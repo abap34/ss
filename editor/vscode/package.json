@@ -1,0 +1,41 @@
+{
+  "name": "ss-language-support",
+  "displayName": "ss Language Support",
+  "description": "Minimal editor support for ss slide source files.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "main": "./extension.js",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [
+    "onLanguage:ss-slide"
+  ],
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ss-slide",
+        "aliases": ["ss", "ss-slide"],
+        "extensions": [".ss"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ss-slide",
+        "scopeName": "source.ss",
+        "path": "./syntaxes/ss.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "ss-slide",
+        "path": "./snippets/ss.code-snippets"
+      }
+    ]
+  }
+}

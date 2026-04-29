@@ -1,0 +1,52 @@
+{
+  "page": {
+    "prefix": "ss-page",
+    "body": [
+      "page ${1:name}",
+      "${2:slide_title \"Title\"}",
+      "${3:page_no}",
+      "end"
+    ],
+    "description": "Create an ss page block"
+  },
+  "function": {
+    "prefix": "ss-fn",
+    "body": [
+      "fn ${1:name}(${2:arg})",
+      "${3:return ${2:arg}}",
+      "end"
+    ],
+    "description": "Create an ss function"
+  },
+  "text block": {
+    "prefix": "ss-text",
+    "body": [
+      "text <<",
+      "${1}",
+      ">>"
+    ],
+    "description": "Insert a text block"
+  },
+  "code block": {
+    "prefix": "ss-code",
+    "body": [
+      "code_block <<",
+      "${1}",
+      ">>"
+    ],
+    "description": "Insert a code block"
+  },
+  "two columns": {
+    "prefix": "ss-2col",
+    "body": [
+      "let left = text <<",
+      "${1:left}",
+      ">>",
+      "let right = text <<",
+      "${2:right}",
+      ">>",
+      "two_columns(left, right)"
+    ],
+    "description": "Insert a two-column layout"
+  }
+}

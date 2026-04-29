@@ -1,0 +1,1059 @@
+const std = @import("std");
+const model = @import("model.zig");
+
+const NodeId = model.NodeId;
+const Node = model.Node;
+const Role = model.Role;
+const Axis = model.Axis;
+const AxisState = model.AxisState;
+const Anchor = model.Anchor;
+const Constraint = model.Constraint;
+const ConstraintSource = model.ConstraintSource;
+const Frame = model.Frame;
+const PageLayout = model.PageLayout;
+const TextStyle = model.TextStyle;
+const roleEq = model.roleEq;
+const GroupRole = model.GroupRole;
+
+const StyleEntry = struct {
+    role: []const u8,
+    style: ?[]const u8 = null,
+    spec: TextStyle,
+};
+
+const DEFAULT_TEXT_STYLE = TextStyle{
+    .font_size = 20,
+    .line_height = 28,
+    .spacing_after = 24,
+    .default_x = 96,
+    .default_right_inset = 96,
+};
+
+const STYLE_ENTRIES = [_]StyleEntry{
+    .{ .role = "title", .spec = .{ .font_size = 34, .line_height = 40, .spacing_after = 54, .default_x = 72, .default_right_inset = 72 } },
+    .{ .role = "subtitle", .spec = .{ .font_size = 18, .line_height = 24, .spacing_after = 34, .default_x = 96, .default_right_inset = 96 } },
+    .{ .role = "byline", .spec = .{ .font_size = 20, .line_height = 26, .spacing_after = 18, .default_x = 72, .default_right_inset = 72 } },
+    .{ .role = "body", .spec = .{ .font_size = 20, .line_height = 28, .spacing_after = 28, .default_x = 96, .default_right_inset = 96 } },
+    .{ .role = "math", .spec = .{ .font_size = 18, .line_height = 24, .spacing_after = 28, .default_x = 102, .default_right_inset = 102 } },
+    .{ .role = "figure", .spec = .{ .font_size = 16, .line_height = 20, .spacing_after = 28, .default_x = 102, .default_right_inset = 102 } },
+    .{ .role = "code", .spec = .{ .font_size = 15, .line_height = 20, .spacing_after = 28, .default_x = 102, .default_right_inset = 102 } },
+    .{ .role = "toc", .spec = .{ .font_size = 18, .line_height = 24, .spacing_after = 24, .default_x = 96, .default_right_inset = 96 } },
+    .{ .role = "page_number", .spec = .{ .font_size = 13, .line_height = 16, .spacing_after = 0, .default_x = PageLayout.flow_margin_x, .default_right_inset = PageLayout.page_number_right_inset } },
+    .{ .role = "highlight", .spec = .{ .font_size = 14, .line_height = 18, .spacing_after = 20, .default_x = 120, .default_right_inset = 120 } },
+    .{ .role = "heading1", .spec = .{ .font_size = 20, .line_height = 28, .spacing_after = 24, .default_x = 96, .default_right_inset = 96 } },
+    .{ .role = "toc_entry", .spec = .{ .font_size = 20, .line_height = 28, .spacing_after = 24, .default_x = 96, .default_right_inset = 96 } },
+    .{ .role = "note", .spec = .{ .font_size = 20, .line_height = 28, .spacing_after = 24, .default_x = 96, .default_right_inset = 96 } },
+    .{ .role = "rule", .spec = .{ .font_size = 4, .line_height = 4, .spacing_after = 0, .default_x = 72, .default_right_inset = 72 } },
+    .{ .role = "label", .spec = .{ .font_size = 14, .line_height = 18, .spacing_after = 0, .default_x = 72, .default_right_inset = 72 } },
+    .{ .role = "panel", .spec = .{ .font_size = 4, .line_height = 4, .spacing_after = 0, .default_x = 72, .default_right_inset = 72 } },
+};
+
+const WRAP_ROLES = [_][]const u8{
+    "title",
+    "subtitle",
+    "byline",
+    "body",
+    "toc",
+    "heading1",
+    "toc_entry",
+    "note",
+    "highlight",
+};
+
+pub fn solveLayout(engine: anytype) !void {
+    for (engine.nodes.items) |*node| {
+        switch (node.kind) {
+            .document => {},
+            .page => {
+                node.frame = .{
+                    .x = 0,
+                    .y = 0,
+                    .width = PageLayout.width,
+                    .height = PageLayout.height,
+                    .x_set = true,
+                    .y_set = true,
+                };
+            },
+            .object, .derived => {
+                node.frame.x = 0;
+                node.frame.y = 0;
+                node.frame.x_set = false;
+                node.frame.y_set = false;
+                node.frame.width = intrinsicWidth(engine, node);
+                node.frame.height = intrinsicHeight(engine, node);
+            },
+        }
+    }
+
+    for (engine.page_order.items) |page_id| {
+        try solvePageLayout(engine, page_id);
+    }
+}
+
+pub fn styleForNode(engine: anytype, node: *const Node) TextStyle {
+    _ = engine;
+    const role = node.role orelse "body";
+    const base = lookupTextStyle(role, null) orelse DEFAULT_TEXT_STYLE;
+    return overrideTextStyleFromProperties(node, base);
+}
+
+fn maxWidthForStyle(style: TextStyle) f32 {
+    return @min(PageLayout.max_visual_width, PageLayout.width - style.default_x - style.default_right_inset);
+}
+
+pub fn intrinsicWidth(engine: anytype, node: *const Node) f32 {
+    const style = styleForNode(engine, node);
+    const content = node.content orelse "";
+    switch (node.payload_kind orelse .text) {
+        .image_ref, .pdf_ref => return parseNodeFloatProperty(node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width),
+        .figure_text => return maxWidthForStyle(style),
+        .math_tex => return maxWidthForStyle(style),
+        else => {},
+    }
+
+    var max_len: usize = 0;
+    var wide = false;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const line_len = codepointCount(line);
+        if (line_len > max_len) max_len = line_len;
+        if (!wide and containsNonAscii(line)) wide = true;
+    }
+    if (max_len == 0) max_len = 1;
+    const advance = if (wide) style.font_size * 1.02 else style.font_size * 0.58;
+    return @min(maxWidthForStyle(style), @as(f32, @floatFromInt(max_len)) * advance);
+}
+
+pub fn intrinsicHeight(engine: anytype, node: *const Node) f32 {
+    const style = styleForNode(engine, node);
+    return switch (node.payload_kind orelse .text) {
+        .image_ref, .pdf_ref => parseNodeFloatProperty(node, "asset_height") orelse PageLayout.max_figure_height,
+        .figure_text => PageLayout.max_figure_height,
+        .math_tex => blk: {
+            const content = node.content orelse "";
+            const lines = @max(lineCount(content), 1);
+            const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
+            break :blk @min(PageLayout.max_math_height, @max(@as(f32, 30.0), base));
+        },
+        else => blk: {
+            const content = node.content orelse "";
+            const width = if (node.frame.width > 0) node.frame.width else intrinsicWidth(engine, node);
+            const lines = if (shouldWrapNode(engine, node))
+                wrappedLineCount(content, style, width, node.role)
+            else
+                lineCount(content);
+            break :blk @as(f32, @floatFromInt(lines)) * style.line_height;
+        },
+    };
+}
+
+pub fn shouldWrapNode(engine: anytype, node: *const Node) bool {
+    _ = engine;
+    if (model.nodeProperty(node, "wrap")) |wrap_mode| {
+        if (std.mem.eql(u8, wrap_mode, "on")) return true;
+        if (std.mem.eql(u8, wrap_mode, "off")) return false;
+    }
+    const role = node.role orelse "body";
+    return containsRole(&WRAP_ROLES, role);
+}
+
+fn lookupTextStyle(role: []const u8, style: ?[]const u8) ?TextStyle {
+    _ = style;
+    for (STYLE_ENTRIES) |entry| {
+        if (!std.mem.eql(u8, entry.role, role)) continue;
+        if (entry.style != null) continue;
+        return entry.spec;
+    }
+
+    return null;
+}
+
+fn containsRole(entries: []const []const u8, role: []const u8) bool {
+    for (entries) |entry| {
+        if (std.mem.eql(u8, entry, role)) return true;
+    }
+    return false;
+}
+
+fn overrideTextStyleFromProperties(node: *const Node, base: TextStyle) TextStyle {
+    var style = base;
+    if (parseNodeFloatProperty(node, "layout_font_size")) |value| style.font_size = value;
+    if (parseNodeFloatProperty(node, "layout_line_height")) |value| style.line_height = value;
+    if (parseNodeFloatProperty(node, "layout_spacing_after")) |value| style.spacing_after = value;
+    if (parseNodeFloatProperty(node, "layout_x")) |value| style.default_x = value;
+    if (parseNodeFloatProperty(node, "layout_right_inset")) |value| style.default_right_inset = value;
+    return style;
+}
+
+fn parseNodeFloatProperty(node: *const Node, key: []const u8) ?f32 {
+    const value = model.nodeProperty(node, key) orelse return null;
+    return std.fmt.parseFloat(f32, value) catch null;
+}
+
+fn solvePageLayout(engine: anytype, page_id: NodeId) !void {
+    const children = engine.contains.get(page_id) orelse return;
+    const child_ids = children.items;
+
+    const horizontal = try engine.allocator.alloc(AxisState, child_ids.len);
+    defer engine.allocator.free(horizontal);
+    const vertical = try engine.allocator.alloc(AxisState, child_ids.len);
+    defer engine.allocator.free(vertical);
+
+    for (child_ids, horizontal, vertical) |child_id, *h_state, *v_state| {
+        const node = engine.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(node)) {
+            h_state.* = .{};
+            v_state.* = .{};
+            continue;
+        }
+        const has_h_target = hasAxisTargetConstraint(engine, child_id, .horizontal);
+        const has_v_target = hasAxisTargetConstraint(engine, child_id, .vertical);
+        h_state.* = .{};
+        v_state.* = .{};
+        if (!has_h_target and node.frame.x_set) {
+            h_state.size = node.frame.width;
+            h_state.start = node.frame.x;
+            h_state.end = node.frame.x + node.frame.width;
+            h_state.center = node.frame.x + node.frame.width / 2;
+        }
+        if (!has_v_target and node.frame.y_set) {
+            v_state.size = node.frame.height;
+            v_state.start = node.frame.y;
+            v_state.end = node.frame.y + node.frame.height;
+            v_state.center = node.frame.y + node.frame.height / 2;
+        }
+    }
+
+    try solvePageAxis(engine, page_id, child_ids, horizontal, .horizontal, &.{});
+
+    var horizontal_fallback = try buildHorizontalFallbackConstraints(engine, child_ids, horizontal);
+    defer horizontal_fallback.deinit(engine.allocator);
+    try solvePageAxis(engine, page_id, child_ids, horizontal, .horizontal, horizontal_fallback.items);
+    applySolvedHorizontalFrames(engine, child_ids, horizontal) catch return error.UnknownNode;
+    try propagateTargetedGroupWidths(engine, child_ids, horizontal, &.{});
+
+    try solvePageAxis(engine, page_id, child_ids, vertical, .vertical, &.{});
+    var vertical_fallback = try buildVerticalFallbackConstraints(engine, child_ids, vertical);
+    defer vertical_fallback.deinit(engine.allocator);
+    try solvePageAxis(engine, page_id, child_ids, vertical, .vertical, vertical_fallback.items);
+
+    for (child_ids, vertical) |child_id, v_state| {
+        const node = engine.getNode(child_id) orelse return error.UnknownNode;
+        node.frame.height = v_state.size orelse node.frame.height;
+        node.frame.y_set = false;
+        if (v_state.start) |y| {
+            node.frame.y = y;
+            node.frame.y_set = true;
+        }
+    }
+
+    try collectPageDiagnostics(engine, page_id, child_ids);
+}
+
+fn applySolvedHorizontalFrames(engine: anytype, child_ids: []const NodeId, horizontal: []const AxisState) !void {
+    for (child_ids, horizontal) |child_id, h_state| {
+        const node = engine.getNode(child_id) orelse return error.UnknownNode;
+        node.frame.width = h_state.size orelse node.frame.width;
+        node.frame.x_set = false;
+        if (h_state.start) |x| {
+            node.frame.x = x;
+            node.frame.x_set = true;
+        }
+    }
+}
+
+fn solvePageAxis(engine: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !void {
+    try runPageAxisPass(engine, page_id, child_ids, states, axis, extra_constraints);
+
+    for (child_ids, states) |child_id, *state| {
+        if (state.size == null) {
+            const node = engine.getNode(child_id) orelse return error.UnknownNode;
+            state.size = switch (axis) {
+                .horizontal => node.frame.width,
+                .vertical => node.frame.height,
+            };
+            state.size_is_default = true;
+        }
+    }
+
+    try runPageAxisPass(engine, page_id, child_ids, states, axis, extra_constraints);
+}
+
+fn hasAxisTargetConstraint(engine: anytype, node_id: NodeId, axis: Axis) bool {
+    for (engine.constraints.items) |constraint| {
+        if (constraint.target_node != node_id) continue;
+        if (anchorAxis(constraint.target_anchor) != axis) continue;
+        return true;
+    }
+    return false;
+}
+
+fn runPageAxisPass(engine: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !void {
+    var pass: usize = 0;
+    while (pass < 32) : (pass += 1) {
+        var changed = false;
+        var local_pass: usize = 0;
+        while (local_pass < 32) : (local_pass += 1) {
+            var local_changed = false;
+
+            for (states) |*state| {
+                local_changed = (try reconcileAxisState(state)) or local_changed;
+            }
+
+            for (engine.constraints.items) |constraint| {
+                if (constraintTargetsGroup(engine, constraint)) continue;
+                if (constraintUsesGroupSource(engine, constraint)) continue;
+                local_changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or local_changed;
+            }
+
+            for (extra_constraints) |constraint| {
+                if (constraintTargetsGroup(engine, constraint)) continue;
+                if (constraintUsesGroupSource(engine, constraint)) continue;
+                local_changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or local_changed;
+            }
+
+            changed = local_changed or changed;
+            if (!local_changed) break;
+        }
+
+        changed = (try updateGroupAxisStates(engine, child_ids, states, axis, extra_constraints)) or changed;
+        changed = (try applyGroupTargetConstraints(engine, page_id, child_ids, states, axis, extra_constraints)) or changed;
+
+        for (engine.constraints.items) |constraint| {
+            if (!constraintUsesGroupSource(engine, constraint)) continue;
+            changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or changed;
+        }
+
+        for (extra_constraints) |constraint| {
+            if (!constraintUsesGroupSource(engine, constraint)) continue;
+            changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or changed;
+        }
+
+        if (!changed) break;
+    }
+}
+
+fn buildHorizontalFallbackConstraints(engine: anytype, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
+    var constraints = std.ArrayList(Constraint).empty;
+    for (child_ids, states) |child_id, state| {
+        const node = engine.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(node)) continue;
+        if (state.start != null) continue;
+        if (hasAxisTargetConstraint(engine, child_id, .horizontal)) continue;
+        try constraints.append(engine.allocator, .{
+            .target_node = child_id,
+            .target_anchor = .left,
+            .source = .{ .page = .left },
+            .offset = styleForNode(engine, node).default_x,
+        });
+    }
+    return constraints;
+}
+
+fn buildVerticalFallbackConstraints(engine: anytype, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
+    var constraints = std.ArrayList(Constraint).empty;
+    var current_source: ConstraintSource = .{ .page = .top };
+    var current_offset: f32 = PageLayout.flow_top - PageLayout.height;
+    var current_top_value: f32 = PageLayout.flow_top;
+
+    for (child_ids, states) |child_id, state| {
+        const node = engine.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(node)) continue;
+        if (roleEq(node.role, "page_number")) continue;
+
+        const spacing = styleForNode(engine, node).spacing_after;
+        if (state.start) |bottom| {
+            const next_top = bottom - spacing;
+            if (next_top < current_top_value) {
+                current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
+                current_offset = -spacing;
+                current_top_value = next_top;
+            }
+            continue;
+        }
+
+        if (hasAxisTargetConstraint(engine, child_id, .vertical)) continue;
+
+        try constraints.append(engine.allocator, .{
+            .target_node = child_id,
+            .target_anchor = .top,
+            .source = current_source,
+            .offset = current_offset,
+        });
+
+        const node_height = state.size orelse node.frame.height;
+        current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
+        current_offset = -spacing;
+        current_top_value = current_top_value - node_height - spacing;
+    }
+
+    return constraints;
+}
+
+fn applyAxisConstraint(engine: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, constraint: Constraint) !bool {
+    if (anchorAxis(constraint.target_anchor) != axis) return false;
+
+    const target_page = engine.parentPageOf(constraint.target_node) orelse return error.MissingParentPage;
+    if (target_page != page_id) return false;
+
+    const target_index = indexOfNode(child_ids, constraint.target_node) orelse return error.UnknownNode;
+    const target_node = engine.getNode(constraint.target_node) orelse return error.UnknownNode;
+    if (isGroupNode(target_node)) return false;
+    const source_value = try constraintSourceValue(engine, page_id, child_ids, states, axis, constraint.source);
+    if (source_value == null) return false;
+
+    return setAxisAnchor(&states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
+        switch (err) {
+            error.ConstraintConflict => engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[target_index], constraint.target_anchor), .conflict),
+        }
+        if (err == error.ConstraintConflict and constraint.origin == null and nodeUnderTargetedGroup(engine, constraint.target_node, axis)) {
+            return false;
+        }
+        return err;
+    };
+}
+
+fn constraintTargetsGroup(engine: anytype, constraint: Constraint) bool {
+    const target_node = engine.getNode(constraint.target_node) orelse return false;
+    return isGroupNode(target_node);
+}
+
+fn groupContainsNode(engine: anytype, group_id: NodeId, target_id: NodeId) bool {
+    const children = engine.childrenOf(group_id) orelse return false;
+    for (children) |child_id| {
+        if (child_id == target_id) return true;
+        const child_node = engine.getNode(child_id) orelse continue;
+        if (isGroupNode(child_node) and groupContainsNode(engine, child_id, target_id)) return true;
+    }
+    return false;
+}
+
+fn nodeUnderTargetedGroup(engine: anytype, node_id: NodeId, axis: Axis) bool {
+    for (engine.constraints.items) |constraint| {
+        if (!constraintTargetsGroup(engine, constraint)) continue;
+        if (anchorAxis(constraint.target_anchor) != axis) continue;
+        if (groupContainsNode(engine, constraint.target_node, node_id)) return true;
+    }
+    return false;
+}
+
+fn groupHasTargetConstraint(engine: anytype, group_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
+    for (engine.constraints.items) |constraint| {
+        if (constraint.target_node != group_id) continue;
+        if (anchorAxis(constraint.target_anchor) != axis) continue;
+        return true;
+    }
+    for (extra_constraints) |constraint| {
+        if (constraint.target_node != group_id) continue;
+        if (anchorAxis(constraint.target_anchor) != axis) continue;
+        return true;
+    }
+    return false;
+}
+
+fn propagateWidthCapToSubtree(engine: anytype, node_id: NodeId, max_right: f32) !void {
+    const node = engine.getNode(node_id) orelse return error.UnknownNode;
+    if (node.frame.x_set and shouldWrapNode(engine, node)) {
+        const available = @max(@as(f32, 1.0), max_right - node.frame.x);
+        if (available < node.frame.width - 0.01) {
+            node.frame.width = available;
+            node.frame.height = intrinsicHeight(engine, node);
+        }
+    }
+    if (isGroupNode(node)) {
+        const children = engine.childrenOf(node_id) orelse return;
+        for (children) |child_id| {
+            try propagateWidthCapToSubtree(engine, child_id, max_right);
+        }
+    }
+}
+
+fn propagateTargetedGroupWidths(engine: anytype, child_ids: []const NodeId, horizontal: []const AxisState, extra_constraints: []const Constraint) !void {
+    for (child_ids, horizontal) |group_id, h_state| {
+        const node = engine.getNode(group_id) orelse return error.UnknownNode;
+        if (!isGroupNode(node)) continue;
+        if (!groupHasTargetConstraint(engine, group_id, .horizontal, extra_constraints)) continue;
+        const group_left = h_state.start orelse continue;
+        const group_width = h_state.size orelse continue;
+        const group_right = group_left + group_width;
+        const children = engine.childrenOf(group_id) orelse continue;
+        for (children) |child_id| {
+            try propagateWidthCapToSubtree(engine, child_id, group_right);
+        }
+    }
+}
+
+fn computeTightGroupAxisState(engine: anytype, child_ids: []const NodeId, states: []const AxisState, node_id: NodeId, axis: Axis) !AxisState {
+    const group_children = engine.childrenOf(node_id) orelse return .{};
+
+    var start: ?f32 = null;
+    var end: ?f32 = null;
+    for (group_children) |child_id| {
+        const child_start, const child_end = try groupChildAxisBounds(engine, child_ids, states, child_id, axis);
+        if (child_start == null or child_end == null) return .{};
+        if (start == null or child_start.? < start.?) start = child_start.?;
+        if (end == null or child_end.? > end.?) end = child_end.?;
+    }
+
+    if (start == null or end == null) return .{};
+    const size = end.? - start.?;
+    return .{
+        .start = start,
+        .end = end,
+        .center = start.? + size / 2,
+        .size = size,
+        .size_is_default = false,
+    };
+}
+
+fn updateGroupAxisStates(engine: anytype, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !bool {
+    var changed = false;
+    for (child_ids, 0..) |node_id, index| {
+        const node = engine.getNode(node_id) orelse return error.UnknownNode;
+        if (!isGroupNode(node)) continue;
+        if (groupHasTargetConstraint(engine, node_id, axis, extra_constraints)) continue;
+        const tight = try computeTightGroupAxisState(engine, child_ids, states, node_id, axis);
+        if (tight.start == null or tight.end == null) {
+            changed = setGroupAxisState(&states[index], null, null) or changed;
+            continue;
+        }
+        changed = setGroupAxisState(&states[index], tight.start.?, tight.end.?) or changed;
+    }
+    return changed;
+}
+
+fn applyGroupTargetConstraintSlice(
+    engine: anytype,
+    page_id: NodeId,
+    child_ids: []const NodeId,
+    states: []AxisState,
+    axis: Axis,
+    group_id: NodeId,
+    base: AxisState,
+    temp: *AxisState,
+    used: *bool,
+    last_constraint: *?Constraint,
+    constraints: []const Constraint,
+) !void {
+    for (constraints) |constraint| {
+        if (constraint.target_node != group_id) continue;
+        if (anchorAxis(constraint.target_anchor) != axis) continue;
+        used.* = true;
+        last_constraint.* = constraint;
+
+        switch (constraint.source) {
+            .node => |node_source| {
+                if (node_source.node_id == group_id and anchorAxis(node_source.anchor) == axis) {
+                    const size_value: ?f32 = switch (axis) {
+                        .horizontal => switch (constraint.target_anchor) {
+                            .right => if (node_source.anchor == .left) constraint.offset else null,
+                            .left => if (node_source.anchor == .right) -constraint.offset else null,
+                            else => null,
+                        },
+                        .vertical => switch (constraint.target_anchor) {
+                            .top => if (node_source.anchor == .bottom) constraint.offset else null,
+                            .bottom => if (node_source.anchor == .top) -constraint.offset else null,
+                            else => null,
+                        },
+                    };
+                    if (size_value) |size| {
+                        try ensureNonNegativeSize(size);
+                        _ = try setAxisSize(temp, size, constraint);
+                        switch (constraint.target_anchor) {
+                            .right, .top => {
+                                if (temp.start == null) temp.start = base.start;
+                            },
+                            .left, .bottom => {
+                                if (temp.end == null) temp.end = base.end;
+                            },
+                            else => {},
+                        }
+                        continue;
+                    }
+                }
+            },
+            .page => {},
+        }
+
+        const source_value = switch (constraint.source) {
+            .page => try constraintSourceValue(engine, page_id, child_ids, states, axis, constraint.source),
+            .node => |node_source| blk: {
+                if (node_source.node_id == group_id) {
+                    const current = axisAnchorValue(temp.*, node_source.anchor);
+                    break :blk if (current != null) current else axisAnchorValue(base, node_source.anchor);
+                }
+                break :blk try constraintSourceValue(engine, page_id, child_ids, states, axis, constraint.source);
+            },
+        };
+        if (source_value == null) continue;
+
+        _ = setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
+            switch (err) {
+                error.ConstraintConflict => engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(temp.*, constraint.target_anchor), .conflict),
+            }
+            return err;
+        };
+    }
+}
+
+fn shiftAxisState(state: *AxisState, delta: f32) bool {
+    if (approxEq(delta, 0)) return false;
+    var changed = false;
+    if (state.start) |value| {
+        state.start = value + delta;
+        changed = true;
+    }
+    if (state.end) |value| {
+        state.end = value + delta;
+        changed = true;
+    }
+    if (state.center) |value| {
+        state.center = value + delta;
+        changed = true;
+    }
+    return changed;
+}
+
+fn translateGroupSubtree(
+    engine: anytype,
+    child_ids: []const NodeId,
+    states: []AxisState,
+    group_id: NodeId,
+    delta: f32,
+) !bool {
+    if (approxEq(delta, 0)) return false;
+    var changed = false;
+    const group_children = engine.childrenOf(group_id) orelse return false;
+    for (group_children) |child_id| {
+        if (indexOfNode(child_ids, child_id)) |child_index| {
+            changed = shiftAxisState(&states[child_index], delta) or changed;
+        }
+        const child_node = engine.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(child_node)) {
+            changed = (try translateGroupSubtree(engine, child_ids, states, child_id, delta)) or changed;
+        }
+    }
+    return changed;
+}
+
+fn applyGroupTargetConstraints(
+    engine: anytype,
+    page_id: NodeId,
+    child_ids: []const NodeId,
+    states: []AxisState,
+    axis: Axis,
+    extra_constraints: []const Constraint,
+) !bool {
+    var changed = false;
+    for (child_ids, 0..) |group_id, group_index| {
+        const group_node = engine.getNode(group_id) orelse return error.UnknownNode;
+        if (!isGroupNode(group_node)) continue;
+        if (!groupHasTargetConstraint(engine, group_id, axis, extra_constraints)) continue;
+
+        const base = try computeTightGroupAxisState(engine, child_ids, states, group_id, axis);
+        if (base.start == null or base.end == null or base.center == null or base.size == null) continue;
+
+        var temp = AxisState{};
+        var used = false;
+        var last_constraint: ?Constraint = null;
+        try applyGroupTargetConstraintSlice(engine, page_id, child_ids, states, axis, group_id, base, &temp, &used, &last_constraint, engine.constraints.items);
+        try applyGroupTargetConstraintSlice(engine, page_id, child_ids, states, axis, group_id, base, &temp, &used, &last_constraint, extra_constraints);
+        if (!used) continue;
+
+        if (temp.start == null and temp.end == null and temp.center == null and temp.size == null) {
+            temp = base;
+        }
+        _ = reconcileAxisState(&temp) catch |err| {
+            if (last_constraint) |constraint| {
+                switch (err) {
+                    error.ConstraintConflict => engine.noteConstraintFailure(page_id, constraint, null, .conflict),
+                    error.NegativeConstraintSize => engine.noteConstraintFailure(page_id, constraint, null, .negative_size),
+                }
+            }
+            return err;
+        };
+
+        const delta = if (temp.start != null and base.start != null) temp.start.? - base.start.? else 0;
+        changed = shiftAxisState(&states[group_index], delta) or changed;
+        changed = (try translateGroupSubtree(engine, child_ids, states, group_id, delta)) or changed;
+        states[group_index] = temp;
+    }
+    return changed;
+}
+
+fn constraintUsesGroupSource(engine: anytype, constraint: Constraint) bool {
+    return switch (constraint.source) {
+        .page => false,
+        .node => |node_source| blk: {
+            const source_node = engine.getNode(node_source.node_id) orelse break :blk false;
+            break :blk isGroupNode(source_node);
+        },
+    };
+}
+
+fn setGroupAxisState(state: *AxisState, start: ?f32, end: ?f32) bool {
+    const old = state.*;
+    if (start == null or end == null) {
+        state.* = .{};
+        return !axisStatesEq(old, state.*);
+    }
+
+    const size = end.? - start.?;
+    state.* = .{
+        .start = start,
+        .end = end,
+        .center = start.? + size / 2,
+        .size = size,
+        .start_source = null,
+        .end_source = null,
+        .center_source = null,
+        .size_source = null,
+        .size_is_default = false,
+    };
+    return !axisStatesEq(old, state.*);
+}
+
+fn axisStatesEq(a: AxisState, b: AxisState) bool {
+    return optionalFloatEq(a.start, b.start) and
+        optionalFloatEq(a.end, b.end) and
+        optionalFloatEq(a.center, b.center) and
+        optionalFloatEq(a.size, b.size) and
+        a.size_is_default == b.size_is_default;
+}
+
+fn optionalFloatEq(a: ?f32, b: ?f32) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return approxEq(a.?, b.?);
+}
+
+fn groupChildAxisBounds(engine: anytype, child_ids: []const NodeId, states: []const AxisState, child_id: NodeId, axis: Axis) !struct { ?f32, ?f32 } {
+    if (indexOfNode(child_ids, child_id)) |index| {
+        return .{
+            axisAnchorValue(states[index], switch (axis) { .horizontal => .left, .vertical => .bottom }),
+            axisAnchorValue(states[index], switch (axis) { .horizontal => .right, .vertical => .top }),
+        };
+    }
+
+    const child = engine.getNode(child_id) orelse return error.UnknownNode;
+    const start_anchor: Anchor = switch (axis) {
+        .horizontal => .left,
+        .vertical => .bottom,
+    };
+    const end_anchor: Anchor = switch (axis) {
+        .horizontal => .right,
+        .vertical => .top,
+    };
+    if (!anchorKnown(child.frame, start_anchor) or !anchorKnown(child.frame, end_anchor)) return .{ null, null };
+    return .{ anchorValue(child.frame, start_anchor), anchorValue(child.frame, end_anchor) };
+}
+
+fn constraintSourceValue(engine: anytype, page_id: NodeId, child_ids: []const NodeId, states: []const AxisState, axis: Axis, source: ConstraintSource) !?f32 {
+    return switch (source) {
+        .page => |anchor| blk: {
+            if (anchorAxis(anchor) != axis) return error.ConstraintAxisMismatch;
+            const page = engine.getNode(page_id) orelse return error.UnknownNode;
+            break :blk anchorValue(page.frame, anchor);
+        },
+        .node => |node_source| blk: {
+            if (anchorAxis(node_source.anchor) != axis) return error.ConstraintAxisMismatch;
+            if (indexOfNode(child_ids, node_source.node_id)) |index| {
+                break :blk axisAnchorValue(states[index], node_source.anchor);
+            }
+
+            const source_node = engine.getNode(node_source.node_id) orelse return error.UnknownNode;
+            if (!anchorKnown(source_node.frame, node_source.anchor)) break :blk null;
+            break :blk anchorValue(source_node.frame, node_source.anchor);
+        },
+    };
+}
+
+pub fn lineCount(text: []const u8) usize {
+    if (text.len == 0) return 1;
+    var count: usize = 1;
+    for (text) |ch| {
+        if (ch == '\n') count += 1;
+    }
+    return count;
+}
+
+fn wrappedLineCount(text: []const u8, style: TextStyle, max_width: f32, role: ?Role) usize {
+    _ = role;
+    var total: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (trimmed.len == 0) {
+            total += 1;
+            continue;
+        }
+
+        const wide = containsNonAscii(trimmed);
+        const advance = if (wide) style.font_size * 1.02 else style.font_size * 0.58;
+        const available = @max(advance, max_width);
+        const chars_per_line = @max(@as(usize, 1), @as(usize, @intFromFloat(@floor(available / advance))));
+        const needed = std.math.divCeil(usize, codepointCount(trimmed), chars_per_line) catch codepointCount(trimmed);
+        total += @max(@as(usize, 1), needed);
+    }
+    return total;
+}
+
+fn codepointCount(text: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(text) catch text.len;
+}
+
+fn containsNonAscii(text: []const u8) bool {
+    for (text) |ch| {
+        if (ch >= 0x80) return true;
+    }
+    return false;
+}
+
+pub fn anchorAxis(anchor: Anchor) Axis {
+    return switch (anchor) {
+        .left, .right, .center_x => .horizontal,
+        .top, .bottom, .center_y => .vertical,
+    };
+}
+
+fn indexOfNode(ids: []const NodeId, target: NodeId) ?usize {
+    for (ids, 0..) |id, index| {
+        if (id == target) return index;
+    }
+    return null;
+}
+
+fn axisAnchorValue(state: AxisState, anchor: Anchor) ?f32 {
+    return switch (anchor) {
+        .left, .bottom => state.start,
+        .right, .top => state.end,
+        .center_x, .center_y => state.center,
+    };
+}
+
+fn axisAnchorSource(state: AxisState, anchor: Anchor) ?Constraint {
+    return switch (anchor) {
+        .left, .bottom => state.start_source,
+        .right, .top => state.end_source,
+        .center_x, .center_y => state.center_source,
+    };
+}
+
+fn setAxisAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
+    if (try overrideDefaultDerivedAnchor(state, anchor, value, source)) return true;
+    return switch (anchor) {
+        .left, .bottom => try setOptionalFloat(&state.start, &state.start_source, value, source),
+        .right, .top => try setOptionalFloat(&state.end, &state.end_source, value, source),
+        .center_x, .center_y => try setOptionalFloat(&state.center, &state.center_source, value, source),
+    };
+}
+
+fn overrideDefaultDerivedAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
+    if (!state.size_is_default) return false;
+
+    return switch (anchor) {
+        .left, .bottom => blk: {
+            if (state.start) |current| {
+                if (approxEq(current, value)) break :blk false;
+                if (state.end != null) {
+                    state.start = value;
+                    state.start_source = source;
+                    state.size = null;
+                    state.size_source = null;
+                    state.size_is_default = false;
+                    state.center = null;
+                    state.center_source = null;
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .right, .top => blk: {
+            if (state.end) |current| {
+                if (approxEq(current, value)) break :blk false;
+                if (state.start != null) {
+                    state.end = value;
+                    state.end_source = source;
+                    state.size = null;
+                    state.size_source = null;
+                    state.size_is_default = false;
+                    state.center = null;
+                    state.center_source = null;
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .center_x, .center_y => false,
+    };
+}
+
+fn reconcileAxisState(state: *AxisState) !bool {
+    var changed = false;
+    var progress = true;
+
+    while (progress) {
+        progress = false;
+
+        if (state.start != null and state.end != null) {
+            const size = state.end.? - state.start.?;
+            try ensureNonNegativeSize(size);
+            progress = (try setAxisSize(state, size, null)) or progress;
+            progress = (try setOptionalFloat(&state.center, &state.center_source, state.start.? + size / 2, null)) or progress;
+        }
+
+        if (state.start != null and state.size != null) {
+            progress = (try setOptionalFloat(&state.end, &state.end_source, state.start.? + state.size.?, null)) or progress;
+            progress = (try setOptionalFloat(&state.center, &state.center_source, state.start.? + state.size.? / 2, null)) or progress;
+        }
+
+        if (state.end != null and state.size != null) {
+            progress = (try setOptionalFloat(&state.start, &state.start_source, state.end.? - state.size.?, null)) or progress;
+            progress = (try setOptionalFloat(&state.center, &state.center_source, state.start.? + state.size.? / 2, null)) or progress;
+        }
+
+        if (state.center != null and state.size != null) {
+            progress = (try setOptionalFloat(&state.start, &state.start_source, state.center.? - state.size.? / 2, null)) or progress;
+            progress = (try setOptionalFloat(&state.end, &state.end_source, state.center.? + state.size.? / 2, null)) or progress;
+        }
+
+        if (state.start != null and state.center != null) {
+            const half = state.center.? - state.start.?;
+            const size = half * 2;
+            try ensureNonNegativeSize(size);
+            progress = (try setAxisSize(state, size, null)) or progress;
+            progress = (try setOptionalFloat(&state.end, &state.end_source, state.start.? + size, null)) or progress;
+        }
+
+        if (state.end != null and state.center != null) {
+            const half = state.end.? - state.center.?;
+            const size = half * 2;
+            try ensureNonNegativeSize(size);
+            progress = (try setAxisSize(state, size, null)) or progress;
+            progress = (try setOptionalFloat(&state.start, &state.start_source, state.end.? - size, null)) or progress;
+        }
+
+        changed = progress or changed;
+    }
+
+    return changed;
+}
+
+fn ensureNonNegativeSize(size: f32) !void {
+    if (size < -0.01) return error.NegativeConstraintSize;
+}
+
+fn setOptionalFloat(slot: *?f32, source_slot: *?Constraint, value: f32, source: ?Constraint) !bool {
+    if (slot.*) |current| {
+        if (approxEq(current, value)) return false;
+        return error.ConstraintConflict;
+    }
+    slot.* = value;
+    source_slot.* = source;
+    return true;
+}
+
+fn setAxisSize(state: *AxisState, value: f32, source: ?Constraint) !bool {
+    if (state.size) |current| {
+        if (approxEq(current, value)) {
+            return false;
+        }
+        if (state.size_is_default) {
+            state.size = value;
+            state.size_source = source;
+            state.size_is_default = false;
+            return true;
+        }
+        return error.ConstraintConflict;
+    }
+
+    state.size = value;
+    state.size_source = source;
+    state.size_is_default = false;
+    return true;
+}
+
+fn anchorKnown(frame: Frame, anchor: Anchor) bool {
+    return switch (anchor) {
+        .left, .right, .center_x => frame.x_set,
+        .top, .bottom, .center_y => frame.y_set,
+    };
+}
+
+fn anchorValue(frame: Frame, anchor: Anchor) f32 {
+    return switch (anchor) {
+        .left => frame.x,
+        .right => frame.x + frame.width,
+        .top => frame.y + frame.height,
+        .bottom => frame.y,
+        .center_x => frame.x + frame.width / 2,
+        .center_y => frame.y + frame.height / 2,
+    };
+}
+
+pub fn approxEq(a: f32, b: f32) bool {
+    const diff = if (a > b) a - b else b - a;
+    return diff < 0.01;
+}
+
+fn collectPageDiagnostics(engine: anytype, page_id: NodeId, child_ids: []const NodeId) !void {
+    for (child_ids) |child_id| {
+        const node = engine.getNode(child_id) orelse return error.UnknownNode;
+
+        if (!node.frame.x_set or !node.frame.y_set) {
+            try engine.addLayoutError(page_id, child_id, .{
+                .unresolved_frame = .{
+                    .missing_horizontal = !node.frame.x_set,
+                    .missing_vertical = !node.frame.y_set,
+                },
+            });
+            continue;
+        }
+
+        const overflow_left = @max(@as(f32, 0.0), -node.frame.x);
+        const overflow_right = @max(@as(f32, 0.0), node.frame.x + node.frame.width - PageLayout.width);
+        const overflow_bottom = @max(@as(f32, 0.0), -node.frame.y);
+        const overflow_top = @max(@as(f32, 0.0), node.frame.y + node.frame.height - PageLayout.height);
+
+        if (overflow_left > 0.01 or overflow_right > 0.01 or overflow_bottom > 0.01 or overflow_top > 0.01) {
+            switch (overflowPolicy(node)) {
+                .ignore => {},
+                .warn => try engine.addLayoutWarning(page_id, child_id, .{
+                    .page_overflow = .{
+                        .overflow_left = overflow_left,
+                        .overflow_right = overflow_right,
+                        .overflow_top = overflow_top,
+                        .overflow_bottom = overflow_bottom,
+                    },
+                }),
+                .@"error" => try engine.addLayoutError(page_id, child_id, .{
+                    .page_overflow = .{
+                        .overflow_left = overflow_left,
+                        .overflow_right = overflow_right,
+                        .overflow_top = overflow_top,
+                        .overflow_bottom = overflow_bottom,
+                    },
+                }),
+            }
+        }
+    }
+}
+
+const OverflowPolicy = enum {
+    warn,
+    @"error",
+    ignore,
+};
+
+fn overflowPolicy(node: *const Node) OverflowPolicy {
+    const fit = model.nodeProperty(node, "fit");
+    if (fit) |value| {
+        if (std.mem.eql(u8, value, "ignore")) return .ignore;
+        if (std.mem.eql(u8, value, "error")) return .@"error";
+    }
+    return .warn;
+}
+
+fn isGroupNode(node: *const Node) bool {
+    return roleEq(node.role, GroupRole);
+}

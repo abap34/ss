@@ -1,0 +1,17 @@
+yet another silde description language & system
+
+No more babysitting slides because of component dependencies.
+The language is stupidly extensible, so you can finally stop living in cmd + c / cmd + v.
+And with enough static checks, it catches stuff you missed in your slides before it gets a chance to embarrass you during the talk.
+
+PDF rendering uses fpdf2 + pypdf and embeds Noto Sans JP / Noto Sans Mono /
+Noto Emoji for full Japanese and emoji coverage. On first render the Zig backend invokes `third_party/fonts/fetch.py`, which downloads the variable Noto fonts from Google Fonts and instances per-weight
+static TTFs into `third_party/fonts/`.
+
+Python runtime requirements:
+
+  fpdf2 pypdf fonttools pillow
+
+You can override the Python interpreter with the `SS_PYTHON` env var.
+
+

@@ -1,0 +1,101 @@
+{
+  "scopeName": "source.ss",
+  "name": "ss",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#block-string" },
+    { "include": "#double-string" },
+    { "include": "#keywords" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#function-call" },
+    { "include": "#bare-call" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-semicolon.ss",
+          "match": ";;.*$"
+        }
+      ]
+    },
+    "block-string": {
+      "patterns": [
+        {
+          "name": "string.unquoted.block.ss",
+          "begin": "<<\\s*$",
+          "end": "^\\s*>>\\s*(?:;;.*)?$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.ss" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.ss" }
+          }
+        }
+      ]
+    },
+    "double-string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.ss",
+          "match": "\"(?:\\\\.|[^\"\\\\])*\""
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ss",
+          "match": "\\b(?:theme|page|fn|let|bind|return|end)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.ss",
+          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.ss",
+          "match": "=|\\-|\\+"
+        }
+      ]
+    },
+    "function-call": {
+      "patterns": [
+        {
+          "captures": {
+            "1": { "name": "entity.name.function.ss" },
+            "2": { "name": "punctuation.section.group.begin.ss" }
+          },
+          "match": "\\b([A-Za-z_][A-Za-z0-9_\\-]*)\\b\\s*(\\()"
+        }
+      ]
+    },
+    "bare-call": {
+      "patterns": [
+        {
+          "captures": {
+            "1": { "name": "entity.name.function.ss" }
+          },
+          "match": "^(\\s*[A-Za-z_][A-Za-z0-9_\\-]*)\\b(?=\\s|$)"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.ss",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_\\-]*\\b"
+        }
+      ]
+    }
+  }
+}
