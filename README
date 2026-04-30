@@ -16,6 +16,13 @@ Setup:
 This fetches the pinned MD4C revision into ignored `third_party/md4c/` sources
 used by the Zig build.
 
+VS Code extension:
+
+1. Run `Developer: Install Extension from Location...`
+2. Choose `editor/vscode/`
+3. If `.ss` opens as Scheme, copy `editor/vscode/settings.sample.json` to
+   `.vscode/settings.json`
+
 Python runtime requirements:
 
   fpdf2 pypdf fonttools pillow
