@@ -3,7 +3,10 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const md4c_include = b.path("third_party/md4c/src");
+    const md4c_src = "third_party/md4c/src";
+    b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
+        @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
+    const md4c_include = b.path(md4c_src);
 
     const core_mod = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),
@@ -13,7 +16,7 @@ pub fn build(b: *std.Build) void {
     });
     core_mod.addIncludePath(md4c_include);
     core_mod.addCSourceFiles(.{
-        .root = b.path("third_party/md4c/src"),
+        .root = b.path(md4c_src),
         .files = &.{"md4c.c"},
     });
 
