@@ -172,6 +172,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
         error.InvalidArity => "InvalidArity: wrong number of arguments",
         error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
+        error.RecursiveFunction => "RecursiveFunction: recursive functions are not allowed",
         error.ExpectedSelection => "ExpectedSelection: expected a selection value",
         error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
         error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",

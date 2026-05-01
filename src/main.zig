@@ -257,6 +257,11 @@ fn formatEngineDiagnostic(allocator: std.mem.Allocator, diagnostic: core.Diagnos
             "{s}: expected {s}, got {s}",
             .{ @tagName(data.code), @tagName(data.expected), @tagName(data.actual) },
         ),
+        .recursive_function => |data| std.fmt.allocPrint(
+            allocator,
+            "RecursiveFunction: recursive function cycle involving {s}",
+            .{data.function_name},
+        ),
         .unresolved_frame => |data| std.fmt.allocPrint(
             allocator,
             "UnresolvedFrame: missing_horizontal={s} missing_vertical={s}",
@@ -801,6 +806,7 @@ pub fn main(init: std.process.Init) void {
             error.FunctionDoesNotReturnValue,
             error.InvalidArity,
             error.InvalidSemanticSort,
+            error.RecursiveFunction,
             error.ExpectedSelection,
             error.ExpectedConstraintSet,
             error.ExpectedStringArgument,

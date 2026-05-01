@@ -386,6 +386,9 @@ pub const Diagnostic = struct {
             expected: SemanticSort,
             actual: SemanticSort,
         },
+        recursive_function: struct {
+            function_name: []const u8,
+        },
         unresolved_frame: struct {
             missing_horizontal: bool,
             missing_vertical: bool,

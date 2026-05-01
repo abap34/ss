@@ -30,6 +30,7 @@ pub const PageDecl = struct {
 
 pub const FunctionDecl = struct {
     name: []const u8,
+    span: Span,
     params: std.ArrayList(ParamDecl),
     result_sort: core.SemanticSort,
     statements: std.ArrayList(Statement),

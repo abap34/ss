@@ -58,11 +58,12 @@ const Parser = struct {
 
         self.skipTrivia();
         while (!self.eof()) {
+            const item_start = self.pos;
             if (try self.consumeKeyword("theme")) {
                 program.theme_name = try self.parsePageName();
                 try self.consumeStatementTerminator();
             } else if (try self.consumeKeyword("fn")) {
-                const func = try self.parseFunctionAfterKeyword();
+                const func = try self.parseFunctionAfterKeyword(item_start);
                 try program.functions.append(self.allocator, func);
             } else {
                 const page = try self.parsePage();
@@ -73,7 +74,7 @@ const Parser = struct {
         return program;
     }
 
-    fn parseFunctionAfterKeyword(self: *Parser) !FunctionDecl {
+    fn parseFunctionAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
         try self.expectChar('(');
@@ -106,7 +107,7 @@ const Parser = struct {
 
         const statements = try self.parseBodyStatements();
         if (!typecheck.functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
-        return .{ .name = name, .params = params, .result_sort = result_sort, .statements = statements };
+        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_sort = result_sort, .statements = statements };
     }
 
     fn parseSortAnnotation(self: *Parser) !core.SemanticSort {

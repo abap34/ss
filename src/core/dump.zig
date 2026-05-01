@@ -229,6 +229,10 @@ pub fn dumpJsonToString(engine: anytype, allocator: Allocator) ![]const u8 {
                 try appendJsonFieldString(allocator, &text, "expected", @tagName(data.expected), true);
                 try appendJsonFieldString(allocator, &text, "actual", @tagName(data.actual), false);
             },
+            .recursive_function => |data| {
+                try appendJsonFieldString(allocator, &text, "code", "RecursiveFunction", true);
+                try appendJsonFieldString(allocator, &text, "function_name", data.function_name, false);
+            },
             .unresolved_frame => |data| {
                 try appendJsonFieldString(allocator, &text, "code", "unresolved_frame", true);
                 try appendJsonFieldBool(allocator, &text, "missing_horizontal", data.missing_horizontal, true);
@@ -298,6 +302,11 @@ pub fn formatDiagnostic(allocator: Allocator, diagnostic: Diagnostic) ![]const u
             allocator,
             "  - [{s}/{s}]{s}{s} {s} expected={s} actual={s}",
             .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, @tagName(data.code), @tagName(data.expected), @tagName(data.actual) },
+        ),
+        .recursive_function => |data| std.fmt.allocPrint(
+            allocator,
+            "  - [{s}/{s}]{s}{s} RecursiveFunction function={s}",
+            .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, data.function_name },
         ),
         .unresolved_frame => |data| std.fmt.allocPrint(
             allocator,
