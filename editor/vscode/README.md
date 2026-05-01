@@ -7,9 +7,9 @@ Included:
 - syntax highlighting
 - comment configuration for `;;`
 - snippets
-- editor diagnostics for errors and warnings from `ss check-file`
+- editor diagnostics for errors and warnings from `ss check`
 - a live PDF preview command
-- a sample task that runs `ss check-file`
+- a sample task that runs `ss check`
 - inlay hints for argument names and solved width/height
 
 ## If `.ss` opens as Scheme
@@ -37,7 +37,7 @@ Copy [settings.sample.json](/Users/yuchi/Desktop/ss/editor/vscode/settings.sampl
 The extension runs:
 
 ```sh
-zig build run -- check-file path/to/file.ss
+zig build run -- check path/to/file.ss
 ```
 
 and publishes both `ERROR:` and `WARNING:` output as VS Code diagnostics. It checks the current buffer through a temporary snapshot next to the source file, so unsaved edits are reflected while relative assets and local themes still resolve from the source directory.
@@ -49,7 +49,7 @@ Use `ss: Check Current File` from the command palette to force a check.
 Run `ss: Open Live Preview` from the command palette or the editor title button. The preview renders the current buffer with:
 
 ```sh
-zig build run -- render-pdf-file path/to/file.ss .ss-cache/vscode-preview/<file>.pdf
+zig build run -- render path/to/file.ss .ss-cache/vscode-preview/<file>.pdf
 ```
 
 It refreshes the generated PDF after edits with a short debounce. The extension opens the preview PDF once, then updates that same file on later renders. By default the extension opens that PDF through VS Code's normal `vscode.open` command, so rendering is handled by the user's installed PDF support instead of a custom webview.
@@ -69,7 +69,7 @@ Copy `tasks.sample.json` to `.vscode/tasks.json` in your workspace if you want a
 The task expects this command to work:
 
 ```sh
-zig build run -- check-file path/to/file.ss
+zig build run -- check path/to/file.ss
 ```
 
 The current CLI emits diagnostics in:
@@ -83,10 +83,10 @@ so the task can attach them to the current file.
 
 ## Inlay hints
 
-The extension asks the local CLI for editor metadata with:
+The extension asks the local CLI for IR JSON with:
 
 ```sh
-zig build run -- editor-info-file path/to/file.ss
+zig build run -- dump path/to/file.ss
 ```
 
 This currently shows:
@@ -104,9 +104,9 @@ If hints do not appear, open `View: Output` and select `ss-slide` in the output-
 
 The extension logs:
 
-- the `zig build run -- editor-info-file ...` command
-- the `zig build run -- check-file ...` command
-- the `zig build run -- render-pdf-file ...` command
+- the `zig build run -- dump ...` command
+- the `zig build run -- check ...` command
+- the `zig build run -- render ...` command
 - the working directory
 - stderr from the CLI
 - JSON parse failures

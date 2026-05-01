@@ -400,6 +400,18 @@ pub const Diagnostic = struct {
             overflow_bottom: f32,
         },
     };
+
+    pub fn deinit(self: *Diagnostic, allocator: Allocator) void {
+        switch (self.data) {
+            .user_report => |data| allocator.free(data.message),
+            .asset_not_found => |data| {
+                allocator.free(data.requested_path);
+                allocator.free(data.resolved_path);
+            },
+            .asset_invalid => |data| allocator.free(data.reason),
+            else => {},
+        }
+    }
 };
 
 pub const TypeMismatchCode = enum {

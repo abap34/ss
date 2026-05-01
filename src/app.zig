@@ -2,8 +2,9 @@ const std = @import("std");
 const core = @import("core");
 const parser = @import("parser.zig");
 const pdf = @import("render/pdf.zig");
-const editor_info = @import("editor_info.zig");
+const dump = @import("dump.zig");
 const typecheck = @import("parser/typecheck.zig");
+const theme_loader = @import("theme_loader.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 
@@ -38,37 +39,7 @@ pub const Progress = struct {
     }
 };
 
-pub const CompiledFile = struct {
-    allocator: std.mem.Allocator,
-    source: []u8,
-    program: parser.Program,
-    index: typecheck.ProgramIndex,
-    engine: core.Engine,
-
-    pub fn deinit(self: *CompiledFile) void {
-        self.engine.deinit();
-        self.index.deinit();
-        self.program.deinit(self.allocator);
-        self.allocator.free(self.source);
-    }
-
-    pub fn takeEngine(self: *CompiledFile) core.Engine {
-        const engine = self.engine;
-        self.index.deinit();
-        self.program.deinit(self.allocator);
-        self.allocator.free(self.source);
-        self.* = undefined;
-        return engine;
-    }
-};
-
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Engine {
-    var compiled = try compileFile(io, allocator, path, progress);
-    errdefer compiled.deinit();
-    return compiled.takeEngine();
-}
-
-pub fn compileFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !CompiledFile {
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
     if (progress) |p| p.step("Read source");
     const source = try utils.fs.readFileAlloc(io, allocator, path);
     errdefer allocator.free(source);
@@ -76,76 +47,84 @@ pub fn compileFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, p
     var program = try parseSource(allocator, source, path);
     errdefer program.deinit(allocator);
 
-    if (progress) |p| p.step("Analyze");
-    var index = try typecheck.loadProgramIndexForPath(allocator, io, path, program);
-    errdefer index.deinit();
-
-    if (progress) |p| p.step("Lower program");
-    var engine = try core.Engine.init(allocator);
-    errdefer engine.deinit();
-    engine.asset_base_dir = try allocator.dupe(u8, std.fs.path.dirname(path) orelse ".");
-    parser.lowerToEngineWithIndex(program, source, path, &engine, &index) catch |err| {
-        switch (err) {
-            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(path, source, &engine, err, core.dump.formatConstraint),
-            else => error_report.printEngineDiagnostics(path, source, &engine),
+    if (progress) |p| p.step("Load index");
+    var index = typecheck.loadProgramIndexForPath(allocator, io, path, program) catch |err| {
+        if (err == error.UnknownTheme) {
+            const base_dir = std.fs.path.dirname(path) orelse ".";
+            const theme_name = program.theme_name orelse "default";
+            const message = try theme_loader.formatUnknownThemeMessage(allocator, io, base_dir, theme_name);
+            defer allocator.free(message);
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = message,
+                .span = null,
+            });
         }
         return err;
     };
-    error_report.printEngineDiagnostics(path, source, &engine);
-    if (error_report.hasErrorDiagnostics(&engine)) return error.DiagnosticsFailed;
-    if (progress) |p| p.step("Solve constraints");
-    return .{
-        .allocator = allocator,
-        .source = source,
-        .program = program,
-        .index = index,
-        .engine = engine,
+    errdefer index.deinit();
+
+    var ir = try typecheck.buildIr(allocator, path, source, program, &index);
+    defer index.deinit();
+    errdefer ir.deinit();
+
+    if (progress) |p| p.step("Typecheck");
+    typecheck.typecheckProgram(allocator, &ir) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        return err;
     };
+
+    if (error_report.hasIrErrors(&ir)) {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        return error.DiagnosticsFailed;
+    }
+
+    if (progress) |p| p.step("Lower and solve");
+    parser.lowerToIr(&ir) catch |err| {
+        switch (err) {
+            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), &ir, err, core.formatConstraint),
+            else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir),
+        }
+        return err;
+    };
+    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+    if (error_report.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    return ir;
 }
 
 pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
-    var engine = try buildFile(io, allocator, path, null);
-    defer engine.deinit();
+    var ir = try buildFile(io, allocator, path, null);
+    defer ir.deinit();
     std.debug.print("ok {s}\n", .{path});
 }
 
-pub fn writeEditorInfoFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
-    var compiled = try compileFile(io, allocator, path, null);
-    defer compiled.deinit();
-    try editor_info.writeEditorInfoJsonWithIndex(
-        allocator,
-        compiled.source,
-        compiled.program,
-        &compiled.engine,
-        &compiled.index,
-    );
-}
-
-pub fn printEngineDumpForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
-    var engine = try buildFile(io, allocator, path, progress);
-    defer engine.deinit();
+pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
+    var ir = try buildFile(io, allocator, path, progress);
+    defer ir.deinit();
     progress.step("Print dump");
-    const dump = try engine.dumpToString(allocator);
-    defer allocator.free(dump);
-    std.debug.print("{s}", .{dump});
+    const text = try dump.toOwnedString(allocator, &ir);
+    defer allocator.free(text);
+    std.debug.print("{s}", .{text});
 }
 
-pub fn writeEngineJsonFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var engine = try buildFile(io, allocator, input_path, progress);
-    defer engine.deinit();
+pub fn writeIrJsonFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildFile(io, allocator, input_path, progress);
+    defer ir.deinit();
     progress.step("Serialize JSON");
-    const json = try engine.dumpJsonToString(allocator);
+    const json = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(json);
     try utils.fs.writeFile(io, output_path, json);
     progress.step("Done");
 }
 
-pub fn writeEnginePdfFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var engine = try buildFile(io, allocator, input_path, progress);
-    defer engine.deinit();
+pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildFile(io, allocator, input_path, progress);
+    defer ir.deinit();
     progress.step("Serialize render IR");
     progress.step("Render PDF");
-    const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &engine);
+    const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &ir);
     defer allocator.free(pdf_data);
     try utils.fs.writeFile(io, output_path, pdf_data);
     progress.step("Done");

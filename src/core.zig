@@ -1,4 +1,4 @@
-const model = @import("core/model.zig");
+const model = @import("model");
 
 pub const Allocator = model.Allocator;
 pub const NodeId = model.NodeId;
@@ -34,8 +34,16 @@ pub const ConstraintFailureKind = model.ConstraintFailureKind;
 pub const ConstraintFailure = model.ConstraintFailure;
 pub const Query = model.Query;
 pub const Transform = model.Transform;
-pub const Engine = @import("core/engine.zig").Engine;
-pub const dump = @import("core/dump.zig");
+pub const Ir = @import("core/ir.zig").Ir;
+pub const SourceModuleKind = @import("core/ir.zig").SourceModuleKind;
+pub const SourceModule = @import("core/ir.zig").SourceModule;
+pub const FunctionSource = @import("core/ir.zig").FunctionSource;
+pub const FunctionMetadata = @import("core/ir.zig").FunctionMetadata;
+pub const DefinitionKind = @import("core/ir.zig").DefinitionKind;
+pub const Definition = @import("core/ir.zig").Definition;
+pub const InlayHintKind = @import("core/ir.zig").InlayHintKind;
+pub const InlayHint = @import("core/ir.zig").InlayHint;
+pub const formatConstraint = @import("core/ir.zig").formatConstraint;
 pub const layout = @import("core/layout.zig");
 pub const render_policy = @import("core/render_policy.zig");
 pub const markdown = @import("core/markdown.zig");

@@ -92,7 +92,7 @@ function activate(context) {
 
     const runRequest = new Promise((resolve) => {
       const cwd = workspaceFolder.uri.fsPath;
-      const args = ["build", "run", "--", "editor-info-file", document.uri.fsPath];
+      const args = ["build", "run", "--", "dump", document.uri.fsPath];
       output.appendLine(`[info] zig ${args.join(" ")}`);
       output.appendLine(`[info] cwd: ${cwd}`);
       cp.execFile(
@@ -263,7 +263,7 @@ function activate(context) {
     }
 
     try {
-      const result = await runZig(document, ["build", "run", "--", "check-file", snapshotPath], "diagnostics");
+      const result = await runZig(document, ["build", "run", "--", "check", snapshotPath], "diagnostics");
       const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
       diagnosticCollection.set(document.uri, diagnostics);
       if (result.error && diagnostics.length === 0) {
@@ -401,7 +401,7 @@ function activate(context) {
     await fs.promises.mkdir(dir, { recursive: true });
 
     try {
-      const result = await runZig(document, ["build", "run", "--", "render-pdf-file", snapshotPath, tempPdf], "preview");
+      const result = await runZig(document, ["build", "run", "--", "render", snapshotPath, tempPdf], "preview");
       const latestSession = previewSessions.get(key);
       if (!latestSession || latestSession.renderId !== renderId) {
         await removeFileIfExists(tempPdf);

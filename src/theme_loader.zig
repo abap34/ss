@@ -2,6 +2,18 @@ const std = @import("std");
 
 const max_theme_bytes = 256 * 1024;
 
+const EmbeddedTheme = struct {
+    name: []const u8,
+    source: []const u8,
+};
+
+const embedded_themes = [_]EmbeddedTheme{
+    .{ .name = "base", .source = @embedFile("stdlib/themes/base.ss") },
+    .{ .name = "default", .source = @embedFile("stdlib/themes/default.ss") },
+    .{ .name = "academic", .source = @embedFile("stdlib/themes/academic.ss") },
+    .{ .name = "pop", .source = @embedFile("stdlib/themes/pop.ss") },
+};
+
 pub const ThemeModule = struct {
     path: []u8,
     source: []u8,
@@ -43,10 +55,11 @@ pub fn loadThemeModule(
         };
     }
 
-    if (try resolveBundledThemePath(allocator, io, theme_spec)) |path| {
-        errdefer allocator.free(path);
-        const source = try readThemeFile(allocator, io, path);
-        return .{ .path = path, .source = source };
+    if (embeddedThemeSource(theme_spec)) |source| {
+        return .{
+            .path = try std.fmt.allocPrint(allocator, "<embedded:{s}>", .{theme_spec}),
+            .source = try allocator.dupe(u8, source),
+        };
     }
 
     const cwd_theme_path = try std.fmt.allocPrint(allocator, "themes/{s}.ss", .{theme_spec});
@@ -78,6 +91,7 @@ pub fn formatUnknownThemeMessage(
     base_dir: []const u8,
     theme_spec: []const u8,
 ) ![]u8 {
+    _ = io;
     if (looksLikePath(theme_spec)) {
         const resolved = try resolveExplicitPath(allocator, base_dir, theme_spec);
         defer allocator.free(resolved);
@@ -88,23 +102,10 @@ pub fn formatUnknownThemeMessage(
         );
     }
 
-    const bundled_note = if (tryBundledThemeCandidatePaths(allocator, io, theme_spec)) |paths| blk: {
-        defer {
-            for (paths) |path| allocator.free(path);
-            allocator.free(paths);
-        }
-        if (paths.len == 0) break :blk "no bundled stdlib theme candidates were available";
-        break :blk try std.fmt.allocPrint(
-            allocator,
-            "bundled stdlib candidates: {s}",
-            .{paths[0]},
-        );
-    } else "no bundled stdlib theme candidates were available";
-    defer if (std.mem.startsWith(u8, bundled_note, "bundled stdlib candidates:")) allocator.free(bundled_note);
     return std.fmt.allocPrint(
         allocator,
-        "UnknownTheme: theme '{s}' was not found. searched: {s}/themes/{s}.ss, themes/{s}.ss; {s}",
-        .{ theme_spec, base_dir, theme_spec, theme_spec, bundled_note },
+        "UnknownTheme: theme '{s}' was not found. searched: {s}/themes/{s}.ss, themes/{s}.ss; embedded stdlib themes: base, default, academic, pop",
+        .{ theme_spec, base_dir, theme_spec, theme_spec },
     );
 }
 
@@ -144,49 +145,9 @@ fn tryReadThemeFile(
     };
 }
 
-fn resolveBundledThemePath(allocator: std.mem.Allocator, io: std.Io, theme_spec: []const u8) !?[]u8 {
-    const candidates = tryBundledThemeCandidatePaths(allocator, io, theme_spec) orelse return null;
-    defer {
-        for (candidates) |candidate| allocator.free(candidate);
-        allocator.free(candidates);
-    }
-
-    for (candidates) |candidate| {
-        if (tryReadThemeFile(allocator, io, candidate) catch |err| return err) |bytes| {
-            allocator.free(bytes);
-            return try allocator.dupe(u8, candidate);
-        }
+fn embeddedThemeSource(theme_spec: []const u8) ?[]const u8 {
+    for (embedded_themes) |theme| {
+        if (std.mem.eql(u8, theme.name, theme_spec)) return theme.source;
     }
     return null;
-}
-
-fn tryBundledThemeCandidatePaths(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    theme_spec: []const u8,
-) ?[][]u8 {
-    const exe_dir = std.process.executableDirPathAlloc(io, allocator) catch return null;
-    defer allocator.free(exe_dir);
-
-    var candidates = std.ArrayList([]u8).empty;
-    errdefer {
-        for (candidates.items) |candidate| allocator.free(candidate);
-        candidates.deinit(allocator);
-    }
-
-    const relative_roots = [_][]const u8{
-        "../stdlib/themes",
-        "../../stdlib/themes",
-    };
-    for (relative_roots) |relative_root| {
-        const root = std.fs.path.join(allocator, &.{ exe_dir, relative_root }) catch continue;
-        defer allocator.free(root);
-        const candidate = std.fmt.allocPrint(allocator, "{s}/{s}.ss", .{ root, theme_spec }) catch continue;
-        candidates.append(allocator, candidate) catch {
-            allocator.free(candidate);
-            continue;
-        };
-    }
-
-    return candidates.toOwnedSlice(allocator) catch null;
 }

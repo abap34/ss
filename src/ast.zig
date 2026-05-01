@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("core");
+const core = @import("model");
 
 const Allocator = std.mem.Allocator;
 

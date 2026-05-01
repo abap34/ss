@@ -1,4 +1,4 @@
-const ast = @import("parser/ast.zig");
+const ast = @import("ast");
 
 pub const Program = ast.Program;
 pub const PageDecl = ast.PageDecl;
@@ -13,6 +13,4 @@ const syntax = @import("parser/syntax.zig");
 pub const ParseDiagnostic = syntax.ParseDiagnostic;
 pub const parse = syntax.parse;
 pub const lastParseDiagnostic = syntax.lastDiagnostic;
-pub const lowerToEngine = @import("parser/lower.zig").lowerToEngine;
-pub const lowerToEngineWithPath = @import("parser/lower.zig").lowerToEngineWithPath;
-pub const lowerToEngineWithIndex = @import("parser/lower.zig").lowerToEngineWithIndex;
+pub const lowerToIr = @import("parser/lower.zig").lowerToIr;
