@@ -73,12 +73,12 @@ fn image(path_value: string) -> object
   return obj
 end
 
-fn pdf_figure(path_value: string) -> object
-  return framed_object(path_value, "figure", "pdf_ref", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16")
+fn pdf_figure(path_value: string, scale: number = 1) -> object
+  return with_asset_scale(framed_object(path_value, "figure", "pdf_ref", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16"), scale)
 end
 
-fn pdf(path_value: string) -> object
-  return pdf_figure(path_value)
+fn pdf(path_value: string, scale: number = 1) -> object
+  return pdf_figure(path_value, scale)
 end
 
 fn code(text_value: string) -> object
