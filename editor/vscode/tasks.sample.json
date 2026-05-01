@@ -9,11 +9,12 @@
         "owner": "ss",
         "fileLocation": ["absolute"],
         "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+): error: (.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "message": 4
+          "regexp": "^(ERROR|WARNING):\\s+(.*):(\\d+):(\\d+):\\s+(.*)$",
+          "severity": 1,
+          "file": 2,
+          "line": 3,
+          "column": 4,
+          "message": 5
         }
       }
     }

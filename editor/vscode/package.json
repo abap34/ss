@@ -9,7 +9,9 @@
     "vscode": "^1.85.0"
   },
   "activationEvents": [
-    "onLanguage:ss-slide"
+    "onLanguage:ss-slide",
+    "onCommand:ss.preview.live",
+    "onCommand:ss.checkCurrentFile"
   ],
   "categories": [
     "Programming Languages",
@@ -36,6 +38,59 @@
         "language": "ss-slide",
         "path": "./snippets/ss.code-snippets"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "ss.preview.live",
+        "title": "ss: Open Live Preview"
+      },
+      {
+        "command": "ss.checkCurrentFile",
+        "title": "ss: Check Current File"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "ss.preview.live",
+          "when": "resourceLangId == ss-slide",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ss.preview.live"
+        },
+        {
+          "command": "ss.checkCurrentFile"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ss",
+      "properties": {
+        "ss.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run ss check-file and publish diagnostics while editing."
+        },
+        "ss.livePreview.debounceMs": {
+          "type": "number",
+          "default": 900,
+          "minimum": 100,
+          "description": "Delay before refreshing the ss live preview after edits."
+        },
+        "ss.livePreview.openMode": {
+          "type": "string",
+          "default": "vscode",
+          "enum": ["vscode", "external"],
+          "enumDescriptions": [
+            "Open the generated PDF through VS Code's normal document opening command.",
+            "Open the generated PDF with the operating system's external PDF application."
+          ],
+          "description": "How ss live preview opens the generated PDF."
+        }
+      }
+    }
   }
 }

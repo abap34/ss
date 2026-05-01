@@ -1,11 +1,18 @@
 const vscode = require("vscode");
 const cp = require("child_process");
+const crypto = require("crypto");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 function activate(context) {
   const emitter = new vscode.EventEmitter();
   const output = vscode.window.createOutputChannel("ss-slide");
   const refreshTimers = new Map();
+  const diagnosticTimers = new Map();
+  const previewTimers = new Map();
+  const previewSessions = new Map();
+  const diagnosticCollection = vscode.languages.createDiagnosticCollection("ss");
   const guideIconPath = vscode.Uri.file(path.join(__dirname, "media", "page-block-guide.svg"));
   const pageBlockDecoration = vscode.window.createTextEditorDecorationType({
     gutterIconPath: guideIconPath,
@@ -32,6 +39,353 @@ function activate(context) {
       }
     }
     return null;
+  }
+
+  function stripAnsi(text) {
+    return String(text || "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  }
+
+  function documentKey(document) {
+    return document.uri.toString();
+  }
+
+  function workspaceCwd(document) {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    return workspaceFolder ? workspaceFolder.uri.fsPath : null;
+  }
+
+  function diagnosticsEnabled() {
+    return vscode.workspace.getConfiguration("ss").get("diagnostics.enabled", true);
+  }
+
+  function livePreviewDebounceMs() {
+    return Math.max(100, Number(vscode.workspace.getConfiguration("ss").get("livePreview.debounceMs", 900)));
+  }
+
+  function livePreviewOpenMode() {
+    return vscode.workspace.getConfiguration("ss").get("livePreview.openMode", "vscode");
+  }
+
+  function stableHash(text) {
+    return crypto.createHash("sha1").update(text).digest("hex").slice(0, 12);
+  }
+
+  async function writeSnapshot(document) {
+    if (!document || document.uri.scheme !== "file") {
+      return null;
+    }
+
+    const sourcePath = document.uri.fsPath;
+    const dir = path.dirname(sourcePath);
+    const ext = path.extname(sourcePath) || ".ss";
+    const base = path.basename(sourcePath, ext).replace(/[^A-Za-z0-9_-]/g, "_") || "untitled";
+    const nonce = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+    const fileName = `.ss-vscode-${base}-${process.pid}-${stableHash(document.uri.toString())}-${nonce}${ext}`;
+    const snapshotPath = path.join(dir, fileName);
+    await fs.promises.writeFile(snapshotPath, document.getText(), "utf8");
+    return snapshotPath;
+  }
+
+  async function removeFileIfExists(filePath) {
+    if (!filePath) {
+      return;
+    }
+    try {
+      await fs.promises.unlink(filePath);
+    } catch (error) {
+      if (error && error.code !== "ENOENT") {
+        output.appendLine(`[cleanup] ${error.message}`);
+      }
+    }
+  }
+
+  function runZig(document, args, label) {
+    const cwd = workspaceCwd(document);
+    if (!cwd) {
+      return Promise.resolve({
+        error: new Error("ss files must be opened inside the ss workspace"),
+        stdout: "",
+        stderr: "",
+      });
+    }
+
+    output.appendLine(`[${label}] zig ${args.join(" ")}`);
+    output.appendLine(`[${label}] cwd: ${cwd}`);
+    return new Promise((resolve) => {
+      cp.execFile("zig", args, { cwd, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+        resolve({ error, stdout: stdout || "", stderr: stderr || "" });
+      });
+    });
+  }
+
+  function parseCliDiagnostics(document, stdout, stderr) {
+    const diagnostics = [];
+    const seen = new Set();
+    const text = stripAnsi(`${stderr || ""}\n${stdout || ""}`);
+    const lines = text.split(/\r?\n/);
+
+    for (const line of lines) {
+      let match = /^(ERROR|WARNING):\s+(.*):(\d+):(\d+):\s+(.*)$/.exec(line);
+      let severityText;
+      let lineNumber;
+      let columnNumber;
+      let message;
+
+      if (match) {
+        severityText = match[1];
+        lineNumber = Number(match[3]);
+        columnNumber = Number(match[4]);
+        message = match[5];
+      } else {
+        match = /^(.*):(\d+):(\d+):\s+(error|warning):\s+(.*)$/i.exec(line);
+        if (!match) {
+          continue;
+        }
+        severityText = match[4].toUpperCase();
+        lineNumber = Number(match[2]);
+        columnNumber = Number(match[3]);
+        message = match[5];
+      }
+
+      const zeroLine = Math.max(0, Math.min(document.lineCount - 1, lineNumber - 1));
+      const lineText = zeroLine < document.lineCount ? document.lineAt(zeroLine).text : "";
+      const zeroColumn = Math.max(0, Math.min(lineText.length, columnNumber - 1));
+      const endColumn = lineText.length > zeroColumn ? lineText.length : zeroColumn;
+      const range = new vscode.Range(
+        new vscode.Position(zeroLine, zeroColumn),
+        new vscode.Position(zeroLine, endColumn),
+      );
+      const diagnostic = new vscode.Diagnostic(
+        range,
+        message,
+        severityText === "WARNING" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error,
+      );
+      const key = `${severityText}:${zeroLine}:${zeroColumn}:${message}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      diagnostic.source = "ss";
+      diagnostics.push(diagnostic);
+    }
+
+    return diagnostics;
+  }
+
+  async function refreshDiagnostics(document) {
+    if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
+      return;
+    }
+
+    const snapshotPath = await writeSnapshot(document);
+    if (!snapshotPath) {
+      return;
+    }
+
+    try {
+      const result = await runZig(document, ["build", "run", "--", "check-file", snapshotPath], "diagnostics");
+      const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
+      diagnosticCollection.set(document.uri, diagnostics);
+      if (result.error && diagnostics.length === 0) {
+        output.appendLine(`[diagnostics] failed: ${result.error.message}`);
+        if (result.stderr.trim().length > 0) output.appendLine(result.stderr.trimEnd());
+        if (result.stdout.trim().length > 0) output.appendLine(result.stdout.trimEnd());
+      } else {
+        output.appendLine(`[diagnostics] ${diagnostics.length} diagnostics`);
+      }
+    } finally {
+      await removeFileIfExists(snapshotPath);
+    }
+  }
+
+  function scheduleDiagnostics(document, delayMs) {
+    if (!document || document.languageId !== "ss-slide") {
+      return;
+    }
+    if (!diagnosticsEnabled()) {
+      diagnosticCollection.delete(document.uri);
+      return;
+    }
+    const key = documentKey(document);
+    const existing = diagnosticTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      diagnosticTimers.delete(key);
+      refreshDiagnostics(document);
+    }, delayMs);
+    diagnosticTimers.set(key, timer);
+  }
+
+  function clearDiagnosticsTimer(document) {
+    if (!document) {
+      return;
+    }
+    const key = documentKey(document);
+    const existing = diagnosticTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+      diagnosticTimers.delete(key);
+    }
+  }
+
+  function clearPreviewSession(document) {
+    if (!document) {
+      return;
+    }
+    const key = documentKey(document);
+    const existing = previewTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+      previewTimers.delete(key);
+    }
+    previewSessions.delete(key);
+  }
+
+  function previewOutputPath(document, renderId) {
+    const cwd = workspaceCwd(document);
+    const root = cwd || os.tmpdir();
+    const outDir = path.join(root, ".ss-cache", "vscode-preview");
+    const base = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath)).replace(/[^A-Za-z0-9_-]/g, "_") || "preview";
+    const stem = `${base}-${stableHash(document.uri.toString())}`;
+    return {
+      dir: outDir,
+      pdf: path.join(outDir, `${stem}.pdf`),
+      tempPdf: path.join(outDir, `${stem}.tmp-${process.pid}-${renderId}.pdf`),
+      stalePrefix: `${stem}-`,
+      tempPrefix: `${stem}.tmp-`,
+    };
+  }
+
+  async function cleanupPreviewCache(document, keepPdf) {
+    const { dir, pdf, stalePrefix, tempPrefix } = previewOutputPath(document, 0);
+    try {
+      const entries = await fs.promises.readdir(dir);
+      await Promise.all(entries.map(async (entry) => {
+        const filePath = path.join(dir, entry);
+        if (filePath === keepPdf || filePath === pdf) {
+          return;
+        }
+        if ((entry.startsWith(stalePrefix) || entry.startsWith(tempPrefix)) && entry.endsWith(".pdf")) {
+          await removeFileIfExists(filePath);
+        }
+      }));
+    } catch (error) {
+      if (error && error.code !== "ENOENT") {
+        output.appendLine(`[preview cleanup] ${error.message}`);
+      }
+    }
+  }
+
+  async function revealPreviewPdf(document, pdfPath, force) {
+    const key = documentKey(document);
+    const session = previewSessions.get(key) || {};
+    if (!force && session.opened) {
+      return;
+    }
+
+    const uri = vscode.Uri.file(pdfPath);
+    if (livePreviewOpenMode() === "external") {
+      await vscode.env.openExternal(uri);
+    } else {
+      await vscode.commands.executeCommand("vscode.open", uri, {
+        viewColumn: vscode.ViewColumn.Beside,
+        preserveFocus: true,
+        preview: false,
+      });
+    }
+    previewSessions.set(key, { ...session, opened: true, pdfPath });
+  }
+
+  async function renderPreview(document) {
+    if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
+      return;
+    }
+
+    const key = documentKey(document);
+    if (!previewSessions.has(key)) {
+      return;
+    }
+
+    const session = previewSessions.get(key) || {};
+    const renderId = (session.renderId || 0) + 1;
+    previewSessions.set(key, { ...session, renderId });
+
+    const snapshotPath = await writeSnapshot(document);
+    if (!snapshotPath) {
+      return;
+    }
+
+    const { dir, pdf, tempPdf } = previewOutputPath(document, renderId);
+    await fs.promises.mkdir(dir, { recursive: true });
+
+    try {
+      const result = await runZig(document, ["build", "run", "--", "render-pdf-file", snapshotPath, tempPdf], "preview");
+      const latestSession = previewSessions.get(key);
+      if (!latestSession || latestSession.renderId !== renderId) {
+        await removeFileIfExists(tempPdf);
+        return;
+      }
+
+      const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
+      diagnosticCollection.set(document.uri, diagnostics);
+      if (result.error) {
+        output.appendLine("[preview] failed:");
+        if (result.stderr.trim().length > 0) output.appendLine(result.stderr.trimEnd());
+        if (result.stdout.trim().length > 0) output.appendLine(result.stdout.trimEnd());
+        vscode.window.showErrorMessage("ss preview failed. See the ss-slide output for details.");
+        return;
+      }
+      await fs.promises.copyFile(tempPdf, pdf);
+      await removeFileIfExists(tempPdf);
+      previewSessions.set(key, { ...latestSession, pdfPath: pdf });
+      await cleanupPreviewCache(document, pdf);
+      await revealPreviewPdf(document, pdf, false);
+    } finally {
+      await removeFileIfExists(snapshotPath);
+      await removeFileIfExists(tempPdf);
+    }
+  }
+
+  function schedulePreview(document, delayMs) {
+    if (!document || document.languageId !== "ss-slide") {
+      return;
+    }
+    const key = documentKey(document);
+    if (!previewSessions.has(key)) {
+      return;
+    }
+    const existing = previewTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      previewTimers.delete(key);
+      renderPreview(document);
+    }, delayMs);
+    previewTimers.set(key, timer);
+  }
+
+  function openLivePreview(document) {
+    if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
+      vscode.window.showWarningMessage("Open an .ss file to start live preview.");
+      return;
+    }
+
+    const key = documentKey(document);
+    const existing = previewSessions.get(key);
+    if (existing) {
+      if (existing.pdfPath) {
+        revealPreviewPdf(document, existing.pdfPath, true);
+      }
+      renderPreview(document);
+      return;
+    }
+
+    previewSessions.set(key, { opened: false, pdfPath: null, renderId: 0 });
+    void cleanupPreviewCache(document, null);
+    renderPreview(document);
   }
 
   function scheduleRefresh(document, delayMs) {
@@ -209,10 +563,28 @@ function activate(context) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("ss.preview.live", () => {
+      openLivePreview(vscode.window.activeTextEditor && vscode.window.activeTextEditor.document);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("ss.checkCurrentFile", () => {
+      const document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+      if (document && document.languageId === "ss-slide") {
+        refreshDiagnostics(document);
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
       if (document.languageId === "ss-slide") {
         clearRefresh(document);
+        clearDiagnosticsTimer(document);
         emitter.fire();
+        refreshDiagnostics(document);
+        schedulePreview(document, 0);
         refreshVisibleBlockDecorations();
       }
     }),
@@ -221,6 +593,8 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
       scheduleRefresh(event.document, 400);
+      scheduleDiagnostics(event.document, 500);
+      schedulePreview(event.document, livePreviewDebounceMs());
       refreshVisibleBlockDecorations();
     }),
   );
@@ -228,12 +602,18 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
       clearRefresh(document);
+      clearDiagnosticsTimer(document);
+      clearPreviewSession(document);
+      diagnosticCollection.delete(document.uri);
     }),
   );
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       refreshBlockDecorations(editor);
+      if (editor && editor.document.languageId === "ss-slide") {
+        scheduleDiagnostics(editor.document, 100);
+      }
     }),
   );
 
@@ -245,6 +625,7 @@ function activate(context) {
 
   context.subscriptions.push(emitter);
   context.subscriptions.push(output);
+  context.subscriptions.push(diagnosticCollection);
   context.subscriptions.push(pageBlockDecoration);
   context.subscriptions.push({
     dispose() {
@@ -252,10 +633,24 @@ function activate(context) {
         clearTimeout(timer);
       }
       refreshTimers.clear();
+      for (const timer of diagnosticTimers.values()) {
+        clearTimeout(timer);
+      }
+      diagnosticTimers.clear();
+      for (const timer of previewTimers.values()) {
+        clearTimeout(timer);
+      }
+      previewTimers.clear();
+      previewSessions.clear();
     },
   });
 
   refreshVisibleBlockDecorations();
+  for (const document of vscode.workspace.textDocuments) {
+    if (document.languageId === "ss-slide") {
+      scheduleDiagnostics(document, 100);
+    }
+  }
 }
 
 function deactivate() {}

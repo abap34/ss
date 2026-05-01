@@ -7,7 +7,9 @@ Included:
 - syntax highlighting
 - comment configuration for `;;`
 - snippets
-- a sample task that runs `ss check-file` and surfaces diagnostics
+- editor diagnostics for errors and warnings from `ss check-file`
+- a live PDF preview command
+- a sample task that runs `ss check-file`
 - inlay hints for argument names and solved width/height
 
 ## If `.ss` opens as Scheme
@@ -30,6 +32,36 @@ Copy [settings.sample.json](/Users/yuchi/Desktop/ss/editor/vscode/settings.sampl
 2. Run `Developer: Install Extension from Location...`
 3. Choose this `editor/vscode` directory.
 
+## Diagnostics
+
+The extension runs:
+
+```sh
+zig build run -- check-file path/to/file.ss
+```
+
+and publishes both `ERROR:` and `WARNING:` output as VS Code diagnostics. It checks the current buffer through a temporary snapshot next to the source file, so unsaved edits are reflected while relative assets and local themes still resolve from the source directory.
+
+Use `ss: Check Current File` from the command palette to force a check.
+
+## Live preview
+
+Run `ss: Open Live Preview` from the command palette or the editor title button. The preview renders the current buffer with:
+
+```sh
+zig build run -- render-pdf-file path/to/file.ss .ss-cache/vscode-preview/<file>.pdf
+```
+
+It refreshes the generated PDF after edits with a short debounce. The extension opens the preview PDF once, then updates that same file on later renders. By default the extension opens that PDF through VS Code's normal `vscode.open` command, so rendering is handled by the user's installed PDF support instead of a custom webview.
+
+Set `ss.livePreview.openMode` to `external` to open the generated PDF in the operating system's PDF application instead:
+
+```json
+{
+  "ss.livePreview.openMode": "external"
+}
+```
+
 ## Diagnostics task
 
 Copy `tasks.sample.json` to `.vscode/tasks.json` in your workspace if you want a simple save/check task.
@@ -40,10 +72,11 @@ The task expects this command to work:
 zig build run -- check-file path/to/file.ss
 ```
 
-The CLI emits diagnostics in:
+The current CLI emits diagnostics in:
 
 ```text
-/abs/path/file.ss:12:3: error: unknown function: foo
+ERROR: /abs/path/file.ss:12:3: unknown function: foo
+WARNING: /abs/path/file.ss:13:3: custom warning
 ```
 
 so the task can attach them to the current file.
@@ -72,6 +105,8 @@ If hints do not appear, open `View: Output` and select `ss-slide` in the output-
 The extension logs:
 
 - the `zig build run -- editor-info-file ...` command
+- the `zig build run -- check-file ...` command
+- the `zig build run -- render-pdf-file ...` command
 - the working directory
 - stderr from the CLI
 - JSON parse failures
