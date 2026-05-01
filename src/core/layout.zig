@@ -297,7 +297,7 @@ fn runPageAxisPass(engine: anytype, page_id: NodeId, child_ids: []const NodeId, 
             var local_changed = false;
 
             for (states) |*state| {
-                local_changed = (try reconcileAxisState(state)) or local_changed;
+                local_changed = (try reconcileAxisStateLocalized(engine, page_id, state)) or local_changed;
             }
 
             for (engine.constraints.items) |constraint| {
@@ -331,6 +331,48 @@ fn runPageAxisPass(engine: anytype, page_id: NodeId, child_ids: []const NodeId, 
 
         if (!changed) break;
     }
+}
+
+fn reconcileAxisStateLocalized(engine: anytype, page_id: NodeId, state: *AxisState) !bool {
+    return reconcileAxisState(state) catch |err| switch (err) {
+        error.ConstraintConflict, error.NegativeConstraintSize => blk: {
+            const incoming = state.size_source orelse state.end_source orelse state.start_source orelse state.center_source;
+            const existing = pickReconcileExistingSource(state, incoming);
+            if (incoming) |c| {
+                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                engine.noteConstraintFailure(page_id, c, existing, kind);
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn pickReconcileExistingSource(state: *const AxisState, incoming: ?Constraint) ?Constraint {
+    const candidates = [_]?Constraint{ state.size_source, state.start_source, state.end_source, state.center_source };
+    for (candidates) |candidate| {
+        const c = candidate orelse continue;
+        if (incoming) |inc| {
+            if (constraintsSame(c, inc)) continue;
+        }
+        return c;
+    }
+    return null;
+}
+
+fn constraintsSame(a: Constraint, b: Constraint) bool {
+    if (a.target_node != b.target_node) return false;
+    if (a.target_anchor != b.target_anchor) return false;
+    if (a.offset != b.offset) return false;
+    return switch (a.source) {
+        .page => |a_anchor| switch (b.source) {
+            .page => |b_anchor| a_anchor == b_anchor,
+            .node => false,
+        },
+        .node => |a_node| switch (b.source) {
+            .page => false,
+            .node => |b_node| a_node.node_id == b_node.node_id and a_node.anchor == b_node.anchor,
+        },
+    };
 }
 
 fn buildHorizontalFallbackConstraints(engine: anytype, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
@@ -399,17 +441,67 @@ fn applyAxisConstraint(engine: anytype, page_id: NodeId, child_ids: []const Node
     const target_index = indexOfNode(child_ids, constraint.target_node) orelse return error.UnknownNode;
     const target_node = engine.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (isGroupNode(target_node)) return false;
+
+    if (selfReferentialSize(constraint, axis)) |size| {
+        if (size < -0.01) {
+            engine.noteConstraintFailure(page_id, constraint, states[target_index].size_source, .negative_size);
+            return false;
+        }
+        return setAxisSize(&states[target_index], size, constraint) catch |err| {
+            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+            engine.noteConstraintFailure(page_id, constraint, states[target_index].size_source, kind);
+            return false;
+        };
+    }
+
     const source_value = try constraintSourceValue(engine, page_id, child_ids, states, axis, constraint.source);
     if (source_value == null) return false;
 
     return setAxisAnchor(&states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
-        switch (err) {
-            error.ConstraintConflict => engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[target_index], constraint.target_anchor), .conflict),
-        }
-        if (err == error.ConstraintConflict and constraint.origin == null and nodeUnderTargetedGroup(engine, constraint.target_node, axis)) {
-            return false;
-        }
-        return err;
+        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+        engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[target_index], constraint.target_anchor), kind);
+        return false;
+    };
+}
+
+fn selfReferentialSize(constraint: Constraint, axis: Axis) ?f32 {
+    const node_source = switch (constraint.source) {
+        .node => |ns| ns,
+        .page => return null,
+    };
+    if (node_source.node_id != constraint.target_node) return null;
+    if (anchorAxis(node_source.anchor) != axis) return null;
+    if (anchorAxis(constraint.target_anchor) != axis) return null;
+    return sizeFromAnchorPair(constraint.target_anchor, node_source.anchor, constraint.offset);
+}
+
+const AnchorRole = enum { start, end, center };
+
+fn anchorRole(a: Anchor) AnchorRole {
+    return switch (a) {
+        .left, .bottom => .start,
+        .right, .top => .end,
+        .center_x, .center_y => .center,
+    };
+}
+
+fn sizeFromAnchorPair(target: Anchor, source: Anchor, offset: f32) ?f32 {
+    return switch (anchorRole(target)) {
+        .end => switch (anchorRole(source)) {
+            .start => offset,
+            .center => offset * 2,
+            .end => null,
+        },
+        .start => switch (anchorRole(source)) {
+            .end => -offset,
+            .center => -offset * 2,
+            .start => null,
+        },
+        .center => switch (anchorRole(source)) {
+            .start => offset * 2,
+            .end => -offset * 2,
+            .center => null,
+        },
     };
 }
 
@@ -541,38 +633,28 @@ fn applyGroupTargetConstraintSlice(
         used.* = true;
         last_constraint.* = constraint;
 
-        switch (constraint.source) {
-            .node => |node_source| {
-                if (node_source.node_id == group_id and anchorAxis(node_source.anchor) == axis) {
-                    const size_value: ?f32 = switch (axis) {
-                        .horizontal => switch (constraint.target_anchor) {
-                            .right => if (node_source.anchor == .left) constraint.offset else null,
-                            .left => if (node_source.anchor == .right) -constraint.offset else null,
-                            else => null,
-                        },
-                        .vertical => switch (constraint.target_anchor) {
-                            .top => if (node_source.anchor == .bottom) constraint.offset else null,
-                            .bottom => if (node_source.anchor == .top) -constraint.offset else null,
-                            else => null,
-                        },
-                    };
-                    if (size_value) |size| {
-                        try ensureNonNegativeSize(size);
-                        _ = try setAxisSize(temp, size, constraint);
-                        switch (constraint.target_anchor) {
-                            .right, .top => {
-                                if (temp.start == null) temp.start = base.start;
-                            },
-                            .left, .bottom => {
-                                if (temp.end == null) temp.end = base.end;
-                            },
-                            else => {},
-                        }
-                        continue;
-                    }
-                }
-            },
-            .page => {},
+        if (selfReferentialSize(constraint, axis)) |size| {
+            if (size < -0.01) {
+                engine.noteConstraintFailure(page_id, constraint, temp.size_source, .negative_size);
+                continue;
+            }
+            _ = setAxisSize(temp, size, constraint) catch |err| {
+                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                engine.noteConstraintFailure(page_id, constraint, temp.size_source, kind);
+                continue;
+            };
+            switch (anchorRole(constraint.target_anchor)) {
+                .end => {
+                    if (temp.start == null) temp.start = base.start;
+                },
+                .start => {
+                    if (temp.end == null) temp.end = base.end;
+                },
+                .center => {
+                    if (temp.center == null) temp.center = base.center;
+                },
+            }
+            continue;
         }
 
         const source_value = switch (constraint.source) {
@@ -588,10 +670,8 @@ fn applyGroupTargetConstraintSlice(
         if (source_value == null) continue;
 
         _ = setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
-            switch (err) {
-                error.ConstraintConflict => engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(temp.*, constraint.target_anchor), .conflict),
-            }
-            return err;
+            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+            engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(temp.*, constraint.target_anchor), kind);
         };
     }
 }
@@ -665,12 +745,10 @@ fn applyGroupTargetConstraints(
         }
         _ = reconcileAxisState(&temp) catch |err| {
             if (last_constraint) |constraint| {
-                switch (err) {
-                    error.ConstraintConflict => engine.noteConstraintFailure(page_id, constraint, null, .conflict),
-                    error.NegativeConstraintSize => engine.noteConstraintFailure(page_id, constraint, null, .negative_size),
-                }
+                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                engine.noteConstraintFailure(page_id, constraint, null, kind);
             }
-            return err;
+            continue;
         };
 
         const delta = if (temp.start != null and base.start != null) temp.start.? - base.start.? else 0;

@@ -40,6 +40,7 @@ pub const Engine = struct {
     constraints: std.ArrayList(Constraint),
     diagnostics: std.ArrayList(Diagnostic),
     last_constraint_failure: ?ConstraintFailure,
+    constraint_failures: std.ArrayList(ConstraintFailure),
     fragments: std.ArrayList(*Fragment),
     next_id: NodeId,
     document_id: NodeId,
@@ -54,6 +55,7 @@ pub const Engine = struct {
             .constraints = .empty,
             .diagnostics = .empty,
             .last_constraint_failure = null,
+            .constraint_failures = .empty,
             .fragments = .empty,
             .next_id = 1,
             .document_id = 0,
@@ -84,6 +86,7 @@ pub const Engine = struct {
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
+        self.constraint_failures.deinit(self.allocator);
         for (self.fragments.items) |fragment| {
             fragment.deinit(self.allocator);
             self.allocator.destroy(fragment);
@@ -321,12 +324,21 @@ pub const Engine = struct {
     }
 
     pub fn noteConstraintFailure(self: *Engine, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
-        self.last_constraint_failure = .{
+        const failure: ConstraintFailure = .{
             .kind = kind,
             .page_id = page_id,
             .constraint = constraint,
             .existing_constraint = existing_constraint,
         };
+        self.last_constraint_failure = failure;
+        for (self.constraint_failures.items) |existing| {
+            if (constraintFailureSame(existing, failure)) return;
+        }
+        self.constraint_failures.append(self.allocator, failure) catch {};
+    }
+
+    pub fn hasConstraintFailures(self: *const Engine) bool {
+        return self.constraint_failures.items.len > 0;
     }
 
     pub fn clearDiagnostics(self: *Engine) void {
@@ -649,9 +661,16 @@ pub const Engine = struct {
     pub fn finalize(self: *Engine) !void {
         self.clearDiagnostics();
         self.last_constraint_failure = null;
+        self.constraint_failures.clearRetainingCapacity();
         try self.refreshPageNumbers();
         try self.refreshTocs();
         try layout.solveLayout(self);
+        if (self.constraint_failures.items.len > 0) {
+            switch (self.constraint_failures.items[0].kind) {
+                .conflict => return error.ConstraintConflict,
+                .negative_size => return error.NegativeConstraintSize,
+            }
+        }
     }
 
     fn refreshPageNumbers(self: *Engine) !void {
@@ -694,3 +713,37 @@ pub const Engine = struct {
         return dump.dumpJsonToString(self, allocator);
     }
 };
+
+fn constraintFailureSame(a: ConstraintFailure, b: ConstraintFailure) bool {
+    if (a.kind != b.kind) return false;
+    if (a.page_id != b.page_id) return false;
+    if (!constraintEq(a.constraint, b.constraint)) return false;
+    if ((a.existing_constraint == null) != (b.existing_constraint == null)) return false;
+    if (a.existing_constraint) |existing_a| {
+        if (!constraintEq(existing_a, b.existing_constraint.?)) return false;
+    }
+    return true;
+}
+
+fn constraintEq(a: Constraint, b: Constraint) bool {
+    if (a.target_node != b.target_node) return false;
+    if (a.target_anchor != b.target_anchor) return false;
+    if (a.offset != b.offset) return false;
+    if (!constraintSourceEq(a.source, b.source)) return false;
+    const a_origin = a.origin orelse "";
+    const b_origin = b.origin orelse "";
+    return std.mem.eql(u8, a_origin, b_origin);
+}
+
+fn constraintSourceEq(a: ConstraintSource, b: ConstraintSource) bool {
+    return switch (a) {
+        .page => |a_anchor| switch (b) {
+            .page => |b_anchor| a_anchor == b_anchor,
+            .node => false,
+        },
+        .node => |a_node| switch (b) {
+            .page => false,
+            .node => |b_node| a_node.node_id == b_node.node_id and a_node.anchor == b_node.anchor,
+        },
+    };
+}
