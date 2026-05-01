@@ -1297,13 +1297,17 @@ fn executeStatement(
         .constrain => |decl| {
             const target = try resolveAnchorRef(engine, mode, env, origin, decl.target, true);
             const source = try resolveAnchorRef(engine, mode, env, origin, decl.source, false);
+            const offset: f32 = if (decl.offset) |expr| blk: {
+                const value = try evalExpr(engine, page_id, mode, env, functions, origin, expr);
+                break :blk try resolveValueNumber(value);
+            } else 0;
             switch (mode) {
-                .attached => try engine.addAnchorConstraint(target.node_id, target.anchor, source, decl.offset, origin),
+                .attached => try engine.addAnchorConstraint(target.node_id, target.anchor, source, offset, origin),
                 .detached => |builder| try builder.constraints.items.append(engine.allocator, .{
                     .target_node = target.node_id,
                     .target_anchor = target.anchor,
                     .source = source,
-                    .offset = decl.offset,
+                    .offset = offset,
                 }),
             }
         },

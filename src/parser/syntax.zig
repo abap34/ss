@@ -210,6 +210,11 @@ const Parser = struct {
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
         }
+        if (self.peekAnchorAssignment()) {
+            const decl = try self.parseMemberConstraintDecl();
+            try self.consumeStatementTerminator();
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
+        }
 
         if (try self.parseLegacyStatement(start)) |stmt| return stmt;
         return try self.parseCallSugarStatement(start);
@@ -288,7 +293,55 @@ const Parser = struct {
     }
 
     fn parseExpr(self: *Parser) anyerror!Expr {
+        return self.parseAddSubExpr();
+    }
+
+    fn parseAddSubExpr(self: *Parser) anyerror!Expr {
+        var left = try self.parseMulDivExpr();
+        while (true) {
+            self.skipTrivia();
+            if (self.eof()) return left;
+            const op = self.source[self.pos];
+            if (op != '+' and op != '-') return left;
+            self.pos += 1;
+            const right = try self.parseMulDivExpr();
+            left = try self.makeBinaryCall(if (op == '+') "add" else "sub", left, right);
+        }
+    }
+
+    fn parseMulDivExpr(self: *Parser) anyerror!Expr {
+        var left = try self.parseUnaryExpr();
+        while (true) {
+            self.skipTrivia();
+            if (self.eof()) return left;
+            const op = self.source[self.pos];
+            if (op != '*' and op != '/') return left;
+            self.pos += 1;
+            const right = try self.parseUnaryExpr();
+            left = try self.makeBinaryCall(if (op == '*') "mul" else "div", left, right);
+        }
+    }
+
+    fn parseUnaryExpr(self: *Parser) anyerror!Expr {
         self.skipTrivia();
+        if (!self.eof() and self.source[self.pos] == '-') {
+            self.pos += 1;
+            var args = std.ArrayList(Expr).empty;
+            errdefer args.deinit(self.allocator);
+            try args.append(self.allocator, try self.parseUnaryExpr());
+            return .{ .call = .{ .name = "neg", .args = args } };
+        }
+        return self.parsePrimaryExpr();
+    }
+
+    fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
+        self.skipTrivia();
+        if (!self.eof() and self.source[self.pos] == '(') {
+            self.pos += 1;
+            const expr = try self.parseExpr();
+            try self.expectChar(')');
+            return expr;
+        }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .string = try self.parseString() };
         }
@@ -296,10 +349,13 @@ const Parser = struct {
             return .{ .string = try self.parseChevronBlockString() };
         }
         if (self.startsNumberLiteral()) {
-            return .{ .number = try self.parseSignedNumber() };
+            return .{ .number = try self.parseNumber() };
         }
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '.') {
+            return try self.parseAnchorMemberExprAfterObjectName(name);
+        }
         if (!self.eof() and self.source[self.pos] == '(') {
             return .{ .call = try self.parseCallAfterName(name) };
         }
@@ -313,6 +369,14 @@ const Parser = struct {
             return .{ .ident = name };
         }
         return .{ .ident = name };
+    }
+
+    fn makeBinaryCall(self: *Parser, name: []const u8, left: Expr, right: Expr) !Expr {
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        try args.append(self.allocator, left);
+        try args.append(self.allocator, right);
+        return .{ .call = .{ .name = name, .args = args } };
     }
 
     fn parseCallAfterName(self: *Parser, name: []const u8) anyerror!ast.CallExpr {
@@ -350,19 +414,53 @@ const Parser = struct {
 
     fn parseConstraintDecl(self: *Parser) !ConstraintDecl {
         const target = try self.parseAnchorRef();
-        try self.expectChar('=');
+        try self.expectEqualityOperator();
         const source = try self.parseAnchorRef();
-        var offset: f32 = 0;
+        var offset: ?Expr = null;
         self.skipTrivia();
         if (!self.eof() and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
-            const sign: f32 = if (self.source[self.pos] == '-') -1 else 1;
+            const sign = self.source[self.pos];
             self.pos += 1;
-            self.skipTrivia();
-            const magnitude = try self.parseNumber();
-            offset = sign * magnitude;
+            var expr = try self.parseExpr();
+            if (sign == '-') expr = try self.makeNegCall(expr);
+            offset = expr;
         }
         return .{ .target = target, .source = source, .offset = offset };
     }
+
+    fn parseMemberConstraintDecl(self: *Parser) !ConstraintDecl {
+        const target = try self.parseConstraintMemberRef(true);
+        try self.expectEqualityOperator();
+        if (target.dimension) |dimension| {
+            if (target.anchor_ref.kind == .page) return self.fail(error.PageCannotBeConstraintTarget);
+            const offset = try self.parseExpr();
+            return .{
+                .target = .{ .kind = .node, .anchor = dimension.target_anchor, .node_name = target.anchor_ref.node_name },
+                .source = .{ .kind = .node, .anchor = dimension.source_anchor, .node_name = target.anchor_ref.node_name },
+                .offset = offset,
+            };
+        }
+        const target_anchor = target.anchor_ref;
+        const source = try self.parseAnchorMemberRef();
+        var offset: ?Expr = null;
+        self.skipTrivia();
+        if (!self.eof() and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
+            const sign = self.source[self.pos];
+            self.pos += 1;
+            var expr = try self.parseExpr();
+            if (sign == '-') expr = try self.makeNegCall(expr);
+            offset = expr;
+        }
+        return .{ .target = target_anchor, .source = source, .offset = offset };
+    }
+
+    const ConstraintMemberRef = struct {
+        anchor_ref: AnchorRef,
+        dimension: ?struct {
+            target_anchor: core.Anchor,
+            source_anchor: core.Anchor,
+        } = null,
+    };
 
     fn parseAnchorRef(self: *Parser) !AnchorRef {
         const name = try self.parseIdentifier();
@@ -378,6 +476,56 @@ const Parser = struct {
         self.skipTrivia();
         try self.expectChar(')');
         return .{ .kind = .node, .anchor = anchor, .node_name = node_name };
+    }
+
+    fn parseAnchorMemberRef(self: *Parser) !AnchorRef {
+        return (try self.parseConstraintMemberRef(false)).anchor_ref;
+    }
+
+    fn parseConstraintMemberRef(self: *Parser, allow_dimension: bool) !ConstraintMemberRef {
+        const object_name = try self.parseIdentifier();
+        self.skipInlineSpaces();
+        try self.expectChar('.');
+        const member_name = try self.parseIdentifier();
+        if (allow_dimension) {
+            if (std.mem.eql(u8, member_name, "width")) {
+                return .{
+                    .anchor_ref = .{ .kind = if (std.mem.eql(u8, object_name, "page")) .page else .node, .anchor = .right, .node_name = if (std.mem.eql(u8, object_name, "page")) null else object_name },
+                    .dimension = .{ .target_anchor = .right, .source_anchor = .left },
+                };
+            }
+            if (std.mem.eql(u8, member_name, "height")) {
+                return .{
+                    .anchor_ref = .{ .kind = if (std.mem.eql(u8, object_name, "page")) .page else .node, .anchor = .top, .node_name = if (std.mem.eql(u8, object_name, "page")) null else object_name },
+                    .dimension = .{ .target_anchor = .top, .source_anchor = .bottom },
+                };
+            }
+        }
+        const anchor = names.parseAnchorName(member_name) orelse return self.fail(error.UnknownAnchor);
+        if (std.mem.eql(u8, object_name, "page")) return .{ .anchor_ref = .{ .kind = .page, .anchor = anchor } };
+        return .{ .anchor_ref = .{ .kind = .node, .anchor = anchor, .node_name = object_name } };
+    }
+
+    fn parseAnchorMemberExprAfterObjectName(self: *Parser, object_name: []const u8) !Expr {
+        try self.expectChar('.');
+        const anchor_name = try self.parseIdentifier();
+        _ = names.parseAnchorName(anchor_name) orelse return self.fail(error.UnknownAnchor);
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        if (std.mem.eql(u8, object_name, "page")) {
+            try args.append(self.allocator, .{ .string = anchor_name });
+            return .{ .call = .{ .name = "page_anchor", .args = args } };
+        }
+        try args.append(self.allocator, .{ .ident = object_name });
+        try args.append(self.allocator, .{ .string = anchor_name });
+        return .{ .call = .{ .name = "anchor", .args = args } };
+    }
+
+    fn makeNegCall(self: *Parser, expr: Expr) !Expr {
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        try args.append(self.allocator, expr);
+        return .{ .call = .{ .name = "neg", .args = args } };
     }
 
     fn parseTextArg(self: *Parser) ![]const u8 {
@@ -479,10 +627,7 @@ const Parser = struct {
     fn startsNumberLiteral(self: *Parser) bool {
         if (self.eof()) return false;
         const ch = self.source[self.pos];
-        if (std.ascii.isDigit(ch)) return true;
-        if (ch != '-') return false;
-        if (self.pos + 1 >= self.source.len) return false;
-        return std.ascii.isDigit(self.source[self.pos + 1]);
+        return std.ascii.isDigit(ch);
     }
 
     fn parseString(self: *Parser) ![]const u8 {
@@ -586,6 +731,15 @@ const Parser = struct {
         self.pos += 1;
     }
 
+    fn expectEqualityOperator(self: *Parser) !void {
+        self.skipTrivia();
+        if (self.startsWith("==")) {
+            self.pos += 2;
+            return;
+        }
+        return self.fail(error.ExpectedEqualityOperator);
+    }
+
     fn expectLineBreakAfterHeader(self: *Parser) !void {
         self.skipInlineSpaces();
         if (self.lineCommentStart()) self.skipLineComment();
@@ -616,6 +770,24 @@ const Parser = struct {
         while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len) return true;
         return self.source[probe] == '\n';
+    }
+
+    fn peekAnchorAssignment(self: *Parser) bool {
+        var probe = self.pos;
+        skipTriviaFrom(self.source, &probe);
+        if (!scanIdentifier(self.source, &probe)) return false;
+        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        if (probe >= self.source.len or self.source[probe] != '.') return false;
+        probe += 1;
+        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        const member_start = probe;
+        if (!scanIdentifier(self.source, &probe)) return false;
+        const member_name = self.source[member_start..probe];
+        if (names.parseAnchorName(member_name) == null and
+            !std.mem.eql(u8, member_name, "width") and
+            !std.mem.eql(u8, member_name, "height")) return false;
+        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        return probe < self.source.len and self.source[probe] == '=';
     }
 
     fn peekStandaloneKeyword(self: *Parser, keyword: []const u8) bool {
@@ -714,6 +886,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",
         error.ExpectedReturn => "return statement",
+        error.ExpectedEqualityOperator => "'=='",
         else => null,
     };
 }
@@ -794,6 +967,13 @@ fn skipTriviaFrom(source: []const u8, pos: *usize) void {
             else => return,
         }
     }
+}
+
+fn scanIdentifier(source: []const u8, pos: *usize) bool {
+    if (pos.* >= source.len or !isIdentifierStart(source[pos.*])) return false;
+    pos.* += 1;
+    while (pos.* < source.len and isIdentifierContinue(source[pos.*])) pos.* += 1;
+    return true;
 }
 
 fn isIdentifierStart(ch: u8) bool {

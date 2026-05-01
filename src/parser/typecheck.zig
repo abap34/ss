@@ -181,6 +181,7 @@ fn collectStatementCallees(
         .let_binding => |binding| try collectExprCallees(allocator, functions, binding.expr, callees),
         .bind_binding => |binding| try collectExprCallees(allocator, functions, binding.expr, callees),
         .return_expr => |expr| try collectExprCallees(allocator, functions, expr, callees),
+        .constrain => |decl| if (decl.offset) |expr| try collectExprCallees(allocator, functions, expr, callees),
         .expr_stmt => |expr| try collectExprCallees(allocator, functions, expr, callees),
         else => {},
     }
@@ -251,7 +252,13 @@ fn checkStatement(
         .expr_stmt => |expr| {
             _ = try inferExprSort(allocator, engine, functions, env, expr, origin);
         },
-        .title, .subtitle, .math, .mathtex, .figure, .image, .pdf_ref, .code, .page_number, .toc, .constrain, .highlight => {},
+        .constrain => |decl| {
+            if (decl.offset) |expr| {
+                const actual = try inferExprSort(allocator, engine, functions, env, expr, origin);
+                try ensureSort(engine, actual, .number, origin, .UnmatchedArgumentType);
+            }
+        },
+        .title, .subtitle, .math, .mathtex, .figure, .image, .pdf_ref, .code, .page_number, .toc, .highlight => {},
     }
 }
 

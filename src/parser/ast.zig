@@ -88,7 +88,11 @@ pub const AnchorRef = struct {
 pub const ConstraintDecl = struct {
     target: AnchorRef,
     source: AnchorRef,
-    offset: f32,
+    offset: ?Expr = null,
+
+    pub fn deinit(self: *ConstraintDecl, allocator: Allocator) void {
+        if (self.offset) |*offset| offset.deinit(allocator);
+    }
 };
 
 pub const Statement = struct {
@@ -125,6 +129,7 @@ pub const Statement = struct {
             .let_binding => |*binding| binding.expr.deinit(allocator),
             .bind_binding => |*binding| binding.expr.deinit(allocator),
             .return_expr => |*expr| expr.deinit(allocator),
+            .constrain => |*decl| decl.deinit(allocator),
             .expr_stmt => |*expr| expr.deinit(allocator),
             else => {},
         }
