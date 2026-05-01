@@ -348,6 +348,10 @@ const BuiltinContext = struct {
         return try evalCallStringArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
+    pub fn evalPropertyStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
+        return try resolveValuePropertyString(self.ir.allocator, try self.evalExprValue(call.args.items[index]));
+    }
+
     pub fn evalNumberArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!f32 {
         return try evalCallNumberArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
@@ -709,6 +713,19 @@ fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void 
     }
 }
 
+fn validateUserFunctionArity(actual: usize, func: FunctionDecl, origin: []const u8) !void {
+    const min = typecheck.requiredParamCount(func);
+    const max = func.params.items.len;
+    if (actual < min or actual > max) {
+        reportLowerDiagnostic(.{
+            .err = error.InvalidArity,
+            .span = error_report.spanFromOrigin(origin),
+            .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
+        });
+        return error.InvalidArity;
+    }
+}
+
 fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8) !void {
     if (actual < min or actual > max) {
         reportLowerDiagnostic(.{
@@ -717,6 +734,27 @@ fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8)
             .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
         });
         return error.InvalidArity;
+    }
+}
+
+fn bindUserFunctionArgs(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    caller_env: *std.StringHashMap(core.Value),
+    local_env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    func: FunctionDecl,
+    current_origin: []const u8,
+    call: CallExpr,
+) !void {
+    for (func.params.items, 0..) |param, index| {
+        const value = if (index < call.args.items.len)
+            try evalExpr(ir, page_id, mode, caller_env, functions, current_origin, call.args.items[index])
+        else
+            try evalExpr(ir, page_id, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
+        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
     }
 }
 
@@ -761,6 +799,14 @@ fn resolveValueString(value: core.Value) ![]const u8 {
     return switch (value) {
         .string => |text| text,
         else => return error.ExpectedStringArgument,
+    };
+}
+
+pub fn resolveValuePropertyString(allocator: std.mem.Allocator, value: core.Value) ![]const u8 {
+    return switch (value) {
+        .string => |text| text,
+        .number => |number| std.fmt.allocPrint(allocator, "{d}", .{number}),
+        else => error.ExpectedStringArgument,
     };
 }
 
@@ -1169,8 +1215,7 @@ fn executeCallStatement(
         _ = try evalCall(ir, page_id, mode, env, functions, current_origin, call);
         return;
     };
-    const func_ref = try typecheck.functionRefFor(ir.allocator, func);
-    try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
+    try validateUserFunctionArity(call.args.items.len, func, current_origin);
 
     var local_env = std.StringHashMap(core.Value).init(ir.allocator);
     defer local_env.deinit();
@@ -1178,11 +1223,7 @@ fn executeCallStatement(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    for (func.params.items, call.args.items) |param, arg_expr| {
-        const value = try evalExpr(ir, page_id, mode, env, functions, current_origin, arg_expr);
-        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
-        try local_env.put(param.name, value);
-    }
+    try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, page_id, mode, &local_env, functions, last_code_like, inner, current_origin);
         switch (flow) {
@@ -1212,7 +1253,7 @@ fn invokeUserFunctionValue(
 ) anyerror!core.Value {
     const func_ref = try typecheck.functionRefFor(ir.allocator, func);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-    try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
+    try validateUserFunctionArity(call.args.items.len, func, current_origin);
 
     var local_env = std.StringHashMap(core.Value).init(ir.allocator);
     defer local_env.deinit();
@@ -1220,11 +1261,7 @@ fn invokeUserFunctionValue(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    for (func.params.items, call.args.items) |param, arg_expr| {
-        const value = try evalExpr(ir, page_id, mode, env, functions, current_origin, arg_expr);
-        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
-        try local_env.put(param.name, value);
-    }
+    try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
     for (func.statements.items) |inner| {

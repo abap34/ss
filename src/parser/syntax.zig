@@ -81,7 +81,11 @@ const Parser = struct {
         try self.expectChar('(');
 
         var params = std.ArrayList(ast.ParamDecl).empty;
-        errdefer params.deinit(self.allocator);
+        errdefer {
+            for (params.items) |*param| param.deinit(self.allocator);
+            params.deinit(self.allocator);
+        }
+        var seen_default = false;
         self.skipTrivia();
         while (!self.eof() and !self.peekChar(')')) {
             const param_name = try self.parseIdentifier();
@@ -90,7 +94,23 @@ const Parser = struct {
             self.pos += 1;
             self.skipInlineSpaces();
             const param_sort = try self.parseSortAnnotation();
-            try params.append(self.allocator, .{ .name = param_name, .sort = param_sort });
+            self.skipInlineSpaces();
+            var default_value: ?*Expr = null;
+            if (!self.eof() and self.source[self.pos] == '=') {
+                self.pos += 1;
+                const expr = try self.allocator.create(Expr);
+                errdefer self.allocator.destroy(expr);
+                expr.* = try self.parseExpr();
+                default_value = expr;
+                seen_default = true;
+            } else if (seen_default) {
+                return self.fail(error.RequiredParameterAfterDefault);
+            }
+            try params.append(self.allocator, .{
+                .name = param_name,
+                .sort = param_sort,
+                .default_value = default_value,
+            });
             self.skipTrivia();
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
@@ -886,6 +906,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.UnknownAnchor => "known anchor name",
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",
+        error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",
         error.ExpectedEqualityOperator => "'=='",
         else => null,

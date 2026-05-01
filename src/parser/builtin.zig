@@ -112,7 +112,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .set_prop => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             const key = try ctx.evalStringArg(call, 1);
-            const value = try ctx.evalStringArg(call, 2);
+            const value = try ctx.evalPropertyStringArg(call, 2);
             try ctx.setNodeProperty(object_id, key, value);
             break :blk .{ .object = object_id };
         },
