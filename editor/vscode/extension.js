@@ -11,6 +11,9 @@ function activate(context) {
   const refreshTimers = new Map();
   const diagnosticTimers = new Map();
   const previewTimers = new Map();
+  const lastEditTimes = new Map();
+  const inlayHintIdleMs = () =>
+    Math.max(0, Number(vscode.workspace.getConfiguration("ss").get("inlayHints.idleMs", 1200)));
   const previewSessions = new Map();
   const activeCommands = new Map();
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("ss");
@@ -690,6 +693,27 @@ function activate(context) {
       if (document.languageId !== "ss-slide") {
         return [];
       }
+      if (document.isDirty) {
+        // Withdraw hints while the buffer differs from disk — positions
+        // would drift against the source the cached dump was computed for.
+        return [];
+      }
+      const idleMs = inlayHintIdleMs();
+      const lastEdit = lastEditTimes.get(documentKey(document)) || 0;
+      const sinceEdit = Date.now() - lastEdit;
+      if (lastEdit && sinceEdit < idleMs) {
+        // Wait until the user has been idle for a while before letting hints
+        // pop back in, so a quick save-then-type doesn't flash them.
+        scheduleRefresh(document, idleMs - sinceEdit);
+        return [];
+      }
+      const generation = currentEditorInfoGeneration(document);
+      const cached = editorInfoCache.get(documentKey(document));
+      if (!cached || cached.generation !== generation) {
+        // Kick off a fresh dump but don't render stale-generation hints.
+        queryEditorInfo(document);
+        return [];
+      }
 
       return queryEditorInfo(document).then((payload) => {
         if (!payload || !payload.hints || token.isCancellationRequested) {
@@ -960,8 +984,12 @@ function activate(context) {
     vscode.workspace.onDidChangeTextDocument((event) => {
       void cleanupLegacySnapshots(event.document);
       clearEditorInfoRequest(event.document);
-      scheduleRefresh(event.document, 400);
-      scheduleDiagnostics(event.document, 500);
+      lastEditTimes.set(documentKey(event.document), Date.now());
+      // Immediately ask VS Code to re-query inlay hints so the dirty buffer
+      // hides them right away instead of leaving the previous frame on screen.
+      emitter.fire();
+      scheduleRefresh(event.document, inlayHintIdleMs());
+      scheduleDiagnostics(event.document, 800);
       schedulePreview(event.document, livePreviewDebounceMs());
       refreshVisibleBlockDecorations();
     }),
@@ -976,6 +1004,7 @@ function activate(context) {
       clearRefresh(document);
       clearDiagnosticsTimer(document);
       clearPreviewSession(document);
+      lastEditTimes.delete(documentKey(document));
       void removeFileIfExists(snapshotOutputPath(document).path);
       diagnosticCollection.delete(document.uri);
     }),

@@ -94,6 +94,12 @@
             "Open the generated PDF with the operating system's external PDF application."
           ],
           "description": "How ss live preview opens the generated PDF."
+        },
+        "ss.inlayHints.idleMs": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 0,
+          "description": "Idle time after the last edit before inlay hints are shown again. Hints are withdrawn while the document is dirty and stay hidden until this delay elapses on a clean buffer."
         }
       }
     }
