@@ -63,18 +63,23 @@ function activate(context) {
     return document.uri.toString();
   }
 
-  function workspaceCwd(document) {
+  function cliPath() {
+    return vscode.workspace.getConfiguration("ss").get("cli.path", "ss");
+  }
+
+  function commandCwd(document) {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-    return workspaceFolder ? workspaceFolder.uri.fsPath : null;
+    if (workspaceFolder) {
+      return workspaceFolder.uri.fsPath;
+    }
+    if (document && document.uri && document.uri.scheme === "file") {
+      return path.dirname(document.uri.fsPath);
+    }
+    return null;
   }
 
   function queryEditorInfo(document) {
     if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
-      return Promise.resolve(null);
-    }
-
-    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-    if (!workspaceFolder) {
       return Promise.resolve(null);
     }
 
@@ -91,12 +96,17 @@ function activate(context) {
     }
 
     const runRequest = new Promise((resolve) => {
-      const cwd = workspaceFolder.uri.fsPath;
-      const args = ["build", "run", "--", "dump", document.uri.fsPath];
-      output.appendLine(`[info] zig ${args.join(" ")}`);
+      const cwd = commandCwd(document);
+      if (!cwd) {
+        resolve(null);
+        return;
+      }
+      const command = cliPath();
+      const args = ["dump", document.uri.fsPath];
+      output.appendLine(`[info] ${command} ${args.join(" ")}`);
       output.appendLine(`[info] cwd: ${cwd}`);
       cp.execFile(
-        "zig",
+        command,
         args,
         { cwd, maxBuffer: 10 * 1024 * 1024 },
         (error, stdout, stderr) => {
@@ -179,20 +189,21 @@ function activate(context) {
     }
   }
 
-  function runZig(document, args, label) {
-    const cwd = workspaceCwd(document);
+  function runSs(document, args, label) {
+    const cwd = commandCwd(document);
     if (!cwd) {
       return Promise.resolve({
-        error: new Error("ss files must be opened inside the ss workspace"),
+        error: new Error("ss files must be opened from a local directory"),
         stdout: "",
         stderr: "",
       });
     }
 
-    output.appendLine(`[${label}] zig ${args.join(" ")}`);
+    const command = cliPath();
+    output.appendLine(`[${label}] ${command} ${args.join(" ")}`);
     output.appendLine(`[${label}] cwd: ${cwd}`);
     return new Promise((resolve) => {
-      cp.execFile("zig", args, { cwd, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+      cp.execFile(command, args, { cwd, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
         resolve({ error, stdout: stdout || "", stderr: stderr || "" });
       });
     });
@@ -263,7 +274,7 @@ function activate(context) {
     }
 
     try {
-      const result = await runZig(document, ["build", "run", "--", "check", snapshotPath], "diagnostics");
+      const result = await runSs(document, ["check", snapshotPath], "diagnostics");
       const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
       diagnosticCollection.set(document.uri, diagnostics);
       if (result.error && diagnostics.length === 0) {
@@ -324,7 +335,7 @@ function activate(context) {
   }
 
   function previewOutputPath(document, renderId) {
-    const cwd = workspaceCwd(document);
+    const cwd = commandCwd(document);
     const root = cwd || os.tmpdir();
     const outDir = path.join(root, ".ss-cache", "vscode-preview");
     const base = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath)).replace(/[^A-Za-z0-9_-]/g, "_") || "preview";
@@ -401,7 +412,7 @@ function activate(context) {
     await fs.promises.mkdir(dir, { recursive: true });
 
     try {
-      const result = await runZig(document, ["build", "run", "--", "render", snapshotPath, tempPdf], "preview");
+      const result = await runSs(document, ["render", snapshotPath, tempPdf], "preview");
       const latestSession = previewSessions.get(key);
       if (!latestSession || latestSession.renderId !== renderId) {
         await removeFileIfExists(tempPdf);

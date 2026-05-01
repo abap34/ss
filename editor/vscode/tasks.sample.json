@@ -4,7 +4,7 @@
     {
       "label": "ss: check current file",
       "type": "shell",
-      "command": "zig build run -- check ${file}",
+      "command": "ss check ${file}",
       "problemMatcher": {
         "owner": "ss",
         "fileLocation": ["absolute"],

@@ -37,7 +37,7 @@ Copy [settings.sample.json](/Users/yuchi/Desktop/ss/editor/vscode/settings.sampl
 The extension runs:
 
 ```sh
-zig build run -- check path/to/file.ss
+ss check path/to/file.ss
 ```
 
 and publishes both `ERROR:` and `WARNING:` output as VS Code diagnostics. It checks the current buffer through a temporary snapshot next to the source file, so unsaved edits are reflected while relative assets and local themes still resolve from the source directory.
@@ -49,7 +49,7 @@ Use `ss: Check Current File` from the command palette to force a check.
 Run `ss: Open Live Preview` from the command palette or the editor title button. The preview renders the current buffer with:
 
 ```sh
-zig build run -- render path/to/file.ss .ss-cache/vscode-preview/<file>.pdf
+ss render path/to/file.ss .ss-cache/vscode-preview/<file>.pdf
 ```
 
 It refreshes the generated PDF after edits with a short debounce. The extension opens the preview PDF once, then updates that same file on later renders. By default the extension opens that PDF through VS Code's normal `vscode.open` command, so rendering is handled by the user's installed PDF support instead of a custom webview.
@@ -69,7 +69,7 @@ Copy `tasks.sample.json` to `.vscode/tasks.json` in your workspace if you want a
 The task expects this command to work:
 
 ```sh
-zig build run -- check path/to/file.ss
+ss check path/to/file.ss
 ```
 
 The current CLI emits diagnostics in:
@@ -86,7 +86,7 @@ so the task can attach them to the current file.
 The extension asks the local CLI for IR JSON with:
 
 ```sh
-zig build run -- dump path/to/file.ss
+ss dump path/to/file.ss
 ```
 
 This currently shows:
@@ -96,7 +96,7 @@ This currently shows:
 
 The hints refresh while editing with a short debounce, and also refresh immediately on save.
 
-It works only when the file is opened inside the `ss` workspace, because the extension runs `zig build` from the workspace root.
+If `ss` is not on your `PATH`, set `ss.cli.path` to the full executable path.
 
 ## Debugging
 
@@ -104,9 +104,9 @@ If hints do not appear, open `View: Output` and select `ss-slide` in the output-
 
 The extension logs:
 
-- the `zig build run -- dump ...` command
-- the `zig build run -- check ...` command
-- the `zig build run -- render ...` command
+- the `ss dump ...` command
+- the `ss check ...` command
+- the `ss render ...` command
 - the working directory
 - stderr from the CLI
 - JSON parse failures
