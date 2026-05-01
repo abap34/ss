@@ -101,29 +101,8 @@ const Parser = struct {
 
     fn parseBodyStatements(self: *Parser) !std.ArrayList(Statement) {
         self.skipInlineSpaces();
-        if (!self.eof() and self.source[self.pos] == '{') {
-            self.pos += 1;
-            return try self.parseStatementsUntilBrace();
-        }
-
         try self.expectLineBreakAfterHeader();
         return try self.parseStatementsUntilEnd();
-    }
-
-    fn parseStatementsUntilBrace(self: *Parser) !std.ArrayList(Statement) {
-        var statements = std.ArrayList(Statement).empty;
-        errdefer {
-            for (statements.items) |*stmt| stmt.deinit(self.allocator);
-            statements.deinit(self.allocator);
-        }
-
-        self.skipTrivia();
-        while (!self.eof() and !self.peekChar('}')) {
-            try statements.append(self.allocator, try self.parseStatement());
-            self.skipTrivia();
-        }
-        try self.expectChar('}');
-        return statements;
     }
 
     fn parseStatementsUntilEnd(self: *Parser) !std.ArrayList(Statement) {
