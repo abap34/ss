@@ -8,7 +8,8 @@ const utils = @import("utils");
 const source_utils = utils.source;
 
 pub const FunctionContract = struct {
-    param_count: usize,
+    min_param_count: usize,
+    max_param_count: usize,
     returns_value: bool,
     result_sort: core.SemanticSort,
 };
@@ -105,7 +106,7 @@ pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !cor
     }
     return .{
         .name = func.name,
-        .param_count = contract.param_count,
+        .param_count = contract.max_param_count,
         .param_sorts = param_sorts,
         .returns_value = contract.returns_value,
         .result_sort = contract.result_sort,
@@ -123,10 +124,19 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
 
 pub fn functionContract(func: ast.FunctionDecl) FunctionContract {
     return .{
-        .param_count = func.params.items.len,
+        .min_param_count = requiredParamCount(func),
+        .max_param_count = func.params.items.len,
         .returns_value = functionReturnsValue(func),
         .result_sort = func.result_sort,
     };
+}
+
+pub fn requiredParamCount(func: ast.FunctionDecl) usize {
+    var required: usize = 0;
+    for (func.params.items) |param| {
+        if (param.default_value == null) required += 1;
+    }
+    return required;
 }
 
 pub fn functionReturnsValue(func: ast.FunctionDecl) bool {
@@ -177,6 +187,10 @@ pub fn collectVariableTypesFromProgram(
         defer env.deinit();
 
         for (func.params.items) |param| {
+            if (param.default_value) |default_value| {
+                const sort = try inferExprSort(allocator, null, functions, &env, default_value.*, "");
+                try ensureSort(null, sort, param.sort, "", .UnmatchedArgumentType);
+            }
             try env.put(param.name, param.sort);
             try variables.put(param.name, param.sort);
         }
@@ -375,7 +389,31 @@ pub fn formatUserSignature(
 }
 
 pub fn formatUserParam(allocator: std.mem.Allocator, param: ast.ParamDecl) ![]const u8 {
+    if (param.default_value) |default_value| {
+        const text = try formatExpr(allocator, default_value.*);
+        defer allocator.free(text);
+        return std.fmt.allocPrint(allocator, "{s}: {s} = {s}", .{ param.name, @tagName(param.sort), text });
+    }
     return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
+}
+
+fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
+    return switch (expr) {
+        .ident => |name| allocator.dupe(u8, name),
+        .string => |text| std.fmt.allocPrint(allocator, "\"{s}\"", .{text}),
+        .number => |value| std.fmt.allocPrint(allocator, "{d}", .{value}),
+        .call => |call| blk: {
+            var args = std.ArrayList(u8).empty;
+            defer args.deinit(allocator);
+            for (call.args.items, 0..) |arg, index| {
+                if (index != 0) try args.appendSlice(allocator, ", ");
+                const text = try formatExpr(allocator, arg);
+                defer allocator.free(text);
+                try args.appendSlice(allocator, text);
+            }
+            break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ call.name, args.items });
+        },
+    };
 }
 
 pub fn resultText(result_sort: ?core.SemanticSort) []const u8 {
@@ -783,6 +821,11 @@ fn collectFunctionCallees(
     func: ast.FunctionDecl,
     callees: *std.ArrayList([]const u8),
 ) !void {
+    for (func.params.items) |param| {
+        if (param.default_value) |default_value| {
+            try collectExprCallees(allocator, functions, default_value.*, callees);
+        }
+    }
     for (func.statements.items) |stmt| {
         try collectStatementCallees(allocator, functions, stmt, callees);
     }
@@ -835,7 +878,13 @@ fn checkFunction(
     var env = SortEnv.init(allocator);
     defer env.deinit();
 
+    const func_origin = try statementOrigin(allocator, func.span);
+    defer allocator.free(func_origin);
     for (func.params.items) |param| {
+        if (param.default_value) |default_value| {
+            const sort = try inferExprSort(allocator, ir, functions, &env, default_value.*, func_origin);
+            try ensureSort(ir, sort, param.sort, func_origin, .UnmatchedArgumentType);
+        }
         try env.put(param.name, param.sort);
     }
 
@@ -959,11 +1008,18 @@ fn inferCallSort(
     origin: []const u8,
 ) anyerror!core.SemanticSort {
     if (functions.get(call.name)) |func| {
-        if (call.args.items.len != func.params.items.len) {
-            try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ func.params.items.len, call.args.items.len });
+        const min_arity = requiredParamCount(func);
+        const max_arity = func.params.items.len;
+        if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
+            if (min_arity == max_arity) {
+                try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
+            } else {
+                try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
+            }
             return error.InvalidArity;
         }
-        for (func.params.items, call.args.items) |param, arg| {
+        for (call.args.items, 0..) |arg, index| {
+            const param = func.params.items[index];
             const actual = try inferExprSort(allocator, ir, functions, env, arg, origin);
             try ensureSort(ir, actual, param.sort, origin, .UnmatchedArgumentType);
         }
