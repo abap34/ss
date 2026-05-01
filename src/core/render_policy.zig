@@ -1,5 +1,5 @@
 const std = @import("std");
-const model = @import("model.zig");
+const model = @import("model");
 const layout = @import("layout.zig");
 
 const Node = model.Node;
@@ -132,11 +132,11 @@ const TEXT_DEFAULTS = [_]TextDefaults{
     .{ .role = "panel", .font = "Helvetica", .color = SEMINAR_BLACK },
 };
 
-pub fn resolve(engine: anytype, node: *const Node) ResolvedRender {
+pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
     const kind = resolveKind(node);
     return .{
         .kind = kind,
-        .text = resolveText(engine, node, kind),
+        .text = resolveText(ir, node, kind),
         .math = resolveMath(kind),
         .code = resolveCode(node, kind),
         .chrome = resolveChrome(node),
@@ -154,13 +154,13 @@ pub fn resolveKind(node: *const Node) RenderKind {
     return .text;
 }
 
-fn resolveText(engine: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
+fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
     switch (kind) {
         .text, .code => {},
         else => return null,
     }
 
-    const layout_style = layout.styleForNode(engine, node);
+    const layout_style = layout.styleForNode(ir, node);
     const role = node.role orelse "body";
     const defaults = lookupTextDefaults(role);
     return .{
@@ -188,7 +188,7 @@ fn resolveText(engine: anytype, node: *const Node, kind: RenderKind) ?TextPaint 
         .markdown_code_radius = parseFloatProperty(node, "text_markdown_code_radius") orelse 10.0,
         .cjk_bold_passes = parseIntProperty(node, "text_cjk_bold_passes") orelse 1,
         .cjk_bold_dx = parseFloatProperty(node, "text_cjk_bold_dx") orelse 0.05,
-        .wrap = layout.shouldWrapNode(engine, node),
+        .wrap = layout.shouldWrapNode(ir, node),
     };
 }
 

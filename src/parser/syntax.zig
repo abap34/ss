@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const ast = @import("ast.zig");
+const ast = @import("ast");
 const names = @import("names.zig");
 const typecheck = @import("typecheck.zig");
 const source_utils = @import("utils").source;

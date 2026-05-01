@@ -1,0 +1,1273 @@
+const std = @import("std");
+const core = @import("core");
+const builtin = @import("builtin.zig");
+const utils = @import("utils");
+const error_report = utils.err;
+const fs_utils = utils.fs;
+const ast = @import("ast");
+const names = @import("names.zig");
+const registry = @import("registry.zig");
+const typecheck = @import("typecheck.zig");
+
+const Program = ast.Program;
+const FunctionDecl = ast.FunctionDecl;
+const Statement = ast.Statement;
+const Expr = ast.Expr;
+const CallExpr = ast.CallExpr;
+const AnchorRef = ast.AnchorRef;
+
+const ExecFlow = union(enum) {
+    none,
+    returned: core.Value,
+};
+
+const EvalMode = union(enum) {
+    attached,
+    detached: *DetachedBuilder,
+};
+
+const DetachedBuilder = struct {
+    page_id: core.NodeId,
+    node_ids: std.ArrayList(core.NodeId),
+    constraints: core.ConstraintSet,
+    deps: std.ArrayList(*core.Fragment),
+
+    fn init(page_id: core.NodeId) DetachedBuilder {
+        return .{
+            .page_id = page_id,
+            .node_ids = std.ArrayList(core.NodeId).empty,
+            .constraints = core.ConstraintSet.init(),
+            .deps = std.ArrayList(*core.Fragment).empty,
+        };
+    }
+
+    fn deinit(self: *DetachedBuilder, allocator: std.mem.Allocator) void {
+        self.node_ids.deinit(allocator);
+        self.constraints.deinit(allocator);
+        self.deps.deinit(allocator);
+    }
+
+    fn trackNode(self: *DetachedBuilder, allocator: std.mem.Allocator, node_id: core.NodeId) !void {
+        for (self.node_ids.items) |existing| {
+            if (existing == node_id) return;
+        }
+        try self.node_ids.append(allocator, node_id);
+    }
+
+    fn appendConstraintSet(self: *DetachedBuilder, allocator: std.mem.Allocator, constraints: core.ConstraintSet) !void {
+        try self.constraints.items.appendSlice(allocator, constraints.items.items);
+    }
+
+    fn trackFragment(self: *DetachedBuilder, allocator: std.mem.Allocator, fragment: *core.Fragment) !void {
+        for (self.deps.items) |existing| {
+            if (existing == fragment) return;
+        }
+        try self.deps.append(allocator, fragment);
+    }
+
+    fn isEmpty(self: *const DetachedBuilder) bool {
+        return self.node_ids.items.len == 0 and self.constraints.items.items.len == 0 and self.deps.items.len == 0;
+    }
+};
+
+var diagnostic_source: []const u8 = "";
+var diagnostic_path: []const u8 = "";
+var diagnostic_reported = false;
+
+const LowerDiagnostic = struct {
+    err: anyerror,
+    span: ?error_report.ByteSpan,
+    data: Data,
+
+    const Data = union(enum) {
+        unknown_name: struct {
+            kind: []const u8,
+            name: []const u8,
+        },
+        invalid_arity: struct {
+            actual: usize,
+            min: usize,
+            max: usize,
+        },
+        invalid_sort: struct {
+            expected: core.SemanticSort,
+            actual: core.SemanticSort,
+        },
+        generic: void,
+    };
+};
+
+fn reportUnknownFunction(name: []const u8, origin: []const u8) void {
+    reportNamedResolutionError(error.UnknownFunction, "function", name, origin);
+}
+
+fn reportUnknownQuery(name: []const u8, origin: []const u8) void {
+    reportNamedResolutionError(error.UnknownQuery, "query", name, origin);
+}
+
+fn reportUnknownTransform(name: []const u8, origin: []const u8) void {
+    reportNamedResolutionError(error.UnknownTransform, "transform", name, origin);
+}
+
+fn reportUnknownIdentifier(name: []const u8, origin: []const u8) void {
+    reportNamedResolutionError(error.UnknownIdentifier, "identifier", name, origin);
+}
+
+fn reportNamedResolutionError(err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) void {
+    reportLowerDiagnostic(.{
+        .err = err,
+        .span = error_report.spanFromOrigin(origin),
+        .data = .{ .unknown_name = .{ .kind = kind, .name = name } },
+    });
+}
+
+fn reportLowerError(err: anyerror, origin: []const u8) void {
+    if (diagnostic_reported) return;
+    reportLowerDiagnostic(.{
+        .err = err,
+        .span = error_report.spanFromOrigin(origin),
+        .data = .generic,
+    });
+}
+
+fn reportLowerDiagnostic(diagnostic: LowerDiagnostic) void {
+    diagnostic_reported = true;
+    var message_buf: [256]u8 = undefined;
+    error_report.print(.{
+        .path = diagnostic_path,
+        .source = diagnostic_source,
+        .severity = .@"error",
+        .message = formatLowerDiagnostic(&message_buf, diagnostic),
+        .span = diagnostic.span,
+    });
+}
+
+fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
+    return switch (diagnostic.data) {
+        .unknown_name => |data| std.fmt.bufPrint(buf, "{s}: unknown {s}: {s}", .{ unknownNameCode(data.kind), data.kind, data.name }) catch "UnknownName: unknown name",
+        .invalid_arity => |data| blk: {
+            if (data.min == data.max) {
+                break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}, got {d}", .{ data.min, data.actual }) catch lowerErrorMessage(diagnostic.err);
+            }
+            break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch lowerErrorMessage(diagnostic.err);
+        },
+        .invalid_sort => |data| std.fmt.bufPrint(buf, "InvalidSemanticSort: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
+        .generic => lowerErrorMessage(diagnostic.err),
+    };
+}
+
+fn unknownNameCode(kind: []const u8) []const u8 {
+    if (std.mem.eql(u8, kind, "function")) return "UnknownFunction";
+    if (std.mem.eql(u8, kind, "query")) return "UnknownQuery";
+    if (std.mem.eql(u8, kind, "transform")) return "UnknownTransform";
+    if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
+    if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
+    if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
+    return "UnknownName";
+}
+
+fn lowerErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ReturnOutsideFunction => "ReturnOutsideFunction: return is only valid inside a function",
+        error.InvalidThemeModule => "InvalidThemeModule: theme files must contain functions only",
+        error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
+        error.InvalidArity => "InvalidArity: wrong number of arguments",
+        error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
+        error.RecursiveFunction => "RecursiveFunction: recursive functions are not allowed",
+        error.ExpectedSelection => "ExpectedSelection: expected a selection value",
+        error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
+        error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
+        error.ExpectedNumberArgument => "ExpectedNumberArgument: expected a number argument",
+        error.ExpectedStyleArgument => "ExpectedStyleArgument: expected a style argument",
+        error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
+        error.ExpectedObject => "ExpectedObject: expected an object argument",
+        error.UnknownAnchor => "UnknownAnchor: unknown anchor",
+        error.UnknownRole => "UnknownRole: unknown role",
+        error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
+        error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
+        error.MissingHighlightTarget => "MissingHighlightTarget: highlight needs a previous code-like object",
+        error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
+        error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
+        else => @errorName(err),
+    };
+}
+
+pub fn executeProgramIntoIr(ir: *core.Ir) !void {
+    return executeProgram(ir.project_module.program, ir.project_module.source, ir.projectPath(), ir, &ir.functions);
+}
+
+pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *core.Ir, io: std.Io) !void {
+    diagnostic_source = source;
+    diagnostic_path = "";
+    return executeProgramWithPath(program, source, "", ir, io);
+}
+
+pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *core.Ir, io: std.Io) !void {
+    diagnostic_source = source;
+    diagnostic_path = path;
+    diagnostic_reported = false;
+    var index = try typecheck.loadProgramIndex(ir.allocator, io, ir.asset_base_dir, program);
+    defer index.deinit();
+    return executeProgramWithIndex(program, source, path, ir, &index);
+}
+
+pub fn executeProgramWithIndex(
+    program: Program,
+    source: []const u8,
+    path: []const u8,
+    ir: *core.Ir,
+    index: *const typecheck.ProgramIndex,
+) !void {
+    return executeProgram(program, source, path, ir, &index.functions);
+}
+
+pub fn executeProgram(
+    program: Program,
+    source: []const u8,
+    path: []const u8,
+    ir: *core.Ir,
+    functions: *const std.StringHashMap(FunctionDecl),
+) !void {
+    diagnostic_source = source;
+    diagnostic_path = path;
+    diagnostic_reported = false;
+
+    for (program.pages.items) |page| {
+        const page_id = try ir.addPage(page.name);
+        var last_code_like: ?core.NodeId = null;
+        var env = std.StringHashMap(core.Value).init(ir.allocator);
+        defer env.deinit();
+
+        for (page.statements.items) |stmt| {
+            const flow = executeStatement(ir, page_id, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
+                const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
+                if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+                return err;
+            };
+            switch (flow) {
+                .none => {},
+                .returned => |value| {
+                    var owned = value;
+                    owned.deinit(ir.allocator);
+                    return error.ReturnOutsideFunction;
+                },
+            }
+        }
+    }
+}
+
+fn evalExpr(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    expr: Expr,
+) anyerror!core.Value {
+    return switch (expr) {
+        .ident => |name| blk: {
+            if (env.get(name)) |value| break :blk value;
+            if (functions.get(name)) |func| break :blk .{ .function = try typecheck.functionRefFor(ir.allocator, func) };
+            reportUnknownIdentifier(name, current_origin);
+            break :blk error.UnknownIdentifier;
+        },
+        .string => |text| .{ .string = text },
+        .number => |value| .{ .number = value },
+        .call => |call| try evalCall(ir, page_id, mode, env, functions, current_origin, call),
+    };
+}
+
+fn evalCall(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+) anyerror!core.Value {
+    if (env.get(call.name)) |value| {
+        switch (value) {
+            .function => |func_ref| {
+                if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
+                const func = functions.get(func_ref.name) orelse {
+                    reportUnknownFunction(func_ref.name, current_origin);
+                    return error.UnknownFunction;
+                };
+                try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
+                return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
+            },
+            else => {},
+        }
+    }
+    if (functions.get(call.name)) |func| {
+        if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+        return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
+    }
+    if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+        return try evalPrimitiveCall(ir, page_id, mode, env, functions, current_origin, call, descriptor);
+    }
+    reportUnknownFunction(call.name, current_origin);
+    return error.UnknownFunction;
+}
+
+const BuiltinContext = struct {
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+
+    pub fn checkArityRange(self: *const BuiltinContext, actual: usize, min: usize, max: usize) !void {
+        try validateArityRange(actual, min, max, self.current_origin);
+    }
+
+    pub fn currentPageValue(self: *const BuiltinContext) core.Value {
+        return .{ .page = self.page_id };
+    }
+
+    pub fn currentDocumentValue(self: *const BuiltinContext) core.Value {
+        return .{ .document = self.ir.document_id };
+    }
+
+    pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
+        return try evalSelectCall(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call);
+    }
+
+    pub fn runDeriveCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
+        return try evalDeriveCall(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call);
+    }
+
+    pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
+        return try evalExpr(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, expr);
+    }
+
+    pub fn evalStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
+        return try evalCallStringArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn evalNumberArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!f32 {
+        return try evalCallNumberArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn evalObjectArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.NodeId {
+        return try evalCallObjectArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn evalAnchorArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.AnchorValue {
+        return try evalCallAnchorArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn evalRoleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.Role {
+        return try evalCallRoleArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn evalPayloadArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!names.ParsedPayload {
+        return try evalCallPayloadArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn evalStyleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.StyleRef {
+        return try evalCallStyleArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
+        return try normalizeForUse(self.ir, self.mode, value);
+    }
+
+    pub fn anchorValueForObject(self: *BuiltinContext, node_id: core.NodeId, anchor_name: []const u8) !core.Value {
+        const anchor = names.parseAnchorName(anchor_name) orelse {
+            reportNamedResolutionError(error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
+            return error.UnknownAnchor;
+        };
+        return .{ .anchor = .{ .node = .{ .node_id = node_id, .anchor = anchor } } };
+    }
+
+    pub fn pageAnchorValue(self: *BuiltinContext, anchor_name: []const u8) !core.Value {
+        const anchor = names.parseAnchorName(anchor_name) orelse {
+            reportNamedResolutionError(error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
+            return error.UnknownAnchor;
+        };
+        return .{ .anchor = .{ .page = anchor } };
+    }
+
+    pub fn select(self: *BuiltinContext, base: core.Value, query: core.Query) !core.Value {
+        return try self.ir.select(self.ir.allocator, base, query);
+    }
+
+    pub fn makeObject(
+        self: *BuiltinContext,
+        role_name: []const u8,
+        role: core.Role,
+        object_kind: core.ObjectKind,
+        payload_kind: core.PayloadKind,
+        content: []const u8,
+    ) !core.NodeId {
+        return switch (self.mode) {
+            .attached => try self.ir.makeObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.makeDetachedObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
+    }
+
+    pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
+        return switch (self.mode) {
+            .attached => try self.ir.makeGroupWithOrigin(self.page_id, true, child_ids, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.makeGroupWithOrigin(self.page_id, false, child_ids, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
+    }
+
+    pub fn deriveFromPage(self: *BuiltinContext, transform: core.Transform) !core.NodeId {
+        return switch (self.mode) {
+            .attached => try self.ir.deriveWithOrigin(self.page_id, .{ .page = self.page_id }, transform, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, .{ .page = self.page_id }, transform, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
+    }
+
+    pub fn deriveFromDocument(self: *BuiltinContext, transform: core.Transform) !core.NodeId {
+        return switch (self.mode) {
+            .attached => try self.ir.deriveWithOrigin(self.page_id, .{ .document = self.ir.document_id }, transform, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, .{ .document = self.ir.document_id }, transform, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
+    }
+
+    pub fn deriveFromBase(self: *BuiltinContext, base: core.Value, transform: core.Transform) !core.NodeId {
+        return switch (self.mode) {
+            .attached => try self.ir.deriveWithOrigin(self.page_id, base, transform, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, base, transform, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
+    }
+
+    pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
+        try self.ir.setNodeProperty(object_id, key, value);
+    }
+
+    pub fn buildHighlight(self: *BuiltinContext, base: core.Value, note: []const u8) !core.NodeId {
+        return try deriveHighlight(self.ir, self.page_id, self.mode, self.current_origin, base, note);
+    }
+
+    pub fn oneConstraintSet(self: *BuiltinContext, constraint: core.Constraint) !core.ConstraintSet {
+        return try singleConstraintSet(self.ir, constraint);
+    }
+
+    pub fn anchorConstraintSet(
+        self: *BuiltinContext,
+        target_node: core.NodeId,
+        target_anchor: core.Anchor,
+        source_node: core.NodeId,
+        source_anchor: core.Anchor,
+        offset: f32,
+    ) !core.ConstraintSet {
+        return try nodeAnchorConstraintSet(self.ir, target_node, target_anchor, source_node, source_anchor, offset, self.current_origin);
+    }
+
+    pub fn equalAnchorConstraintSet(
+        self: *BuiltinContext,
+        target: core.AnchorValue,
+        source: core.AnchorValue,
+        offset: f32,
+    ) !core.ConstraintSet {
+        return try anchorEqualityConstraintSet(self.ir, target, source, offset, self.current_origin);
+    }
+
+    pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
+        try emitUserReport(self.ir, self.page_id, self.current_origin, severity, message);
+    }
+
+    pub fn checkAssetExists(self: *BuiltinContext, object_id: core.NodeId) !void {
+        try validateAssetExists(self.ir, self.page_id, object_id, self.current_origin);
+    }
+};
+
+fn evalPrimitiveCall(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    descriptor: registry.PrimitiveDescriptor,
+) anyerror!core.Value {
+    var ctx = BuiltinContext{
+        .ir = ir,
+        .page_id = page_id,
+        .mode = mode,
+        .env = env,
+        .functions = functions,
+        .current_origin = current_origin,
+    };
+    return try builtin.evalCall(&ctx, call, descriptor);
+}
+
+fn emitUserReport(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    origin: []const u8,
+    severity: core.DiagnosticSeverity,
+    message: []const u8,
+) !void {
+    try ir.addValidationDiagnostic(
+        severity,
+        page_id,
+        null,
+        origin,
+        .{ .user_report = .{ .message = try ir.allocator.dupe(u8, message) } },
+    );
+}
+
+fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+    const node = ir.getNode(object_id) orelse return error.UnknownNode;
+    if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
+        try ir.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
+            .asset_invalid = .{
+                .reason = try ir.allocator.dupe(u8, "expected an asset object with a path"),
+                .payload_kind = node.payload_kind,
+            },
+        });
+        return;
+    }
+
+    const requested = node.content.?;
+    const resolved = try resolveAssetPath(ir.allocator, ir.asset_base_dir, requested);
+    if (!fs_utils.fileExists(ir.allocator, resolved)) {
+        try ir.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
+            .asset_not_found = .{
+                .requested_path = try ir.allocator.dupe(u8, requested),
+                .resolved_path = resolved,
+                .payload_kind = node.payload_kind,
+            },
+        });
+    }
+}
+
+fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(requested)) return allocator.dupe(u8, requested);
+    return std.fs.path.join(allocator, &.{ base_dir, requested });
+}
+
+fn evalSelectCall(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+) anyerror!core.Value {
+    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[0]));
+    const op_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 1);
+    const descriptor = registry.lookupQueryOp(op_name) orelse {
+        reportUnknownQuery(op_name, current_origin);
+        return error.UnknownQuery;
+    };
+    try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
+    try typecheck.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
+    switch (descriptor.op) {
+        .self_object => {
+            return try ir.select(ir.allocator, base, core.Query.selfObject());
+        },
+        .previous_page => {
+            return try ir.select(ir.allocator, base, core.Query.previousPage());
+        },
+        .parent_page => {
+            return try ir.select(ir.allocator, base, core.Query.parentPage());
+        },
+        .document_pages => {
+            return try ir.select(ir.allocator, base, core.Query.documentPages());
+        },
+        .page_objects_by_role => {
+            const role = try evalCallRoleArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            return try ir.select(ir.allocator, base, core.Query.pageObjectsByRole(role));
+        },
+        .document_objects_by_role => {
+            const role = try evalCallRoleArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            return try ir.select(ir.allocator, base, core.Query.documentObjectsByRole(role));
+        },
+    }
+}
+
+fn evalDeriveCall(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+) anyerror!core.Value {
+    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[0]));
+    const op_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 1);
+    const descriptor = registry.lookupTransformOp(op_name) orelse {
+        reportUnknownTransform(op_name, current_origin);
+        return error.UnknownTransform;
+    };
+    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
+    if (descriptor.input_sort) |expected| try typecheck.ensureValueSortWithCode(ir, null, base, expected, current_origin, .UnmatchedInputType);
+    switch (descriptor.op) {
+        .page_number => {
+            return .{ .object = switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.pageNumber(), current_origin),
+                .detached => |builder| blk: {
+                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.pageNumber(), current_origin);
+                    try builder.trackNode(ir.allocator, id);
+                    break :blk id;
+                },
+            } };
+        },
+        .toc => {
+            return .{ .object = switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.toc(), current_origin),
+                .detached => |builder| blk: {
+                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.toc(), current_origin);
+                    try builder.trackNode(ir.allocator, id);
+                    break :blk id;
+                },
+            } };
+        },
+        .rewrite_text => {
+            const old = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            const new = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 3);
+            return .{ .object = switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin),
+                .detached => |builder| blk: {
+                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin);
+                    try builder.trackNode(ir.allocator, id);
+                    break :blk id;
+                },
+            } };
+        },
+        .highlight => {
+            const note = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            return .{ .object = try deriveHighlight(ir, page_id, mode, current_origin, base, note) };
+        },
+    }
+}
+
+fn deriveHighlight(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    current_origin: []const u8,
+    base: core.Value,
+    note: []const u8,
+) !core.NodeId {
+    return switch (base) {
+        .object => |id| blk: {
+            const selection = try ir.select(ir.allocator, .{ .object = id }, core.Query.selfObject());
+            break :blk switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, selection, core.Transform.highlight(note), current_origin),
+                .detached => |builder| blk2: {
+                    const derived = try ir.deriveDetachedWithOrigin(page_id, selection, core.Transform.highlight(note), current_origin);
+                    try builder.trackNode(ir.allocator, derived);
+                    break :blk2 derived;
+                },
+            };
+        },
+        .selection => blk: {
+            break :blk switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.highlight(note), current_origin),
+                .detached => |builder| blk2: {
+                    const derived = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.highlight(note), current_origin);
+                    try builder.trackNode(ir.allocator, derived);
+                    break :blk2 derived;
+                },
+            };
+        },
+        else => return error.ExpectedObject,
+    };
+}
+
+fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void {
+    if (actual != expected) {
+        reportLowerDiagnostic(.{
+            .err = error.InvalidArity,
+            .span = error_report.spanFromOrigin(origin),
+            .data = .{ .invalid_arity = .{ .actual = actual, .min = expected, .max = expected } },
+        });
+        return error.InvalidArity;
+    }
+}
+
+fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8) !void {
+    if (actual < min or actual > max) {
+        reportLowerDiagnostic(.{
+            .err = error.InvalidArity,
+            .span = error_report.spanFromOrigin(origin),
+            .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
+        });
+        return error.InvalidArity;
+    }
+}
+
+fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.Value {
+    const root = fragment.root orelse unreachable;
+    return switch (root) {
+        .document => |id| .{ .document = id },
+        .page => |id| .{ .page = id },
+        .object => |id| .{ .object = id },
+        .selection => |selection| .{ .selection = try selection.clone(allocator) },
+        .anchor => |anchor| .{ .anchor = anchor },
+        .function => |function| .{ .function = function },
+        .style => |style| .{ .style = style },
+        .string => |text| .{ .string = text },
+        .number => |number| .{ .number = number },
+        .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
+    };
+}
+
+fn fragmentRootCloneFromFragment(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.FragmentRoot {
+    const root = fragment.root orelse unreachable;
+    return try root.clone(allocator);
+}
+
+fn normalizeForUse(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.Value {
+    return switch (value) {
+        .fragment => |fragment| switch (mode) {
+            .attached => blk: {
+                try ir.materializeFragment(fragment);
+                break :blk try fragmentRootToValue(ir.allocator, fragment);
+            },
+            .detached => |builder| blk: {
+                try builder.trackFragment(ir.allocator, fragment);
+                break :blk try fragmentRootToValue(ir.allocator, fragment);
+            },
+        },
+        else => value,
+    };
+}
+
+fn resolveValueString(value: core.Value) ![]const u8 {
+    return switch (value) {
+        .string => |text| text,
+        else => return error.ExpectedStringArgument,
+    };
+}
+
+fn resolveValueNumber(value: core.Value) !f32 {
+    return switch (value) {
+        .number => |number| number,
+        else => return error.ExpectedNumberArgument,
+    };
+}
+
+fn resolveValueStyle(value: core.Value) !core.StyleRef {
+    return switch (value) {
+        .style => |style| style,
+        else => return error.ExpectedStyleArgument,
+    };
+}
+
+fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
+    return switch (value) {
+        .anchor => |anchor| anchor,
+        else => return error.ExpectedAnchor,
+    };
+}
+
+fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.NodeId {
+    return switch (try normalizeForUse(ir, mode, value)) {
+        .object => |id| id,
+        else => return error.ExpectedObject,
+    };
+}
+
+fn evalCallArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!core.Value {
+    return try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[index]);
+}
+
+fn evalCallStringArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror![]const u8 {
+    return try resolveValueString(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+}
+
+fn evalCallNumberArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!f32 {
+    return try resolveValueNumber(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+}
+
+fn evalCallObjectArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!core.NodeId {
+    return try resolveValueObjectId(ir, mode, try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+}
+
+fn evalCallAnchorArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!core.AnchorValue {
+    return try resolveValueAnchor(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+}
+
+fn evalCallStyleArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!core.StyleRef {
+    return try resolveValueStyle(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+}
+
+fn evalCallRoleArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!core.Role {
+    const role_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, index);
+    return names.parseRoleName(role_name) orelse {
+        reportNamedResolutionError(error.UnknownRole, "role", role_name, current_origin);
+        return error.UnknownRole;
+    };
+}
+
+fn evalCallPayloadArg(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    current_origin: []const u8,
+    call: CallExpr,
+    index: usize,
+) anyerror!names.ParsedPayload {
+    const payload_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, index);
+    return names.parsePayloadName(payload_name) orelse {
+        reportNamedResolutionError(error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
+        return error.UnknownPayloadKind;
+    };
+}
+
+fn singleConstraintSet(ir: *core.Ir, constraint: core.Constraint) !core.ConstraintSet {
+    var bundle = core.ConstraintSet.init();
+    errdefer bundle.deinit(ir.allocator);
+    try bundle.items.append(ir.allocator, constraint);
+    return bundle;
+}
+
+fn nodeAnchorConstraintSet(
+    ir: *core.Ir,
+    target_node: core.NodeId,
+    target_anchor: core.Anchor,
+    source_node: core.NodeId,
+    source_anchor: core.Anchor,
+    offset: f32,
+    origin: []const u8,
+) !core.ConstraintSet {
+    return try singleConstraintSet(ir, .{
+        .target_node = target_node,
+        .target_anchor = target_anchor,
+        .source = .{ .node = .{ .node_id = source_node, .anchor = source_anchor } },
+        .offset = offset,
+        .origin = origin,
+    });
+}
+
+fn anchorEqualityConstraintSet(
+    ir: *core.Ir,
+    target: core.AnchorValue,
+    source: core.AnchorValue,
+    offset: f32,
+    origin: []const u8,
+) !core.ConstraintSet {
+    return switch (target) {
+        .page => error.PageCannotBeConstraintTarget,
+        .node => |node| try singleConstraintSet(ir, .{
+            .target_node = node.node_id,
+            .target_anchor = node.anchor,
+            .source = source.toConstraintSource(),
+            .offset = offset,
+            .origin = origin,
+        }),
+    };
+}
+
+const ResolvedTarget = struct {
+    node_id: core.NodeId,
+    anchor: core.Anchor,
+};
+
+fn executeStatement(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    last_code_like: *?core.NodeId,
+    stmt: Statement,
+    origin_override: ?[]const u8,
+) anyerror!ExecFlow {
+    const origin = if (origin_override) |override| override else try statementOrigin(ir.allocator, stmt.span);
+    switch (stmt.kind) {
+        .title => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "title", "title", .text, .text, text, origin),
+        .subtitle => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "subtitle", "subtitle", .text, .text, text, origin),
+        .math => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "math", "math", .source, .math_text, text, origin),
+        .mathtex => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "mathtex", "math", .asset, .math_tex, text, origin),
+        .figure => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "figure", "figure", .source, .figure_text, text, origin),
+        .image => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "image", "figure", .asset, .image_ref, text, origin),
+        .pdf_ref => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "pdf", "figure", .asset, .pdf_ref, text, origin),
+        .code => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "code", "code", .source, .code, text, origin),
+        .page_number => {
+            const value: core.Value = .{ .object = switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, .{ .page = page_id }, core.Transform.pageNumber(), origin),
+                .detached => |builder| blk: {
+                    const id = try ir.deriveDetachedWithOrigin(page_id, .{ .page = page_id }, core.Transform.pageNumber(), origin);
+                    try builder.trackNode(ir.allocator, id);
+                    break :blk id;
+                },
+            } };
+            try materializeStatementValue(ir, mode, last_code_like, value);
+        },
+        .toc => {
+            const value: core.Value = .{ .object = switch (mode) {
+                .attached => try ir.deriveWithOrigin(page_id, .{ .document = ir.document_id }, core.Transform.toc(), origin),
+                .detached => |builder| blk: {
+                    const id = try ir.deriveDetachedWithOrigin(page_id, .{ .document = ir.document_id }, core.Transform.toc(), origin);
+                    try builder.trackNode(ir.allocator, id);
+                    break :blk id;
+                },
+            } };
+            try materializeStatementValue(ir, mode, last_code_like, value);
+        },
+        .let_binding => |binding| {
+            const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
+            switch (mode) {
+                .attached => try materializeStatementValue(ir, mode, last_code_like, value),
+                .detached => {},
+            }
+            try env.put(binding.name, value);
+        },
+        .bind_binding => |binding| {
+            switch (mode) {
+                .attached => {
+                    var builder = DetachedBuilder.init(page_id);
+                    errdefer builder.deinit(ir.allocator);
+                    const value = try evalExpr(ir, page_id, .{ .detached = &builder }, env, functions, origin, binding.expr);
+                    switch (value) {
+                        .fragment => {
+                            if (builder.isEmpty()) {
+                                builder.deinit(ir.allocator);
+                                try env.put(binding.name, value);
+                            } else {
+                                const root = try fragmentRootCloneFromFragment(ir.allocator, value.fragment);
+                                try builder.trackFragment(ir.allocator, value.fragment);
+                                const fragment = try ir.createFragment(page_id, root, builder.node_ids, builder.constraints, builder.deps);
+                                try env.put(binding.name, .{ .fragment = fragment });
+                            }
+                        },
+                        else => {
+                            const root = try fragmentRootFromValue(value);
+                            const fragment = try ir.createFragment(page_id, root, builder.node_ids, builder.constraints, builder.deps);
+                            try env.put(binding.name, .{ .fragment = fragment });
+                        },
+                    }
+                },
+                .detached => {
+                    const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
+                    try env.put(binding.name, value);
+                },
+            }
+        },
+        .return_expr => |expr| {
+            const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+            return .{ .returned = value };
+        },
+        .constrain => |decl| {
+            const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
+            const source = try resolveAnchorRef(ir, mode, env, origin, decl.source, false);
+            const offset: f32 = if (decl.offset) |expr| blk: {
+                const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                break :blk try resolveValueNumber(value);
+            } else 0;
+            switch (mode) {
+                .attached => try ir.addAnchorConstraint(target.node_id, target.anchor, source, offset, origin),
+                .detached => |builder| try builder.constraints.items.append(ir.allocator, .{
+                    .target_node = target.node_id,
+                    .target_anchor = target.anchor,
+                    .source = source,
+                    .offset = offset,
+                }),
+            }
+        },
+        .expr_stmt => |expr| switch (expr) {
+            .call => |call| {
+                if (functions.contains(call.name)) {
+                    try executeCallStatement(ir, page_id, mode, env, functions, last_code_like, origin, call);
+                } else {
+                    var value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                    defer value.deinit(ir.allocator);
+                    try materializeStatementValue(ir, mode, last_code_like, value);
+                }
+            },
+            else => {
+                var value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                defer value.deinit(ir.allocator);
+                try materializeStatementValue(ir, mode, last_code_like, value);
+            },
+        },
+        .highlight => |note| {
+            const target = last_code_like.* orelse return error.MissingHighlightTarget;
+            var selection = try ir.select(ir.allocator, .{ .object = target }, core.Query.selfObject());
+            defer selection.deinit(ir.allocator);
+            _ = try deriveHighlight(ir, page_id, mode, origin, selection, note);
+        },
+    }
+    return .none;
+}
+
+fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
+    switch (mode) {
+        .attached => switch (value) {
+            .fragment => |fragment| {
+                try ir.materializeFragment(fragment);
+                if (fragment.root) |root| {
+                    switch (root) {
+                        .object => |id| last_code_like.* = id,
+                        .constraints => {},
+                        else => {},
+                    }
+                }
+            },
+            .constraints => |constraints| try ir.addConstraintSet(constraints),
+            .object => |id| last_code_like.* = id,
+            else => {},
+        },
+        .detached => |builder| switch (value) {
+            .constraints => |constraints| try builder.appendConstraintSet(ir.allocator, constraints),
+            .object => |id| {
+                last_code_like.* = id;
+                try builder.trackNode(ir.allocator, id);
+            },
+            .fragment => |fragment| {
+                try builder.trackFragment(ir.allocator, fragment);
+                if (fragment.root) |root| {
+                    switch (root) {
+                        .object => |id| last_code_like.* = id,
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        },
+    }
+}
+
+fn makeLegacyNode(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    name: []const u8,
+    role: []const u8,
+    object_kind: core.ObjectKind,
+    payload_kind: core.PayloadKind,
+    content: []const u8,
+    origin: []const u8,
+) !core.NodeId {
+    return switch (mode) {
+        .attached => try ir.makeObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, origin),
+        .detached => |builder| blk: {
+            const id = try ir.makeDetachedObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, origin);
+            try builder.trackNode(ir.allocator, id);
+            break :blk id;
+        },
+    };
+}
+
+fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
+    return switch (value) {
+        .document => |id| .{ .document = id },
+        .page => |id| .{ .page = id },
+        .object => |id| .{ .object = id },
+        .selection => |selection| .{ .selection = selection },
+        .anchor => |anchor| .{ .anchor = anchor },
+        .function => |function| .{ .function = function },
+        .style => |style| .{ .style = style },
+        .string => |text| .{ .string = text },
+        .number => |number| .{ .number = number },
+        .constraints => |constraints| .{ .constraints = constraints },
+        .fragment => error.UnsupportedFragmentRoot,
+    };
+}
+
+fn executeCallStatement(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    last_code_like: *?core.NodeId,
+    current_origin: []const u8,
+    call: CallExpr,
+) anyerror!void {
+    const func = functions.get(call.name) orelse {
+        _ = try evalCall(ir, page_id, mode, env, functions, current_origin, call);
+        return;
+    };
+    const func_ref = try typecheck.functionRefFor(ir.allocator, func);
+    try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
+
+    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer local_env.deinit();
+    var it = env.iterator();
+    while (it.next()) |entry| {
+        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    for (func.params.items, call.args.items) |param, arg_expr| {
+        const value = try evalExpr(ir, page_id, mode, env, functions, current_origin, arg_expr);
+        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
+    }
+    for (func.statements.items) |inner| {
+        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, last_code_like, inner, current_origin);
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                defer {
+                    var owned = value;
+                    owned.deinit(ir.allocator);
+                }
+                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try materializeStatementValue(ir, mode, last_code_like, value);
+                return;
+            },
+        }
+    }
+}
+
+fn invokeUserFunctionValue(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    func: FunctionDecl,
+    current_origin: []const u8,
+    call: CallExpr,
+) anyerror!core.Value {
+    const func_ref = try typecheck.functionRefFor(ir.allocator, func);
+    if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
+    try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
+
+    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer local_env.deinit();
+    var it = env.iterator();
+    while (it.next()) |entry| {
+        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    for (func.params.items, call.args.items) |param, arg_expr| {
+        const value = try evalExpr(ir, page_id, mode, env, functions, current_origin, arg_expr);
+        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
+    }
+
+    var last_code_like: ?core.NodeId = null;
+    for (func.statements.items) |inner| {
+        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, &last_code_like, inner, current_origin);
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                return value;
+            },
+        }
+    }
+
+    return error.FunctionDidNotReturnValue;
+}
+
+fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
+}
+
+fn resolveAnchorRef(
+    ir: *core.Ir,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    current_origin: []const u8,
+    anchor_ref: AnchorRef,
+    comptime is_target: bool,
+) !if (is_target) ResolvedTarget else core.ConstraintSource {
+    switch (anchor_ref.kind) {
+        .page => {
+            if (is_target) return error.PageCannotBeConstraintTarget;
+            return .{ .page = anchor_ref.anchor };
+        },
+        .node => {
+            const value = env.get(anchor_ref.node_name.?) orelse {
+                reportUnknownIdentifier(anchor_ref.node_name.?, current_origin);
+                return error.UnknownIdentifier;
+            };
+            const node_id = try resolveValueObjectId(ir, mode, value);
+            if (is_target) {
+                return .{ .node_id = node_id, .anchor = anchor_ref.anchor };
+            }
+            return .{ .node = .{ .node_id = node_id, .anchor = anchor_ref.anchor } };
+        },
+    }
+}

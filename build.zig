@@ -14,6 +14,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const model_mod = b.createModule(.{
+        .root_source_file = b.path("src/core/model.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const ast_mod = b.createModule(.{
+        .root_source_file = b.path("src/ast.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    ast_mod.addImport("model", model_mod);
+
     const core_mod = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
@@ -21,6 +34,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     core_mod.addImport("utils", utils_mod);
+    core_mod.addImport("ast", ast_mod);
+    core_mod.addImport("model", model_mod);
     core_mod.addIncludePath(md4c_include);
     core_mod.addCSourceFiles(.{
         .root = b.path(md4c_src),
@@ -35,6 +50,7 @@ pub fn build(b: *std.Build) void {
     });
     exe_mod.addImport("core", core_mod);
     exe_mod.addImport("utils", utils_mod);
+    exe_mod.addImport("ast", ast_mod);
 
     const exe = b.addExecutable(.{
         .name = "ss",
@@ -60,6 +76,7 @@ pub fn build(b: *std.Build) void {
     });
     parser_tests_mod.addImport("core", core_mod);
     parser_tests_mod.addImport("utils", utils_mod);
+    parser_tests_mod.addImport("ast", ast_mod);
     const parser_tests = b.addTest(.{
         .root_module = parser_tests_mod,
     });
@@ -72,6 +89,7 @@ pub fn build(b: *std.Build) void {
     });
     main_tests_mod.addImport("core", core_mod);
     main_tests_mod.addImport("utils", utils_mod);
+    main_tests_mod.addImport("ast", ast_mod);
     const main_tests = b.addTest(.{
         .root_module = main_tests_mod,
     });

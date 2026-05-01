@@ -1,28 +1,47 @@
 const std = @import("std");
 
+const Sink = union(enum) {
+    stdout,
+    buffer: struct {
+        value: *std.ArrayList(u8),
+        allocator: std.mem.Allocator,
+    },
+};
+
 pub const Object = struct {
     allocator: std.mem.Allocator,
+    sink: Sink,
     first: bool = true,
 
     pub fn begin(allocator: std.mem.Allocator) Object {
-        std.debug.print("{{", .{});
-        return .{ .allocator = allocator };
+        writeByte(.stdout, '{') catch unreachable;
+        return .{ .allocator = allocator, .sink = .stdout };
     }
 
-    pub fn end(self: *Object) void {
-        _ = self;
-        std.debug.print("}}", .{});
+    pub fn beginBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !Object {
+        try writeByte(.{ .buffer = .{ .value = buffer, .allocator = allocator } }, '{');
+        return .{ .allocator = allocator, .sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } } };
+    }
+
+    pub fn end(self: *Object) !void {
+        try writeByte(self.sink, '}');
+    }
+
+    pub fn objectField(self: *Object, key: []const u8) !Object {
+        try self.fieldName(key);
+        try writeByte(self.sink, '{');
+        return .{ .allocator = self.allocator, .sink = self.sink };
     }
 
     pub fn arrayField(self: *Object, key: []const u8) !Array {
         try self.fieldName(key);
-        std.debug.print("[", .{});
-        return .{ .allocator = self.allocator };
+        try writeByte(self.sink, '[');
+        return .{ .allocator = self.allocator, .sink = self.sink };
     }
 
     pub fn stringField(self: *Object, key: []const u8, value: []const u8) !void {
         try self.fieldName(key);
-        try string(self.allocator, value);
+        try string(self.allocator, self.sink, value);
     }
 
     pub fn enumTagField(self: *Object, key: []const u8, value: anytype) !void {
@@ -31,58 +50,117 @@ pub const Object = struct {
 
     pub fn intField(self: *Object, key: []const u8, value: anytype) !void {
         try self.fieldName(key);
-        std.debug.print("{d}", .{value});
+        try int(self.allocator, self.sink, value);
+    }
+
+    pub fn floatField(self: *Object, key: []const u8, value: f32, comptime fmt: []const u8) !void {
+        try self.fieldName(key);
+        try float(self.allocator, self.sink, value, fmt);
+    }
+
+    pub fn boolField(self: *Object, key: []const u8, value: bool) !void {
+        try self.fieldName(key);
+        try writeBytes(self.sink, if (value) "true" else "false");
+    }
+
+    pub fn nullField(self: *Object, key: []const u8) !void {
+        try self.fieldName(key);
+        try writeBytes(self.sink, "null");
     }
 
     pub fn optionalStringField(self: *Object, key: []const u8, value: ?[]const u8) !void {
         try self.fieldName(key);
         if (value) |text| {
-            try string(self.allocator, text);
+            try string(self.allocator, self.sink, text);
         } else {
-            nullValue();
+            try writeBytes(self.sink, "null");
+        }
+    }
+
+    pub fn optionalIntField(self: *Object, key: []const u8, value: anytype) !void {
+        try self.fieldName(key);
+        if (value) |number| {
+            try int(self.allocator, self.sink, number);
+        } else {
+            try writeBytes(self.sink, "null");
+        }
+    }
+
+    pub fn optionalEnumTagField(self: *Object, key: []const u8, value: anytype) !void {
+        try self.fieldName(key);
+        if (value) |tagged| {
+            try string(self.allocator, self.sink, @tagName(tagged));
+        } else {
+            try writeBytes(self.sink, "null");
         }
     }
 
     fn fieldName(self: *Object, key: []const u8) !void {
         try self.comma();
-        try string(self.allocator, key);
-        std.debug.print(":", .{});
+        try string(self.allocator, self.sink, key);
+        try writeByte(self.sink, ':');
     }
 
     fn comma(self: *Object) !void {
         if (self.first) {
             self.first = false;
         } else {
-            std.debug.print(",", .{});
+            try writeByte(self.sink, ',');
         }
     }
 };
 
 pub const Array = struct {
     allocator: std.mem.Allocator,
+    sink: Sink,
     first: bool = true,
 
-    pub fn end(self: *Array) void {
-        _ = self;
-        std.debug.print("]", .{});
+    pub fn end(self: *Array) !void {
+        try writeByte(self.sink, ']');
     }
 
     pub fn objectItem(self: *Array) !Object {
         try self.comma();
-        std.debug.print("{{", .{});
-        return .{ .allocator = self.allocator };
+        try writeByte(self.sink, '{');
+        return .{ .allocator = self.allocator, .sink = self.sink };
+    }
+
+    pub fn arrayItem(self: *Array) !Array {
+        try self.comma();
+        try writeByte(self.sink, '[');
+        return .{ .allocator = self.allocator, .sink = self.sink };
     }
 
     pub fn stringItem(self: *Array, value: []const u8) !void {
         try self.comma();
-        try string(self.allocator, value);
+        try string(self.allocator, self.sink, value);
+    }
+
+    pub fn intItem(self: *Array, value: anytype) !void {
+        try self.comma();
+        try int(self.allocator, self.sink, value);
+    }
+
+    pub fn floatItem(self: *Array, value: f32, comptime fmt: []const u8) !void {
+        try self.comma();
+        try float(self.allocator, self.sink, value, fmt);
+    }
+
+    pub fn boolItem(self: *Array, value: bool) !void {
+        try self.comma();
+        try writeBytes(self.sink, if (value) "true" else "false");
+    }
+
+    pub fn nullItem(self: *Array) !void {
+        try self.comma();
+        try writeBytes(self.sink, "null");
     }
 
     fn comma(self: *Array) !void {
         if (self.first) {
             self.first = false;
         } else {
-            std.debug.print(",", .{});
+            try writeByte(self.sink, ',');
         }
     }
 };
@@ -91,154 +169,38 @@ pub fn newline() void {
     std.debug.print("\n", .{});
 }
 
-fn string(allocator: std.mem.Allocator, value: []const u8) !void {
+pub fn appendNewline(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+    try buffer.append(allocator, '\n');
+}
+
+fn string(allocator: std.mem.Allocator, sink: Sink, value: []const u8) !void {
     const escaped = try std.json.Stringify.valueAlloc(allocator, value, .{});
     defer allocator.free(escaped);
-    std.debug.print("{s}", .{escaped});
+    try writeBytes(sink, escaped);
 }
 
-fn nullValue() void {
-    std.debug.print("null", .{});
-}
-
-pub fn appendFieldPrefix(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), key: []const u8) !void {
-    try appendString(allocator, buffer, key);
-    try buffer.appendSlice(allocator, ": ");
-}
-
-pub fn appendTrailingComma(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), trailing_comma: bool) !void {
-    if (trailing_comma) try buffer.appendSlice(allocator, ", ");
-}
-
-pub fn appendObjectFieldStart(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), key: []const u8) !void {
-    try appendFieldPrefix(allocator, buffer, key);
-    try buffer.append(allocator, '{');
-}
-
-pub fn appendFieldString(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: []const u8,
-    trailing_comma: bool,
-) !void {
-    try appendFieldPrefix(allocator, buffer, key);
-    try appendString(allocator, buffer, value);
-    try appendTrailingComma(allocator, buffer, trailing_comma);
-}
-
-pub fn appendFieldInt(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: anytype,
-    trailing_comma: bool,
-) !void {
-    try appendFieldPrefix(allocator, buffer, key);
-    try appendInt(allocator, buffer, value);
-    try appendTrailingComma(allocator, buffer, trailing_comma);
-}
-
-pub fn appendFieldFloat(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: f32,
-    trailing_comma: bool,
-) !void {
-    try appendFieldPrefix(allocator, buffer, key);
-    try appendFloat(allocator, buffer, value, "{d:.1}");
-    try appendTrailingComma(allocator, buffer, trailing_comma);
-}
-
-pub fn appendFieldNull(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    trailing_comma: bool,
-) !void {
-    try appendFieldPrefix(allocator, buffer, key);
-    try buffer.appendSlice(allocator, "null");
-    try appendTrailingComma(allocator, buffer, trailing_comma);
-}
-
-pub fn appendFieldBool(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: bool,
-    trailing_comma: bool,
-) !void {
-    try appendFieldPrefix(allocator, buffer, key);
-    try buffer.appendSlice(allocator, if (value) "true" else "false");
-    try appendTrailingComma(allocator, buffer, trailing_comma);
-}
-
-pub fn appendFieldOptionalString(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: ?[]const u8,
-    trailing_comma: bool,
-) !void {
-    if (value) |text| {
-        try appendFieldString(allocator, buffer, key, text, trailing_comma);
-    } else {
-        try appendFieldNull(allocator, buffer, key, trailing_comma);
-    }
-}
-
-pub fn appendFieldOptionalInt(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: anytype,
-    trailing_comma: bool,
-) !void {
-    if (value) |number| {
-        try appendFieldInt(allocator, buffer, key, number, trailing_comma);
-    } else {
-        try appendFieldNull(allocator, buffer, key, trailing_comma);
-    }
-}
-
-pub fn appendFieldOptionalEnumTag(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: anytype,
-    trailing_comma: bool,
-) !void {
-    if (value) |tagged| {
-        try appendFieldString(allocator, buffer, key, @tagName(tagged), trailing_comma);
-    } else {
-        try appendFieldNull(allocator, buffer, key, trailing_comma);
-    }
-}
-
-pub fn appendInt(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: anytype) !void {
+fn int(allocator: std.mem.Allocator, sink: Sink, value: anytype) !void {
     const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
     defer allocator.free(text);
-    try buffer.appendSlice(allocator, text);
+    try writeBytes(sink, text);
 }
 
-pub fn appendFloatValue(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: f32) !void {
-    try appendFloat(allocator, buffer, value, "{d:.4}");
-}
-
-pub fn appendString(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: []const u8) !void {
-    const escaped = try std.json.Stringify.valueAlloc(allocator, value, .{});
-    defer allocator.free(escaped);
-    try buffer.appendSlice(allocator, escaped);
-}
-
-fn appendFloat(
-    allocator: std.mem.Allocator,
-    buffer: *std.ArrayList(u8),
-    value: f32,
-    comptime fmt: []const u8,
-) !void {
+fn float(allocator: std.mem.Allocator, sink: Sink, value: f32, comptime fmt: []const u8) !void {
     const text = try std.fmt.allocPrint(allocator, fmt, .{value});
     defer allocator.free(text);
-    try buffer.appendSlice(allocator, text);
+    try writeBytes(sink, text);
+}
+
+fn writeByte(sink: Sink, byte: u8) !void {
+    switch (sink) {
+        .stdout => std.debug.print("{c}", .{byte}),
+        .buffer => |buffer| try buffer.value.append(buffer.allocator, byte),
+    }
+}
+
+fn writeBytes(sink: Sink, text: []const u8) !void {
+    switch (sink) {
+        .stdout => std.debug.print("{s}", .{text}),
+        .buffer => |buffer| try buffer.value.appendSlice(buffer.allocator, text),
+    }
 }

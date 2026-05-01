@@ -1,7 +1,7 @@
 const std = @import("std");
-const model = @import("model.zig");
+const model = @import("model");
 const layout = @import("layout.zig");
-const dump = @import("dump.zig");
+const ast = @import("ast");
 
 const Allocator = model.Allocator;
 const NodeId = model.NodeId;
@@ -32,9 +32,71 @@ const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
 const nodeProperty = model.nodeProperty;
 
-pub const Engine = struct {
+pub const SourceModuleKind = enum {
+    project,
+    base,
+    theme,
+};
+
+pub const SourceModule = struct {
+    kind: SourceModuleKind,
+    path: ?[]u8,
+    source: []u8,
+    program: ast.Program,
+
+    pub fn deinit(self: *SourceModule, allocator: Allocator) void {
+        self.program.deinit(allocator);
+        allocator.free(self.source);
+        if (self.path) |path| allocator.free(path);
+    }
+};
+
+pub const FunctionSource = enum {
+    base,
+    theme,
+    project,
+};
+
+pub const FunctionMetadata = struct {
+    source: FunctionSource,
+};
+
+pub const DefinitionKind = enum {
+    function,
+    variable,
+};
+
+pub const Definition = struct {
+    line: usize,
+    column: usize,
+    length: usize,
+    kind: DefinitionKind,
+    file: ?[]const u8 = null,
+};
+
+pub const InlayHintKind = enum {
+    parameter_names,
+    solved_frame,
+};
+
+pub const InlayHint = struct {
+    line: usize,
+    column: usize,
+    label: []const u8,
+    kind: InlayHintKind,
+};
+
+pub const Ir = struct {
     allocator: Allocator,
-    asset_base_dir: []const u8,
+    asset_base_dir: []u8,
+    project_module: SourceModule,
+    base_module: ?SourceModule = null,
+    theme_module: ?SourceModule = null,
+    functions: std.StringHashMap(ast.FunctionDecl),
+    function_metadata: std.StringHashMap(FunctionMetadata),
+    variable_types: std.StringHashMap(SemanticSort),
+    definitions: std.StringHashMap(Definition),
+    hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
@@ -46,10 +108,27 @@ pub const Engine = struct {
     next_id: NodeId,
     document_id: NodeId,
 
-    pub fn init(allocator: Allocator) !Engine {
-        var engine = Engine{
+    pub fn init(
+        allocator: Allocator,
+        asset_base_dir: []u8,
+        project_path: []u8,
+        project_source: []u8,
+        project_program: ast.Program,
+    ) !Ir {
+        var ir = Ir{
             .allocator = allocator,
-            .asset_base_dir = ".",
+            .asset_base_dir = asset_base_dir,
+            .project_module = .{
+                .kind = .project,
+                .path = project_path,
+                .source = project_source,
+                .program = project_program,
+            },
+            .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
+            .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
+            .variable_types = std.StringHashMap(SemanticSort).init(allocator),
+            .definitions = std.StringHashMap(Definition).init(allocator),
+            .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
@@ -62,19 +141,34 @@ pub const Engine = struct {
             .document_id = 0,
         };
 
-        const doc_id = try engine.freshId();
-        try engine.nodes.append(allocator, .{
+        const doc_id = try ir.freshId();
+        try ir.nodes.append(allocator, .{
             .id = doc_id,
             .kind = .document,
             .name = "document",
             .attached = true,
         });
-        engine.document_id = doc_id;
+        ir.document_id = doc_id;
 
-        return engine;
+        return ir;
     }
 
-    pub fn deinit(self: *Engine) void {
+    pub fn deinit(self: *Ir) void {
+        self.project_module.deinit(self.allocator);
+        if (self.base_module) |*module| module.deinit(self.allocator);
+        if (self.theme_module) |*module| module.deinit(self.allocator);
+        self.functions.deinit();
+        self.function_metadata.deinit();
+        self.variable_types.deinit();
+        var definition_iterator = self.definitions.iterator();
+        while (definition_iterator.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.file) |file| self.allocator.free(file);
+        }
+        self.definitions.deinit();
+        for (self.hints.items) |hint| self.allocator.free(hint.label);
+        self.hints.deinit(self.allocator);
+        self.allocator.free(self.asset_base_dir);
         var it = self.contains.iterator();
         while (it.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
@@ -86,6 +180,7 @@ pub const Engine = struct {
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
+        self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.constraint_failures.deinit(self.allocator);
         for (self.fragments.items) |fragment| {
@@ -95,13 +190,33 @@ pub const Engine = struct {
         self.fragments.deinit(self.allocator);
     }
 
-    fn freshId(self: *Engine) !NodeId {
+    pub fn projectPath(self: *const Ir) []const u8 {
+        return self.project_module.path orelse "";
+    }
+
+    pub fn projectSource(self: *const Ir) []const u8 {
+        return self.project_module.source;
+    }
+
+    pub fn projectProgram(self: *const Ir) ast.Program {
+        return self.project_module.program;
+    }
+
+    pub fn modulePathForFunctionSource(self: *const Ir, source: FunctionSource) ?[]const u8 {
+        return switch (source) {
+            .project => self.project_module.path,
+            .base => if (self.base_module) |module| module.path else null,
+            .theme => if (self.theme_module) |module| module.path else null,
+        };
+    }
+
+    fn freshId(self: *Ir) !NodeId {
         const id = self.next_id;
         self.next_id += 1;
         return id;
     }
 
-    fn addContainment(self: *Engine, parent: NodeId, child: NodeId) !void {
+    fn addContainment(self: *Ir, parent: NodeId, child: NodeId) !void {
         const gop = try self.contains.getOrPut(parent);
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
@@ -109,7 +224,7 @@ pub const Engine = struct {
         try gop.value_ptr.append(self.allocator, child);
     }
 
-    pub fn addPage(self: *Engine, name: []const u8) !NodeId {
+    pub fn addPage(self: *Ir, name: []const u8) !NodeId {
         const page_id = try self.freshId();
         const index = self.page_order.items.len + 1;
         try self.nodes.append(self.allocator, .{
@@ -125,7 +240,7 @@ pub const Engine = struct {
     }
 
     pub fn makeObject(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         name: []const u8,
         role: ?Role,
@@ -137,7 +252,7 @@ pub const Engine = struct {
     }
 
     pub fn makeObjectWithOrigin(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         name: []const u8,
         role: ?Role,
@@ -150,7 +265,7 @@ pub const Engine = struct {
     }
 
     pub fn makeDetachedObjectWithOrigin(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         name: []const u8,
         role: ?Role,
@@ -163,7 +278,7 @@ pub const Engine = struct {
     }
 
     pub fn makeGroupWithOrigin(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         attached: bool,
         children: []const NodeId,
@@ -187,7 +302,7 @@ pub const Engine = struct {
         return group_id;
     }
 
-    pub fn setNodeProperty(self: *Engine, node_id: NodeId, key: []const u8, value: []const u8) !void {
+    pub fn setNodeProperty(self: *Ir, node_id: NodeId, key: []const u8, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.properties.items) |*property| {
             if (std.mem.eql(u8, property.key, key)) {
@@ -198,12 +313,12 @@ pub const Engine = struct {
         try node.properties.append(self.allocator, .{ .key = key, .value = value });
     }
 
-    pub fn getNodeProperty(self: *Engine, node_id: NodeId, key: []const u8) ?[]const u8 {
+    pub fn getNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) ?[]const u8 {
         const node = self.getNode(node_id) orelse return null;
         return nodeProperty(node, key);
     }
 
-    fn copyNodeProperties(self: *Engine, from_id: NodeId, to_id: NodeId) !void {
+    fn copyNodeProperties(self: *Ir, from_id: NodeId, to_id: NodeId) !void {
         const from = self.getNode(from_id) orelse return error.UnknownNode;
         for (from.properties.items) |property| {
             try self.setNodeProperty(to_id, property.key, property.value);
@@ -211,7 +326,7 @@ pub const Engine = struct {
     }
 
     fn deriveObject(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         attached: bool,
         from_id: NodeId,
@@ -226,7 +341,7 @@ pub const Engine = struct {
     }
 
     fn makeNodeWithOrigin(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         attached: bool,
         kind: NodeKind,
@@ -256,7 +371,7 @@ pub const Engine = struct {
     }
 
     pub fn createFragment(
-        self: *Engine,
+        self: *Ir,
         page_id: NodeId,
         root: FragmentRoot,
         node_ids: std.ArrayList(NodeId),
@@ -276,7 +391,7 @@ pub const Engine = struct {
         return fragment;
     }
 
-    pub fn materializeFragment(self: *Engine, fragment: *Fragment) !void {
+    pub fn materializeFragment(self: *Ir, fragment: *Fragment) !void {
         if (fragment.materialized) return;
 
         for (fragment.deps.items) |dep| {
@@ -297,14 +412,14 @@ pub const Engine = struct {
         fragment.materialized = true;
     }
 
-    pub fn addConstraint(self: *Engine, expr: []const u8) !void {
+    pub fn addConstraint(self: *Ir, expr: []const u8) !void {
         _ = self;
         _ = expr;
         return error.StringConstraintsRemoved;
     }
 
     pub fn addAnchorConstraint(
-        self: *Engine,
+        self: *Ir,
         target_node: NodeId,
         target_anchor: Anchor,
         source: ConstraintSource,
@@ -320,11 +435,11 @@ pub const Engine = struct {
         });
     }
 
-    pub fn addConstraintSet(self: *Engine, constraints: ConstraintSet) !void {
+    pub fn addConstraintSet(self: *Ir, constraints: ConstraintSet) !void {
         try self.constraints.appendSlice(self.allocator, constraints.items.items);
     }
 
-    pub fn noteConstraintFailure(self: *Engine, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
+    pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
         const failure: ConstraintFailure = .{
             .kind = kind,
             .page_id = page_id,
@@ -338,29 +453,33 @@ pub const Engine = struct {
         self.constraint_failures.append(self.allocator, failure) catch {};
     }
 
-    pub fn hasConstraintFailures(self: *const Engine) bool {
+    pub fn hasConstraintFailures(self: *const Ir) bool {
         return self.constraint_failures.items.len > 0;
     }
 
-    pub fn clearDiagnostics(self: *Engine) void {
+    pub fn clearDiagnostics(self: *Ir) void {
+        for (self.diagnostics.items) |*diagnostic| diagnostic.deinit(self.allocator);
         self.diagnostics.clearRetainingCapacity();
     }
 
-    pub fn clearDiagnosticsForPhase(self: *Engine, phase: DiagnosticPhase) void {
+    pub fn clearDiagnosticsForPhase(self: *Ir, phase: DiagnosticPhase) void {
         var write_index: usize = 0;
-        for (self.diagnostics.items) |diagnostic| {
-            if (diagnostic.phase == phase) continue;
-            self.diagnostics.items[write_index] = diagnostic;
+        for (self.diagnostics.items) |*diagnostic| {
+            if (diagnostic.phase == phase) {
+                diagnostic.deinit(self.allocator);
+                continue;
+            }
+            self.diagnostics.items[write_index] = diagnostic.*;
             write_index += 1;
         }
         self.diagnostics.items.len = write_index;
     }
 
-    pub fn addDiagnostic(self: *Engine, diagnostic: Diagnostic) !void {
+    pub fn addDiagnostic(self: *Ir, diagnostic: Diagnostic) !void {
         try self.diagnostics.append(self.allocator, diagnostic);
     }
 
-    fn addLayoutDiagnostic(self: *Engine, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+    fn addLayoutDiagnostic(self: *Ir, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addDiagnostic(.{
             .phase = .layout,
             .severity = severity,
@@ -370,16 +489,16 @@ pub const Engine = struct {
         });
     }
 
-    pub fn addLayoutWarning(self: *Engine, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+    pub fn addLayoutWarning(self: *Ir, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addLayoutDiagnostic(.warning, page_id, node_id, data);
     }
 
-    pub fn addLayoutError(self: *Engine, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+    pub fn addLayoutError(self: *Ir, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addLayoutDiagnostic(.@"error", page_id, node_id, data);
     }
 
     pub fn addValidationDiagnostic(
-        self: *Engine,
+        self: *Ir,
         severity: DiagnosticSeverity,
         page_id: ?NodeId,
         node_id: ?NodeId,
@@ -396,32 +515,32 @@ pub const Engine = struct {
         });
     }
 
-    pub fn getNode(self: *Engine, id: NodeId) ?*Node {
+    pub fn getNode(self: *Ir, id: NodeId) ?*Node {
         for (self.nodes.items) |*node| {
             if (node.id == id) return node;
         }
         return null;
     }
 
-    pub fn childrenOf(self: *Engine, parent: NodeId) ?[]const NodeId {
+    pub fn childrenOf(self: *Ir, parent: NodeId) ?[]const NodeId {
         const children = self.contains.get(parent) orelse return null;
         return children.items;
     }
 
-    pub fn pageIndexOf(self: *Engine, page_id: NodeId) usize {
+    pub fn pageIndexOf(self: *Ir, page_id: NodeId) usize {
         const node = self.getNode(page_id) orelse unreachable;
         return node.page_index.?;
     }
 
-    pub fn pageCount(self: *Engine) usize {
+    pub fn pageCount(self: *Ir) usize {
         return self.page_order.items.len;
     }
 
-    fn pageNumberText(self: *Engine, allocator: Allocator, page_id: NodeId) ![]const u8 {
+    fn pageNumberText(self: *Ir, allocator: Allocator, page_id: NodeId) ![]const u8 {
         return std.fmt.allocPrint(allocator, "{d}/{d}", .{ self.pageIndexOf(page_id), self.pageCount() });
     }
 
-    pub fn parentPageOf(self: *Engine, child_id: NodeId) ?NodeId {
+    pub fn parentPageOf(self: *Ir, child_id: NodeId) ?NodeId {
         var it = self.contains.iterator();
         while (it.next()) |entry| {
             const parent_id = entry.key_ptr.*;
@@ -434,7 +553,7 @@ pub const Engine = struct {
         return null;
     }
 
-    fn previousPageOf(self: *Engine, page_id: NodeId) ?NodeId {
+    fn previousPageOf(self: *Ir, page_id: NodeId) ?NodeId {
         for (self.page_order.items, 0..) |candidate, index| {
             if (candidate != page_id) continue;
             if (index == 0) return null;
@@ -443,7 +562,7 @@ pub const Engine = struct {
         return null;
     }
 
-    fn ensureSort(self: *Engine, value: Value, expected: SemanticSort, context: []const u8) !void {
+    fn ensureSort(self: *Ir, value: Value, expected: SemanticSort, context: []const u8) !void {
         _ = self;
         const actual: SemanticSort = switch (value) {
             .document => .document,
@@ -469,7 +588,7 @@ pub const Engine = struct {
     }
 
     fn singletonSelection(
-        self: *Engine,
+        self: *Ir,
         allocator: Allocator,
         item_sort: SelectionItemSort,
         provenance: []const u8,
@@ -482,7 +601,7 @@ pub const Engine = struct {
     }
 
     fn selectPageObjectsByRole(
-        self: *Engine,
+        self: *Ir,
         allocator: Allocator,
         page_id: NodeId,
         role: Role,
@@ -500,7 +619,7 @@ pub const Engine = struct {
     }
 
     fn selectDocumentObjectsByRole(
-        self: *Engine,
+        self: *Ir,
         allocator: Allocator,
         role: Role,
         provenance: []const u8,
@@ -516,7 +635,7 @@ pub const Engine = struct {
         return selection;
     }
 
-    fn selectDocumentPages(self: *Engine, allocator: Allocator, provenance: []const u8) !Selection {
+    fn selectDocumentPages(self: *Ir, allocator: Allocator, provenance: []const u8) !Selection {
         var selection = Selection.init(.page, provenance);
         for (self.page_order.items) |page_id| {
             try selection.ids.append(allocator, page_id);
@@ -524,7 +643,7 @@ pub const Engine = struct {
         return selection;
     }
 
-    pub fn select(self: *Engine, allocator: Allocator, base: Value, query: Query) !Value {
+    pub fn select(self: *Ir, allocator: Allocator, base: Value, query: Query) !Value {
         try self.ensureSort(base, query.input, query.name);
 
         return switch (query.op) {
@@ -549,25 +668,25 @@ pub const Engine = struct {
         };
     }
 
-    fn rewriteText(self: *Engine, allocator: Allocator, from_id: NodeId, old: []const u8, new: []const u8) ![]const u8 {
+    fn rewriteText(self: *Ir, allocator: Allocator, from_id: NodeId, old: []const u8, new: []const u8) ![]const u8 {
         const from = self.getNode(from_id) orelse return error.UnknownNode;
         const source = from.content orelse return error.MissingContent;
         return std.mem.replaceOwned(u8, allocator, source, old, new);
     }
 
-    pub fn derive(self: *Engine, page_id: NodeId, base: Value, transform: Transform) !NodeId {
+    pub fn derive(self: *Ir, page_id: NodeId, base: Value, transform: Transform) !NodeId {
         return self.deriveWithOrigin(page_id, base, transform, transform.name);
     }
 
-    pub fn deriveWithOrigin(self: *Engine, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
+    pub fn deriveWithOrigin(self: *Ir, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
         return self.deriveWithMode(page_id, true, base, transform, origin);
     }
 
-    pub fn deriveDetachedWithOrigin(self: *Engine, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
+    pub fn deriveDetachedWithOrigin(self: *Ir, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
         return self.deriveWithMode(page_id, false, base, transform, origin);
     }
 
-    fn deriveWithMode(self: *Engine, page_id: NodeId, attached: bool, base: Value, transform: Transform, origin: []const u8) !NodeId {
+    fn deriveWithMode(self: *Ir, page_id: NodeId, attached: bool, base: Value, transform: Transform, origin: []const u8) !NodeId {
         try self.ensureSort(base, transform.input, transform.name);
 
         return switch (transform.op) {
@@ -626,7 +745,7 @@ pub const Engine = struct {
         };
     }
 
-    fn deriveToc(self: *Engine, page_id: NodeId, attached: bool, document_id: NodeId, origin: []const u8) !NodeId {
+    fn deriveToc(self: *Ir, page_id: NodeId, attached: bool, document_id: NodeId, origin: []const u8) !NodeId {
         const owned = try self.buildTocText(document_id);
         return self.deriveObject(
             page_id,
@@ -641,7 +760,7 @@ pub const Engine = struct {
         );
     }
 
-    fn buildTocText(self: *Engine, document_id: NodeId) ![]const u8 {
+    fn buildTocText(self: *Ir, document_id: NodeId) ![]const u8 {
         var pages = try self.select(self.allocator, .{ .document = document_id }, Query.documentPages());
         defer pages.deinit(self.allocator);
 
@@ -670,7 +789,7 @@ pub const Engine = struct {
         return text.toOwnedSlice(self.allocator);
     }
 
-    pub fn fragmentRootSort(self: *Engine, fragment: *const Fragment) SemanticSort {
+    pub fn fragmentRootSort(self: *Ir, fragment: *const Fragment) SemanticSort {
         _ = self;
         const root = fragment.root orelse unreachable;
         return switch (root) {
@@ -687,7 +806,7 @@ pub const Engine = struct {
         };
     }
 
-    pub fn finalize(self: *Engine) !void {
+    pub fn finalize(self: *Ir) !void {
         self.clearDiagnosticsForPhase(.layout);
         self.last_constraint_failure = null;
         self.constraint_failures.clearRetainingCapacity();
@@ -702,7 +821,7 @@ pub const Engine = struct {
         }
     }
 
-    fn refreshPageNumbers(self: *Engine) !void {
+    fn refreshPageNumbers(self: *Ir) !void {
         for (self.nodes.items) |*node| {
             if (!roleEq(node.role, "page_number")) continue;
             const page_id = self.parentPageOf(node.id) orelse continue;
@@ -710,7 +829,7 @@ pub const Engine = struct {
         }
     }
 
-    fn refreshTocs(self: *Engine) !void {
+    fn refreshTocs(self: *Ir) !void {
         for (self.nodes.items) |*node| {
             if (!roleEq(node.role, "toc")) continue;
             const document_id = node.derived_from orelse self.document_id;
@@ -718,30 +837,40 @@ pub const Engine = struct {
         }
     }
 
-    pub fn styleForNode(self: *Engine, node: *const Node) model.TextStyle {
+    pub fn styleForNode(self: *Ir, node: *const Node) model.TextStyle {
         return layout.styleForNode(self, node);
     }
 
-    pub fn intrinsicWidth(self: *Engine, node: *const Node) f32 {
+    pub fn intrinsicWidth(self: *Ir, node: *const Node) f32 {
         return layout.intrinsicWidth(self, node);
     }
 
-    pub fn intrinsicHeight(self: *Engine, node: *const Node) f32 {
+    pub fn intrinsicHeight(self: *Ir, node: *const Node) f32 {
         return layout.intrinsicHeight(self, node);
     }
 
-    pub fn shouldWrapNode(self: *Engine, node: *const Node) bool {
+    pub fn shouldWrapNode(self: *Ir, node: *const Node) bool {
         return layout.shouldWrapNode(self, node);
     }
-
-    pub fn dumpToString(self: *Engine, allocator: Allocator) ![]const u8 {
-        return dump.dumpToString(self, allocator);
-    }
-
-    pub fn dumpJsonToString(self: *Engine, allocator: Allocator) ![]const u8 {
-        return dump.dumpJsonToString(self, allocator);
-    }
 };
+
+pub fn formatConstraint(allocator: Allocator, constraint: Constraint) ![]const u8 {
+    const source_text = switch (constraint.source) {
+        .page => |anchor| try std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
+        .node => |source| try std.fmt.allocPrint(allocator, "#{d}.{s}", .{ source.node_id, @tagName(source.anchor) }),
+    };
+    return std.fmt.allocPrint(
+        allocator,
+        "  - #{d}.{s} = {s} {s} {d:.1}",
+        .{
+            constraint.target_node,
+            @tagName(constraint.target_anchor),
+            source_text,
+            if (constraint.offset < 0) "-" else "+",
+            @abs(constraint.offset),
+        },
+    );
+}
 
 fn constraintFailureSame(a: ConstraintFailure, b: ConstraintFailure) bool {
     if (a.kind != b.kind) return false;

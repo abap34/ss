@@ -72,7 +72,7 @@
         "ss.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Run ss check-file and publish diagnostics while editing."
+          "description": "Run ss check and publish diagnostics while editing."
         },
         "ss.livePreview.debounceMs": {
           "type": "number",

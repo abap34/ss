@@ -3,7 +3,7 @@
 PDF backend.
 
 The dump JSON emitted by the Zig core describes nodes in PDF-native (bottom-left)
-coordinates with embedded markdown / inline runs already laid out by the engine.
+coordinates with embedded markdown / inline runs already laid out by the IR.
 This module turns that document into a PDF using ``fpdf2`` for text, code, and
 chrome, and overlays vector PDFs (math, embedded assets) via ``pypdf`` after the
 base pages are written.
