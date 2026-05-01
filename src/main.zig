@@ -108,18 +108,34 @@ fn formatDurationMsText(value: i64, buf: []u8) ![]const u8 {
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\  slides-core check-file [input.ss]
-        \\  slides-core editor-info-file [input.ss]
-        \\  slides-core dump-file [input.ss]
-        \\  slides-core dump-json-file [input.ss] [output-path]
-        \\  slides-core render-pdf-file [input.ss] [output-path]
+        \\ss <command> [arguments]
+        \\
+        \\Commands:
+        \\  check-file [input.ss]
+        \\    Parse and type-check; print diagnostics when needed
+        \\  editor-info-file [input.ss]
+        \\    Print editor support info (hints/functions/variables metadata) as JSON
+        \\  dump-file [input.ss]
+        \\    Print engine dump as human-readable text
+        \\  dump-json-file [input.ss] [output-path]
+        \\    Write engine info to a JSON file
+        \\  render-pdf-file [input.ss] [output-path]
+        \\    Render PDF to the specified path
+        \\
+        \\Flags:
+        \\  --help, -h
+        \\    Show this help message
         \\
         \\Examples:
+        \\  ss --help
+        \\  ss check-file demo/ss.ss
+        \\  ss editor-info-file demo/ss.ss
+        \\  ss dump-file demo/ss.ss
+        \\  ss dump-json-file demo/ss.ss
+        \\  ss render-pdf-file demo/ss.ss out.pdf
         \\  zig build run -- check-file demo/ss.ss
         \\  zig build run -- editor-info-file demo/ss.ss
-        \\  zig build run -- dump-file demo/ss.ss
-        \\  zig build run -- dump-json-file demo/ss.ss
-        \\  zig build run -- render-pdf-file demo/ss.ss
+        \\  zig build run -- render-pdf-file demo/ss.ss out.pdf
         \\
     , .{});
 }

@@ -647,7 +647,7 @@ pub const Engine = struct {
 
         var text = std.ArrayList(u8).empty;
         defer text.deinit(self.allocator);
-        try text.appendSlice(self.allocator, "目次\n");
+        try text.appendSlice(self.allocator, "Table of Contents\n");
 
         for (pages.selection.ids.items) |member_page_id| {
             var titles = try self.select(
