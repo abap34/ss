@@ -306,11 +306,16 @@ pub const Ir = struct {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.properties.items) |*property| {
             if (std.mem.eql(u8, property.key, key)) {
-                property.value = value;
+                const owned_value = try self.allocator.dupe(u8, value);
+                self.allocator.free(property.value);
+                property.value = owned_value;
                 return;
             }
         }
-        try node.properties.append(self.allocator, .{ .key = key, .value = value });
+        try node.properties.append(self.allocator, .{
+            .key = try self.allocator.dupe(u8, key),
+            .value = try self.allocator.dupe(u8, value),
+        });
     }
 
     pub fn getNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) ?[]const u8 {

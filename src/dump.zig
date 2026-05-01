@@ -3,6 +3,7 @@ const core = @import("core");
 const ast = @import("ast");
 const registry = @import("parser/registry.zig");
 const typecheck = @import("parser/typecheck.zig");
+const property_schema = @import("property_schema.zig");
 const json = @import("utils").json;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
@@ -34,14 +35,29 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try functions.end();
 
     var variables = try root.arrayField("variables");
-    var variable_iterator = ir.variable_types.iterator();
+    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.project_module.program);
+    defer variable_infos.deinit();
+    var variable_iterator = variable_infos.iterator();
     while (variable_iterator.next()) |entry| {
         var item = try variables.objectItem();
         try item.stringField("name", entry.key_ptr.*);
-        try item.enumTagField("type", entry.value_ptr.*);
+        try item.enumTagField("type", entry.value_ptr.sort);
+        try item.enumTagField("objectShape", entry.value_ptr.object_shape);
         try item.end();
     }
     try variables.end();
+
+    var property_schemas_json = try root.arrayField("property_schemas");
+    for (property_schema.propertySchemas()) |schema| {
+        var item = try property_schemas_json.objectItem();
+        try item.stringField("key", schema.key);
+        try item.stringField("valueType", @tagName(schema.value_type));
+        var allowed = try item.arrayField("allowedShapes");
+        for (schema.allowed_shapes) |shape| try allowed.stringItem(property_schema.shapeLabel(shape));
+        try allowed.end();
+        try item.end();
+    }
+    try property_schemas_json.end();
 
     var definitions = try root.arrayField("definitions");
     var definition_iterator = ir.definitions.iterator();
@@ -253,6 +269,12 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             } else {
                 try item.nullField("offset");
             }
+        },
+        .property_set => |property_set| {
+            try item.stringField("kind", "property_set");
+            try item.stringField("object_name", property_set.object_name);
+            try item.stringField("property_name", property_set.property_name);
+            try writeExpr(allocator, &item, "value", property_set.value);
         },
     }
     try item.end();

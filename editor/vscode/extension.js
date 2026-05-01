@@ -59,6 +59,19 @@ function activate(context) {
     return range ? document.getText(range) : "";
   }
 
+  function getPropertyCompletionContext(document, position) {
+    const line = document.lineAt(position.line).text;
+    const head = line.slice(0, position.character);
+    const match = /([A-Za-z_][A-Za-z0-9_]*)\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(head);
+    if (!match) {
+      return null;
+    }
+    return {
+      objectName: match[1],
+      prefix: match[2] || "",
+    };
+  }
+
   function documentKey(document) {
     return document.uri.toString();
   }
@@ -603,10 +616,48 @@ function activate(context) {
         return [];
       }
 
+      const propertyContext = getPropertyCompletionContext(document, position);
       const prefix = getWordAtPosition(document, position);
-        return queryEditorInfo(document).then((payload) => {
+      return queryEditorInfo(document).then((payload) => {
         if (!payload || token.isCancellationRequested) {
           return [];
+        }
+
+        if (propertyContext) {
+          const variable = (payload.variables || []).find((item) => String(item && item.name ? item.name : "") === propertyContext.objectName);
+          if (!variable || String(variable.type || "") !== "object") {
+            return [];
+          }
+          const objectShape = String(variable.objectShape || "unknown");
+          const items = [];
+          for (const schema of payload.property_schemas || []) {
+            const key = String(schema && schema.key ? schema.key : "");
+            if (!key) {
+              continue;
+            }
+            const allowedShapes = Array.isArray(schema.allowedShapes) ? schema.allowedShapes.map((item) => String(item)) : [];
+            const shapeAllowed =
+              objectShape === "unknown" ||
+              objectShape === "generic" ||
+              allowedShapes.length === 0 ||
+              allowedShapes.includes(objectShape);
+            if (!shapeAllowed) {
+              continue;
+            }
+            if (propertyContext.prefix && !key.startsWith(propertyContext.prefix)) {
+              continue;
+            }
+            const completion = new vscode.CompletionItem(key, vscode.CompletionItemKind.Property);
+            completion.insertText = key;
+            completion.filterText = key;
+            const valueType = schema && schema.valueType ? String(schema.valueType) : "";
+            completion.detail = valueType ? `property: ${valueType}` : "property";
+            if (allowedShapes.length > 0) {
+              completion.documentation = new vscode.MarkdownString(`allowed on: ${allowedShapes.join(", ")}`);
+            }
+            items.push(completion);
+          }
+          return items;
         }
 
         const items = [];
@@ -758,7 +809,7 @@ function activate(context) {
     vscode.languages.registerInlayHintsProvider({ language: "ss-slide" }, provider),
   );
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider),
+    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider, "."),
   );
   context.subscriptions.push(
     vscode.languages.registerHoverProvider({ language: "ss-slide" }, provider),

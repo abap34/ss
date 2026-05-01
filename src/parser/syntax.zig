@@ -236,6 +236,22 @@ const Parser = struct {
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
         }
+        if (self.peekPropertyAssignment()) {
+            const object_name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            try self.expectChar('.');
+            const property_name = try self.parseIdentifier();
+            self.skipTrivia();
+            try self.expectChar('=');
+            if (!self.eof() and self.source[self.pos] == '=') return self.fail(error.ExpectedChar);
+            const value = try self.parseExpr();
+            try self.consumeStatementTerminator();
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .property_set = .{
+                .object_name = object_name,
+                .property_name = property_name,
+                .value = value,
+            } } };
+        }
 
         if (try self.parseLegacyStatement(start)) |stmt| return stmt;
         return try self.parseCallSugarStatement(start);
@@ -809,6 +825,26 @@ const Parser = struct {
             !std.mem.eql(u8, member_name, "height")) return false;
         while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
         return probe < self.source.len and self.source[probe] == '=';
+    }
+
+    fn peekPropertyAssignment(self: *Parser) bool {
+        var probe = self.pos;
+        source_utils.skipTriviaFrom(self.source, &probe);
+        if (!scanIdentifier(self.source, &probe)) return false;
+        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        if (probe >= self.source.len or self.source[probe] != '.') return false;
+        probe += 1;
+        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        const member_start = probe;
+        if (!scanIdentifier(self.source, &probe)) return false;
+        const member_name = self.source[member_start..probe];
+        if (names.parseAnchorName(member_name) != null or
+            std.mem.eql(u8, member_name, "width") or
+            std.mem.eql(u8, member_name, "height")) return false;
+        source_utils.skipTriviaFrom(self.source, &probe);
+        if (probe >= self.source.len or self.source[probe] != '=') return false;
+        if (probe + 1 < self.source.len and self.source[probe + 1] == '=') return false;
+        return true;
     }
 
     fn peekStandaloneKeyword(self: *Parser, keyword: []const u8) bool {

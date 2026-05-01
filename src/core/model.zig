@@ -128,6 +128,10 @@ pub const Node = struct {
     frame: Frame = .{},
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
+        for (self.properties.items) |property| {
+            allocator.free(property.key);
+            allocator.free(property.value);
+        }
         self.properties.deinit(allocator);
     }
 };

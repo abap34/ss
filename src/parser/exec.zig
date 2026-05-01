@@ -1084,6 +1084,18 @@ fn executeStatement(
             const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
             return .{ .returned = value };
         },
+        .property_set => |property_set| {
+            const base = env.get(property_set.object_name) orelse return error.UnknownIdentifier;
+            const object_id = try resolveValueObjectId(ir, mode, base);
+            const value = try evalExpr(ir, page_id, mode, env, functions, origin, property_set.value);
+            defer {
+                var owned = value;
+                owned.deinit(ir.allocator);
+            }
+            const text = try resolveValuePropertyString(ir.allocator, value);
+            defer ir.allocator.free(text);
+            try ir.setNodeProperty(object_id, property_set.property_name, text);
+        },
         .constrain => |decl| {
             const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
             const source = try resolveAnchorRef(ir, mode, env, origin, decl.source, false);
