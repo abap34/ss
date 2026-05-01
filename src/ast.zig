@@ -36,6 +36,7 @@ pub const FunctionDecl = struct {
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
+        for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
@@ -45,6 +46,14 @@ pub const FunctionDecl = struct {
 pub const ParamDecl = struct {
     name: []const u8,
     sort: core.SemanticSort,
+    default_value: ?*Expr = null,
+
+    pub fn deinit(self: *ParamDecl, allocator: Allocator) void {
+        if (self.default_value) |expr| {
+            expr.deinit(allocator);
+            allocator.destroy(expr);
+        }
+    }
 };
 
 pub const CallExpr = struct {

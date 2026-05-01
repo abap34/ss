@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const ast = @import("ast");
 const parser = @import("parser.zig");
 const pdf = @import("render/pdf.zig");
 const dump = @import("dump.zig");
@@ -41,7 +42,7 @@ pub const Progress = struct {
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
     if (progress) |p| p.step("Read source");
-    const source = try utils.fs.readFileAlloc(io, allocator, path);
+    var source = try utils.fs.readFileAlloc(io, allocator, path);
     errdefer allocator.free(source);
     if (progress) |p| p.step("Parse");
     var program = try parseSource(allocator, source, path);
@@ -67,6 +68,8 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, pro
     errdefer index.deinit();
 
     var ir = try typecheck.buildIr(allocator, path, source, program, &index);
+    source = &.{};
+    program = ast.Program.init();
     defer index.deinit();
     errdefer ir.deinit();
 

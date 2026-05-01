@@ -102,11 +102,18 @@ fn maxWidthForStyle(style: TextStyle) f32 {
     return @min(PageLayout.max_visual_width, PageLayout.width - style.default_x - style.default_right_inset);
 }
 
+fn assetScale(node: *const Node) f32 {
+    return parseNodeFloatProperty(node, "asset_scale") orelse 1.0;
+}
+
 pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
     const style = styleForNode(ir, node);
     const content = node.content orelse "";
     switch (node.payload_kind orelse .text) {
-        .image_ref, .pdf_ref => return parseNodeFloatProperty(node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width),
+        .image_ref, .pdf_ref => {
+            const base_width = parseNodeFloatProperty(node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
+            return base_width * assetScale(node);
+        },
         .figure_text => return maxWidthForStyle(style),
         .math_tex => return maxWidthForStyle(style),
         else => {},
@@ -128,7 +135,10 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
 pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
     const style = styleForNode(ir, node);
     return switch (node.payload_kind orelse .text) {
-        .image_ref, .pdf_ref => parseNodeFloatProperty(node, "asset_height") orelse PageLayout.max_figure_height,
+        .image_ref, .pdf_ref => blk: {
+            const base_height = parseNodeFloatProperty(node, "asset_height") orelse PageLayout.max_figure_height;
+            break :blk base_height * assetScale(node);
+        },
         .figure_text => PageLayout.max_figure_height,
         .math_tex => blk: {
             const content = node.content orelse "";
