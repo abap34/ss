@@ -457,6 +457,19 @@ fn appendInlayHint(
     });
 }
 
+fn trimHintByteIndexToLineEnd(source: []const u8, byte_index: usize) usize {
+    var index = @min(byte_index, source.len);
+    while (index > 0) {
+        const ch = source[index - 1];
+        if (ch == '\n' or ch == '\r' or ch == ' ' or ch == '\t') {
+            index -= 1;
+            continue;
+        }
+        break;
+    }
+    return index;
+}
+
 fn indexOfCallNameInSlice(slice: []const u8, call_name: []const u8) ?usize {
     return std.mem.indexOf(u8, slice, call_name);
 }
@@ -664,7 +677,7 @@ fn collectSolvedSizeHints(
             " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
             .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height },
         );
-        try appendInlayHint(allocator, hints, source, span.end, label, .solved_frame);
+        try appendInlayHint(allocator, hints, source, trimHintByteIndexToLineEnd(source, span.end), label, .solved_frame);
     }
 }
 
