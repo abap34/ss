@@ -19,7 +19,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try writeModule(allocator, &modules, ir.project_module);
     if (ir.base_module) |module| try writeModule(allocator, &modules, module);
     if (ir.theme_module) |module| try writeModule(allocator, &modules, module);
-    modules.end();
+    try modules.end();
 
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
@@ -31,7 +31,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         const metadata = ir.function_metadata.get(entry.key_ptr.*) orelse core.FunctionMetadata{ .source = .project };
         try writeUserFunction(allocator, &functions, ir, entry.key_ptr.*, entry.value_ptr.*, metadata);
     }
-    functions.end();
+    try functions.end();
 
     var variables = try root.arrayField("variables");
     var variable_iterator = ir.variable_types.iterator();
@@ -39,9 +39,9 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         var item = try variables.objectItem();
         try item.stringField("name", entry.key_ptr.*);
         try item.enumTagField("type", entry.value_ptr.*);
-        item.end();
+        try item.end();
     }
-    variables.end();
+    try variables.end();
 
     var definitions = try root.arrayField("definitions");
     var definition_iterator = ir.definitions.iterator();
@@ -53,9 +53,9 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try item.intField("column", entry.value_ptr.column);
         try item.intField("length", entry.value_ptr.length);
         try item.optionalStringField("file", entry.value_ptr.file);
-        item.end();
+        try item.end();
     }
-    definitions.end();
+    try definitions.end();
 
     var hints = try root.arrayField("hints");
     for (ir.hints.items) |hint| {
@@ -64,21 +64,21 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try item.intField("column", hint.column);
         try item.stringField("label", hint.label);
         try item.enumTagField("kind", hint.kind);
-        item.end();
+        try item.end();
     }
-    hints.end();
+    try hints.end();
 
     try root.intField("document_id", ir.document_id);
     var page_order = try root.arrayField("page_order");
     for (ir.page_order.items) |page_id| try page_order.intItem(page_id);
-    page_order.end();
+    try page_order.end();
 
     var nodes = try root.arrayField("nodes");
     for (ir.nodes.items) |node| {
         if ((node.kind == .object or node.kind == .derived) and !node.attached) continue;
         try writeNode(allocator, &nodes, ir, node);
     }
-    nodes.end();
+    try nodes.end();
 
     var contains = try root.arrayField("contains");
     var contains_iterator = ir.contains.iterator();
@@ -87,10 +87,10 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try item.intField("parent", entry.key_ptr.*);
         var children = try item.arrayField("children");
         for (entry.value_ptr.items) |child_id| try children.intItem(child_id);
-        children.end();
-        item.end();
+        try children.end();
+        try item.end();
     }
-    contains.end();
+    try contains.end();
 
     var constraints = try root.arrayField("constraints");
     for (ir.constraints.items) |constraint| {
@@ -111,17 +111,17 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         }
         try item.floatField("offset", constraint.offset, "{d:.1}");
         try item.optionalStringField("origin", constraint.origin);
-        item.end();
+        try item.end();
     }
-    constraints.end();
+    try constraints.end();
 
     var diagnostics = try root.arrayField("diagnostics");
     for (ir.diagnostics.items) |diagnostic| {
         try writeDiagnostic(allocator, &diagnostics, diagnostic);
     }
-    diagnostics.end();
+    try diagnostics.end();
 
-    root.end();
+    try root.end();
     try json.appendNewline(&buffer, allocator);
     return buffer.toOwnedSlice(allocator);
 }
@@ -132,7 +132,7 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     try item.optionalStringField("path", module.path);
     try item.stringField("source", module.source);
     try writeProgram(allocator, &item, module.program);
-    item.end();
+    try item.end();
 }
 
 fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast.Program) !void {
@@ -150,15 +150,15 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
             var param_item = try params.objectItem();
             try param_item.stringField("name", param.name);
             try param_item.enumTagField("sort", param.sort);
-            param_item.end();
+            try param_item.end();
         }
-        params.end();
+        try params.end();
         var statements = try item.arrayField("statements");
         for (func.statements.items) |stmt| try writeStatement(allocator, &statements, stmt);
-        statements.end();
-        item.end();
+        try statements.end();
+        try item.end();
     }
-    functions.end();
+    try functions.end();
 
     var pages = try program_object.arrayField("pages");
     for (program.pages.items) |page| {
@@ -166,18 +166,18 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
         try item.stringField("name", page.name);
         var statements = try item.arrayField("statements");
         for (page.statements.items) |stmt| try writeStatement(allocator, &statements, stmt);
-        statements.end();
-        item.end();
+        try statements.end();
+        try item.end();
     }
-    pages.end();
-    program_object.end();
+    try pages.end();
+    try program_object.end();
 }
 
 fn writeSpan(object: *json.Object, span: ast.Span) !void {
     var span_object = try object.objectField("span");
     try span_object.intField("start", span.start);
     try span_object.intField("end", span.end);
-    span_object.end();
+    try span_object.end();
 }
 
 fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: ast.Statement) !void {
@@ -255,7 +255,7 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             }
         },
     }
-    item.end();
+    try item.end();
 }
 
 fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorRef) !void {
@@ -263,7 +263,7 @@ fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorR
     try item.stringField("kind", @tagName(anchor_ref.kind));
     try item.enumTagField("anchor", anchor_ref.anchor);
     try item.optionalStringField("node_name", anchor_ref.node_name);
-    item.end();
+    try item.end();
 }
 
 fn writeExpr(allocator: std.mem.Allocator, object: *json.Object, key: []const u8, expr: ast.Expr) !void {
@@ -288,10 +288,10 @@ fn writeExpr(allocator: std.mem.Allocator, object: *json.Object, key: []const u8
             for (call.args.items) |arg| {
                 try writeExprItem(allocator, &args, arg);
             }
-            args.end();
+            try args.end();
         },
     }
-    item.end();
+    try item.end();
 }
 
 fn writeExprItem(allocator: std.mem.Allocator, items: *json.Array, expr: ast.Expr) !void {
@@ -314,10 +314,10 @@ fn writeExprItem(allocator: std.mem.Allocator, items: *json.Array, expr: ast.Exp
             try item.stringField("name", call.name);
             var args = try item.arrayField("args");
             for (call.args.items) |arg| try writeExprItem(allocator, &args, arg);
-            args.end();
+            try args.end();
         },
     }
-    item.end();
+    try item.end();
 }
 
 fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, descriptor: registry.PrimitiveDescriptor) !void {
@@ -336,8 +336,8 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
         defer allocator.free(label);
         try params.stringItem(label);
     }
-    params.end();
-    item.end();
+    try params.end();
+    try item.end();
 }
 
 fn writeUserFunction(
@@ -364,8 +364,8 @@ fn writeUserFunction(
         defer allocator.free(label);
         try params.stringItem(label);
     }
-    params.end();
-    item.end();
+    try params.end();
+    try item.end();
 }
 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
@@ -427,7 +427,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, nod
     try item.floatField("width", node.frame.width, "{d:.1}");
     try item.floatField("height", node.frame.height, "{d:.1}");
     try writeRender(&item, render);
-    item.end();
+    try item.end();
 }
 
 fn writeProperties(object: *json.Object, properties: anytype) !void {
@@ -435,7 +435,7 @@ fn writeProperties(object: *json.Object, properties: anytype) !void {
     for (properties) |property| {
         try props.stringField(property.key, property.value);
     }
-    props.end();
+    try props.end();
 }
 
 fn writeInlineLines(object: *json.Object, key: []const u8, lines: []const core.markdown.Line) !void {
@@ -448,11 +448,11 @@ fn writeInlineLines(object: *json.Object, key: []const u8, lines: []const core.m
             try run_item.stringField("text", run.text);
             try run_item.optionalStringField("url", run.url);
             try run_item.optionalStringField("icon", run.icon);
-            run_item.end();
+            try run_item.end();
         }
-        line_array.end();
+        try line_array.end();
     }
-    outer.end();
+    try outer.end();
 }
 
 fn writeMarkdownBlocks(object: *json.Object, key: []const u8, blocks: []const *core.markdown.Block) anyerror!void {
@@ -460,7 +460,7 @@ fn writeMarkdownBlocks(object: *json.Object, key: []const u8, blocks: []const *c
     for (blocks) |block| {
         try writeMarkdownBlock(&outer, block);
     }
-    outer.end();
+    try outer.end();
 }
 
 fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) anyerror!void {
@@ -480,12 +480,12 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
             for (block.list.?.items.items) |list_item| {
                 var list_json = try items.objectItem();
                 try writeMarkdownBlocks(&list_json, "blocks", list_item.blocks.items);
-                list_json.end();
+                try list_json.end();
             }
-            items.end();
+            try items.end();
         },
     }
-    item.end();
+    try item.end();
 }
 
 fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) !void {
@@ -518,7 +518,7 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
         try text.intField("cjk_bold_passes", text_spec.cjk_bold_passes);
         try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
         try text.boolField("wrap", text_spec.wrap);
-        text.end();
+        try text.end();
     } else {
         try render_object.nullField("text");
     }
@@ -527,7 +527,7 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
         try math.floatField("block_line_height", math_spec.block_line_height, "{d:.1}");
         try math.floatField("block_min_height", math_spec.block_min_height, "{d:.1}");
         try math.floatField("block_vertical_padding", math_spec.block_vertical_padding, "{d:.1}");
-        math.end();
+        try math.end();
     } else {
         try render_object.nullField("math");
     }
@@ -538,7 +538,7 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
         try writeColor(&code, "keyword_color", code_spec.keyword);
         try writeColor(&code, "comment_color", code_spec.comment);
         try writeColor(&code, "string_color", code_spec.string);
-        code.end();
+        try code.end();
     } else {
         try render_object.nullField("code");
     }
@@ -548,13 +548,13 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
     try writeOptionalColor(&chrome, "stroke", render.chrome.stroke);
     try chrome.floatField("line_width", render.chrome.line_width, "{d:.1}");
     try chrome.floatField("radius", render.chrome.radius, "{d:.1}");
-    chrome.end();
+    try chrome.end();
 
     var underline = try render_object.objectField("underline");
     try writeOptionalColor(&underline, "color", render.underline.color);
     try underline.floatField("width", render.underline.width, "{d:.1}");
     try underline.floatField("offset", render.underline.offset, "{d:.1}");
-    underline.end();
+    try underline.end();
 
     var rule = try render_object.objectField("rule");
     try writeOptionalColor(&rule, "stroke", render.rule.stroke);
@@ -563,12 +563,12 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
         var dash_array = try rule.arrayField("dash");
         try dash_array.floatItem(dash.on, "{d:.4}");
         try dash_array.floatItem(dash.off, "{d:.4}");
-        dash_array.end();
+        try dash_array.end();
     } else {
         try rule.nullField("dash");
     }
-    rule.end();
-    render_object.end();
+    try rule.end();
+    try render_object.end();
 }
 
 fn writeColor(object: *json.Object, key: []const u8, color: core.render_policy.Color) !void {
@@ -576,7 +576,7 @@ fn writeColor(object: *json.Object, key: []const u8, color: core.render_policy.C
     try array.floatItem(color.r, "{d:.4}");
     try array.floatItem(color.g, "{d:.4}");
     try array.floatItem(color.b, "{d:.4}");
-    array.end();
+    try array.end();
 }
 
 fn writeOptionalColor(object: *json.Object, key: []const u8, color: ?core.render_policy.Color) !void {
@@ -632,6 +632,6 @@ fn writeDiagnostic(allocator: std.mem.Allocator, diagnostics: *json.Array, diagn
             try item.floatField("overflow_bottom", data.overflow_bottom, "{d:.1}");
         },
     }
-    item.end();
+    try item.end();
     _ = allocator;
 }

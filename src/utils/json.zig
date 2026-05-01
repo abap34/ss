@@ -23,8 +23,8 @@ pub const Object = struct {
         return .{ .allocator = allocator, .sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } } };
     }
 
-    pub fn end(self: *Object) void {
-        writeByte(self.sink, '}') catch unreachable;
+    pub fn end(self: *Object) !void {
+        try writeByte(self.sink, '}');
     }
 
     pub fn objectField(self: *Object, key: []const u8) !Object {
@@ -115,8 +115,8 @@ pub const Array = struct {
     sink: Sink,
     first: bool = true,
 
-    pub fn end(self: *Array) void {
-        writeByte(self.sink, ']') catch unreachable;
+    pub fn end(self: *Array) !void {
+        try writeByte(self.sink, ']');
     }
 
     pub fn objectItem(self: *Array) !Object {

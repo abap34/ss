@@ -180,6 +180,7 @@ pub const Ir = struct {
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
+        self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.constraint_failures.deinit(self.allocator);
         for (self.fragments.items) |fragment| {
@@ -457,14 +458,18 @@ pub const Ir = struct {
     }
 
     pub fn clearDiagnostics(self: *Ir) void {
+        for (self.diagnostics.items) |*diagnostic| diagnostic.deinit(self.allocator);
         self.diagnostics.clearRetainingCapacity();
     }
 
     pub fn clearDiagnosticsForPhase(self: *Ir, phase: DiagnosticPhase) void {
         var write_index: usize = 0;
-        for (self.diagnostics.items) |diagnostic| {
-            if (diagnostic.phase == phase) continue;
-            self.diagnostics.items[write_index] = diagnostic;
+        for (self.diagnostics.items) |*diagnostic| {
+            if (diagnostic.phase == phase) {
+                diagnostic.deinit(self.allocator);
+                continue;
+            }
+            self.diagnostics.items[write_index] = diagnostic.*;
             write_index += 1;
         }
         self.diagnostics.items.len = write_index;
