@@ -562,7 +562,45 @@ fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeI
                 .payload_kind = node.payload_kind,
             },
         });
+        return;
     }
+
+    if (node.payload_kind == .image_ref) {
+        try attachIntrinsicImageSize(ir, object_id, resolved);
+    } else if (node.payload_kind == .pdf_ref) {
+        try attachIntrinsicPdfSize(ir, object_id, resolved);
+    }
+}
+
+fn attachIntrinsicImageSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+    const dimensions = fs_utils.readImageDimensions(ir.allocator, resolved_path) catch return;
+    try attachIntrinsicAssetSize(ir, object_id, dimensions);
+}
+
+fn attachIntrinsicPdfSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+    const dimensions = fs_utils.readPdfDimensions(ir.allocator, resolved_path) catch return;
+    try attachIntrinsicAssetSize(ir, object_id, dimensions);
+}
+
+fn attachIntrinsicAssetSize(ir: *core.Ir, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
+    const fitted = fitSize(
+        dimensions.width,
+        dimensions.height,
+        core.PageLayout.default_asset_width,
+        core.PageLayout.max_figure_height,
+    );
+    var width_buf: [32]u8 = undefined;
+    var height_buf: [32]u8 = undefined;
+    const width_text = try std.fmt.bufPrint(&width_buf, "{d}", .{fitted.width});
+    const height_text = try std.fmt.bufPrint(&height_buf, "{d}", .{fitted.height});
+    try ir.setNodeProperty(object_id, "asset_width", width_text);
+    try ir.setNodeProperty(object_id, "asset_height", height_text);
+}
+
+fn fitSize(width: f32, height: f32, max_width: f32, max_height: f32) struct { width: f32, height: f32 } {
+    if (width <= 0 or height <= 0) return .{ .width = max_width, .height = max_height };
+    const scale = @min(max_width / width, max_height / height);
+    return .{ .width = width * scale, .height = height * scale };
 }
 
 fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {

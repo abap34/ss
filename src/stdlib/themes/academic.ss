@@ -62,18 +62,20 @@ fn figure(text_value: string) -> object
   return figure_text_block(text_value)
 end
 
-fn image_figure(path_value: string) -> object
-  return flow_inset(image_object(path_value), "102", "102")
+fn image_figure(path_value: string, scale: number = 1) -> object
+  return with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
 end
 
-fn image(path_value: string) -> object
-  let obj = image_figure(path_value)
+fn image(path_value: string, scale: number = 1) -> object
+  let obj = image_figure(path_value, scale)
   require_asset_exists(obj)
   return obj
 end
 
 fn pdf_figure(path_value: string, scale: number = 1) -> object
-  return with_asset_scale(flow_inset(pdf_object(path_value), "102", "102"), scale)
+  let obj = with_asset_scale(flow_inset(pdf_object(path_value), "102", "102"), scale)
+  require_asset_exists(obj)
+  return obj
 end
 
 fn pdf(path_value: string, scale: number = 1) -> object
