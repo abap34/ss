@@ -215,16 +215,18 @@ pub fn loadProgramIndex(
     };
     errdefer index.deinit();
 
-    index.base_path = try theme_loader.resolveThemeSourcePath(allocator, io, base_dir, "base");
-    index.base_source = try readFile(io, allocator, index.base_path.?);
+    const base_module = try theme_loader.loadThemeModule(allocator, io, base_dir, "base");
+    index.base_path = base_module.path;
+    index.base_source = base_module.source;
     index.base_program = try syntax.parse(allocator, index.base_source.?);
     try validateThemeProgram(index.base_program.?);
     try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.base_program.?, .base, index.base_path.?);
 
     const theme_name = project_program.theme_name orelse "default";
     if (!std.mem.eql(u8, theme_name, "base")) {
-        index.theme_path = try theme_loader.resolveThemeSourcePath(allocator, io, base_dir, theme_name);
-        index.theme_source = try readFile(io, allocator, index.theme_path.?);
+        const theme_module = try theme_loader.loadThemeModule(allocator, io, base_dir, theme_name);
+        index.theme_path = theme_module.path;
+        index.theme_source = theme_module.source;
         index.theme_program = try syntax.parse(allocator, index.theme_source.?);
         try validateThemeProgram(index.theme_program.?);
         try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.theme_program.?, .theme, index.theme_path.?);
@@ -342,10 +344,6 @@ fn collectVariableTypesFromStatement(
         },
         else => {},
     }
-}
-
-fn readFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return utils.fs.readFileAlloc(io, allocator, path);
 }
 
 fn checkFunctionCallGraph(

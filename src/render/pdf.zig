@@ -18,7 +18,8 @@ pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, engine: *core.Engin
     });
 
     const python = try findPythonExecutable(allocator, io);
-    const script_path = "src/render/pdf_backend.py";
+    const script_path = try resolvePdfBackendScriptPath(allocator, io);
+    defer allocator.free(script_path);
     const asset_base_dir = if (engine.asset_base_dir.len == 0) "." else engine.asset_base_dir;
 
     const result = try std.process.run(allocator, io, .{
@@ -41,6 +42,33 @@ pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, engine: *core.Engin
     }
 
     return std.Io.Dir.cwd().readFileAlloc(io, pdf_path, allocator, .unlimited);
+}
+
+fn resolvePdfBackendScriptPath(allocator: Allocator, io: std.Io) ![]u8 {
+    const cwd_candidate = try allocator.dupe(u8, "src/render/pdf_backend.py");
+    if (fileExists(cwd_candidate)) return cwd_candidate;
+    allocator.free(cwd_candidate);
+
+    const exe_dir = std.process.executableDirPathAlloc(io, allocator) catch return error.PdfBackendNotFound;
+    defer allocator.free(exe_dir);
+
+    const relative_candidates = [_][]const u8{
+        "../../src/render/pdf_backend.py",
+        "../src/render/pdf_backend.py",
+    };
+    for (relative_candidates) |relative| {
+        const candidate = try std.fs.path.join(allocator, &.{ exe_dir, relative });
+        if (fileExists(candidate)) return candidate;
+        allocator.free(candidate);
+    }
+
+    return error.PdfBackendNotFound;
+}
+
+fn fileExists(path: []const u8) bool {
+    const zpath = std.heap.smp_allocator.dupeZ(u8, path) catch return false;
+    defer std.heap.smp_allocator.free(zpath);
+    return std.c.access(zpath.ptr, 0) == 0;
 }
 
 fn findPythonExecutable(allocator: Allocator, io: std.Io) ![]const u8 {
