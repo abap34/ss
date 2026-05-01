@@ -44,27 +44,39 @@ pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, engine: *core.Engin
 }
 
 fn findPythonExecutable(allocator: Allocator, io: std.Io) ![]const u8 {
-    if (envOwned(allocator, "SS_PYTHON")) |path| {
-        if (try isUsablePython(allocator, io, path)) return path;
+    const env_candidates = [_][:0]const u8{
+        "SS_PYTHON",
+        "PYTHON",
+        "PYTHON_EXECUTABLE",
+    };
+    for (env_candidates) |name| {
+        if (envOwned(allocator, name)) |exe| {
+            if (exe.len == 0) continue;
+            if (try isUsablePython(allocator, io, exe)) return exe;
+            std.debug.print(
+                "{s}={s} is not a usable Python for the PDF backend; it must import fpdf, pypdf, fontTools, and PIL.\n",
+                .{ name, exe },
+            );
+            return error.PythonExecutableUnusable;
+        }
     }
 
-    if (envOwned(allocator, "HOME")) |home| {
-        const bundled = try std.fs.path.join(allocator, &.{
-            home,
-            ".cache",
-            "codex-runtimes",
-            "codex-primary-runtime",
-            "dependencies",
-            "python",
-            "bin",
-            "python3",
-        });
-        if (try isUsablePython(allocator, io, bundled)) return bundled;
+    const path_candidates = [_][]const u8{
+        "python3",
+        "python",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+    };
+    for (path_candidates) |exe| {
+        if (try isUsablePython(allocator, io, exe)) return exe;
     }
 
-    const fallback = try allocator.dupe(u8, "python3");
-    if (try isUsablePython(allocator, io, fallback)) return fallback;
-    return error.NoPythonRuntime;
+    std.debug.print(
+        "Could not find a usable Python for the PDF backend. Set SS_PYTHON to a Python executable with fpdf, pypdf, fontTools, and Pillow installed.\n",
+        .{},
+    );
+    return error.PythonExecutableNotFound;
 }
 
 fn envOwned(allocator: Allocator, name: [:0]const u8) ?[]u8 {
