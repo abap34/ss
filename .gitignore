@@ -1,3 +1,4 @@
 /.zig-cache
 /.ss-cache
 /third_party/md4c
+/zig-out
