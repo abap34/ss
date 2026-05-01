@@ -41,6 +41,17 @@ pub const Progress = struct {
 };
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
+    const asset_base_dir = std.fs.path.dirname(path) orelse ".";
+    return buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
+}
+
+pub fn buildFileWithAssetBase(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    asset_base_dir: []const u8,
+    progress: ?*Progress,
+) !core.Ir {
     if (progress) |p| p.step("Read source");
     var source = try utils.fs.readFileAlloc(io, allocator, path);
     errdefer allocator.free(source);
@@ -49,11 +60,10 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, pro
     errdefer program.deinit(allocator);
 
     if (progress) |p| p.step("Load index");
-    var index = typecheck.loadProgramIndexForPath(allocator, io, path, program) catch |err| {
+    var index = typecheck.loadProgramIndex(allocator, io, asset_base_dir, program) catch |err| {
         if (err == error.UnknownTheme) {
-            const base_dir = std.fs.path.dirname(path) orelse ".";
             const theme_name = program.theme_name orelse "default";
-            const message = try theme_loader.formatUnknownThemeMessage(allocator, io, base_dir, theme_name);
+            const message = try theme_loader.formatUnknownThemeMessage(allocator, io, asset_base_dir, theme_name);
             defer allocator.free(message);
             error_report.print(.{
                 .path = path,
@@ -66,9 +76,7 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, pro
         return err;
     };
 
-    var ir = try typecheck.buildIr(allocator, path, source, program, &index);
-    source = &.{};
-    program = ast.Program.init();
+    var ir = try typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index);
     defer index.deinit();
     errdefer ir.deinit();
 
@@ -102,8 +110,23 @@ pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !vo
     std.debug.print("ok {s}\n", .{path});
 }
 
+pub fn checkFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []const u8, asset_base_dir: []const u8) !void {
+    var ir = try buildFileWithAssetBase(io, allocator, path, asset_base_dir, null);
+    defer ir.deinit();
+    std.debug.print("ok {s}\n", .{path});
+}
+
 pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, path, progress);
+    defer ir.deinit();
+    progress.step("Print dump");
+    const text = try dump.toOwnedString(allocator, &ir);
+    defer allocator.free(text);
+    std.debug.print("{s}", .{text});
+}
+
+pub fn printIrJsonForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []const u8, asset_base_dir: []const u8, progress: *Progress) !void {
+    var ir = try buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
     defer ir.deinit();
     progress.step("Print dump");
     const text = try dump.toOwnedString(allocator, &ir);
@@ -121,8 +144,29 @@ pub fn writeIrJsonFile(io: std.Io, allocator: std.mem.Allocator, input_path: []c
     progress.step("Done");
 }
 
+pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
+    defer ir.deinit();
+    progress.step("Serialize JSON");
+    const json = try dump.toOwnedString(allocator, &ir);
+    defer allocator.free(json);
+    try utils.fs.writeFile(io, output_path, json);
+    progress.step("Done");
+}
+
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
+    defer ir.deinit();
+    progress.step("Serialize render IR");
+    progress.step("Render PDF");
+    const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &ir);
+    defer allocator.free(pdf_data);
+    try utils.fs.writeFile(io, output_path, pdf_data);
+    progress.step("Done");
+}
+
+pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
     progress.step("Serialize render IR");
     progress.step("Render PDF");

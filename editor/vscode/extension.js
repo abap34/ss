@@ -12,9 +12,11 @@ function activate(context) {
   const diagnosticTimers = new Map();
   const previewTimers = new Map();
   const previewSessions = new Map();
+  const activeCommands = new Map();
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("ss");
   const editorInfoCache = new Map();
   const editorInfoRequests = new Map();
+  const editorInfoGenerations = new Map();
   const guideIconPath = vscode.Uri.file(path.join(__dirname, "media", "page-block-guide.svg"));
   const pageBlockDecoration = vscode.window.createTextEditorDecorationType({
     gutterIconPath: guideIconPath,
@@ -54,6 +56,37 @@ function activate(context) {
     editorInfoCache.delete(documentKey(document));
   }
 
+  function currentEditorInfoGeneration(document) {
+    if (!document) {
+      return 0;
+    }
+    return editorInfoGenerations.get(documentKey(document)) || 0;
+  }
+
+  function bumpEditorInfoGeneration(document) {
+    if (!document) {
+      return 0;
+    }
+    const next = currentEditorInfoGeneration(document) + 1;
+    editorInfoGenerations.set(documentKey(document), next);
+    return next;
+  }
+
+  function clearEditorInfoGeneration(document) {
+    if (!document) {
+      return;
+    }
+    editorInfoGenerations.delete(documentKey(document));
+  }
+
+  function clearEditorInfoRequest(document) {
+    if (!document) {
+      return;
+    }
+    stopActiveCommand(document, "dump");
+    editorInfoRequests.delete(documentKey(document));
+  }
+
   function getWordAtPosition(document, position) {
     const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/g);
     return range ? document.getText(range) : "";
@@ -74,6 +107,10 @@ function activate(context) {
 
   function documentKey(document) {
     return document.uri.toString();
+  }
+
+  function commandKey(document, kind) {
+    return `${documentKey(document)}::${kind}`;
   }
 
   function cliPath() {
@@ -97,32 +134,37 @@ function activate(context) {
     }
 
     const key = documentKey(document);
-    const now = Date.now();
+    const generation = currentEditorInfoGeneration(document);
     const cached = editorInfoCache.get(key);
-    if (cached && now - cached.atMs < 1200) {
+    if (cached && cached.generation === generation) {
       return Promise.resolve(cached.payload);
     }
 
     const existing = editorInfoRequests.get(key);
     if (existing) {
-      return existing;
+      return cached ? Promise.resolve(cached.payload) : existing;
     }
 
     const runRequest = new Promise((resolve) => {
       const cwd = commandCwd(document);
       if (!cwd) {
-        resolve(null);
+        resolve(cached ? cached.payload : null);
         return;
       }
       const command = cliPath();
-      const args = ["dump", document.uri.fsPath];
+      const args = ["dump", document.uri.fsPath, "--asset-base-dir", assetBaseDir(document)];
       output.appendLine(`[info] ${command} ${args.join(" ")}`);
       output.appendLine(`[info] cwd: ${cwd}`);
-      cp.execFile(
+      stopActiveCommand(document, "dump");
+      const child = cp.execFile(
         command,
         args,
         { cwd, maxBuffer: 10 * 1024 * 1024 },
         (error, stdout, stderr) => {
+          const activeKey = commandKey(document, "dump");
+          if (activeCommands.get(activeKey) === child) {
+            activeCommands.delete(activeKey);
+          }
           if (stderr && stderr.trim().length > 0) {
             output.appendLine("[info] stderr:");
             output.appendLine(stderr.trimEnd());
@@ -130,7 +172,7 @@ function activate(context) {
 
           if (error) {
             output.appendLine(`[info] failed: ${error.message}`);
-            resolve(null);
+            resolve(cached ? cached.payload : null);
             return;
           }
 
@@ -140,20 +182,25 @@ function activate(context) {
             if (!stdout || stdout.trim().length === 0) {
               output.appendLine("[info] empty stdout");
             }
-            resolve(null);
+            resolve(cached ? cached.payload : null);
             return;
           }
 
-          editorInfoCache.set(key, { atMs: Date.now(), payload });
+          editorInfoCache.set(key, { generation, payload });
+          emitter.fire();
           resolve(payload);
         },
       );
+      activeCommands.set(commandKey(document, "dump"), child);
     });
 
     const finalize = runRequest.finally(() => {
       editorInfoRequests.delete(key);
     });
     editorInfoRequests.set(key, finalize);
+    if (cached) {
+      return Promise.resolve(cached.payload);
+    }
     return finalize;
   }
 
@@ -173,18 +220,28 @@ function activate(context) {
     return crypto.createHash("sha1").update(text).digest("hex").slice(0, 12);
   }
 
+  function assetBaseDir(document) {
+    return path.dirname(document.uri.fsPath);
+  }
+
+  function snapshotOutputPath(document) {
+    const cwd = commandCwd(document);
+    const root = cwd || os.tmpdir();
+    const outDir = path.join(root, ".ss-cache", "vscode-snapshots");
+    const base = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath)).replace(/[^A-Za-z0-9_-]/g, "_") || "untitled";
+    return {
+      dir: outDir,
+      path: path.join(outDir, `${base}-${stableHash(document.uri.toString())}.ss`),
+    };
+  }
+
   async function writeSnapshot(document) {
     if (!document || document.uri.scheme !== "file") {
       return null;
     }
 
-    const sourcePath = document.uri.fsPath;
-    const dir = path.dirname(sourcePath);
-    const ext = path.extname(sourcePath) || ".ss";
-    const base = path.basename(sourcePath, ext).replace(/[^A-Za-z0-9_-]/g, "_") || "untitled";
-    const nonce = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
-    const fileName = `.ss-vscode-${base}-${process.pid}-${stableHash(document.uri.toString())}-${nonce}${ext}`;
-    const snapshotPath = path.join(dir, fileName);
+    const { dir, path: snapshotPath } = snapshotOutputPath(document);
+    await fs.promises.mkdir(dir, { recursive: true });
     await fs.promises.writeFile(snapshotPath, document.getText(), "utf8");
     return snapshotPath;
   }
@@ -202,7 +259,47 @@ function activate(context) {
     }
   }
 
-  function runSs(document, args, label) {
+  async function cleanupLegacySnapshots(document) {
+    if (!document || document.uri.scheme !== "file") {
+      return;
+    }
+    const dir = path.dirname(document.uri.fsPath);
+    const currentSnapshot = snapshotOutputPath(document).path;
+    try {
+      const entries = await fs.promises.readdir(dir);
+      await Promise.all(entries.map(async (entry) => {
+        if (!entry.startsWith(".ss-vscode-") || !entry.endsWith(".ss")) {
+          return;
+        }
+        const filePath = path.join(dir, entry);
+        if (filePath === currentSnapshot) {
+          return;
+        }
+        await removeFileIfExists(filePath);
+      }));
+    } catch (error) {
+      if (error && error.code !== "ENOENT") {
+        output.appendLine(`[snapshot cleanup] ${error.message}`);
+      }
+    }
+  }
+
+  function stopActiveCommand(document, kind) {
+    if (!document) {
+      return;
+    }
+    const key = commandKey(document, kind);
+    const child = activeCommands.get(key);
+    if (!child) {
+      return;
+    }
+    activeCommands.delete(key);
+    try {
+      child.kill();
+    } catch {}
+  }
+
+  function runSs(document, args, label, kind) {
     const cwd = commandCwd(document);
     if (!cwd) {
       return Promise.resolve({
@@ -215,10 +312,16 @@ function activate(context) {
     const command = cliPath();
     output.appendLine(`[${label}] ${command} ${args.join(" ")}`);
     output.appendLine(`[${label}] cwd: ${cwd}`);
+    stopActiveCommand(document, kind);
     return new Promise((resolve) => {
-      cp.execFile(command, args, { cwd, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const child = cp.execFile(command, args, { cwd, maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
+        const key = commandKey(document, kind);
+        if (activeCommands.get(key) === child) {
+          activeCommands.delete(key);
+        }
         resolve({ error, stdout: stdout || "", stderr: stderr || "" });
       });
+      activeCommands.set(commandKey(document, kind), child);
     });
   }
 
@@ -287,7 +390,7 @@ function activate(context) {
     }
 
     try {
-      const result = await runSs(document, ["check", snapshotPath], "diagnostics");
+      const result = await runSs(document, ["check", snapshotPath, "--asset-base-dir", assetBaseDir(document)], "diagnostics", "diagnostics");
       const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
       diagnosticCollection.set(document.uri, diagnostics);
       if (result.error && diagnostics.length === 0) {
@@ -297,9 +400,7 @@ function activate(context) {
       } else {
         output.appendLine(`[diagnostics] ${diagnostics.length} diagnostics`);
       }
-    } finally {
-      await removeFileIfExists(snapshotPath);
-    }
+    } finally {}
   }
 
   function scheduleDiagnostics(document, delayMs) {
@@ -332,6 +433,7 @@ function activate(context) {
       clearTimeout(existing);
       diagnosticTimers.delete(key);
     }
+    stopActiveCommand(document, "diagnostics");
   }
 
   function clearPreviewSession(document) {
@@ -344,6 +446,7 @@ function activate(context) {
       clearTimeout(existing);
       previewTimers.delete(key);
     }
+    stopActiveCommand(document, "preview");
     previewSessions.delete(key);
   }
 
@@ -357,18 +460,23 @@ function activate(context) {
       dir: outDir,
       pdf: path.join(outDir, `${stem}.pdf`),
       tempPdf: path.join(outDir, `${stem}.tmp-${process.pid}-${renderId}.pdf`),
+      legacyFixedPdf: path.join(outDir, `${base}-fixed.pdf`),
       stalePrefix: `${stem}-`,
       tempPrefix: `${stem}.tmp-`,
     };
   }
 
   async function cleanupPreviewCache(document, keepPdf) {
-    const { dir, pdf, stalePrefix, tempPrefix } = previewOutputPath(document, 0);
+    const { dir, pdf, legacyFixedPdf, stalePrefix, tempPrefix } = previewOutputPath(document, 0);
     try {
       const entries = await fs.promises.readdir(dir);
       await Promise.all(entries.map(async (entry) => {
         const filePath = path.join(dir, entry);
         if (filePath === keepPdf || filePath === pdf) {
+          return;
+        }
+        if (filePath === legacyFixedPdf) {
+          await removeFileIfExists(filePath);
           return;
         }
         if ((entry.startsWith(stalePrefix) || entry.startsWith(tempPrefix)) && entry.endsWith(".pdf")) {
@@ -425,7 +533,7 @@ function activate(context) {
     await fs.promises.mkdir(dir, { recursive: true });
 
     try {
-      const result = await runSs(document, ["render", snapshotPath, tempPdf], "preview");
+      const result = await runSs(document, ["render", snapshotPath, tempPdf, "--asset-base-dir", assetBaseDir(document)], "preview", "preview");
       const latestSession = previewSessions.get(key);
       if (!latestSession || latestSession.renderId !== renderId) {
         await removeFileIfExists(tempPdf);
@@ -447,7 +555,6 @@ function activate(context) {
       await cleanupPreviewCache(document, pdf);
       await revealPreviewPdf(document, pdf, false);
     } finally {
-      await removeFileIfExists(snapshotPath);
       await removeFileIfExists(tempPdf);
     }
   }
@@ -836,7 +943,9 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
       if (document.languageId === "ss-slide") {
-        clearEditorInfoCache(document);
+        void cleanupLegacySnapshots(document);
+        bumpEditorInfoGeneration(document);
+        clearEditorInfoRequest(document);
         clearRefresh(document);
         clearDiagnosticsTimer(document);
         emitter.fire();
@@ -849,7 +958,8 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
-      clearEditorInfoCache(event.document);
+      void cleanupLegacySnapshots(event.document);
+      clearEditorInfoRequest(event.document);
       scheduleRefresh(event.document, 400);
       scheduleDiagnostics(event.document, 500);
       schedulePreview(event.document, livePreviewDebounceMs());
@@ -859,10 +969,14 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
+      void cleanupLegacySnapshots(document);
       clearEditorInfoCache(document);
+      clearEditorInfoGeneration(document);
+      clearEditorInfoRequest(document);
       clearRefresh(document);
       clearDiagnosticsTimer(document);
       clearPreviewSession(document);
+      void removeFileIfExists(snapshotOutputPath(document).path);
       diagnosticCollection.delete(document.uri);
     }),
   );
@@ -900,6 +1014,12 @@ function activate(context) {
         clearTimeout(timer);
       }
       previewTimers.clear();
+      for (const child of activeCommands.values()) {
+        try {
+          child.kill();
+        } catch {}
+      }
+      activeCommands.clear();
       previewSessions.clear();
     },
   });
@@ -907,6 +1027,7 @@ function activate(context) {
   refreshVisibleBlockDecorations();
   for (const document of vscode.workspace.textDocuments) {
     if (document.languageId === "ss-slide") {
+      void cleanupLegacySnapshots(document);
       scheduleDiagnostics(document, 100);
     }
   }
