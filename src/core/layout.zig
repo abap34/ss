@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model.zig");
+const markdown = @import("markdown.zig");
 
 const NodeId = model.NodeId;
 const Node = model.Node;
@@ -138,11 +139,140 @@ pub fn intrinsicHeight(engine: anytype, node: *const Node) f32 {
         else => blk: {
             const content = node.content orelse "";
             const width = if (node.frame.width > 0) node.frame.width else intrinsicWidth(engine, node);
+            if (shouldWrapNode(engine, node) and markdown.shouldParseBlocks(node.role, if (node.payload_kind) |kind| @tagName(kind) else null)) {
+                var doc = markdown.parseMarkdownDocument(
+                    engine.allocator,
+                    node.role,
+                    if (node.payload_kind) |kind| @tagName(kind) else null,
+                    content,
+                ) catch break :blk fallbackTextHeight(engine, node, style, content, width);
+                defer doc.deinit();
+                break :blk markdownBlocksHeight(engine, node, style, doc.blocks.items, width, 0);
+            }
             const lines = if (shouldWrapNode(engine, node))
                 wrappedLineCount(content, style, width, node.role)
             else
                 lineCount(content);
             break :blk @as(f32, @floatFromInt(lines)) * style.line_height;
+        },
+    };
+}
+
+fn fallbackTextHeight(engine: anytype, node: *const Node, style: TextStyle, content: []const u8, width: f32) f32 {
+    const lines = if (shouldWrapNode(engine, node))
+        wrappedLineCount(content, style, width, node.role)
+    else
+        lineCount(content);
+    return @as(f32, @floatFromInt(lines)) * style.line_height;
+}
+
+fn markdownBlockGap(node: *const Node, style: TextStyle) f32 {
+    return parseNodeFloatProperty(node, "text_markdown_block_gap") orelse style.line_height * 0.15;
+}
+
+fn markdownListIndent(node: *const Node, style: TextStyle) f32 {
+    return parseNodeFloatProperty(node, "text_markdown_list_indent") orelse style.font_size * 1.3;
+}
+
+fn markdownCodeLineHeight(node: *const Node) f32 {
+    return parseNodeFloatProperty(node, "text_markdown_code_line_height") orelse 20.0;
+}
+
+fn markdownCodePadY(node: *const Node) f32 {
+    return parseNodeFloatProperty(node, "text_markdown_code_pad_y") orelse 10.0;
+}
+
+fn markdownBlocksHeight(engine: anytype, node: *const Node, style: TextStyle, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
+    _ = engine;
+    if (blocks.len == 0) return style.line_height;
+
+    var total: f32 = 0;
+    const gap = markdownBlockGap(node, style);
+    for (blocks, 0..) |block, index| {
+        total += markdownBlockHeight(node, style, block, max_width, list_depth);
+        if (index != blocks.len - 1) total += gap;
+    }
+    return total;
+}
+
+fn markdownBlockHeight(node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
+    return switch (block.kind) {
+        .paragraph => markdownLinesHeight(style, block.paragraph.?.lines.items, max_width),
+        .code_block => blk: {
+            const lines = @max(@as(usize, 1), block.paragraph.?.lines.items.len);
+            break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(node) + 2.0 * markdownCodePadY(node);
+        },
+        .bullet_list, .ordered_list => markdownListHeight(node, style, block, max_width, list_depth),
+    };
+}
+
+fn markdownListHeight(node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
+    const list = block.list.?;
+    if (list.items.items.len == 0) return style.line_height;
+
+    var total: f32 = 0;
+    const gap = markdownBlockGap(node, style);
+    for (list.items.items, 0..) |item, item_index| {
+        total += markdownListItemHeight(node, style, block.kind, item, max_width, list_depth);
+        if (item_index != list.items.items.len - 1) total += gap;
+    }
+    return total;
+}
+
+fn markdownListItemHeight(node: *const Node, style: TextStyle, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize) f32 {
+    _ = kind;
+    const marker_gap = @max(@as(f32, 8.0), style.font_size * 0.35);
+    const marker_width = style.font_size * 0.58;
+    const content_width = @max(@as(f32, 1.0), max_width - marker_width - marker_gap);
+    if (item.blocks.items.len == 0) return style.line_height;
+
+    var total: f32 = 0;
+    const gap = markdownBlockGap(node, style);
+    for (item.blocks.items, 0..) |block, block_index| {
+        const block_width = if (block.kind == .bullet_list or block.kind == .ordered_list)
+            @max(@as(f32, 1.0), content_width - markdownListIndent(node, style))
+        else
+            content_width;
+        total += markdownBlockHeight(node, style, block, block_width, list_depth + 1);
+        if (block_index != item.blocks.items.len - 1) total += gap;
+    }
+    return total;
+}
+
+fn markdownLinesHeight(style: TextStyle, lines: []const markdown.Line, max_width: f32) f32 {
+    const count = markdownWrappedLineCount(style, lines, max_width);
+    return @as(f32, @floatFromInt(count)) * style.line_height;
+}
+
+fn markdownWrappedLineCount(style: TextStyle, lines: []const markdown.Line, max_width: f32) usize {
+    if (lines.len == 0) return 1;
+    var total: usize = 0;
+    for (lines) |line| {
+        const width = markdownLineAdvance(style, line);
+        if (width <= 0) {
+            total += 1;
+            continue;
+        }
+        const available = @max(@as(f32, 1.0), max_width);
+        total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(width / available))));
+    }
+    return total;
+}
+
+fn markdownLineAdvance(style: TextStyle, line: markdown.Line) f32 {
+    var width: f32 = 0;
+    for (line.runs.items) |run| {
+        width += markdownRunAdvance(style, run);
+    }
+    return width;
+}
+
+fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
+    return switch (run.kind) {
+        .icon, .math => style.font_size * 1.05,
+        else => blk: {
+            const advance = if (containsNonAscii(run.text)) style.font_size * 1.02 else style.font_size * 0.58;
+            break :blk @as(f32, @floatFromInt(codepointCount(run.text))) * advance;
         },
     };
 }

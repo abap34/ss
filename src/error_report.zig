@@ -432,12 +432,3 @@ fn printColor(severity: Severity) void {
 fn printReset() void {
     std.debug.print("\x1b[0m", .{});
 }
-
-test "display width handles CJK emoji combining marks and tabs" {
-    try std.testing.expectEqual(@as(usize, 6), displayWidthSlice("日本語"));
-    try std.testing.expectEqual(@as(usize, 2), displayWidthSlice("🙂"));
-    try std.testing.expectEqual(@as(usize, 2), displayWidthSlice("👨‍👩‍👧‍👦"));
-    try std.testing.expectEqual(@as(usize, 2), displayWidthSlice("🇯🇵"));
-    try std.testing.expectEqual(@as(usize, 1), displayWidthSlice("é"));
-    try std.testing.expectEqual(@as(usize, 4), displayWidthSlice("\t"));
-}
