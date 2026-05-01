@@ -102,6 +102,180 @@ pub fn printLabeledOrigin(source: []const u8, label: []const u8, origin: ?[]cons
     printExcerpt(source, span, .note, label, 0);
 }
 
+pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diagnostic: anytype) void {
+    const parsed_diagnostic = diagnostic orelse {
+        var message_buf: [128]u8 = undefined;
+        print(.{
+            .path = path,
+            .source = source,
+            .severity = .@"error",
+            .message = std.fmt.bufPrint(&message_buf, "{s}: {s}", .{ @errorName(err), @errorName(err) }) catch @errorName(err),
+            .span = null,
+        });
+        return;
+    };
+    var message_buf: [256]u8 = undefined;
+    const message = formatParseDiagnostic(&message_buf, parsed_diagnostic);
+    print(.{
+        .path = path,
+        .source = source,
+        .severity = .@"error",
+        .message = message,
+        .span = .{ .start = parsed_diagnostic.span.start, .end = parsed_diagnostic.span.end },
+    });
+}
+
+pub fn printEngineDiagnostics(path: []const u8, source: []const u8, engine: anytype) void {
+    for (engine.diagnostics.items) |diagnostic| {
+        const message = formatEngineDiagnostic(engine.allocator, diagnostic) catch @tagName(diagnostic.phase);
+        defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) engine.allocator.free(message);
+        const span = if (spanFromOrigin(diagnostic.origin)) |origin_span|
+            origin_span
+        else if (diagnostic.node_id) |node_id| blk: {
+            const node = engine.getNode(node_id) orelse break :blk null;
+            break :blk spanFromOrigin(node.origin);
+        } else null;
+        print(.{
+            .path = path,
+            .source = source,
+            .severity = switch (diagnostic.severity) {
+                .warning => .warning,
+                .@"error" => .@"error",
+            },
+            .message = message,
+            .span = span,
+        });
+    }
+}
+
+pub fn hasErrorDiagnostics(engine: anytype) bool {
+    for (engine.diagnostics.items) |diagnostic| {
+        if (diagnostic.severity == .@"error") return true;
+    }
+    return false;
+}
+
+pub fn printConstraintFailure(
+    path: []const u8,
+    source: []const u8,
+    engine: anytype,
+    err: anyerror,
+    formatConstraint: anytype,
+) void {
+    const failure = engine.last_constraint_failure orelse {
+        std.debug.print("constraint error: {s}\n", .{@errorName(err)});
+        return;
+    };
+    const kind_text = switch (failure.kind) {
+        .conflict => "ConstraintConflict: constraint conflict",
+        .negative_size => "NegativeConstraintSize: negative size from constraints",
+    };
+    const constraint_text = formatConstraint(engine.allocator, failure.constraint) catch "";
+    defer if (constraint_text.len > 0) engine.allocator.free(constraint_text);
+    const existing_text = if (failure.existing_constraint) |constraint|
+        formatConstraint(engine.allocator, constraint) catch ""
+    else
+        "";
+    defer if (existing_text.len > 0) engine.allocator.free(existing_text);
+
+    if (failure.constraint.origin) |origin| {
+        if (parseByteOrigin(origin)) |span| {
+            print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = kind_text,
+                .span = span,
+            });
+            if (failure.existing_constraint != null) {
+                printLabeledOrigin(source, "other constraint", failure.existing_constraint.?.origin);
+            }
+            if (constraint_text.len > 0 and existing_text.len == 0) {
+                std.debug.print("  constraint: {s}\n", .{constraint_text});
+            }
+            return;
+        }
+    }
+
+    if (path.len != 0) {
+        std.debug.print("{s}: error: {s}\n", .{ path, kind_text });
+    } else {
+        std.debug.print("{s}\n", .{kind_text});
+    }
+    if (failure.existing_constraint != null) {
+        printLabeledOrigin(source, "other constraint", failure.existing_constraint.?.origin);
+    }
+    if (constraint_text.len > 0 and existing_text.len == 0) {
+        std.debug.print("  constraint: {s}\n", .{constraint_text});
+        printLabeledOrigin(source, "constraint", failure.constraint.origin);
+    }
+}
+
+fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
+    return switch (diagnostic.err) {
+        error.UnterminatedString => "UnterminatedString: unterminated string",
+        error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",
+        error.InvalidEscape => "InvalidEscape: invalid escape sequence",
+        error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
+        else => blk: {
+            const expected = diagnostic.expected orelse @errorName(diagnostic.err);
+            const found = diagnostic.found orelse "unknown token";
+            break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ parseDiagnosticCode(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
+        },
+    };
+}
+
+fn parseDiagnosticCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ExpectedString => "ExpectedString",
+        error.ExpectedIdentifier => "ExpectedIdentifier",
+        error.ExpectedKeyword => "ExpectedKeyword",
+        error.ExpectedChar => "ExpectedPunctuation",
+        error.ExpectedLineBreak => "ExpectedLineBreak",
+        error.ExpectedEnd => "ExpectedEnd",
+        error.ExpectedNumber => "ExpectedNumber",
+        error.ExpectedTypeAnnotation => "ExpectedTypeAnnotation",
+        error.ExpectedReturn => "ExpectedReturn",
+        error.InvalidSemanticSort => "InvalidSemanticSort",
+        else => @errorName(err),
+    };
+}
+
+fn formatEngineDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
+    return switch (diagnostic.data) {
+        .user_report => |data| std.fmt.allocPrint(allocator, "UserReport: {s}", .{data.message}),
+        .asset_not_found => |data| std.fmt.allocPrint(
+            allocator,
+            "AssetNotFound: {s} (resolved to {s})",
+            .{ data.requested_path, data.resolved_path },
+        ),
+        .asset_invalid => |data| std.fmt.allocPrint(allocator, "InvalidAsset: {s}", .{data.reason}),
+        .type_mismatch => |data| std.fmt.allocPrint(
+            allocator,
+            "{s}: expected {s}, got {s}",
+            .{ @tagName(data.code), @tagName(data.expected), @tagName(data.actual) },
+        ),
+        .recursive_function => |data| std.fmt.allocPrint(
+            allocator,
+            "RecursiveFunction: recursive function cycle involving {s}",
+            .{data.function_name},
+        ),
+        .unresolved_frame => |data| std.fmt.allocPrint(
+            allocator,
+            "UnresolvedFrame: missing_horizontal={s} missing_vertical={s}",
+            .{
+                if (data.missing_horizontal) "true" else "false",
+                if (data.missing_vertical) "true" else "false",
+            },
+        ),
+        .page_overflow => |data| std.fmt.allocPrint(
+            allocator,
+            "PageOverflow: left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
+            .{ data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom },
+        ),
+    };
+}
+
 fn printExcerpt(source: []const u8, span: ByteSpan, severity: Severity, label: []const u8, context: usize) void {
     const target = lineAt(source, span.start);
     const first_line = if (target.number > context) target.number - context else 1;

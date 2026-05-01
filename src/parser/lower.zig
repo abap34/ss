@@ -1,6 +1,8 @@
 const std = @import("std");
 const core = @import("core");
-const error_report = @import("utils").err;
+const utils = @import("utils");
+const error_report = utils.err;
+const fs_utils = utils.fs;
 const theme_loader = @import("../theme_loader.zig");
 const ast = @import("ast.zig");
 const names = @import("names.zig");
@@ -203,6 +205,19 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
     diagnostic_reported = false;
     var index = try typecheck.loadProgramIndex(engine.allocator, io, engine.asset_base_dir, program);
     defer index.deinit();
+    return lowerToEngineWithIndex(program, source, path, engine, &index);
+}
+
+pub fn lowerToEngineWithIndex(
+    program: Program,
+    source: []const u8,
+    path: []const u8,
+    engine: *core.Engine,
+    index: *const typecheck.ProgramIndex,
+) !void {
+    diagnostic_source = source;
+    diagnostic_path = path;
+    diagnostic_reported = false;
     const functions = &index.functions;
 
     typecheck.checkFunctionDefinitions(engine.allocator, engine, functions) catch |err| {
@@ -236,79 +251,12 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
     try engine.finalize();
 }
 
-fn validateThemeProgram(program: Program) !void {
-    if (program.theme_name != null) return error.InvalidThemeModule;
-    if (program.pages.items.len != 0) return error.InvalidThemeModule;
-}
-
-fn loadThemeProgram(engine: *core.Engine, io: std.Io, theme_name: []const u8) !Program {
-    const source = try theme_loader.loadThemeSource(engine.allocator, io, engine.asset_base_dir, theme_name);
-    defer engine.allocator.free(source);
-    const path = try std.fmt.allocPrint(engine.allocator, "theme:{s}", .{theme_name});
-    const program = syntax.parse(engine.allocator, source) catch |err| {
-        if (syntax.lastDiagnostic()) |diagnostic| {
-            var message_buf: [256]u8 = undefined;
-            error_report.print(.{
-                .path = path,
-                .source = source,
-                .severity = .@"error",
-                .message = formatParseDiagnostic(&message_buf, diagnostic),
-                .span = .{ .start = diagnostic.span.start, .end = diagnostic.span.end },
-            });
-            diagnostic_reported = true;
-        }
-        return err;
-    };
-    validateThemeProgram(program) catch |err| {
-        error_report.print(.{
-            .path = path,
-            .source = source,
-            .severity = .@"error",
-            .message = lowerErrorMessage(err),
-            .span = null,
-        });
-        diagnostic_reported = true;
-        return err;
-    };
-    return program;
-}
-
-fn formatParseDiagnostic(buf: []u8, diagnostic: syntax.ParseDiagnostic) []const u8 {
-    return switch (diagnostic.err) {
-        error.UnterminatedString => "UnterminatedString: unterminated string",
-        error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",
-        error.InvalidEscape => "InvalidEscape: invalid escape sequence",
-        error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
-        else => blk: {
-            const expected = diagnostic.expected orelse @errorName(diagnostic.err);
-            const found = diagnostic.found orelse "unknown token";
-            break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ parseDiagnosticCode(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
-        },
-    };
-}
-
-fn parseDiagnosticCode(err: anyerror) []const u8 {
-    return switch (err) {
-        error.ExpectedString => "ExpectedString",
-        error.ExpectedIdentifier => "ExpectedIdentifier",
-        error.ExpectedKeyword => "ExpectedKeyword",
-        error.ExpectedChar => "ExpectedPunctuation",
-        error.ExpectedLineBreak => "ExpectedLineBreak",
-        error.ExpectedEnd => "ExpectedEnd",
-        error.ExpectedNumber => "ExpectedNumber",
-        error.ExpectedTypeAnnotation => "ExpectedTypeAnnotation",
-        error.ExpectedReturn => "ExpectedReturn",
-        error.InvalidSemanticSort => "InvalidSemanticSort",
-        else => @errorName(err),
-    };
-}
-
 fn evalExpr(
     engine: *core.Engine,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     expr: Expr,
 ) anyerror!core.Value {
@@ -330,7 +278,7 @@ fn evalCall(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
@@ -364,7 +312,7 @@ fn evalPrimitiveCall(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     descriptor: registry.PrimitiveDescriptor,
@@ -779,7 +727,7 @@ fn validateAssetExists(engine: *core.Engine, page_id: core.NodeId, object_id: co
 
     const requested = node.content.?;
     const resolved = try resolveAssetPath(engine.allocator, engine.asset_base_dir, requested);
-    if (!fileExists(engine.allocator, resolved)) {
+    if (!fs_utils.fileExists(engine.allocator, resolved)) {
         try engine.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
             .asset_not_found = .{
                 .requested_path = try engine.allocator.dupe(u8, requested),
@@ -795,18 +743,12 @@ fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requeste
     return std.fs.path.join(allocator, &.{ base_dir, requested });
 }
 
-fn fileExists(allocator: std.mem.Allocator, path: []const u8) bool {
-    const zpath = allocator.dupeZ(u8, path) catch return false;
-    defer allocator.free(zpath);
-    return std.c.access(zpath.ptr, 0) == 0;
-}
-
 fn evalSelectCall(
     engine: *core.Engine,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
@@ -847,7 +789,7 @@ fn evalDeriveCall(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
@@ -1032,7 +974,7 @@ fn evalCallArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1045,7 +987,7 @@ fn evalCallStringArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1058,7 +1000,7 @@ fn evalCallNumberArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1071,7 +1013,7 @@ fn evalCallObjectArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1084,7 +1026,7 @@ fn evalCallAnchorArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1097,7 +1039,7 @@ fn evalCallStyleArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1110,7 +1052,7 @@ fn evalCallRoleArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1127,7 +1069,7 @@ fn evalCallPayloadArg(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
     index: usize,
@@ -1193,7 +1135,7 @@ fn executeStatement(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     last_code_like: *?core.NodeId,
     stmt: Statement,
     origin_override: ?[]const u8,
@@ -1395,7 +1337,7 @@ fn executeCallStatement(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     last_code_like: *?core.NodeId,
     current_origin: []const u8,
     call: CallExpr,
@@ -1440,7 +1382,7 @@ fn invokeUserFunctionValue(
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
-    functions: *std.StringHashMap(FunctionDecl),
+    functions: *const std.StringHashMap(FunctionDecl),
     func: FunctionDecl,
     current_origin: []const u8,
     call: CallExpr,

@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const registry = @import("registry.zig");
 const theme_loader = @import("../theme_loader.zig");
 const syntax = @import("syntax.zig");
+const utils = @import("utils");
 
 pub const FunctionContract = struct {
     param_count: usize,
@@ -216,7 +217,7 @@ pub fn loadProgramIndex(
 
     index.base_path = try theme_loader.resolveThemeSourcePath(allocator, io, base_dir, "base");
     index.base_source = try readFile(io, allocator, index.base_path.?);
-    index.base_program = try parseSource(allocator, index.base_source.?, index.base_path.?);
+    index.base_program = try syntax.parse(allocator, index.base_source.?);
     try validateThemeProgram(index.base_program.?);
     try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.base_program.?, .base, index.base_path.?);
 
@@ -224,7 +225,7 @@ pub fn loadProgramIndex(
     if (!std.mem.eql(u8, theme_name, "base")) {
         index.theme_path = try theme_loader.resolveThemeSourcePath(allocator, io, base_dir, theme_name);
         index.theme_source = try readFile(io, allocator, index.theme_path.?);
-        index.theme_program = try parseSource(allocator, index.theme_source.?, index.theme_path.?);
+        index.theme_program = try syntax.parse(allocator, index.theme_source.?);
         try validateThemeProgram(index.theme_program.?);
         try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.theme_program.?, .theme, index.theme_path.?);
     }
@@ -233,9 +234,70 @@ pub fn loadProgramIndex(
     return index;
 }
 
-fn validateThemeProgram(program: ast.Program) !void {
+pub fn loadProgramIndexForPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    input_path: []const u8,
+    project_program: ast.Program,
+) !ProgramIndex {
+    const base_dir = std.fs.path.dirname(input_path) orelse ".";
+    return loadProgramIndex(allocator, io, base_dir, project_program);
+}
+
+pub fn validateThemeProgram(program: ast.Program) !void {
     if (program.theme_name != null) return error.InvalidThemeModule;
     if (program.pages.items.len != 0) return error.InvalidThemeModule;
+}
+
+pub fn formatPrimitiveSignature(
+    allocator: std.mem.Allocator,
+    descriptor: registry.PrimitiveDescriptor,
+) ![]const u8 {
+    var params = std.ArrayList(u8).empty;
+    defer params.deinit(allocator);
+    for (descriptor.arg_names, 0..) |_, index| {
+        if (index != 0) try params.appendSlice(allocator, ", ");
+        const label = try formatPrimitiveParam(allocator, descriptor, index);
+        defer allocator.free(label);
+        try params.appendSlice(allocator, label);
+    }
+    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ descriptor.name, params.items, resultText(descriptor.result_sort) });
+}
+
+pub fn formatPrimitiveParam(
+    allocator: std.mem.Allocator,
+    descriptor: registry.PrimitiveDescriptor,
+    index: usize,
+) ![]const u8 {
+    const name = descriptor.arg_names[index];
+    if (expectedPrimitiveArgSort(descriptor, index)) |sort| {
+        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, @tagName(sort) });
+    }
+    return allocator.dupe(u8, name);
+}
+
+pub fn formatUserSignature(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    func: ast.FunctionDecl,
+) ![]const u8 {
+    var params = std.ArrayList(u8).empty;
+    defer params.deinit(allocator);
+    for (func.params.items, 0..) |param, index| {
+        if (index != 0) try params.appendSlice(allocator, ", ");
+        const label = try formatUserParam(allocator, param);
+        defer allocator.free(label);
+        try params.appendSlice(allocator, label);
+    }
+    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, @tagName(func.result_sort) });
+}
+
+pub fn formatUserParam(allocator: std.mem.Allocator, param: ast.ParamDecl) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
+}
+
+pub fn resultText(result_sort: ?core.SemanticSort) []const u8 {
+    return if (result_sort) |sort| @tagName(sort) else "unknown";
 }
 
 pub fn collectVariableTypesForProgram(
@@ -244,8 +306,7 @@ pub fn collectVariableTypesForProgram(
     input_path: []const u8,
     program: ast.Program,
 ) !std.StringHashMap(core.SemanticSort) {
-    const base_dir = std.fs.path.dirname(input_path) orelse ".";
-    var index = try loadProgramIndex(allocator, io, base_dir, program);
+    var index = try loadProgramIndexForPath(allocator, io, input_path, program);
     defer index.deinit();
     return try collectVariableTypesFromProgram(allocator, &index.functions, program);
 }
@@ -284,14 +345,7 @@ fn collectVariableTypesFromStatement(
 }
 
 fn readFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
-}
-
-fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !ast.Program {
-    _ = path;
-    return syntax.parse(allocator, source) catch |err| {
-        return err;
-    };
+    return utils.fs.readFileAlloc(io, allocator, path);
 }
 
 fn checkFunctionCallGraph(

@@ -15,3 +15,4 @@ pub const parse = syntax.parse;
 pub const lastParseDiagnostic = syntax.lastDiagnostic;
 pub const lowerToEngine = @import("parser/lower.zig").lowerToEngine;
 pub const lowerToEngineWithPath = @import("parser/lower.zig").lowerToEngineWithPath;
+pub const lowerToEngineWithIndex = @import("parser/lower.zig").lowerToEngineWithIndex;

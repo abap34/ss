@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
     const md4c_include = b.path(md4c_src);
 
     const utils_mod = b.createModule(.{
-        .root_source_file = b.path("src/utils.zig"),
+        .root_source_file = b.path("src/utils/root.zig"),
         .target = target,
         .optimize = optimize,
     });

@@ -3,6 +3,7 @@ const core = @import("core");
 const ast = @import("ast.zig");
 const names = @import("names.zig");
 const typecheck = @import("typecheck.zig");
+const source_utils = @import("utils").source;
 
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
@@ -679,9 +680,9 @@ const Parser = struct {
         self.skipTrivia();
         if (self.eof()) return self.fail(error.ExpectedIdentifier);
         const start = self.pos;
-        if (!isIdentifierStart(self.source[self.pos])) return self.fail(error.ExpectedIdentifier);
+        if (!source_utils.isIdentifierStart(self.source[self.pos])) return self.fail(error.ExpectedIdentifier);
         self.pos += 1;
-        while (!self.eof() and isIdentifierContinue(self.source[self.pos])) {
+        while (!self.eof() and source_utils.isIdentifierContinue(self.source[self.pos])) {
             self.pos += 1;
         }
         return self.allocator.dupe(u8, self.source[start..self.pos]);
@@ -699,7 +700,7 @@ const Parser = struct {
     fn consumeKeywordNoTrivia(self: *Parser, keyword: []const u8) bool {
         if (!self.startsWith(keyword)) return false;
         const end = self.pos + keyword.len;
-        if (end < self.source.len and isIdentifierContinue(self.source[end])) return false;
+        if (end < self.source.len and source_utils.isIdentifierContinue(self.source[end])) return false;
         self.pos = end;
         return true;
     }
@@ -774,7 +775,7 @@ const Parser = struct {
 
     fn peekAnchorAssignment(self: *Parser) bool {
         var probe = self.pos;
-        skipTriviaFrom(self.source, &probe);
+        source_utils.skipTriviaFrom(self.source, &probe);
         if (!scanIdentifier(self.source, &probe)) return false;
         while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '.') return false;
@@ -792,11 +793,11 @@ const Parser = struct {
 
     fn peekStandaloneKeyword(self: *Parser, keyword: []const u8) bool {
         var probe = self.pos;
-        skipTriviaFrom(self.source, &probe);
+        source_utils.skipTriviaFrom(self.source, &probe);
         if (probe + keyword.len > self.source.len) return false;
         if (!std.mem.eql(u8, self.source[probe .. probe + keyword.len], keyword)) return false;
         const end = probe + keyword.len;
-        if (end < self.source.len and isIdentifierContinue(self.source[end])) return false;
+        if (end < self.source.len and source_utils.isIdentifierContinue(self.source[end])) return false;
         probe = end;
         while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
         return probe == self.source.len or self.source[probe] == '\n';
@@ -941,47 +942,11 @@ fn legacyHighlightKind(text: []const u8) Statement.Kind {
     return .{ .highlight = text };
 }
 
-fn skipTriviaFrom(source: []const u8, pos: *usize) void {
-    while (pos.* < source.len) {
-        switch (source[pos.*]) {
-            ' ', '\t', '\r', '\n' => pos.* += 1,
-            '/' => {
-                if (pos.* + 1 < source.len and source[pos.* + 1] == '/') {
-                    pos.* += 2;
-                    while (pos.* < source.len and source[pos.*] != '\n') pos.* += 1;
-                } else {
-                    return;
-                }
-            },
-            ';' => {
-                if (pos.* + 1 < source.len and source[pos.* + 1] == ';') {
-                    pos.* += 2;
-                    while (pos.* < source.len and source[pos.*] != '\n') pos.* += 1;
-                } else {
-                    return;
-                }
-            },
-            '#' => {
-                while (pos.* < source.len and source[pos.*] != '\n') pos.* += 1;
-            },
-            else => return,
-        }
-    }
-}
-
 fn scanIdentifier(source: []const u8, pos: *usize) bool {
-    if (pos.* >= source.len or !isIdentifierStart(source[pos.*])) return false;
+    if (pos.* >= source.len or !source_utils.isIdentifierStart(source[pos.*])) return false;
     pos.* += 1;
-    while (pos.* < source.len and isIdentifierContinue(source[pos.*])) pos.* += 1;
+    while (pos.* < source.len and source_utils.isIdentifierContinue(source[pos.*])) pos.* += 1;
     return true;
-}
-
-fn isIdentifierStart(ch: u8) bool {
-    return std.ascii.isAlphabetic(ch) or ch == '_';
-}
-
-fn isIdentifierContinue(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_';
 }
 
 fn isInlineSpace(ch: u8) bool {

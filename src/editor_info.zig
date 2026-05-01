@@ -7,6 +7,7 @@ const typecheck = @import("parser/typecheck.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 const json = utils.json;
+const source_utils = utils.source;
 
 const DefinitionKind = enum {
     function,
@@ -44,7 +45,16 @@ pub fn writeEditorInfoJson(
     const base_dir = std.fs.path.dirname(source_path) orelse ".";
     var index = try typecheck.loadProgramIndex(allocator, io, base_dir, program);
     defer index.deinit();
+    return writeEditorInfoJsonWithIndex(allocator, source, program, engine, &index);
+}
 
+pub fn writeEditorInfoJsonWithIndex(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    program: parser.Program,
+    engine: *core.Engine,
+    index: *const typecheck.ProgramIndex,
+) !void {
     var variables = try typecheck.collectVariableTypesFromProgram(allocator, &index.functions, program);
     defer variables.deinit();
 
@@ -65,7 +75,7 @@ pub fn writeEditorInfoJson(
     }
     try collectSolvedSizeHints(allocator, source, engine, &hints);
 
-    try writeJson(allocator, &index, &variables, &definitions, hints.items);
+    try writeJson(allocator, index, &variables, &definitions, hints.items);
 }
 
 fn writeJson(
@@ -130,12 +140,12 @@ fn writePrimitiveFunctionJson(
     var item = try functions.objectItem();
     try item.stringField("name", descriptor.name);
     try item.stringField("signature", signature);
-    try item.stringField("resultSort", resultText(descriptor.result_sort));
+    try item.stringField("resultSort", typecheck.resultText(descriptor.result_sort));
     try item.stringField("source", "primitive");
     try item.stringField("summary", descriptor.summary);
     var params = try item.arrayField("params");
     for (descriptor.arg_names, 0..) |_, index| {
-        const label = try formatPrimitiveParam(allocator, descriptor, index);
+        const label = try typecheck.formatPrimitiveParam(allocator, descriptor, index);
         defer allocator.free(label);
         try params.stringItem(label);
     }
@@ -150,7 +160,7 @@ fn writeUserFunctionJson(
     func: parser.FunctionDecl,
     metadata: typecheck.FunctionMetadata,
 ) !void {
-    const signature = try formatUserSignature(allocator, name, func);
+    const signature = try typecheck.formatUserSignature(allocator, name, func);
     defer allocator.free(signature);
 
     var item = try functions.objectItem();
@@ -160,9 +170,8 @@ fn writeUserFunctionJson(
     try item.enumTagField("source", metadata.source);
     try item.stringField("summary", "");
     var params = try item.arrayField("params");
-    for (func.params.items, 0..) |param, index| {
-        _ = index;
-        const label = try formatUserParam(allocator, param);
+    for (func.params.items) |param| {
+        const label = try typecheck.formatUserParam(allocator, param);
         defer allocator.free(label);
         try params.stringItem(label);
     }
@@ -182,43 +191,7 @@ fn writeDefinitionJson(definitions: *json.Array, name: []const u8, definition: E
 }
 
 fn formatPrimitiveSignature(allocator: std.mem.Allocator, descriptor: registry.PrimitiveDescriptor) ![]const u8 {
-    var params = std.ArrayList(u8).empty;
-    defer params.deinit(allocator);
-    for (descriptor.arg_names, 0..) |_, index| {
-        if (index != 0) try params.appendSlice(allocator, ", ");
-        const label = try formatPrimitiveParam(allocator, descriptor, index);
-        defer allocator.free(label);
-        try params.appendSlice(allocator, label);
-    }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ descriptor.name, params.items, resultText(descriptor.result_sort) });
-}
-
-fn formatUserSignature(allocator: std.mem.Allocator, name: []const u8, func: parser.FunctionDecl) ![]const u8 {
-    var params = std.ArrayList(u8).empty;
-    defer params.deinit(allocator);
-    for (func.params.items, 0..) |param, index| {
-        if (index != 0) try params.appendSlice(allocator, ", ");
-        const label = try formatUserParam(allocator, param);
-        defer allocator.free(label);
-        try params.appendSlice(allocator, label);
-    }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, @tagName(func.result_sort) });
-}
-
-fn formatUserParam(allocator: std.mem.Allocator, param: parser.ParamDecl) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
-}
-
-fn formatPrimitiveParam(allocator: std.mem.Allocator, descriptor: registry.PrimitiveDescriptor, index: usize) ![]const u8 {
-    const name = descriptor.arg_names[index];
-    if (typecheck.expectedPrimitiveArgSort(descriptor, index)) |sort| {
-        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, @tagName(sort) });
-    }
-    return allocator.dupe(u8, name);
-}
-
-fn resultText(result_sort: ?core.SemanticSort) []const u8 {
-    return if (result_sort) |sort| @tagName(sort) else "unknown";
+    return typecheck.formatPrimitiveSignature(allocator, descriptor);
 }
 
 fn collectDefinitionsFromProgram(
@@ -459,10 +432,10 @@ fn findIdentifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: [
     if (!std.mem.startsWith(u8, source[start..@min(source.len, start + keyword.len)], keyword)) return null;
 
     var pos = start + keyword.len;
-    skipTriviaFrom(source, &pos);
+    source_utils.skipTriviaFrom(source, &pos);
     const name_start = pos;
-    if (pos >= source.len or !isIdentifierStart(source[pos])) return null;
-    while (pos < source.len and isIdentifierContinue(source[pos])) pos += 1;
+    if (pos >= source.len or !source_utils.isIdentifierStart(source[pos])) return null;
+    while (pos < source.len and source_utils.isIdentifierContinue(source[pos])) pos += 1;
     if (!std.mem.eql(u8, source[name_start..pos], expected_name)) return null;
     return .{ .offset = name_start, .length = pos - name_start };
 }
@@ -555,36 +528,4 @@ fn skipHorizontalSpace(slice: []const u8, start: usize) usize {
     var index = start;
     while (index < slice.len and (slice[index] == ' ' or slice[index] == '\t' or slice[index] == '\r' or slice[index] == '\n')) : (index += 1) {}
     return index;
-}
-
-fn isIdentifierStart(ch: u8) bool {
-    return std.ascii.isAlphabetic(ch) or ch == '_';
-}
-
-fn isIdentifierContinue(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_';
-}
-
-fn skipTriviaFrom(source: []const u8, pos: *usize) void {
-    while (pos.* < source.len) {
-        switch (source[pos.*]) {
-            ' ', '\t', '\r', '\n' => pos.* += 1,
-            '/' => {
-                if (pos.* + 1 < source.len and source[pos.* + 1] == '/') {
-                    pos.* += 2;
-                    while (pos.* < source.len and source[pos.*] != '\n') pos.* += 1;
-                } else return;
-            },
-            ';' => {
-                if (pos.* + 1 < source.len and source[pos.* + 1] == ';') {
-                    pos.* += 2;
-                    while (pos.* < source.len and source[pos.*] != '\n') pos.* += 1;
-                } else return;
-            },
-            '#' => {
-                while (pos.* < source.len and source[pos.*] != '\n') pos.* += 1;
-            },
-            else => return,
-        }
-    }
 }
