@@ -27,12 +27,20 @@ const embedded_resources = [_]EmbeddedResource{
 
 pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, ir: *core.Ir) ![]const u8 {
     const json = try dump.toOwnedString(allocator, ir);
+    defer allocator.free(json);
     const cache_dir = ".ss-cache/render";
     try std.Io.Dir.cwd().createDirPath(io, cache_dir);
 
-    const hash = std.hash.Wyhash.hash(0, json);
-    const json_path = try std.fmt.allocPrint(allocator, "{s}/{x}.json", .{ cache_dir, hash });
-    const pdf_path = try std.fmt.allocPrint(allocator, "{s}/{x}.pdf", .{ cache_dir, hash });
+    try cleanupStaleRenderTemps(allocator, io, cache_dir);
+
+    const nonce = std.hash.Wyhash.hash(0, json);
+    const pid = std.c.getpid();
+    const json_path = try std.fmt.allocPrint(allocator, "{s}/tmp-{d}-{x}.json", .{ cache_dir, pid, nonce });
+    defer allocator.free(json_path);
+    defer std.Io.Dir.cwd().deleteFile(io, json_path) catch {};
+    const pdf_path = try std.fmt.allocPrint(allocator, "{s}/tmp-{d}-{x}.pdf", .{ cache_dir, pid, nonce });
+    defer allocator.free(pdf_path);
+    defer std.Io.Dir.cwd().deleteFile(io, pdf_path) catch {};
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = json_path,
         .data = json,
@@ -65,7 +73,25 @@ pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, ir: *core.Ir) ![]co
         else => return error.PdfBackendFailed,
     }
 
-    return std.Io.Dir.cwd().readFileAlloc(io, pdf_path, allocator, .unlimited);
+    const pdf_bytes = try std.Io.Dir.cwd().readFileAlloc(io, pdf_path, allocator, .unlimited);
+    try cleanupStaleRenderTemps(allocator, io, cache_dir);
+    return pdf_bytes;
+}
+
+fn cleanupStaleRenderTemps(allocator: Allocator, io: std.Io, cache_dir: []const u8) !void {
+    var dir = std.Io.Dir.cwd().openDir(io, cache_dir, .{}) catch return;
+    defer dir.close(io);
+
+    var walker = dir.walk(allocator) catch return;
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        const is_render_artifact =
+            std.mem.endsWith(u8, entry.path, ".json") or
+            std.mem.endsWith(u8, entry.path, ".pdf");
+        if (!is_render_artifact) continue;
+        dir.deleteFile(io, entry.path) catch {};
+    }
 }
 
 fn ensureEmbeddedRuntime(allocator: Allocator, io: std.Io) ![]u8 {

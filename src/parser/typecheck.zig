@@ -254,13 +254,18 @@ fn appendFunctionDeclarations(
 pub fn buildIr(
     allocator: std.mem.Allocator,
     input_path: []const u8,
-    project_source: []u8,
-    project_program: ast.Program,
+    asset_base_path: []const u8,
+    project_source: *[]u8,
+    project_program: *ast.Program,
     index: *ProgramIndex,
 ) !core.Ir {
-    const asset_base_dir = try allocator.dupe(u8, std.fs.path.dirname(input_path) orelse ".");
+    const asset_base_dir = try allocator.dupe(u8, asset_base_path);
+    errdefer allocator.free(asset_base_dir);
     const project_path = try allocator.dupe(u8, input_path);
-    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source, project_program);
+    errdefer allocator.free(project_path);
+    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source.*, project_program.*);
+    project_source.* = &.{};
+    project_program.* = ast.Program.init();
     errdefer ir.deinit();
 
     if (index.base_source) |base_source| {
