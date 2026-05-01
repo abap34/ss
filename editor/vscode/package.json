@@ -69,6 +69,11 @@
     "configuration": {
       "title": "ss",
       "properties": {
+        "ss.cli.path": {
+          "type": "string",
+          "default": "ss",
+          "description": "Path to the ss executable used for dump, check, and render commands."
+        },
         "ss.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
