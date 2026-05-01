@@ -35,6 +35,9 @@ pub const PrimitiveCall = enum {
     below,
     inset_x,
     surround,
+    report_error,
+    report_warning,
+    require_asset_exists,
 };
 
 pub const QueryOp = enum {
@@ -137,6 +140,9 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .below, .name = "below", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "source", "gap" }, .arg_sorts = &.{ .object, .object, .number }, .result_sort = .constraints, .summary = "互換 sugar: vertical stacking constraint" },
     .{ .op = .inset_x, .name = "inset_x", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "object", "left", "right" }, .arg_sorts = &.{ .object, .number, .number }, .result_sort = .constraints, .summary = "互換 sugar: left/right inset bundle" },
     .{ .op = .surround, .name = "surround", .min_arity = 4, .max_arity = 4, .arg_names = &.{ "panel", "inner", "pad_x", "pad_y" }, .arg_sorts = &.{ .object, .object, .number, .number }, .result_sort = .constraints, .summary = "互換 sugar: panel surround constraint bundle" },
+    .{ .op = .report_error, .name = "report_error", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_sorts = &.{.string}, .result_sort = .string, .summary = "ユーザ定義検査から error diagnostic を報告する" },
+    .{ .op = .report_warning, .name = "report_warning", .min_arity = 1, .max_arity = 1, .arg_names = &.{"message"}, .arg_sorts = &.{.string}, .result_sort = .string, .summary = "ユーザ定義検査から warning diagnostic を報告する" },
+    .{ .op = .require_asset_exists, .name = "require_asset_exists", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .object, .summary = "asset object の参照先ファイルが存在することを検査する" },
 };
 
 const query_descriptors = [_]QueryDescriptor{

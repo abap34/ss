@@ -340,6 +340,7 @@ pub const TextStyle = struct {
 
 pub const DiagnosticPhase = enum {
     layout,
+    validation,
     render,
 };
 
@@ -353,9 +354,22 @@ pub const Diagnostic = struct {
     severity: DiagnosticSeverity,
     page_id: ?NodeId = null,
     node_id: ?NodeId = null,
+    origin: ?[]const u8 = null,
     data: Data,
 
     pub const Data = union(enum) {
+        user_report: struct {
+            message: []const u8,
+        },
+        asset_not_found: struct {
+            requested_path: []const u8,
+            resolved_path: []const u8,
+            payload_kind: ?PayloadKind = null,
+        },
+        asset_invalid: struct {
+            reason: []const u8,
+            payload_kind: ?PayloadKind = null,
+        },
         unresolved_frame: struct {
             missing_horizontal: bool,
             missing_vertical: bool,

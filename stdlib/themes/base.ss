@@ -416,12 +416,28 @@ fn figure(text_value)
   return flow_inset(figure_text_object(text_value), "102", "102")
 end
 
-fn image(path_value)
+fn unchecked_image(path_value)
   return flow_inset(image_object(path_value), "102", "102")
+end
+
+fn image(path_value)
+  let obj = unchecked_image(path_value)
+  require_asset_exists(obj)
+  return obj
+end
+
+fn checked_image(path_value)
+  return image(path_value)
 end
 
 fn pdf(path_value)
   return flow_inset(pdf_object(path_value), "102", "102")
+end
+
+fn checked_pdf(path_value)
+  let obj = pdf(path_value)
+  require_asset_exists(obj)
+  return obj
 end
 
 fn plain_code(text_value)

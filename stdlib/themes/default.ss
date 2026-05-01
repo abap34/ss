@@ -69,7 +69,9 @@ fn image_figure(path_value)
 end
 
 fn image(path_value)
-  return image_figure(path_value)
+  let obj = image_figure(path_value)
+  require_asset_exists(obj)
+  return obj
 end
 
 fn pdf_figure(path_value)

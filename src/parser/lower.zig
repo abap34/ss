@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const error_report = @import("../error_report.zig");
 const theme_loader = @import("../theme_loader.zig");
 const ast = @import("ast.zig");
 const names = @import("names.zig");
@@ -74,100 +75,113 @@ const FunctionContract = struct {
 
 var diagnostic_source: []const u8 = "";
 var diagnostic_path: []const u8 = "";
+var diagnostic_reported = false;
 
-const ByteSpan = struct {
-    start: usize,
-    end: usize,
+const LowerDiagnostic = struct {
+    err: anyerror,
+    span: ?error_report.ByteSpan,
+    data: Data,
+
+    const Data = union(enum) {
+        unknown_name: struct {
+            kind: []const u8,
+            name: []const u8,
+        },
+        invalid_arity: struct {
+            actual: usize,
+            min: usize,
+            max: usize,
+        },
+        invalid_sort: struct {
+            expected: core.SemanticSort,
+            actual: core.SemanticSort,
+        },
+        generic: void,
+    };
 };
 
 fn reportUnknownFunction(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError("function", name, origin);
+    reportNamedResolutionError(error.UnknownFunction, "function", name, origin);
 }
 
 fn reportUnknownQuery(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError("query", name, origin);
+    reportNamedResolutionError(error.UnknownQuery, "query", name, origin);
 }
 
 fn reportUnknownTransform(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError("transform", name, origin);
+    reportNamedResolutionError(error.UnknownTransform, "transform", name, origin);
 }
 
 fn reportUnknownIdentifier(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError("identifier", name, origin);
+    reportNamedResolutionError(error.UnknownIdentifier, "identifier", name, origin);
 }
 
-fn reportNamedResolutionError(kind: []const u8, name: []const u8, origin: []const u8) void {
-    if (parseByteOrigin(origin)) |span| {
-        const loc = computeLineColumn(diagnostic_source, span.start);
-        const line = extractLine(diagnostic_source, span.start);
-        const caret_width = computeCaretWidth(diagnostic_source, span);
-        if (diagnostic_path.len != 0) {
-            std.debug.print("{s}:{d}:{d}: error: unknown {s}: {s}\n", .{ diagnostic_path, loc.line, loc.column, kind, name });
-        } else {
-            std.debug.print("unknown {s}: {s} at {d}:{d}\n", .{ kind, name, loc.line, loc.column });
-        }
-        if (line.text.len != 0) {
-            std.debug.print("  {s}\n", .{line.text});
-            std.debug.print("  ", .{});
-            printSpaces(loc.column - 1);
-            printCarets(caret_width);
-            std.debug.print("\n", .{});
-        }
-        return;
-    }
-    std.debug.print("unknown {s}: {s} at {s}\n", .{ kind, name, origin });
+fn reportNamedResolutionError(err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) void {
+    reportLowerDiagnostic(.{
+        .err = err,
+        .span = error_report.spanFromOrigin(origin),
+        .data = .{ .unknown_name = .{ .kind = kind, .name = name } },
+    });
 }
 
-fn parseByteOrigin(origin: []const u8) ?ByteSpan {
-    if (!std.mem.startsWith(u8, origin, "bytes:")) return null;
-    const payload = origin["bytes:".len..];
-    const dash = std.mem.indexOfScalar(u8, payload, '-') orelse return null;
-    const start = std.fmt.parseInt(usize, payload[0..dash], 10) catch return null;
-    const end = std.fmt.parseInt(usize, payload[dash + 1 ..], 10) catch return null;
-    return .{ .start = start, .end = end };
+fn reportLowerError(err: anyerror, origin: []const u8) void {
+    if (diagnostic_reported) return;
+    reportLowerDiagnostic(.{
+        .err = err,
+        .span = error_report.spanFromOrigin(origin),
+        .data = .generic,
+    });
 }
 
-fn computeLineColumn(source: []const u8, byte_index: usize) struct { line: usize, column: usize } {
-    var line: usize = 1;
-    var line_start: usize = 0;
-    var i: usize = 0;
-    const limit = @min(byte_index, source.len);
-    while (i < limit) : (i += 1) {
-        if (source[i] == '\n') {
-            line += 1;
-            line_start = i + 1;
-        }
-    }
-    const prefix = source[line_start..limit];
-    const column = (std.unicode.utf8CountCodepoints(prefix) catch prefix.len) + 1;
-    return .{ .line = line, .column = column };
+fn reportLowerDiagnostic(diagnostic: LowerDiagnostic) void {
+    diagnostic_reported = true;
+    var message_buf: [256]u8 = undefined;
+    error_report.print(.{
+        .path = diagnostic_path,
+        .source = diagnostic_source,
+        .severity = .@"error",
+        .message = formatLowerDiagnostic(&message_buf, diagnostic),
+        .span = diagnostic.span,
+    });
 }
 
-fn extractLine(source: []const u8, byte_index: usize) struct { text: []const u8, start: usize } {
-    const limit = @min(byte_index, source.len);
-    var start: usize = limit;
-    while (start > 0 and source[start - 1] != '\n') : (start -= 1) {}
-    var end: usize = limit;
-    while (end < source.len and source[end] != '\n') : (end += 1) {}
-    return .{ .text = source[start..end], .start = start };
+fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
+    return switch (diagnostic.data) {
+        .unknown_name => |data| std.fmt.bufPrint(buf, "unknown {s}: {s}", .{ data.kind, data.name }) catch "unknown name",
+        .invalid_arity => |data| blk: {
+            if (data.min == data.max) {
+                break :blk std.fmt.bufPrint(buf, "wrong number of arguments: expected {d}, got {d}", .{ data.min, data.actual }) catch lowerErrorMessage(diagnostic.err);
+            }
+            break :blk std.fmt.bufPrint(buf, "wrong number of arguments: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch lowerErrorMessage(diagnostic.err);
+        },
+        .invalid_sort => |data| std.fmt.bufPrint(buf, "wrong value kind: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
+        .generic => lowerErrorMessage(diagnostic.err),
+    };
 }
 
-fn computeCaretWidth(source: []const u8, span: ByteSpan) usize {
-    const line = extractLine(source, span.start);
-    const line_end = line.start + line.text.len;
-    const clamped_end = @min(@max(span.end, span.start + 1), line_end);
-    const slice = source[span.start..clamped_end];
-    return @max(std.unicode.utf8CountCodepoints(slice) catch slice.len, 1);
-}
-
-fn printSpaces(count: usize) void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) std.debug.print(" ", .{});
-}
-
-fn printCarets(count: usize) void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) std.debug.print("^", .{});
+fn lowerErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ReturnOutsideFunction => "return is only valid inside a function",
+        error.InvalidThemeModule => "theme files must contain functions only",
+        error.FunctionDoesNotReturnValue => "function used as a value does not return anything",
+        error.InvalidArity => "wrong number of arguments",
+        error.InvalidSemanticSort => "value has the wrong semantic kind",
+        error.ExpectedSelection => "expected a selection value",
+        error.ExpectedConstraintSet => "expected a constraint set",
+        error.ExpectedStringArgument => "expected a string argument",
+        error.ExpectedNumberArgument => "expected a number argument",
+        error.ExpectedStyleArgument => "expected a style argument",
+        error.ExpectedAnchor => "expected an anchor argument",
+        error.ExpectedObject => "expected an object argument",
+        error.UnknownAnchor => "unknown anchor",
+        error.UnknownRole => "unknown role",
+        error.UnknownPayloadKind => "unknown payload kind",
+        error.PageCannotBeConstraintTarget => "page anchors cannot be constraint targets",
+        error.MissingHighlightTarget => "highlight needs a previous code-like object",
+        error.UnsupportedFragmentRoot => "unsupported fragment root",
+        error.FunctionDidNotReturnValue => "function did not return a value",
+        else => @errorName(err),
+    };
 }
 
 fn functionRefFor(func: FunctionDecl) core.FunctionRef {
@@ -188,6 +202,7 @@ pub fn lowerToEngine(program: Program, source: []const u8, engine: *core.Engine,
 pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const u8, engine: *core.Engine, io: std.Io) !void {
     diagnostic_source = source;
     diagnostic_path = path;
+    diagnostic_reported = false;
     var base_program: ?Program = null;
     defer if (base_program) |*prog| prog.deinit(engine.allocator);
     var theme_program: ?Program = null;
@@ -220,7 +235,11 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            const flow = try executeStatement(engine, page_id, .attached, &env, &functions, &last_code_like, stmt, null);
+            const flow = executeStatement(engine, page_id, .attached, &env, &functions, &last_code_like, stmt, null) catch |err| {
+                const origin = statementOrigin(engine.allocator, stmt.span) catch "bytes:0-1";
+                reportLowerError(err, origin);
+                return err;
+            };
             switch (flow) {
                 .none => {},
                 .returned => |value| {
@@ -243,9 +262,47 @@ fn validateThemeProgram(program: Program) !void {
 fn loadThemeProgram(engine: *core.Engine, io: std.Io, theme_name: []const u8) !Program {
     const source = try theme_loader.loadThemeSource(engine.allocator, io, engine.asset_base_dir, theme_name);
     defer engine.allocator.free(source);
-    const program = try syntax.parse(engine.allocator, source);
-    try validateThemeProgram(program);
+    const path = try std.fmt.allocPrint(engine.allocator, "theme:{s}", .{theme_name});
+    const program = syntax.parse(engine.allocator, source) catch |err| {
+        if (syntax.lastDiagnostic()) |diagnostic| {
+            var message_buf: [256]u8 = undefined;
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = formatParseDiagnostic(&message_buf, diagnostic),
+                .span = .{ .start = diagnostic.span.start, .end = diagnostic.span.end },
+            });
+            diagnostic_reported = true;
+        }
+        return err;
+    };
+    validateThemeProgram(program) catch |err| {
+        error_report.print(.{
+            .path = path,
+            .source = source,
+            .severity = .@"error",
+            .message = lowerErrorMessage(err),
+            .span = null,
+        });
+        diagnostic_reported = true;
+        return err;
+    };
     return program;
+}
+
+fn formatParseDiagnostic(buf: []u8, diagnostic: syntax.ParseDiagnostic) []const u8 {
+    return switch (diagnostic.err) {
+        error.UnterminatedString => "unterminated string",
+        error.UnterminatedEscape => "unterminated escape sequence",
+        error.InvalidEscape => "invalid escape sequence",
+        error.UnknownAnchor => "unknown anchor name",
+        else => blk: {
+            const expected = diagnostic.expected orelse @errorName(diagnostic.err);
+            const found = diagnostic.found orelse "unknown token";
+            break :blk std.fmt.bufPrint(buf, "expected {s}, found {s}", .{ expected, found }) catch @errorName(diagnostic.err);
+        },
+    };
 }
 
 fn evalExpr(
@@ -287,7 +344,7 @@ fn evalCall(
                     reportUnknownFunction(func_ref.name, current_origin);
                     return error.UnknownFunction;
                 };
-                if (call.args.items.len != func_ref.param_count) return error.InvalidArity;
+                try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
                 return try invokeUserFunctionValue(engine, page_id, mode, env, functions, func, current_origin, call);
             },
             else => {},
@@ -314,7 +371,7 @@ fn evalPrimitiveCall(
     call: CallExpr,
     descriptor: registry.PrimitiveDescriptor,
 ) anyerror!core.Value {
-    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);
+    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
     switch (descriptor.op) {
         .pagectx => {
             return .{ .page = page_id };
@@ -327,12 +384,18 @@ fn evalPrimitiveCall(
         .anchor => {
             const node_id = try evalCallObjectArg(engine, page_id, mode, env, functions, current_origin, call, 0);
             const anchor_name = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, 1);
-            const anchor = names.parseAnchorName(anchor_name) orelse return error.UnknownAnchor;
+            const anchor = names.parseAnchorName(anchor_name) orelse {
+                reportNamedResolutionError(error.UnknownAnchor, "anchor", anchor_name, current_origin);
+                return error.UnknownAnchor;
+            };
             return .{ .anchor = .{ .node = .{ .node_id = node_id, .anchor = anchor } } };
         },
         .page_anchor => {
             const anchor_name = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, 0);
-            const anchor = names.parseAnchorName(anchor_name) orelse return error.UnknownAnchor;
+            const anchor = names.parseAnchorName(anchor_name) orelse {
+                reportNamedResolutionError(error.UnknownAnchor, "anchor", anchor_name, current_origin);
+                return error.UnknownAnchor;
+            };
             return .{ .anchor = .{ .page = anchor } };
         },
         .equal => {
@@ -631,7 +694,74 @@ fn evalPrimitiveCall(
             });
             return .{ .constraints = bundle };
         },
+        .report_error => {
+            const message = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            try emitUserReport(engine, page_id, current_origin, .@"error", message);
+            return .{ .string = message };
+        },
+        .report_warning => {
+            const message = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            try emitUserReport(engine, page_id, current_origin, .warning, message);
+            return .{ .string = message };
+        },
+        .require_asset_exists => {
+            const object_id = try evalCallObjectArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            try validateAssetExists(engine, page_id, object_id, current_origin);
+            return .{ .object = object_id };
+        },
     }
+}
+
+fn emitUserReport(
+    engine: *core.Engine,
+    page_id: core.NodeId,
+    origin: []const u8,
+    severity: core.DiagnosticSeverity,
+    message: []const u8,
+) !void {
+    try engine.addValidationDiagnostic(
+        severity,
+        page_id,
+        null,
+        origin,
+        .{ .user_report = .{ .message = try engine.allocator.dupe(u8, message) } },
+    );
+}
+
+fn validateAssetExists(engine: *core.Engine, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+    const node = engine.getNode(object_id) orelse return error.UnknownNode;
+    if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
+        try engine.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
+            .asset_invalid = .{
+                .reason = try engine.allocator.dupe(u8, "expected an asset object with a path"),
+                .payload_kind = node.payload_kind,
+            },
+        });
+        return;
+    }
+
+    const requested = node.content.?;
+    const resolved = try resolveAssetPath(engine.allocator, engine.asset_base_dir, requested);
+    if (!fileExists(engine.allocator, resolved)) {
+        try engine.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
+            .asset_not_found = .{
+                .requested_path = try engine.allocator.dupe(u8, requested),
+                .resolved_path = resolved,
+                .payload_kind = node.payload_kind,
+            },
+        });
+    }
+}
+
+fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(requested)) return allocator.dupe(u8, requested);
+    return std.fs.path.join(allocator, &.{ base_dir, requested });
+}
+
+fn fileExists(allocator: std.mem.Allocator, path: []const u8) bool {
+    const zpath = allocator.dupeZ(u8, path) catch return false;
+    defer allocator.free(zpath);
+    return std.c.access(zpath.ptr, 0) == 0;
 }
 
 fn evalSelectCall(
@@ -649,8 +779,8 @@ fn evalSelectCall(
         reportUnknownQuery(op_name, current_origin);
         return error.UnknownQuery;
     };
-    try validateFixedArity(call.args.items.len, descriptor.arity);
-    try ensureValueSort(base, descriptor.input_sort);
+    try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
+    try ensureValueSort(base, descriptor.input_sort, current_origin);
     switch (descriptor.op) {
         .self_object => {
             return try engine.select(engine.allocator, base, core.Query.selfObject());
@@ -690,8 +820,8 @@ fn evalDeriveCall(
         reportUnknownTransform(op_name, current_origin);
         return error.UnknownTransform;
     };
-    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);
-    if (descriptor.input_sort) |expected| try ensureValueSort(base, expected);
+    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
+    if (descriptor.input_sort) |expected| try ensureValueSort(base, expected, current_origin);
     switch (descriptor.op) {
         .page_number => {
             return .{ .object = switch (mode) {
@@ -766,15 +896,29 @@ fn deriveHighlight(
     };
 }
 
-fn validateFixedArity(actual: usize, expected: u8) !void {
-    if (actual != expected) return error.InvalidArity;
+fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void {
+    if (actual != expected) {
+        reportLowerDiagnostic(.{
+            .err = error.InvalidArity,
+            .span = error_report.spanFromOrigin(origin),
+            .data = .{ .invalid_arity = .{ .actual = actual, .min = expected, .max = expected } },
+        });
+        return error.InvalidArity;
+    }
 }
 
-fn validateArityRange(actual: usize, min: u8, max: u8) !void {
-    if (actual < min or actual > max) return error.InvalidArity;
+fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8) !void {
+    if (actual < min or actual > max) {
+        reportLowerDiagnostic(.{
+            .err = error.InvalidArity,
+            .span = error_report.spanFromOrigin(origin),
+            .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
+        });
+        return error.InvalidArity;
+    }
 }
 
-fn ensureValueSort(value: core.Value, expected: core.SemanticSort) !void {
+fn ensureValueSort(value: core.Value, expected: core.SemanticSort, origin: []const u8) !void {
     const actual: core.SemanticSort = switch (value) {
         .document => .document,
         .page => .page,
@@ -788,7 +932,14 @@ fn ensureValueSort(value: core.Value, expected: core.SemanticSort) !void {
         .constraints => .constraints,
         .fragment => .fragment,
     };
-    if (actual != expected) return error.InvalidSemanticSort;
+    if (actual != expected) {
+        reportLowerDiagnostic(.{
+            .err = error.InvalidSemanticSort,
+            .span = error_report.spanFromOrigin(origin),
+            .data = .{ .invalid_sort = .{ .expected = expected, .actual = actual } },
+        });
+        return error.InvalidSemanticSort;
+    }
 }
 
 fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.Value {
@@ -952,7 +1103,10 @@ fn evalCallRoleArg(
     index: usize,
 ) anyerror!core.Role {
     const role_name = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, index);
-    return names.parseRoleName(role_name) orelse error.UnknownRole;
+    return names.parseRoleName(role_name) orelse {
+        reportNamedResolutionError(error.UnknownRole, "role", role_name, current_origin);
+        return error.UnknownRole;
+    };
 }
 
 fn evalCallPayloadArg(
@@ -966,7 +1120,10 @@ fn evalCallPayloadArg(
     index: usize,
 ) anyerror!names.ParsedPayload {
     const payload_name = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, index);
-    return names.parsePayloadName(payload_name) orelse error.UnknownPayloadKind;
+    return names.parsePayloadName(payload_name) orelse {
+        reportNamedResolutionError(error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
+        return error.UnknownPayloadKind;
+    };
 }
 
 fn singleConstraintSet(engine: *core.Engine, constraint: core.Constraint) !core.ConstraintSet {
@@ -1231,7 +1388,7 @@ fn executeCallStatement(
         return;
     };
     const func_ref = functionRefFor(func);
-    if (call.args.items.len != func_ref.param_count) return error.InvalidArity;
+    try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
 
     var local_env = std.StringHashMap(core.Value).init(engine.allocator);
     defer local_env.deinit();
@@ -1271,7 +1428,7 @@ fn invokeUserFunctionValue(
 ) anyerror!core.Value {
     const func_ref = functionRefFor(func);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-    if (call.args.items.len != func_ref.param_count) return error.InvalidArity;
+    try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
 
     var local_env = std.StringHashMap(core.Value).init(engine.allocator);
     defer local_env.deinit();

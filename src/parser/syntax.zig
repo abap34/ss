@@ -11,19 +11,44 @@ const Expr = ast.Expr;
 const ConstraintDecl = ast.ConstraintDecl;
 const AnchorRef = ast.AnchorRef;
 
+pub const ParseDiagnostic = struct {
+    err: anyerror,
+    span: ast.Span,
+    expected: ?[]const u8 = null,
+    found: ?[]const u8 = null,
+};
+
+var last_diagnostic: ?ParseDiagnostic = null;
+
 pub fn parse(allocator: Allocator, source: []const u8) !Program {
     var parser = Parser{
         .allocator = allocator,
         .source = source,
         .pos = 0,
+        .error_pos = 0,
     };
-    return parser.parseProgram();
+    last_diagnostic = null;
+    return parser.parseProgram() catch |err| {
+        const pos = @min(parser.error_pos, source.len);
+        last_diagnostic = .{
+            .err = err,
+            .span = .{ .start = pos, .end = @min(pos + 1, source.len) },
+            .expected = parseExpected(err),
+            .found = foundToken(source, pos),
+        };
+        return err;
+    };
+}
+
+pub fn lastDiagnostic() ?ParseDiagnostic {
+    return last_diagnostic;
 }
 
 const Parser = struct {
     allocator: Allocator,
     source: []const u8,
     pos: usize,
+    error_pos: usize,
 
     fn parseProgram(self: *Parser) !Program {
         var program = Program.init();
@@ -95,7 +120,7 @@ const Parser = struct {
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
             self.pos += 1;
         }
-        if (start == self.pos) return error.ExpectedString;
+        if (start == self.pos) return self.fail(error.ExpectedString);
         return self.allocator.dupe(u8, self.source[start..self.pos]);
     }
 
@@ -121,7 +146,7 @@ const Parser = struct {
             try statements.append(self.allocator, try self.parseStatement());
             self.skipTrivia();
         }
-        return error.ExpectedEnd;
+        return self.fail(error.ExpectedEnd);
     }
 
     fn parseStatement(self: *Parser) !Statement {
@@ -275,7 +300,7 @@ const Parser = struct {
             }
             break;
         }
-        if (self.eof() or self.source[self.pos] != ')') return error.ExpectedChar;
+        if (self.eof() or self.source[self.pos] != ')') return self.fail(error.ExpectedChar);
         self.pos += 1;
         return .{ .name = name, .args = args };
     }
@@ -310,7 +335,7 @@ const Parser = struct {
 
     fn parseAnchorRef(self: *Parser) !AnchorRef {
         const name = try self.parseIdentifier();
-        const anchor = names.parseAnchorName(name) orelse return error.UnknownAnchor;
+        const anchor = names.parseAnchorName(name) orelse return self.fail(error.UnknownAnchor);
         self.skipTrivia();
         try self.expectChar('(');
         self.skipTrivia();
@@ -345,7 +370,7 @@ const Parser = struct {
 
     fn parseChevronBlockString(self: *Parser) ![]const u8 {
         self.skipInlineSpaces();
-        if (!self.startsWith("<<")) return error.ExpectedString;
+        if (!self.startsWith("<<")) return self.fail(error.ExpectedString);
         self.pos += 2;
         self.skipInlineSpaces();
         try self.expectLineBreak();
@@ -359,7 +384,7 @@ const Parser = struct {
             }
             self.pos += 1;
         }
-        return error.UnterminatedString;
+        return self.fail(error.UnterminatedString);
     }
 
     fn isChevronTerminatorAtCurrentLine(self: *Parser) bool {
@@ -405,7 +430,7 @@ const Parser = struct {
             }
             break;
         }
-        if (start == self.pos) return error.ExpectedNumber;
+        if (start == self.pos) return self.fail(error.ExpectedNumber);
         const token = self.source[start..self.pos];
         return std.fmt.parseFloat(f32, token);
     }
@@ -437,13 +462,13 @@ const Parser = struct {
             while (!self.eof() and !self.startsWith("\"\"\"")) {
                 self.pos += 1;
             }
-            if (self.eof()) return error.UnterminatedString;
+            if (self.eof()) return self.fail(error.UnterminatedString);
             const raw = self.source[start..self.pos];
             self.pos += 3;
             return self.allocator.dupe(u8, normalizeBlockString(raw));
         }
 
-        if (self.eof() or self.source[self.pos] != '"') return error.ExpectedString;
+        if (self.eof() or self.source[self.pos] != '"') return self.fail(error.ExpectedString);
         self.pos += 1;
 
         var out = std.ArrayList(u8).empty;
@@ -456,7 +481,7 @@ const Parser = struct {
                 return out.toOwnedSlice(self.allocator);
             }
             if (ch == '\\') {
-                if (self.eof()) return error.UnterminatedEscape;
+                if (self.eof()) return self.fail(error.UnterminatedEscape);
                 const esc = self.source[self.pos];
                 self.pos += 1;
                 switch (esc) {
@@ -465,20 +490,20 @@ const Parser = struct {
                     't' => try out.append(self.allocator, '\t'),
                     '\\' => try out.append(self.allocator, '\\'),
                     '"' => try out.append(self.allocator, '"'),
-                    else => return error.InvalidEscape,
+                    else => return self.fail(error.InvalidEscape),
                 }
             } else {
                 try out.append(self.allocator, ch);
             }
         }
-        return error.UnterminatedString;
+        return self.fail(error.UnterminatedString);
     }
 
     fn parseIdentifier(self: *Parser) ![]const u8 {
         self.skipTrivia();
-        if (self.eof()) return error.ExpectedIdentifier;
+        if (self.eof()) return self.fail(error.ExpectedIdentifier);
         const start = self.pos;
-        if (!isIdentifierStart(self.source[self.pos])) return error.ExpectedIdentifier;
+        if (!isIdentifierStart(self.source[self.pos])) return self.fail(error.ExpectedIdentifier);
         self.pos += 1;
         while (!self.eof() and isIdentifierContinue(self.source[self.pos])) {
             self.pos += 1;
@@ -487,7 +512,7 @@ const Parser = struct {
     }
 
     fn expectKeyword(self: *Parser, keyword: []const u8) !void {
-        if (!try self.consumeKeyword(keyword)) return error.ExpectedKeyword;
+        if (!try self.consumeKeyword(keyword)) return self.fail(error.ExpectedKeyword);
     }
 
     fn consumeKeyword(self: *Parser, keyword: []const u8) !bool {
@@ -526,7 +551,7 @@ const Parser = struct {
 
     fn expectChar(self: *Parser, ch: u8) !void {
         self.skipTrivia();
-        if (self.eof() or self.source[self.pos] != ch) return error.ExpectedChar;
+        if (self.eof() or self.source[self.pos] != ch) return self.fail(error.ExpectedChar);
         self.pos += 1;
     }
 
@@ -538,7 +563,7 @@ const Parser = struct {
 
     fn expectLineBreak(self: *Parser) !void {
         if (self.eof()) return;
-        if (self.source[self.pos] != '\n') return error.ExpectedLineBreak;
+        if (self.source[self.pos] != '\n') return self.fail(error.ExpectedLineBreak);
         self.pos += 1;
     }
 
@@ -576,7 +601,7 @@ const Parser = struct {
 
     fn consumeStandaloneKeyword(self: *Parser, keyword: []const u8) !void {
         self.skipTrivia();
-        if (!self.consumeKeywordNoTrivia(keyword)) return error.ExpectedKeyword;
+        if (!self.consumeKeywordNoTrivia(keyword)) return self.fail(error.ExpectedKeyword);
         self.skipInlineSpaces();
         if (self.lineCommentStart()) self.skipLineComment();
         if (!self.eof() and self.source[self.pos] == '\n') self.pos += 1;
@@ -635,7 +660,43 @@ const Parser = struct {
     fn eof(self: *Parser) bool {
         return self.pos >= self.source.len;
     }
+
+    fn fail(self: *Parser, err: anyerror) anyerror {
+        self.error_pos = @min(self.pos, self.source.len);
+        return err;
+    }
 };
+
+fn parseExpected(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.ExpectedString => "string or page name",
+        error.ExpectedIdentifier => "identifier",
+        error.ExpectedKeyword => "keyword",
+        error.ExpectedChar => "punctuation",
+        error.ExpectedLineBreak => "line break after block header",
+        error.ExpectedEnd => "'end'",
+        error.ExpectedNumber => "number",
+        error.UnterminatedString => "closing string delimiter",
+        error.UnterminatedEscape => "escape target",
+        error.InvalidEscape => "valid escape sequence",
+        error.UnknownAnchor => "known anchor name",
+        else => null,
+    };
+}
+
+fn foundToken(source: []const u8, pos: usize) []const u8 {
+    if (pos >= source.len) return "end of file";
+    return switch (source[pos]) {
+        '\n' => "line break",
+        '\r' => "carriage return",
+        '\t' => "tab",
+        ' ' => "space",
+        else => blk: {
+            const len = std.unicode.utf8ByteSequenceLength(source[pos]) catch 1;
+            break :blk source[pos..@min(pos + len, source.len)];
+        },
+    };
+}
 
 fn legacyTitleKind(text: []const u8) Statement.Kind {
     return .{ .title = text };

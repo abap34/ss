@@ -4,11 +4,9 @@ const parser = @import("parser.zig");
 const pdf = @import("render/pdf.zig");
 const registry = @import("parser/registry.zig");
 const theme_loader = @import("theme_loader.zig");
+const error_report = @import("error_report.zig");
 
-const ByteSpan = struct {
-    start: usize,
-    end: usize,
-};
+const ByteSpan = error_report.ByteSpan;
 
 const FunctionSignature = struct {
     params: []const []const u8,
@@ -130,12 +128,19 @@ fn readFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
 }
 
+fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {
+    return parser.parse(allocator, source) catch |err| {
+        printParseError(path, source, err);
+        return err;
+    };
+}
+
 fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Engine {
     if (progress) |p| p.step("Read source");
     const source = try readFile(io, allocator, path);
     defer allocator.free(source);
     if (progress) |p| p.step("Parse");
-    var program = try parser.parse(allocator, source);
+    var program = try parseSource(allocator, source, path);
     defer program.deinit(allocator);
 
     if (progress) |p| p.step("Lower program");
@@ -145,76 +150,109 @@ fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progres
     parser.lowerToEngineWithPath(program, source, path, &engine, io) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeConstraintSize => printConstraintFailure(path, source, &engine, err),
-            else => {},
+            else => printEngineDiagnostics(path, source, &engine),
         }
         return err;
     };
+    printEngineDiagnostics(path, source, &engine);
+    if (hasErrorDiagnostics(&engine)) return error.DiagnosticsFailed;
     if (progress) |p| p.step("Solve constraints");
     return engine;
 }
 
-fn parseByteOrigin(origin: []const u8) ?ByteSpan {
-    if (!std.mem.startsWith(u8, origin, "bytes:")) return null;
-    const payload = origin["bytes:".len..];
-    const dash = std.mem.indexOfScalar(u8, payload, '-') orelse return null;
-    const start = std.fmt.parseInt(usize, payload[0..dash], 10) catch return null;
-    const end = std.fmt.parseInt(usize, payload[dash + 1 ..], 10) catch return null;
-    return .{ .start = start, .end = end };
+fn printParseError(path: []const u8, source: []const u8, err: anyerror) void {
+    const diagnostic = parser.lastParseDiagnostic() orelse {
+        error_report.print(.{
+            .path = path,
+            .source = source,
+            .severity = .@"error",
+            .message = @errorName(err),
+            .span = null,
+        });
+        return;
+    };
+    var message_buf: [256]u8 = undefined;
+    const message = formatParseDiagnostic(&message_buf, diagnostic);
+    error_report.print(.{
+        .path = path,
+        .source = source,
+        .severity = .@"error",
+        .message = message,
+        .span = .{ .start = diagnostic.span.start, .end = diagnostic.span.end },
+    });
 }
 
-fn computeLineColumn(source: []const u8, byte_index: usize) struct { line: usize, column: usize } {
-    var line: usize = 1;
-    var line_start: usize = 0;
-    var index: usize = 0;
-    while (index < source.len and index < byte_index) : (index += 1) {
-        if (source[index] == '\n') {
-            line += 1;
-            line_start = index + 1;
-        }
+fn formatParseDiagnostic(buf: []u8, diagnostic: parser.ParseDiagnostic) []const u8 {
+    return switch (diagnostic.err) {
+        error.UnterminatedString => "unterminated string",
+        error.UnterminatedEscape => "unterminated escape sequence",
+        error.InvalidEscape => "invalid escape sequence",
+        error.UnknownAnchor => "unknown anchor name",
+        else => blk: {
+            const expected = diagnostic.expected orelse @errorName(diagnostic.err);
+            const found = diagnostic.found orelse "unknown token";
+            break :blk std.fmt.bufPrint(buf, "expected {s}, found {s}", .{ expected, found }) catch @errorName(diagnostic.err);
+        },
+    };
+}
+
+fn printEngineDiagnostics(path: []const u8, source: []const u8, engine: *core.Engine) void {
+    for (engine.diagnostics.items) |diagnostic| {
+        const message = formatEngineDiagnostic(engine.allocator, diagnostic) catch @tagName(diagnostic.phase);
+        defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) engine.allocator.free(message);
+        const span = if (error_report.spanFromOrigin(diagnostic.origin)) |origin_span|
+            origin_span
+        else if (diagnostic.node_id) |node_id| blk: {
+            const node = engine.getNode(node_id) orelse break :blk null;
+            break :blk error_report.spanFromOrigin(node.origin);
+        } else null;
+        error_report.print(.{
+            .path = path,
+            .source = source,
+            .severity = switch (diagnostic.severity) {
+                .warning => .warning,
+                .@"error" => .@"error",
+            },
+            .message = message,
+            .span = span,
+        });
     }
-    const prefix = source[line_start..@min(byte_index, source.len)];
-    const column = (std.unicode.utf8CountCodepoints(prefix) catch prefix.len) + 1;
-    return .{ .line = line, .column = column };
 }
 
-fn extractLine(source: []const u8, byte_index: usize) []const u8 {
-    var start = @min(byte_index, source.len);
-    while (start > 0 and source[start - 1] != '\n') : (start -= 1) {}
-    var end = @min(byte_index, source.len);
-    while (end < source.len and source[end] != '\n') : (end += 1) {}
-    return source[start..end];
+fn hasErrorDiagnostics(engine: *const core.Engine) bool {
+    for (engine.diagnostics.items) |diagnostic| {
+        if (diagnostic.severity == .@"error") return true;
+    }
+    return false;
 }
 
-fn computeCaretWidth(source: []const u8, span: ByteSpan) usize {
-    const line = extractLine(source, span.start);
-    const line_start = @as(usize, @intFromPtr(line.ptr) - @intFromPtr(source.ptr));
-    const local_end = @min(span.end, line_start + line.len);
-    if (local_end <= span.start) return 1;
-    const width_slice = source[span.start..local_end];
-    return @max(1, std.unicode.utf8CountCodepoints(width_slice) catch width_slice.len);
-}
-
-fn printSpaces(count: usize) void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) std.debug.print(" ", .{});
-}
-
-fn printRepeated(ch: u8, count: usize) void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) std.debug.print("{c}", .{ch});
+fn formatEngineDiagnostic(allocator: std.mem.Allocator, diagnostic: core.Diagnostic) ![]const u8 {
+    return switch (diagnostic.data) {
+        .user_report => |data| std.fmt.allocPrint(allocator, "{s}", .{data.message}),
+        .asset_not_found => |data| std.fmt.allocPrint(
+            allocator,
+            "asset not found: {s} (resolved to {s})",
+            .{ data.requested_path, data.resolved_path },
+        ),
+        .asset_invalid => |data| std.fmt.allocPrint(allocator, "invalid asset: {s}", .{data.reason}),
+        .unresolved_frame => |data| std.fmt.allocPrint(
+            allocator,
+            "layout could not resolve frame: missing_horizontal={s} missing_vertical={s}",
+            .{
+                if (data.missing_horizontal) "true" else "false",
+                if (data.missing_vertical) "true" else "false",
+            },
+        ),
+        .page_overflow => |data| std.fmt.allocPrint(
+            allocator,
+            "object overflows page: left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
+            .{ data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom },
+        ),
+    };
 }
 
 fn printConstraintOrigin(source: []const u8, label: []const u8, origin: ?[]const u8) void {
-    const origin_text = origin orelse return;
-    const span = parseByteOrigin(origin_text) orelse return;
-    const loc = computeLineColumn(source, span.start);
-    const line = extractLine(source, span.start);
-    const caret_width = computeCaretWidth(source, span);
-    std.debug.print("  {s} from {d}:{d}\n", .{ label, loc.line, loc.column });
-    std.debug.print("    {s}\n    ", .{line});
-    printSpaces(loc.column - 1);
-    printRepeated('^', caret_width);
-    std.debug.print("\n", .{});
+    error_report.printLabeledOrigin(source, label, origin);
 }
 
 fn printConstraintFailure(path: []const u8, source: []const u8, engine: *const core.Engine, err: anyerror) void {
@@ -235,27 +273,20 @@ fn printConstraintFailure(path: []const u8, source: []const u8, engine: *const c
     defer if (existing_text.len > 0) engine.allocator.free(existing_text);
 
     if (failure.constraint.origin) |origin| {
-        if (parseByteOrigin(origin)) |span| {
-            const loc = computeLineColumn(source, span.start);
-            const line = extractLine(source, span.start);
-            const caret_width = computeCaretWidth(source, span);
-            if (path.len != 0) {
-                std.debug.print("{s}:{d}:{d}: error: {s}\n", .{ path, loc.line, loc.column, kind_text });
-            } else {
-                std.debug.print("{s} at {d}:{d}\n", .{ kind_text, loc.line, loc.column });
+        if (error_report.parseByteOrigin(origin)) |span| {
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = kind_text,
+                .span = span,
+            });
+            if (failure.existing_constraint != null) {
+                printConstraintOrigin(source, "other constraint", failure.existing_constraint.?.origin);
             }
-            if (existing_text.len > 0) {
-                std.debug.print("  existing: {s}\n", .{existing_text});
-                printConstraintOrigin(source, "existing", failure.existing_constraint.?.origin);
+            if (constraint_text.len > 0 and existing_text.len == 0) {
+                std.debug.print("  constraint: {s}\n", .{constraint_text});
             }
-            if (constraint_text.len > 0) {
-                std.debug.print("  incoming: {s}\n", .{constraint_text});
-                printConstraintOrigin(source, "incoming", failure.constraint.origin);
-            }
-            std.debug.print("  {s}\n  ", .{line});
-            printSpaces(loc.column - 1);
-            printRepeated('^', caret_width);
-            std.debug.print("\n", .{});
             return;
         }
     }
@@ -265,13 +296,12 @@ fn printConstraintFailure(path: []const u8, source: []const u8, engine: *const c
     } else {
         std.debug.print("{s}\n", .{kind_text});
     }
-    if (existing_text.len > 0) {
-        std.debug.print("  existing: {s}\n", .{existing_text});
-        printConstraintOrigin(source, "existing", failure.existing_constraint.?.origin);
+    if (failure.existing_constraint != null) {
+        printConstraintOrigin(source, "other constraint", failure.existing_constraint.?.origin);
     }
-    if (constraint_text.len > 0) {
-        std.debug.print("  incoming: {s}\n", .{constraint_text});
-        printConstraintOrigin(source, "incoming", failure.constraint.origin);
+    if (constraint_text.len > 0 and existing_text.len == 0) {
+        std.debug.print("  constraint: {s}\n", .{constraint_text});
+        printConstraintOrigin(source, "constraint", failure.constraint.origin);
     }
 }
 
@@ -320,7 +350,7 @@ fn loadFunctionSignatures(
     const base_dir = std.fs.path.dirname(input_path) orelse ".";
     const base_source = try theme_loader.loadThemeSource(allocator, io, base_dir, "base");
     defer allocator.free(base_source);
-    var base_program = try parser.parse(allocator, base_source);
+    var base_program = try parseSource(allocator, base_source, "stdlib/themes/base.ss");
     defer base_program.deinit(allocator);
     for (base_program.functions.items) |func| {
         try map.put(func.name, .{ .params = try cloneParamNames(allocator, func.params.items) });
@@ -330,7 +360,8 @@ fn loadFunctionSignatures(
     if (!std.mem.eql(u8, theme_name, "base")) {
         const theme_source = try theme_loader.loadThemeSource(allocator, io, base_dir, theme_name);
         defer allocator.free(theme_source);
-        var theme_program = try parser.parse(allocator, theme_source);
+        const theme_path = try std.fmt.allocPrint(allocator, "stdlib/themes/{s}.ss", .{theme_name});
+        var theme_program = try parseSource(allocator, theme_source, theme_path);
         defer theme_program.deinit(allocator);
         for (theme_program.functions.items) |func| {
             try map.put(func.name, .{ .params = try cloneParamNames(allocator, func.params.items) });
@@ -372,7 +403,7 @@ fn appendInlayHint(
     label: []const u8,
     kind: InlayHintKind,
 ) !void {
-    const loc = computeLineColumn(source, byte_index);
+    const loc = error_report.computeLineColumn(source, byte_index);
     try hints.append(allocator, .{
         .line = loc.line,
         .column = loc.column,
@@ -569,7 +600,7 @@ fn collectSolvedSizeHints(
 
     var it = best_by_origin.iterator();
     while (it.next()) |entry| {
-        const span = parseByteOrigin(entry.key_ptr.*) orelse continue;
+        const span = error_report.parseByteOrigin(entry.key_ptr.*) orelse continue;
         const node = engine.getNode(entry.value_ptr.*) orelse continue;
         const label = try std.fmt.allocPrint(
             allocator,
@@ -641,7 +672,7 @@ fn run(init: std.process.Init) !void {
         const input_path = if (args.len >= 3) args[2] else "demo/ss.ss";
         const source = try readFile(io, allocator, input_path);
         defer allocator.free(source);
-        var program = try parser.parse(allocator, source);
+        var program = try parseSource(allocator, source, input_path);
         defer program.deinit(allocator);
         var signatures = try loadFunctionSignatures(allocator, io, input_path, program);
         defer signatures.deinit();
@@ -699,6 +730,38 @@ pub fn main(init: std.process.Init) void {
             error.UnknownQuery,
             error.UnknownTransform,
             error.UnknownIdentifier,
+            error.ExpectedString,
+            error.ExpectedIdentifier,
+            error.ExpectedKeyword,
+            error.ExpectedChar,
+            error.ExpectedLineBreak,
+            error.ExpectedEnd,
+            error.ExpectedNumber,
+            error.UnterminatedString,
+            error.UnterminatedEscape,
+            error.InvalidEscape,
+            error.UnknownAnchor,
+            error.ReturnOutsideFunction,
+            error.InvalidThemeModule,
+            error.FunctionDoesNotReturnValue,
+            error.InvalidArity,
+            error.InvalidSemanticSort,
+            error.ExpectedSelection,
+            error.ExpectedConstraintSet,
+            error.ExpectedStringArgument,
+            error.ExpectedNumberArgument,
+            error.ExpectedStyleArgument,
+            error.ExpectedAnchor,
+            error.ExpectedObject,
+            error.UnknownRole,
+            error.UnknownPayloadKind,
+            error.PageCannotBeConstraintTarget,
+            error.MissingHighlightTarget,
+            error.UnsupportedFragmentRoot,
+            error.FunctionDidNotReturnValue,
+            error.ConstraintConflict,
+            error.NegativeConstraintSize,
+            error.DiagnosticsFailed,
             => {},
             else => std.debug.print("error: {s}\n", .{@errorName(err)}),
         }

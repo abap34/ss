@@ -24,6 +24,7 @@ const Query = model.Query;
 const Transform = model.Transform;
 const PageLayout = model.PageLayout;
 const Diagnostic = model.Diagnostic;
+const DiagnosticPhase = model.DiagnosticPhase;
 const DiagnosticSeverity = model.DiagnosticSeverity;
 const ConstraintFailure = model.ConstraintFailure;
 const ConstraintFailureKind = model.ConstraintFailureKind;
@@ -345,6 +346,16 @@ pub const Engine = struct {
         self.diagnostics.clearRetainingCapacity();
     }
 
+    pub fn clearDiagnosticsForPhase(self: *Engine, phase: DiagnosticPhase) void {
+        var write_index: usize = 0;
+        for (self.diagnostics.items) |diagnostic| {
+            if (diagnostic.phase == phase) continue;
+            self.diagnostics.items[write_index] = diagnostic;
+            write_index += 1;
+        }
+        self.diagnostics.items.len = write_index;
+    }
+
     pub fn addDiagnostic(self: *Engine, diagnostic: Diagnostic) !void {
         try self.diagnostics.append(self.allocator, diagnostic);
     }
@@ -365,6 +376,24 @@ pub const Engine = struct {
 
     pub fn addLayoutError(self: *Engine, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addLayoutDiagnostic(.@"error", page_id, node_id, data);
+    }
+
+    pub fn addValidationDiagnostic(
+        self: *Engine,
+        severity: DiagnosticSeverity,
+        page_id: ?NodeId,
+        node_id: ?NodeId,
+        origin: ?[]const u8,
+        data: Diagnostic.Data,
+    ) !void {
+        try self.addDiagnostic(.{
+            .phase = .validation,
+            .severity = severity,
+            .page_id = page_id,
+            .node_id = node_id,
+            .origin = origin,
+            .data = data,
+        });
     }
 
     pub fn getNode(self: *Engine, id: NodeId) ?*Node {
@@ -659,7 +688,7 @@ pub const Engine = struct {
     }
 
     pub fn finalize(self: *Engine) !void {
-        self.clearDiagnostics();
+        self.clearDiagnosticsForPhase(.layout);
         self.last_constraint_failure = null;
         self.constraint_failures.clearRetainingCapacity();
         try self.refreshPageNumbers();

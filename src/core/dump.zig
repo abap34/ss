@@ -207,7 +207,23 @@ pub fn dumpJsonToString(engine: anytype, allocator: Allocator) ![]const u8 {
         try appendJsonFieldString(allocator, &text, "severity", @tagName(diagnostic.severity), true);
         try appendJsonFieldOptionalInt(allocator, &text, "page_id", diagnostic.page_id, true);
         try appendJsonFieldOptionalInt(allocator, &text, "node_id", diagnostic.node_id, true);
+        try appendJsonFieldOptionalString(allocator, &text, "origin", diagnostic.origin, true);
         switch (diagnostic.data) {
+            .user_report => |data| {
+                try appendJsonFieldString(allocator, &text, "code", "user_report", true);
+                try appendJsonFieldString(allocator, &text, "message", data.message, false);
+            },
+            .asset_not_found => |data| {
+                try appendJsonFieldString(allocator, &text, "code", "asset_not_found", true);
+                try appendJsonFieldString(allocator, &text, "requested_path", data.requested_path, true);
+                try appendJsonFieldString(allocator, &text, "resolved_path", data.resolved_path, true);
+                try appendJsonFieldOptionalEnumTag(allocator, &text, "payload_kind", data.payload_kind, false);
+            },
+            .asset_invalid => |data| {
+                try appendJsonFieldString(allocator, &text, "code", "asset_invalid", true);
+                try appendJsonFieldString(allocator, &text, "reason", data.reason, true);
+                try appendJsonFieldOptionalEnumTag(allocator, &text, "payload_kind", data.payload_kind, false);
+            },
             .unresolved_frame => |data| {
                 try appendJsonFieldString(allocator, &text, "code", "unresolved_frame", true);
                 try appendJsonFieldBool(allocator, &text, "missing_horizontal", data.missing_horizontal, true);
@@ -258,6 +274,21 @@ pub fn formatDiagnostic(allocator: Allocator, diagnostic: Diagnostic) ![]const u
         "";
 
     return switch (diagnostic.data) {
+        .user_report => |data| std.fmt.allocPrint(
+            allocator,
+            "  - [{s}/{s}]{s}{s} {s}",
+            .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, data.message },
+        ),
+        .asset_not_found => |data| std.fmt.allocPrint(
+            allocator,
+            "  - [{s}/{s}]{s}{s} asset_not_found requested={s} resolved={s}",
+            .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, data.requested_path, data.resolved_path },
+        ),
+        .asset_invalid => |data| std.fmt.allocPrint(
+            allocator,
+            "  - [{s}/{s}]{s}{s} asset_invalid {s}",
+            .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, data.reason },
+        ),
         .unresolved_frame => |data| std.fmt.allocPrint(
             allocator,
             "  - [{s}/{s}]{s}{s} unresolved_frame missing_horizontal={s} missing_vertical={s}",
