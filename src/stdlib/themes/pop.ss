@@ -63,18 +63,20 @@ fn figure(text_value: string) -> object
   return figure_text_block(text_value)
 end
 
-fn image_figure(path_value: string) -> object
-  return framed_object(path_value, "figure", "image_ref", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16")
+fn image_figure(path_value: string, scale: number = 1) -> object
+  return with_asset_scale(framed_object(path_value, "figure", "image_ref", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16"), scale)
 end
 
-fn image(path_value: string) -> object
-  let obj = image_figure(path_value)
+fn image(path_value: string, scale: number = 1) -> object
+  let obj = image_figure(path_value, scale)
   require_asset_exists(obj)
   return obj
 end
 
 fn pdf_figure(path_value: string, scale: number = 1) -> object
-  return with_asset_scale(framed_object(path_value, "figure", "pdf_ref", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16"), scale)
+  let obj = with_asset_scale(framed_object(path_value, "figure", "pdf_ref", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16"), scale)
+  require_asset_exists(obj)
+  return obj
 end
 
 fn pdf(path_value: string, scale: number = 1) -> object
