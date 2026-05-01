@@ -433,13 +433,13 @@ fn runPageAxisPass(engine: anytype, page_id: NodeId, child_ids: []const NodeId, 
             for (engine.constraints.items) |constraint| {
                 if (constraintTargetsGroup(engine, constraint)) continue;
                 if (constraintUsesGroupSource(engine, constraint)) continue;
-                local_changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or local_changed;
+                local_changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint, false)) or local_changed;
             }
 
             for (extra_constraints) |constraint| {
                 if (constraintTargetsGroup(engine, constraint)) continue;
                 if (constraintUsesGroupSource(engine, constraint)) continue;
-                local_changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or local_changed;
+                local_changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint, true)) or local_changed;
             }
 
             changed = local_changed or changed;
@@ -451,12 +451,12 @@ fn runPageAxisPass(engine: anytype, page_id: NodeId, child_ids: []const NodeId, 
 
         for (engine.constraints.items) |constraint| {
             if (!constraintUsesGroupSource(engine, constraint)) continue;
-            changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or changed;
+            changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint, false)) or changed;
         }
 
         for (extra_constraints) |constraint| {
             if (!constraintUsesGroupSource(engine, constraint)) continue;
-            changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint)) or changed;
+            changed = (try applyAxisConstraint(engine, page_id, child_ids, states, axis, constraint, true)) or changed;
         }
 
         if (!changed) break;
@@ -562,7 +562,7 @@ fn buildVerticalFallbackConstraints(engine: anytype, child_ids: []const NodeId, 
     return constraints;
 }
 
-fn applyAxisConstraint(engine: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, constraint: Constraint) !bool {
+fn applyAxisConstraint(engine: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, constraint: Constraint, is_soft: bool) !bool {
     if (anchorAxis(constraint.target_anchor) != axis) return false;
 
     const target_page = engine.parentPageOf(constraint.target_node) orelse return error.MissingParentPage;
@@ -574,20 +574,28 @@ fn applyAxisConstraint(engine: anytype, page_id: NodeId, child_ids: []const Node
 
     if (selfReferentialSize(constraint, axis)) |size| {
         if (size < -0.01) {
+            if (is_soft) return false;
             engine.noteConstraintFailure(page_id, constraint, states[target_index].size_source, .negative_size);
             return false;
         }
+        if (is_soft and states[target_index].size != null) return false;
         return setAxisSize(&states[target_index], size, constraint) catch |err| {
+            if (is_soft) return false;
             const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
             engine.noteConstraintFailure(page_id, constraint, states[target_index].size_source, kind);
             return false;
         };
     }
 
+    if (is_soft and axisAnchorValue(states[target_index], constraint.target_anchor) != null) {
+        return false;
+    }
+
     const source_value = try constraintSourceValue(engine, page_id, child_ids, states, axis, constraint.source);
     if (source_value == null) return false;
 
     return setAxisAnchor(&states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
+        if (is_soft) return false;
         const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
         engine.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[target_index], constraint.target_anchor), kind);
         return false;
@@ -773,17 +781,6 @@ fn applyGroupTargetConstraintSlice(
                 engine.noteConstraintFailure(page_id, constraint, temp.size_source, kind);
                 continue;
             };
-            switch (anchorRole(constraint.target_anchor)) {
-                .end => {
-                    if (temp.start == null) temp.start = base.start;
-                },
-                .start => {
-                    if (temp.end == null) temp.end = base.end;
-                },
-                .center => {
-                    if (temp.center == null) temp.center = base.center;
-                },
-            }
             continue;
         }
 
@@ -872,6 +869,14 @@ fn applyGroupTargetConstraints(
 
         if (temp.start == null and temp.end == null and temp.center == null and temp.size == null) {
             temp = base;
+        } else {
+            if (temp.size == null) {
+                temp.size = base.size;
+                temp.size_is_default = true;
+            }
+            if (temp.start == null and temp.end == null and temp.center == null) {
+                temp.start = base.start;
+            }
         }
         _ = reconcileAxisState(&temp) catch |err| {
             if (last_constraint) |constraint| {
