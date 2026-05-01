@@ -65,7 +65,6 @@ pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, pro
         }
         return err;
     };
-    errdefer index.deinit();
 
     var ir = try typecheck.buildIr(allocator, path, source, program, &index);
     source = &.{};

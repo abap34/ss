@@ -129,6 +129,11 @@ pub const Statement = struct {
         },
         return_expr: Expr,
         constrain: ConstraintDecl,
+        property_set: struct {
+            object_name: []const u8,
+            property_name: []const u8,
+            value: Expr,
+        },
         expr_stmt: Expr,
         highlight: []const u8,
     };
@@ -139,6 +144,7 @@ pub const Statement = struct {
             .bind_binding => |*binding| binding.expr.deinit(allocator),
             .return_expr => |*expr| expr.deinit(allocator),
             .constrain => |*decl| decl.deinit(allocator),
+            .property_set => |*property_set| property_set.value.deinit(allocator),
             .expr_stmt => |*expr| expr.deinit(allocator),
             else => {},
         }
