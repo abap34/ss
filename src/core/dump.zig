@@ -224,6 +224,11 @@ pub fn dumpJsonToString(engine: anytype, allocator: Allocator) ![]const u8 {
                 try appendJsonFieldString(allocator, &text, "reason", data.reason, true);
                 try appendJsonFieldOptionalEnumTag(allocator, &text, "payload_kind", data.payload_kind, false);
             },
+            .type_mismatch => |data| {
+                try appendJsonFieldString(allocator, &text, "code", @tagName(data.code), true);
+                try appendJsonFieldString(allocator, &text, "expected", @tagName(data.expected), true);
+                try appendJsonFieldString(allocator, &text, "actual", @tagName(data.actual), false);
+            },
             .unresolved_frame => |data| {
                 try appendJsonFieldString(allocator, &text, "code", "unresolved_frame", true);
                 try appendJsonFieldBool(allocator, &text, "missing_horizontal", data.missing_horizontal, true);
@@ -276,7 +281,7 @@ pub fn formatDiagnostic(allocator: Allocator, diagnostic: Diagnostic) ![]const u
     return switch (diagnostic.data) {
         .user_report => |data| std.fmt.allocPrint(
             allocator,
-            "  - [{s}/{s}]{s}{s} {s}",
+            "  - [{s}/{s}]{s}{s} UserReport {s}",
             .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, data.message },
         ),
         .asset_not_found => |data| std.fmt.allocPrint(
@@ -288,6 +293,11 @@ pub fn formatDiagnostic(allocator: Allocator, diagnostic: Diagnostic) ![]const u
             allocator,
             "  - [{s}/{s}]{s}{s} asset_invalid {s}",
             .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, data.reason },
+        ),
+        .type_mismatch => |data| std.fmt.allocPrint(
+            allocator,
+            "  - [{s}/{s}]{s}{s} {s} expected={s} actual={s}",
+            .{ @tagName(diagnostic.phase), @tagName(diagnostic.severity), page_text, node_text, @tagName(data.code), @tagName(data.expected), @tagName(data.actual) },
         ),
         .unresolved_frame => |data| std.fmt.allocPrint(
             allocator,

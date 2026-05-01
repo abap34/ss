@@ -66,7 +66,7 @@ fn printProgress(current: usize, total: usize, label: []const u8, stage_elapsed_
     const filled = if (total == 0) width else @min(width, (current * width) / total);
     var stage_buf: [32]u8 = undefined;
     var total_buf: [32]u8 = undefined;
-    const stage_text = formatDurationMsText(stage_elapsed_ms, &stage_buf) catch "<?>"; 
+    const stage_text = formatDurationMsText(stage_elapsed_ms, &stage_buf) catch "<?>";
     const total_text = formatDurationMsText(total_elapsed_ms, &total_buf) catch "<?>";
     std.debug.print("[", .{});
     var i: usize = 0;
@@ -162,11 +162,12 @@ fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progres
 
 fn printParseError(path: []const u8, source: []const u8, err: anyerror) void {
     const diagnostic = parser.lastParseDiagnostic() orelse {
+        var message_buf: [128]u8 = undefined;
         error_report.print(.{
             .path = path,
             .source = source,
             .severity = .@"error",
-            .message = @errorName(err),
+            .message = std.fmt.bufPrint(&message_buf, "{s}: {s}", .{ @errorName(err), @errorName(err) }) catch @errorName(err),
             .span = null,
         });
         return;
@@ -184,15 +185,31 @@ fn printParseError(path: []const u8, source: []const u8, err: anyerror) void {
 
 fn formatParseDiagnostic(buf: []u8, diagnostic: parser.ParseDiagnostic) []const u8 {
     return switch (diagnostic.err) {
-        error.UnterminatedString => "unterminated string",
-        error.UnterminatedEscape => "unterminated escape sequence",
-        error.InvalidEscape => "invalid escape sequence",
-        error.UnknownAnchor => "unknown anchor name",
+        error.UnterminatedString => "UnterminatedString: unterminated string",
+        error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",
+        error.InvalidEscape => "InvalidEscape: invalid escape sequence",
+        error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
             const found = diagnostic.found orelse "unknown token";
-            break :blk std.fmt.bufPrint(buf, "expected {s}, found {s}", .{ expected, found }) catch @errorName(diagnostic.err);
+            break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ parseDiagnosticCode(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
         },
+    };
+}
+
+fn parseDiagnosticCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ExpectedString => "ExpectedString",
+        error.ExpectedIdentifier => "ExpectedIdentifier",
+        error.ExpectedKeyword => "ExpectedKeyword",
+        error.ExpectedChar => "ExpectedPunctuation",
+        error.ExpectedLineBreak => "ExpectedLineBreak",
+        error.ExpectedEnd => "ExpectedEnd",
+        error.ExpectedNumber => "ExpectedNumber",
+        error.ExpectedTypeAnnotation => "ExpectedTypeAnnotation",
+        error.ExpectedReturn => "ExpectedReturn",
+        error.InvalidSemanticSort => "InvalidSemanticSort",
+        else => @errorName(err),
     };
 }
 
@@ -228,16 +245,21 @@ fn hasErrorDiagnostics(engine: *const core.Engine) bool {
 
 fn formatEngineDiagnostic(allocator: std.mem.Allocator, diagnostic: core.Diagnostic) ![]const u8 {
     return switch (diagnostic.data) {
-        .user_report => |data| std.fmt.allocPrint(allocator, "{s}", .{data.message}),
+        .user_report => |data| std.fmt.allocPrint(allocator, "UserReport: {s}", .{data.message}),
         .asset_not_found => |data| std.fmt.allocPrint(
             allocator,
-            "asset not found: {s} (resolved to {s})",
+            "AssetNotFound: {s} (resolved to {s})",
             .{ data.requested_path, data.resolved_path },
         ),
-        .asset_invalid => |data| std.fmt.allocPrint(allocator, "invalid asset: {s}", .{data.reason}),
+        .asset_invalid => |data| std.fmt.allocPrint(allocator, "InvalidAsset: {s}", .{data.reason}),
+        .type_mismatch => |data| std.fmt.allocPrint(
+            allocator,
+            "{s}: expected {s}, got {s}",
+            .{ @tagName(data.code), @tagName(data.expected), @tagName(data.actual) },
+        ),
         .unresolved_frame => |data| std.fmt.allocPrint(
             allocator,
-            "layout could not resolve frame: missing_horizontal={s} missing_vertical={s}",
+            "UnresolvedFrame: missing_horizontal={s} missing_vertical={s}",
             .{
                 if (data.missing_horizontal) "true" else "false",
                 if (data.missing_vertical) "true" else "false",
@@ -245,7 +267,7 @@ fn formatEngineDiagnostic(allocator: std.mem.Allocator, diagnostic: core.Diagnos
         ),
         .page_overflow => |data| std.fmt.allocPrint(
             allocator,
-            "object overflows page: left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
+            "PageOverflow: left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
             .{ data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom },
         ),
     };
@@ -261,8 +283,8 @@ fn printConstraintFailure(path: []const u8, source: []const u8, engine: *const c
         return;
     };
     const kind_text = switch (failure.kind) {
-        .conflict => "constraint conflict",
-        .negative_size => "negative size from constraints",
+        .conflict => "ConstraintConflict: constraint conflict",
+        .negative_size => "NegativeConstraintSize: negative size from constraints",
     };
     const constraint_text = core.dump.formatConstraint(engine.allocator, failure.constraint) catch "";
     defer if (constraint_text.len > 0) engine.allocator.free(constraint_text);
@@ -344,7 +366,7 @@ fn loadFunctionSignatures(
     }
 
     for (registry.primitiveDescriptors()) |descriptor| {
-        try map.put(descriptor.name, .{ .params = try cloneParamNames(allocator, descriptor.arg_names) });
+        try map.put(descriptor.name, .{ .params = try clonePrimitiveParamLabels(allocator, descriptor) });
     }
 
     const base_dir = std.fs.path.dirname(input_path) orelse ".";
@@ -353,7 +375,7 @@ fn loadFunctionSignatures(
     var base_program = try parseSource(allocator, base_source, "stdlib/themes/base.ss");
     defer base_program.deinit(allocator);
     for (base_program.functions.items) |func| {
-        try map.put(func.name, .{ .params = try cloneParamNames(allocator, func.params.items) });
+        try map.put(func.name, .{ .params = try cloneFunctionParamLabels(allocator, func.params.items) });
     }
 
     const theme_name = program.theme_name orelse "default";
@@ -364,20 +386,20 @@ fn loadFunctionSignatures(
         var theme_program = try parseSource(allocator, theme_source, theme_path);
         defer theme_program.deinit(allocator);
         for (theme_program.functions.items) |func| {
-            try map.put(func.name, .{ .params = try cloneParamNames(allocator, func.params.items) });
+            try map.put(func.name, .{ .params = try cloneFunctionParamLabels(allocator, func.params.items) });
         }
     }
 
     for (program.functions.items) |func| {
-        try map.put(func.name, .{ .params = try cloneParamNames(allocator, func.params.items) });
+        try map.put(func.name, .{ .params = try cloneFunctionParamLabels(allocator, func.params.items) });
     }
 
     return map;
 }
 
-fn cloneParamNames(
+fn cloneFunctionParamLabels(
     allocator: std.mem.Allocator,
-    params: []const []const u8,
+    params: []const parser.ParamDecl,
 ) ![]const []const u8 {
     const copied = try allocator.alloc([]const u8, params.len);
     errdefer {
@@ -385,7 +407,25 @@ fn cloneParamNames(
         allocator.free(copied);
     }
     for (params, 0..) |param, index| {
-        copied[index] = try allocator.dupe(u8, param);
+        copied[index] = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
+    }
+    return copied;
+}
+
+fn clonePrimitiveParamLabels(
+    allocator: std.mem.Allocator,
+    descriptor: registry.PrimitiveDescriptor,
+) ![]const []const u8 {
+    const copied = try allocator.alloc([]const u8, descriptor.arg_names.len);
+    errdefer {
+        for (copied[0..descriptor.arg_names.len]) |name| allocator.free(name);
+        allocator.free(copied);
+    }
+    for (descriptor.arg_names, 0..) |name, index| {
+        copied[index] = if (index < descriptor.arg_sorts.len and descriptor.arg_sorts[index] != .any)
+            try std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, @tagName(descriptor.arg_sorts[index]) })
+        else
+            try allocator.dupe(u8, name);
     }
     return copied;
 }
@@ -517,9 +557,16 @@ fn hintForCallExpr(
     defer allocator.free(arg_starts);
     const hint_count = @min(@min(signature.params.len, call.args.items.len), arg_starts.len);
     for (0..hint_count) |index| {
-        const label = try std.fmt.allocPrint(allocator, "{s}:", .{signature.params[index]});
+        const label = try std.fmt.allocPrint(allocator, "{s}:", .{hintParamName(signature.params[index])});
         try appendInlayHint(allocator, hints, source, span.start + arg_starts[index], label, .parameter_names);
     }
+}
+
+fn hintParamName(label: []const u8) []const u8 {
+    const colon = std.mem.indexOfScalar(u8, label, ':') orelse return label;
+    var end = colon;
+    while (end > 0 and (label[end - 1] == ' ' or label[end - 1] == '\t')) end -= 1;
+    return label[0..end];
 }
 
 fn collectExprHints(
@@ -531,7 +578,12 @@ fn collectExprHints(
     expr: parser.Expr,
 ) !void {
     switch (expr) {
-        .call => |call| try hintForCallExpr(allocator, hints, signatures, source, span, call),
+        .call => |call| {
+            try hintForCallExpr(allocator, hints, signatures, source, span, call);
+            for (call.args.items) |arg| {
+                try collectExprHints(allocator, hints, signatures, source, span, arg);
+            }
+        },
         else => {},
     }
 }
@@ -629,7 +681,8 @@ fn writeEditorInfoJson(
     for (hints.items, 0..) |hint, index| {
         if (index != 0) std.debug.print(",", .{});
         std.debug.print(
-            "{{\"line\":{d},\"column\":{d},\"label\":", .{ hint.line, hint.column },
+            "{{\"line\":{d},\"column\":{d},\"label\":",
+            .{ hint.line, hint.column },
         );
         const escaped = try std.json.Stringify.valueAlloc(allocator, hint.label, .{});
         defer allocator.free(escaped);
@@ -737,6 +790,8 @@ pub fn main(init: std.process.Init) void {
             error.ExpectedLineBreak,
             error.ExpectedEnd,
             error.ExpectedNumber,
+            error.ExpectedTypeAnnotation,
+            error.ExpectedReturn,
             error.UnterminatedString,
             error.UnterminatedEscape,
             error.InvalidEscape,

@@ -6,6 +6,7 @@ const ast = @import("ast.zig");
 const names = @import("names.zig");
 const registry = @import("registry.zig");
 const syntax = @import("syntax.zig");
+const typecheck = @import("typecheck.zig");
 
 const Program = ast.Program;
 const FunctionDecl = ast.FunctionDecl;
@@ -66,11 +67,6 @@ const DetachedBuilder = struct {
     fn isEmpty(self: *const DetachedBuilder) bool {
         return self.node_ids.items.len == 0 and self.constraints.items.items.len == 0 and self.deps.items.len == 0;
     }
-};
-
-const FunctionContract = struct {
-    param_count: usize,
-    returns_value: bool,
 };
 
 var diagnostic_source: []const u8 = "";
@@ -147,49 +143,50 @@ fn reportLowerDiagnostic(diagnostic: LowerDiagnostic) void {
 
 fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
     return switch (diagnostic.data) {
-        .unknown_name => |data| std.fmt.bufPrint(buf, "unknown {s}: {s}", .{ data.kind, data.name }) catch "unknown name",
+        .unknown_name => |data| std.fmt.bufPrint(buf, "{s}: unknown {s}: {s}", .{ unknownNameCode(data.kind), data.kind, data.name }) catch "UnknownName: unknown name",
         .invalid_arity => |data| blk: {
             if (data.min == data.max) {
-                break :blk std.fmt.bufPrint(buf, "wrong number of arguments: expected {d}, got {d}", .{ data.min, data.actual }) catch lowerErrorMessage(diagnostic.err);
+                break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}, got {d}", .{ data.min, data.actual }) catch lowerErrorMessage(diagnostic.err);
             }
-            break :blk std.fmt.bufPrint(buf, "wrong number of arguments: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch lowerErrorMessage(diagnostic.err);
+            break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch lowerErrorMessage(diagnostic.err);
         },
-        .invalid_sort => |data| std.fmt.bufPrint(buf, "wrong value kind: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
+        .invalid_sort => |data| std.fmt.bufPrint(buf, "InvalidSemanticSort: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
         .generic => lowerErrorMessage(diagnostic.err),
     };
 }
 
-fn lowerErrorMessage(err: anyerror) []const u8 {
-    return switch (err) {
-        error.ReturnOutsideFunction => "return is only valid inside a function",
-        error.InvalidThemeModule => "theme files must contain functions only",
-        error.FunctionDoesNotReturnValue => "function used as a value does not return anything",
-        error.InvalidArity => "wrong number of arguments",
-        error.InvalidSemanticSort => "value has the wrong semantic kind",
-        error.ExpectedSelection => "expected a selection value",
-        error.ExpectedConstraintSet => "expected a constraint set",
-        error.ExpectedStringArgument => "expected a string argument",
-        error.ExpectedNumberArgument => "expected a number argument",
-        error.ExpectedStyleArgument => "expected a style argument",
-        error.ExpectedAnchor => "expected an anchor argument",
-        error.ExpectedObject => "expected an object argument",
-        error.UnknownAnchor => "unknown anchor",
-        error.UnknownRole => "unknown role",
-        error.UnknownPayloadKind => "unknown payload kind",
-        error.PageCannotBeConstraintTarget => "page anchors cannot be constraint targets",
-        error.MissingHighlightTarget => "highlight needs a previous code-like object",
-        error.UnsupportedFragmentRoot => "unsupported fragment root",
-        error.FunctionDidNotReturnValue => "function did not return a value",
-        else => @errorName(err),
-    };
+fn unknownNameCode(kind: []const u8) []const u8 {
+    if (std.mem.eql(u8, kind, "function")) return "UnknownFunction";
+    if (std.mem.eql(u8, kind, "query")) return "UnknownQuery";
+    if (std.mem.eql(u8, kind, "transform")) return "UnknownTransform";
+    if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
+    if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
+    if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
+    return "UnknownName";
 }
 
-fn functionRefFor(func: FunctionDecl) core.FunctionRef {
-    const contract = functionContract(func);
-    return .{
-        .name = func.name,
-        .param_count = contract.param_count,
-        .returns_value = contract.returns_value,
+fn lowerErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ReturnOutsideFunction => "ReturnOutsideFunction: return is only valid inside a function",
+        error.InvalidThemeModule => "InvalidThemeModule: theme files must contain functions only",
+        error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
+        error.InvalidArity => "InvalidArity: wrong number of arguments",
+        error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
+        error.ExpectedSelection => "ExpectedSelection: expected a selection value",
+        error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
+        error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
+        error.ExpectedNumberArgument => "ExpectedNumberArgument: expected a number argument",
+        error.ExpectedStyleArgument => "ExpectedStyleArgument: expected a style argument",
+        error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
+        error.ExpectedObject => "ExpectedObject: expected an object argument",
+        error.UnknownAnchor => "UnknownAnchor: unknown anchor",
+        error.UnknownRole => "UnknownRole: unknown role",
+        error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
+        error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
+        error.MissingHighlightTarget => "MissingHighlightTarget: highlight needs a previous code-like object",
+        error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
+        error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
+        else => @errorName(err),
     };
 }
 
@@ -228,6 +225,11 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
         try functions.put(func.name, func);
     }
 
+    typecheck.checkFunctionDefinitions(engine.allocator, engine, &functions) catch |err| {
+        if (engine.diagnostics.items.len == 0) reportLowerError(err, "bytes:0-1");
+        return err;
+    };
+
     for (program.pages.items) |page| {
         const page_id = try engine.addPage(page.name);
         var last_code_like: ?core.NodeId = null;
@@ -237,7 +239,7 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
         for (page.statements.items) |stmt| {
             const flow = executeStatement(engine, page_id, .attached, &env, &functions, &last_code_like, stmt, null) catch |err| {
                 const origin = statementOrigin(engine.allocator, stmt.span) catch "bytes:0-1";
-                reportLowerError(err, origin);
+                if (engine.diagnostics.items.len == 0) reportLowerError(err, origin);
                 return err;
             };
             switch (flow) {
@@ -293,15 +295,31 @@ fn loadThemeProgram(engine: *core.Engine, io: std.Io, theme_name: []const u8) !P
 
 fn formatParseDiagnostic(buf: []u8, diagnostic: syntax.ParseDiagnostic) []const u8 {
     return switch (diagnostic.err) {
-        error.UnterminatedString => "unterminated string",
-        error.UnterminatedEscape => "unterminated escape sequence",
-        error.InvalidEscape => "invalid escape sequence",
-        error.UnknownAnchor => "unknown anchor name",
+        error.UnterminatedString => "UnterminatedString: unterminated string",
+        error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",
+        error.InvalidEscape => "InvalidEscape: invalid escape sequence",
+        error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
             const found = diagnostic.found orelse "unknown token";
-            break :blk std.fmt.bufPrint(buf, "expected {s}, found {s}", .{ expected, found }) catch @errorName(diagnostic.err);
+            break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ parseDiagnosticCode(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
         },
+    };
+}
+
+fn parseDiagnosticCode(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ExpectedString => "ExpectedString",
+        error.ExpectedIdentifier => "ExpectedIdentifier",
+        error.ExpectedKeyword => "ExpectedKeyword",
+        error.ExpectedChar => "ExpectedPunctuation",
+        error.ExpectedLineBreak => "ExpectedLineBreak",
+        error.ExpectedEnd => "ExpectedEnd",
+        error.ExpectedNumber => "ExpectedNumber",
+        error.ExpectedTypeAnnotation => "ExpectedTypeAnnotation",
+        error.ExpectedReturn => "ExpectedReturn",
+        error.InvalidSemanticSort => "InvalidSemanticSort",
+        else => @errorName(err),
     };
 }
 
@@ -317,7 +335,7 @@ fn evalExpr(
     return switch (expr) {
         .ident => |name| blk: {
             if (env.get(name)) |value| break :blk value;
-            if (functions.get(name)) |func| break :blk .{ .function = functionRefFor(func) };
+            if (functions.get(name)) |func| break :blk .{ .function = try typecheck.functionRefFor(engine.allocator, func) };
             reportUnknownIdentifier(name, current_origin);
             break :blk error.UnknownIdentifier;
         },
@@ -351,7 +369,7 @@ fn evalCall(
         }
     }
     if (functions.get(call.name)) |func| {
-        if (!functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+        if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
         return try invokeUserFunctionValue(engine, page_id, mode, env, functions, func, current_origin, call);
     }
     if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
@@ -414,6 +432,45 @@ fn evalPrimitiveCall(
         .neg => {
             const value = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
             return .{ .number = -value };
+        },
+        .add => {
+            const left = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .number = left + right };
+        },
+        .sub => {
+            const left = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .number = left - right };
+        },
+        .mul => {
+            const left = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .number = left * right };
+        },
+        .div => {
+            const left = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .number = left / right };
+        },
+        .min => {
+            const left = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .number = if (left < right) left else right };
+        },
+        .max => {
+            const left = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .number = if (left > right) left else right };
+        },
+        .str => {
+            const value = try evalCallNumberArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            return .{ .string = try std.fmt.allocPrint(engine.allocator, "{d}", .{value}) };
+        },
+        .concat => {
+            const left = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, 0);
+            const right = try evalCallStringArg(engine, page_id, mode, env, functions, current_origin, call, 1);
+            return .{ .string = try std.fmt.allocPrint(engine.allocator, "{s}{s}", .{ left, right }) };
         },
         .previous_page => {
             return try engine.select(engine.allocator, .{ .page = page_id }, core.Query.previousPage());
@@ -780,7 +837,7 @@ fn evalSelectCall(
         return error.UnknownQuery;
     };
     try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
-    try ensureValueSort(base, descriptor.input_sort, current_origin);
+    try typecheck.ensureValueSortWithCode(engine, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {
             return try engine.select(engine.allocator, base, core.Query.selfObject());
@@ -821,7 +878,7 @@ fn evalDeriveCall(
         return error.UnknownTransform;
     };
     try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
-    if (descriptor.input_sort) |expected| try ensureValueSort(base, expected, current_origin);
+    if (descriptor.input_sort) |expected| try typecheck.ensureValueSortWithCode(engine, null, base, expected, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .page_number => {
             return .{ .object = switch (mode) {
@@ -915,30 +972,6 @@ fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8)
             .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
         });
         return error.InvalidArity;
-    }
-}
-
-fn ensureValueSort(value: core.Value, expected: core.SemanticSort, origin: []const u8) !void {
-    const actual: core.SemanticSort = switch (value) {
-        .document => .document,
-        .page => .page,
-        .object => .object,
-        .selection => .selection,
-        .anchor => .anchor,
-        .function => .function,
-        .style => .style,
-        .string => .string,
-        .number => .number,
-        .constraints => .constraints,
-        .fragment => .fragment,
-    };
-    if (actual != expected) {
-        reportLowerDiagnostic(.{
-            .err = error.InvalidSemanticSort,
-            .span = error_report.spanFromOrigin(origin),
-            .data = .{ .invalid_sort = .{ .expected = expected, .actual = actual } },
-        });
-        return error.InvalidSemanticSort;
     }
 }
 
@@ -1387,7 +1420,7 @@ fn executeCallStatement(
         _ = try evalCall(engine, page_id, mode, env, functions, current_origin, call);
         return;
     };
-    const func_ref = functionRefFor(func);
+    const func_ref = try typecheck.functionRefFor(engine.allocator, func);
     try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
 
     var local_env = std.StringHashMap(core.Value).init(engine.allocator);
@@ -1398,7 +1431,8 @@ fn executeCallStatement(
     }
     for (func.params.items, call.args.items) |param, arg_expr| {
         const value = try evalExpr(engine, page_id, mode, env, functions, current_origin, arg_expr);
-        try local_env.put(param, value);
+        try typecheck.ensureValueSortWithCode(engine, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
     }
     for (func.statements.items) |inner| {
         const flow = try executeStatement(engine, page_id, mode, &local_env, functions, last_code_like, inner, current_origin);
@@ -1409,6 +1443,7 @@ fn executeCallStatement(
                     var owned = value;
                     owned.deinit(engine.allocator);
                 }
+                try typecheck.ensureValueSortWithCode(engine, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
                 try materializeStatementValue(engine, mode, last_code_like, value);
                 return;
             },
@@ -1426,7 +1461,7 @@ fn invokeUserFunctionValue(
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const func_ref = functionRefFor(func);
+    const func_ref = try typecheck.functionRefFor(engine.allocator, func);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
 
@@ -1438,7 +1473,8 @@ fn invokeUserFunctionValue(
     }
     for (func.params.items, call.args.items) |param, arg_expr| {
         const value = try evalExpr(engine, page_id, mode, env, functions, current_origin, arg_expr);
-        try local_env.put(param, value);
+        try typecheck.ensureValueSortWithCode(engine, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
     }
 
     var last_code_like: ?core.NodeId = null;
@@ -1446,7 +1482,10 @@ fn invokeUserFunctionValue(
         const flow = try executeStatement(engine, page_id, mode, &local_env, functions, &last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
-            .returned => |value| return value,
+            .returned => |value| {
+                try typecheck.ensureValueSortWithCode(engine, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                return value;
+            },
         }
     }
 
@@ -1455,23 +1494,6 @@ fn invokeUserFunctionValue(
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
-}
-
-fn functionContract(func: FunctionDecl) FunctionContract {
-    return .{
-        .param_count = func.params.items.len,
-        .returns_value = functionReturnsValue(func),
-    };
-}
-
-fn functionReturnsValue(func: FunctionDecl) bool {
-    for (func.statements.items) |stmt| {
-        switch (stmt.kind) {
-            .return_expr => return true,
-            else => {},
-        }
-    }
-    return false;
 }
 
 fn resolveAnchorRef(

@@ -1,6 +1,8 @@
 const std = @import("std");
+const core = @import("core");
 const ast = @import("ast.zig");
 const names = @import("names.zig");
+const typecheck = @import("typecheck.zig");
 
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
@@ -76,11 +78,17 @@ const Parser = struct {
         self.skipInlineSpaces();
         try self.expectChar('(');
 
-        var params = std.ArrayList([]const u8).empty;
+        var params = std.ArrayList(ast.ParamDecl).empty;
         errdefer params.deinit(self.allocator);
         self.skipTrivia();
         while (!self.eof() and !self.peekChar(')')) {
-            try params.append(self.allocator, try self.parseIdentifier());
+            const param_name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
+            self.pos += 1;
+            self.skipInlineSpaces();
+            const param_sort = try self.parseSortAnnotation();
+            try params.append(self.allocator, .{ .name = param_name, .sort = param_sort });
             self.skipTrivia();
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
@@ -90,9 +98,31 @@ const Parser = struct {
             break;
         }
         try self.expectChar(')');
+        self.skipInlineSpaces();
+        if (!self.startsWith("->")) return self.fail(error.ExpectedTypeAnnotation);
+        self.pos += 2;
+        self.skipInlineSpaces();
+        const result_sort = try self.parseSortAnnotation();
 
         const statements = try self.parseBodyStatements();
-        return .{ .name = name, .params = params, .statements = statements };
+        if (!typecheck.functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+        return .{ .name = name, .params = params, .result_sort = result_sort, .statements = statements };
+    }
+
+    fn parseSortAnnotation(self: *Parser) !core.SemanticSort {
+        const name = try self.parseIdentifier();
+        if (std.mem.eql(u8, name, "document")) return .document;
+        if (std.mem.eql(u8, name, "page")) return .page;
+        if (std.mem.eql(u8, name, "object")) return .object;
+        if (std.mem.eql(u8, name, "selection")) return .selection;
+        if (std.mem.eql(u8, name, "anchor")) return .anchor;
+        if (std.mem.eql(u8, name, "function")) return .function;
+        if (std.mem.eql(u8, name, "style")) return .style;
+        if (std.mem.eql(u8, name, "string")) return .string;
+        if (std.mem.eql(u8, name, "number")) return .number;
+        if (std.mem.eql(u8, name, "constraints")) return .constraints;
+        if (std.mem.eql(u8, name, "fragment")) return .fragment;
+        return self.fail(error.InvalidSemanticSort);
     }
 
     fn parsePage(self: *Parser) !PageDecl {
@@ -680,6 +710,9 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.UnterminatedEscape => "escape target",
         error.InvalidEscape => "valid escape sequence",
         error.UnknownAnchor => "known anchor name",
+        error.InvalidSemanticSort => "semantic sort",
+        error.ExpectedTypeAnnotation => "type annotation",
+        error.ExpectedReturn => "return statement",
         else => null,
     };
 }

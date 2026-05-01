@@ -203,7 +203,18 @@ pub const ConstraintSet = struct {
 pub const FunctionRef = struct {
     name: []const u8,
     param_count: usize,
+    param_sorts: []const SemanticSort = &.{},
     returns_value: bool,
+    result_sort: SemanticSort,
+    effect: FunctionEffect = .unknown,
+};
+
+pub const FunctionEffect = enum {
+    unknown,
+    pure,
+    builds_graph,
+    adds_constraints,
+    reports_diagnostics,
 };
 
 pub const StyleRef = struct {
@@ -370,6 +381,11 @@ pub const Diagnostic = struct {
             reason: []const u8,
             payload_kind: ?PayloadKind = null,
         },
+        type_mismatch: struct {
+            code: TypeMismatchCode,
+            expected: SemanticSort,
+            actual: SemanticSort,
+        },
         unresolved_frame: struct {
             missing_horizontal: bool,
             missing_vertical: bool,
@@ -381,6 +397,12 @@ pub const Diagnostic = struct {
             overflow_bottom: f32,
         },
     };
+};
+
+pub const TypeMismatchCode = enum {
+    UnmatchedArgumentType,
+    UnmatchedReturnType,
+    UnmatchedInputType,
 };
 
 pub fn roleEq(role: ?Role, expected: []const u8) bool {

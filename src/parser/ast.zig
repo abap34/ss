@@ -30,7 +30,8 @@ pub const PageDecl = struct {
 
 pub const FunctionDecl = struct {
     name: []const u8,
-    params: std.ArrayList([]const u8),
+    params: std.ArrayList(ParamDecl),
+    result_sort: core.SemanticSort,
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
@@ -38,6 +39,11 @@ pub const FunctionDecl = struct {
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
     }
+};
+
+pub const ParamDecl = struct {
+    name: []const u8,
+    sort: core.SemanticSort,
 };
 
 pub const CallExpr = struct {

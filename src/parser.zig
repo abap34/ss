@@ -3,6 +3,7 @@ const ast = @import("parser/ast.zig");
 pub const Program = ast.Program;
 pub const PageDecl = ast.PageDecl;
 pub const FunctionDecl = ast.FunctionDecl;
+pub const ParamDecl = ast.ParamDecl;
 pub const CallExpr = ast.CallExpr;
 pub const Expr = ast.Expr;
 pub const AnchorRef = ast.AnchorRef;
