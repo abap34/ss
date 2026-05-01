@@ -13,6 +13,8 @@ function activate(context) {
   const previewTimers = new Map();
   const previewSessions = new Map();
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("ss");
+  const editorInfoCache = new Map();
+  const editorInfoRequests = new Map();
   const guideIconPath = vscode.Uri.file(path.join(__dirname, "media", "page-block-guide.svg"));
   const pageBlockDecoration = vscode.window.createTextEditorDecorationType({
     gutterIconPath: guideIconPath,
@@ -45,6 +47,18 @@ function activate(context) {
     return String(text || "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
   }
 
+  function clearEditorInfoCache(document) {
+    if (!document) {
+      return;
+    }
+    editorInfoCache.delete(documentKey(document));
+  }
+
+  function getWordAtPosition(document, position) {
+    const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/g);
+    return range ? document.getText(range) : "";
+  }
+
   function documentKey(document) {
     return document.uri.toString();
   }
@@ -52,6 +66,72 @@ function activate(context) {
   function workspaceCwd(document) {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
     return workspaceFolder ? workspaceFolder.uri.fsPath : null;
+  }
+
+  function queryEditorInfo(document) {
+    if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
+      return Promise.resolve(null);
+    }
+
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (!workspaceFolder) {
+      return Promise.resolve(null);
+    }
+
+    const key = documentKey(document);
+    const now = Date.now();
+    const cached = editorInfoCache.get(key);
+    if (cached && now - cached.atMs < 1200) {
+      return Promise.resolve(cached.payload);
+    }
+
+    const existing = editorInfoRequests.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const runRequest = new Promise((resolve) => {
+      const cwd = workspaceFolder.uri.fsPath;
+      const args = ["build", "run", "--", "editor-info-file", document.uri.fsPath];
+      output.appendLine(`[info] zig ${args.join(" ")}`);
+      output.appendLine(`[info] cwd: ${cwd}`);
+      cp.execFile(
+        "zig",
+        args,
+        { cwd, maxBuffer: 10 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          if (stderr && stderr.trim().length > 0) {
+            output.appendLine("[info] stderr:");
+            output.appendLine(stderr.trimEnd());
+          }
+
+          if (error) {
+            output.appendLine(`[info] failed: ${error.message}`);
+            resolve(null);
+            return;
+          }
+
+          const payload = extractJsonPayload(stdout, stderr);
+          if (!payload) {
+            output.appendLine("[info] no JSON payload");
+            if (!stdout || stdout.trim().length === 0) {
+              output.appendLine("[info] empty stdout");
+            }
+            resolve(null);
+            return;
+          }
+
+          editorInfoCache.set(key, { atMs: Date.now(), payload });
+          resolve(payload);
+        },
+      );
+    });
+
+    const finalize = runRequest.finally(() => {
+      editorInfoRequests.delete(key);
+    });
+    editorInfoRequests.set(key, finalize);
+    return finalize;
   }
 
   function diagnosticsEnabled() {
@@ -480,86 +560,200 @@ function activate(context) {
         return [];
       }
 
-      const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-      if (!workspaceFolder) {
+      return queryEditorInfo(document).then((payload) => {
+        if (!payload || !payload.hints || token.isCancellationRequested) {
+          return [];
+        }
+
+        const hints = [];
+        for (const item of payload.hints) {
+          const pos = new vscode.Position(
+            Math.max(0, Number(item.line || 1) - 1),
+            Math.max(0, Number(item.column || 1) - 1),
+          );
+          if (!range.contains(pos)) {
+            continue;
+          }
+          const hint = new vscode.InlayHint(pos, String(item.label || ""));
+          hint.paddingLeft = true;
+          hint.paddingRight = false;
+          hint.kind =
+            item.kind === "parameter_names"
+              ? vscode.InlayHintKind.Parameter
+              : vscode.InlayHintKind.Type;
+          hints.push(hint);
+        }
+        output.appendLine(`[hint] ok: ${hints.length} hints`);
+        return hints;
+      });
+    },
+    provideCompletionItems(document, position, _context, token) {
+      if (document.languageId !== "ss-slide" || token.isCancellationRequested) {
         return [];
       }
 
-      return new Promise((resolve) => {
-        const cwd = workspaceFolder.uri.fsPath;
-        const args = ["build", "run", "--", "editor-info-file", document.uri.fsPath];
-        output.appendLine(`[hint] zig ${args.join(" ")}`);
-        output.appendLine(`[hint] cwd: ${cwd}`);
-        cp.execFile(
-          "zig",
-          args,
-          { cwd, maxBuffer: 10 * 1024 * 1024 },
-          (error, stdout, stderr) => {
-            if (token.isCancellationRequested) {
-              resolve([]);
-              return;
-            }
+      const prefix = getWordAtPosition(document, position);
+        return queryEditorInfo(document).then((payload) => {
+        if (!payload || token.isCancellationRequested) {
+          return [];
+        }
 
-            if (stderr && stderr.trim().length > 0) {
-              output.appendLine("[hint] stderr:");
-              output.appendLine(stderr.trimEnd());
-            }
+        const items = [];
+        for (const item of payload.functions || []) {
+          const label = String(item.name || "");
+          if (!label) {
+            continue;
+          }
+          if (prefix && !label.startsWith(prefix)) {
+            continue;
+          }
 
-            if (error) {
-              output.appendLine(`[hint] failed: ${error.message}`);
-              resolve([]);
-              return;
-            }
+          const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.Function);
+          completion.insertText = label;
+          completion.filterText = label;
+          if (item.signature) {
+            completion.detail = String(item.signature);
+          }
+          if (item.summary) {
+            completion.documentation = new vscode.MarkdownString(String(item.summary));
+          }
+          if (item.source) {
+            completion.detail = `${completion.detail ? `${completion.detail}\n` : ""}[${String(item.source)}]`;
+          }
+          items.push(completion);
+        }
 
-            try {
-              const payload = extractJsonPayload(stdout, stderr);
-              if (!payload) {
-                output.appendLine("[hint] no JSON payload");
-                if (!stdout || stdout.trim().length === 0) {
-                  output.appendLine("[hint] empty stdout");
-                }
-                resolve([]);
-                return;
-              }
-              const hints = [];
-              for (const item of payload.hints || []) {
-                const pos = new vscode.Position(
-                  Math.max(0, Number(item.line || 1) - 1),
-                  Math.max(0, Number(item.column || 1) - 1),
-                );
-                if (!range.contains(pos)) {
-                  continue;
-                }
-                const hint = new vscode.InlayHint(pos, String(item.label || ""));
-                hint.paddingLeft = true;
-                hint.paddingRight = false;
-                hint.kind =
-                  item.kind === "parameter_names"
-                    ? vscode.InlayHintKind.Parameter
-                    : vscode.InlayHintKind.Type;
-                hints.push(hint);
-              }
-              output.appendLine(`[hint] ok: ${hints.length} hints`);
-              resolve(hints);
-            } catch (parseError) {
-              output.appendLine("[hint] invalid JSON:");
-              if (stdout && stdout.trim().length > 0) {
-                output.appendLine(stdout.trimEnd());
-              }
-              if (stderr && stderr.trim().length > 0) {
-                output.appendLine(stderr.trimEnd());
-              }
-              output.appendLine(`[hint] parse error: ${parseError.message}`);
-              resolve([]);
+        for (const item of payload.variables || []) {
+          const label = String(item && item.name ? item.name : "");
+          if (!label) {
+            continue;
+          }
+          if (label && payload.functions) {
+            const sameNameAsFunction = (payload.functions || []).some((func) => String(func && func.name ? func.name : "") === label);
+            if (sameNameAsFunction) {
+              continue;
             }
-          },
-        );
+          }
+          if (prefix && !label.startsWith(prefix)) {
+            continue;
+          }
+
+          const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.Variable);
+          completion.insertText = label;
+          completion.filterText = label;
+          if (item.type) {
+            completion.detail = `type: ${String(item.type)}`;
+          }
+          items.push(completion);
+        }
+        return items;
+      });
+    },
+    provideDefinition(document, position, token) {
+      if (document.languageId !== "ss-slide" || token.isCancellationRequested) {
+        return null;
+      }
+
+      const target = getWordAtPosition(document, position);
+      if (!target) {
+        return null;
+      }
+
+      return queryEditorInfo(document).then((payload) => {
+        if (!payload || !payload.definitions || token.isCancellationRequested) {
+          return null;
+        }
+
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+        for (const item of payload.definitions) {
+          if (String(item && item.name ? item.name : "") !== target) {
+            continue;
+          }
+          const line = Math.max(0, Number(item.line || 1) - 1);
+          const column = Math.max(0, Number(item.column || 1) - 1);
+          const length = Math.max(1, Number(item.length || target.length || 1));
+          let definitionPath = null;
+          if (item.file) {
+            definitionPath = String(item.file);
+            if (!path.isAbsolute(definitionPath) && workspaceFolder && workspaceFolder.uri && workspaceFolder.uri.fsPath) {
+              definitionPath = path.join(workspaceFolder.uri.fsPath, definitionPath);
+            }
+          }
+          const definitionUri = definitionPath ? vscode.Uri.file(definitionPath) : document.uri;
+          return new vscode.Location(
+            definitionUri,
+            new vscode.Range(
+              new vscode.Position(line, column),
+              new vscode.Position(line, column + length),
+            ),
+          );
+        }
+        return null;
+      });
+    },
+    provideHover(document, position, token) {
+      if (document.languageId !== "ss-slide" || token.isCancellationRequested) {
+        return null;
+      }
+
+      const target = getWordAtPosition(document, position);
+      if (!target) {
+        return null;
+      }
+
+      return queryEditorInfo(document).then((payload) => {
+        if (!payload || (!payload.functions && !payload.variables) || token.isCancellationRequested) {
+          return null;
+        }
+
+        for (const item of payload.functions || []) {
+          if (String(item.name || "") !== target) {
+            continue;
+          }
+          const markdown = new vscode.MarkdownString();
+          if (item.signature) {
+            markdown.appendCodeblock(String(item.signature), "ss");
+          }
+          if (item.summary) {
+            markdown.appendText("\n\n");
+            markdown.appendText(String(item.summary));
+          }
+          if (item.source) {
+            markdown.appendText(`\n\nsource: ${String(item.source)}`);
+          }
+          if (item.resultSort) {
+            markdown.appendText(`\nresult: ${String(item.resultSort)}`);
+          }
+          return new vscode.Hover(markdown);
+        }
+
+        for (const item of payload.variables || []) {
+          if (String(item && item.name ? item.name : "") !== target) {
+            continue;
+          }
+          const markdown = new vscode.MarkdownString();
+          markdown.appendCodeblock(`(${target}: ${String(item.type || "unknown")})`, "ss");
+          if (item.type) {
+            markdown.appendText(`\ntype: ${String(item.type)}`);
+          }
+          return new vscode.Hover(markdown);
+        }
+        return null;
       });
     },
   };
 
   context.subscriptions.push(
     vscode.languages.registerInlayHintsProvider({ language: "ss-slide" }, provider),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider({ language: "ss-slide" }, provider),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider({ language: "ss-slide" }, provider),
   );
 
   context.subscriptions.push(
@@ -580,6 +774,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
       if (document.languageId === "ss-slide") {
+        clearEditorInfoCache(document);
         clearRefresh(document);
         clearDiagnosticsTimer(document);
         emitter.fire();
@@ -592,6 +787,7 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
+      clearEditorInfoCache(event.document);
       scheduleRefresh(event.document, 400);
       scheduleDiagnostics(event.document, 500);
       schedulePreview(event.document, livePreviewDebounceMs());
@@ -601,6 +797,7 @@ function activate(context) {
 
   context.subscriptions.push(
     vscode.workspace.onDidCloseTextDocument((document) => {
+      clearEditorInfoCache(document);
       clearRefresh(document);
       clearDiagnosticsTimer(document);
       clearPreviewSession(document);

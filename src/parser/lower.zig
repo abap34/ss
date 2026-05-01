@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const error_report = @import("../error_report.zig");
+const error_report = @import("utils").err;
 const theme_loader = @import("../theme_loader.zig");
 const ast = @import("ast.zig");
 const names = @import("names.zig");
@@ -201,32 +201,11 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
     diagnostic_source = source;
     diagnostic_path = path;
     diagnostic_reported = false;
-    var base_program: ?Program = null;
-    defer if (base_program) |*prog| prog.deinit(engine.allocator);
-    var theme_program: ?Program = null;
-    defer if (theme_program) |*prog| prog.deinit(engine.allocator);
+    var index = try typecheck.loadProgramIndex(engine.allocator, io, engine.asset_base_dir, program);
+    defer index.deinit();
+    const functions = &index.functions;
 
-    var functions = std.StringHashMap(FunctionDecl).init(engine.allocator);
-    defer functions.deinit();
-
-    base_program = try loadThemeProgram(engine, io, "base");
-    for (base_program.?.functions.items) |func| {
-        try functions.put(func.name, func);
-    }
-
-    const theme_name = program.theme_name orelse "default";
-    if (!std.mem.eql(u8, theme_name, "base")) {
-        theme_program = try loadThemeProgram(engine, io, theme_name);
-        for (theme_program.?.functions.items) |func| {
-            try functions.put(func.name, func);
-        }
-    }
-
-    for (program.functions.items) |func| {
-        try functions.put(func.name, func);
-    }
-
-    typecheck.checkFunctionDefinitions(engine.allocator, engine, &functions) catch |err| {
+    typecheck.checkFunctionDefinitions(engine.allocator, engine, functions) catch |err| {
         if (engine.diagnostics.items.len == 0) reportLowerError(err, "bytes:0-1");
         return err;
     };
@@ -238,7 +217,7 @@ pub fn lowerToEngineWithPath(program: Program, source: []const u8, path: []const
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            const flow = executeStatement(engine, page_id, .attached, &env, &functions, &last_code_like, stmt, null) catch |err| {
+            const flow = executeStatement(engine, page_id, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
                 const origin = statementOrigin(engine.allocator, stmt.span) catch "bytes:0-1";
                 if (engine.diagnostics.items.len == 0) reportLowerError(err, origin);
                 return err;

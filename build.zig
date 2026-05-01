@@ -8,12 +8,19 @@ pub fn build(b: *std.Build) void {
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
     const md4c_include = b.path(md4c_src);
 
+    const utils_mod = b.createModule(.{
+        .root_source_file = b.path("src/utils.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const core_mod = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
+    core_mod.addImport("utils", utils_mod);
     core_mod.addIncludePath(md4c_include);
     core_mod.addCSourceFiles(.{
         .root = b.path(md4c_src),
@@ -27,6 +34,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     exe_mod.addImport("core", core_mod);
+    exe_mod.addImport("utils", utils_mod);
 
     const exe = b.addExecutable(.{
         .name = "ss",
@@ -51,6 +59,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     parser_tests_mod.addImport("core", core_mod);
+    parser_tests_mod.addImport("utils", utils_mod);
     const parser_tests = b.addTest(.{
         .root_module = parser_tests_mod,
     });
@@ -62,6 +71,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     main_tests_mod.addImport("core", core_mod);
+    main_tests_mod.addImport("utils", utils_mod);
     const main_tests = b.addTest(.{
         .root_module = main_tests_mod,
     });

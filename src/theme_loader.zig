@@ -8,13 +8,25 @@ pub fn loadThemeSource(
     base_dir: []const u8,
     theme_spec: []const u8,
 ) ![]u8 {
+    const path = try resolveThemeSourcePath(allocator, io, base_dir, theme_spec);
+    defer allocator.free(path);
+    return readThemeFile(allocator, io, path);
+}
+
+pub fn resolveThemeSourcePath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    theme_spec: []const u8,
+) ![]u8 {
     if (looksLikePath(theme_spec)) {
         const path = try resolveExplicitPath(allocator, base_dir, theme_spec);
-        defer allocator.free(path);
-        return readThemeFile(allocator, io, path) catch |err| switch (err) {
-            error.FileNotFound => error.UnknownTheme,
-            else => err,
-        };
+        if (tryReadThemeFile(allocator, io, path) catch |err| return err) |bytes| {
+            allocator.free(bytes);
+            return path;
+        }
+        allocator.free(path);
+        return error.UnknownTheme;
     }
 
     const candidates = [_][]const u8{
@@ -25,8 +37,12 @@ pub fn loadThemeSource(
     defer {
         for (candidates) |candidate| allocator.free(candidate);
     }
+
     for (candidates) |candidate| {
-        if (try tryReadThemeFile(allocator, io, candidate)) |bytes| return bytes;
+        if (tryReadThemeFile(allocator, io, candidate) catch |err| return err) |bytes| {
+            allocator.free(bytes);
+            return try allocator.dupe(u8, candidate);
+        }
     }
 
     return error.UnknownTheme;

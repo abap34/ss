@@ -2,27 +2,8 @@ const std = @import("std");
 const core = @import("core");
 const parser = @import("parser.zig");
 const pdf = @import("render/pdf.zig");
-const registry = @import("parser/registry.zig");
-const theme_loader = @import("theme_loader.zig");
-const error_report = @import("error_report.zig");
-
-const ByteSpan = error_report.ByteSpan;
-
-const FunctionSignature = struct {
-    params: []const []const u8,
-};
-
-const InlayHintKind = enum {
-    parameter_names,
-    solved_frame,
-};
-
-const InlayHintInfo = struct {
-    line: usize,
-    column: usize,
-    label: []const u8,
-    kind: InlayHintKind,
-};
+const editor_info = @import("editor_info.zig");
+const error_report = @import("utils").err;
 
 const Progress = struct {
     total: usize,
@@ -358,371 +339,30 @@ fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
 
 fn printEngineDump(allocator: std.mem.Allocator, engine: *core.Engine) !void {
     const dump = try engine.dumpToString(allocator);
+    defer allocator.free(dump);
     std.debug.print("{s}", .{dump});
 }
 
-fn writeEngineJson(io: std.Io, allocator: std.mem.Allocator, output_path: []const u8, engine: *core.Engine) !void {
-    const dump = try engine.dumpJsonToString(allocator);
-    try writeFile(io, output_path, dump);
-    std.debug.print("wrote {s}\n", .{output_path});
-}
-
-fn writeEnginePdf(io: std.Io, allocator: std.mem.Allocator, output_path: []const u8, engine: *core.Engine) !void {
-    const bytes = try pdf.renderDocumentToPdf(allocator, io, engine);
-    try writeFile(io, output_path, bytes);
-    std.debug.print("wrote {s}\n", .{output_path});
-}
-
-fn loadFunctionSignatures(
-    allocator: std.mem.Allocator,
+fn writeEngineJson(
     io: std.Io,
-    input_path: []const u8,
-    program: parser.Program,
-) !std.StringHashMap(FunctionSignature) {
-    var map = std.StringHashMap(FunctionSignature).init(allocator);
-    errdefer {
-        var it = map.iterator();
-        while (it.next()) |entry| freeSignature(allocator, entry.value_ptr.*);
-        map.deinit();
-    }
-
-    for (registry.primitiveDescriptors()) |descriptor| {
-        try map.put(descriptor.name, .{ .params = try clonePrimitiveParamLabels(allocator, descriptor) });
-    }
-
-    const base_dir = std.fs.path.dirname(input_path) orelse ".";
-    const base_source = try theme_loader.loadThemeSource(allocator, io, base_dir, "base");
-    defer allocator.free(base_source);
-    var base_program = try parseSource(allocator, base_source, "stdlib/themes/base.ss");
-    defer base_program.deinit(allocator);
-    for (base_program.functions.items) |func| {
-        try map.put(func.name, .{ .params = try cloneFunctionParamLabels(allocator, func.params.items) });
-    }
-
-    const theme_name = program.theme_name orelse "default";
-    if (!std.mem.eql(u8, theme_name, "base")) {
-        const theme_source = try theme_loader.loadThemeSource(allocator, io, base_dir, theme_name);
-        defer allocator.free(theme_source);
-        const theme_path = try std.fmt.allocPrint(allocator, "stdlib/themes/{s}.ss", .{theme_name});
-        var theme_program = try parseSource(allocator, theme_source, theme_path);
-        defer theme_program.deinit(allocator);
-        for (theme_program.functions.items) |func| {
-            try map.put(func.name, .{ .params = try cloneFunctionParamLabels(allocator, func.params.items) });
-        }
-    }
-
-    for (program.functions.items) |func| {
-        try map.put(func.name, .{ .params = try cloneFunctionParamLabels(allocator, func.params.items) });
-    }
-
-    return map;
-}
-
-fn cloneFunctionParamLabels(
     allocator: std.mem.Allocator,
-    params: []const parser.ParamDecl,
-) ![]const []const u8 {
-    const copied = try allocator.alloc([]const u8, params.len);
-    errdefer {
-        for (copied[0..params.len]) |name| allocator.free(name);
-        allocator.free(copied);
-    }
-    for (params, 0..) |param, index| {
-        copied[index] = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
-    }
-    return copied;
-}
-
-fn clonePrimitiveParamLabels(
-    allocator: std.mem.Allocator,
-    descriptor: registry.PrimitiveDescriptor,
-) ![]const []const u8 {
-    const copied = try allocator.alloc([]const u8, descriptor.arg_names.len);
-    errdefer {
-        for (copied[0..descriptor.arg_names.len]) |name| allocator.free(name);
-        allocator.free(copied);
-    }
-    for (descriptor.arg_names, 0..) |name, index| {
-        copied[index] = if (index < descriptor.arg_sorts.len and descriptor.arg_sorts[index] != .any)
-            try std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, @tagName(descriptor.arg_sorts[index]) })
-        else
-            try allocator.dupe(u8, name);
-    }
-    return copied;
-}
-
-fn freeSignature(allocator: std.mem.Allocator, signature: FunctionSignature) void {
-    for (signature.params) |param| allocator.free(param);
-    allocator.free(signature.params);
-}
-
-fn appendInlayHint(
-    allocator: std.mem.Allocator,
-    hints: *std.ArrayList(InlayHintInfo),
-    source: []const u8,
-    byte_index: usize,
-    label: []const u8,
-    kind: InlayHintKind,
-) !void {
-    const loc = error_report.computeLineColumn(source, byte_index);
-    try hints.append(allocator, .{
-        .line = loc.line,
-        .column = loc.column,
-        .label = label,
-        .kind = kind,
-    });
-}
-
-fn trimHintByteIndexToLineEnd(source: []const u8, byte_index: usize) usize {
-    var index = @min(byte_index, source.len);
-    while (index > 0) {
-        const ch = source[index - 1];
-        if (ch == '\n' or ch == '\r' or ch == ' ' or ch == '\t') {
-            index -= 1;
-            continue;
-        }
-        break;
-    }
-    return index;
-}
-
-fn indexOfCallNameInSlice(slice: []const u8, call_name: []const u8) ?usize {
-    return std.mem.indexOf(u8, slice, call_name);
-}
-
-fn skipHorizontalSpace(slice: []const u8, start: usize) usize {
-    var index = start;
-    while (index < slice.len and (slice[index] == ' ' or slice[index] == '\t' or slice[index] == '\r' or slice[index] == '\n')) : (index += 1) {}
-    return index;
-}
-
-fn findUnaryArgStart(slice: []const u8, after_name: usize) ?usize {
-    const start = skipHorizontalSpace(slice, after_name);
-    if (start >= slice.len) return null;
-    return start;
-}
-
-fn findCallArgStartOffsets(
-    allocator: std.mem.Allocator,
-    slice: []const u8,
-    call_name: []const u8,
-    arg_count: usize,
-) ![]usize {
-    var starts = std.ArrayList(usize).empty;
-    errdefer starts.deinit(allocator);
-    if (arg_count == 0) return starts.toOwnedSlice(allocator);
-
-    const name_index = indexOfCallNameInSlice(slice, call_name) orelse return starts.toOwnedSlice(allocator);
-    var index = skipHorizontalSpace(slice, name_index + call_name.len);
-    if (index >= slice.len) return starts.toOwnedSlice(allocator);
-
-    if (slice[index] != '(') {
-        if (findUnaryArgStart(slice, index)) |arg_start| {
-            try starts.append(allocator, arg_start);
-        }
-        return starts.toOwnedSlice(allocator);
-    }
-
-    index += 1;
-    var depth: usize = 0;
-    var in_string = false;
-    var escaped = false;
-    var want_arg_start = true;
-
-    while (index < slice.len) : (index += 1) {
-        const ch = slice[index];
-        if (in_string) {
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            if (ch == '\\') {
-                escaped = true;
-                continue;
-            }
-            if (ch == '"') {
-                in_string = false;
-            }
-            continue;
-        }
-
-        if (ch == '"') {
-            if (want_arg_start) {
-                try starts.append(allocator, index);
-                want_arg_start = false;
-            }
-            in_string = true;
-            continue;
-        }
-
-        if (want_arg_start and !std.ascii.isWhitespace(ch)) {
-            try starts.append(allocator, index);
-            want_arg_start = false;
-        }
-
-        switch (ch) {
-            '(' => depth += 1,
-            ')' => {
-                if (depth == 0) break;
-                depth -= 1;
-            },
-            ',' => {
-                if (depth == 0) want_arg_start = true;
-            },
-            else => {},
-        }
-    }
-
-    return starts.toOwnedSlice(allocator);
-}
-
-fn hintForCallExpr(
-    allocator: std.mem.Allocator,
-    hints: *std.ArrayList(InlayHintInfo),
-    signatures: *const std.StringHashMap(FunctionSignature),
-    source: []const u8,
-    span: ByteSpan,
-    call: parser.CallExpr,
-) !void {
-    const signature = signatures.get(call.name) orelse return;
-    if (signature.params.len == 0 or call.args.items.len == 0) return;
-    const slice = source[span.start..@min(span.end, source.len)];
-    const arg_starts = try findCallArgStartOffsets(allocator, slice, call.name, call.args.items.len);
-    defer allocator.free(arg_starts);
-    const hint_count = @min(@min(signature.params.len, call.args.items.len), arg_starts.len);
-    for (0..hint_count) |index| {
-        const label = try std.fmt.allocPrint(allocator, "{s}:", .{hintParamName(signature.params[index])});
-        try appendInlayHint(allocator, hints, source, span.start + arg_starts[index], label, .parameter_names);
-    }
-}
-
-fn hintParamName(label: []const u8) []const u8 {
-    const colon = std.mem.indexOfScalar(u8, label, ':') orelse return label;
-    var end = colon;
-    while (end > 0 and (label[end - 1] == ' ' or label[end - 1] == '\t')) end -= 1;
-    return label[0..end];
-}
-
-fn collectExprHints(
-    allocator: std.mem.Allocator,
-    hints: *std.ArrayList(InlayHintInfo),
-    signatures: *const std.StringHashMap(FunctionSignature),
-    source: []const u8,
-    span: ByteSpan,
-    expr: parser.Expr,
-) !void {
-    switch (expr) {
-        .call => |call| {
-            try hintForCallExpr(allocator, hints, signatures, source, span, call);
-            for (call.args.items) |arg| {
-                try collectExprHints(allocator, hints, signatures, source, span, arg);
-            }
-        },
-        else => {},
-    }
-}
-
-fn collectStatementHints(
-    allocator: std.mem.Allocator,
-    hints: *std.ArrayList(InlayHintInfo),
-    signatures: *const std.StringHashMap(FunctionSignature),
-    source: []const u8,
-    stmt: parser.Statement,
-) !void {
-    const span: ByteSpan = .{ .start = stmt.span.start, .end = stmt.span.end };
-    switch (stmt.kind) {
-        .let_binding => |binding| try collectExprHints(allocator, hints, signatures, source, span, binding.expr),
-        .bind_binding => |binding| try collectExprHints(allocator, hints, signatures, source, span, binding.expr),
-        .return_expr => |expr| try collectExprHints(allocator, hints, signatures, source, span, expr),
-        .expr_stmt => |expr| try collectExprHints(allocator, hints, signatures, source, span, expr),
-        else => {},
-    }
-}
-
-fn collectProgramHints(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    program: parser.Program,
-    signatures: *const std.StringHashMap(FunctionSignature),
-) !std.ArrayList(InlayHintInfo) {
-    var hints = std.ArrayList(InlayHintInfo).empty;
-    errdefer {
-        for (hints.items) |hint| allocator.free(hint.label);
-        hints.deinit(allocator);
-    }
-
-    for (program.functions.items) |func| {
-        for (func.statements.items) |stmt| {
-            try collectStatementHints(allocator, &hints, signatures, source, stmt);
-        }
-    }
-    for (program.pages.items) |page| {
-        for (page.statements.items) |stmt| {
-            try collectStatementHints(allocator, &hints, signatures, source, stmt);
-        }
-    }
-    return hints;
-}
-
-fn collectSolvedSizeHints(
-    allocator: std.mem.Allocator,
-    source: []const u8,
+    output_path: []const u8,
     engine: *core.Engine,
-    hints: *std.ArrayList(InlayHintInfo),
 ) !void {
-    var best_by_origin = std.StringHashMap(core.NodeId).init(allocator);
-    defer best_by_origin.deinit();
-
-    for (engine.nodes.items) |node| {
-        if ((node.kind != .object and node.kind != .derived) or !node.attached) continue;
-        const origin = node.origin orelse continue;
-        if (node.role != null and std.mem.eql(u8, node.role.?, "panel")) continue;
-        if (best_by_origin.get(origin)) |existing| {
-            if (node.id > existing) try best_by_origin.put(origin, node.id);
-        } else {
-            try best_by_origin.put(origin, node.id);
-        }
-    }
-
-    var it = best_by_origin.iterator();
-    while (it.next()) |entry| {
-        const span = error_report.parseByteOrigin(entry.key_ptr.*) orelse continue;
-        const node = engine.getNode(entry.value_ptr.*) orelse continue;
-        const label = try std.fmt.allocPrint(
-            allocator,
-            " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
-            .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height },
-        );
-        try appendInlayHint(allocator, hints, source, trimHintByteIndexToLineEnd(source, span.end), label, .solved_frame);
-    }
+    const json = try engine.dumpJsonToString(allocator);
+    defer allocator.free(json);
+    try writeFile(io, output_path, json);
 }
 
-fn writeEditorInfoJson(
+fn writeEnginePdf(
+    io: std.Io,
     allocator: std.mem.Allocator,
-    source: []const u8,
-    program: parser.Program,
+    output_path: []const u8,
     engine: *core.Engine,
-    signatures: *const std.StringHashMap(FunctionSignature),
 ) !void {
-    var hints = try collectProgramHints(allocator, source, program, signatures);
-    defer {
-        for (hints.items) |hint| allocator.free(hint.label);
-        hints.deinit(allocator);
-    }
-    try collectSolvedSizeHints(allocator, source, engine, &hints);
-
-    std.debug.print("{{\"hints\":[", .{});
-    for (hints.items, 0..) |hint, index| {
-        if (index != 0) std.debug.print(",", .{});
-        std.debug.print(
-            "{{\"line\":{d},\"column\":{d},\"label\":",
-            .{ hint.line, hint.column },
-        );
-        const escaped = try std.json.Stringify.valueAlloc(allocator, hint.label, .{});
-        defer allocator.free(escaped);
-        std.debug.print("{s},\"kind\":\"{s}\"}}", .{ escaped, @tagName(hint.kind) });
-    }
-    std.debug.print("]}}\n", .{});
+    const pdf_data = try pdf.renderDocumentToPdf(allocator, io, engine);
+    defer allocator.free(pdf_data);
+    try writeFile(io, output_path, pdf_data);
 }
 
 fn defaultSiblingOutputPath(
@@ -746,6 +386,10 @@ fn run(init: std.process.Init) !void {
     }
 
     const cmd = args[1];
+    if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
+        usage();
+        return;
+    }
 
     if (std.mem.eql(u8, cmd, "check-file")) {
         const input_path = if (args.len >= 3) args[2] else "demo/ss.ss";
@@ -761,11 +405,9 @@ fn run(init: std.process.Init) !void {
         defer allocator.free(source);
         var program = try parseSource(allocator, source, input_path);
         defer program.deinit(allocator);
-        var signatures = try loadFunctionSignatures(allocator, io, input_path, program);
-        defer signatures.deinit();
         var engine = try buildFile(io, allocator, input_path, null);
         defer engine.deinit();
-        try writeEditorInfoJson(allocator, source, program, &engine, &signatures);
+        try editor_info.writeEditorInfoJson(allocator, io, input_path, source, program, &engine);
         return;
     }
 

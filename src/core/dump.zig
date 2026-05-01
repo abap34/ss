@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("model.zig");
 const render_policy = @import("render_policy.zig");
 const markdown = @import("markdown.zig");
+const json = @import("utils").json;
 
 const Allocator = model.Allocator;
 const Constraint = model.Constraint;
@@ -344,94 +345,24 @@ fn appendFmt(
     args: anytype,
 ) !void {
     const text = try std.fmt.allocPrint(allocator, fmt, args);
+    defer allocator.free(text);
     try buffer.appendSlice(allocator, text);
 }
 
-fn appendJsonFieldPrefix(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8) !void {
-    try appendJsonString(allocator, buffer, key);
-    try buffer.appendSlice(allocator, ": ");
-}
-
-fn appendJsonTrailingComma(allocator: Allocator, buffer: *std.ArrayList(u8), trailing_comma: bool) !void {
-    if (trailing_comma) try buffer.appendSlice(allocator, ", ");
-}
-
-fn appendJsonObjectFieldStart(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8) !void {
-    try appendJsonFieldPrefix(allocator, buffer, key);
-    try buffer.append(allocator, '{');
-}
-
-fn appendJsonFieldString(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8, value: []const u8, trailing_comma: bool) !void {
-    try appendJsonFieldPrefix(allocator, buffer, key);
-    try appendJsonString(allocator, buffer, value);
-    try appendJsonTrailingComma(allocator, buffer, trailing_comma);
-}
-
-fn appendJsonFieldInt(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8, value: anytype, trailing_comma: bool) !void {
-    try appendJsonFieldPrefix(allocator, buffer, key);
-    try appendJsonInt(allocator, buffer, value);
-    try appendJsonTrailingComma(allocator, buffer, trailing_comma);
-}
-
-fn appendJsonFieldFloat(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8, value: f32, trailing_comma: bool) !void {
-    try appendJsonFieldPrefix(allocator, buffer, key);
-    try appendFmt(allocator, buffer, "{d:.1}", .{value});
-    try appendJsonTrailingComma(allocator, buffer, trailing_comma);
-}
-
-fn appendJsonFieldNull(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8, trailing_comma: bool) !void {
-    try appendJsonFieldPrefix(allocator, buffer, key);
-    try buffer.appendSlice(allocator, "null");
-    try appendJsonTrailingComma(allocator, buffer, trailing_comma);
-}
-
-fn appendJsonFieldBool(allocator: Allocator, buffer: *std.ArrayList(u8), key: []const u8, value: bool, trailing_comma: bool) !void {
-    try appendJsonFieldPrefix(allocator, buffer, key);
-    try buffer.appendSlice(allocator, if (value) "true" else "false");
-    try appendJsonTrailingComma(allocator, buffer, trailing_comma);
-}
-
-fn appendJsonFieldOptionalString(
-    allocator: Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: ?[]const u8,
-    trailing_comma: bool,
-) !void {
-    if (value) |text| {
-        try appendJsonFieldString(allocator, buffer, key, text, trailing_comma);
-    } else {
-        try appendJsonFieldNull(allocator, buffer, key, trailing_comma);
-    }
-}
-
-fn appendJsonFieldOptionalInt(
-    allocator: Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: anytype,
-    trailing_comma: bool,
-) !void {
-    if (value) |number| {
-        try appendJsonFieldInt(allocator, buffer, key, number, trailing_comma);
-    } else {
-        try appendJsonFieldNull(allocator, buffer, key, trailing_comma);
-    }
-}
-
-fn appendJsonFieldOptionalEnumTag(
-    allocator: Allocator,
-    buffer: *std.ArrayList(u8),
-    key: []const u8,
-    value: anytype,
-    trailing_comma: bool,
-) !void {
-    if (value) |tagged| {
-        try appendJsonFieldString(allocator, buffer, key, @tagName(tagged), trailing_comma);
-    } else {
-        try appendJsonFieldNull(allocator, buffer, key, trailing_comma);
-    }
-}
+const appendJsonFieldPrefix = json.appendFieldPrefix;
+const appendJsonTrailingComma = json.appendTrailingComma;
+const appendJsonObjectFieldStart = json.appendObjectFieldStart;
+const appendJsonFieldString = json.appendFieldString;
+const appendJsonFieldInt = json.appendFieldInt;
+const appendJsonFieldFloat = json.appendFieldFloat;
+const appendJsonFieldNull = json.appendFieldNull;
+const appendJsonFieldBool = json.appendFieldBool;
+const appendJsonFieldOptionalString = json.appendFieldOptionalString;
+const appendJsonFieldOptionalInt = json.appendFieldOptionalInt;
+const appendJsonFieldOptionalEnumTag = json.appendFieldOptionalEnumTag;
+const appendJsonInt = json.appendInt;
+const appendJsonFloatValue = json.appendFloatValue;
+const appendJsonString = json.appendString;
 
 fn appendJsonFieldProperties(
     allocator: Allocator,
@@ -692,11 +623,6 @@ fn appendJsonFieldRender(
     try appendJsonTrailingComma(allocator, buffer, trailing_comma);
 }
 
-fn appendJsonInt(allocator: Allocator, buffer: *std.ArrayList(u8), value: anytype) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    try buffer.appendSlice(allocator, text);
-}
-
 fn appendJsonFieldColor(
     allocator: Allocator,
     buffer: *std.ArrayList(u8),
@@ -747,24 +673,4 @@ fn appendJsonFieldOptionalDash(
         try buffer.appendSlice(allocator, "null");
     }
     try appendJsonTrailingComma(allocator, buffer, trailing_comma);
-}
-
-fn appendJsonFloatValue(allocator: Allocator, buffer: *std.ArrayList(u8), value: f32) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d:.4}", .{value});
-    try buffer.appendSlice(allocator, text);
-}
-
-fn appendJsonString(allocator: Allocator, buffer: *std.ArrayList(u8), value: []const u8) !void {
-    try buffer.append(allocator, '"');
-    for (value) |ch| {
-        switch (ch) {
-            '\\' => try buffer.appendSlice(allocator, "\\\\"),
-            '"' => try buffer.appendSlice(allocator, "\\\""),
-            '\n' => try buffer.appendSlice(allocator, "\\n"),
-            '\r' => try buffer.appendSlice(allocator, "\\r"),
-            '\t' => try buffer.appendSlice(allocator, "\\t"),
-            else => try buffer.append(allocator, ch),
-        }
-    }
-    try buffer.append(allocator, '"');
 }

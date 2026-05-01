@@ -2,6 +2,8 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast.zig");
 const registry = @import("registry.zig");
+const theme_loader = @import("../theme_loader.zig");
+const syntax = @import("syntax.zig");
 
 pub const FunctionContract = struct {
     param_count: usize,
@@ -10,6 +12,53 @@ pub const FunctionContract = struct {
 };
 
 const SortEnv = std.StringHashMap(core.SemanticSort);
+
+pub const FunctionSource = enum {
+    base,
+    theme,
+    project,
+};
+
+pub const FunctionMetadata = struct {
+    source: FunctionSource,
+    path: ?[]const u8 = null,
+};
+
+pub const ProgramIndex = struct {
+    allocator: std.mem.Allocator,
+    base_source: ?[]u8 = null,
+    base_path: ?[]u8 = null,
+    base_program: ?ast.Program = null,
+    theme_source: ?[]u8 = null,
+    theme_path: ?[]u8 = null,
+    theme_program: ?ast.Program = null,
+    functions: std.StringHashMap(ast.FunctionDecl),
+    function_metadata: std.StringHashMap(FunctionMetadata),
+
+    pub fn deinit(self: *ProgramIndex) void {
+        self.function_metadata.deinit();
+        self.functions.deinit();
+        if (self.theme_program) |*program| program.deinit(self.allocator);
+        if (self.base_program) |*program| program.deinit(self.allocator);
+        if (self.theme_source) |source| self.allocator.free(source);
+        if (self.theme_path) |path| self.allocator.free(path);
+        if (self.base_source) |source| self.allocator.free(source);
+        if (self.base_path) |path| self.allocator.free(path);
+    }
+};
+
+pub fn collectFunctionsFromPrograms(
+    allocator: std.mem.Allocator,
+    programs: []const *const ast.Program,
+) !std.StringHashMap(ast.FunctionDecl) {
+    var functions = std.StringHashMap(ast.FunctionDecl).init(allocator);
+    for (programs) |program| {
+        for (program.functions.items) |func| {
+            try functions.put(func.name, func);
+        }
+    }
+    return functions;
+}
 
 pub fn valueSort(value: core.Value) core.SemanticSort {
     return switch (value) {
@@ -103,6 +152,146 @@ pub fn checkFunctionDefinitions(
     while (it.next()) |entry| {
         try checkFunction(allocator, engine, functions, entry.value_ptr.*);
     }
+}
+
+pub fn collectVariableTypesFromProgram(
+    allocator: std.mem.Allocator,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    program: ast.Program,
+) !std.StringHashMap(core.SemanticSort) {
+    var variables = std.StringHashMap(core.SemanticSort).init(allocator);
+    errdefer variables.deinit();
+
+    for (program.functions.items) |func| {
+        var env = SortEnv.init(allocator);
+        defer env.deinit();
+
+        for (func.params.items) |param| {
+            try env.put(param.name, param.sort);
+            try variables.put(param.name, param.sort);
+        }
+
+        for (func.statements.items) |stmt| {
+            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+        }
+    }
+
+    for (program.pages.items) |page| {
+        var env = SortEnv.init(allocator);
+        defer env.deinit();
+
+        for (page.statements.items) |stmt| {
+            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+        }
+    }
+
+    return variables;
+}
+
+fn appendFunctionDeclarations(
+    functions: *std.StringHashMap(ast.FunctionDecl),
+    metadata: *std.StringHashMap(FunctionMetadata),
+    program: ast.Program,
+    source: FunctionSource,
+    path: ?[]const u8,
+) !void {
+    for (program.functions.items) |func| {
+        try functions.put(func.name, func);
+        try metadata.put(func.name, .{ .source = source, .path = path });
+    }
+}
+
+pub fn loadProgramIndex(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    project_program: ast.Program,
+) !ProgramIndex {
+    var index = ProgramIndex{
+        .allocator = allocator,
+        .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
+        .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
+    };
+    errdefer index.deinit();
+
+    index.base_path = try theme_loader.resolveThemeSourcePath(allocator, io, base_dir, "base");
+    index.base_source = try readFile(io, allocator, index.base_path.?);
+    index.base_program = try parseSource(allocator, index.base_source.?, index.base_path.?);
+    try validateThemeProgram(index.base_program.?);
+    try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.base_program.?, .base, index.base_path.?);
+
+    const theme_name = project_program.theme_name orelse "default";
+    if (!std.mem.eql(u8, theme_name, "base")) {
+        index.theme_path = try theme_loader.resolveThemeSourcePath(allocator, io, base_dir, theme_name);
+        index.theme_source = try readFile(io, allocator, index.theme_path.?);
+        index.theme_program = try parseSource(allocator, index.theme_source.?, index.theme_path.?);
+        try validateThemeProgram(index.theme_program.?);
+        try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.theme_program.?, .theme, index.theme_path.?);
+    }
+
+    try appendFunctionDeclarations(&index.functions, &index.function_metadata, project_program, .project, null);
+    return index;
+}
+
+fn validateThemeProgram(program: ast.Program) !void {
+    if (program.theme_name != null) return error.InvalidThemeModule;
+    if (program.pages.items.len != 0) return error.InvalidThemeModule;
+}
+
+pub fn collectVariableTypesForProgram(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    input_path: []const u8,
+    program: ast.Program,
+) !std.StringHashMap(core.SemanticSort) {
+    const base_dir = std.fs.path.dirname(input_path) orelse ".";
+    var index = try loadProgramIndex(allocator, io, base_dir, program);
+    defer index.deinit();
+    return try collectVariableTypesFromProgram(allocator, &index.functions, program);
+}
+
+fn collectVariableTypesFromStatement(
+    allocator: std.mem.Allocator,
+    env: *SortEnv,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    stmt: ast.Statement,
+    variables: *std.StringHashMap(core.SemanticSort),
+) !void {
+    switch (stmt.kind) {
+        .let_binding => |binding| {
+            const sort = try inferExprSort(allocator, null, functions, env, binding.expr, "");
+            try env.put(binding.name, sort);
+            try variables.put(binding.name, sort);
+        },
+        .bind_binding => |binding| {
+            _ = try inferExprSort(allocator, null, functions, env, binding.expr, "");
+            try env.put(binding.name, .fragment);
+            try variables.put(binding.name, .fragment);
+        },
+        .return_expr => |expr| {
+            _ = try inferExprSort(allocator, null, functions, env, expr, "");
+        },
+        .expr_stmt => |expr| {
+            _ = try inferExprSort(allocator, null, functions, env, expr, "");
+        },
+        .constrain => |decl| {
+            if (decl.offset) |expr| {
+                _ = try inferExprSort(allocator, null, functions, env, expr, "");
+            }
+        },
+        else => {},
+    }
+}
+
+fn readFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
+}
+
+fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !ast.Program {
+    _ = path;
+    return syntax.parse(allocator, source) catch |err| {
+        return err;
+    };
 }
 
 fn checkFunctionCallGraph(
@@ -264,7 +453,7 @@ fn checkStatement(
 
 fn inferExprSort(
     allocator: std.mem.Allocator,
-    engine: *core.Engine,
+    engine: ?*core.Engine,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     env: *const SortEnv,
     expr: ast.Expr,
@@ -284,7 +473,7 @@ fn inferExprSort(
 
 fn inferCallSort(
     allocator: std.mem.Allocator,
-    engine: *core.Engine,
+    engine: ?*core.Engine,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     env: *const SortEnv,
     call: ast.CallExpr,
@@ -313,7 +502,7 @@ fn inferCallSort(
     return error.UnknownFunction;
 }
 
-fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index: usize) ?core.SemanticSort {
+pub fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index: usize) ?core.SemanticSort {
     const arg_sort = if (descriptor.arg_sorts.len == 0)
         return null
     else if (index < descriptor.arg_sorts.len)
@@ -337,16 +526,18 @@ fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index: usi
 }
 
 fn ensureSort(
-    engine: *core.Engine,
+    engine: ?*core.Engine,
     actual: core.SemanticSort,
     expected: core.SemanticSort,
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
     if (actual != expected) {
-        try engine.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
-        });
+        if (engine) |sink| {
+            try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
+            });
+        }
         return error.InvalidSemanticSort;
     }
 }
