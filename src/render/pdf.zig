@@ -1,10 +1,32 @@
 const std = @import("std");
 const core = @import("core");
+const dump = @import("../dump.zig");
+const utils = @import("utils");
 
 const Allocator = std.mem.Allocator;
+const fs_utils = utils.fs;
 
-pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, engine: *core.Engine) ![]const u8 {
-    const json = try engine.dumpJsonToString(allocator);
+const embedded_runtime_version = "pdf-runtime-v1";
+
+const EmbeddedResource = struct {
+    relative_path: []const u8,
+    bytes: []const u8,
+};
+
+const embedded_resources = [_]EmbeddedResource{
+    .{ .relative_path = "src/render/pdf_backend.py", .bytes = @embedFile("pdf_backend.py") },
+    .{ .relative_path = "stdlib/highlighters/python_keywords.py", .bytes = @embedFile("../stdlib/highlighters/python_keywords.py") },
+    .{ .relative_path = "third_party/fonts/fetch.py", .bytes = @embedFile("../embedded_fonts/fetch.py") },
+    .{ .relative_path = "third_party/fonts/NotoSansJP-Regular.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Regular.ttf") },
+    .{ .relative_path = "third_party/fonts/NotoSansJP-Bold.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Bold.ttf") },
+    .{ .relative_path = "third_party/fonts/NotoSansJP-Black.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Black.ttf") },
+    .{ .relative_path = "third_party/fonts/NotoSansMono-Regular.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansMono-Regular.ttf") },
+    .{ .relative_path = "third_party/fonts/NotoSansMono-Bold.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansMono-Bold.ttf") },
+    .{ .relative_path = "third_party/fonts/NotoEmoji-Regular.ttf", .bytes = @embedFile("../embedded_fonts/NotoEmoji-Regular.ttf") },
+};
+
+pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, ir: *core.Ir) ![]const u8 {
+    const json = try dump.toOwnedString(allocator, ir);
     const cache_dir = ".ss-cache/render";
     try std.Io.Dir.cwd().createDirPath(io, cache_dir);
 
@@ -18,9 +40,11 @@ pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, engine: *core.Engin
     });
 
     const python = try findPythonExecutable(allocator, io);
-    const script_path = try resolvePdfBackendScriptPath(allocator, io);
+    const runtime_root = try ensureEmbeddedRuntime(allocator, io);
+    defer allocator.free(runtime_root);
+    const script_path = try std.fs.path.join(allocator, &.{ runtime_root, "src/render/pdf_backend.py" });
     defer allocator.free(script_path);
-    const asset_base_dir = if (engine.asset_base_dir.len == 0) "." else engine.asset_base_dir;
+    const asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir;
 
     const result = try std.process.run(allocator, io, .{
         .argv = &.{
@@ -44,31 +68,26 @@ pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, engine: *core.Engin
     return std.Io.Dir.cwd().readFileAlloc(io, pdf_path, allocator, .unlimited);
 }
 
-fn resolvePdfBackendScriptPath(allocator: Allocator, io: std.Io) ![]u8 {
-    const cwd_candidate = try allocator.dupe(u8, "src/render/pdf_backend.py");
-    if (fileExists(cwd_candidate)) return cwd_candidate;
-    allocator.free(cwd_candidate);
+fn ensureEmbeddedRuntime(allocator: Allocator, io: std.Io) ![]u8 {
+    const root = try std.fmt.allocPrint(allocator, ".ss-cache/runtime/{s}", .{embedded_runtime_version});
+    errdefer allocator.free(root);
 
-    const exe_dir = std.process.executableDirPathAlloc(io, allocator) catch return error.PdfBackendNotFound;
-    defer allocator.free(exe_dir);
+    try std.Io.Dir.cwd().createDirPath(io, root);
+    for (embedded_resources) |resource| {
+        const full_path = try std.fs.path.join(allocator, &.{ root, resource.relative_path });
+        defer allocator.free(full_path);
 
-    const relative_candidates = [_][]const u8{
-        "../../src/render/pdf_backend.py",
-        "../src/render/pdf_backend.py",
-    };
-    for (relative_candidates) |relative| {
-        const candidate = try std.fs.path.join(allocator, &.{ exe_dir, relative });
-        if (fileExists(candidate)) return candidate;
-        allocator.free(candidate);
+        if (fs_utils.fileExists(allocator, full_path)) continue;
+
+        const dir_path = std.fs.path.dirname(full_path) orelse ".";
+        try std.Io.Dir.cwd().createDirPath(io, dir_path);
+        try std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = full_path,
+            .data = resource.bytes,
+            .flags = .{ .truncate = true },
+        });
     }
-
-    return error.PdfBackendNotFound;
-}
-
-fn fileExists(path: []const u8) bool {
-    const zpath = std.heap.smp_allocator.dupeZ(u8, path) catch return false;
-    defer std.heap.smp_allocator.free(zpath);
-    return std.c.access(zpath.ptr, 0) == 0;
+    return root;
 }
 
 fn findPythonExecutable(allocator: Allocator, io: std.Io) ![]const u8 {

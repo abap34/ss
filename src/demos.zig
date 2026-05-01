@@ -5,7 +5,7 @@ const default_demo = @import("demo_default");
 
 pub const Demo = struct {
     name: []const u8,
-    buildFn: *const fn (*core.Engine) anyerror!void,
+    buildFn: *const fn (*core.Ir) anyerror!void,
 };
 
 pub const all = [_]Demo{

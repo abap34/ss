@@ -125,14 +125,14 @@ pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diag
     });
 }
 
-pub fn printEngineDiagnostics(path: []const u8, source: []const u8, engine: anytype) void {
-    for (engine.diagnostics.items) |diagnostic| {
-        const message = formatEngineDiagnostic(engine.allocator, diagnostic) catch @tagName(diagnostic.phase);
-        defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) engine.allocator.free(message);
+pub fn printIrDiagnostics(path: []const u8, source: []const u8, ir: anytype) void {
+    for (ir.diagnostics.items) |diagnostic| {
+        const message = formatIrDiagnostic(ir.allocator, diagnostic) catch @tagName(diagnostic.phase);
+        defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) ir.allocator.free(message);
         const span = if (spanFromOrigin(diagnostic.origin)) |origin_span|
             origin_span
         else if (diagnostic.node_id) |node_id| blk: {
-            const node = engine.getNode(node_id) orelse break :blk null;
+            const node = ir.getNode(node_id) orelse break :blk null;
             break :blk spanFromOrigin(node.origin);
         } else null;
         print(.{
@@ -148,8 +148,8 @@ pub fn printEngineDiagnostics(path: []const u8, source: []const u8, engine: anyt
     }
 }
 
-pub fn hasErrorDiagnostics(engine: anytype) bool {
-    for (engine.diagnostics.items) |diagnostic| {
+pub fn hasIrErrors(ir: anytype) bool {
+    for (ir.diagnostics.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return true;
     }
     return false;
@@ -158,11 +158,11 @@ pub fn hasErrorDiagnostics(engine: anytype) bool {
 pub fn printConstraintFailure(
     path: []const u8,
     source: []const u8,
-    engine: anytype,
+    ir: anytype,
     err: anyerror,
     formatConstraint: anytype,
 ) void {
-    const failure = engine.last_constraint_failure orelse {
+    const failure = ir.last_constraint_failure orelse {
         std.debug.print("constraint error: {s}\n", .{@errorName(err)});
         return;
     };
@@ -170,13 +170,13 @@ pub fn printConstraintFailure(
         .conflict => "ConstraintConflict: constraint conflict",
         .negative_size => "NegativeConstraintSize: negative size from constraints",
     };
-    const constraint_text = formatConstraint(engine.allocator, failure.constraint) catch "";
-    defer if (constraint_text.len > 0) engine.allocator.free(constraint_text);
+    const constraint_text = formatConstraint(ir.allocator, failure.constraint) catch "";
+    defer if (constraint_text.len > 0) ir.allocator.free(constraint_text);
     const existing_text = if (failure.existing_constraint) |constraint|
-        formatConstraint(engine.allocator, constraint) catch ""
+        formatConstraint(ir.allocator, constraint) catch ""
     else
         "";
-    defer if (existing_text.len > 0) engine.allocator.free(existing_text);
+    defer if (existing_text.len > 0) ir.allocator.free(existing_text);
 
     if (failure.constraint.origin) |origin| {
         if (parseByteOrigin(origin)) |span| {
@@ -211,6 +211,53 @@ pub fn printConstraintFailure(
     }
 }
 
+pub fn isExpectedCliError(err: anyerror) bool {
+    return switch (err) {
+        error.UnknownFunction,
+        error.UnknownQuery,
+        error.UnknownTransform,
+        error.UnknownIdentifier,
+        error.ExpectedString,
+        error.ExpectedIdentifier,
+        error.ExpectedKeyword,
+        error.ExpectedChar,
+        error.ExpectedLineBreak,
+        error.ExpectedEnd,
+        error.ExpectedNumber,
+        error.ExpectedTypeAnnotation,
+        error.ExpectedReturn,
+        error.UnterminatedString,
+        error.UnterminatedEscape,
+        error.InvalidEscape,
+        error.UnknownAnchor,
+        error.ReturnOutsideFunction,
+        error.InvalidThemeModule,
+        error.FunctionDoesNotReturnValue,
+        error.InvalidArity,
+        error.InvalidSemanticSort,
+        error.UnknownTheme,
+        error.RecursiveFunction,
+        error.ExpectedSelection,
+        error.ExpectedConstraintSet,
+        error.ExpectedStringArgument,
+        error.ExpectedNumberArgument,
+        error.ExpectedStyleArgument,
+        error.ExpectedAnchor,
+        error.ExpectedObject,
+        error.UnknownRole,
+        error.UnknownPayloadKind,
+        error.PageCannotBeConstraintTarget,
+        error.MissingHighlightTarget,
+        error.UnsupportedFragmentRoot,
+        error.FunctionDidNotReturnValue,
+        error.ConstraintConflict,
+        error.NegativeConstraintSize,
+        error.DiagnosticsFailed,
+        => true,
+        else => false,
+    };
+}
+
 fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
     return switch (diagnostic.err) {
         error.UnterminatedString => "UnterminatedString: unterminated string",
@@ -241,9 +288,9 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
     };
 }
 
-fn formatEngineDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
+fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
     return switch (diagnostic.data) {
-        .user_report => |data| std.fmt.allocPrint(allocator, "UserReport: {s}", .{data.message}),
+        .user_report => |data| allocator.dupe(u8, data.message),
         .asset_not_found => |data| std.fmt.allocPrint(
             allocator,
             "AssetNotFound: {s} (resolved to {s})",
