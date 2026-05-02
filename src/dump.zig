@@ -17,9 +17,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try root.stringField("asset_base_dir", ir.asset_base_dir);
 
     var modules = try root.arrayField("modules");
-    try writeModule(allocator, &modules, ir.project_module);
-    if (ir.base_module) |module| try writeModule(allocator, &modules, module);
-    if (ir.theme_module) |module| try writeModule(allocator, &modules, module);
+    for (ir.modules.items) |module| try writeModule(allocator, &modules, module);
     try modules.end();
 
     var functions = try root.arrayField("functions");
@@ -29,13 +27,13 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     }
     var function_iterator = ir.functions.iterator();
     while (function_iterator.next()) |entry| {
-        const metadata = ir.function_metadata.get(entry.key_ptr.*) orelse core.FunctionMetadata{ .source = .project };
+        const metadata = ir.function_metadata.get(entry.key_ptr.*) orelse core.FunctionMetadata{ .module_id = ir.project_module_id };
         try writeUserFunction(allocator, &functions, ir, entry.key_ptr.*, entry.value_ptr.*, metadata);
     }
     try functions.end();
 
     var variables = try root.arrayField("variables");
-    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.project_module.program);
+    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram());
     defer variable_infos.deinit();
     var variable_iterator = variable_infos.iterator();
     while (variable_iterator.next()) |entry| {
@@ -144,8 +142,23 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
 fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.SourceModule) !void {
     var item = try modules.objectItem();
+    try item.intField("id", module.id);
     try item.enumTagField("kind", module.kind);
+    try item.stringField("spec", module.spec);
     try item.optionalStringField("path", module.path);
+    var imports = try item.arrayField("imports");
+    for (module.program.imports.items, 0..) |import_decl, index| {
+        var import_item = try imports.objectItem();
+        try import_item.stringField("spec", import_decl.spec);
+        try writeSpan(&import_item, import_decl.span);
+        if (index < module.resolved_import_ids.items.len) {
+            try import_item.intField("module_id", module.resolved_import_ids.items[index]);
+        } else {
+            try import_item.nullField("module_id");
+        }
+        try import_item.end();
+    }
+    try imports.end();
     try item.stringField("source", module.source);
     try writeProgram(allocator, &item, module.program);
     try item.end();
@@ -153,7 +166,15 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
 
 fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast.Program) !void {
     var program_object = try object.objectField("program");
-    try program_object.optionalStringField("theme_name", program.theme_name);
+
+    var imports = try program_object.arrayField("imports");
+    for (program.imports.items) |import_decl| {
+        var item = try imports.objectItem();
+        try item.stringField("spec", import_decl.spec);
+        try writeSpan(&item, import_decl.span);
+        try item.end();
+    }
+    try imports.end();
 
     var functions = try program_object.arrayField("functions");
     for (program.functions.items) |func| {
@@ -377,8 +398,16 @@ fn writeUserFunction(
     try item.stringField("name", name);
     try item.stringField("signature", signature);
     try item.enumTagField("resultSort", func.result_sort);
-    try item.enumTagField("source", metadata.source);
-    try item.optionalStringField("file", ir.modulePathForFunctionSource(metadata.source));
+    if (ir.moduleById(metadata.module_id)) |module| {
+        try item.enumTagField("source", module.kind);
+        try item.intField("moduleId", module.id);
+        try item.stringField("moduleSpec", module.spec);
+        try item.optionalStringField("file", module.path);
+    } else {
+        try item.stringField("source", "unknown");
+        try item.intField("moduleId", metadata.module_id);
+        try item.nullField("file");
+    }
     try item.stringField("summary", "");
     var params = try item.arrayField("params");
     for (func.params.items) |param| {

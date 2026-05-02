@@ -4,15 +4,17 @@ const core = @import("model");
 const Allocator = std.mem.Allocator;
 
 pub const Program = struct {
-    theme_name: ?[]const u8,
+    imports: std.ArrayList(ImportDecl),
     functions: std.ArrayList(FunctionDecl),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .theme_name = null, .functions = .empty, .pages = .empty };
+        return .{ .imports = .empty, .functions = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
+        for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
+        self.imports.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
         for (self.pages.items) |*page| {
@@ -21,6 +23,11 @@ pub const Program = struct {
         }
         self.pages.deinit(allocator);
     }
+};
+
+pub const ImportDecl = struct {
+    spec: []const u8,
+    span: Span,
 };
 
 pub const PageDecl = struct {

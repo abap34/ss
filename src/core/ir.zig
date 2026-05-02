@@ -32,33 +32,33 @@ const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
 const nodeProperty = model.nodeProperty;
 
+pub const SourceModuleId = u32;
+
 pub const SourceModuleKind = enum {
     project,
-    base,
-    theme,
+    library,
 };
 
 pub const SourceModule = struct {
+    id: SourceModuleId,
     kind: SourceModuleKind,
+    spec: []u8,
     path: ?[]u8,
     source: []u8,
     program: ast.Program,
+    resolved_import_ids: std.ArrayList(SourceModuleId),
 
     pub fn deinit(self: *SourceModule, allocator: Allocator) void {
         self.program.deinit(allocator);
+        self.resolved_import_ids.deinit(allocator);
+        allocator.free(self.spec);
         allocator.free(self.source);
         if (self.path) |path| allocator.free(path);
     }
 };
 
-pub const FunctionSource = enum {
-    base,
-    theme,
-    project,
-};
-
 pub const FunctionMetadata = struct {
-    source: FunctionSource,
+    module_id: SourceModuleId,
 };
 
 pub const DefinitionKind = enum {
@@ -89,9 +89,9 @@ pub const InlayHint = struct {
 pub const Ir = struct {
     allocator: Allocator,
     asset_base_dir: []u8,
-    project_module: SourceModule,
-    base_module: ?SourceModule = null,
-    theme_module: ?SourceModule = null,
+    modules: std.ArrayList(SourceModule),
+    module_order: std.ArrayList(SourceModuleId),
+    project_module_id: SourceModuleId,
     functions: std.StringHashMap(ast.FunctionDecl),
     function_metadata: std.StringHashMap(FunctionMetadata),
     variable_types: std.StringHashMap(SemanticSort),
@@ -118,12 +118,9 @@ pub const Ir = struct {
         var ir = Ir{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
-            .project_module = .{
-                .kind = .project,
-                .path = project_path,
-                .source = project_source,
-                .program = project_program,
-            },
+            .modules = .empty,
+            .module_order = .empty,
+            .project_module_id = 0,
             .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
             .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
             .variable_types = std.StringHashMap(SemanticSort).init(allocator),
@@ -141,6 +138,16 @@ pub const Ir = struct {
             .document_id = 0,
         };
 
+        try ir.modules.append(allocator, .{
+            .id = 0,
+            .kind = .project,
+            .spec = try allocator.dupe(u8, project_path),
+            .path = project_path,
+            .source = project_source,
+            .program = project_program,
+            .resolved_import_ids = .empty,
+        });
+
         const doc_id = try ir.freshId();
         try ir.nodes.append(allocator, .{
             .id = doc_id,
@@ -154,9 +161,9 @@ pub const Ir = struct {
     }
 
     pub fn deinit(self: *Ir) void {
-        self.project_module.deinit(self.allocator);
-        if (self.base_module) |*module| module.deinit(self.allocator);
-        if (self.theme_module) |*module| module.deinit(self.allocator);
+        for (self.modules.items) |*module| module.deinit(self.allocator);
+        self.modules.deinit(self.allocator);
+        self.module_order.deinit(self.allocator);
         self.functions.deinit();
         self.function_metadata.deinit();
         self.variable_types.deinit();
@@ -191,23 +198,42 @@ pub const Ir = struct {
     }
 
     pub fn projectPath(self: *const Ir) []const u8 {
-        return self.project_module.path orelse "";
+        return self.projectModule().path orelse "";
     }
 
     pub fn projectSource(self: *const Ir) []const u8 {
-        return self.project_module.source;
+        return self.projectModule().source;
     }
 
     pub fn projectProgram(self: *const Ir) ast.Program {
-        return self.project_module.program;
+        return self.projectModule().program;
     }
 
-    pub fn modulePathForFunctionSource(self: *const Ir, source: FunctionSource) ?[]const u8 {
-        return switch (source) {
-            .project => self.project_module.path,
-            .base => if (self.base_module) |module| module.path else null,
-            .theme => if (self.theme_module) |module| module.path else null,
-        };
+    pub fn projectModule(self: *const Ir) *const SourceModule {
+        return self.moduleById(self.project_module_id).?;
+    }
+
+    pub fn moduleById(self: *const Ir, id: SourceModuleId) ?*const SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.id == id) return module;
+        }
+        return null;
+    }
+
+    pub fn projectModuleMutable(self: *Ir) *SourceModule {
+        return self.moduleByIdMutable(self.project_module_id).?;
+    }
+
+    pub fn moduleByIdMutable(self: *Ir, id: SourceModuleId) ?*SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.id == id) return module;
+        }
+        return null;
+    }
+
+    pub fn modulePath(self: *const Ir, id: SourceModuleId) ?[]const u8 {
+        const module = self.moduleById(id) orelse return null;
+        return module.path;
     }
 
     fn freshId(self: *Ir) !NodeId {

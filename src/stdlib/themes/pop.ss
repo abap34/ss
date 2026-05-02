@@ -1,3 +1,5 @@
+import std:themes/base
+
 fn h1(title_text: string) -> object
   let title_style = style("pop")
   let title = styled_text(title_text, "title", title_style)
