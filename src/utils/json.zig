@@ -19,8 +19,9 @@ pub const Object = struct {
     }
 
     pub fn beginBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !Object {
-        try writeByte(.{ .buffer = .{ .value = buffer, .allocator = allocator } }, '{');
-        return .{ .allocator = allocator, .sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } } };
+        const sink: Sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } };
+        try writeByte(sink, '{');
+        return .{ .allocator = allocator, .sink = sink };
     }
 
     pub fn end(self: *Object) !void {
@@ -180,15 +181,25 @@ fn string(allocator: std.mem.Allocator, sink: Sink, value: []const u8) !void {
 }
 
 fn int(allocator: std.mem.Allocator, sink: Sink, value: anytype) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    defer allocator.free(text);
-    try writeBytes(sink, text);
+    var buf: [32]u8 = undefined;
+    if (std.fmt.bufPrint(&buf, "{d}", .{value})) |text| {
+        try writeBytes(sink, text);
+    } else |_| {
+        const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+        defer allocator.free(text);
+        try writeBytes(sink, text);
+    }
 }
 
 fn float(allocator: std.mem.Allocator, sink: Sink, value: f32, comptime fmt: []const u8) !void {
-    const text = try std.fmt.allocPrint(allocator, fmt, .{value});
-    defer allocator.free(text);
-    try writeBytes(sink, text);
+    var buf: [64]u8 = undefined;
+    if (std.fmt.bufPrint(&buf, fmt, .{value})) |text| {
+        try writeBytes(sink, text);
+    } else |_| {
+        const text = try std.fmt.allocPrint(allocator, fmt, .{value});
+        defer allocator.free(text);
+        try writeBytes(sink, text);
+    }
 }
 
 fn writeByte(sink: Sink, byte: u8) !void {

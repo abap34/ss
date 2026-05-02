@@ -8,7 +8,7 @@ import keyword
 import re
 import sys
 import tokenize
-from typing import List, Sequence
+from collections.abc import Sequence
 
 
 def main(argv: Sequence[str]) -> int:
@@ -29,16 +29,16 @@ def main(argv: Sequence[str]) -> int:
     return 0
 
 
-def highlight_python(source: str) -> List[List[dict]]:
+def highlight_python(source: str) -> list[list[dict]]:
     try:
         return tokenize_highlight(source)
     except (tokenize.TokenError, IndentationError):
         return regex_fallback(source)
 
 
-def tokenize_highlight(source: str) -> List[List[dict]]:
+def tokenize_highlight(source: str) -> list[list[dict]]:
     offsets = line_offsets(source)
-    lines: List[List[dict]] = [[]]
+    lines: list[list[dict]] = [[]]
     cursor = 0
 
     for tok in tokenize.generate_tokens(io.StringIO(source).readline):
@@ -60,11 +60,13 @@ def tokenize_highlight(source: str) -> List[List[dict]]:
     return lines or [[]]
 
 
-def regex_fallback(source: str) -> List[List[dict]]:
-    lines: List[List[dict]] = [[]]
-    pattern = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+_IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def regex_fallback(source: str) -> list[list[dict]]:
+    lines: list[list[dict]] = [[]]
     cursor = 0
-    for match in pattern.finditer(source):
+    for match in _IDENT_RE.finditer(source):
         start, end = match.span()
         if cursor < start:
             append_text(lines, source[cursor:start], "plain")
@@ -79,7 +81,7 @@ def regex_fallback(source: str) -> List[List[dict]]:
     return lines or [[]]
 
 
-def line_offsets(source: str) -> List[int]:
+def line_offsets(source: str) -> list[int]:
     offsets = [0]
     total = 0
     for line in source.splitlines(keepends=True):
@@ -97,7 +99,7 @@ def absolute_index(offsets: Sequence[int], position: tuple[int, int]) -> int:
     return offsets[row - 1] + col
 
 
-def append_text(lines: List[List[dict]], text: str, token_class: str) -> None:
+def append_text(lines: list[list[dict]], text: str, token_class: str) -> None:
     parts = text.split("\n")
     for index, part in enumerate(parts):
         if part:

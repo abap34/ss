@@ -33,7 +33,14 @@ pub fn fileExists(allocator: std.mem.Allocator, path: []const u8) bool {
     return std.c.access(zpath.ptr, 0) == 0;
 }
 
-pub fn readImageDimensions(allocator: std.mem.Allocator, path: []const u8) !ImageDimensions {
+const HEADER_BUF_SIZE = 256 * 1024;
+
+fn readHeaderBytes(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    buf: *[HEADER_BUF_SIZE]u8,
+    invalid_err: anyerror,
+) ![]u8 {
     const zpath = try allocator.dupeZ(u8, path);
     defer allocator.free(zpath);
 
@@ -41,10 +48,14 @@ pub fn readImageDimensions(allocator: std.mem.Allocator, path: []const u8) !Imag
     if (fd < 0) return error.FileNotFound;
     defer _ = std.c.close(fd);
 
-    var buf: [256 * 1024]u8 = undefined;
-    const read_len = std.c.read(fd, &buf, buf.len);
-    if (read_len <= 0) return error.InvalidImageAsset;
-    const bytes = buf[0..@intCast(read_len)];
+    const read_len = std.c.read(fd, buf, buf.len);
+    if (read_len <= 0) return invalid_err;
+    return buf[0..@intCast(read_len)];
+}
+
+pub fn readImageDimensions(allocator: std.mem.Allocator, path: []const u8) !ImageDimensions {
+    var buf: [HEADER_BUF_SIZE]u8 = undefined;
+    const bytes = try readHeaderBytes(allocator, path, &buf, error.InvalidImageAsset);
 
     if (parsePngDimensions(bytes)) |dimensions| return dimensions;
     if (parseGifDimensions(bytes)) |dimensions| return dimensions;
@@ -53,18 +64,8 @@ pub fn readImageDimensions(allocator: std.mem.Allocator, path: []const u8) !Imag
 }
 
 pub fn readPdfDimensions(allocator: std.mem.Allocator, path: []const u8) !ImageDimensions {
-    const zpath = try allocator.dupeZ(u8, path);
-    defer allocator.free(zpath);
-
-    const fd = std.c.open(zpath.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
-    if (fd < 0) return error.FileNotFound;
-    defer _ = std.c.close(fd);
-
-    var buf: [256 * 1024]u8 = undefined;
-    const read_len = std.c.read(fd, &buf, buf.len);
-    if (read_len <= 0) return error.InvalidPdfAsset;
-    const bytes = buf[0..@intCast(read_len)];
-
+    var buf: [HEADER_BUF_SIZE]u8 = undefined;
+    const bytes = try readHeaderBytes(allocator, path, &buf, error.InvalidPdfAsset);
     return parsePdfDimensions(bytes) orelse error.UnsupportedPdfFormat;
 }
 
@@ -72,8 +73,8 @@ fn parsePngDimensions(bytes: []const u8) ?ImageDimensions {
     if (bytes.len < 24) return null;
     const signature = [_]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
     if (!std.mem.eql(u8, bytes[0..8], &signature)) return null;
-    const width = readU32Be(bytes, 16);
-    const height = readU32Be(bytes, 20);
+    const width = std.mem.readInt(u32, bytes[16..20], .big);
+    const height = std.mem.readInt(u32, bytes[20..24], .big);
     if (width == 0 or height == 0) return null;
     return .{ .width = @floatFromInt(width), .height = @floatFromInt(height) };
 }
@@ -81,8 +82,8 @@ fn parsePngDimensions(bytes: []const u8) ?ImageDimensions {
 fn parseGifDimensions(bytes: []const u8) ?ImageDimensions {
     if (bytes.len < 10) return null;
     if (!std.mem.eql(u8, bytes[0..6], "GIF87a") and !std.mem.eql(u8, bytes[0..6], "GIF89a")) return null;
-    const width = readU16Le(bytes, 6);
-    const height = readU16Le(bytes, 8);
+    const width = std.mem.readInt(u16, bytes[6..8], .little);
+    const height = std.mem.readInt(u16, bytes[8..10], .little);
     if (width == 0 or height == 0) return null;
     return .{ .width = @floatFromInt(width), .height = @floatFromInt(height) };
 }
@@ -106,17 +107,16 @@ fn parseJpegDimensions(bytes: []const u8) ?ImageDimensions {
         if (marker == 0x01 or (marker >= 0xd0 and marker <= 0xd7)) continue;
         if (i + 2 > bytes.len) break;
 
-        const segment_len = readU16Be(bytes, i);
+        const segment_len = std.mem.readInt(u16, bytes[i..][0..2], .big);
         if (segment_len < 2 or i + segment_len > bytes.len) break;
 
-        const is_sof =
-            (marker >= 0xc0 and marker <= 0xc3) or
-            (marker >= 0xc5 and marker <= 0xc7) or
-            (marker >= 0xc9 and marker <= 0xcb) or
-            (marker >= 0xcd and marker <= 0xcf);
+        const is_sof = switch (marker) {
+            0xc0...0xc3, 0xc5...0xc7, 0xc9...0xcb, 0xcd...0xcf => true,
+            else => false,
+        };
         if (is_sof and segment_len >= 7) {
-            const height = readU16Be(bytes, i + 3);
-            const width = readU16Be(bytes, i + 5);
+            const height = std.mem.readInt(u16, bytes[i + 3 ..][0..2], .big);
+            const width = std.mem.readInt(u16, bytes[i + 5 ..][0..2], .big);
             if (width == 0 or height == 0) return null;
             return .{ .width = @floatFromInt(width), .height = @floatFromInt(height) };
         }
@@ -154,17 +154,3 @@ fn parsePdfDimensions(bytes: []const u8) ?ImageDimensions {
     return .{ .width = width, .height = height };
 }
 
-fn readU16Be(bytes: []const u8, offset: usize) u16 {
-    return (@as(u16, bytes[offset]) << 8) | @as(u16, bytes[offset + 1]);
-}
-
-fn readU16Le(bytes: []const u8, offset: usize) u16 {
-    return @as(u16, bytes[offset]) | (@as(u16, bytes[offset + 1]) << 8);
-}
-
-fn readU32Be(bytes: []const u8, offset: usize) u32 {
-    return (@as(u32, bytes[offset]) << 24) |
-        (@as(u32, bytes[offset + 1]) << 16) |
-        (@as(u32, bytes[offset + 2]) << 8) |
-        @as(u32, bytes[offset + 3]);
-}
