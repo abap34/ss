@@ -1237,7 +1237,10 @@ fn validateSetPropCall(
         .string => |text| text,
         else => return,
     };
-    const schema = property_schema.lookup(key) orelse return;
+    const schema = property_schema.lookup(key) orelse {
+        try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{key});
+        return error.InvalidSemanticSort;
+    };
     const object_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
     if (!property_schema.isShapeAllowed(schema, object_info.object_shape)) {
         try addUserReport(
@@ -1276,7 +1279,10 @@ fn validatePropertySetStatement(
         return error.UnknownIdentifier;
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
-    const schema = property_schema.lookup(property_name) orelse return;
+    const schema = property_schema.lookup(property_name) orelse {
+        try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{property_name});
+        return error.InvalidSemanticSort;
+    };
     if (!property_schema.isShapeAllowed(schema, object_info.object_shape)) {
         try addUserReport(
             ir,

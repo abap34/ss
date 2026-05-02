@@ -233,6 +233,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownAnchor,
         error.ReturnOutsideFunction,
         error.InvalidLibraryModule,
+        error.UnknownProperty,
         error.FunctionDoesNotReturnValue,
         error.InvalidArity,
         error.InvalidSemanticSort,
