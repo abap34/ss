@@ -119,6 +119,10 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
         else => {},
     }
 
+    if (shouldUseFullWrapWidth(ir, node, content)) {
+        return maxWidthForStyle(style);
+    }
+
     var max_len: usize = 0;
     var wide = false;
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -287,6 +291,29 @@ fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
     };
 }
 
+fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) bool {
+    if (!shouldWrapNode(ir, node)) return false;
+    if (lineCount(content) > 1) return true;
+    if (!markdown.shouldParseBlocks(node.role, if (node.payload_kind) |kind| @tagName(kind) else null)) return false;
+
+    var doc = markdown.parseMarkdownDocument(
+        ir.allocator,
+        node.role,
+        if (node.payload_kind) |kind| @tagName(kind) else null,
+        content,
+    ) catch return false;
+    defer doc.deinit();
+
+    if (doc.blocks.items.len > 1) return true;
+    for (doc.blocks.items) |block| {
+        switch (block.kind) {
+            .bullet_list, .ordered_list, .code_block => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
 pub fn shouldWrapNode(ir: anytype, node: *const Node) bool {
     _ = ir;
     if (model.nodeProperty(node, "wrap")) |wrap_mode| {
@@ -317,8 +344,8 @@ fn containsRole(entries: []const []const u8, role: []const u8) bool {
 
 fn overrideTextStyleFromProperties(node: *const Node, base: TextStyle) TextStyle {
     var style = base;
-    if (parseNodeFloatProperty(node, "layout_font_size")) |value| style.font_size = value;
-    if (parseNodeFloatProperty(node, "layout_line_height")) |value| style.line_height = value;
+    if (parseNodeFloatProperty(node, "layout_font_size") orelse parseNodeFloatProperty(node, "text_size")) |value| style.font_size = value;
+    if (parseNodeFloatProperty(node, "layout_line_height") orelse parseNodeFloatProperty(node, "text_line_height")) |value| style.line_height = value;
     if (parseNodeFloatProperty(node, "layout_spacing_after")) |value| style.spacing_after = value;
     if (parseNodeFloatProperty(node, "layout_x")) |value| style.default_x = value;
     if (parseNodeFloatProperty(node, "layout_right_inset")) |value| style.default_right_inset = value;
