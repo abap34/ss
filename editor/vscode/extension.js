@@ -107,6 +107,15 @@ function activate(context) {
     return range ? document.getText(range) : "";
   }
 
+  function formatFunctionSource(item) {
+    const source = item && item.source ? String(item.source) : "";
+    const moduleSpec = item && item.moduleSpec ? String(item.moduleSpec) : "";
+    if (source && moduleSpec) {
+      return `${source}: ${moduleSpec}`;
+    }
+    return moduleSpec || source;
+  }
+
   function getPropertyCompletionContext(document, position) {
     const line = document.lineAt(position.line).text;
     const head = line.slice(0, position.character);
@@ -830,8 +839,9 @@ function activate(context) {
           if (item.summary) {
             completion.documentation = new vscode.MarkdownString(String(item.summary));
           }
-          if (item.source) {
-            completion.detail = `${completion.detail ? `${completion.detail}\n` : ""}[${String(item.source)}]`;
+          const sourceLabel = formatFunctionSource(item);
+          if (sourceLabel) {
+            completion.detail = `${completion.detail ? `${completion.detail}\n` : ""}[${sourceLabel}]`;
           }
           items.push(completion);
         }
@@ -933,6 +943,12 @@ function activate(context) {
           }
           if (item.source) {
             markdown.appendText(`\n\nsource: ${String(item.source)}`);
+          }
+          if (item.moduleSpec) {
+            markdown.appendText(`\nmodule: ${String(item.moduleSpec)}`);
+          }
+          if (item.file) {
+            markdown.appendText(`\nfile: ${String(item.file)}`);
           }
           if (item.resultSort) {
             markdown.appendText(`\nresult: ${String(item.resultSort)}`);

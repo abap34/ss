@@ -60,9 +60,13 @@ const Parser = struct {
         self.skipTrivia();
         while (!self.eof()) {
             const item_start = self.pos;
-            if (try self.consumeKeyword("theme")) {
-                program.theme_name = try self.parsePageName();
+            if (try self.consumeKeyword("import")) {
+                const spec = try self.parseImportSpec();
                 try self.consumeStatementTerminator();
+                try program.imports.append(self.allocator, .{
+                    .spec = spec,
+                    .span = .{ .start = item_start, .end = self.pos },
+                });
             } else if (try self.consumeKeyword("fn")) {
                 const func = try self.parseFunctionAfterKeyword(item_start);
                 try program.functions.append(self.allocator, func);
@@ -176,6 +180,24 @@ const Parser = struct {
         return self.allocator.dupe(u8, self.source[start..self.pos]);
     }
 
+    fn parseImportSpec(self: *Parser) ![]const u8 {
+        self.skipInlineSpaces();
+        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+            return self.parseString();
+        }
+        const start = self.pos;
+        while (!self.eof()) {
+            const ch = self.source[self.pos];
+            if (isInlineSpace(ch) or ch == '\n') break;
+            if (ch == '#') break;
+            if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
+            if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
+            self.pos += 1;
+        }
+        if (start == self.pos) return self.fail(error.ExpectedString);
+        return self.allocator.dupe(u8, self.source[start..self.pos]);
+    }
+
     fn parseBodyStatements(self: *Parser) !std.ArrayList(Statement) {
         self.skipInlineSpaces();
         try self.expectLineBreakAfterHeader();
@@ -251,6 +273,9 @@ const Parser = struct {
                 .property_name = property_name,
                 .value = value,
             } } };
+        }
+        if (self.peekSimpleAssignment()) {
+            return self.fail(error.AssignmentRequiresLet);
         }
 
         if (try self.parseLegacyStatement(start)) |stmt| return stmt;
@@ -847,6 +872,16 @@ const Parser = struct {
         return true;
     }
 
+    fn peekSimpleAssignment(self: *Parser) bool {
+        var probe = self.pos;
+        source_utils.skipTriviaFrom(self.source, &probe);
+        if (!scanIdentifier(self.source, &probe)) return false;
+        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        if (probe >= self.source.len or self.source[probe] != '=') return false;
+        if (probe + 1 < self.source.len and self.source[probe + 1] == '=') return false;
+        return true;
+    }
+
     fn peekStandaloneKeyword(self: *Parser, keyword: []const u8) bool {
         var probe = self.pos;
         source_utils.skipTriviaFrom(self.source, &probe);
@@ -942,6 +977,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.UnknownAnchor => "known anchor name",
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",
+        error.AssignmentRequiresLet => "'let name = expr' for variable bindings",
         error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",
         error.ExpectedEqualityOperator => "'=='",

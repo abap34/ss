@@ -5,7 +5,7 @@ const parser = @import("parser.zig");
 const pdf = @import("render/pdf.zig");
 const dump = @import("dump.zig");
 const typecheck = @import("parser/typecheck.zig");
-const theme_loader = @import("theme_loader.zig");
+const module_loader = @import("module_loader.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 
@@ -61,9 +61,8 @@ pub fn buildFileWithAssetBase(
 
     if (progress) |p| p.step("Load index");
     var index = typecheck.loadProgramIndex(allocator, io, asset_base_dir, program) catch |err| {
-        if (err == error.UnknownTheme) {
-            const theme_name = program.theme_name orelse "default";
-            const message = try theme_loader.formatUnknownThemeMessage(allocator, asset_base_dir, theme_name);
+        if (err == error.UnknownImport and program.imports.items.len != 0) {
+            const message = try module_loader.formatUnknownImportMessage(allocator, asset_base_dir, program.imports.items[0].spec);
             defer allocator.free(message);
             error_report.print(.{
                 .path = path,
@@ -76,7 +75,25 @@ pub fn buildFileWithAssetBase(
         return err;
     };
 
-    var ir = try typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index);
+    var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
+        if (err == error.UnknownImport and program.imports.items.len != 0) {
+            const message = try module_loader.formatUnknownImportMessage(allocator, asset_base_dir, program.imports.items[0].spec);
+            defer allocator.free(message);
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = message,
+                .span = .{
+                    .start = program.imports.items[0].span.start,
+                    .end = program.imports.items[0].span.end,
+                },
+            });
+        } else if (err != error.DiagnosticsFailed) {
+            std.debug.print("error: {s}\n", .{@errorName(err)});
+        }
+        return err;
+    };
     defer index.deinit();
     errdefer ir.deinit();
 

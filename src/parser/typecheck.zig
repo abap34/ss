@@ -3,7 +3,7 @@ const core = @import("core");
 const ast = @import("ast");
 const names = @import("names.zig");
 const registry = @import("registry.zig");
-const theme_loader = @import("../theme_loader.zig");
+const module_loader = @import("../module_loader.zig");
 const syntax = @import("syntax.zig");
 const property_schema = @import("../property_schema.zig");
 const utils = @import("utils");
@@ -24,30 +24,23 @@ const TypeInfo = struct {
 
 const TypeEnv = std.StringHashMap(TypeInfo);
 pub const VariableInfo = TypeInfo;
-
-pub const FunctionSource = core.FunctionSource;
 pub const FunctionMetadata = core.FunctionMetadata;
 
 pub const ProgramIndex = struct {
     allocator: std.mem.Allocator,
-    base_source: ?[]u8 = null,
-    base_path: ?[]u8 = null,
-    base_program: ?ast.Program = null,
-    theme_source: ?[]u8 = null,
-    theme_path: ?[]u8 = null,
-    theme_program: ?ast.Program = null,
+    modules: std.ArrayList(core.SourceModule),
+    module_order: std.ArrayList(core.SourceModuleId),
+    project_import_ids: std.ArrayList(core.SourceModuleId),
     functions: std.StringHashMap(ast.FunctionDecl),
     function_metadata: std.StringHashMap(FunctionMetadata),
 
     pub fn deinit(self: *ProgramIndex) void {
         self.function_metadata.deinit();
         self.functions.deinit();
-        if (self.theme_program) |*program| program.deinit(self.allocator);
-        if (self.base_program) |*program| program.deinit(self.allocator);
-        if (self.theme_source) |source| self.allocator.free(source);
-        if (self.theme_path) |path| self.allocator.free(path);
-        if (self.base_source) |source| self.allocator.free(source);
-        if (self.base_path) |path| self.allocator.free(path);
+        for (self.modules.items) |*module| module.deinit(self.allocator);
+        self.modules.deinit(self.allocator);
+        self.module_order.deinit(self.allocator);
+        self.project_import_ids.deinit(self.allocator);
     }
 };
 
@@ -62,6 +55,13 @@ pub fn collectFunctionsFromPrograms(
         }
     }
     return functions;
+}
+
+fn findModuleById(modules: []const core.SourceModule, module_id: core.SourceModuleId) ?core.SourceModule {
+    for (modules) |module| {
+        if (module.id == module_id) return module;
+    }
+    return null;
 }
 
 pub fn valueSort(value: core.Value) core.SemanticSort {
@@ -180,7 +180,7 @@ pub fn typecheckProgram(
     ir: *core.Ir,
 ) !void {
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
-    try checkPageStatements(allocator, ir, &ir.functions, ir.project_module.program);
+    try checkPageStatements(allocator, ir, &ir.functions, ir.projectProgram());
 }
 
 pub fn collectVariableTypesFromProgram(
@@ -241,13 +241,11 @@ fn appendFunctionDeclarations(
     functions: *std.StringHashMap(ast.FunctionDecl),
     metadata: *std.StringHashMap(FunctionMetadata),
     program: ast.Program,
-    source: FunctionSource,
-    path: ?[]const u8,
+    module_id: core.SourceModuleId,
 ) !void {
-    _ = path;
     for (program.functions.items) |func| {
         try functions.put(func.name, func);
-        try metadata.put(func.name, .{ .source = source });
+        try metadata.put(func.name, .{ .module_id = module_id });
     }
 }
 
@@ -268,48 +266,31 @@ pub fn buildIr(
     project_program.* = ast.Program.init();
     errdefer ir.deinit();
 
-    if (index.base_source) |base_source| {
-        ir.base_module = .{
-            .kind = .base,
-            .path = index.base_path.?,
-            .source = base_source,
-            .program = index.base_program.?,
-        };
-        index.base_source = null;
-        index.base_path = null;
-        index.base_program = null;
-    }
-
-    if (index.theme_source) |theme_source| {
-        ir.theme_module = .{
-            .kind = .theme,
-            .path = index.theme_path.?,
-            .source = theme_source,
-            .program = index.theme_program.?,
-        };
-        index.theme_source = null;
-        index.theme_path = null;
-        index.theme_program = null;
-    }
-
     ir.functions = index.functions;
     index.functions = std.StringHashMap(ast.FunctionDecl).init(allocator);
     ir.function_metadata = index.function_metadata;
     index.function_metadata = std.StringHashMap(FunctionMetadata).init(allocator);
-    ir.variable_types = try collectVariableTypesFromProgram(allocator, &ir.functions, ir.project_module.program);
+    ir.module_order = index.module_order;
+    index.module_order = .empty;
+    ir.projectModuleMutable().resolved_import_ids = index.project_import_ids;
+    index.project_import_ids = .empty;
+    for (index.modules.items) |module| try ir.modules.append(allocator, module);
+    index.modules = .empty;
+    if (ir.module_order.items.len == 0 or ir.module_order.items[ir.module_order.items.len - 1] != ir.project_module_id) {
+        try ir.module_order.append(allocator, ir.project_module_id);
+    }
+    ir.variable_types = try collectVariableTypesFromProgram(allocator, &ir.functions, ir.projectProgram());
     try populateIrAnalysis(allocator, &ir);
     return ir;
 }
 
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    if (ir.base_module) |base_module| {
-        try collectDefinitionsFromProgram(allocator, base_module.source, base_module.program, base_module.path, false, &ir.definitions);
+    for (ir.modules.items) |module| {
+        if (module.kind == .project) continue;
+        try collectDefinitionsFromProgram(allocator, module.source, module.program, module.path, false, &ir.definitions);
     }
-    if (ir.theme_module) |theme_module| {
-        try collectDefinitionsFromProgram(allocator, theme_module.source, theme_module.program, theme_module.path, false, &ir.definitions);
-    }
-    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.project_module.program, null, true, &ir.definitions);
-    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.project_module.program, &ir.functions);
+    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), null, true, &ir.definitions);
+    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectProgram(), &ir.functions);
 }
 
 pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -332,31 +313,28 @@ pub fn loadProgramIndex(
     base_dir: []const u8,
     project_program: ast.Program,
 ) !ProgramIndex {
+    var graph = try module_loader.loadGraph(allocator, io, base_dir, project_program);
+    errdefer graph.deinit();
+
     var index = ProgramIndex{
         .allocator = allocator,
+        .modules = graph.modules,
+        .module_order = graph.module_order,
+        .project_import_ids = graph.project_import_ids,
         .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
         .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
     };
+    graph.modules = .empty;
+    graph.module_order = .empty;
+    graph.project_import_ids = .empty;
+
     errdefer index.deinit();
 
-    const base_module = try theme_loader.loadThemeModule(allocator, io, base_dir, "base");
-    index.base_path = base_module.path;
-    index.base_source = base_module.source;
-    index.base_program = try syntax.parse(allocator, index.base_source.?);
-    try validateThemeProgram(index.base_program.?);
-    try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.base_program.?, .base, index.base_path.?);
-
-    const theme_name = project_program.theme_name orelse "default";
-    if (!std.mem.eql(u8, theme_name, "base")) {
-        const theme_module = try theme_loader.loadThemeModule(allocator, io, base_dir, theme_name);
-        index.theme_path = theme_module.path;
-        index.theme_source = theme_module.source;
-        index.theme_program = try syntax.parse(allocator, index.theme_source.?);
-        try validateThemeProgram(index.theme_program.?);
-        try appendFunctionDeclarations(&index.functions, &index.function_metadata, index.theme_program.?, .theme, index.theme_path.?);
+    for (index.module_order.items) |module_id| {
+        const module = findModuleById(index.modules.items, module_id) orelse continue;
+        try appendFunctionDeclarations(&index.functions, &index.function_metadata, module.program, module.id);
     }
-
-    try appendFunctionDeclarations(&index.functions, &index.function_metadata, project_program, .project, null);
+    try appendFunctionDeclarations(&index.functions, &index.function_metadata, project_program, 0);
     return index;
 }
 
@@ -368,11 +346,6 @@ pub fn loadProgramIndexForPath(
 ) !ProgramIndex {
     const base_dir = std.fs.path.dirname(input_path) orelse ".";
     return loadProgramIndex(allocator, io, base_dir, project_program);
-}
-
-pub fn validateThemeProgram(program: ast.Program) !void {
-    if (program.theme_name != null) return error.InvalidThemeModule;
-    if (program.pages.items.len != 0) return error.InvalidThemeModule;
 }
 
 pub fn formatPrimitiveSignature(
@@ -765,29 +738,31 @@ fn collectVariableTypesFromStatement(
     stmt: ast.Statement,
     variables: *std.StringHashMap(VariableInfo),
 ) !void {
+    const origin = try statementOrigin(allocator, stmt.span);
+    defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, null, functions, env, binding.expr, "");
+            const info = try inferExprInfo(allocator, null, functions, env, binding.expr, origin);
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
         },
         .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, null, functions, env, binding.expr, "");
+            _ = try inferExprInfo(allocator, null, functions, env, binding.expr, origin);
             try env.put(binding.name, .{ .sort = .fragment });
             try variables.put(binding.name, .{ .sort = .fragment });
         },
         .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, null, functions, env, expr, "");
+            _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
         },
         .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, null, functions, env, property_set.value, "");
+            _ = try inferExprInfo(allocator, null, functions, env, property_set.value, origin);
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, null, functions, env, expr, "");
+            _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, null, functions, env, expr, "");
+                _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
             }
         },
         else => {},

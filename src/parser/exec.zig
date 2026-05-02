@@ -169,7 +169,7 @@ fn unknownNameCode(kind: []const u8) []const u8 {
 fn lowerErrorMessage(err: anyerror) []const u8 {
     return switch (err) {
         error.ReturnOutsideFunction => "ReturnOutsideFunction: return is only valid inside a function",
-        error.InvalidThemeModule => "InvalidThemeModule: theme files must contain functions only",
+        error.InvalidLibraryModule => "InvalidLibraryModule: imported modules must contain functions and imports only",
         error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
         error.InvalidArity => "InvalidArity: wrong number of arguments",
         error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
@@ -193,7 +193,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
 }
 
 pub fn executeProgramIntoIr(ir: *core.Ir) !void {
-    return executeProgram(ir.project_module.program, ir.project_module.source, ir.projectPath(), ir, &ir.functions);
+    return executeProgram(ir.projectProgram(), ir.projectSource(), ir.projectPath(), ir, &ir.functions);
 }
 
 pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *core.Ir, io: std.Io) !void {

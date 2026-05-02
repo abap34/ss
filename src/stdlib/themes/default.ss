@@ -1,3 +1,5 @@
+import std:themes/base
+
 fn h1(title_text: string) -> object
   let title = title_object(title_text)
   text_preset(title, "Helvetica", "34", "40", "0,0,0.0353", "54", "72", "72")
