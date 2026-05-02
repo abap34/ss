@@ -48,7 +48,7 @@ pub fn loadThemeModule(
 
     const project_theme_path = try std.fmt.allocPrint(allocator, "{s}/themes/{s}.ss", .{ base_dir, theme_spec });
     defer allocator.free(project_theme_path);
-    if (tryReadThemeFile(allocator, io, project_theme_path) catch |err| return err) |bytes| {
+    if (try tryReadThemeFile(allocator, io, project_theme_path)) |bytes| {
         return .{
             .path = try allocator.dupe(u8, project_theme_path),
             .source = bytes,
@@ -87,11 +87,9 @@ pub fn resolveThemeSourcePath(
 
 pub fn formatUnknownThemeMessage(
     allocator: std.mem.Allocator,
-    io: std.Io,
     base_dir: []const u8,
     theme_spec: []const u8,
 ) ![]u8 {
-    _ = io;
     if (looksLikePath(theme_spec)) {
         const resolved = try resolveExplicitPath(allocator, base_dir, theme_spec);
         defer allocator.free(resolved);

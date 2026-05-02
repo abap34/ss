@@ -63,7 +63,7 @@ pub fn buildFileWithAssetBase(
     var index = typecheck.loadProgramIndex(allocator, io, asset_base_dir, program) catch |err| {
         if (err == error.UnknownTheme) {
             const theme_name = program.theme_name orelse "default";
-            const message = try theme_loader.formatUnknownThemeMessage(allocator, io, asset_base_dir, theme_name);
+            const message = try theme_loader.formatUnknownThemeMessage(allocator, asset_base_dir, theme_name);
             defer allocator.free(message);
             error_report.print(.{
                 .path = path,
