@@ -81,7 +81,7 @@
         },
         "ss.livePreview.debounceMs": {
           "type": "number",
-          "default": 900,
+          "default": 350,
           "minimum": 100,
           "description": "Delay before refreshing the ss live preview after edits."
         },
@@ -97,7 +97,7 @@
         },
         "ss.inlayHints.idleMs": {
           "type": "number",
-          "default": 1200,
+          "default": 300,
           "minimum": 0,
           "description": "Idle time after the last edit before inlay hints are shown again. Hints are withdrawn while the document is dirty and stay hidden until this delay elapses on a clean buffer."
         }

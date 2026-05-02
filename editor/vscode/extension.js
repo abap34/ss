@@ -13,20 +13,32 @@ function activate(context) {
   const previewTimers = new Map();
   const lastEditTimes = new Map();
   const inlayHintIdleMs = () =>
-    Math.max(0, Number(vscode.workspace.getConfiguration("ss").get("inlayHints.idleMs", 1200)));
+    Math.max(0, Number(vscode.workspace.getConfiguration("ss").get("inlayHints.idleMs", 300)));
   const previewSessions = new Map();
   const activeCommands = new Map();
   const diagnosticCollection = vscode.languages.createDiagnosticCollection("ss");
   const editorInfoCache = new Map();
   const editorInfoRequests = new Map();
   const editorInfoGenerations = new Map();
-  const guideIconPath = vscode.Uri.file(path.join(__dirname, "media", "page-block-guide.svg"));
-  const pageBlockDecoration = vscode.window.createTextEditorDecorationType({
-    gutterIconPath: guideIconPath,
-    gutterIconSize: "contain",
-    overviewRulerColor: "rgba(86, 156, 214, 0.45)",
-    overviewRulerLane: vscode.OverviewRulerLane.Left,
-  });
+  const pageBlockPalette = [
+    { ruler: "rgba(86, 156, 214, 0.52)", icon: "#569CD6" },
+    { ruler: "rgba(220, 90, 90, 0.50)", icon: "#DC5A5A" },
+    { ruler: "rgba(90, 184, 110, 0.50)", icon: "#5AB86E" },
+    { ruler: "rgba(214, 168, 74, 0.52)", icon: "#D6A84A" },
+  ];
+  const pageBlockDecorations = pageBlockPalette.map(({ ruler, icon }) =>
+    vscode.window.createTextEditorDecorationType({
+      gutterIconPath: pageBlockGuideIconUri(icon),
+      gutterIconSize: "contain",
+      overviewRulerColor: ruler,
+      overviewRulerLane: vscode.OverviewRulerLane.Left,
+    }),
+  );
+
+  function pageBlockGuideIconUri(fill) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="20" viewBox="0 0 8 20"><rect x="2" y="0" width="3" height="20" rx="1.5" fill="${fill}"/></svg>`;
+    return vscode.Uri.parse(`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`);
+  }
 
   function extractJsonPayload(stdout, stderr) {
     const candidates = [stdout, stderr].filter((text) => typeof text === "string" && text.trim().length > 0);
@@ -212,7 +224,7 @@ function activate(context) {
   }
 
   function livePreviewDebounceMs() {
-    return Math.max(100, Number(vscode.workspace.getConfiguration("ss").get("livePreview.debounceMs", 900)));
+    return Math.max(80, Number(vscode.workspace.getConfiguration("ss").get("livePreview.debounceMs", 350)));
   }
 
   function livePreviewOpenMode() {
@@ -643,7 +655,8 @@ function activate(context) {
 
   function computePageBlockRanges(document) {
     const stack = [];
-    const ranges = [];
+    const ranges = pageBlockDecorations.map(() => []);
+    let pageIndex = 0;
 
     for (let line = 0; line < document.lineCount; line += 1) {
       const text = document.lineAt(line).text;
@@ -664,10 +677,12 @@ function activate(context) {
         continue;
       }
 
+      const bucket = ranges[pageIndex % ranges.length];
       for (let blockLine = block.line; blockLine <= line; blockLine += 1) {
         const lineRange = document.lineAt(blockLine).range;
-        ranges.push(lineRange);
+        bucket.push(lineRange);
       }
+      pageIndex += 1;
     }
 
     return ranges;
@@ -677,8 +692,13 @@ function activate(context) {
     if (!editor || editor.document.languageId !== "ss-slide") {
       return;
     }
-    const ranges = computePageBlockRanges(editor.document);
-    editor.setDecorations(pageBlockDecoration, ranges);
+    const rangeBuckets = computePageBlockRanges(editor.document);
+    for (const decoration of pageBlockDecorations) {
+      editor.setDecorations(decoration, []);
+    }
+    rangeBuckets.forEach((ranges, index) => {
+      editor.setDecorations(pageBlockDecorations[index], ranges);
+    });
   }
 
   function refreshVisibleBlockDecorations() {
@@ -989,7 +1009,7 @@ function activate(context) {
       // hides them right away instead of leaving the previous frame on screen.
       emitter.fire();
       scheduleRefresh(event.document, inlayHintIdleMs());
-      scheduleDiagnostics(event.document, 800);
+      scheduleDiagnostics(event.document, 250);
       schedulePreview(event.document, livePreviewDebounceMs());
       refreshVisibleBlockDecorations();
     }),
@@ -1014,7 +1034,7 @@ function activate(context) {
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       refreshBlockDecorations(editor);
       if (editor && editor.document.languageId === "ss-slide") {
-        scheduleDiagnostics(editor.document, 100);
+        scheduleDiagnostics(editor.document, 50);
       }
     }),
   );
@@ -1028,7 +1048,9 @@ function activate(context) {
   context.subscriptions.push(emitter);
   context.subscriptions.push(output);
   context.subscriptions.push(diagnosticCollection);
-  context.subscriptions.push(pageBlockDecoration);
+  for (const decoration of pageBlockDecorations) {
+    context.subscriptions.push(decoration);
+  }
   context.subscriptions.push({
     dispose() {
       for (const timer of refreshTimers.values()) {
