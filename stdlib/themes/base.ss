@@ -297,7 +297,6 @@ end
 fn two_columns_constraints(left: object, right: object, gap: number, right_inset_value: number) -> constraints
   return constraints(
     equal(anchor(right, "left"), anchor(left, "right"), gap),
-    same_top(right, left, 0),
     left_inset(left, 96),
     ;; right_inset(right, right_inset_value)
   )

@@ -688,7 +688,7 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, page_id: NodeId, child_i
 
     var units = std.ArrayList(VerticalComponentUnit).empty;
     defer units.deinit(allocator);
-    try collectVerticalComponentUnits(ir, page_id, child_ids, states, parent, page_dependent, local_tops, &units);
+    try collectVerticalComponentUnits(ir, page_id, child_ids, states, parent, page_dependent, local_tops, .top_flow, &units);
 
     const seen = try allocator.alloc(bool, child_ids.len);
     defer allocator.free(seen);
@@ -757,7 +757,7 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, page_id: NodeId, chi
 
     var units = std.ArrayList(VerticalComponentUnit).empty;
     defer units.deinit(allocator);
-    try collectVerticalComponentUnits(ir, page_id, child_ids, states, parent, page_dependent, local_tops, &units);
+    try collectVerticalComponentUnits(ir, page_id, child_ids, states, parent, page_dependent, local_tops, .center_stack, &units);
     if (units.items.len == 0) return constraints;
 
     var total_height: f32 = 0;
@@ -812,6 +812,7 @@ fn collectVerticalComponentUnits(
     parent: []usize,
     page_dependent: []const bool,
     local_tops: []?f32,
+    policy: VerticalFallbackPolicy,
     units: *std.ArrayList(VerticalComponentUnit),
 ) !void {
     var seen = try ir.allocator.alloc(bool, child_ids.len);
@@ -824,7 +825,7 @@ fn collectVerticalComponentUnits(
         seen[root] = true;
         if (page_dependent[root]) continue;
 
-        const unit = try computeVerticalComponentUnit(ir, page_id, child_ids, states, parent, root, local_tops) orelse continue;
+        const unit = try computeVerticalComponentUnit(ir, page_id, child_ids, states, parent, root, local_tops, policy) orelse continue;
         try units.append(ir.allocator, unit);
     }
 }
@@ -917,6 +918,7 @@ fn computeVerticalComponentUnit(
     parent: []usize,
     component_root: usize,
     local_tops: []?f32,
+    policy: VerticalFallbackPolicy,
 ) !?VerticalComponentUnit {
     const root_index = componentFallbackRootIndex(ir, child_ids, parent, component_root) orelse return null;
 
@@ -928,6 +930,9 @@ fn computeVerticalComponentUnit(
     var local_fallback = try buildComponentLocalTopFlowConstraints(ir, child_ids, states, parent, component_root, root_index);
     defer local_fallback.deinit(ir.allocator);
     try runPageAxisPass(ir, page_id, child_ids, temp, .vertical, local_fallback.items);
+    if (policy == .center_stack) {
+        try centerDirectChildGroupsInComponent(ir, child_ids, temp, parent, component_root);
+    }
 
     var local_bottom: ?f32 = null;
     var local_top: ?f32 = null;
@@ -960,6 +965,43 @@ fn computeVerticalComponentUnit(
         .height = local_top.? - local_bottom.?,
         .spacing_after = styleForNode(ir, spacing_source).spacing_after,
     };
+}
+
+fn centerDirectChildGroupsInComponent(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []AxisState,
+    parent: []usize,
+    component_root: usize,
+) !void {
+    var pass: usize = 0;
+    while (pass < 8) : (pass += 1) {
+        var changed = false;
+        changed = (try updateGroupAxisStates(ir, child_ids, states, .vertical, &.{})) or changed;
+
+        for (child_ids, 0..) |group_id, group_index| {
+            if (componentFind(parent, group_index) != component_root) continue;
+            const group_node = ir.getNode(group_id) orelse return error.UnknownNode;
+            if (!isGroupNode(group_node)) continue;
+            const group_state = states[group_index];
+            const group_center = group_state.center orelse continue;
+            const children = ir.childrenOf(group_id) orelse continue;
+
+            for (children) |child_id| {
+                const child_index = indexOfNode(child_ids, child_id) orelse continue;
+                if (componentFind(parent, child_index) != component_root) continue;
+                const child_node = ir.getNode(child_id) orelse return error.UnknownNode;
+                if (!isGroupNode(child_node)) continue;
+                if (groupHasTargetConstraint(ir, child_id, .vertical, &.{})) continue;
+                const child_center = states[child_index].center orelse continue;
+                const delta = group_center - child_center;
+                changed = shiftAxisState(&states[child_index], delta) or changed;
+                changed = (try translateGroupSubtree(ir, child_ids, states, child_id, delta)) or changed;
+            }
+        }
+
+        if (!changed) break;
+    }
 }
 
 fn buildComponentLocalTopFlowConstraints(
