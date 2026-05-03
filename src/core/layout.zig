@@ -218,11 +218,43 @@ fn markdownBlockHeight(node: *const Node, style: TextStyle, block: *const markdo
     return switch (block.kind) {
         .paragraph => markdownLinesHeight(style, block.paragraph.?.lines.items, max_width),
         .code_block => blk: {
-            const lines = @max(@as(usize, 1), block.paragraph.?.lines.items.len);
+            const lines = markdownCodeBlockLineCount(block);
             break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(node) + 2.0 * markdownCodePadY(node);
         },
         .bullet_list, .ordered_list => markdownListHeight(node, style, block, max_width, list_depth),
     };
+}
+
+fn markdownCodeBlockLineCount(block: *const markdown.Block) usize {
+    const paragraph = block.paragraph orelse return 1;
+    var total: usize = 0;
+    for (paragraph.lines.items) |line| {
+        if (line.runs.items.len == 0) {
+            total += 1;
+            continue;
+        }
+
+        var newlines: usize = 0;
+        var ends_with_newline = false;
+        var saw_text = false;
+        for (line.runs.items) |run| {
+            if (run.text.len == 0) continue;
+            saw_text = true;
+            for (run.text) |ch| {
+                if (ch == '\n') newlines += 1;
+            }
+            ends_with_newline = run.text[run.text.len - 1] == '\n';
+        }
+        if (!saw_text) {
+            total += 1;
+            continue;
+        }
+
+        var count = newlines + 1;
+        if (ends_with_newline and count > 1) count -= 1;
+        total += @max(@as(usize, 1), count);
+    }
+    return @max(@as(usize, 1), total);
 }
 
 fn markdownListHeight(node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
