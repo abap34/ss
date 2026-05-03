@@ -890,6 +890,7 @@ fn unionAxisConstraintComponents(
     for (ir.constraints.items) |constraint| {
         if (anchorAxis(constraint.target_anchor) != axis) continue;
         if (selfReferentialSize(constraint, axis) != null) continue;
+        if (axis == .vertical and constraintTargetsGroup(ir, constraint)) continue;
         const target_page = ir.parentPageOf(constraint.target_node) orelse continue;
         if (target_page != page_id) continue;
         const target_index = indexOfNode(child_ids, constraint.target_node) orelse continue;
@@ -970,6 +971,27 @@ fn buildComponentLocalTopFlowConstraints(
     root_index: usize,
 ) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
+    try appendLocalTopFlowForPageChildren(ir, child_ids, states, parent, component_root, root_index, &constraints);
+
+    for (child_ids, 0..) |group_id, group_index| {
+        if (componentFind(parent, group_index) != component_root) continue;
+        const group_node = ir.getNode(group_id) orelse return error.UnknownNode;
+        if (!isGroupNode(group_node)) continue;
+        try appendLocalTopFlowForGroupChildren(ir, child_ids, states, parent, component_root, root_index, group_id, &constraints);
+    }
+
+    return constraints;
+}
+
+fn appendLocalTopFlowForPageChildren(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    root_index: usize,
+    constraints: *std.ArrayList(Constraint),
+) !void {
     var current_source: ConstraintSource = .{ .node = .{ .node_id = child_ids[root_index], .anchor = .bottom } };
     var current_offset: f32 = -styleForNode(ir, ir.getNode(child_ids[root_index]) orelse return error.UnknownNode).spacing_after;
     var started = false;
@@ -978,6 +1000,7 @@ fn buildComponentLocalTopFlowConstraints(
         if (componentFind(parent, index) != component_root) continue;
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         if (isGroupNode(node) or roleEq(node.role, "page_number")) continue;
+        if (directParentGroupIndex(ir, child_ids, parent, component_root, child_id) != null) continue;
         if (state.start != null or state.end != null or state.center != null) continue;
         if (hasAxisTargetConstraint(ir, child_id, .vertical)) continue;
 
@@ -998,8 +1021,56 @@ fn buildComponentLocalTopFlowConstraints(
         current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
         current_offset = -styleForNode(ir, node).spacing_after;
     }
+}
 
-    return constraints;
+fn appendLocalTopFlowForGroupChildren(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    root_index: usize,
+    group_id: NodeId,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    const children = ir.childrenOf(group_id) orelse return;
+    var current_source: ConstraintSource = .{ .node = .{ .node_id = child_ids[root_index], .anchor = .top } };
+    var current_offset: f32 = 0;
+
+    for (children) |child_id| {
+        const index = indexOfNode(child_ids, child_id) orelse continue;
+        if (componentFind(parent, index) != component_root) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(node) or roleEq(node.role, "page_number")) continue;
+        const state = states[index];
+        if (state.start != null or state.end != null or state.center != null) continue;
+        if (hasAxisTargetConstraint(ir, child_id, .vertical)) continue;
+
+        if (index != root_index) {
+            try constraints.append(ir.allocator, .{
+                .target_node = child_id,
+                .target_anchor = .top,
+                .source = current_source,
+                .offset = current_offset,
+            });
+        }
+
+        current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
+        current_offset = -styleForNode(ir, node).spacing_after;
+    }
+}
+
+fn directParentGroupIndex(ir: anytype, child_ids: []const NodeId, parent: []usize, component_root: usize, child_id: NodeId) ?usize {
+    for (child_ids, 0..) |candidate_id, index| {
+        if (componentFind(parent, index) != component_root) continue;
+        const candidate = ir.getNode(candidate_id) orelse continue;
+        if (!isGroupNode(candidate)) continue;
+        const children = ir.childrenOf(candidate_id) orelse continue;
+        for (children) |group_child_id| {
+            if (group_child_id == child_id) return index;
+        }
+    }
+    return null;
 }
 
 fn componentFallbackRootIndex(ir: anytype, child_ids: []const NodeId, parent: []usize, component_root: usize) ?usize {
