@@ -84,6 +84,11 @@ fn with_prop(obj: object, key_name: string, value_name: string) -> object
   return obj
 end
 
+fn with_asset_scale(obj: object, scale: number) -> object
+  set_prop(obj, "asset_scale", str(scale))
+  return obj
+end
+
 fn text_paint(obj: object, font_name: string, font_size_name: string, line_height_name: string, color_name: string) -> object
   set_prop(obj, "text_font", font_name)
   set_prop(obj, "text_size", font_size_name)
@@ -427,28 +432,28 @@ fn figure(text_value: string) -> object
   return flow_inset(figure_text_object(text_value), "102", "102")
 end
 
-fn unchecked_image(path_value: string) -> object
-  return flow_inset(image_object(path_value), "102", "102")
+fn unchecked_image(path_value: string, scale: number = 1) -> object
+  return with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
 end
 
-fn image(path_value: string) -> object
-  let obj = unchecked_image(path_value)
+fn image(path_value: string, scale: number = 1) -> object
+  let obj = unchecked_image(path_value, scale)
   require_asset_exists(obj)
   return obj
 end
 
-fn checked_image(path_value: string) -> object
-  return image(path_value)
+fn checked_image(path_value: string, scale: number = 1) -> object
+  return image(path_value, scale)
 end
 
-fn pdf(path_value: string) -> object
-  return flow_inset(pdf_object(path_value), "102", "102")
-end
-
-fn checked_pdf(path_value: string) -> object
-  let obj = pdf(path_value)
+fn pdf(path_value: string, scale: number = 1) -> object
+  let obj = with_asset_scale(flow_inset(pdf_object(path_value), "102", "102"), scale)
   require_asset_exists(obj)
   return obj
+end
+
+fn checked_pdf(path_value: string, scale: number = 1) -> object
+  return pdf(path_value, scale)
 end
 
 fn plain_code(text_value: string) -> object

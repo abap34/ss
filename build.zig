@@ -27,6 +27,12 @@ pub fn build(b: *std.Build) void {
     });
     ast_mod.addImport("model", model_mod);
 
+    const stdlib_assets_mod = b.createModule(.{
+        .root_source_file = b.path("stdlib/embed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const core_mod = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
@@ -51,6 +57,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("core", core_mod);
     exe_mod.addImport("utils", utils_mod);
     exe_mod.addImport("ast", ast_mod);
+    exe_mod.addImport("stdlib_assets", stdlib_assets_mod);
 
     const exe = b.addExecutable(.{
         .name = "ss",
@@ -77,6 +84,7 @@ pub fn build(b: *std.Build) void {
     parser_tests_mod.addImport("core", core_mod);
     parser_tests_mod.addImport("utils", utils_mod);
     parser_tests_mod.addImport("ast", ast_mod);
+    parser_tests_mod.addImport("stdlib_assets", stdlib_assets_mod);
     const parser_tests = b.addTest(.{
         .root_module = parser_tests_mod,
     });
@@ -90,6 +98,7 @@ pub fn build(b: *std.Build) void {
     main_tests_mod.addImport("core", core_mod);
     main_tests_mod.addImport("utils", utils_mod);
     main_tests_mod.addImport("ast", ast_mod);
+    main_tests_mod.addImport("stdlib_assets", stdlib_assets_mod);
     const main_tests = b.addTest(.{
         .root_module = main_tests_mod,
     });
