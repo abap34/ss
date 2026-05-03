@@ -1069,8 +1069,12 @@ fn inferCallInfo(
             }
         }
         const info = try primitiveResultTypeInfo(allocator, ir, functions, env, call, descriptor, origin);
-        if (ir != null and descriptor.op == .set_prop) {
-            try validateSetPropCall(ir.?, call, env, functions, origin);
+        if (ir != null) {
+            switch (descriptor.op) {
+                .set_prop => try validateSetPropCall(ir.?, call, env, functions, origin),
+                .layout_v => try validateLayoutVCall(ir.?, call, env, origin),
+                else => {},
+            }
         }
         return info;
     }
@@ -1262,6 +1266,26 @@ fn validateSetPropCall(
         );
         return error.InvalidSemanticSort;
     }
+}
+
+fn validateLayoutVCall(
+    ir: *core.Ir,
+    call: ast.CallExpr,
+    env: *const TypeEnv,
+    origin: []const u8,
+) !void {
+    if (call.args.items.len < 1) return;
+    const policy = resolveStringLiteral(env, call.args.items[0]) orelse return;
+    if (std.mem.eql(u8, policy, "top") or
+        std.mem.eql(u8, policy, "top_flow") or
+        std.mem.eql(u8, policy, "center") or
+        std.mem.eql(u8, policy, "center_stack"))
+    {
+        return;
+    }
+
+    try addUserReport(ir, origin, "InvalidLayoutPolicy: expected top or center, got {s}", .{policy});
+    return error.InvalidSemanticSort;
 }
 
 fn validatePropertySetStatement(

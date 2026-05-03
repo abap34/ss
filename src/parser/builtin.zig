@@ -116,6 +116,17 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             try ctx.setNodeProperty(object_id, key, value);
             break :blk .{ .object = object_id };
         },
+        .layout_v => blk: {
+            const policy = try ctx.evalStringArg(call, 0);
+            if (std.mem.eql(u8, policy, "top") or std.mem.eql(u8, policy, "top_flow")) {
+                try ctx.setCurrentPageProperty("layout_v", "top");
+            } else if (std.mem.eql(u8, policy, "center") or std.mem.eql(u8, policy, "center_stack")) {
+                try ctx.setCurrentPageProperty("layout_v", "center");
+            } else {
+                return error.InvalidLayoutPolicy;
+            }
+            break :blk ctx.currentPageValue();
+        },
         .set_style => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             const style = try ctx.evalStyleArg(call, 1);

@@ -61,6 +61,11 @@ const WRAP_ROLES = [_][]const u8{
     "highlight",
 };
 
+const VerticalFallbackPolicy = enum {
+    top_flow,
+    center_stack,
+};
+
 pub fn solveLayout(ir: anytype) !void {
     for (ir.nodes.items) |*node| {
         switch (node.kind) {
@@ -396,11 +401,13 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
     var horizontal_fallback = try buildHorizontalFallbackConstraints(ir, child_ids, horizontal);
     defer horizontal_fallback.deinit(ir.allocator);
     try solvePageAxis(ir, page_id, child_ids, horizontal, .horizontal, horizontal_fallback.items);
+    try capDefaultWrappedHorizontalWidths(ir, child_ids, horizontal);
+    _ = try updateGroupAxisStates(ir, child_ids, horizontal, .horizontal, horizontal_fallback.items);
     applySolvedHorizontalFrames(ir, child_ids, horizontal) catch return error.UnknownNode;
     try propagateTargetedGroupWidths(ir, child_ids, horizontal, &.{});
 
     try solvePageAxis(ir, page_id, child_ids, vertical, .vertical, &.{});
-    var vertical_fallback = try buildVerticalFallbackConstraints(ir, child_ids, vertical);
+    var vertical_fallback = try buildVerticalFallbackConstraints(ir, page_id, child_ids, vertical);
     defer vertical_fallback.deinit(ir.allocator);
     try solvePageAxis(ir, page_id, child_ids, vertical, .vertical, vertical_fallback.items);
 
@@ -421,11 +428,37 @@ fn applySolvedHorizontalFrames(ir: anytype, child_ids: []const NodeId, horizonta
     for (child_ids, horizontal) |child_id, h_state| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         node.frame.width = h_state.size orelse node.frame.width;
+        if (shouldWrapNode(ir, node)) {
+            node.frame.height = intrinsicHeight(ir, node);
+        }
         node.frame.x_set = false;
         if (h_state.start) |x| {
             node.frame.x = x;
             node.frame.x_set = true;
         }
+    }
+}
+
+fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, states: []AxisState) !void {
+    for (child_ids, states) |child_id, *state| {
+        if (!state.size_is_default) continue;
+        if (state.start == null or state.size == null) continue;
+        if (state.end_source != null or state.size_source != null) continue;
+
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(node)) continue;
+        if (!shouldWrapNode(ir, node)) continue;
+
+        const style = styleForNode(ir, node);
+        const max_right = PageLayout.width - style.default_right_inset;
+        const capped_width = @max(@as(f32, 1.0), max_right - state.start.?);
+        if (capped_width >= state.size.? - 0.01) continue;
+
+        state.size = capped_width;
+        state.end = state.start.? + capped_width;
+        state.center = state.start.? + capped_width / 2;
+        state.end_source = null;
+        state.center_source = null;
     }
 }
 
@@ -559,7 +592,21 @@ fn buildHorizontalFallbackConstraints(ir: anytype, child_ids: []const NodeId, st
     return constraints;
 }
 
-fn buildVerticalFallbackConstraints(ir: anytype, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
+fn buildVerticalFallbackConstraints(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
+    return switch (verticalFallbackPolicy(ir, page_id)) {
+        .top_flow => buildTopFlowVerticalFallbackConstraints(ir, child_ids, states),
+        .center_stack => buildCenterStackVerticalFallbackConstraints(ir, page_id, child_ids, states),
+    };
+}
+
+fn verticalFallbackPolicy(ir: anytype, page_id: NodeId) VerticalFallbackPolicy {
+    const page = ir.getNode(page_id) orelse return .top_flow;
+    const value = model.nodeProperty(page, "layout_v") orelse return .top_flow;
+    if (std.mem.eql(u8, value, "center") or std.mem.eql(u8, value, "center_stack")) return .center_stack;
+    return .top_flow;
+}
+
+fn buildTopFlowVerticalFallbackConstraints(ir: anytype, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
     var constraints = std.ArrayList(Constraint).empty;
     var current_source: ConstraintSource = .{ .page = .top };
     var current_offset: f32 = PageLayout.flow_top - PageLayout.height;
@@ -581,7 +628,7 @@ fn buildVerticalFallbackConstraints(ir: anytype, child_ids: []const NodeId, stat
             continue;
         }
 
-        if (hasAxisTargetConstraint(ir, child_id, .vertical)) continue;
+        if (!try isVerticalFallbackCandidate(ir, child_id, state)) continue;
 
         try constraints.append(ir.allocator, .{
             .target_node = child_id,
@@ -597,6 +644,244 @@ fn buildVerticalFallbackConstraints(ir: anytype, child_ids: []const NodeId, stat
     }
 
     return constraints;
+}
+
+const VerticalComponentUnit = struct {
+    root_index: usize,
+    local_top: f32,
+    height: f32,
+    spacing_after: f32,
+};
+
+fn buildCenterStackVerticalFallbackConstraints(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []const AxisState) !std.ArrayList(Constraint) {
+    var constraints = std.ArrayList(Constraint).empty;
+    if (child_ids.len == 0) return constraints;
+
+    const allocator = ir.allocator;
+    const parent = try allocator.alloc(usize, child_ids.len);
+    defer allocator.free(parent);
+    const page_dependent = try allocator.alloc(bool, child_ids.len);
+    defer allocator.free(page_dependent);
+    for (parent, page_dependent, 0..) |*p, *dependent, index| {
+        p.* = index;
+        dependent.* = false;
+    }
+
+    try unionVerticalContainmentComponents(ir, child_ids, parent, page_dependent);
+    try unionVerticalConstraintComponents(ir, page_id, child_ids, states, parent, page_dependent);
+
+    var seen = try allocator.alloc(bool, child_ids.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+    const local_tops = try allocator.alloc(?f32, child_ids.len);
+    defer allocator.free(local_tops);
+    @memset(local_tops, null);
+
+    var units = std.ArrayList(VerticalComponentUnit).empty;
+    defer units.deinit(allocator);
+    for (child_ids, 0..) |_, index| {
+        const root = componentFind(parent, index);
+        if (seen[root]) continue;
+        seen[root] = true;
+        if (page_dependent[root]) continue;
+
+        const unit = try computeVerticalComponentUnit(ir, page_id, child_ids, states, parent, root, local_tops) orelse continue;
+        try units.append(allocator, unit);
+    }
+    if (units.items.len == 0) return constraints;
+
+    var total_height: f32 = 0;
+    for (units.items, 0..) |unit, index| {
+        total_height += unit.height;
+        if (index != units.items.len - 1) total_height += unit.spacing_after;
+    }
+
+    var current_top = PageLayout.height / 2 + total_height / 2;
+    for (units.items) |unit| {
+        const component_root = componentFind(parent, unit.root_index);
+        for (child_ids, 0..) |child_id, index| {
+            if (componentFind(parent, index) != component_root) continue;
+            const local_top = local_tops[index] orelse continue;
+            try constraints.append(allocator, .{
+                .target_node = child_id,
+                .target_anchor = .top,
+                .source = .{ .page = .bottom },
+                .offset = current_top - unit.local_top + local_top,
+            });
+        }
+        current_top -= unit.height + unit.spacing_after;
+    }
+
+    return constraints;
+}
+
+fn unionVerticalContainmentComponents(ir: anytype, child_ids: []const NodeId, parent: []usize, page_dependent: []bool) !void {
+    for (child_ids, 0..) |node_id, index| {
+        const node = ir.getNode(node_id) orelse return error.UnknownNode;
+        if (!isGroupNode(node)) continue;
+        const children = ir.childrenOf(node_id) orelse continue;
+        for (children) |child_id| {
+            const child_index = indexOfNode(child_ids, child_id) orelse continue;
+            componentUnion(parent, page_dependent, index, child_index);
+        }
+    }
+}
+
+fn unionVerticalConstraintComponents(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []const AxisState, parent: []usize, page_dependent: []bool) !void {
+    for (child_ids, states, 0..) |child_id, state, index| {
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (roleEq(node.role, "page_number") or state.start != null or state.end != null or state.center != null) {
+            page_dependent[componentFind(parent, index)] = true;
+        }
+    }
+
+    for (ir.constraints.items) |constraint| {
+        if (anchorAxis(constraint.target_anchor) != .vertical) continue;
+        if (selfReferentialSize(constraint, .vertical) != null) continue;
+        const target_page = ir.parentPageOf(constraint.target_node) orelse continue;
+        if (target_page != page_id) continue;
+        const target_index = indexOfNode(child_ids, constraint.target_node) orelse continue;
+
+        switch (constraint.source) {
+            .page => page_dependent[componentFind(parent, target_index)] = true,
+            .node => |source| {
+                if (anchorAxis(source.anchor) != .vertical) continue;
+                const source_index = indexOfNode(child_ids, source.node_id) orelse {
+                    page_dependent[componentFind(parent, target_index)] = true;
+                    continue;
+                };
+                componentUnion(parent, page_dependent, target_index, source_index);
+            },
+        }
+    }
+}
+
+fn computeVerticalComponentUnit(
+    ir: anytype,
+    page_id: NodeId,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    local_tops: []?f32,
+) !?VerticalComponentUnit {
+    const root_index = componentFallbackRootIndex(ir, child_ids, parent, component_root) orelse return null;
+
+    const temp = try ir.allocator.alloc(AxisState, states.len);
+    defer ir.allocator.free(temp);
+    @memcpy(temp, states);
+    _ = setAxisAnchor(&temp[root_index], .top, 0, null) catch return null;
+
+    var local_fallback = try buildComponentLocalTopFlowConstraints(ir, child_ids, states, parent, component_root, root_index);
+    defer local_fallback.deinit(ir.allocator);
+    try runPageAxisPass(ir, page_id, child_ids, temp, .vertical, local_fallback.items);
+
+    var local_bottom: ?f32 = null;
+    var local_top: ?f32 = null;
+    var bottom_index: ?usize = null;
+    for (child_ids, 0..) |child_id, index| {
+        if (componentFind(parent, index) != component_root) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (roleEq(node.role, "page_number")) continue;
+        if (isGroupNode(node) and (temp[index].start == null or temp[index].end == null)) continue;
+        const start = temp[index].start orelse return null;
+        const end = temp[index].end orelse return null;
+        if (index == root_index or !hasAxisTargetConstraint(ir, child_id, .vertical)) {
+            local_tops[index] = end;
+        }
+        if (local_bottom == null or start < local_bottom.?) {
+            local_bottom = start;
+            bottom_index = index;
+        }
+        if (local_top == null or end > local_top.?) local_top = end;
+    }
+    if (local_bottom == null or local_top == null) return null;
+
+    const spacing_source_index = bottom_index orelse root_index;
+    const spacing_source = ir.getNode(child_ids[spacing_source_index]) orelse return error.UnknownNode;
+    return .{
+        .root_index = root_index,
+        .local_top = local_top.?,
+        .height = local_top.? - local_bottom.?,
+        .spacing_after = styleForNode(ir, spacing_source).spacing_after,
+    };
+}
+
+fn buildComponentLocalTopFlowConstraints(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    root_index: usize,
+) !std.ArrayList(Constraint) {
+    var constraints = std.ArrayList(Constraint).empty;
+    var current_source: ConstraintSource = .{ .node = .{ .node_id = child_ids[root_index], .anchor = .bottom } };
+    var current_offset: f32 = -styleForNode(ir, ir.getNode(child_ids[root_index]) orelse return error.UnknownNode).spacing_after;
+    var started = false;
+
+    for (child_ids, states, 0..) |child_id, state, index| {
+        if (componentFind(parent, index) != component_root) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (isGroupNode(node) or roleEq(node.role, "page_number")) continue;
+        if (state.start != null or state.end != null or state.center != null) continue;
+        if (hasAxisTargetConstraint(ir, child_id, .vertical)) continue;
+
+        if (index == root_index) {
+            started = true;
+            current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
+            current_offset = -styleForNode(ir, node).spacing_after;
+            continue;
+        }
+        if (!started) continue;
+
+        try constraints.append(ir.allocator, .{
+            .target_node = child_id,
+            .target_anchor = .top,
+            .source = current_source,
+            .offset = current_offset,
+        });
+        current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
+        current_offset = -styleForNode(ir, node).spacing_after;
+    }
+
+    return constraints;
+}
+
+fn componentFallbackRootIndex(ir: anytype, child_ids: []const NodeId, parent: []usize, component_root: usize) ?usize {
+    for (child_ids, 0..) |child_id, index| {
+        if (componentFind(parent, index) != component_root) continue;
+        const node = ir.getNode(child_id) orelse continue;
+        if (isGroupNode(node)) continue;
+        if (roleEq(node.role, "page_number")) continue;
+        return index;
+    }
+    return null;
+}
+
+fn componentFind(parent: []usize, index: usize) usize {
+    var current = index;
+    while (parent[current] != current) {
+        current = parent[current];
+    }
+    return current;
+}
+
+fn componentUnion(parent: []usize, page_dependent: []bool, a: usize, b: usize) void {
+    const a_root = componentFind(parent, a);
+    const b_root = componentFind(parent, b);
+    if (a_root == b_root) return;
+    parent[b_root] = a_root;
+    page_dependent[a_root] = page_dependent[a_root] or page_dependent[b_root];
+}
+
+fn isVerticalFallbackCandidate(ir: anytype, child_id: NodeId, state: AxisState) !bool {
+    const node = ir.getNode(child_id) orelse return error.UnknownNode;
+    if (isGroupNode(node)) return false;
+    if (roleEq(node.role, "page_number")) return false;
+    if (state.start != null) return false;
+    if (hasAxisTargetConstraint(ir, child_id, .vertical)) return false;
+    return true;
 }
 
 fn applyAxisConstraint(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, constraint: Constraint, is_soft: bool) !bool {
@@ -629,12 +914,49 @@ fn applyAxisConstraint(ir: anytype, page_id: NodeId, child_ids: []const NodeId, 
     }
 
     const source_value = try constraintSourceValue(ir, page_id, child_ids, states, axis, constraint.source);
-    if (source_value == null) return false;
+    if (source_value == null) {
+        return try applyReverseAxisConstraint(ir, page_id, child_ids, states, axis, constraint, is_soft, target_index);
+    }
 
     return setAxisAnchor(&states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
         if (is_soft) return false;
         const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
         ir.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[target_index], constraint.target_anchor), kind);
+        return false;
+    };
+}
+
+fn applyReverseAxisConstraint(
+    ir: anytype,
+    page_id: NodeId,
+    child_ids: []const NodeId,
+    states: []AxisState,
+    axis: Axis,
+    constraint: Constraint,
+    is_soft: bool,
+    target_index: usize,
+) !bool {
+    if (is_soft) return false;
+
+    const node_source = switch (constraint.source) {
+        .page => return false,
+        .node => |source| source,
+    };
+    if (anchorAxis(node_source.anchor) != axis) return error.ConstraintAxisMismatch;
+
+    const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
+    if (isGroupNode(source_node)) return false;
+
+    const source_page = ir.parentPageOf(node_source.node_id) orelse return error.MissingParentPage;
+    if (source_page != page_id) return false;
+
+    const source_index = indexOfNode(child_ids, node_source.node_id) orelse return false;
+    if (axisAnchorValue(states[source_index], node_source.anchor) != null) return false;
+
+    const target_value = axisAnchorValue(states[target_index], constraint.target_anchor) orelse return false;
+    return setAxisAnchor(&states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
+        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+        ir.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[source_index], node_source.anchor), kind);
         return false;
     };
 }
