@@ -31,6 +31,17 @@ fn rule_object() -> object
   return text_object("", "rule")
 end
 
+fn spacer(height: number, width: number = 1) -> object
+  let obj = text_object("", "panel")
+  fixed_height(obj, height)
+  fixed_width(obj, width)
+  return obj
+end
+
+fn vspace(height: number) -> object
+  return spacer(height)
+end
+
 fn payload_object(text_value: string, role_name: string, payload_name: string) -> object
   let obj = object(text_value, role_name, payload_name)
   return obj
