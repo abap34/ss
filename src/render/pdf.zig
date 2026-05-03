@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const dump = @import("../dump.zig");
 const utils = @import("utils");
+const stdlib_assets = @import("stdlib_assets");
 
 const Allocator = std.mem.Allocator;
 const fs_utils = utils.fs;
@@ -15,7 +16,7 @@ const EmbeddedResource = struct {
 
 const embedded_resources = [_]EmbeddedResource{
     .{ .relative_path = "src/render/pdf_backend.py", .bytes = @embedFile("pdf_backend.py") },
-    .{ .relative_path = "stdlib/highlighters/python_keywords.py", .bytes = @embedFile("../stdlib/highlighters/python_keywords.py") },
+    .{ .relative_path = "stdlib/highlighters/python_keywords.py", .bytes = stdlib_assets.python_keywords },
     .{ .relative_path = "third_party/fonts/fetch.py", .bytes = @embedFile("../embedded_fonts/fetch.py") },
     .{ .relative_path = "third_party/fonts/NotoSansJP-Regular.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Regular.ttf") },
     .{ .relative_path = "third_party/fonts/NotoSansJP-Bold.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Bold.ttf") },

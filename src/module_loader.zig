@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const syntax = @import("parser/syntax.zig");
+const stdlib_assets = @import("stdlib_assets");
 
 const max_module_bytes = 256 * 1024;
 
@@ -11,10 +12,10 @@ const EmbeddedModule = struct {
 };
 
 const embedded_modules = [_]EmbeddedModule{
-    .{ .spec = "std:themes/base", .source = @embedFile("stdlib/themes/base.ss") },
-    .{ .spec = "std:themes/default", .source = @embedFile("stdlib/themes/default.ss") },
-    .{ .spec = "std:themes/academic", .source = @embedFile("stdlib/themes/academic.ss") },
-    .{ .spec = "std:themes/pop", .source = @embedFile("stdlib/themes/pop.ss") },
+    .{ .spec = "std:themes/base", .source = stdlib_assets.themes_base },
+    .{ .spec = "std:themes/default", .source = stdlib_assets.themes_default },
+    .{ .spec = "std:themes/academic", .source = stdlib_assets.themes_academic },
+    .{ .spec = "std:themes/pop", .source = stdlib_assets.themes_pop },
 };
 
 pub const Graph = struct {
