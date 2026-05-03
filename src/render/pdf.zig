@@ -7,7 +7,7 @@ const stdlib_assets = @import("stdlib_assets");
 const Allocator = std.mem.Allocator;
 const fs_utils = utils.fs;
 
-const embedded_runtime_version = "pdf-runtime-v1";
+const embedded_runtime_version = "pdf-runtime-v2";
 
 const EmbeddedResource = struct {
     relative_path: []const u8,

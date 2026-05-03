@@ -35,7 +35,7 @@ PAGE_WIDTH = 1280.0
 PAGE_HEIGHT = 720.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FONT_DIR = REPO_ROOT / "third_party" / "fonts"
-MATH_RENDER_VERSION = "v2"
+MATH_RENDER_VERSION = "v3"
 HIGHLIGHT_RENDER_VERSION = "v1"
 FA_RENDER_VERSION = "v1"
 
@@ -478,7 +478,11 @@ class Renderer:
             kind = str(block.get("kind", "paragraph"))
             if kind == "paragraph":
                 lines = inline_lines_from_lines_field(block)
-                block_overlays, cursor_bl = self._draw_inline_lines(spec, x, cursor_bl, lines, max_width, True)
+                display_math = display_math_text_from_lines(lines)
+                if display_math is not None:
+                    block_overlays, cursor_bl = self._draw_display_math_block(spec, x, cursor_bl, display_math, max_width)
+                else:
+                    block_overlays, cursor_bl = self._draw_inline_lines(spec, x, cursor_bl, lines, max_width, True)
                 overlays.extend(block_overlays)
             elif kind == "code_block":
                 block_overlays, cursor_bl = self._draw_markdown_code_block(
@@ -549,14 +553,24 @@ class Renderer:
             kind = str(block.get("kind", "paragraph"))
             if kind == "paragraph":
                 lines = inline_lines_from_lines_field(block)
-                block_overlays, cursor_bl = self._draw_inline_lines(
-                    spec,
-                    content_x,
-                    cursor_bl,
-                    lines,
-                    content_width,
-                    True,
-                )
+                display_math = display_math_text_from_lines(lines)
+                if display_math is not None:
+                    block_overlays, cursor_bl = self._draw_display_math_block(
+                        spec,
+                        content_x,
+                        cursor_bl,
+                        display_math,
+                        content_width,
+                    )
+                else:
+                    block_overlays, cursor_bl = self._draw_inline_lines(
+                        spec,
+                        content_x,
+                        cursor_bl,
+                        lines,
+                        content_width,
+                        True,
+                    )
                 overlays.extend(block_overlays)
             elif kind in ("bullet_list", "ordered_list"):
                 start = int(block.get("start", 1))
@@ -703,6 +717,32 @@ class Renderer:
                 cursor_bl -= spec.line_height
         return overlays, cursor_bl
 
+    def _draw_display_math_block(
+        self,
+        spec: TextPaintSpec,
+        x: float,
+        baseline_bl: float,
+        tex_body: str,
+        max_width: float,
+    ) -> Tuple[List[Overlay], float]:
+        pdf_path = render_inline_math_to_pdf(tex_body, self.math_cache_dir)
+        src_w, src_h = pdf_page_size(pdf_path)
+        target_h = spec.line_height
+        target_w = src_w * (target_h / src_h) if src_h > 0 else max_width
+        if target_w > max_width and target_w > 0:
+            scale = max_width / target_w
+            target_w *= scale
+            target_h *= scale
+        return [
+            Overlay(
+                pdf_path,
+                x,
+                baseline_bl - target_h * 0.25,
+                target_w,
+                target_h,
+            )
+        ], baseline_bl - spec.line_height
+
     def _draw_text_atom(self, atom: dict, spec: TextPaintSpec, x: float, baseline_bl: float) -> None:
         text = atom["text"]
         if not text:
@@ -745,7 +785,7 @@ class Renderer:
         for run in line:
             kind = str(run.get("kind", "text"))
             segment = str(run.get("text", ""))
-            if kind == "math":
+            if kind in ("math", "display_math"):
                 pdf_path = render_inline_math_to_pdf(segment, self.math_cache_dir)
                 src_w, src_h = pdf_page_size(pdf_path)
                 target_h = spec.font_size * spec.inline_math_height_factor
@@ -1291,6 +1331,28 @@ def inline_lines_from_lines_field(block: dict) -> List[List[dict]]:
             continue
         normalized.append([segment for segment in line if isinstance(segment, dict)])
     return normalized or [[]]
+
+
+def display_math_text_from_lines(lines: List[List[dict]]) -> Optional[str]:
+    chunks: List[str] = []
+    saw_display_math = False
+    for line_index, line in enumerate(lines):
+        if line_index > 0:
+            chunks.append("\n")
+        for segment in line:
+            kind = str(segment.get("kind", "text"))
+            text = str(segment.get("text", ""))
+            if kind == "display_math":
+                saw_display_math = True
+                chunks.append(text)
+            elif text.strip():
+                return None
+            else:
+                chunks.append(text)
+    if not saw_display_math:
+        return None
+    tex_body = "".join(chunks).strip()
+    return tex_body or None
 
 
 def code_plain_lines_from_block(block: dict) -> List[str]:
