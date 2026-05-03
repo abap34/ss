@@ -101,7 +101,7 @@ fn run(init: std.process.Init) !void {
                 try app.writeIrJsonFile(io, allocator, input_path, output_path, &progress);
             }
         } else {
-            var progress = app.Progress.init(6);
+            var progress = app.Progress.init(7);
             if (options.asset_base_dir) |asset_base_dir| {
                 try app.printIrJsonForFileWithAssetBase(io, allocator, input_path, asset_base_dir, &progress);
             } else {
@@ -115,7 +115,7 @@ fn run(init: std.process.Init) !void {
         const options = try parseCommandOptions(args[2..]);
         const input_path = options.input_path orelse "demo/ss.ss";
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, input_path, "pdf");
-        var progress = app.Progress.init(8);
+        var progress = app.Progress.init(7);
         if (options.asset_base_dir) |asset_base_dir| {
             try app.writePdfForFileWithAssetBase(io, allocator, input_path, asset_base_dir, output_path, &progress);
         } else {

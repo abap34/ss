@@ -52,14 +52,14 @@ pub fn buildFileWithAssetBase(
     asset_base_dir: []const u8,
     progress: ?*Progress,
 ) !core.Ir {
-    if (progress) |p| p.step("Read source");
     var source = try utils.fs.readFileAlloc(io, allocator, path);
     errdefer allocator.free(source);
-    if (progress) |p| p.step("Parse");
+    if (progress) |p| p.step("Read source");
+
     var program = try parseSource(allocator, source, path);
     errdefer program.deinit(allocator);
+    if (progress) |p| p.step("Parse");
 
-    if (progress) |p| p.step("Load index");
     var index = typecheck.loadProgramIndex(allocator, io, asset_base_dir, program) catch |err| {
         if (err == error.UnknownImport and program.imports.items.len != 0) {
             const message = try module_loader.formatUnknownImportMessage(allocator, asset_base_dir, program.imports.items[0].spec);
@@ -74,6 +74,7 @@ pub fn buildFileWithAssetBase(
         }
         return err;
     };
+    if (progress) |p| p.step("Load index");
 
     var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
         if (err == error.UnknownImport and program.imports.items.len != 0) {
@@ -97,18 +98,17 @@ pub fn buildFileWithAssetBase(
     defer index.deinit();
     errdefer ir.deinit();
 
-    if (progress) |p| p.step("Typecheck");
     typecheck.typecheckProgram(allocator, &ir) catch |err| {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
         return err;
     };
+    if (progress) |p| p.step("Typecheck");
 
     if (error_report.hasIrErrors(&ir)) {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
         return error.DiagnosticsFailed;
     }
 
-    if (progress) |p| p.step("Lower and solve");
     parser.lowerToIr(&ir) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), &ir, err, core.formatConstraint),
@@ -116,6 +116,7 @@ pub fn buildFileWithAssetBase(
         }
         return err;
     };
+    if (progress) |p| p.step("Lower and solve");
     error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
     if (error_report.hasIrErrors(&ir)) return error.DiagnosticsFailed;
     return ir;
@@ -136,61 +137,61 @@ pub fn checkFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []
 pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, path, progress);
     defer ir.deinit();
-    progress.step("Print dump");
     const text = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(text);
+    progress.step("Serialize JSON");
     std.debug.print("{s}", .{text});
+    progress.step("Print dump");
 }
 
 pub fn printIrJsonForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []const u8, asset_base_dir: []const u8, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
     defer ir.deinit();
-    progress.step("Print dump");
     const text = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(text);
+    progress.step("Serialize JSON");
     std.debug.print("{s}", .{text});
+    progress.step("Print dump");
 }
 
 pub fn writeIrJsonFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
     defer ir.deinit();
-    progress.step("Serialize JSON");
     const json = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(json);
+    progress.step("Serialize JSON");
     try utils.fs.writeFile(io, output_path, json);
-    progress.step("Done");
+    progress.step("Write JSON");
 }
 
 pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    progress.step("Serialize JSON");
     const json = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(json);
+    progress.step("Serialize JSON");
     try utils.fs.writeFile(io, output_path, json);
-    progress.step("Done");
+    progress.step("Write JSON");
 }
 
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
     defer ir.deinit();
-    progress.step("Serialize render IR");
-    progress.step("Render PDF");
     const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &ir);
     defer allocator.free(pdf_data);
+    progress.step("Render PDF");
     try utils.fs.writeFile(io, output_path, pdf_data);
-    progress.step("Done");
+    progress.step("Write PDF");
 }
 
 pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    progress.step("Serialize render IR");
-    progress.step("Render PDF");
     const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &ir);
     defer allocator.free(pdf_data);
+    progress.step("Render PDF");
     try utils.fs.writeFile(io, output_path, pdf_data);
-    progress.step("Done");
+    progress.step("Write PDF");
 }
 
 fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {
