@@ -433,8 +433,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
     var horizontal_fallback = try buildHorizontalFallbackConstraints(ir, page_id, child_ids, horizontal);
     defer horizontal_fallback.deinit(ir.allocator);
     try solvePageAxis(ir, page_id, child_ids, horizontal, .horizontal, horizontal_fallback.items);
-    try capDefaultWrappedHorizontalWidths(ir, child_ids, horizontal);
-    _ = try updateGroupAxisStates(ir, child_ids, horizontal, .horizontal, horizontal_fallback.items);
+    try finalizeHorizontalGroupStates(ir, page_id, child_ids, horizontal, horizontal_fallback.items);
     applySolvedHorizontalFrames(ir, child_ids, horizontal) catch return error.UnknownNode;
     try propagateTargetedGroupWidths(ir, child_ids, horizontal, &.{});
 
@@ -471,7 +470,19 @@ fn applySolvedHorizontalFrames(ir: anytype, child_ids: []const NodeId, horizonta
     }
 }
 
-fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, states: []AxisState) !void {
+fn finalizeHorizontalGroupStates(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, extra_constraints: []const Constraint) !void {
+    var pass: usize = 0;
+    while (pass < 8) : (pass += 1) {
+        var changed = false;
+        changed = (try capDefaultWrappedHorizontalWidths(ir, child_ids, states)) or changed;
+        changed = (try applyGroupTargetConstraints(ir, page_id, child_ids, states, .horizontal, extra_constraints)) or changed;
+        changed = (try updateGroupAxisStates(ir, child_ids, states, .horizontal, extra_constraints)) or changed;
+        if (!changed) break;
+    }
+}
+
+fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, states: []AxisState) !bool {
+    var changed = false;
     for (child_ids, states) |child_id, *state| {
         if (!state.size_is_default) continue;
         if (state.start == null or state.size == null) continue;
@@ -491,7 +502,9 @@ fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, sta
         state.center = state.start.? + capped_width / 2;
         state.end_source = null;
         state.center_source = null;
+        changed = true;
     }
+    return changed;
 }
 
 fn solvePageAxis(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !void {
