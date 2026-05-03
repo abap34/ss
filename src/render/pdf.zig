@@ -12,11 +12,12 @@ const embedded_runtime_version = "pdf-runtime-v2";
 const EmbeddedResource = struct {
     relative_path: []const u8,
     bytes: []const u8,
+    refresh_existing: bool = false,
 };
 
 const embedded_resources = [_]EmbeddedResource{
-    .{ .relative_path = "src/render/pdf_backend.py", .bytes = @embedFile("pdf_backend.py") },
-    .{ .relative_path = "stdlib/highlighters/python_keywords.py", .bytes = stdlib_assets.python_keywords },
+    .{ .relative_path = "src/render/pdf_backend.py", .bytes = @embedFile("pdf_backend.py"), .refresh_existing = true },
+    .{ .relative_path = "stdlib/highlighters/python_keywords.py", .bytes = stdlib_assets.python_keywords, .refresh_existing = true },
     .{ .relative_path = "third_party/fonts/fetch.py", .bytes = @embedFile("../embedded_fonts/fetch.py") },
     .{ .relative_path = "third_party/fonts/NotoSansJP-Regular.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Regular.ttf") },
     .{ .relative_path = "third_party/fonts/NotoSansJP-Bold.ttf", .bytes = @embedFile("../embedded_fonts/NotoSansJP-Bold.ttf") },
@@ -104,7 +105,7 @@ fn ensureEmbeddedRuntime(allocator: Allocator, io: std.Io) ![]u8 {
         const full_path = try std.fs.path.join(allocator, &.{ root, resource.relative_path });
         defer allocator.free(full_path);
 
-        if (fs_utils.fileExists(allocator, full_path)) continue;
+        if (fs_utils.fileExists(allocator, full_path) and !resource.refresh_existing) continue;
 
         const dir_path = std.fs.path.dirname(full_path) orelse ".";
         try std.Io.Dir.cwd().createDirPath(io, dir_path);

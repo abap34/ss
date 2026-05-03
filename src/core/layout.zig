@@ -189,6 +189,14 @@ fn markdownBlockGap(node: *const Node, style: TextStyle) f32 {
     return parseNodeFloatProperty(node, "text_markdown_block_gap") orelse style.line_height * 0.15;
 }
 
+fn markdownGapBetweenBlocks(node: *const Node, style: TextStyle, current: *const markdown.Block, next: *const markdown.Block) f32 {
+    const base = markdownBlockGap(node, style);
+    if (current.kind == .code_block or next.kind == .code_block) {
+        return @max(base, style.line_height);
+    }
+    return base;
+}
+
 fn markdownListIndent(node: *const Node, style: TextStyle) f32 {
     return parseNodeFloatProperty(node, "text_markdown_list_indent") orelse style.font_size * 1.3;
 }
@@ -206,10 +214,9 @@ fn markdownBlocksHeight(ir: anytype, node: *const Node, style: TextStyle, blocks
     if (blocks.len == 0) return style.line_height;
 
     var total: f32 = 0;
-    const gap = markdownBlockGap(node, style);
     for (blocks, 0..) |block, index| {
         total += markdownBlockHeight(node, style, block, max_width, list_depth);
-        if (index != blocks.len - 1) total += gap;
+        if (index != blocks.len - 1) total += markdownGapBetweenBlocks(node, style, block, blocks[index + 1]);
     }
     return total;
 }
@@ -262,10 +269,9 @@ fn markdownListHeight(node: *const Node, style: TextStyle, block: *const markdow
     if (list.items.items.len == 0) return style.line_height;
 
     var total: f32 = 0;
-    const gap = markdownBlockGap(node, style);
     for (list.items.items, 0..) |item, item_index| {
         total += markdownListItemHeight(node, style, block.kind, item, max_width, list_depth);
-        if (item_index != list.items.items.len - 1) total += gap;
+        if (item_index != list.items.items.len - 1) total += markdownBlockGap(node, style);
     }
     return total;
 }
@@ -278,14 +284,13 @@ fn markdownListItemHeight(node: *const Node, style: TextStyle, kind: markdown.Bl
     if (item.blocks.items.len == 0) return style.line_height;
 
     var total: f32 = 0;
-    const gap = markdownBlockGap(node, style);
     for (item.blocks.items, 0..) |block, block_index| {
         const block_width = if (block.kind == .bullet_list or block.kind == .ordered_list)
             @max(@as(f32, 1.0), content_width - markdownListIndent(node, style))
         else
             content_width;
         total += markdownBlockHeight(node, style, block, block_width, list_depth + 1);
-        if (block_index != item.blocks.items.len - 1) total += gap;
+        if (block_index != item.blocks.items.len - 1) total += markdownGapBetweenBlocks(node, style, block, item.blocks.items[block_index + 1]);
     }
     return total;
 }

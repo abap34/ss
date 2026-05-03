@@ -474,6 +474,8 @@ class Renderer:
     ) -> Tuple[List[Overlay], float]:
         overlays: List[Overlay] = []
         cursor_bl = baseline_bl
+        if blocks:
+            cursor_bl = baseline_bl + spec.font_size - self._markdown_block_ascent(spec, blocks[0])
         for index, block in enumerate(blocks):
             kind = str(block.get("kind", "paragraph"))
             if kind == "paragraph":
@@ -512,7 +514,9 @@ class Renderer:
                     if item_index != len(items) - 1:
                         cursor_bl -= spec.markdown_block_gap
             if index != len(blocks) - 1:
-                cursor_bl -= spec.markdown_block_gap
+                bottom_bl = self._markdown_block_bottom(spec, block, cursor_bl)
+                gap = self._markdown_gap_between_blocks(spec, block, blocks[index + 1])
+                cursor_bl = bottom_bl - gap - self._markdown_block_ascent(spec, blocks[index + 1])
         return overlays, cursor_bl
 
     def _draw_list_item(
@@ -548,7 +552,7 @@ class Renderer:
         if not blocks:
             return overlays, baseline_bl - spec.line_height
 
-        cursor_bl = baseline_bl
+        cursor_bl = baseline_bl + spec.font_size - self._markdown_block_ascent(spec, blocks[0])
         for block_index, block in enumerate(blocks):
             kind = str(block.get("kind", "paragraph"))
             if kind == "paragraph":
@@ -572,6 +576,15 @@ class Renderer:
                         True,
                     )
                 overlays.extend(block_overlays)
+            elif kind == "code_block":
+                block_overlays, cursor_bl = self._draw_markdown_code_block(
+                    spec,
+                    content_x,
+                    cursor_bl,
+                    block,
+                    content_width,
+                )
+                overlays.extend(block_overlays)
             elif kind in ("bullet_list", "ordered_list"):
                 start = int(block.get("start", 1))
                 items = block.get("items", []) if isinstance(block.get("items"), list) else []
@@ -593,9 +606,30 @@ class Renderer:
                     if item_index != len(items) - 1:
                         cursor_bl -= spec.markdown_block_gap
             if block_index != len(blocks) - 1:
-                cursor_bl -= spec.markdown_block_gap
+                bottom_bl = self._markdown_block_bottom(spec, block, cursor_bl)
+                gap = self._markdown_gap_between_blocks(spec, block, blocks[block_index + 1])
+                cursor_bl = bottom_bl - gap - self._markdown_block_ascent(spec, blocks[block_index + 1])
 
         return overlays, cursor_bl
+
+    def _markdown_block_ascent(self, spec: TextPaintSpec, block: dict) -> float:
+        kind = str(block.get("kind", "paragraph"))
+        if kind == "code_block":
+            return spec.markdown_code_font_size + spec.markdown_code_pad_y
+        return spec.font_size
+
+    def _markdown_block_bottom(self, spec: TextPaintSpec, block: dict, cursor_bl: float) -> float:
+        kind = str(block.get("kind", "paragraph"))
+        if kind == "code_block":
+            return cursor_bl
+        return cursor_bl + spec.font_size
+
+    def _markdown_gap_between_blocks(self, spec: TextPaintSpec, current: dict, next_block: dict) -> float:
+        current_kind = str(current.get("kind", "paragraph"))
+        next_kind = str(next_block.get("kind", "paragraph"))
+        if current_kind == "code_block" or next_kind == "code_block":
+            return max(spec.markdown_block_gap, spec.line_height)
+        return spec.markdown_block_gap
 
     def _draw_markdown_code_block(
         self,
@@ -658,7 +692,7 @@ class Renderer:
             spec.cjk_bold_passes,
             spec.cjk_bold_dx,
         )
-        return overlays, box_bottom - pad_y
+        return overlays, box_bottom
 
     def _list_marker(self, kind: str, list_depth: int, ordinal: int) -> str:
         if kind == "ordered_list":
