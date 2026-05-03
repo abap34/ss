@@ -1034,35 +1034,7 @@ fn appendLocalTopFlowForPageChildren(
     root_index: usize,
     constraints: *std.ArrayList(Constraint),
 ) !void {
-    var current_source: ConstraintSource = .{ .node = .{ .node_id = child_ids[root_index], .anchor = .bottom } };
-    var current_offset: f32 = -styleForNode(ir, ir.getNode(child_ids[root_index]) orelse return error.UnknownNode).spacing_after;
-    var started = false;
-
-    for (child_ids, states, 0..) |child_id, state, index| {
-        if (componentFind(parent, index) != component_root) continue;
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
-        if (isGroupNode(node) or roleEq(node.role, "page_number")) continue;
-        if (directParentGroupIndex(ir, child_ids, parent, component_root, child_id) != null) continue;
-        if (state.start != null or state.end != null or state.center != null) continue;
-        if (hasAxisTargetConstraint(ir, child_id, .vertical)) continue;
-
-        if (index == root_index) {
-            started = true;
-            current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
-            current_offset = -styleForNode(ir, node).spacing_after;
-            continue;
-        }
-        if (!started) continue;
-
-        try constraints.append(ir.allocator, .{
-            .target_node = child_id,
-            .target_anchor = .top,
-            .source = current_source,
-            .offset = current_offset,
-        });
-        current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
-        current_offset = -styleForNode(ir, node).spacing_after;
-    }
+    try appendLocalTopFlowForChildren(ir, child_ids, states, parent, component_root, root_index, child_ids, .page, constraints);
 }
 
 fn appendLocalTopFlowForGroupChildren(
@@ -1076,30 +1048,192 @@ fn appendLocalTopFlowForGroupChildren(
     constraints: *std.ArrayList(Constraint),
 ) !void {
     const children = ir.childrenOf(group_id) orelse return;
-    var current_source: ConstraintSource = .{ .node = .{ .node_id = child_ids[root_index], .anchor = .top } };
+    try appendLocalTopFlowForChildren(ir, child_ids, states, parent, component_root, root_index, children, .group, constraints);
+}
+
+const FlowScope = enum { page, group };
+
+fn appendLocalTopFlowForChildren(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    root_index: usize,
+    children: []const NodeId,
+    scope: FlowScope,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    const allocator = ir.allocator;
+    const used = try allocator.alloc(bool, children.len);
+    defer allocator.free(used);
+    @memset(used, false);
+
+    var unit = std.ArrayList(usize).empty;
+    defer unit.deinit(allocator);
+
+    var current_source: ?ConstraintSource = null;
     var current_offset: f32 = 0;
+    var started = false;
 
-    for (children) |child_id| {
-        const index = indexOfNode(child_ids, child_id) orelse continue;
-        if (componentFind(parent, index) != component_root) continue;
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
-        if (isGroupNode(node) or roleEq(node.role, "page_number")) continue;
-        const state = states[index];
-        if (state.start != null or state.end != null or state.center != null) continue;
-        if (hasAxisTargetConstraint(ir, child_id, .vertical)) continue;
+    for (children, 0..) |child_id, child_pos| {
+        if (used[child_pos]) continue;
+        const index = flowChildIndex(ir, child_ids, states, parent, component_root, child_id, scope) orelse continue;
 
-        if (index != root_index) {
-            try constraints.append(ir.allocator, .{
-                .target_node = child_id,
+        unit.clearRetainingCapacity();
+        try collectHorizontalFlowUnit(ir, child_ids, states, parent, component_root, children, scope, index, used, &unit);
+        const placement_index = flowUnitPlacementIndex(ir, child_ids, states, unit.items) orelse index;
+        const spacing_index = flowUnitBottomIndex(ir, child_ids, states, unit.items) orelse placement_index;
+        const contains_root = flowUnitContains(unit.items, root_index);
+
+        if (contains_root) {
+            started = true;
+        } else if (!started and scope == .page) {
+            continue;
+        }
+
+        if (!contains_root) {
+            try constraints.append(allocator, .{
+                .target_node = child_ids[placement_index],
                 .target_anchor = .top,
-                .source = current_source,
+                .source = current_source orelse .{ .node = .{ .node_id = child_ids[root_index], .anchor = .top } },
                 .offset = current_offset,
             });
         }
 
-        current_source = .{ .node = .{ .node_id = child_id, .anchor = .bottom } };
-        current_offset = -styleForNode(ir, node).spacing_after;
+        try appendFlowUnitCenterConstraints(allocator, constraints, child_ids, unit.items, if (contains_root) root_index else placement_index);
+
+        const spacing_node = ir.getNode(child_ids[spacing_index]) orelse return error.UnknownNode;
+        current_source = .{ .node = .{ .node_id = child_ids[spacing_index], .anchor = .bottom } };
+        current_offset = -styleForNode(ir, spacing_node).spacing_after;
     }
+}
+
+fn collectHorizontalFlowUnit(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    children: []const NodeId,
+    scope: FlowScope,
+    seed_index: usize,
+    used: []bool,
+    unit: *std.ArrayList(usize),
+) !void {
+    try unit.append(ir.allocator, seed_index);
+    markChildUsed(child_ids, children, seed_index, used);
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (children) |candidate_id| {
+            const candidate_index = flowChildIndex(ir, child_ids, states, parent, component_root, candidate_id, scope) orelse continue;
+            if (flowUnitContains(unit.items, candidate_index)) continue;
+            if (!hasHorizontalRelationToUnit(ir, child_ids, unit.items, candidate_index)) continue;
+            try unit.append(ir.allocator, candidate_index);
+            markChildUsed(child_ids, children, candidate_index, used);
+            changed = true;
+        }
+    }
+}
+
+fn appendFlowUnitCenterConstraints(
+    allocator: std.mem.Allocator,
+    constraints: *std.ArrayList(Constraint),
+    child_ids: []const NodeId,
+    unit: []const usize,
+    center_index: usize,
+) !void {
+    if (unit.len < 2) return;
+    for (unit) |index| {
+        if (index == center_index) continue;
+        try constraints.append(allocator, .{
+            .target_node = child_ids[index],
+            .target_anchor = .center_y,
+            .source = .{ .node = .{ .node_id = child_ids[center_index], .anchor = .center_y } },
+            .offset = 0,
+        });
+    }
+}
+
+fn flowChildIndex(
+    ir: anytype,
+    child_ids: []const NodeId,
+    states: []const AxisState,
+    parent: []usize,
+    component_root: usize,
+    child_id: NodeId,
+    scope: FlowScope,
+) ?usize {
+    const index = indexOfNode(child_ids, child_id) orelse return null;
+    if (componentFind(parent, index) != component_root) return null;
+    const node = ir.getNode(child_id) orelse return null;
+    if (isGroupNode(node)) return null;
+    if (scope == .page and directParentGroupIndex(ir, child_ids, parent, component_root, child_id) != null) return null;
+    const state = states[index];
+    if (state.start != null or state.end != null or state.center != null) return null;
+    if (hasAxisTargetConstraint(ir, child_id, .vertical)) return null;
+    return index;
+}
+
+fn flowUnitPlacementIndex(ir: anytype, child_ids: []const NodeId, states: []const AxisState, unit: []const usize) ?usize {
+    return flowUnitMaxHeightIndex(ir, child_ids, states, unit);
+}
+
+fn flowUnitBottomIndex(ir: anytype, child_ids: []const NodeId, states: []const AxisState, unit: []const usize) ?usize {
+    return flowUnitMaxHeightIndex(ir, child_ids, states, unit);
+}
+
+fn flowUnitMaxHeightIndex(ir: anytype, child_ids: []const NodeId, states: []const AxisState, unit: []const usize) ?usize {
+    var best: ?usize = null;
+    var best_height: f32 = -1;
+    for (unit) |index| {
+        const node = ir.getNode(child_ids[index]) orelse continue;
+        const height = states[index].size orelse node.frame.height;
+        if (best == null or height > best_height) {
+            best = index;
+            best_height = height;
+        }
+    }
+    return best;
+}
+
+fn hasHorizontalRelationToUnit(ir: anytype, child_ids: []const NodeId, unit: []const usize, candidate_index: usize) bool {
+    for (unit) |member_index| {
+        if (hasHorizontalRelation(ir, child_ids[candidate_index], child_ids[member_index])) return true;
+    }
+    return false;
+}
+
+fn hasHorizontalRelation(ir: anytype, a: NodeId, b: NodeId) bool {
+    for (ir.constraints.items) |constraint| {
+        if (anchorAxis(constraint.target_anchor) != .horizontal) continue;
+        const source = switch (constraint.source) {
+            .page => continue,
+            .node => |source| source,
+        };
+        if (anchorAxis(source.anchor) != .horizontal) continue;
+        if (constraint.target_node == a and source.node_id == b) return true;
+        if (constraint.target_node == b and source.node_id == a) return true;
+    }
+    return false;
+}
+
+fn markChildUsed(child_ids: []const NodeId, children: []const NodeId, index: usize, used: []bool) void {
+    for (children, 0..) |child_id, child_pos| {
+        if (child_id == child_ids[index]) {
+            used[child_pos] = true;
+            return;
+        }
+    }
+}
+
+fn flowUnitContains(unit: []const usize, index: usize) bool {
+    for (unit) |member| {
+        if (member == index) return true;
+    }
+    return false;
 }
 
 fn directParentGroupIndex(ir: anytype, child_ids: []const NodeId, parent: []usize, component_root: usize, child_id: NodeId) ?usize {
