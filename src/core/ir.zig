@@ -344,6 +344,13 @@ pub const Ir = struct {
         });
     }
 
+    pub fn setAllPageProperty(self: *Ir, key: []const u8, value: []const u8) !void {
+        try self.setNodeProperty(self.document_id, key, value);
+        for (self.page_order.items) |page_id| {
+            try self.setNodeProperty(page_id, key, value);
+        }
+    }
+
     pub fn getNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) ?[]const u8 {
         const node = self.getNode(node_id) orelse return null;
         return nodeProperty(node, key);

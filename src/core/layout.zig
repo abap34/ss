@@ -601,7 +601,10 @@ fn buildVerticalFallbackConstraints(ir: anytype, page_id: NodeId, child_ids: []c
 
 fn verticalFallbackPolicy(ir: anytype, page_id: NodeId) VerticalFallbackPolicy {
     const page = ir.getNode(page_id) orelse return .top_flow;
-    const value = model.nodeProperty(page, "layout_v") orelse return .top_flow;
+    const value = model.nodeProperty(page, "layout_v") orelse blk: {
+        const document = ir.getNode(ir.document_id) orelse return .top_flow;
+        break :blk model.nodeProperty(document, "layout_v") orelse return .top_flow;
+    };
     if (std.mem.eql(u8, value, "center") or std.mem.eql(u8, value, "center_stack")) return .center_stack;
     return .top_flow;
 }

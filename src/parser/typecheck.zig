@@ -1072,7 +1072,7 @@ fn inferCallInfo(
         if (ir != null) {
             switch (descriptor.op) {
                 .set_prop => try validateSetPropCall(ir.?, call, env, functions, origin),
-                .layout_v => try validateLayoutVCall(ir.?, call, env, origin),
+                .layout_v, .layout_v_all => try validateLayoutVCall(ir.?, call, env, origin),
                 else => {},
             }
         }
