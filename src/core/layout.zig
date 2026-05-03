@@ -320,7 +320,7 @@ fn markdownLineAdvance(style: TextStyle, line: markdown.Line) f32 {
 
 fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
     return switch (run.kind) {
-        .icon, .math => style.font_size * 1.05,
+        .icon, .math, .display_math => style.font_size * 1.05,
         else => blk: {
             const advance = if (containsNonAscii(run.text)) style.font_size * 1.02 else style.font_size * 0.58;
             break :blk @as(f32, @floatFromInt(codepointCount(run.text))) * advance;

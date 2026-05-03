@@ -13,6 +13,7 @@ pub const RunKind = enum {
     code,
     link,
     math,
+    display_math,
     icon,
 };
 
@@ -97,6 +98,7 @@ const ParserState = struct {
     italic_depth: usize = 0,
     code_depth: usize = 0,
     math_depth: usize = 0,
+    display_math_depth: usize = 0,
     link_url: ?[]const u8 = null,
     image: ?ImageState = null,
 
@@ -288,6 +290,7 @@ const InlineParserState = struct {
     italic_depth: usize = 0,
     code_depth: usize = 0,
     math_depth: usize = 0,
+    display_math_depth: usize = 0,
     link_url: ?[]const u8 = null,
     image: ?ImageState = null,
 };
@@ -424,7 +427,11 @@ fn handleEnterSpan(comptime T: type, state: *T, span_type: c.MD_SPANTYPE, detail
         c.MD_SPAN_EM => state.italic_depth += 1,
         c.MD_SPAN_STRONG => state.strong_depth += 1,
         c.MD_SPAN_CODE => state.code_depth += 1,
-        c.MD_SPAN_LATEXMATH, c.MD_SPAN_LATEXMATH_DISPLAY => state.math_depth += 1,
+        c.MD_SPAN_LATEXMATH => state.math_depth += 1,
+        c.MD_SPAN_LATEXMATH_DISPLAY => {
+            state.math_depth += 1;
+            state.display_math_depth += 1;
+        },
         c.MD_SPAN_A => {
             if (detail) |ptr| {
                 const link_detail: *const c.MD_SPAN_A_DETAIL = @ptrCast(@alignCast(ptr));
@@ -454,8 +461,12 @@ fn handleLeaveSpan(comptime T: type, state: *T, span_type: c.MD_SPANTYPE, runs: 
         c.MD_SPAN_CODE => {
             if (state.code_depth > 0) state.code_depth -= 1;
         },
-        c.MD_SPAN_LATEXMATH, c.MD_SPAN_LATEXMATH_DISPLAY => {
+        c.MD_SPAN_LATEXMATH => {
             if (state.math_depth > 0) state.math_depth -= 1;
+        },
+        c.MD_SPAN_LATEXMATH_DISPLAY => {
+            if (state.math_depth > 0) state.math_depth -= 1;
+            if (state.display_math_depth > 0) state.display_math_depth -= 1;
         },
         c.MD_SPAN_A => {
             if (state.link_url) |url| allocatorForState(T, state).free(url);
@@ -528,8 +539,9 @@ fn appendTextRun(
         ""
     else
         @as([*]const u8, @ptrCast(text_ptr))[0..size];
+    const kind = activeKind(state, text_type);
     const normalized = switch (text_type) {
-        c.MD_TEXT_SOFTBR => " ",
+        c.MD_TEXT_SOFTBR => if (kind == .display_math) "\n" else " ",
         c.MD_TEXT_BR => "\n",
         else => bytes,
     };
@@ -537,7 +549,7 @@ fn appendTextRun(
     const alloc = allocatorForState(T, state);
     const text_copy = try alloc.dupe(u8, normalized);
     var run = Run{
-        .kind = activeKind(state, text_type),
+        .kind = kind,
         .text = text_copy,
     };
     if (run.kind == .link and state.link_url != null) {
@@ -569,6 +581,7 @@ fn allocatorForState(comptime T: type, state: *T) Allocator {
 }
 
 fn activeKind(state: anytype, text_type: c.MD_TEXTTYPE) RunKind {
+    if (state.display_math_depth > 0) return .display_math;
     if (text_type == c.MD_TEXT_LATEXMATH or state.math_depth > 0) return .math;
     if (text_type == c.MD_TEXT_CODE or state.code_depth > 0) return .code;
     if (state.strong_depth > 0) return .bold;
