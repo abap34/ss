@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const types = @import("language_type");
 
 pub const PrimitiveCall = enum {
     pagectx,
@@ -173,4 +174,55 @@ pub fn lookupTransformOp(name: []const u8) ?TransformDescriptor {
         if (std.mem.eql(u8, name, descriptor.name)) return descriptor;
     }
     return null;
+}
+
+pub fn argSortType(sort: ArgSort) ?types.Type {
+    return switch (sort) {
+        .any => null,
+        .document => types.Type.document,
+        .page => types.Type.page,
+        .object => types.Type.object,
+        .selection => types.Type.selection(.any),
+        .anchor => types.Type.anchor,
+        .function => types.Type.function,
+        .style => types.Type.style,
+        .string => types.Type.string,
+        .number => types.Type.number,
+        .constraints => types.Type.constraints,
+    };
+}
+
+pub fn primitiveArgType(descriptor: PrimitiveDescriptor, index: usize) ?types.Type {
+    const arg_sort = if (descriptor.arg_sorts.len == 0)
+        return null
+    else if (index < descriptor.arg_sorts.len)
+        descriptor.arg_sorts[index]
+    else
+        descriptor.arg_sorts[descriptor.arg_sorts.len - 1];
+    return argSortType(arg_sort);
+}
+
+pub fn primitiveResultType(descriptor: PrimitiveDescriptor) ?types.Type {
+    if (descriptor.result_sort) |sort| return types.Type.fromSort(sort);
+    return null;
+}
+
+pub fn queryInputType(descriptor: QueryDescriptor) types.Type {
+    return types.Type.fromSort(descriptor.input_sort);
+}
+
+pub fn queryOutputType(descriptor: QueryDescriptor) types.Type {
+    return switch (descriptor.op) {
+        .self_object, .page_objects_by_role, .document_objects_by_role => types.Type.selection(.object),
+        .document_pages => types.Type.selection(.page),
+        .previous_page, .parent_page => types.Type.page,
+    };
+}
+
+pub fn transformInputType(descriptor: TransformDescriptor) ?types.Type {
+    return if (descriptor.input_sort) |sort| types.Type.fromSort(sort) else null;
+}
+
+pub fn transformOutputType(descriptor: TransformDescriptor) types.Type {
+    return types.Type.fromSort(descriptor.output_sort);
 }
