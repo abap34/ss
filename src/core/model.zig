@@ -452,6 +452,8 @@ pub const Query = struct {
         self_object: void,
         previous_page: void,
         parent_page: void,
+        children: void,
+        descendants: void,
         page_objects_by_role: Role,
         document_objects_by_role: Role,
         document_pages: void,
@@ -481,6 +483,24 @@ pub const Query = struct {
             .output = .page,
             .name = "parent-page",
             .op = .{ .parent_page = {} },
+        };
+    }
+
+    pub fn children() Query {
+        return .{
+            .input = .object,
+            .output = .selection,
+            .name = "children",
+            .op = .{ .children = {} },
+        };
+    }
+
+    pub fn descendants() Query {
+        return .{
+            .input = .object,
+            .output = .selection,
+            .name = "descendants",
+            .op = .{ .descendants = {} },
         };
     }
 

@@ -392,12 +392,39 @@ pub const Document = struct {
         return selection;
     }
 
+    fn selectChildren(self: *Document, allocator: Allocator, parent_id: HandleId, provenance: []const u8) !core.Selection {
+        var selection = core.Selection.init(.object, provenance);
+        const children = self.contains.get(parent_id) orelse return selection;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+        }
+        return selection;
+    }
+
+    fn appendDescendants(self: *Document, allocator: Allocator, parent_id: HandleId, selection: *core.Selection) !void {
+        const children = self.contains.get(parent_id) orelse return;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+            try self.appendDescendants(allocator, child_id, selection);
+        }
+    }
+
+    fn selectDescendants(self: *Document, allocator: Allocator, parent_id: HandleId, provenance: []const u8) !core.Selection {
+        var selection = core.Selection.init(.object, provenance);
+        try self.appendDescendants(allocator, parent_id, &selection);
+        return selection;
+    }
+
     pub fn select(self: *Document, allocator: Allocator, base: core.Value, query: core.Query) !core.Value {
         try self.ensureSort(base, query.input, query.name);
         return switch (query.op) {
             .self_object => .{ .selection = try self.singletonSelection(allocator, .object, query.name, base.object) },
             .previous_page => .{ .page = self.previousPageOf(base.page) orelse return error.NoPreviousPage },
             .parent_page => .{ .page = self.parentPageOf(base.object) orelse return error.MissingParentPage },
+            .children => .{ .selection = try self.selectChildren(allocator, base.object, query.name) },
+            .descendants => .{ .selection = try self.selectDescendants(allocator, base.object, query.name) },
             .page_objects_by_role => |role| .{ .selection = try self.selectPageObjectsByRole(allocator, base.page, role, query.name) },
             .document_objects_by_role => |role| .{ .selection = try self.selectDocumentObjectsByRole(allocator, role, query.name) },
             .document_pages => .{ .selection = try self.selectDocumentPages(allocator, query.name) },
