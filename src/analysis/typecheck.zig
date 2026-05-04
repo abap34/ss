@@ -1187,7 +1187,7 @@ fn inferUserFunctionReturnInfoInner(
                 result = mergeTypeInfo(result, info);
             },
             .property_set => |property_set| {
-                try validatePropertySetStatement(allocator, null, functions, &env, property_set.object_name, property_set.property_name, property_set.value, "");
+                try validatePropertySetStatement(allocator, ir, functions, &env, property_set.object_name, property_set.property_name, property_set.value, "");
             },
             .expr_stmt => |expr| {
                 _ = try inferExprInfo(allocator, null, functions, &env, expr, "");
@@ -1400,7 +1400,7 @@ fn validateSetPropCall(
         .string => |text| text,
         else => return,
     };
-    const schema = property_schema.lookup(key) orelse {
+    const schema = property_schema.lookupInIr(ir, key) orelse {
         try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{key});
         return error.InvalidSemanticSort;
     };
@@ -1409,12 +1409,12 @@ fn validateSetPropCall(
         try addUserReport(
             ir,
             origin,
-            "InvalidProperty: set_prop target must be document, page, or object; got {s}",
+            "InvalidProperty: set_prop target must be document, page, object, or selection<object>; got {s}",
             .{@tagName(target_info.sort)},
         );
         return error.InvalidSemanticSort;
     };
-    if (!property_schema.isShapeAllowed(schema, target_shape)) {
+    if (!property_schema.isSchemaShapeAllowed(schema, target_shape)) {
         try addUserReport(
             ir,
             origin,
@@ -1425,12 +1425,12 @@ fn validateSetPropCall(
     }
 
     const value_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[2], origin);
-    if (!property_schema.valueMatches(schema, value_info.string_literal, value_info.sort)) {
+    if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
         try addUserReport(
             ir,
             origin,
             "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-            .{ key, property_schema.valueTypeLabel(schema.value_type), @tagName(value_info.sort) },
+            .{ key, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
         );
         return error.InvalidSemanticSort;
     }
@@ -1461,11 +1461,11 @@ fn validatePropertySetStatement(
         return error.UnknownIdentifier;
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
-    const schema = property_schema.lookup(property_name) orelse {
+    const schema = lookupPropertySchema(ir, property_name) orelse {
         try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{property_name});
         return error.InvalidSemanticSort;
     };
-    if (!property_schema.isShapeAllowed(schema, object_info.object_shape)) {
+    if (!property_schema.isSchemaShapeAllowed(schema, object_info.object_shape)) {
         try addUserReport(
             ir,
             origin,
@@ -1475,15 +1475,20 @@ fn validatePropertySetStatement(
         return error.InvalidSemanticSort;
     }
     const value_info = try inferExprInfo(allocator, ir, functions, env, value, origin);
-    if (!property_schema.valueMatches(schema, value_info.string_literal, value_info.sort)) {
+    if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
         try addUserReport(
             ir,
             origin,
             "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-            .{ property_name, property_schema.valueTypeLabel(schema.value_type), @tagName(value_info.sort) },
+            .{ property_name, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
         );
         return error.InvalidSemanticSort;
     }
+}
+
+fn lookupPropertySchema(ir: ?*core.Ir, property_name: []const u8) ?property_schema.SchemaRef {
+    if (ir) |sink| return property_schema.lookupInIr(sink, property_name);
+    return property_schema.lookupRef(property_name);
 }
 
 fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
