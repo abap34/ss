@@ -51,3 +51,15 @@ end
 fn select_difference(left: selection<object>, right: selection<object>) -> selection<object>
   return selection_difference(left, right)
 end
+
+fn with_prop_except(items: selection<object>, excluded: selection<object>, key_name: string, value_name: string) -> selection<object>
+  let targets = select_difference(items, excluded)
+  set_prop(targets, key_name, value_name)
+  return targets
+end
+
+fn with_style_except(items: selection<object>, excluded: selection<object>, style_value: style) -> selection<object>
+  let targets = select_difference(items, excluded)
+  set_style(targets, style_value)
+  return targets
+end
