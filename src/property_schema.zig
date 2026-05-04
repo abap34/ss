@@ -22,6 +22,8 @@ pub const PropertyValueType = enum {
     scalar_like,
     color_string,
     fit_policy,
+    render_kind,
+    wrap_mode,
 };
 
 pub const PropertySchema = struct {
@@ -36,6 +38,8 @@ const asset_shapes = [_]ObjectShape{ .asset_image, .asset_pdf };
 const chrome_shapes = [_]ObjectShape{ .panel, .rule };
 
 const property_schemas = [_]PropertySchema{
+    .{ .key = "render_kind", .value_type = .render_kind, .allowed_shapes = &any_shapes },
+    .{ .key = "wrap", .value_type = .wrap_mode, .allowed_shapes = &any_shapes },
     .{ .key = "text_font", .value_type = .string, .allowed_shapes = &text_shapes },
     .{ .key = "text_bold_font", .value_type = .string, .allowed_shapes = &text_shapes },
     .{ .key = "text_italic_font", .value_type = .string, .allowed_shapes = &text_shapes },
@@ -60,9 +64,13 @@ const property_schemas = [_]PropertySchema{
     .{ .key = "text_markdown_code_radius", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
     .{ .key = "text_cjk_bold_passes", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
     .{ .key = "text_cjk_bold_dx", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
-    .{ .key = "layout_font_size", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
-    .{ .key = "layout_line_height", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
-    .{ .key = "layout_spacing_after", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
+    .{ .key = "code_plain_color", .value_type = .color_string, .allowed_shapes = &text_shapes },
+    .{ .key = "code_keyword_color", .value_type = .color_string, .allowed_shapes = &text_shapes },
+    .{ .key = "code_comment_color", .value_type = .color_string, .allowed_shapes = &text_shapes },
+    .{ .key = "code_string_color", .value_type = .color_string, .allowed_shapes = &text_shapes },
+    .{ .key = "layout_font_size", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
+    .{ .key = "layout_line_height", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
+    .{ .key = "layout_spacing_after", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
     .{ .key = "layout_x", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
     .{ .key = "layout_right_inset", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
     .{ .key = "math_scale", .value_type = .scalar_like, .allowed_shapes = &.{.math} },
@@ -115,6 +123,20 @@ pub fn valueMatches(schema: PropertySchema, string_literal: ?[]const u8, sort: c
             std.mem.eql(u8, text, "warn") or std.mem.eql(u8, text, "error") or std.mem.eql(u8, text, "ignore")
         else
             sort == .string,
+        .render_kind => if (string_literal) |text|
+            std.mem.eql(u8, text, "text") or
+                std.mem.eql(u8, text, "code") or
+                std.mem.eql(u8, text, "vector_math") or
+                std.mem.eql(u8, text, "vector_asset") or
+                std.mem.eql(u8, text, "raster_asset") or
+                std.mem.eql(u8, text, "chrome") or
+                std.mem.eql(u8, text, "chrome_only")
+        else
+            sort == .string,
+        .wrap_mode => if (string_literal) |text|
+            std.mem.eql(u8, text, "on") or std.mem.eql(u8, text, "off")
+        else
+            sort == .string,
     };
 }
 
@@ -124,6 +146,8 @@ pub fn valueTypeLabel(kind: PropertyValueType) []const u8 {
         .scalar_like => "string or number",
         .color_string => "color string",
         .fit_policy => "\"warn\" | \"error\" | \"ignore\"",
+        .render_kind => "\"text\" | \"code\" | \"vector_math\" | \"vector_asset\" | \"raster_asset\" | \"chrome\"",
+        .wrap_mode => "\"on\" | \"off\"",
     };
 }
 

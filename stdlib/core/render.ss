@@ -24,6 +24,7 @@ fn text_layout(obj: object, font_size_name: string, line_height_name: string, sp
   set_prop(obj, "layout_spacing_after", spacing_after_name)
   set_prop(obj, "layout_x", left_name)
   set_prop(obj, "layout_right_inset", right_name)
+  set_prop(obj, "wrap", "on")
   return obj
 end
 
@@ -91,24 +92,31 @@ fn styled_text(text_value: string, role_name: string, style_value: style) -> obj
 end
 
 fn title_variant(text_value: string, variant_name: string) -> object
-  return styled_text(text_value, "title", style(variant_name))
+  let obj = title_object(text_value)
+  set_style(obj, style(variant_name))
+  return obj
 end
 
 fn subtitle_variant(text_value: string, variant_name: string) -> object
-  return styled_text(text_value, "subtitle", style(variant_name))
+  let obj = subtitle_object(text_value)
+  set_style(obj, style(variant_name))
+  return obj
 end
 
 fn byline(text_value: string) -> object
-  let byline = text_object(text_value, "byline")
-  return byline
+  return byline_object(text_value)
 end
 
 fn byline_variant(text_value: string, variant_name: string) -> object
-  return styled_text(text_value, "byline", style(variant_name))
+  let obj = byline_object(text_value)
+  set_style(obj, style(variant_name))
+  return obj
 end
 
 fn label(label_style_name: string, text_value: string) -> object
-  return styled_text(text_value, "label", style(label_style_name))
+  let obj = label_object(text_value)
+  set_style(obj, style(label_style_name))
+  return obj
 end
 
 fn rule(rule_style_name: string) -> object

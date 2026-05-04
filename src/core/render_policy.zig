@@ -100,38 +100,9 @@ pub const ResolvedRender = struct {
 
 const DEFAULT_TEXT_COLOR = Color{ .r = 0.08, .g = 0.08, .b = 0.08 };
 const DEFAULT_LINK_COLOR = Color{ .r = 0.1, .g = 0.25, .b = 0.75 };
-const SEMINAR_BLUE = Color{ .r = 70.0 / 255.0, .g = 130.0 / 255.0, .b = 180.0 / 255.0 };
-const SEMINAR_BLACK = Color{ .r = 0.0, .g = 0.0, .b = 9.0 / 255.0 };
-const SEMINAR_GRAY = Color{ .r = 0.5, .g = 0.5, .b = 0.5 };
-const SEMINAR_ORANGE = Color{ .r = 1.0, .g = 152.0 / 255.0, .b = 0.0 };
 const CODE_KEYWORD_BLUE = Color{ .r = 44.0 / 255.0, .g = 88.0 / 255.0, .b = 201.0 / 255.0 };
 const CODE_COMMENT_GREEN = Color{ .r = 78.0 / 255.0, .g = 138.0 / 255.0, .b = 92.0 / 255.0 };
 const CODE_STRING_RED = Color{ .r = 178.0 / 255.0, .g = 65.0 / 255.0, .b = 55.0 / 255.0 };
-
-const TextDefaults = struct {
-    role: []const u8,
-    font: []const u8,
-    color: Color,
-};
-
-const TEXT_DEFAULTS = [_]TextDefaults{
-    .{ .role = "title", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "subtitle", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "byline", .font = "Helvetica", .color = SEMINAR_BLUE },
-    .{ .role = "label", .font = "Helvetica", .color = SEMINAR_BLUE },
-    .{ .role = "body", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "math", .font = "Courier", .color = Color{ .r = 0.05, .g = 0.05, .b = 0.25 } },
-    .{ .role = "figure", .font = "Courier", .color = Color{ .r = 0.18, .g = 0.18, .b = 0.18 } },
-    .{ .role = "code", .font = "Courier", .color = Color{ .r = 0.12, .g = 0.12, .b = 0.12 } },
-    .{ .role = "toc", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "highlight", .font = "Helvetica", .color = SEMINAR_ORANGE },
-    .{ .role = "page_number", .font = "Helvetica", .color = SEMINAR_GRAY },
-    .{ .role = "heading1", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "toc_entry", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "note", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "rule", .font = "Helvetica", .color = SEMINAR_BLACK },
-    .{ .role = "panel", .font = "Helvetica", .color = SEMINAR_BLACK },
-};
 
 pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
     const kind = resolveKind(node);
@@ -147,8 +118,9 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
 }
 
 pub fn resolveKind(node: *const Node) RenderKind {
-    if (roleEq(node.role, "panel") or roleEq(node.role, "rule") or roleEq(node.role, "group")) return .chrome_only;
-    if (roleEq(node.role, "code") or node.payload_kind == .code) return .code;
+    if (parseRenderKindProperty(node)) |kind| return kind;
+    if (roleEq(node.role, "group")) return .chrome_only;
+    if (node.payload_kind == .code) return .code;
     if (node.payload_kind == .math_tex) return .vector_math;
     if (node.payload_kind == .pdf_ref) return .vector_asset;
     if (node.payload_kind == .image_ref) return .raster_asset;
@@ -162,16 +134,15 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
     }
 
     const layout_style = layout.styleForNode(ir, node);
-    const role = node.role orelse "body";
-    const defaults = lookupTextDefaults(role);
+    const font = model.nodeProperty(node, "text_font") orelse "Helvetica";
     return .{
-        .font = model.nodeProperty(node, "text_font") orelse defaults.font,
-        .bold_font = model.nodeProperty(node, "text_bold_font") orelse defaultBoldFont(model.nodeProperty(node, "text_font") orelse defaults.font),
-        .italic_font = model.nodeProperty(node, "text_italic_font") orelse defaultItalicFont(model.nodeProperty(node, "text_font") orelse defaults.font),
+        .font = font,
+        .bold_font = model.nodeProperty(node, "text_bold_font") orelse defaultBoldFont(font),
+        .italic_font = model.nodeProperty(node, "text_italic_font") orelse defaultItalicFont(font),
         .code_font = model.nodeProperty(node, "text_code_font") orelse "Courier",
         .font_size = parseFloatProperty(node, "text_size") orelse layout_style.font_size,
         .line_height = parseFloatProperty(node, "text_line_height") orelse layout_style.line_height,
-        .color = parseColorProperty(node, "text_color") orelse defaults.color,
+        .color = parseColorProperty(node, "text_color") orelse DEFAULT_TEXT_COLOR,
         .link_color = parseColorProperty(node, "text_link_color") orelse DEFAULT_LINK_COLOR,
         .link_underline_width = parseFloatProperty(node, "text_link_underline_width") orelse 0.8,
         .link_underline_offset = parseFloatProperty(node, "text_link_underline_offset") orelse -1.5,
@@ -205,7 +176,7 @@ fn resolveMath(node: *const Node, kind: RenderKind) ?MathPaint {
 
 fn resolveCode(node: *const Node, kind: RenderKind) ?CodePaint {
     if (kind != .code) return null;
-    const plain = parseColorProperty(node, "code_plain_color") orelse parseColorProperty(node, "text_color") orelse lookupTextDefaults(node.role orelse "code").color;
+    const plain = parseColorProperty(node, "code_plain_color") orelse parseColorProperty(node, "text_color") orelse DEFAULT_TEXT_COLOR;
     return .{
         .language = model.nodeProperty(node, "language"),
         .plain = plain,
@@ -240,13 +211,6 @@ fn resolveRule(node: *const Node) RulePaint {
     };
 }
 
-fn lookupTextDefaults(role: []const u8) TextDefaults {
-    for (TEXT_DEFAULTS) |entry| {
-        if (std.mem.eql(u8, entry.role, role)) return entry;
-    }
-    return .{ .role = role, .font = "Helvetica", .color = DEFAULT_TEXT_COLOR };
-}
-
 fn defaultBoldFont(font: []const u8) []const u8 {
     if (std.mem.eql(u8, font, "Helvetica")) return "Helvetica-Bold";
     if (std.mem.eql(u8, font, "Courier")) return "Courier-Bold";
@@ -257,6 +221,17 @@ fn defaultItalicFont(font: []const u8) []const u8 {
     if (std.mem.eql(u8, font, "Helvetica")) return "Helvetica-Oblique";
     if (std.mem.eql(u8, font, "Courier")) return "Courier-Oblique";
     return font;
+}
+
+fn parseRenderKindProperty(node: *const Node) ?RenderKind {
+    const value = model.nodeProperty(node, "render_kind") orelse return null;
+    if (std.mem.eql(u8, value, "text")) return .text;
+    if (std.mem.eql(u8, value, "code")) return .code;
+    if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
+    if (std.mem.eql(u8, value, "vector_asset")) return .vector_asset;
+    if (std.mem.eql(u8, value, "raster_asset")) return .raster_asset;
+    if (std.mem.eql(u8, value, "chrome") or std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
+    return null;
 }
 
 fn parseFloatProperty(node: *const Node, key: []const u8) ?f32 {
