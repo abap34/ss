@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("model");
 const diagnostics = @import("diagnostics.zig");
 const fallback = @import("fallback.zig");
+const graph = @import("graph.zig");
 const groups = @import("groups.zig");
 const metrics = @import("metrics.zig");
 const style_defaults = @import("style.zig");
@@ -16,6 +17,7 @@ const ConstraintSource = model.ConstraintSource;
 const Frame = model.Frame;
 const PageLayout = model.PageLayout;
 const TextStyle = model.TextStyle;
+const ConstraintTolerance = graph.ConstraintTolerance;
 
 pub fn solveLayout(ir: anytype) !void {
     for (ir.nodes.items) |*node| {
@@ -68,54 +70,32 @@ pub fn lineCount(text: []const u8) usize {
 }
 
 fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
-    const children = ir.contains.get(page_id) orelse return;
-    const child_ids = children.items;
+    var page_graph = try graph.PageLayoutGraph.init(ir.allocator, ir, page_id);
+    defer page_graph.deinit();
+    if (page_graph.len() == 0) return;
 
-    const horizontal = try ir.allocator.alloc(AxisState, child_ids.len);
-    defer ir.allocator.free(horizontal);
-    const vertical = try ir.allocator.alloc(AxisState, child_ids.len);
-    defer ir.allocator.free(vertical);
+    var horizontal = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .horizontal);
+    defer horizontal.deinit();
+    var vertical = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .vertical);
+    defer vertical.deinit();
 
-    for (child_ids, horizontal, vertical) |child_id, *h_state, *v_state| {
-        const node = ir.getNode(child_id) orelse return error.UnknownNode;
-        if (groups.isGroupNode(node)) {
-            h_state.* = .{};
-            v_state.* = .{};
-            continue;
-        }
-        const has_h_target = hasAxisTargetConstraint(ir, child_id, .horizontal);
-        const has_v_target = hasAxisTargetConstraint(ir, child_id, .vertical);
-        h_state.* = .{};
-        v_state.* = .{};
-        if (!has_h_target and node.frame.x_set) {
-            h_state.size = node.frame.width;
-            h_state.start = node.frame.x;
-            h_state.end = node.frame.x + node.frame.width;
-            h_state.center = node.frame.x + node.frame.width / 2;
-        }
-        if (!has_v_target and node.frame.y_set) {
-            v_state.size = node.frame.height;
-            v_state.start = node.frame.y;
-            v_state.end = node.frame.y + node.frame.height;
-            v_state.center = node.frame.y + node.frame.height / 2;
-        }
-    }
+    try solvePageAxis(ir, &horizontal);
 
-    try solvePageAxis(ir, page_id, child_ids, horizontal, .horizontal, &.{});
-
-    var horizontal_fallback = try fallback.buildHorizontalConstraints(ir, page_id, child_ids, horizontal);
+    var horizontal_fallback = try fallback.buildHorizontalConstraints(ir, &horizontal);
     defer horizontal_fallback.deinit(ir.allocator);
-    try solvePageAxis(ir, page_id, child_ids, horizontal, .horizontal, horizontal_fallback.items);
-    try finalizeHorizontalGroupStates(ir, page_id, child_ids, horizontal, horizontal_fallback.items);
-    applySolvedHorizontalFrames(ir, child_ids, horizontal) catch return error.UnknownNode;
-    try groups.propagateTargetedWidths(ir, child_ids, horizontal, &.{});
+    horizontal.soft_constraints = horizontal_fallback.items;
+    try solvePageAxis(ir, &horizontal);
+    try finalizeHorizontalGroupStates(ir, &horizontal);
+    applySolvedHorizontalFrames(ir, &horizontal) catch return error.UnknownNode;
+    try groups.propagateTargetedWidths(ir, &horizontal);
 
-    try solvePageAxis(ir, page_id, child_ids, vertical, .vertical, &.{});
-    var vertical_fallback = try fallback.buildVerticalConstraints(ir, page_id, child_ids, vertical);
+    try solvePageAxis(ir, &vertical);
+    var vertical_fallback = try fallback.buildVerticalConstraints(ir, &vertical);
     defer vertical_fallback.deinit(ir.allocator);
-    try solvePageAxis(ir, page_id, child_ids, vertical, .vertical, vertical_fallback.items);
+    vertical.soft_constraints = vertical_fallback.items;
+    try solvePageAxis(ir, &vertical);
 
-    for (child_ids, vertical) |child_id, v_state| {
+    for (page_graph.child_ids, vertical.states) |child_id, v_state| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         node.frame.height = v_state.size orelse node.frame.height;
         node.frame.y_set = false;
@@ -125,11 +105,11 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
         }
     }
 
-    try diagnostics.collectPageDiagnostics(ir, page_id, child_ids);
+    try diagnostics.collectPageDiagnostics(ir, page_id, page_graph.child_ids);
 }
 
-fn applySolvedHorizontalFrames(ir: anytype, child_ids: []const NodeId, horizontal: []const AxisState) !void {
-    for (child_ids, horizontal) |child_id, h_state| {
+fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspace) !void {
+    for (workspace.graph.child_ids, workspace.states) |child_id, h_state| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         node.frame.width = h_state.size orelse node.frame.width;
         if (shouldWrapNode(ir, node)) {
@@ -143,20 +123,20 @@ fn applySolvedHorizontalFrames(ir: anytype, child_ids: []const NodeId, horizonta
     }
 }
 
-fn finalizeHorizontalGroupStates(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, extra_constraints: []const Constraint) !void {
+fn finalizeHorizontalGroupStates(ir: anytype, workspace: *graph.AxisWorkspace) !void {
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
         var changed = false;
-        changed = (try capDefaultWrappedHorizontalWidths(ir, child_ids, states)) or changed;
-        changed = (try groups.applyTargetConstraints(ir, page_id, child_ids, states, .horizontal, extra_constraints)) or changed;
-        changed = (try groups.updateAxisStates(ir, child_ids, states, .horizontal, extra_constraints)) or changed;
+        changed = (try capDefaultWrappedHorizontalWidths(ir, workspace)) or changed;
+        changed = (try groups.applyTargetConstraints(ir, workspace)) or changed;
+        changed = (try groups.updateAxisStates(ir, workspace)) or changed;
         if (!changed) break;
     }
 }
 
-fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, states: []AxisState) !bool {
+fn capDefaultWrappedHorizontalWidths(ir: anytype, workspace: *graph.AxisWorkspace) !bool {
     var changed = false;
-    for (child_ids, states) |child_id, *state| {
+    for (workspace.graph.child_ids, workspace.states) |child_id, *state| {
         if (!state.size_is_default) continue;
         if (state.start == null or state.size == null) continue;
         if (state.end_source != null or state.size_source != null) continue;
@@ -168,7 +148,7 @@ fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, sta
         const style = styleForNode(ir, node);
         const max_right = PageLayout.width - style.default_right_inset;
         const capped_width = @max(@as(f32, 1.0), max_right - state.start.?);
-        if (capped_width >= state.size.? - 0.01) continue;
+        if (capped_width >= state.size.? - ConstraintTolerance) continue;
 
         state.size = capped_width;
         state.end = state.start.? + capped_width;
@@ -180,13 +160,13 @@ fn capDefaultWrappedHorizontalWidths(ir: anytype, child_ids: []const NodeId, sta
     return changed;
 }
 
-fn solvePageAxis(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !void {
-    try runPageAxisPass(ir, page_id, child_ids, states, axis, extra_constraints);
+fn solvePageAxis(ir: anytype, workspace: *graph.AxisWorkspace) !void {
+    try runPageAxisPass(ir, workspace);
 
-    for (child_ids, states) |child_id, *state| {
+    for (workspace.graph.child_ids, workspace.states) |child_id, *state| {
         if (state.size == null) {
             const node = ir.getNode(child_id) orelse return error.UnknownNode;
-            state.size = switch (axis) {
+            state.size = switch (workspace.axis) {
                 .horizontal => node.frame.width,
                 .vertical => node.frame.height,
             };
@@ -194,7 +174,7 @@ fn solvePageAxis(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states
         }
     }
 
-    try runPageAxisPass(ir, page_id, child_ids, states, axis, extra_constraints);
+    try runPageAxisPass(ir, workspace);
 }
 
 pub fn hasAxisTargetConstraint(ir: anytype, node_id: NodeId, axis: Axis) bool {
@@ -206,7 +186,7 @@ pub fn hasAxisTargetConstraint(ir: anytype, node_id: NodeId, axis: Axis) bool {
     return false;
 }
 
-pub fn runPageAxisPass(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !void {
+pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !void {
     var pass: usize = 0;
     while (pass < 32) : (pass += 1) {
         var changed = false;
@@ -214,37 +194,37 @@ pub fn runPageAxisPass(ir: anytype, page_id: NodeId, child_ids: []const NodeId, 
         while (local_pass < 32) : (local_pass += 1) {
             var local_changed = false;
 
-            for (states) |*state| {
-                local_changed = (try reconcileAxisStateLocalized(ir, page_id, state)) or local_changed;
+            for (workspace.states) |*state| {
+                local_changed = (try reconcileAxisStateLocalized(ir, workspace.graph.page_id, state)) or local_changed;
             }
 
             for (ir.constraints.items) |constraint| {
                 if (groups.constraintTargetsGroup(ir, constraint)) continue;
                 if (groups.constraintUsesGroupSource(ir, constraint)) continue;
-                local_changed = (try applyAxisConstraint(ir, page_id, child_ids, states, axis, constraint, false)) or local_changed;
+                local_changed = (try applyAxisConstraint(ir, workspace, constraint, false)) or local_changed;
             }
 
-            for (extra_constraints) |constraint| {
+            for (workspace.soft_constraints) |constraint| {
                 if (groups.constraintTargetsGroup(ir, constraint)) continue;
                 if (groups.constraintUsesGroupSource(ir, constraint)) continue;
-                local_changed = (try applyAxisConstraint(ir, page_id, child_ids, states, axis, constraint, true)) or local_changed;
+                local_changed = (try applyAxisConstraint(ir, workspace, constraint, true)) or local_changed;
             }
 
             changed = local_changed or changed;
             if (!local_changed) break;
         }
 
-        changed = (try groups.updateAxisStates(ir, child_ids, states, axis, extra_constraints)) or changed;
-        changed = (try groups.applyTargetConstraints(ir, page_id, child_ids, states, axis, extra_constraints)) or changed;
+        changed = (try groups.updateAxisStates(ir, workspace)) or changed;
+        changed = (try groups.applyTargetConstraints(ir, workspace)) or changed;
 
         for (ir.constraints.items) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            changed = (try applyAxisConstraint(ir, page_id, child_ids, states, axis, constraint, false)) or changed;
+            changed = (try applyAxisConstraint(ir, workspace, constraint, false)) or changed;
         }
 
-        for (extra_constraints) |constraint| {
+        for (workspace.soft_constraints) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            changed = (try applyAxisConstraint(ir, page_id, child_ids, states, axis, constraint, true)) or changed;
+            changed = (try applyAxisConstraint(ir, workspace, constraint, true)) or changed;
         }
 
         if (!changed) break;
@@ -293,54 +273,51 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     };
 }
 
-fn applyAxisConstraint(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []AxisState, axis: Axis, constraint: Constraint, is_soft: bool) !bool {
-    if (anchorAxis(constraint.target_anchor) != axis) return false;
+fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool) !bool {
+    if (anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
     const target_page = ir.parentPageOf(constraint.target_node) orelse return error.MissingParentPage;
-    if (target_page != page_id) return false;
+    if (target_page != workspace.graph.page_id) return false;
 
-    const target_index = indexOfNode(child_ids, constraint.target_node) orelse return error.UnknownNode;
+    const target_index = workspace.indexOf(constraint.target_node) orelse return error.UnknownNode;
     const target_node = ir.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (groups.isGroupNode(target_node)) return false;
 
-    if (selfReferentialSize(constraint, axis)) |size| {
-        if (size < -0.01) {
+    if (selfReferentialSize(constraint, workspace.axis)) |size| {
+        if (size < -ConstraintTolerance) {
             if (is_soft) return false;
-            ir.noteConstraintFailure(page_id, constraint, states[target_index].size_source, .negative_size);
+            ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, .negative_size);
             return false;
         }
-        if (is_soft and states[target_index].size != null) return false;
-        return setAxisSize(&states[target_index], size, constraint) catch |err| {
+        if (is_soft and workspace.states[target_index].size != null) return false;
+        return setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
             if (is_soft) return false;
             const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-            ir.noteConstraintFailure(page_id, constraint, states[target_index].size_source, kind);
+            ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, kind);
             return false;
         };
     }
 
-    if (is_soft and axisAnchorValue(states[target_index], constraint.target_anchor) != null) {
+    if (is_soft and axisAnchorValue(workspace.states[target_index], constraint.target_anchor) != null) {
         return false;
     }
 
-    const source_value = try constraintSourceValue(ir, page_id, child_ids, states, axis, constraint.source);
+    const source_value = try constraintSourceValue(ir, workspace, constraint.source);
     if (source_value == null) {
-        return try applyReverseAxisConstraint(ir, page_id, child_ids, states, axis, constraint, is_soft, target_index);
+        return try applyReverseAxisConstraint(ir, workspace, constraint, is_soft, target_index);
     }
 
-    return setAxisAnchor(&states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
+    return setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
         if (is_soft) return false;
         const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-        ir.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[target_index], constraint.target_anchor), kind);
+        ir.noteConstraintFailure(workspace.graph.page_id, constraint, axisAnchorSource(workspace.states[target_index], constraint.target_anchor), kind);
         return false;
     };
 }
 
 fn applyReverseAxisConstraint(
     ir: anytype,
-    page_id: NodeId,
-    child_ids: []const NodeId,
-    states: []AxisState,
-    axis: Axis,
+    workspace: *graph.AxisWorkspace,
     constraint: Constraint,
     is_soft: bool,
     target_index: usize,
@@ -351,21 +328,21 @@ fn applyReverseAxisConstraint(
         .page => return false,
         .node => |source| source,
     };
-    if (anchorAxis(node_source.anchor) != axis) return error.ConstraintAxisMismatch;
+    if (anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
 
     const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
     if (groups.isGroupNode(source_node)) return false;
 
     const source_page = ir.parentPageOf(node_source.node_id) orelse return error.MissingParentPage;
-    if (source_page != page_id) return false;
+    if (source_page != workspace.graph.page_id) return false;
 
-    const source_index = indexOfNode(child_ids, node_source.node_id) orelse return false;
-    if (axisAnchorValue(states[source_index], node_source.anchor) != null) return false;
+    const source_index = workspace.indexOf(node_source.node_id) orelse return false;
+    if (axisAnchorValue(workspace.states[source_index], node_source.anchor) != null) return false;
 
-    const target_value = axisAnchorValue(states[target_index], constraint.target_anchor) orelse return false;
-    return setAxisAnchor(&states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
+    const target_value = axisAnchorValue(workspace.states[target_index], constraint.target_anchor) orelse return false;
+    return setAxisAnchor(&workspace.states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
         const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-        ir.noteConstraintFailure(page_id, constraint, axisAnchorSource(states[source_index], node_source.anchor), kind);
+        ir.noteConstraintFailure(workspace.graph.page_id, constraint, axisAnchorSource(workspace.states[source_index], node_source.anchor), kind);
         return false;
     };
 }
@@ -411,17 +388,17 @@ fn sizeFromAnchorPair(target: Anchor, source: Anchor, offset: f32) ?f32 {
     };
 }
 
-pub fn constraintSourceValue(ir: anytype, page_id: NodeId, child_ids: []const NodeId, states: []const AxisState, axis: Axis, source: ConstraintSource) !?f32 {
+pub fn constraintSourceValue(ir: anytype, workspace: *const graph.AxisWorkspace, source: ConstraintSource) !?f32 {
     return switch (source) {
         .page => |anchor| blk: {
-            if (anchorAxis(anchor) != axis) return error.ConstraintAxisMismatch;
-            const page = ir.getNode(page_id) orelse return error.UnknownNode;
+            if (anchorAxis(anchor) != workspace.axis) return error.ConstraintAxisMismatch;
+            const page = ir.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
             break :blk anchorValue(page.frame, anchor);
         },
         .node => |node_source| blk: {
-            if (anchorAxis(node_source.anchor) != axis) return error.ConstraintAxisMismatch;
-            if (indexOfNode(child_ids, node_source.node_id)) |index| {
-                break :blk axisAnchorValue(states[index], node_source.anchor);
+            if (anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
+            if (workspace.indexOf(node_source.node_id)) |index| {
+                break :blk axisAnchorValue(workspace.states[index], node_source.anchor);
             }
 
             const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
@@ -562,7 +539,7 @@ pub fn reconcileAxisState(state: *AxisState) !bool {
 }
 
 fn ensureNonNegativeSize(size: f32) !void {
-    if (size < -0.01) return error.NegativeConstraintSize;
+    if (size < -ConstraintTolerance) return error.NegativeConstraintSize;
 }
 
 fn setOptionalFloat(slot: *?f32, source_slot: *?Constraint, value: f32, source: ?Constraint) !bool {
@@ -614,6 +591,5 @@ pub fn anchorValue(frame: Frame, anchor: Anchor) f32 {
 }
 
 pub fn approxEq(a: f32, b: f32) bool {
-    const diff = if (a > b) a - b else b - a;
-    return diff < 0.01;
+    return graph.approxEq(a, b);
 }

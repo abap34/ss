@@ -1089,7 +1089,6 @@ fn inferCallInfo(
         if (ir != null) {
             switch (descriptor.op) {
                 .set_prop => try validateSetPropCall(ir.?, call, env, functions, origin),
-                .layout_v, .layout_v_all => try validateLayoutVCall(ir.?, call, env, origin),
                 else => {},
             }
         }
@@ -1201,12 +1200,24 @@ fn primitiveResultTypeInfo(
     descriptor: registry.PrimitiveDescriptor,
     origin: []const u8,
 ) !TypeInfo {
+    if (descriptor.op == .set_prop) {
+        if (call.args.items.len == 0) return .{ .sort = .object, .object_shape = .generic };
+        const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        return .{
+            .sort = switch (target_info.sort) {
+                .document, .page, .object => target_info.sort,
+                else => .object,
+            },
+            .object_shape = target_info.object_shape,
+        };
+    }
+
     const result_sort = descriptor.result_sort orelse .object;
     if (result_sort != .object) return .{ .sort = result_sort };
 
     const shape = switch (descriptor.op) {
         .group => .group,
-        .set_prop, .set_style => blk: {
+        .set_style => blk: {
             const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
             break :blk object_info.object_shape;
         },
@@ -1250,13 +1261,22 @@ fn validateSetPropCall(
         try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{key});
         return error.InvalidSemanticSort;
     };
-    const object_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
-    if (!property_schema.isShapeAllowed(schema, object_info.object_shape)) {
+    const target_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
+    const target_shape = propertyShapeForInfo(target_info) orelse {
+        try addUserReport(
+            ir,
+            origin,
+            "InvalidProperty: set_prop target must be document, page, or object; got {s}",
+            .{@tagName(target_info.sort)},
+        );
+        return error.InvalidSemanticSort;
+    };
+    if (!property_schema.isShapeAllowed(schema, target_shape)) {
         try addUserReport(
             ir,
             origin,
             "InvalidProperty: property '{s}' is not valid for {s}",
-            .{ key, property_schema.shapeLabel(object_info.object_shape) },
+            .{ key, property_schema.shapeLabel(target_shape) },
         );
         return error.InvalidSemanticSort;
     }
@@ -1273,24 +1293,13 @@ fn validateSetPropCall(
     }
 }
 
-fn validateLayoutVCall(
-    ir: *core.Ir,
-    call: ast.CallExpr,
-    env: *const TypeEnv,
-    origin: []const u8,
-) !void {
-    if (call.args.items.len < 1) return;
-    const policy = resolveStringLiteral(env, call.args.items[0]) orelse return;
-    if (std.mem.eql(u8, policy, "top") or
-        std.mem.eql(u8, policy, "top_flow") or
-        std.mem.eql(u8, policy, "center") or
-        std.mem.eql(u8, policy, "center_stack"))
-    {
-        return;
-    }
-
-    try addUserReport(ir, origin, "InvalidLayoutPolicy: expected top or center, got {s}", .{policy});
-    return error.InvalidSemanticSort;
+fn propertyShapeForInfo(info: TypeInfo) ?property_schema.ObjectShape {
+    return switch (info.sort) {
+        .document => .document,
+        .page => .page,
+        .object => info.object_shape,
+        else => null,
+    };
 }
 
 fn validatePropertySetStatement(

@@ -1,3 +1,13 @@
+fn layout_v(policy: string) -> page
+  set_prop(pagectx(), "layout_v", policy)
+  return pagectx()
+end
+
+fn layout_v_all(policy: string) -> document
+  set_prop(docctx(), "layout_v", policy)
+  return docctx()
+end
+
 fn left_inset(node: object, amount: number) -> constraints
   return equal(anchor(node, "left"), page_anchor("left"), amount)
 end

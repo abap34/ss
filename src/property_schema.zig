@@ -3,6 +3,8 @@ const core = @import("core");
 
 pub const ObjectShape = enum {
     unknown,
+    document,
+    page,
     generic,
     text,
     code,
@@ -24,6 +26,7 @@ pub const PropertyValueType = enum {
     fit_policy,
     render_kind,
     wrap_mode,
+    layout_policy,
 };
 
 pub const PropertySchema = struct {
@@ -33,11 +36,13 @@ pub const PropertySchema = struct {
 };
 
 const any_shapes = [_]ObjectShape{};
+const layout_owner_shapes = [_]ObjectShape{ .document, .page };
 const text_shapes = [_]ObjectShape{ .text, .code, .math, .figure, .page_number, .toc };
 const asset_shapes = [_]ObjectShape{ .asset_image, .asset_pdf };
 const chrome_shapes = [_]ObjectShape{ .panel, .rule };
 
 const property_schemas = [_]PropertySchema{
+    .{ .key = "layout_v", .value_type = .layout_policy, .allowed_shapes = &layout_owner_shapes },
     .{ .key = "render_kind", .value_type = .render_kind, .allowed_shapes = &any_shapes },
     .{ .key = "wrap", .value_type = .wrap_mode, .allowed_shapes = &any_shapes },
     .{ .key = "text_font", .value_type = .string, .allowed_shapes = &text_shapes },
@@ -103,10 +108,11 @@ pub fn lookup(key: []const u8) ?PropertySchema {
 
 pub fn isShapeAllowed(schema: PropertySchema, shape: ObjectShape) bool {
     if (shape == .unknown or shape == .generic) return true;
-    if (schema.allowed_shapes.len == 0) return true;
     for (schema.allowed_shapes) |allowed| {
         if (allowed == shape) return true;
     }
+    if (shape == .document or shape == .page) return false;
+    if (schema.allowed_shapes.len == 0) return true;
     return false;
 }
 
@@ -137,6 +143,13 @@ pub fn valueMatches(schema: PropertySchema, string_literal: ?[]const u8, sort: c
             std.mem.eql(u8, text, "on") or std.mem.eql(u8, text, "off")
         else
             sort == .string,
+        .layout_policy => if (string_literal) |text|
+            std.mem.eql(u8, text, "top") or
+                std.mem.eql(u8, text, "top_flow") or
+                std.mem.eql(u8, text, "center") or
+                std.mem.eql(u8, text, "center_stack")
+        else
+            sort == .string,
     };
 }
 
@@ -148,6 +161,7 @@ pub fn valueTypeLabel(kind: PropertyValueType) []const u8 {
         .fit_policy => "\"warn\" | \"error\" | \"ignore\"",
         .render_kind => "\"text\" | \"code\" | \"vector_math\" | \"vector_asset\" | \"raster_asset\" | \"chrome\"",
         .wrap_mode => "\"on\" | \"off\"",
+        .layout_policy => "\"top\" | \"top_flow\" | \"center\" | \"center_stack\"",
     };
 }
 

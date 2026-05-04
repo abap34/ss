@@ -451,14 +451,6 @@ const BuiltinContext = struct {
         try self.ir.setNodeProperty(object_id, key, value);
     }
 
-    pub fn setCurrentPageProperty(self: *BuiltinContext, key: []const u8, value: []const u8) !void {
-        try self.ir.setNodeProperty(self.page_id, key, value);
-    }
-
-    pub fn setAllPageProperty(self: *BuiltinContext, key: []const u8, value: []const u8) !void {
-        try self.ir.setAllPageProperty(key, value);
-    }
-
     pub fn equalAnchorConstraintSet(
         self: *BuiltinContext,
         target: core.AnchorValue,

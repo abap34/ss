@@ -1,4 +1,5 @@
 const model = @import("model");
+const graph = @import("graph.zig");
 const solver = @import("solver.zig");
 
 const NodeId = model.NodeId;
@@ -34,7 +35,7 @@ fn propagateWidthCapToSubtree(ir: anytype, node_id: NodeId, max_right: f32) !voi
     const node = ir.getNode(node_id) orelse return error.UnknownNode;
     if (node.frame.x_set and solver.shouldWrapNode(ir, node)) {
         const available = @max(@as(f32, 1.0), max_right - node.frame.x);
-        if (available < node.frame.width - 0.01) {
+        if (available < node.frame.width - graph.ConstraintTolerance) {
             node.frame.width = available;
             node.frame.height = solver.intrinsicHeight(ir, node);
         }
@@ -47,11 +48,11 @@ fn propagateWidthCapToSubtree(ir: anytype, node_id: NodeId, max_right: f32) !voi
     }
 }
 
-pub fn propagateTargetedWidths(ir: anytype, child_ids: []const NodeId, horizontal: []const AxisState, extra_constraints: []const Constraint) !void {
-    for (child_ids, horizontal) |group_id, h_state| {
+pub fn propagateTargetedWidths(ir: anytype, workspace: *const graph.AxisWorkspace) !void {
+    for (workspace.graph.child_ids, workspace.states) |group_id, h_state| {
         const node = ir.getNode(group_id) orelse return error.UnknownNode;
         if (!isGroupNode(node)) continue;
-        if (!hasTargetConstraint(ir, group_id, .horizontal, extra_constraints)) continue;
+        if (!workspace.graph.hasTargetConstraint(ir, group_id, .horizontal, workspace.soft_constraints)) continue;
         const group_left = h_state.start orelse continue;
         const group_width = h_state.size orelse continue;
         const group_right = group_left + group_width;
@@ -62,13 +63,13 @@ pub fn propagateTargetedWidths(ir: anytype, child_ids: []const NodeId, horizonta
     }
 }
 
-fn computeTightGroupAxisState(ir: anytype, child_ids: []const NodeId, states: []const AxisState, node_id: NodeId, axis: Axis) !AxisState {
+fn computeTightGroupAxisState(ir: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) !AxisState {
     const group_children = ir.childrenOf(node_id) orelse return .{};
 
     var start: ?f32 = null;
     var end: ?f32 = null;
     for (group_children) |child_id| {
-        const child_start, const child_end = try groupChildAxisBounds(ir, child_ids, states, child_id, axis);
+        const child_start, const child_end = try groupChildAxisBounds(ir, workspace, child_id);
         if (child_start == null or child_end == null) return .{};
         if (start == null or child_start.? < start.?) start = child_start.?;
         if (end == null or child_end.? > end.?) end = child_end.?;
@@ -85,28 +86,25 @@ fn computeTightGroupAxisState(ir: anytype, child_ids: []const NodeId, states: []
     };
 }
 
-pub fn updateAxisStates(ir: anytype, child_ids: []const NodeId, states: []AxisState, axis: Axis, extra_constraints: []const Constraint) !bool {
+pub fn updateAxisStates(ir: anytype, workspace: *graph.AxisWorkspace) !bool {
     var changed = false;
-    for (child_ids, 0..) |node_id, index| {
+    for (workspace.graph.child_ids, 0..) |node_id, index| {
         const node = ir.getNode(node_id) orelse return error.UnknownNode;
         if (!isGroupNode(node)) continue;
-        if (hasTargetConstraint(ir, node_id, axis, extra_constraints)) continue;
-        const tight = try computeTightGroupAxisState(ir, child_ids, states, node_id, axis);
+        if (workspace.graph.hasTargetConstraint(ir, node_id, workspace.axis, workspace.soft_constraints)) continue;
+        const tight = try computeTightGroupAxisState(ir, workspace, node_id);
         if (tight.start == null or tight.end == null) {
-            changed = setGroupAxisState(&states[index], null, null) or changed;
+            changed = setGroupAxisState(&workspace.states[index], null, null) or changed;
             continue;
         }
-        changed = setGroupAxisState(&states[index], tight.start.?, tight.end.?) or changed;
+        changed = setGroupAxisState(&workspace.states[index], tight.start.?, tight.end.?) or changed;
     }
     return changed;
 }
 
 fn applyGroupTargetConstraintSlice(
     ir: anytype,
-    page_id: NodeId,
-    child_ids: []const NodeId,
-    states: []AxisState,
-    axis: Axis,
+    workspace: *const graph.AxisWorkspace,
     group_id: NodeId,
     base: AxisState,
     temp: *AxisState,
@@ -116,104 +114,73 @@ fn applyGroupTargetConstraintSlice(
 ) !void {
     for (constraints) |constraint| {
         if (constraint.target_node != group_id) continue;
-        if (solver.anchorAxis(constraint.target_anchor) != axis) continue;
+        if (solver.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
         used.* = true;
         last_constraint.* = constraint;
 
-        if (solver.selfReferentialSize(constraint, axis)) |size| {
-            if (size < -0.01) {
-                ir.noteConstraintFailure(page_id, constraint, temp.size_source, .negative_size);
+        if (solver.selfReferentialSize(constraint, workspace.axis)) |size| {
+            if (size < -graph.ConstraintTolerance) {
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
                 continue;
             }
             _ = solver.setAxisSize(temp, size, constraint) catch |err| {
                 const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(page_id, constraint, temp.size_source, kind);
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
                 continue;
             };
             continue;
         }
 
         const source_value = switch (constraint.source) {
-            .page => try solver.constraintSourceValue(ir, page_id, child_ids, states, axis, constraint.source),
+            .page => try solver.constraintSourceValue(ir, workspace, constraint.source),
             .node => |node_source| blk: {
                 if (node_source.node_id == group_id) {
                     const current = solver.axisAnchorValue(temp.*, node_source.anchor);
                     break :blk if (current != null) current else solver.axisAnchorValue(base, node_source.anchor);
                 }
-                break :blk try solver.constraintSourceValue(ir, page_id, child_ids, states, axis, constraint.source);
+                break :blk try solver.constraintSourceValue(ir, workspace, constraint.source);
             },
         };
         if (source_value == null) continue;
 
         _ = solver.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
             const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-            ir.noteConstraintFailure(page_id, constraint, solver.axisAnchorSource(temp.*, constraint.target_anchor), kind);
+            ir.noteConstraintFailure(workspace.graph.page_id, constraint, solver.axisAnchorSource(temp.*, constraint.target_anchor), kind);
         };
     }
 }
 
 pub fn shiftAxisState(state: *AxisState, delta: f32) bool {
-    if (solver.approxEq(delta, 0)) return false;
-    var changed = false;
-    if (state.start) |value| {
-        state.start = value + delta;
-        changed = true;
-    }
-    if (state.end) |value| {
-        state.end = value + delta;
-        changed = true;
-    }
-    if (state.center) |value| {
-        state.center = value + delta;
-        changed = true;
-    }
-    return changed;
+    return graph.shiftAxisState(state, delta);
 }
 
 pub fn translateSubtree(
     ir: anytype,
-    child_ids: []const NodeId,
-    states: []AxisState,
+    workspace: *graph.AxisWorkspace,
     group_id: NodeId,
     delta: f32,
 ) !bool {
-    if (solver.approxEq(delta, 0)) return false;
-    var changed = false;
-    const group_children = ir.childrenOf(group_id) orelse return false;
-    for (group_children) |child_id| {
-        if (solver.indexOfNode(child_ids, child_id)) |child_index| {
-            changed = shiftAxisState(&states[child_index], delta) or changed;
-        }
-        const child_node = ir.getNode(child_id) orelse return error.UnknownNode;
-        if (isGroupNode(child_node)) {
-            changed = (try translateSubtree(ir, child_ids, states, child_id, delta)) or changed;
-        }
-    }
-    return changed;
+    return try workspace.graph.translateSubgraph(workspace, ir, group_id, delta);
 }
 
 pub fn applyTargetConstraints(
     ir: anytype,
-    page_id: NodeId,
-    child_ids: []const NodeId,
-    states: []AxisState,
-    axis: Axis,
-    extra_constraints: []const Constraint,
+    workspace: *graph.AxisWorkspace,
 ) !bool {
     var changed = false;
-    for (child_ids, 0..) |group_id, group_index| {
+    for (workspace.graph.child_ids, 0..) |group_id, group_index| {
         const group_node = ir.getNode(group_id) orelse return error.UnknownNode;
         if (!isGroupNode(group_node)) continue;
-        if (!hasTargetConstraint(ir, group_id, axis, extra_constraints)) continue;
+        if (!workspace.graph.hasTargetConstraint(ir, group_id, workspace.axis, workspace.soft_constraints)) continue;
 
-        const base = try computeTightGroupAxisState(ir, child_ids, states, group_id, axis);
+        const base = try computeTightGroupAxisState(ir, workspace, group_id);
         if (base.start == null or base.end == null or base.center == null or base.size == null) continue;
 
         var temp = AxisState{};
         var used = false;
         var last_constraint: ?Constraint = null;
-        try applyGroupTargetConstraintSlice(ir, page_id, child_ids, states, axis, group_id, base, &temp, &used, &last_constraint, ir.constraints.items);
-        try applyGroupTargetConstraintSlice(ir, page_id, child_ids, states, axis, group_id, base, &temp, &used, &last_constraint, extra_constraints);
+        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, ir.constraints.items);
+        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints);
         if (!used) continue;
 
         if (temp.start == null and temp.end == null and temp.center == null and temp.size == null) {
@@ -230,15 +197,15 @@ pub fn applyTargetConstraints(
         _ = solver.reconcileAxisState(&temp) catch |err| {
             if (last_constraint) |constraint| {
                 const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(page_id, constraint, null, kind);
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, null, kind);
             }
             continue;
         };
 
         const delta = if (temp.start != null and base.start != null) temp.start.? - base.start.? else 0;
-        changed = shiftAxisState(&states[group_index], delta) or changed;
-        changed = (try translateSubtree(ir, child_ids, states, group_id, delta)) or changed;
-        states[group_index] = temp;
+        changed = shiftAxisState(&workspace.states[group_index], delta) or changed;
+        changed = (try translateSubtree(ir, workspace, group_id, delta)) or changed;
+        workspace.states[group_index] = temp;
     }
     return changed;
 }
@@ -289,14 +256,14 @@ fn optionalFloatEq(a: ?f32, b: ?f32) bool {
     return solver.approxEq(a.?, b.?);
 }
 
-fn groupChildAxisBounds(ir: anytype, child_ids: []const NodeId, states: []const AxisState, child_id: NodeId, axis: Axis) !struct { ?f32, ?f32 } {
-    if (solver.indexOfNode(child_ids, child_id)) |index| {
+fn groupChildAxisBounds(ir: anytype, workspace: *const graph.AxisWorkspace, child_id: NodeId) !struct { ?f32, ?f32 } {
+    if (workspace.indexOf(child_id)) |index| {
         return .{
-            solver.axisAnchorValue(states[index], switch (axis) {
+            solver.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
                 .horizontal => .left,
                 .vertical => .bottom,
             }),
-            solver.axisAnchorValue(states[index], switch (axis) {
+            solver.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
                 .horizontal => .right,
                 .vertical => .top,
             }),
@@ -304,11 +271,11 @@ fn groupChildAxisBounds(ir: anytype, child_ids: []const NodeId, states: []const 
     }
 
     const child = ir.getNode(child_id) orelse return error.UnknownNode;
-    const start_anchor: Anchor = switch (axis) {
+    const start_anchor: Anchor = switch (workspace.axis) {
         .horizontal => .left,
         .vertical => .bottom,
     };
-    const end_anchor: Anchor = switch (axis) {
+    const end_anchor: Anchor = switch (workspace.axis) {
         .horizontal => .right,
         .vertical => .top,
     };

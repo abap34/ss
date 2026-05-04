@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model");
+const graph = @import("graph.zig");
 
 const Node = model.Node;
 const NodeId = model.NodeId;
@@ -24,7 +25,7 @@ pub fn collectPageDiagnostics(ir: anytype, page_id: NodeId, child_ids: []const N
         const overflow_bottom = @max(@as(f32, 0.0), -node.frame.y);
         const overflow_top = @max(@as(f32, 0.0), node.frame.y + node.frame.height - PageLayout.height);
 
-        if (overflow_left > 0.01 or overflow_right > 0.01 or overflow_bottom > 0.01 or overflow_top > 0.01) {
+        if (overflow_left > graph.ConstraintTolerance or overflow_right > graph.ConstraintTolerance or overflow_bottom > graph.ConstraintTolerance or overflow_top > graph.ConstraintTolerance) {
             switch (overflowPolicy(node)) {
                 .ignore => {},
                 .warn => try ir.addLayoutWarning(page_id, child_id, .{

@@ -98,33 +98,25 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .object = try ctx.makeGroup(child_ids.items) };
         },
         .set_prop => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
             const key = try ctx.evalStringArg(call, 1);
             const value = try ctx.evalPropertyStringArg(call, 2);
-            try ctx.setNodeProperty(object_id, key, value);
-            break :blk .{ .object = object_id };
-        },
-        .layout_v => blk: {
-            const policy = try ctx.evalStringArg(call, 0);
-            if (std.mem.eql(u8, policy, "top") or std.mem.eql(u8, policy, "top_flow")) {
-                try ctx.setCurrentPageProperty("layout_v", "top");
-            } else if (std.mem.eql(u8, policy, "center") or std.mem.eql(u8, policy, "center_stack")) {
-                try ctx.setCurrentPageProperty("layout_v", "center");
-            } else {
-                return error.InvalidLayoutPolicy;
-            }
-            break :blk ctx.currentPageValue();
-        },
-        .layout_v_all => blk: {
-            const policy = try ctx.evalStringArg(call, 0);
-            if (std.mem.eql(u8, policy, "top") or std.mem.eql(u8, policy, "top_flow")) {
-                try ctx.setAllPageProperty("layout_v", "top");
-            } else if (std.mem.eql(u8, policy, "center") or std.mem.eql(u8, policy, "center_stack")) {
-                try ctx.setAllPageProperty("layout_v", "center");
-            } else {
-                return error.InvalidLayoutPolicy;
-            }
-            break :blk ctx.currentDocumentValue();
+            break :blk switch (target) {
+                .document => |id| blk2: {
+                    try ctx.setNodeProperty(id, key, value);
+                    break :blk2 .{ .document = id };
+                },
+                .page => |id| blk2: {
+                    try ctx.setNodeProperty(id, key, value);
+                    break :blk2 .{ .page = id };
+                },
+                .object => |id| blk2: {
+                    try ctx.setNodeProperty(id, key, value);
+                    break :blk2 .{ .object = id };
+                },
+                else => return error.InvalidSemanticSort,
+            };
         },
         .set_style => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
