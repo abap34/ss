@@ -83,7 +83,10 @@ fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
     while (variable_iterator.next()) |entry| {
         var item = try variables.objectItem();
         try item.stringField("name", entry.key_ptr.*);
-        try item.enumTagField("type", entry.value_ptr.sort);
+        const type_label = try entry.value_ptr.ty.formatAlloc(allocator);
+        defer allocator.free(type_label);
+        try item.stringField("type", type_label);
+        try item.enumTagField("runtimeSort", entry.value_ptr.sort);
         try item.enumTagField("objectShape", entry.value_ptr.object_shape);
         try item.end();
     }
@@ -220,12 +223,18 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
         try item.stringField("name", func.name);
         try item.enumTagField("kind", func.kind);
         try writeSpan(&item, func.span);
-        try item.enumTagField("result_sort", func.result_sort);
+        const result_label = try func.result_type.formatAlloc(allocator);
+        defer allocator.free(result_label);
+        try item.stringField("resultType", result_label);
+        try item.enumTagField("resultSort", func.result_sort);
         var params = try item.arrayField("params");
         for (func.params.items) |param| {
             var param_item = try params.objectItem();
             try param_item.stringField("name", param.name);
-            try param_item.enumTagField("sort", param.sort);
+            const param_label = try param.ty.formatAlloc(allocator);
+            defer allocator.free(param_label);
+            try param_item.stringField("type", param_label);
+            try param_item.enumTagField("runtimeSort", param.sort);
             try param_item.end();
         }
         try params.end();
@@ -434,6 +443,13 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
     var item = try functions.objectItem();
     try item.stringField("name", descriptor.name);
     try item.stringField("signature", signature);
+    if (registry.primitiveResultType(descriptor)) |result_type| {
+        const result_label = try result_type.formatAlloc(allocator);
+        defer allocator.free(result_label);
+        try item.stringField("resultType", result_label);
+    } else {
+        try item.stringField("resultType", "dependent");
+    }
     try item.stringField("resultSort", typecheck.resultText(descriptor.result_sort));
     try item.stringField("source", "primitive");
     try item.stringField("summary", descriptor.summary);
@@ -462,6 +478,9 @@ fn writeUserFunction(
     try item.stringField("name", name);
     try item.enumTagField("kind", func.kind);
     try item.stringField("signature", signature);
+    const result_label = try func.result_type.formatAlloc(allocator);
+    defer allocator.free(result_label);
+    try item.stringField("resultType", result_label);
     try item.enumTagField("resultSort", func.result_sort);
     if (ir.moduleById(metadata.module_id)) |module| {
         try item.enumTagField("source", module.kind);
