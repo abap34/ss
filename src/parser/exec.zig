@@ -169,7 +169,7 @@ fn unknownNameCode(kind: []const u8) []const u8 {
 fn lowerErrorMessage(err: anyerror) []const u8 {
     return switch (err) {
         error.ReturnOutsideFunction => "ReturnOutsideFunction: return is only valid inside a function",
-        error.InvalidLibraryModule => "InvalidLibraryModule: imported modules must contain functions and imports only",
+        error.InvalidLibraryModule => "InvalidLibraryModule: imported modules must contain functions, constants, and imports only",
         error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
         error.InvalidArity => "InvalidArity: wrong number of arguments",
         error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
@@ -268,7 +268,14 @@ fn evalExpr(
     return switch (expr) {
         .ident => |name| blk: {
             if (env.get(name)) |value| break :blk value;
-            if (functions.get(name)) |func| break :blk .{ .function = try typecheck.functionRefFor(ir.allocator, func) };
+            if (functions.get(name)) |func| {
+                if (func.kind == .constant) {
+                    break :blk try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, .{
+                        .name = name,
+                        .args = std.ArrayList(Expr).empty,
+                    });
+                }
+            }
             reportUnknownIdentifier(name, current_origin);
             break :blk error.UnknownIdentifier;
         },
@@ -302,6 +309,10 @@ fn evalCall(
         }
     }
     if (functions.get(call.name)) |func| {
+        if (func.kind == .constant) {
+            reportUnknownFunction(call.name, current_origin);
+            return error.UnknownFunction;
+        }
         if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
         return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
     }

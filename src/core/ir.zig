@@ -63,6 +63,7 @@ pub const FunctionMetadata = struct {
 
 pub const DefinitionKind = enum {
     function,
+    constant,
     variable,
 };
 

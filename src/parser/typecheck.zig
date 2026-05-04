@@ -123,6 +123,10 @@ pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !cor
     };
 }
 
+fn isConst(func: ast.FunctionDecl) bool {
+    return func.kind == .constant;
+}
+
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
@@ -380,6 +384,8 @@ pub fn formatUserSignature(
     name: []const u8,
     func: ast.FunctionDecl,
 ) ![]const u8 {
+    if (isConst(func)) return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, @tagName(func.result_sort) });
+
     var params = std.ArrayList(u8).empty;
     defer params.deinit(allocator);
     for (func.params.items, 0..) |param, index| {
@@ -443,9 +449,11 @@ fn collectDefinitionsFromProgram(
     definitions: *std.StringHashMap(core.Definition),
 ) !void {
     for (program.functions.items) |func| {
-        if (findIdentifierOffsetAfterKeyword(source, func.span.start, "fn", func.name)) |location| {
+        const keyword = if (isConst(func)) "const" else "fn";
+        const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
+        if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, .function, file);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, kind, file);
         }
         if (include_variables) {
             for (func.statements.items) |stmt| {
@@ -864,8 +872,15 @@ fn collectExprCallees(
     callees: *std.ArrayList([]const u8),
 ) !void {
     switch (expr) {
+        .ident => |name| {
+            if (functions.get(name)) |func| {
+                if (isConst(func)) try appendUniqueCallee(allocator, callees, name);
+            }
+        },
         .call => |call| {
-            if (functions.contains(call.name)) try appendUniqueCallee(allocator, callees, call.name);
+            if (functions.get(call.name)) |func| {
+                if (!isConst(func)) try appendUniqueCallee(allocator, callees, call.name);
+            }
             for (call.args.items) |arg| try collectExprCallees(allocator, functions, arg, callees);
         },
         else => {},
@@ -1018,7 +1033,9 @@ fn inferExprInfo(
         .number => .{ .sort = .number },
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
-            if (functions.contains(name)) break :blk .{ .sort = .function };
+            if (functions.get(name)) |func| {
+                if (isConst(func)) break :blk .{ .sort = func.result_sort };
+            }
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
@@ -1035,6 +1052,10 @@ fn inferCallInfo(
     origin: []const u8,
 ) anyerror!TypeInfo {
     if (functions.get(call.name)) |func| {
+        if (isConst(func)) {
+            try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
+            return error.UnknownFunction;
+        }
         const min_arity = requiredParamCount(func);
         const max_arity = func.params.items.len;
         if (call.args.items.len < min_arity or call.args.items.len > max_arity) {

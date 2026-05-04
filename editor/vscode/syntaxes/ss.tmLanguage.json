@@ -48,7 +48,7 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\b(?:theme|page|fn|let|bind|return|end)\\b"
+          "match": "\\b(?:import|const|page|fn|let|bind|return|end|constrain)\\b"
         }
       ]
     },
