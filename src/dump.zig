@@ -17,9 +17,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try root.stringField("project_path", ir.projectPath());
     try root.stringField("asset_base_dir", ir.asset_base_dir);
 
-    var modules = try root.arrayField("modules");
-    for (ir.modules.items) |module| try writeModule(allocator, &modules, module);
-    try modules.end();
+    try writeModulesField(allocator, &root, ir.modules.items);
 
     var document_code = try stage0.elaborateProgram(
         allocator,
@@ -31,10 +29,39 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     );
     defer document_code.deinit();
     try root.intField("stage0_document_handle", document_code.document_id);
-    var doc_terms = try root.arrayField("doc_terms");
-    for (document_code.terms.items) |term| try writeDocTerm(&doc_terms, term);
-    try doc_terms.end();
+    try writeDocTermsField(&root, document_code.terms.items);
 
+    try writeFunctionsField(allocator, &root, ir);
+    try writeVariablesField(allocator, &root, ir);
+    try writePropertySchemasField(&root);
+    try writeDefinitionsField(&root, ir);
+    try writeHintsField(&root, ir.hints.items);
+
+    try root.intField("document_id", ir.document_id);
+    try writePageOrderField(&root, ir.page_order.items);
+    try writeNodesField(allocator, &root, ir);
+    try writeContainsField(&root, &ir.contains);
+    try writeConstraintsField(&root, ir.constraints.items);
+    try writeDiagnosticsField(&root, ir.diagnostics.items);
+
+    try root.end();
+    try json.appendNewline(&buffer, allocator);
+    return buffer.toOwnedSlice(allocator);
+}
+
+fn writeModulesField(allocator: std.mem.Allocator, root: *json.Object, modules: []const core.SourceModule) !void {
+    var array = try root.arrayField("modules");
+    for (modules) |module| try writeModule(allocator, &array, module);
+    try array.end();
+}
+
+fn writeDocTermsField(root: *json.Object, terms: []const stage0.Term) !void {
+    var array = try root.arrayField("doc_terms");
+    for (terms) |term| try writeDocTerm(&array, term);
+    try array.end();
+}
+
+fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
         if (ir.functions.contains(descriptor.name)) continue;
@@ -46,7 +73,9 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try writeUserFunction(allocator, &functions, ir, entry.key_ptr.*, entry.value_ptr.*, metadata);
     }
     try functions.end();
+}
 
+fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var variables = try root.arrayField("variables");
     var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram());
     defer variable_infos.deinit();
@@ -59,10 +88,12 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try item.end();
     }
     try variables.end();
+}
 
-    var property_schemas_json = try root.arrayField("property_schemas");
+fn writePropertySchemasField(root: *json.Object) !void {
+    var schemas = try root.arrayField("property_schemas");
     for (property_schema.propertySchemas()) |schema| {
-        var item = try property_schemas_json.objectItem();
+        var item = try schemas.objectItem();
         try item.stringField("key", schema.key);
         try item.stringField("valueType", @tagName(schema.value_type));
         var allowed = try item.arrayField("allowedShapes");
@@ -70,8 +101,10 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try allowed.end();
         try item.end();
     }
-    try property_schemas_json.end();
+    try schemas.end();
+}
 
+fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
     var definitions = try root.arrayField("definitions");
     var definition_iterator = ir.definitions.iterator();
     while (definition_iterator.next()) |entry| {
@@ -85,32 +118,39 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try item.end();
     }
     try definitions.end();
+}
 
-    var hints = try root.arrayField("hints");
-    for (ir.hints.items) |hint| {
-        var item = try hints.objectItem();
+fn writeHintsField(root: *json.Object, hints: []const core.InlayHint) !void {
+    var array = try root.arrayField("hints");
+    for (hints) |hint| {
+        var item = try array.objectItem();
         try item.intField("line", hint.line);
         try item.intField("column", hint.column);
         try item.stringField("label", hint.label);
         try item.enumTagField("kind", hint.kind);
         try item.end();
     }
-    try hints.end();
+    try array.end();
+}
 
-    try root.intField("document_id", ir.document_id);
-    var page_order = try root.arrayField("page_order");
-    for (ir.page_order.items) |page_id| try page_order.intItem(page_id);
-    try page_order.end();
+fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !void {
+    var array = try root.arrayField("page_order");
+    for (page_order) |page_id| try array.intItem(page_id);
+    try array.end();
+}
 
+fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var nodes = try root.arrayField("nodes");
     for (ir.nodes.items) |node| {
         if ((node.kind == .object or node.kind == .derived) and !node.attached) continue;
         try writeNode(allocator, &nodes, ir, node);
     }
     try nodes.end();
+}
 
+fn writeContainsField(root: *json.Object, contains_map: *std.AutoHashMap(core.NodeId, std.ArrayList(core.NodeId))) !void {
     var contains = try root.arrayField("contains");
-    var contains_iterator = ir.contains.iterator();
+    var contains_iterator = contains_map.iterator();
     while (contains_iterator.next()) |entry| {
         var item = try contains.objectItem();
         try item.intField("parent", entry.key_ptr.*);
@@ -120,39 +160,22 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
         try item.end();
     }
     try contains.end();
+}
 
-    var constraints = try root.arrayField("constraints");
-    for (ir.constraints.items) |constraint| {
-        var item = try constraints.objectItem();
-        try item.intField("target_node", constraint.target_node);
-        try item.enumTagField("target_anchor", constraint.target_anchor);
-        switch (constraint.source) {
-            .page => |anchor| {
-                try item.stringField("source_kind", "page");
-                try item.enumTagField("source_anchor", anchor);
-                try item.nullField("source_node");
-            },
-            .node => |source| {
-                try item.stringField("source_kind", "node");
-                try item.enumTagField("source_anchor", source.anchor);
-                try item.intField("source_node", source.node_id);
-            },
-        }
-        try item.floatField("offset", constraint.offset, "{d:.1}");
-        try item.optionalStringField("origin", constraint.origin);
+fn writeConstraintsField(root: *json.Object, constraints: []const core.Constraint) !void {
+    var array = try root.arrayField("constraints");
+    for (constraints) |constraint| {
+        var item = try array.objectItem();
+        try writeConstraintFields(&item, constraint, "target_node", "source_node", "node");
         try item.end();
     }
-    try constraints.end();
+    try array.end();
+}
 
-    var diagnostics = try root.arrayField("diagnostics");
-    for (ir.diagnostics.items) |diagnostic| {
-        try writeDiagnostic(allocator, &diagnostics, diagnostic);
-    }
-    try diagnostics.end();
-
-    try root.end();
-    try json.appendNewline(&buffer, allocator);
-    return buffer.toOwnedSlice(allocator);
+fn writeDiagnosticsField(root: *json.Object, diagnostics: []const core.Diagnostic) !void {
+    var array = try root.arrayField("diagnostics");
+    for (diagnostics) |diagnostic| try writeDiagnostic(&array, diagnostic);
+    try array.end();
 }
 
 fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.SourceModule) !void {
@@ -237,48 +260,17 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
     var item = try statements.objectItem();
     try writeSpan(&item, stmt.span);
     switch (stmt.kind) {
-        .title => |text| {
-            try item.stringField("kind", "title");
-            try item.stringField("text", text);
-        },
-        .subtitle => |text| {
-            try item.stringField("kind", "subtitle");
-            try item.stringField("text", text);
-        },
-        .math => |text| {
-            try item.stringField("kind", "math");
-            try item.stringField("text", text);
-        },
-        .mathtex => |text| {
-            try item.stringField("kind", "mathtex");
-            try item.stringField("text", text);
-        },
-        .figure => |text| {
-            try item.stringField("kind", "figure");
-            try item.stringField("text", text);
-        },
-        .image => |text| {
-            try item.stringField("kind", "image");
-            try item.stringField("text", text);
-        },
-        .pdf_ref => |text| {
-            try item.stringField("kind", "pdf_ref");
-            try item.stringField("text", text);
-        },
-        .code => |text| {
-            try item.stringField("kind", "code");
-            try item.stringField("text", text);
-        },
-        .page_number => {
-            try item.stringField("kind", "page_number");
-        },
-        .toc => {
-            try item.stringField("kind", "toc");
-        },
-        .highlight => |text| {
-            try item.stringField("kind", "highlight");
-            try item.stringField("text", text);
-        },
+        .title => |text| try writeTextStatementFields(&item, "title", text),
+        .subtitle => |text| try writeTextStatementFields(&item, "subtitle", text),
+        .math => |text| try writeTextStatementFields(&item, "math", text),
+        .mathtex => |text| try writeTextStatementFields(&item, "mathtex", text),
+        .figure => |text| try writeTextStatementFields(&item, "figure", text),
+        .image => |text| try writeTextStatementFields(&item, "image", text),
+        .pdf_ref => |text| try writeTextStatementFields(&item, "pdf_ref", text),
+        .code => |text| try writeTextStatementFields(&item, "code", text),
+        .page_number => try item.stringField("kind", "page_number"),
+        .toc => try item.stringField("kind", "toc"),
+        .highlight => |text| try writeTextStatementFields(&item, "highlight", text),
         .let_binding => |binding| {
             try item.stringField("kind", "let_binding");
             try item.stringField("name", binding.name);
@@ -315,6 +307,11 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
         },
     }
     try item.end();
+}
+
+fn writeTextStatementFields(item: *json.Object, kind: []const u8, text: []const u8) !void {
+    try item.stringField("kind", kind);
+    try item.stringField("text", text);
 }
 
 fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorRef) !void {
@@ -382,54 +379,47 @@ fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
 }
 
 fn writeDocConstraint(item: *json.Object, constraint: core.Constraint) !void {
-    try item.intField("target_handle", constraint.target_node);
+    try writeConstraintFields(item, constraint, "target_handle", "source_handle", "object");
+}
+
+fn writeConstraintFields(
+    item: *json.Object,
+    constraint: core.Constraint,
+    target_key: []const u8,
+    source_key: []const u8,
+    node_source_kind: []const u8,
+) !void {
+    try item.intField(target_key, constraint.target_node);
     try item.enumTagField("target_anchor", constraint.target_anchor);
     switch (constraint.source) {
         .page => |anchor| {
             try item.stringField("source_kind", "page");
             try item.enumTagField("source_anchor", anchor);
-            try item.nullField("source_handle");
+            try item.nullField(source_key);
         },
         .node => |source| {
-            try item.stringField("source_kind", "object");
+            try item.stringField("source_kind", node_source_kind);
             try item.enumTagField("source_anchor", source.anchor);
-            try item.intField("source_handle", source.node_id);
+            try item.intField(source_key, source.node_id);
         },
     }
     try item.floatField("offset", constraint.offset, "{d:.1}");
     try item.optionalStringField("origin", constraint.origin);
 }
 
-fn writeExpr(allocator: std.mem.Allocator, object: *json.Object, key: []const u8, expr: ast.Expr) !void {
+fn writeExpr(allocator: std.mem.Allocator, object: *json.Object, key: []const u8, expr: ast.Expr) anyerror!void {
     var item = try object.objectField(key);
-    switch (expr) {
-        .ident => |name| {
-            try item.stringField("kind", "ident");
-            try item.stringField("name", name);
-        },
-        .string => |text| {
-            try item.stringField("kind", "string");
-            try item.stringField("value", text);
-        },
-        .number => |value| {
-            try item.stringField("kind", "number");
-            try item.floatField("value", value, "{d:.4}");
-        },
-        .call => |call| {
-            try item.stringField("kind", "call");
-            try item.stringField("name", call.name);
-            var args = try item.arrayField("args");
-            for (call.args.items) |arg| {
-                try writeExprItem(allocator, &args, arg);
-            }
-            try args.end();
-        },
-    }
+    try writeExprFields(allocator, &item, expr);
     try item.end();
 }
 
-fn writeExprItem(allocator: std.mem.Allocator, items: *json.Array, expr: ast.Expr) !void {
+fn writeExprItem(allocator: std.mem.Allocator, items: *json.Array, expr: ast.Expr) anyerror!void {
     var item = try items.objectItem();
+    try writeExprFields(allocator, &item, expr);
+    try item.end();
+}
+
+fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.Expr) anyerror!void {
     switch (expr) {
         .ident => |name| {
             try item.stringField("kind", "ident");
@@ -451,7 +441,6 @@ fn writeExprItem(allocator: std.mem.Allocator, items: *json.Array, expr: ast.Exp
             try args.end();
         },
     }
-    try item.end();
 }
 
 fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, descriptor: registry.PrimitiveDescriptor) !void {
@@ -634,76 +623,101 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
 fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) !void {
     var render_object = try object.objectField("render");
     try render_object.enumTagField("kind", render.kind);
-    if (render.text) |text_spec| {
-        var text = try render_object.objectField("text");
-        try text.stringField("font", text_spec.font);
-        try text.stringField("bold_font", text_spec.bold_font);
-        try text.stringField("italic_font", text_spec.italic_font);
-        try text.stringField("code_font", text_spec.code_font);
-        try text.floatField("font_size", text_spec.font_size, "{d:.1}");
-        try text.floatField("line_height", text_spec.line_height, "{d:.1}");
-        try writeColor(&text, "color", text_spec.color);
-        try writeColor(&text, "link_color", text_spec.link_color);
-        try text.floatField("link_underline_width", text_spec.link_underline_width, "{d:.1}");
-        try text.floatField("link_underline_offset", text_spec.link_underline_offset, "{d:.1}");
-        try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
-        try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
-        try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
-        try text.floatField("markdown_list_indent", text_spec.markdown_list_indent, "{d:.4}");
-        try text.floatField("markdown_code_font_size", text_spec.markdown_code_font_size, "{d:.1}");
-        try text.floatField("markdown_code_line_height", text_spec.markdown_code_line_height, "{d:.1}");
-        try text.floatField("markdown_code_pad_x", text_spec.markdown_code_pad_x, "{d:.1}");
-        try text.floatField("markdown_code_pad_y", text_spec.markdown_code_pad_y, "{d:.1}");
-        try writeOptionalColor(&text, "markdown_code_fill", text_spec.markdown_code_fill);
-        try writeOptionalColor(&text, "markdown_code_stroke", text_spec.markdown_code_stroke);
-        try text.floatField("markdown_code_line_width", text_spec.markdown_code_line_width, "{d:.1}");
-        try text.floatField("markdown_code_radius", text_spec.markdown_code_radius, "{d:.1}");
-        try text.intField("cjk_bold_passes", text_spec.cjk_bold_passes);
-        try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
-        try text.boolField("wrap", text_spec.wrap);
-        try text.end();
-    } else {
-        try render_object.nullField("text");
-    }
-    if (render.math) |math_spec| {
-        var math = try render_object.objectField("math");
-        try math.floatField("block_line_height", math_spec.block_line_height, "{d:.1}");
-        try math.floatField("block_min_height", math_spec.block_min_height, "{d:.1}");
-        try math.floatField("block_vertical_padding", math_spec.block_vertical_padding, "{d:.1}");
-        try math.floatField("scale", math_spec.scale, "{d:.4}");
-        try math.end();
-    } else {
-        try render_object.nullField("math");
-    }
-    if (render.code) |code_spec| {
-        var code = try render_object.objectField("code");
-        try code.optionalStringField("language", code_spec.language);
-        try writeColor(&code, "plain_color", code_spec.plain);
-        try writeColor(&code, "keyword_color", code_spec.keyword);
-        try writeColor(&code, "comment_color", code_spec.comment);
-        try writeColor(&code, "string_color", code_spec.string);
-        try code.end();
-    } else {
-        try render_object.nullField("code");
-    }
+    try writeOptionalTextPaint(&render_object, render.text);
+    try writeOptionalMathPaint(&render_object, render.math);
+    try writeOptionalCodePaint(&render_object, render.code);
+    try writeChromePaint(&render_object, render.chrome);
+    try writeUnderlinePaint(&render_object, render.underline);
+    try writeRulePaint(&render_object, render.rule);
+    try render_object.end();
+}
 
-    var chrome = try render_object.objectField("chrome");
-    try writeOptionalColor(&chrome, "fill", render.chrome.fill);
-    try writeOptionalColor(&chrome, "stroke", render.chrome.stroke);
-    try chrome.floatField("line_width", render.chrome.line_width, "{d:.1}");
-    try chrome.floatField("radius", render.chrome.radius, "{d:.1}");
+fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.TextPaint) !void {
+    const text_spec = maybe_text orelse {
+        try object.nullField("text");
+        return;
+    };
+
+    var text = try object.objectField("text");
+    try text.stringField("font", text_spec.font);
+    try text.stringField("bold_font", text_spec.bold_font);
+    try text.stringField("italic_font", text_spec.italic_font);
+    try text.stringField("code_font", text_spec.code_font);
+    try text.floatField("font_size", text_spec.font_size, "{d:.1}");
+    try text.floatField("line_height", text_spec.line_height, "{d:.1}");
+    try writeColor(&text, "color", text_spec.color);
+    try writeColor(&text, "link_color", text_spec.link_color);
+    try text.floatField("link_underline_width", text_spec.link_underline_width, "{d:.1}");
+    try text.floatField("link_underline_offset", text_spec.link_underline_offset, "{d:.1}");
+    try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
+    try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
+    try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
+    try text.floatField("markdown_list_indent", text_spec.markdown_list_indent, "{d:.4}");
+    try text.floatField("markdown_code_font_size", text_spec.markdown_code_font_size, "{d:.1}");
+    try text.floatField("markdown_code_line_height", text_spec.markdown_code_line_height, "{d:.1}");
+    try text.floatField("markdown_code_pad_x", text_spec.markdown_code_pad_x, "{d:.1}");
+    try text.floatField("markdown_code_pad_y", text_spec.markdown_code_pad_y, "{d:.1}");
+    try writeOptionalColor(&text, "markdown_code_fill", text_spec.markdown_code_fill);
+    try writeOptionalColor(&text, "markdown_code_stroke", text_spec.markdown_code_stroke);
+    try text.floatField("markdown_code_line_width", text_spec.markdown_code_line_width, "{d:.1}");
+    try text.floatField("markdown_code_radius", text_spec.markdown_code_radius, "{d:.1}");
+    try text.intField("cjk_bold_passes", text_spec.cjk_bold_passes);
+    try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
+    try text.boolField("wrap", text_spec.wrap);
+    try text.end();
+}
+
+fn writeOptionalMathPaint(object: *json.Object, maybe_math: ?core.render_policy.MathPaint) !void {
+    const math_spec = maybe_math orelse {
+        try object.nullField("math");
+        return;
+    };
+
+    var math = try object.objectField("math");
+    try math.floatField("block_line_height", math_spec.block_line_height, "{d:.1}");
+    try math.floatField("block_min_height", math_spec.block_min_height, "{d:.1}");
+    try math.floatField("block_vertical_padding", math_spec.block_vertical_padding, "{d:.1}");
+    try math.floatField("scale", math_spec.scale, "{d:.4}");
+    try math.end();
+}
+
+fn writeOptionalCodePaint(object: *json.Object, maybe_code: ?core.render_policy.CodePaint) !void {
+    const code_spec = maybe_code orelse {
+        try object.nullField("code");
+        return;
+    };
+
+    var code = try object.objectField("code");
+    try code.optionalStringField("language", code_spec.language);
+    try writeColor(&code, "plain_color", code_spec.plain);
+    try writeColor(&code, "keyword_color", code_spec.keyword);
+    try writeColor(&code, "comment_color", code_spec.comment);
+    try writeColor(&code, "string_color", code_spec.string);
+    try code.end();
+}
+
+fn writeChromePaint(object: *json.Object, chrome_spec: core.render_policy.ChromePaint) !void {
+    var chrome = try object.objectField("chrome");
+    try writeOptionalColor(&chrome, "fill", chrome_spec.fill);
+    try writeOptionalColor(&chrome, "stroke", chrome_spec.stroke);
+    try chrome.floatField("line_width", chrome_spec.line_width, "{d:.1}");
+    try chrome.floatField("radius", chrome_spec.radius, "{d:.1}");
     try chrome.end();
+}
 
-    var underline = try render_object.objectField("underline");
-    try writeOptionalColor(&underline, "color", render.underline.color);
-    try underline.floatField("width", render.underline.width, "{d:.1}");
-    try underline.floatField("offset", render.underline.offset, "{d:.1}");
+fn writeUnderlinePaint(object: *json.Object, underline_spec: core.render_policy.UnderlinePaint) !void {
+    var underline = try object.objectField("underline");
+    try writeOptionalColor(&underline, "color", underline_spec.color);
+    try underline.floatField("width", underline_spec.width, "{d:.1}");
+    try underline.floatField("offset", underline_spec.offset, "{d:.1}");
     try underline.end();
+}
 
-    var rule = try render_object.objectField("rule");
-    try writeOptionalColor(&rule, "stroke", render.rule.stroke);
-    try rule.floatField("line_width", render.rule.line_width, "{d:.1}");
-    if (render.rule.dash) |dash| {
+fn writeRulePaint(object: *json.Object, rule_spec: core.render_policy.RulePaint) !void {
+    var rule = try object.objectField("rule");
+    try writeOptionalColor(&rule, "stroke", rule_spec.stroke);
+    try rule.floatField("line_width", rule_spec.line_width, "{d:.1}");
+    if (rule_spec.dash) |dash| {
         var dash_array = try rule.arrayField("dash");
         try dash_array.floatItem(dash.on, "{d:.4}");
         try dash_array.floatItem(dash.off, "{d:.4}");
@@ -712,7 +726,6 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
         try rule.nullField("dash");
     }
     try rule.end();
-    try render_object.end();
 }
 
 fn writeColor(object: *json.Object, key: []const u8, color: core.render_policy.Color) !void {
@@ -731,7 +744,7 @@ fn writeOptionalColor(object: *json.Object, key: []const u8, color: ?core.render
     }
 }
 
-fn writeDiagnostic(allocator: std.mem.Allocator, diagnostics: *json.Array, diagnostic: core.Diagnostic) !void {
+fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void {
     var item = try diagnostics.objectItem();
     try item.enumTagField("phase", diagnostic.phase);
     try item.enumTagField("severity", diagnostic.severity);
@@ -777,5 +790,4 @@ fn writeDiagnostic(allocator: std.mem.Allocator, diagnostics: *json.Array, diagn
         },
     }
     try item.end();
-    _ = allocator;
 }
