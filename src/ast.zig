@@ -7,16 +7,19 @@ pub const Type = types.Type;
 
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
+    properties: std.ArrayList(PropertyDecl),
     functions: std.ArrayList(FunctionDecl),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .functions = .empty, .pages = .empty };
+        return .{ .imports = .empty, .properties = .empty, .functions = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
         self.imports.deinit(allocator);
+        for (self.properties.items) |*property| property.deinit(allocator);
+        self.properties.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
         for (self.pages.items) |*page| {
@@ -30,6 +33,20 @@ pub const Program = struct {
 pub const ImportDecl = struct {
     spec: []const u8,
     span: Span,
+};
+
+pub const PropertyDecl = struct {
+    key: []const u8,
+    value_type: []const u8,
+    shapes: std.ArrayList([]const u8),
+    span: Span,
+
+    pub fn deinit(self: *PropertyDecl, allocator: Allocator) void {
+        allocator.free(self.key);
+        allocator.free(self.value_type);
+        for (self.shapes.items) |shape| allocator.free(shape);
+        self.shapes.deinit(allocator);
+    }
 };
 
 pub const PageDecl = struct {

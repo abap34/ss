@@ -217,6 +217,10 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     }
     try imports.end();
 
+    var properties = try program_object.arrayField("properties");
+    for (program.properties.items) |property| try writePropertyDeclaration(&properties, property);
+    try properties.end();
+
     var functions = try program_object.arrayField("functions");
     for (program.functions.items) |func| {
         var item = try functions.objectItem();
@@ -256,6 +260,17 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     }
     try pages.end();
     try program_object.end();
+}
+
+fn writePropertyDeclaration(properties: *json.Array, property: ast.PropertyDecl) !void {
+    var item = try properties.objectItem();
+    try item.stringField("key", property.key);
+    try item.stringField("valueType", property.value_type);
+    var shapes = try item.arrayField("shapes");
+    for (property.shapes.items) |shape| try shapes.stringItem(shape);
+    try shapes.end();
+    try writeSpan(&item, property.span);
+    try item.end();
 }
 
 fn writeSpan(object: *json.Object, span: ast.Span) !void {
