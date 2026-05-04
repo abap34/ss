@@ -260,17 +260,6 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
     var item = try statements.objectItem();
     try writeSpan(&item, stmt.span);
     switch (stmt.kind) {
-        .title => |text| try writeTextStatementFields(&item, "title", text),
-        .subtitle => |text| try writeTextStatementFields(&item, "subtitle", text),
-        .math => |text| try writeTextStatementFields(&item, "math", text),
-        .mathtex => |text| try writeTextStatementFields(&item, "mathtex", text),
-        .figure => |text| try writeTextStatementFields(&item, "figure", text),
-        .image => |text| try writeTextStatementFields(&item, "image", text),
-        .pdf_ref => |text| try writeTextStatementFields(&item, "pdf_ref", text),
-        .code => |text| try writeTextStatementFields(&item, "code", text),
-        .page_number => try item.stringField("kind", "page_number"),
-        .toc => try item.stringField("kind", "toc"),
-        .highlight => |text| try writeTextStatementFields(&item, "highlight", text),
         .let_binding => |binding| {
             try item.stringField("kind", "let_binding");
             try item.stringField("name", binding.name);
@@ -307,11 +296,6 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
         },
     }
     try item.end();
-}
-
-fn writeTextStatementFields(item: *json.Object, kind: []const u8, text: []const u8) !void {
-    try item.stringField("kind", kind);
-    try item.stringField("text", text);
 }
 
 fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorRef) !void {

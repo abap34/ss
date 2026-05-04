@@ -72,12 +72,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const right = try ctx.evalStringArg(call, 1);
             break :blk .{ .string = try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right }) };
         },
-        .previous_page => try ctx.select(ctx.currentPageValue(), core.Query.previousPage()),
-        .objects => blk: {
-            const base = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
-            const role = try ctx.evalRoleArg(call, 1);
-            break :blk try ctx.select(base, core.Query.pageObjectsByRole(role));
-        },
         .first => blk: {
             const selection = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             break :blk switch (selection) {
@@ -87,12 +81,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
                 else => return error.ExpectedSelection,
             };
-        },
-        .text => blk: {
-            const content = try ctx.evalStringArg(call, 0);
-            const role_name = try ctx.evalStringArg(call, 1);
-            const role = try ctx.evalRoleArg(call, 1);
-            break :blk .{ .object = try ctx.makeObject(role_name, role, .text, .text, content) };
         },
         .object => blk: {
             const content = try ctx.evalStringArg(call, 0);
@@ -144,19 +132,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             try ctx.setNodeProperty(object_id, "style", style.name);
             break :blk .{ .object = object_id };
         },
-        .page_number_object => .{ .object = try ctx.deriveFromPage(core.Transform.pageNumber()) },
-        .toc_object => .{ .object = try ctx.deriveFromDocument(core.Transform.toc()) },
-        .rewrite_text => blk: {
-            const base = try ctx.evalExprValue(call.args.items[0]);
-            const old = try ctx.evalStringArg(call, 1);
-            const new = try ctx.evalStringArg(call, 2);
-            break :blk .{ .object = try ctx.deriveFromBase(base, core.Transform.rewriteText(old, new)) };
-        },
-        .highlight => blk: {
-            const base = try ctx.evalExprValue(call.args.items[0]);
-            const note = try ctx.evalStringArg(call, 1);
-            break :blk .{ .object = try ctx.buildHighlight(base, note) };
-        },
         .constraints => blk: {
             var bundle = core.ConstraintSet.init();
             errdefer bundle.deinit(ctx.ir.allocator);
@@ -172,122 +147,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     else => return error.ExpectedConstraintSet,
                 }
             }
-            break :blk .{ .constraints = bundle };
-        },
-        .left_inset => .{ .constraints = try ctx.oneConstraintSet(.{
-            .target_node = try ctx.evalObjectArg(call, 0),
-            .target_anchor = .left,
-            .source = .{ .page = .left },
-            .offset = try ctx.evalNumberArg(call, 1),
-            .origin = ctx.current_origin,
-        }) },
-        .right_inset => .{ .constraints = try ctx.oneConstraintSet(.{
-            .target_node = try ctx.evalObjectArg(call, 0),
-            .target_anchor = .right,
-            .source = .{ .page = .right },
-            .offset = -try ctx.evalNumberArg(call, 1),
-            .origin = ctx.current_origin,
-        }) },
-        .top_inset => .{ .constraints = try ctx.oneConstraintSet(.{
-            .target_node = try ctx.evalObjectArg(call, 0),
-            .target_anchor = .top,
-            .source = .{ .page = .top },
-            .offset = -try ctx.evalNumberArg(call, 1),
-            .origin = ctx.current_origin,
-        }) },
-        .bottom_inset => .{ .constraints = try ctx.oneConstraintSet(.{
-            .target_node = try ctx.evalObjectArg(call, 0),
-            .target_anchor = .bottom,
-            .source = .{ .page = .bottom },
-            .offset = try ctx.evalNumberArg(call, 1),
-            .origin = ctx.current_origin,
-        }) },
-        .same_left => .{ .constraints = try ctx.anchorConstraintSet(
-            try ctx.evalObjectArg(call, 0),
-            .left,
-            try ctx.evalObjectArg(call, 1),
-            .left,
-            try ctx.evalNumberArg(call, 2),
-        ) },
-        .same_right => .{ .constraints = try ctx.anchorConstraintSet(
-            try ctx.evalObjectArg(call, 0),
-            .right,
-            try ctx.evalObjectArg(call, 1),
-            .right,
-            try ctx.evalNumberArg(call, 2),
-        ) },
-        .same_top => .{ .constraints = try ctx.anchorConstraintSet(
-            try ctx.evalObjectArg(call, 0),
-            .top,
-            try ctx.evalObjectArg(call, 1),
-            .top,
-            try ctx.evalNumberArg(call, 2),
-        ) },
-        .same_bottom => .{ .constraints = try ctx.anchorConstraintSet(
-            try ctx.evalObjectArg(call, 0),
-            .bottom,
-            try ctx.evalObjectArg(call, 1),
-            .bottom,
-            try ctx.evalNumberArg(call, 2),
-        ) },
-        .below => .{ .constraints = try ctx.anchorConstraintSet(
-            try ctx.evalObjectArg(call, 0),
-            .top,
-            try ctx.evalObjectArg(call, 1),
-            .bottom,
-            -try ctx.evalNumberArg(call, 2),
-        ) },
-        .inset_x => blk: {
-            const node_id = try ctx.evalObjectArg(call, 0);
-            const left = try ctx.evalNumberArg(call, 1);
-            const right = try ctx.evalNumberArg(call, 2);
-            var bundle = core.ConstraintSet.init();
-            errdefer bundle.deinit(ctx.ir.allocator);
-            try bundle.items.append(ctx.ir.allocator, .{
-                .target_node = node_id,
-                .target_anchor = .left,
-                .source = .{ .page = .left },
-                .offset = left,
-            });
-            try bundle.items.append(ctx.ir.allocator, .{
-                .target_node = node_id,
-                .target_anchor = .right,
-                .source = .{ .page = .right },
-                .offset = -right,
-            });
-            break :blk .{ .constraints = bundle };
-        },
-        .surround => blk: {
-            const panel_id = try ctx.evalObjectArg(call, 0);
-            const inner_id = try ctx.evalObjectArg(call, 1);
-            const pad_x = try ctx.evalNumberArg(call, 2);
-            const pad_y = try ctx.evalNumberArg(call, 3);
-            var bundle = core.ConstraintSet.init();
-            errdefer bundle.deinit(ctx.ir.allocator);
-            try bundle.items.append(ctx.ir.allocator, .{
-                .target_node = panel_id,
-                .target_anchor = .left,
-                .source = .{ .node = .{ .node_id = inner_id, .anchor = .left } },
-                .offset = -pad_x,
-            });
-            try bundle.items.append(ctx.ir.allocator, .{
-                .target_node = panel_id,
-                .target_anchor = .right,
-                .source = .{ .node = .{ .node_id = inner_id, .anchor = .right } },
-                .offset = pad_x,
-            });
-            try bundle.items.append(ctx.ir.allocator, .{
-                .target_node = panel_id,
-                .target_anchor = .top,
-                .source = .{ .node = .{ .node_id = inner_id, .anchor = .top } },
-                .offset = pad_y,
-            });
-            try bundle.items.append(ctx.ir.allocator, .{
-                .target_node = panel_id,
-                .target_anchor = .bottom,
-                .source = .{ .node = .{ .node_id = inner_id, .anchor = .bottom } },
-                .offset = -pad_y,
-            });
             break :blk .{ .constraints = bundle };
         },
         .report_error => blk: {

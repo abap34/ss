@@ -122,16 +122,6 @@ pub const Statement = struct {
     kind: Kind,
 
     pub const Kind = union(enum) {
-        title: []const u8,
-        subtitle: []const u8,
-        math: []const u8,
-        mathtex: []const u8,
-        figure: []const u8,
-        image: []const u8,
-        pdf_ref: []const u8,
-        code: []const u8,
-        page_number: void,
-        toc: void,
         let_binding: struct {
             name: []const u8,
             expr: Expr,
@@ -148,7 +138,6 @@ pub const Statement = struct {
             value: Expr,
         },
         expr_stmt: Expr,
-        highlight: []const u8,
     };
 
     pub fn deinit(self: *Statement, allocator: Allocator) void {
@@ -159,7 +148,6 @@ pub const Statement = struct {
             .constrain => |*decl| decl.deinit(allocator),
             .property_set => |*property_set| property_set.value.deinit(allocator),
             .expr_stmt => |*expr| expr.deinit(allocator),
-            else => {},
         }
     }
 };

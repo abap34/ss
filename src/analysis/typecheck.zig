@@ -773,7 +773,6 @@ fn collectVariableTypesFromStatement(
                 _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
             }
         },
-        else => {},
     }
 }
 
@@ -861,7 +860,6 @@ fn collectStatementCallees(
         .property_set => |property_set| try collectExprCallees(allocator, functions, property_set.value, callees),
         .constrain => |decl| if (decl.offset) |expr| try collectExprCallees(allocator, functions, expr, callees),
         .expr_stmt => |expr| try collectExprCallees(allocator, functions, expr, callees),
-        else => {},
     }
 }
 
@@ -967,7 +965,6 @@ fn checkTopLevelStatement(
                 try ensureSort(ir, actual.sort, .number, origin, .UnmatchedArgumentType);
             }
         },
-        .title, .subtitle, .math, .mathtex, .figure, .image, .pdf_ref, .code, .page_number, .toc, .highlight => {},
     }
 }
 
@@ -1005,7 +1002,6 @@ fn checkStatement(
                 try ensureSort(ir, actual.sort, .number, origin, .UnmatchedArgumentType);
             }
         },
-        .title, .subtitle, .math, .mathtex, .figure, .image, .pdf_ref, .code, .page_number, .toc, .highlight => {},
     }
 }
 
@@ -1168,7 +1164,6 @@ fn inferUserFunctionReturnInfoInner(
             .constrain => |decl| {
                 if (decl.offset) |expr| _ = try inferExprInfo(allocator, null, functions, &env, expr, "");
             },
-            else => {},
         }
     }
     result.sort = func.result_sort;
@@ -1210,21 +1205,10 @@ fn primitiveResultTypeInfo(
     if (result_sort != .object) return .{ .sort = result_sort };
 
     const shape = switch (descriptor.op) {
-        .text => .text,
         .group => .group,
-        .page_number_object => .page_number,
-        .toc_object => .toc,
         .set_prop, .set_style => blk: {
             const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
             break :blk object_info.object_shape;
-        },
-        .rewrite_text => blk: {
-            const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-            break :blk object_info.object_shape;
-        },
-        .highlight => blk: {
-            const base_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-            break :blk if (base_info.object_shape == .unknown) .generic else base_info.object_shape;
         },
         .object => inferObjectConstructorShape(env, call),
         .derive => inferDeriveShape(env, call),

@@ -310,35 +310,7 @@ const Parser = struct {
             return self.fail(error.AssignmentRequiresLet);
         }
 
-        if (try self.parseLegacyStatement(start)) |stmt| return stmt;
         return try self.parseCallSugarStatement(start);
-    }
-
-    fn parseLegacyStatement(self: *Parser, start: usize) !?Statement {
-        const string_heads = [_]struct {
-            name: []const u8,
-            build: fn ([]const u8) Statement.Kind,
-        }{
-            .{ .name = "title", .build = legacyTitleKind },
-            .{ .name = "subtitle", .build = legacySubtitleKind },
-            .{ .name = "math", .build = legacyMathKind },
-            .{ .name = "mathtex", .build = legacyMathTexKind },
-            .{ .name = "figure", .build = legacyFigureKind },
-            .{ .name = "image", .build = legacyImageKind },
-            .{ .name = "pdf", .build = legacyPdfKind },
-            .{ .name = "code", .build = legacyCodeKind },
-            .{ .name = "highlight", .build = legacyHighlightKind },
-        };
-
-        inline for (string_heads) |entry| {
-            if (try self.consumeLegacyStringHead(entry.name)) {
-                const text = try self.parseTextArg();
-                try self.consumeStatementTerminator();
-                return .{ .span = .{ .start = start, .end = self.pos }, .kind = entry.build(text) };
-            }
-        }
-
-        return null;
     }
 
     fn parseCallSugarStatement(self: *Parser, start: usize) !Statement {
@@ -780,27 +752,6 @@ const Parser = struct {
         return true;
     }
 
-    fn consumeLegacyStringHead(self: *Parser, keyword: []const u8) !bool {
-        const checkpoint = self.pos;
-        if (!try self.consumeKeyword(keyword)) return false;
-        self.skipInlineSpaces();
-        if (!self.eof() and self.source[self.pos] == '(') {
-            self.pos = checkpoint;
-            return false;
-        }
-        return true;
-    }
-
-    fn consumeLegacyZeroHead(self: *Parser, keyword: []const u8) !bool {
-        const checkpoint = self.pos;
-        if (!try self.consumeKeyword(keyword)) return false;
-        if (!self.atStatementBoundary()) {
-            self.pos = checkpoint;
-            return false;
-        }
-        return true;
-    }
-
     fn expectChar(self: *Parser, ch: u8) !void {
         self.skipTrivia();
         if (self.eof() or self.source[self.pos] != ch) return self.fail(error.ExpectedChar);
@@ -1026,42 +977,6 @@ fn foundToken(source: []const u8, pos: usize) []const u8 {
             break :blk source[pos..@min(pos + len, source.len)];
         },
     };
-}
-
-fn legacyTitleKind(text: []const u8) Statement.Kind {
-    return .{ .title = text };
-}
-
-fn legacySubtitleKind(text: []const u8) Statement.Kind {
-    return .{ .subtitle = text };
-}
-
-fn legacyMathKind(text: []const u8) Statement.Kind {
-    return .{ .math = text };
-}
-
-fn legacyMathTexKind(text: []const u8) Statement.Kind {
-    return .{ .mathtex = text };
-}
-
-fn legacyFigureKind(text: []const u8) Statement.Kind {
-    return .{ .figure = text };
-}
-
-fn legacyImageKind(text: []const u8) Statement.Kind {
-    return .{ .image = text };
-}
-
-fn legacyPdfKind(text: []const u8) Statement.Kind {
-    return .{ .pdf_ref = text };
-}
-
-fn legacyCodeKind(text: []const u8) Statement.Kind {
-    return .{ .code = text };
-}
-
-fn legacyHighlightKind(text: []const u8) Statement.Kind {
-    return .{ .highlight = text };
 }
 
 fn scanIdentifier(source: []const u8, pos: *usize) bool {

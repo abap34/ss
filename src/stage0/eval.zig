@@ -418,10 +418,6 @@ const BuiltinContext = struct {
         return .{ .anchor = .{ .page = anchor } };
     }
 
-    pub fn select(self: *BuiltinContext, base: core.Value, query: core.Query) !core.Value {
-        return try self.ir.select(self.ir.allocator, base, query);
-    }
-
     pub fn makeObject(
         self: *BuiltinContext,
         role_name: []const u8,
@@ -451,39 +447,6 @@ const BuiltinContext = struct {
         };
     }
 
-    pub fn deriveFromPage(self: *BuiltinContext, transform: core.Transform) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.deriveWithOrigin(self.page_id, .{ .page = self.page_id }, transform, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, .{ .page = self.page_id }, transform, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
-    }
-
-    pub fn deriveFromDocument(self: *BuiltinContext, transform: core.Transform) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.deriveWithOrigin(self.page_id, .{ .document = self.ir.document_id }, transform, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, .{ .document = self.ir.document_id }, transform, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
-    }
-
-    pub fn deriveFromBase(self: *BuiltinContext, base: core.Value, transform: core.Transform) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.deriveWithOrigin(self.page_id, base, transform, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, base, transform, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
-    }
-
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
         try self.ir.setNodeProperty(object_id, key, value);
     }
@@ -494,25 +457,6 @@ const BuiltinContext = struct {
 
     pub fn setAllPageProperty(self: *BuiltinContext, key: []const u8, value: []const u8) !void {
         try self.ir.setAllPageProperty(key, value);
-    }
-
-    pub fn buildHighlight(self: *BuiltinContext, base: core.Value, note: []const u8) !core.NodeId {
-        return try deriveHighlight(self.ir, self.page_id, self.mode, self.current_origin, base, note);
-    }
-
-    pub fn oneConstraintSet(self: *BuiltinContext, constraint: core.Constraint) !core.ConstraintSet {
-        return try singleConstraintSet(self.ir, constraint);
-    }
-
-    pub fn anchorConstraintSet(
-        self: *BuiltinContext,
-        target_node: core.NodeId,
-        target_anchor: core.Anchor,
-        source_node: core.NodeId,
-        source_anchor: core.Anchor,
-        offset: f32,
-    ) !core.ConstraintSet {
-        return try nodeAnchorConstraintSet(self.ir, target_node, target_anchor, source_node, source_anchor, offset, self.current_origin);
     }
 
     pub fn equalAnchorConstraintSet(
@@ -1025,24 +969,6 @@ fn singleConstraintSet(ir: *doc.Document, constraint: core.Constraint) !core.Con
     return bundle;
 }
 
-fn nodeAnchorConstraintSet(
-    ir: *doc.Document,
-    target_node: core.NodeId,
-    target_anchor: core.Anchor,
-    source_node: core.NodeId,
-    source_anchor: core.Anchor,
-    offset: f32,
-    origin: []const u8,
-) !core.ConstraintSet {
-    return try singleConstraintSet(ir, .{
-        .target_node = target_node,
-        .target_anchor = target_anchor,
-        .source = .{ .node = .{ .node_id = source_node, .anchor = source_anchor } },
-        .offset = offset,
-        .origin = origin,
-    });
-}
-
 fn anchorEqualityConstraintSet(
     ir: *doc.Document,
     target: core.AnchorValue,
@@ -1079,36 +1005,6 @@ fn executeStatement(
 ) anyerror!ExecFlow {
     const origin = if (origin_override) |override| override else try statementOrigin(ir.allocator, stmt.span);
     switch (stmt.kind) {
-        .title => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "title", "title", .text, .text, text, origin),
-        .subtitle => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "subtitle", "subtitle", .text, .text, text, origin),
-        .math => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "math", "math", .source, .math_text, text, origin),
-        .mathtex => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "mathtex", "math", .asset, .math_tex, text, origin),
-        .figure => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "figure", "figure", .source, .figure_text, text, origin),
-        .image => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "image", "figure", .asset, .image_ref, text, origin),
-        .pdf_ref => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "pdf", "figure", .asset, .pdf_ref, text, origin),
-        .code => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "code", "code", .source, .code, text, origin),
-        .page_number => {
-            const value: core.Value = .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, .{ .page = page_id }, core.Transform.pageNumber(), origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, .{ .page = page_id }, core.Transform.pageNumber(), origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-            try materializeStatementValue(ir, mode, last_code_like, value);
-        },
-        .toc => {
-            const value: core.Value = .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, .{ .document = ir.document_id }, core.Transform.toc(), origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, .{ .document = ir.document_id }, core.Transform.toc(), origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-            try materializeStatementValue(ir, mode, last_code_like, value);
-        },
         .let_binding => |binding| {
             const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
             switch (mode) {
@@ -1197,12 +1093,6 @@ fn executeStatement(
                 try materializeStatementValue(ir, mode, last_code_like, value);
             },
         },
-        .highlight => |note| {
-            const target = last_code_like.* orelse return error.MissingHighlightTarget;
-            var selection = try ir.select(ir.allocator, .{ .object = target }, core.Query.selfObject());
-            defer selection.deinit(ir.allocator);
-            _ = try deriveHighlight(ir, page_id, mode, origin, selection, note);
-        },
     }
     return .none;
 }
@@ -1242,27 +1132,6 @@ fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: 
             else => {},
         },
     }
-}
-
-fn makeLegacyNode(
-    ir: *doc.Document,
-    page_id: core.NodeId,
-    mode: EvalMode,
-    name: []const u8,
-    role: []const u8,
-    object_kind: core.ObjectKind,
-    payload_kind: core.PayloadKind,
-    content: []const u8,
-    origin: []const u8,
-) !core.NodeId {
-    return switch (mode) {
-        .attached => try ir.makeObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, origin),
-        .detached => |builder| blk: {
-            const id = try ir.makeDetachedObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, origin);
-            try builder.trackNode(ir.allocator, id);
-            break :blk id;
-        },
-    };
 }
 
 fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
