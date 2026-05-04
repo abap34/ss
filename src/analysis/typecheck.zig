@@ -8,6 +8,7 @@ const syntax = @import("../syntax/parse.zig");
 const property_schema = @import("../property_schema.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
+const Type = ast.Type;
 
 pub const FunctionContract = struct {
     min_param_count: usize,
@@ -17,6 +18,7 @@ pub const FunctionContract = struct {
 };
 
 const TypeInfo = struct {
+    ty: Type = Type.any,
     sort: core.SemanticSort,
     object_shape: property_schema.ObjectShape = .unknown,
     string_literal: ?[]const u8 = null,
@@ -135,6 +137,22 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     });
 }
 
+fn infoFromSort(sort: core.SemanticSort) TypeInfo {
+    return .{ .ty = Type.fromSort(sort), .sort = sort };
+}
+
+fn infoFromType(ty: Type) TypeInfo {
+    return .{ .ty = ty, .sort = ty.toRuntimeSort() orelse .fragment };
+}
+
+fn infoForSelectionItem(sort: core.SelectionItemSort) TypeInfo {
+    return infoFromType(Type.fromSelectionItemSort(sort));
+}
+
+fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
+    return ty.formatAlloc(allocator);
+}
+
 pub fn functionContract(func: ast.FunctionDecl) FunctionContract {
     return .{
         .min_param_count = requiredParamCount(func),
@@ -218,10 +236,10 @@ pub fn collectVariableInfoFromProgram(
         for (func.params.items) |param| {
             if (param.default_value) |default_value| {
                 const info = try inferExprInfo(allocator, null, functions, &env, default_value.*, "");
-                try ensureSort(null, info.sort, param.sort, "", .UnmatchedArgumentType);
+                try ensureType(null, allocator, info, param.ty, "", .UnmatchedArgumentType);
             }
-            try env.put(param.name, .{ .sort = param.sort });
-            try variables.put(param.name, .{ .sort = param.sort });
+            try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
+            try variables.put(param.name, .{ .ty = param.ty, .sort = param.sort });
         }
 
         for (func.statements.items) |stmt| {
@@ -373,8 +391,10 @@ pub fn formatPrimitiveParam(
     index: usize,
 ) ![]const u8 {
     const name = descriptor.arg_names[index];
-    if (expectedPrimitiveArgSort(descriptor, index)) |sort| {
-        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, @tagName(sort) });
+    if (registry.primitiveArgType(descriptor, index)) |ty| {
+        const label = try ty.formatAlloc(allocator);
+        defer allocator.free(label);
+        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, label });
     }
     return allocator.dupe(u8, name);
 }
@@ -384,7 +404,9 @@ pub fn formatUserSignature(
     name: []const u8,
     func: ast.FunctionDecl,
 ) ![]const u8 {
-    if (isConst(func)) return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, @tagName(func.result_sort) });
+    const result_label = try func.result_type.formatAlloc(allocator);
+    defer allocator.free(result_label);
+    if (isConst(func)) return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, result_label });
 
     var params = std.ArrayList(u8).empty;
     defer params.deinit(allocator);
@@ -394,16 +416,18 @@ pub fn formatUserSignature(
         defer allocator.free(label);
         try params.appendSlice(allocator, label);
     }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, @tagName(func.result_sort) });
+    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, result_label });
 }
 
 pub fn formatUserParam(allocator: std.mem.Allocator, param: ast.ParamDecl) ![]const u8 {
+    const label = try param.ty.formatAlloc(allocator);
+    defer allocator.free(label);
     if (param.default_value) |default_value| {
         const text = try formatExpr(allocator, default_value.*);
         defer allocator.free(text);
-        return std.fmt.allocPrint(allocator, "{s}: {s} = {s}", .{ param.name, @tagName(param.sort), text });
+        return std.fmt.allocPrint(allocator, "{s}: {s} = {s}", .{ param.name, label, text });
     }
-    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
+    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, label });
 }
 
 fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
@@ -756,8 +780,8 @@ fn collectVariableTypesFromStatement(
         },
         .bind_binding => |binding| {
             _ = try inferExprInfo(allocator, null, functions, env, binding.expr, origin);
-            try env.put(binding.name, .{ .sort = .fragment });
-            try variables.put(binding.name, .{ .sort = .fragment });
+            try env.put(binding.name, infoFromSort(.fragment));
+            try variables.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
             _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
@@ -906,13 +930,13 @@ fn checkFunction(
     for (func.params.items) |param| {
         if (param.default_value) |default_value| {
             const info = try inferExprInfo(allocator, ir, functions, &env, default_value.*, func_origin);
-            try ensureSort(ir, info.sort, param.sort, func_origin, .UnmatchedArgumentType);
+            try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
-        try env.put(param.name, .{ .sort = param.sort });
+        try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
     }
 
     for (func.statements.items) |stmt| {
-        try checkStatement(allocator, ir, functions, &env, func.result_sort, stmt);
+        try checkStatement(allocator, ir, functions, &env, func.result_type, stmt);
     }
 }
 
@@ -947,7 +971,7 @@ fn checkTopLevelStatement(
         },
         .bind_binding => |binding| {
             _ = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
-            try env.put(binding.name, .{ .sort = .fragment });
+            try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => {
             try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
@@ -962,7 +986,7 @@ fn checkTopLevelStatement(
         .constrain => |decl| {
             if (decl.offset) |expr| {
                 const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
-                try ensureSort(ir, actual.sort, .number, origin, .UnmatchedArgumentType);
+                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
     }
@@ -973,7 +997,7 @@ fn checkStatement(
     ir: *core.Ir,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     env: *TypeEnv,
-    result_sort: core.SemanticSort,
+    result_type: Type,
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, stmt.span);
@@ -984,11 +1008,11 @@ fn checkStatement(
         },
         .bind_binding => |binding| {
             _ = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
-            try env.put(binding.name, .{ .sort = .fragment });
+            try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
             const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
-            try ensureSort(ir, actual.sort, result_sort, origin, .UnmatchedReturnType);
+            try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
         .property_set => |property_set| {
             try validatePropertySetStatement(allocator, ir, functions, env, property_set.object_name, property_set.property_name, property_set.value, origin);
@@ -999,7 +1023,7 @@ fn checkStatement(
         .constrain => |decl| {
             if (decl.offset) |expr| {
                 const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
-                try ensureSort(ir, actual.sort, .number, origin, .UnmatchedArgumentType);
+                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
     }
@@ -1025,12 +1049,16 @@ fn inferExprInfo(
     origin: []const u8,
 ) anyerror!TypeInfo {
     return switch (expr) {
-        .string => |text| .{ .sort = .string, .string_literal = text },
-        .number => .{ .sort = .number },
+        .string => |text| blk: {
+            var info = infoFromSort(.string);
+            info.string_literal = text;
+            break :blk info;
+        },
+        .number => infoFromSort(.number),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
             if (functions.get(name)) |func| {
-                if (isConst(func)) break :blk .{ .sort = func.result_sort };
+                if (isConst(func)) break :blk infoFromType(func.result_type);
             }
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
@@ -1065,7 +1093,7 @@ fn inferCallInfo(
         for (call.args.items, 0..) |arg, index| {
             const param = func.params.items[index];
             const actual = try inferExprInfo(allocator, ir, functions, env, arg, origin);
-            try ensureSort(ir, actual.sort, param.sort, origin, .UnmatchedArgumentType);
+            try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
         }
         return try inferUserFunctionReturnInfo(allocator, ir, functions, env, func, call, origin);
     }
@@ -1081,8 +1109,8 @@ fn inferCallInfo(
         }
         for (call.args.items, 0..) |arg, index| {
             const actual = try inferExprInfo(allocator, ir, functions, env, arg, origin);
-            if (expectedPrimitiveArgSort(descriptor, index)) |expected| {
-                try ensureSort(ir, actual.sort, expected, origin, .UnmatchedArgumentType);
+            if (registry.primitiveArgType(descriptor, index)) |expected| {
+                try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
             }
         }
         const info = try primitiveResultTypeInfo(allocator, ir, functions, env, call, descriptor, origin);
@@ -1123,7 +1151,11 @@ fn inferUserFunctionReturnInfoInner(
     origin: []const u8,
     visiting: *std.StringHashMap(void),
 ) !TypeInfo {
-    if (visiting.contains(func.name)) return .{ .sort = func.result_sort, .object_shape = .generic };
+    if (visiting.contains(func.name)) {
+        var info = infoFromType(func.result_type);
+        info.object_shape = .generic;
+        return info;
+    }
     try visiting.put(func.name, {});
     defer _ = visiting.remove(func.name);
 
@@ -1135,11 +1167,11 @@ fn inferUserFunctionReturnInfoInner(
         else if (param.default_value) |default_value|
             try inferExprInfo(allocator, ir, functions, &env, default_value.*, origin)
         else
-            .{ .sort = param.sort };
+            .{ .ty = param.ty, .sort = param.sort };
         try env.put(param.name, info);
     }
 
-    var result = TypeInfo{ .sort = func.result_sort };
+    var result = infoFromType(func.result_type);
     for (func.statements.items) |stmt| {
         switch (stmt.kind) {
             .let_binding => |binding| {
@@ -1148,7 +1180,7 @@ fn inferUserFunctionReturnInfoInner(
             },
             .bind_binding => |binding| {
                 _ = try inferExprInfo(allocator, null, functions, &env, binding.expr, "");
-                try env.put(binding.name, .{ .sort = .fragment });
+                try env.put(binding.name, infoFromSort(.fragment));
             },
             .return_expr => |expr| {
                 const info = try inferExprInfo(allocator, null, functions, &env, expr, "");
@@ -1165,12 +1197,14 @@ fn inferUserFunctionReturnInfoInner(
             },
         }
     }
+    result.ty = func.result_type;
     result.sort = func.result_sort;
     return result;
 }
 
 fn mergeTypeInfo(a: TypeInfo, b: TypeInfo) TypeInfo {
     return .{
+        .ty = a.ty,
         .sort = a.sort,
         .object_shape = mergeObjectShape(a.object_shape, b.object_shape),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
@@ -1200,12 +1234,34 @@ fn primitiveResultTypeInfo(
     descriptor: registry.PrimitiveDescriptor,
     origin: []const u8,
 ) !TypeInfo {
+    if (descriptor.op == .first) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        return switch (selection_info.ty.param) {
+            .page => infoFromSort(.page),
+            .object, .any, .none => infoFromSort(.object),
+            else => infoFromSort(selection_info.sort),
+        };
+    }
+
+    if (descriptor.op == .select) {
+        return try inferSelectCallInfo(allocator, ir, functions, env, call, origin);
+    }
+
+    if (descriptor.op == .derive) {
+        return try inferDeriveCallInfo(allocator, ir, functions, env, call, origin);
+    }
+
     if (descriptor.op == .set_prop) {
-        if (call.args.items.len == 0) return .{ .sort = .object, .object_shape = .generic };
+        if (call.args.items.len == 0) return infoFromSort(.object);
         const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
         return .{
+            .ty = switch (target_info.ty.tag) {
+                .document, .page, .object, .selection => target_info.ty,
+                else => Type.object,
+            },
             .sort = switch (target_info.sort) {
-                .document, .page, .object => target_info.sort,
+                .document, .page, .object, .selection => target_info.sort,
                 else => .object,
             },
             .object_shape = target_info.object_shape,
@@ -1213,7 +1269,7 @@ fn primitiveResultTypeInfo(
     }
 
     const result_sort = descriptor.result_sort orelse .object;
-    if (result_sort != .object) return .{ .sort = result_sort };
+    if (result_sort != .object) return infoFromSort(result_sort);
 
     const shape = switch (descriptor.op) {
         .group => .group,
@@ -1225,7 +1281,85 @@ fn primitiveResultTypeInfo(
         .derive => inferDeriveShape(env, call),
         else => .generic,
     };
-    return .{ .sort = result_sort, .object_shape = shape };
+    var info = infoFromSort(result_sort);
+    info.object_shape = shape;
+    return info;
+}
+
+fn inferSelectCallInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+) !TypeInfo {
+    if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+    const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
+    const query = registry.lookupQueryOp(query_name) orelse {
+        try addUserReport(ir, origin, "UnknownQuery: unknown query: {s}", .{query_name});
+        return error.UnknownQuery;
+    };
+    if (call.args.items.len != query.arity) {
+        try addUserReport(ir, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
+        return error.InvalidArity;
+    }
+    const base = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
+    for (query.extra_arg_sorts, 0..) |_, extra_index| {
+        const arg_index = 2 + extra_index;
+        if (arg_index >= call.args.items.len) break;
+        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[arg_index], origin);
+        if (registry.argSortType(query.extra_arg_sorts[extra_index])) |expected| {
+            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        }
+    }
+    return infoFromType(registry.queryOutputType(query));
+}
+
+fn inferDeriveCallInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+) !TypeInfo {
+    if (call.args.items.len < 2) return infoFromSort(.object);
+    const transform_name = resolveStringLiteral(env, call.args.items[1]) orelse {
+        var info = infoFromSort(.object);
+        info.object_shape = inferDeriveShape(env, call);
+        return info;
+    };
+    const transform = registry.lookupTransformOp(transform_name) orelse {
+        try addUserReport(ir, origin, "UnknownTransform: unknown transform: {s}", .{transform_name});
+        return error.UnknownTransform;
+    };
+    if (call.args.items.len < transform.min_arity or call.args.items.len > transform.max_arity) {
+        if (transform.min_arity == transform.max_arity) {
+            try addUserReport(ir, origin, "InvalidArity: transform {s} expects {d} arguments, got {d}", .{ transform_name, transform.min_arity, call.args.items.len });
+        } else {
+            try addUserReport(ir, origin, "InvalidArity: transform {s} expects {d}..{d} arguments, got {d}", .{ transform_name, transform.min_arity, transform.max_arity, call.args.items.len });
+        }
+        return error.InvalidArity;
+    }
+    const base = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    if (registry.transformInputType(transform)) |expected| {
+        try ensureType(ir, allocator, base, expected, origin, .UnmatchedInputType);
+    } else if (transform.op == .highlight and !(base.ty.tag == .object or (base.ty.tag == .selection and (base.ty.param == .object or base.ty.param == .any)))) {
+        try ensureType(ir, allocator, base, Type.object, origin, .UnmatchedInputType);
+    }
+    for (transform.extra_arg_sorts, 0..) |_, extra_index| {
+        const arg_index = 2 + extra_index;
+        if (arg_index >= call.args.items.len) break;
+        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[arg_index], origin);
+        if (registry.argSortType(transform.extra_arg_sorts[extra_index])) |expected| {
+            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        }
+    }
+    var info = infoFromType(registry.transformOutputType(transform));
+    info.object_shape = inferDeriveShape(env, call);
+    return info;
 }
 
 fn inferObjectConstructorShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.ObjectShape {
@@ -1294,10 +1428,11 @@ fn validateSetPropCall(
 }
 
 fn propertyShapeForInfo(info: TypeInfo) ?property_schema.ObjectShape {
-    return switch (info.sort) {
+    return switch (info.ty.tag) {
         .document => .document,
         .page => .page,
         .object => info.object_shape,
+        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_shape else null,
         else => null,
     };
 }
@@ -1388,6 +1523,27 @@ fn ensureSort(
         }
         return error.InvalidSemanticSort;
     }
+}
+
+fn ensureType(
+    ir: ?*core.Ir,
+    allocator: std.mem.Allocator,
+    actual: TypeInfo,
+    expected: Type,
+    origin: []const u8,
+    code: core.TypeMismatchCode,
+) !void {
+    if (Type.accepts(expected, actual.ty)) return;
+    const expected_sort = expected.toRuntimeSort() orelse actual.sort;
+    if (expected_sort != actual.sort) return ensureSort(ir, actual.sort, expected_sort, origin, code);
+    if (ir) |_| {
+        const actual_label = try typeLabelAlloc(allocator, actual.ty);
+        defer allocator.free(actual_label);
+        const expected_label = try typeLabelAlloc(allocator, expected);
+        defer allocator.free(expected_label);
+        try addUserReport(ir, origin, "TypeMismatch: expected {s}, got {s}", .{ expected_label, actual_label });
+    }
+    return error.InvalidSemanticSort;
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {

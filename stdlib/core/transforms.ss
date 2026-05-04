@@ -30,7 +30,7 @@ fn highlight(base: object, note: string) -> object
   return obj
 end
 
-fn highlight_selection(base: selection, note: string) -> object
+fn highlight_selection(base: selection<object>, note: string) -> object
   let obj = derive(base, "highlight", note)
   text_preset(obj, "Helvetica", "14", "18", "1,0.5961,0", "20", "120", "120")
   return obj
