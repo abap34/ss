@@ -242,11 +242,6 @@ pub const Document = struct {
         } });
     }
 
-    pub fn setAllPageProperty(self: *Document, key: []const u8, value: []const u8) !void {
-        try self.setNodeProperty(self.document_id, key, value);
-        for (self.page_order.items) |page_id| try self.setNodeProperty(page_id, key, value);
-    }
-
     pub fn getNodeProperty(self: *Document, node_id: HandleId, key: []const u8) ?[]const u8 {
         const node = self.getNode(node_id) orelse return null;
         return core.nodeProperty(node, key);
