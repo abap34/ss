@@ -1252,6 +1252,15 @@ fn primitiveResultTypeInfo(
         return try inferDeriveCallInfo(allocator, ir, functions, env, call, origin);
     }
 
+    if (descriptor.op == .set_style) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        if (!(target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any)))) {
+            try ensureType(ir, allocator, target_info, Type.object, origin, .UnmatchedArgumentType);
+        }
+        return target_info;
+    }
+
     if (descriptor.op == .set_prop) {
         if (call.args.items.len == 0) return infoFromSort(.object);
         const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);

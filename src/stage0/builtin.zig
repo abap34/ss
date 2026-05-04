@@ -99,7 +99,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .set_prop => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
-            defer target.deinit(ctx.ir.allocator);
             const key = try ctx.evalStringArg(call, 1);
             const value = try ctx.evalPropertyStringArg(call, 2);
             break :blk switch (target) {
@@ -115,14 +114,41 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     try ctx.setNodeProperty(id, key, value);
                     break :blk2 .{ .object = id };
                 },
-                else => return error.InvalidSemanticSort,
+                .selection => |sel| blk2: {
+                    if (sel.item_sort != .object) {
+                        target.deinit(ctx.ir.allocator);
+                        return error.InvalidSelectionSort;
+                    }
+                    for (sel.ids.items) |id| try ctx.setNodeProperty(id, key, value);
+                    break :blk2 target;
+                },
+                else => {
+                    target.deinit(ctx.ir.allocator);
+                    return error.InvalidSemanticSort;
+                },
             };
         },
         .set_style => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             const style = try ctx.evalStyleArg(call, 1);
-            try ctx.setNodeProperty(object_id, "style", style.name);
-            break :blk .{ .object = object_id };
+            break :blk switch (target) {
+                .object => |id| blk2: {
+                    try ctx.setNodeProperty(id, "style", style.name);
+                    break :blk2 .{ .object = id };
+                },
+                .selection => |sel| blk2: {
+                    if (sel.item_sort != .object) {
+                        target.deinit(ctx.ir.allocator);
+                        return error.InvalidSelectionSort;
+                    }
+                    for (sel.ids.items) |id| try ctx.setNodeProperty(id, "style", style.name);
+                    break :blk2 target;
+                },
+                else => {
+                    target.deinit(ctx.ir.allocator);
+                    return error.InvalidSemanticSort;
+                },
+            };
         },
         .constraints => blk: {
             var bundle = core.ConstraintSet.init();
