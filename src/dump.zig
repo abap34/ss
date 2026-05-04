@@ -578,6 +578,7 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
         try math.floatField("block_line_height", math_spec.block_line_height, "{d:.1}");
         try math.floatField("block_min_height", math_spec.block_min_height, "{d:.1}");
         try math.floatField("block_vertical_padding", math_spec.block_vertical_padding, "{d:.1}");
+        try math.floatField("scale", math_spec.scale, "{d:.4}");
         try math.end();
     } else {
         try render_object.nullField("math");

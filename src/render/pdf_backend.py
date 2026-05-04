@@ -1474,7 +1474,7 @@ def fit_math_block_size(render: dict, width: float, height: float, max_width: fl
     target_height = max(
         float(math.get("block_min_height", 30.0)),
         lines * float(math.get("block_line_height", 22.0)) + float(math.get("block_vertical_padding", 2.0)),
-    )
+    ) * float(math.get("scale", 1.0))
     scale = min(max_width / width, max_height / height, target_height / height)
     return width * scale, height * scale
 

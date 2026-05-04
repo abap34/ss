@@ -58,6 +58,7 @@ pub const MathPaint = struct {
     block_line_height: f32,
     block_min_height: f32,
     block_vertical_padding: f32,
+    scale: f32,
 };
 
 pub const CodePaint = struct {
@@ -137,7 +138,7 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
     return .{
         .kind = kind,
         .text = resolveText(ir, node, kind),
-        .math = resolveMath(kind),
+        .math = resolveMath(node, kind),
         .code = resolveCode(node, kind),
         .chrome = resolveChrome(node),
         .underline = resolveUnderline(node),
@@ -192,12 +193,13 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
     };
 }
 
-fn resolveMath(kind: RenderKind) ?MathPaint {
+fn resolveMath(node: *const Node, kind: RenderKind) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
         .block_line_height = 22.0,
         .block_min_height = 30.0,
         .block_vertical_padding = 2.0,
+        .scale = parseFloatProperty(node, "math_scale") orelse 1.0,
     };
 }
 

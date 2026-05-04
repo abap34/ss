@@ -415,34 +415,20 @@ fn text(text_value: string) -> object
   return body_object(text_value)
 end
 
-fn lead(text_value: string) -> object
-  return text(text_value)
-end
-
-fn math_block(text_value: string) -> object
-  return flow_inset(math_text_object(text_value), "102", "102")
-end
-
-fn tex(text_value: string) -> object
-  return flow_inset(math_tex_object(text_value), "102", "102")
+fn tex(text_value: string, scale: number = 1) -> object
+  let obj = flow_inset(math_tex_object(text_value), "102", "102")
+  set_prop(obj, "math_scale", str(scale))
+  return obj
 end
 
 fn figure(text_value: string) -> object
   return flow_inset(figure_text_object(text_value), "102", "102")
 end
 
-fn unchecked_image(path_value: string, scale: number = 1) -> object
-  return with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
-end
-
 fn image(path_value: string, scale: number = 1) -> object
-  let obj = unchecked_image(path_value, scale)
+  let obj = with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
   require_asset_exists(obj)
   return obj
-end
-
-fn checked_image(path_value: string, scale: number = 1) -> object
-  return image(path_value, scale)
 end
 
 fn pdf(path_value: string, scale: number = 1) -> object
@@ -451,36 +437,14 @@ fn pdf(path_value: string, scale: number = 1) -> object
   return obj
 end
 
-fn checked_pdf(path_value: string, scale: number = 1) -> object
-  return pdf(path_value, scale)
-end
-
-fn plain_code(text_value: string) -> object
-  let code = code_object(text_value)
+fn code(text_value: string, language_name: string = "python") -> object
+  let code = code_with_language(text_value, language_name)
   flow_inset(code, "102", "102")
   return code
-end
-
-fn code(text_value: string) -> object
-  let code = python_code_object(text_value)
-  flow_inset(code, "102", "102")
-  return code
-end
-
-fn python_code(text_value: string) -> object
-  return code(text_value)
 end
 
 fn note(text_value: string) -> object
   return flow_inset(note_object(text_value), "120", "120")
-end
-
-fn callout(text_value: string) -> object
-  return note(text_value)
-end
-
-fn quote(text_value: string) -> object
-  return note(text_value)
 end
 
 fn page_no() -> object
