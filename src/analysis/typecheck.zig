@@ -1389,7 +1389,27 @@ fn inferSelectCallInfo(
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
-    return infoFromType(registry.queryOutputType(query));
+    var info = infoFromType(registry.queryOutputType(query));
+    info.object_shape = inferQueryOutputShape(env, query, call, base);
+    return info;
+}
+
+fn inferQueryOutputShape(
+    env: *const TypeEnv,
+    query: registry.QueryDescriptor,
+    call: ast.CallExpr,
+    base: TypeInfo,
+) property_schema.ObjectShape {
+    return switch (query.op) {
+        .self_object => base.object_shape,
+        .page_objects_by_role, .document_objects_by_role => blk: {
+            if (call.args.items.len < 3) break :blk .generic;
+            const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk .generic;
+            break :blk property_schema.shapeForRole(role_name);
+        },
+        .children, .descendants => .generic,
+        .document_pages, .previous_page, .parent_page => .unknown,
+    };
 }
 
 fn inferDeriveCallInfo(
