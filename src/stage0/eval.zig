@@ -1,13 +1,14 @@
 const std = @import("std");
 const core = @import("core");
 const builtin = @import("builtin.zig");
+const doc = @import("doc.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 const fs_utils = utils.fs;
 const ast = @import("ast");
-const names = @import("names.zig");
-const registry = @import("registry.zig");
-const typecheck = @import("typecheck.zig");
+const names = @import("../language/names.zig");
+const registry = @import("../language/registry.zig");
+const typecheck = @import("../sema/typecheck.zig");
 
 const Program = ast.Program;
 const FunctionDecl = ast.FunctionDecl;
@@ -192,17 +193,27 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
     };
 }
 
-pub fn executeProgramIntoIr(ir: *core.Ir) !void {
-    return executeProgram(ir.projectProgram(), ir.projectSource(), ir.projectPath(), ir, &ir.functions);
+pub fn elaborateProgram(
+    allocator: std.mem.Allocator,
+    asset_base_dir: []const u8,
+    program: Program,
+    source: []const u8,
+    path: []const u8,
+    functions: *const std.StringHashMap(FunctionDecl),
+) !doc.Document {
+    var document = try doc.Document.init(allocator, asset_base_dir);
+    errdefer document.deinit();
+    try executeProgram(program, source, path, &document, functions);
+    return document;
 }
 
-pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *core.Ir, io: std.Io) !void {
+pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *doc.Document, io: std.Io) !void {
     diagnostic_source = source;
     diagnostic_path = "";
     return executeProgramWithPath(program, source, "", ir, io);
 }
 
-pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *core.Ir, io: std.Io) !void {
+pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *doc.Document, io: std.Io) !void {
     diagnostic_source = source;
     diagnostic_path = path;
     diagnostic_reported = false;
@@ -215,7 +226,7 @@ pub fn executeProgramWithIndex(
     program: Program,
     source: []const u8,
     path: []const u8,
-    ir: *core.Ir,
+    ir: *doc.Document,
     index: *const typecheck.ProgramIndex,
 ) !void {
     return executeProgram(program, source, path, ir, &index.functions);
@@ -225,7 +236,7 @@ pub fn executeProgram(
     program: Program,
     source: []const u8,
     path: []const u8,
-    ir: *core.Ir,
+    ir: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
     diagnostic_source = source;
@@ -257,7 +268,7 @@ pub fn executeProgram(
 }
 
 fn evalExpr(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -286,7 +297,7 @@ fn evalExpr(
 }
 
 fn evalCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -324,7 +335,7 @@ fn evalCall(
 }
 
 const BuiltinContext = struct {
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -523,7 +534,7 @@ const BuiltinContext = struct {
 };
 
 fn evalPrimitiveCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -544,7 +555,7 @@ fn evalPrimitiveCall(
 }
 
 fn emitUserReport(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     origin: []const u8,
     severity: core.DiagnosticSeverity,
@@ -559,7 +570,7 @@ fn emitUserReport(
     );
 }
 
-fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+fn validateAssetExists(ir: *doc.Document, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
     const node = ir.getNode(object_id) orelse return error.UnknownNode;
     if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
         try ir.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
@@ -591,17 +602,17 @@ fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeI
     }
 }
 
-fn attachIntrinsicImageSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+fn attachIntrinsicImageSize(ir: *doc.Document, object_id: core.NodeId, resolved_path: []const u8) !void {
     const dimensions = fs_utils.readImageDimensions(ir.allocator, resolved_path) catch return;
     try attachIntrinsicAssetSize(ir, object_id, dimensions);
 }
 
-fn attachIntrinsicPdfSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+fn attachIntrinsicPdfSize(ir: *doc.Document, object_id: core.NodeId, resolved_path: []const u8) !void {
     const dimensions = fs_utils.readPdfDimensions(ir.allocator, resolved_path) catch return;
     try attachIntrinsicAssetSize(ir, object_id, dimensions);
 }
 
-fn attachIntrinsicAssetSize(ir: *core.Ir, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
+fn attachIntrinsicAssetSize(ir: *doc.Document, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
     const fitted = fitSize(
         dimensions.width,
         dimensions.height,
@@ -628,7 +639,7 @@ fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requeste
 }
 
 fn evalSelectCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -669,7 +680,7 @@ fn evalSelectCall(
 }
 
 fn evalDeriveCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -726,7 +737,7 @@ fn evalDeriveCall(
 }
 
 fn deriveHighlight(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     current_origin: []const u8,
@@ -795,7 +806,7 @@ fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8)
 }
 
 fn bindUserFunctionArgs(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     caller_env: *std.StringHashMap(core.Value),
@@ -836,7 +847,7 @@ fn fragmentRootCloneFromFragment(allocator: std.mem.Allocator, fragment: *const 
     return try root.clone(allocator);
 }
 
-fn normalizeForUse(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.Value {
+fn normalizeForUse(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.Value {
     return switch (value) {
         .fragment => |fragment| switch (mode) {
             .attached => blk: {
@@ -888,7 +899,7 @@ fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
     };
 }
 
-fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.NodeId {
+fn resolveValueObjectId(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.NodeId {
     return switch (try normalizeForUse(ir, mode, value)) {
         .object => |id| id,
         else => return error.ExpectedObject,
@@ -896,7 +907,7 @@ fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.N
 }
 
 fn evalCallArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -909,7 +920,7 @@ fn evalCallArg(
 }
 
 fn evalCallStringArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -922,7 +933,7 @@ fn evalCallStringArg(
 }
 
 fn evalCallNumberArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -935,7 +946,7 @@ fn evalCallNumberArg(
 }
 
 fn evalCallObjectArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -948,7 +959,7 @@ fn evalCallObjectArg(
 }
 
 fn evalCallAnchorArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -961,7 +972,7 @@ fn evalCallAnchorArg(
 }
 
 fn evalCallStyleArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -974,7 +985,7 @@ fn evalCallStyleArg(
 }
 
 fn evalCallRoleArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -991,7 +1002,7 @@ fn evalCallRoleArg(
 }
 
 fn evalCallPayloadArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -1007,7 +1018,7 @@ fn evalCallPayloadArg(
     };
 }
 
-fn singleConstraintSet(ir: *core.Ir, constraint: core.Constraint) !core.ConstraintSet {
+fn singleConstraintSet(ir: *doc.Document, constraint: core.Constraint) !core.ConstraintSet {
     var bundle = core.ConstraintSet.init();
     errdefer bundle.deinit(ir.allocator);
     try bundle.items.append(ir.allocator, constraint);
@@ -1015,7 +1026,7 @@ fn singleConstraintSet(ir: *core.Ir, constraint: core.Constraint) !core.Constrai
 }
 
 fn nodeAnchorConstraintSet(
-    ir: *core.Ir,
+    ir: *doc.Document,
     target_node: core.NodeId,
     target_anchor: core.Anchor,
     source_node: core.NodeId,
@@ -1033,7 +1044,7 @@ fn nodeAnchorConstraintSet(
 }
 
 fn anchorEqualityConstraintSet(
-    ir: *core.Ir,
+    ir: *doc.Document,
     target: core.AnchorValue,
     source: core.AnchorValue,
     offset: f32,
@@ -1057,7 +1068,7 @@ const ResolvedTarget = struct {
 };
 
 fn executeStatement(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -1196,7 +1207,7 @@ fn executeStatement(
     return .none;
 }
 
-fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
+fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
     switch (mode) {
         .attached => switch (value) {
             .fragment => |fragment| {
@@ -1234,7 +1245,7 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
 }
 
 fn makeLegacyNode(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     name: []const u8,
@@ -1271,7 +1282,7 @@ fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
 }
 
 fn executeCallStatement(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -1311,7 +1322,7 @@ fn executeCallStatement(
 }
 
 fn invokeUserFunctionValue(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
@@ -1352,7 +1363,7 @@ fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
 }
 
 fn resolveAnchorRef(
-    ir: *core.Ir,
+    ir: *doc.Document,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     current_origin: []const u8,

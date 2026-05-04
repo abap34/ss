@@ -1,11 +1,12 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const parser = @import("parser.zig");
+const parser = @import("syntax.zig");
+const stage1 = @import("stage1.zig");
 const pdf = @import("render/pdf.zig");
 const dump = @import("dump.zig");
-const typecheck = @import("parser/typecheck.zig");
-const module_loader = @import("module_loader.zig");
+const typecheck = @import("sema/typecheck.zig");
+const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 
@@ -109,7 +110,7 @@ pub fn buildFileWithAssetBase(
         return error.DiagnosticsFailed;
     }
 
-    parser.lowerToIr(&ir) catch |err| {
+    stage1.lowerToIr(&ir) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), &ir, err, core.formatConstraint),
             else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir),

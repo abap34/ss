@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const parser_tests_mod = b.createModule(.{
-        .root_source_file = b.path("src/parser.zig"),
+        .root_source_file = b.path("src/syntax.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,

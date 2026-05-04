@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
-const syntax = @import("parser/syntax.zig");
+const syntax = @import("../syntax/parse.zig");
 const stdlib_assets = @import("stdlib_assets");
 
 const max_module_bytes = 256 * 1024;

@@ -1,10 +1,10 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const names = @import("names.zig");
-const registry = @import("registry.zig");
-const module_loader = @import("../module_loader.zig");
-const syntax = @import("syntax.zig");
+const names = @import("../language/names.zig");
+const registry = @import("../language/registry.zig");
+const module_loader = @import("../modules/loader.zig");
+const syntax = @import("../syntax/parse.zig");
 const property_schema = @import("../property_schema.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
@@ -81,7 +81,7 @@ pub fn valueSort(value: core.Value) core.SemanticSort {
 }
 
 pub fn ensureValueSort(
-    ir: *core.Ir,
+    ir: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.SemanticSort,
@@ -91,7 +91,7 @@ pub fn ensureValueSort(
 }
 
 pub fn ensureValueSortWithCode(
-    ir: *core.Ir,
+    ir: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.SemanticSort,
