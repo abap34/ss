@@ -70,6 +70,9 @@ const Parser = struct {
             } else if (try self.consumeKeyword("fn")) {
                 const func = try self.parseFunctionAfterKeyword(item_start);
                 try program.functions.append(self.allocator, func);
+            } else if (try self.consumeKeyword("const")) {
+                const constant = try self.parseConstAfterKeyword(item_start);
+                try program.functions.append(self.allocator, constant);
             } else {
                 const page = try self.parsePage();
                 try program.pages.append(self.allocator, page);
@@ -133,6 +136,36 @@ const Parser = struct {
         const statements = try self.parseBodyStatements();
         if (!typecheck.functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_sort = result_sort, .statements = statements };
+    }
+
+    fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
+        const name = try self.parseIdentifier();
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
+        self.pos += 1;
+        self.skipInlineSpaces();
+        const result_sort = try self.parseSortAnnotation();
+        self.skipTrivia();
+        try self.expectChar('=');
+        const expr_start = self.pos;
+        const expr = try self.parseExpr();
+        try self.consumeStatementTerminator();
+
+        var statements = std.ArrayList(Statement).empty;
+        errdefer statements.deinit(self.allocator);
+        try statements.append(self.allocator, .{
+            .span = .{ .start = expr_start, .end = self.pos },
+            .kind = .{ .return_expr = expr },
+        });
+
+        return .{
+            .kind = .constant,
+            .name = name,
+            .span = .{ .start = start, .end = self.pos },
+            .params = std.ArrayList(ast.ParamDecl).empty,
+            .result_sort = result_sort,
+            .statements = statements,
+        };
     }
 
     fn parseSortAnnotation(self: *Parser) !core.SemanticSort {
@@ -306,15 +339,6 @@ const Parser = struct {
             }
         }
 
-        if (try self.consumeLegacyZeroHead("page_number")) {
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .page_number = {} } };
-        }
-        if (try self.consumeLegacyZeroHead("toc")) {
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .toc = {} } };
-        }
-
         return null;
     }
 
@@ -342,11 +366,7 @@ const Parser = struct {
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
         }
 
-        if (self.atStatementBoundary()) {
-            const call = try self.makeZeroArgCall(name);
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
-        }
+        if (self.atStatementBoundary()) return self.fail(error.ZeroArgCallRequiresParens);
 
         const text = try self.parseLineText();
         const call = try self.makeUnaryStringCall(name, text);
@@ -467,11 +487,6 @@ const Parser = struct {
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, .{ .string = text });
         return .{ .name = name, .args = args };
-    }
-
-    fn makeZeroArgCall(self: *Parser, name: []const u8) !ast.CallExpr {
-        _ = self;
-        return .{ .name = name, .args = std.ArrayList(Expr).empty };
     }
 
     fn parseConstraintDecl(self: *Parser) !ConstraintDecl {
@@ -978,6 +993,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",
         error.AssignmentRequiresLet => "'let name = expr' for variable bindings",
+        error.ZeroArgCallRequiresParens => "'name()' for zero-argument calls",
         error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",
         error.ExpectedEqualityOperator => "'=='",

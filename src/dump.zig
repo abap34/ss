@@ -180,6 +180,7 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.functions.items) |func| {
         var item = try functions.objectItem();
         try item.stringField("name", func.name);
+        try item.enumTagField("kind", func.kind);
         try writeSpan(&item, func.span);
         try item.enumTagField("result_sort", func.result_sort);
         var params = try item.arrayField("params");
@@ -396,6 +397,7 @@ fn writeUserFunction(
 
     var item = try functions.objectItem();
     try item.stringField("name", name);
+    try item.enumTagField("kind", func.kind);
     try item.stringField("signature", signature);
     try item.enumTagField("resultSort", func.result_sort);
     if (ir.moduleById(metadata.module_id)) |module| {

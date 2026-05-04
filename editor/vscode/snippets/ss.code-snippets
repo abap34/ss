@@ -4,7 +4,7 @@
     "body": [
       "page ${1:name}",
       "${2:slide_title \"Title\"}",
-      "${3:page_no}",
+      "${3:page_no()}",
       "end"
     ],
     "description": "Create an ss page block"
@@ -12,11 +12,20 @@
   "function": {
     "prefix": "ss-fn",
     "body": [
-      "fn ${1:name}(${2:arg})",
-      "${3:return ${2:arg}}",
+      "fn ${1:name}(${2:arg}: ${3:string}) -> ${4:object}",
+      "${5:return ${2:arg}}",
       "end"
     ],
     "description": "Create an ss function"
+  },
+  "constant": {
+    "prefix": "ss-const",
+    "body": [
+      "const ${1:name}: ${2:string} = <<",
+      "${3}",
+      ">>"
+    ],
+    "description": "Create a top-level shared constant"
   },
   "text block": {
     "prefix": "ss-text",
@@ -30,7 +39,7 @@
   "code block": {
     "prefix": "ss-code",
     "body": [
-      "code_block <<",
+      "code <<",
       "${1}",
       ">>"
     ],

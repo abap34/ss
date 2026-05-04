@@ -36,6 +36,12 @@ pub const PageDecl = struct {
 };
 
 pub const FunctionDecl = struct {
+    pub const Kind = enum {
+        function,
+        constant,
+    };
+
+    kind: Kind = .function,
     name: []const u8,
     span: Span,
     params: std.ArrayList(ParamDecl),
