@@ -201,8 +201,36 @@ pub fn typecheckProgram(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {
+    try checkPropertyDeclarations(allocator, ir);
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
     try checkPageStatements(allocator, ir, &ir.functions, ir.projectProgram());
+}
+
+fn checkPropertyDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    for (ir.modules.items) |module| {
+        for (module.program.properties.items) |property| {
+            try checkPropertyDeclaration(allocator, ir, property);
+        }
+    }
+}
+
+fn checkPropertyDeclaration(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    property: ast.PropertyDecl,
+) !void {
+    const origin = try statementOrigin(allocator, property.span);
+    defer allocator.free(origin);
+    if (property_schema.parseValueType(property.value_type) == null) {
+        try addUserReport(ir, origin, "InvalidPropertySchema: unknown property value type: {s}", .{property.value_type});
+        return error.InvalidSemanticSort;
+    }
+    for (property.shapes.items) |shape_name| {
+        if (std.mem.eql(u8, shape_name, "any")) continue;
+        if (property_schema.parseShape(shape_name) != null) continue;
+        try addUserReport(ir, origin, "InvalidPropertySchema: unknown property shape: {s}", .{shape_name});
+        return error.InvalidSemanticSort;
+    }
 }
 
 pub fn collectVariableTypesFromProgram(
