@@ -1244,6 +1244,10 @@ fn primitiveResultTypeInfo(
         };
     }
 
+    if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
+        return try inferSelectionAlgebraInfo(allocator, ir, functions, env, call, origin);
+    }
+
     if (descriptor.op == .select) {
         return try inferSelectCallInfo(allocator, ir, functions, env, call, origin);
     }
@@ -1292,6 +1296,40 @@ fn primitiveResultTypeInfo(
     };
     var info = infoFromSort(result_sort);
     info.object_shape = shape;
+    return info;
+}
+
+fn inferSelectionAlgebraInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+) !TypeInfo {
+    if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+    const left = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    const right = try inferExprInfo(allocator, ir, functions, env, call.args.items[1], origin);
+    try ensureType(ir, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
+    try ensureType(ir, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
+
+    if (left.ty.param != .any and right.ty.param != .any and left.ty.param != right.ty.param) {
+        const left_label = try typeLabelAlloc(allocator, left.ty);
+        defer allocator.free(left_label);
+        const right_label = try typeLabelAlloc(allocator, right.ty);
+        defer allocator.free(right_label);
+        try addUserReport(
+            ir,
+            origin,
+            "InvalidSelectionAlgebra: cannot combine {s} and {s}",
+            .{ left_label, right_label },
+        );
+        return error.InvalidSemanticSort;
+    }
+
+    const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
+    var info = infoFromType(Type.selection(item_tag));
+    info.object_shape = mergeObjectShape(left.object_shape, right.object_shape);
     return info;
 }
 

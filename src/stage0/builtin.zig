@@ -82,6 +82,41 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 else => return error.ExpectedSelection,
             };
         },
+        .selection_union, .selection_intersection, .selection_difference => blk: {
+            var left_value = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer left_value.deinit(ctx.ir.allocator);
+            var right_value = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[1]));
+            defer right_value.deinit(ctx.ir.allocator);
+            const left = switch (left_value) {
+                .selection => |selection| selection,
+                else => return error.ExpectedSelection,
+            };
+            const right = switch (right_value) {
+                .selection => |selection| selection,
+                else => return error.ExpectedSelection,
+            };
+            if (left.item_sort != right.item_sort) return error.InvalidSelectionSort;
+            var result = core.Selection.init(left.item_sort, descriptor.name);
+            errdefer result.deinit(ctx.ir.allocator);
+            switch (descriptor.op) {
+                .selection_union => {
+                    for (left.ids.items) |id| try result.appendUnique(ctx.ir.allocator, id);
+                    for (right.ids.items) |id| try result.appendUnique(ctx.ir.allocator, id);
+                },
+                .selection_intersection => {
+                    for (left.ids.items) |id| {
+                        if (right.contains(id)) try result.appendUnique(ctx.ir.allocator, id);
+                    }
+                },
+                .selection_difference => {
+                    for (left.ids.items) |id| {
+                        if (!right.contains(id)) try result.appendUnique(ctx.ir.allocator, id);
+                    }
+                },
+                else => unreachable,
+            }
+            break :blk .{ .selection = result };
+        },
         .object => blk: {
             const content = try ctx.evalStringArg(call, 0);
             const role_name = try ctx.evalStringArg(call, 1);

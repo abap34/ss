@@ -39,3 +39,15 @@ fn with_style_all(items: selection<object>, style_value: style) -> selection<obj
   set_style(items, style_value)
   return items
 end
+
+fn select_union(left: selection<object>, right: selection<object>) -> selection<object>
+  return selection_union(left, right)
+end
+
+fn select_intersection(left: selection<object>, right: selection<object>) -> selection<object>
+  return selection_intersection(left, right)
+end
+
+fn select_difference(left: selection<object>, right: selection<object>) -> selection<object>
+  return selection_difference(left, right)
+end

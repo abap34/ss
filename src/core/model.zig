@@ -183,6 +183,18 @@ pub const Selection = struct {
         if (self.ids.items.len == 0) return null;
         return self.ids.items[0];
     }
+
+    pub fn contains(self: Selection, id: NodeId) bool {
+        for (self.ids.items) |existing| {
+            if (existing == id) return true;
+        }
+        return false;
+    }
+
+    pub fn appendUnique(self: *Selection, allocator: Allocator, id: NodeId) !void {
+        if (self.contains(id)) return;
+        try self.ids.append(allocator, id);
+    }
 };
 
 pub const ConstraintSet = struct {
