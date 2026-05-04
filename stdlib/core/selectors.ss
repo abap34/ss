@@ -10,6 +10,14 @@ fn current_objects(role_name: string) -> selection<object>
   return objects(pagectx(), role_name)
 end
 
+fn children(base: object) -> selection<object>
+  return select(base, "children")
+end
+
+fn descendants(base: object) -> selection<object>
+  return select(base, "descendants")
+end
+
 fn document_pages() -> selection<page>
   return select(docctx(), "document_pages")
 end

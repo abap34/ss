@@ -698,6 +698,31 @@ pub const Ir = struct {
         return selection;
     }
 
+    fn selectChildren(self: *Ir, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+        var selection = Selection.init(.object, provenance);
+        const children = self.contains.get(parent_id) orelse return selection;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+        }
+        return selection;
+    }
+
+    fn appendDescendants(self: *Ir, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
+        const children = self.contains.get(parent_id) orelse return;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+            try self.appendDescendants(allocator, child_id, selection);
+        }
+    }
+
+    fn selectDescendants(self: *Ir, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+        var selection = Selection.init(.object, provenance);
+        try self.appendDescendants(allocator, parent_id, &selection);
+        return selection;
+    }
+
     pub fn select(self: *Ir, allocator: Allocator, base: Value, query: Query) !Value {
         try self.ensureSort(base, query.input, query.name);
 
@@ -710,6 +735,12 @@ pub const Ir = struct {
             },
             .parent_page => .{
                 .page = self.parentPageOf(base.object) orelse return error.MissingParentPage,
+            },
+            .children => .{
+                .selection = try self.selectChildren(allocator, base.object, query.name),
+            },
+            .descendants => .{
+                .selection = try self.selectDescendants(allocator, base.object, query.name),
             },
             .page_objects_by_role => |role| .{
                 .selection = try self.selectPageObjectsByRole(allocator, base.page, role, query.name),

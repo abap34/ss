@@ -601,6 +601,12 @@ fn evalSelectCall(
         .parent_page => {
             return try ir.select(ir.allocator, base, core.Query.parentPage());
         },
+        .children => {
+            return try ir.select(ir.allocator, base, core.Query.children());
+        },
+        .descendants => {
+            return try ir.select(ir.allocator, base, core.Query.descendants());
+        },
         .document_pages => {
             return try ir.select(ir.allocator, base, core.Query.documentPages());
         },

@@ -35,6 +35,8 @@ pub const QueryOp = enum {
     self_object,
     previous_page,
     parent_page,
+    children,
+    descendants,
     document_pages,
     page_objects_by_role,
     document_objects_by_role,
@@ -129,8 +131,10 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
 
 const query_descriptors = [_]QueryDescriptor{
     .{ .op = .self_object, .name = "self_object", .arity = 2, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .selection, .summary = "Return the object itself as a one-element Selection" },
-    .{ .op = .previous_page, .name = "previous_page", .arity = 2, .input_name = "base", .input_sort = .page, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .selection, .summary = "Select the previous page" },
-    .{ .op = .parent_page, .name = "parent_page", .arity = 2, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .selection, .summary = "Select the parent page" },
+    .{ .op = .previous_page, .name = "previous_page", .arity = 2, .input_name = "base", .input_sort = .page, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .page, .summary = "Select the previous page" },
+    .{ .op = .parent_page, .name = "parent_page", .arity = 2, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .page, .summary = "Select the parent page" },
+    .{ .op = .children, .name = "children", .arity = 2, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .selection, .summary = "Select direct object children" },
+    .{ .op = .descendants, .name = "descendants", .arity = 2, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .selection, .summary = "Select recursive object descendants" },
     .{ .op = .document_pages, .name = "document_pages", .arity = 2, .input_name = "base", .input_sort = .document, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .selection, .summary = "Select all pages in the document" },
     .{ .op = .page_objects_by_role, .name = "page_objects_by_role", .arity = 3, .input_name = "base", .input_sort = .page, .extra_arg_names = &.{"role_name"}, .extra_arg_sorts = &.{.string}, .output_sort = .selection, .summary = "Select objects by role within a page" },
     .{ .op = .document_objects_by_role, .name = "document_objects_by_role", .arity = 3, .input_name = "base", .input_sort = .document, .extra_arg_names = &.{"role_name"}, .extra_arg_sorts = &.{.string}, .output_sort = .selection, .summary = "Select objects by role across the whole document" },
@@ -213,7 +217,7 @@ pub fn queryInputType(descriptor: QueryDescriptor) types.Type {
 
 pub fn queryOutputType(descriptor: QueryDescriptor) types.Type {
     return switch (descriptor.op) {
-        .self_object, .page_objects_by_role, .document_objects_by_role => types.Type.selection(.object),
+        .self_object, .children, .descendants, .page_objects_by_role, .document_objects_by_role => types.Type.selection(.object),
         .document_pages => types.Type.selection(.page),
         .previous_page, .parent_page => types.Type.page,
     };
