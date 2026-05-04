@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const stage0 = @import("../stage0/eval.zig");
 const doc = @import("../stage0/doc.zig");
-const typecheck = @import("../sema/typecheck.zig");
+const typecheck = @import("../analysis/typecheck.zig");
 
 const NormalizeContext = struct {
     allocator: std.mem.Allocator,
