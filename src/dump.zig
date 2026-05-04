@@ -3,7 +3,7 @@ const core = @import("core");
 const ast = @import("ast");
 const registry = @import("language/registry.zig");
 const stage0 = @import("stage0.zig");
-const typecheck = @import("sema/typecheck.zig");
+const typecheck = @import("analysis/typecheck.zig");
 const property_schema = @import("property_schema.zig");
 const json = @import("utils").json;
 

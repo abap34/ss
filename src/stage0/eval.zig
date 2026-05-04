@@ -8,7 +8,7 @@ const fs_utils = utils.fs;
 const ast = @import("ast");
 const names = @import("../language/names.zig");
 const registry = @import("../language/registry.zig");
-const typecheck = @import("../sema/typecheck.zig");
+const typecheck = @import("../analysis/typecheck.zig");
 
 const Program = ast.Program;
 const FunctionDecl = ast.FunctionDecl;
