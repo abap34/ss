@@ -1,7 +1,9 @@
 const std = @import("std");
 const core = @import("model");
+pub const types = @import("language_type");
 
 const Allocator = std.mem.Allocator;
+pub const Type = types.Type;
 
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
@@ -45,6 +47,7 @@ pub const FunctionDecl = struct {
     name: []const u8,
     span: Span,
     params: std.ArrayList(ParamDecl),
+    result_type: Type,
     result_sort: core.SemanticSort,
     statements: std.ArrayList(Statement),
 
@@ -58,6 +61,7 @@ pub const FunctionDecl = struct {
 
 pub const ParamDecl = struct {
     name: []const u8,
+    ty: Type,
     sort: core.SemanticSort,
     default_value: ?*Expr = null,
 

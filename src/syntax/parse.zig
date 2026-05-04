@@ -99,7 +99,8 @@ const Parser = struct {
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
             self.skipInlineSpaces();
-            const param_sort = try self.parseSortAnnotation();
+            const param_type = try self.parseTypeAnnotation();
+            const param_sort = try self.runtimeSortForType(param_type);
             self.skipInlineSpaces();
             var default_value: ?*Expr = null;
             if (!self.eof() and self.source[self.pos] == '=') {
@@ -114,6 +115,7 @@ const Parser = struct {
             }
             try params.append(self.allocator, .{
                 .name = param_name,
+                .ty = param_type,
                 .sort = param_sort,
                 .default_value = default_value,
             });
@@ -130,11 +132,12 @@ const Parser = struct {
         if (!self.startsWith("->")) return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 2;
         self.skipInlineSpaces();
-        const result_sort = try self.parseSortAnnotation();
+        const result_type = try self.parseTypeAnnotation();
+        const result_sort = try self.runtimeSortForType(result_type);
 
         const statements = try self.parseBodyStatements();
         if (!functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
-        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_sort = result_sort, .statements = statements };
+        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_sort = result_sort, .statements = statements };
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
@@ -143,7 +146,8 @@ const Parser = struct {
         if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 1;
         self.skipInlineSpaces();
-        const result_sort = try self.parseSortAnnotation();
+        const result_type = try self.parseTypeAnnotation();
+        const result_sort = try self.runtimeSortForType(result_type);
         self.skipTrivia();
         try self.expectChar('=');
         const expr_start = self.pos;
@@ -162,25 +166,51 @@ const Parser = struct {
             .name = name,
             .span = .{ .start = start, .end = self.pos },
             .params = std.ArrayList(ast.ParamDecl).empty,
+            .result_type = result_type,
             .result_sort = result_sort,
             .statements = statements,
         };
     }
 
-    fn parseSortAnnotation(self: *Parser) !core.SemanticSort {
+    fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
         const name = try self.parseIdentifier();
-        if (std.mem.eql(u8, name, "document")) return .document;
-        if (std.mem.eql(u8, name, "page")) return .page;
-        if (std.mem.eql(u8, name, "object")) return .object;
-        if (std.mem.eql(u8, name, "selection")) return .selection;
-        if (std.mem.eql(u8, name, "anchor")) return .anchor;
-        if (std.mem.eql(u8, name, "function")) return .function;
-        if (std.mem.eql(u8, name, "style")) return .style;
-        if (std.mem.eql(u8, name, "string")) return .string;
-        if (std.mem.eql(u8, name, "number")) return .number;
-        if (std.mem.eql(u8, name, "constraints")) return .constraints;
-        if (std.mem.eql(u8, name, "fragment")) return .fragment;
+        if (std.mem.eql(u8, name, "document")) return ast.Type.document;
+        if (std.mem.eql(u8, name, "page")) return ast.Type.page;
+        if (std.mem.eql(u8, name, "object")) return ast.Type.object;
+        if (std.mem.eql(u8, name, "anchor")) return ast.Type.anchor;
+        if (std.mem.eql(u8, name, "function")) return ast.Type.function;
+        if (std.mem.eql(u8, name, "style")) return ast.Type.style;
+        if (std.mem.eql(u8, name, "string")) return ast.Type.string;
+        if (std.mem.eql(u8, name, "number")) return ast.Type.number;
+        if (std.mem.eql(u8, name, "constraints")) return ast.Type.constraints;
+        if (std.mem.eql(u8, name, "selection")) return ast.Type.selection(try self.parseOptionalTypeParam());
+        if (std.mem.eql(u8, name, "fragment")) return ast.Type.fragment(try self.parseOptionalTypeParam());
+        if (std.mem.eql(u8, name, "code")) return ast.Type.code(try self.parseRequiredTypeParam());
+        if (std.mem.eql(u8, name, "list")) return ast.Type.list(try self.parseRequiredTypeParam());
         return self.fail(error.InvalidSemanticSort);
+    }
+
+    fn parseOptionalTypeParam(self: *Parser) anyerror!ast.Type.Tag {
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != '<') return .any;
+        return try self.parseTypeParam();
+    }
+
+    fn parseRequiredTypeParam(self: *Parser) anyerror!ast.Type.Tag {
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != '<') return self.fail(error.ExpectedTypeAnnotation);
+        return try self.parseTypeParam();
+    }
+
+    fn parseTypeParam(self: *Parser) anyerror!ast.Type.Tag {
+        try self.expectChar('<');
+        const inner = try self.parseTypeAnnotation();
+        try self.expectChar('>');
+        return inner.tag;
+    }
+
+    fn runtimeSortForType(self: *Parser, ty: ast.Type) anyerror!core.SemanticSort {
+        return ty.toRuntimeSort() orelse self.fail(error.InvalidSemanticSort);
     }
 
     fn parsePage(self: *Parser) !PageDecl {
