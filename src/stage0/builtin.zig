@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const registry = @import("registry.zig");
+const registry = @import("../language/registry.zig");
 
 pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!core.Value {
     try ctx.checkArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);

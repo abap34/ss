@@ -1,8 +1,9 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const registry = @import("parser/registry.zig");
-const typecheck = @import("parser/typecheck.zig");
+const registry = @import("language/registry.zig");
+const stage0 = @import("stage0.zig");
+const typecheck = @import("sema/typecheck.zig");
 const property_schema = @import("property_schema.zig");
 const json = @import("utils").json;
 
@@ -19,6 +20,20 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     var modules = try root.arrayField("modules");
     for (ir.modules.items) |module| try writeModule(allocator, &modules, module);
     try modules.end();
+
+    var document_code = try stage0.elaborateProgram(
+        allocator,
+        ir.asset_base_dir,
+        ir.projectProgram(),
+        ir.projectSource(),
+        ir.projectPath(),
+        &ir.functions,
+    );
+    defer document_code.deinit();
+    try root.intField("stage0_document_handle", document_code.document_id);
+    var doc_terms = try root.arrayField("doc_terms");
+    for (document_code.terms.items) |term| try writeDocTerm(&doc_terms, term);
+    try doc_terms.end();
 
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
@@ -308,6 +323,81 @@ fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorR
     try item.enumTagField("anchor", anchor_ref.anchor);
     try item.optionalStringField("node_name", anchor_ref.node_name);
     try item.end();
+}
+
+fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
+    var item = try terms.objectItem();
+    switch (term) {
+        .add_page => |page| {
+            try item.stringField("kind", "add_page");
+            try item.intField("handle", page.handle);
+            try item.stringField("name", page.name);
+        },
+        .make_node => |node| {
+            try item.stringField("kind", "make_object");
+            try item.intField("handle", node.handle);
+            try item.intField("page", node.page);
+            try item.boolField("attached", node.attached);
+            try item.enumTagField("node_kind", node.kind);
+            try item.optionalIntField("derived_from", node.derived_from);
+            try item.stringField("name", node.name);
+            try item.optionalStringField("role", node.role);
+            try item.enumTagField("object_kind", node.object_kind);
+            try item.enumTagField("payload_kind", node.payload_kind);
+            try item.optionalStringField("content", node.content);
+            try item.optionalStringField("origin", node.origin);
+        },
+        .add_containment => |edge| {
+            try item.stringField("kind", "add_containment");
+            try item.intField("parent", edge.parent);
+            try item.intField("child", edge.child);
+        },
+        .set_property => |property| {
+            try item.stringField("kind", "set_prop");
+            try item.intField("node", property.node);
+            try item.stringField("key", property.key);
+            try item.stringField("value", property.value);
+        },
+        .add_constraint => |constraint| {
+            try item.stringField("kind", "add_constraints");
+            try writeDocConstraint(&item, constraint);
+        },
+        .materialize_fragment => |fragment| {
+            try item.stringField("kind", "materialize_fragment");
+            try item.intField("page", fragment.page_id);
+            try item.boolField("materialized", fragment.materialized);
+            if (fragment.root) |root| {
+                try item.stringField("root_kind", @tagName(root));
+                try item.optionalIntField("root_handle", root.firstId());
+            } else {
+                try item.nullField("root_kind");
+                try item.nullField("root_handle");
+            }
+            var nodes = try item.arrayField("nodes");
+            for (fragment.node_ids.items) |node_id| try nodes.intItem(node_id);
+            try nodes.end();
+        },
+    }
+    try item.end();
+}
+
+fn writeDocConstraint(item: *json.Object, constraint: core.Constraint) !void {
+    try item.intField("target_handle", constraint.target_node);
+    try item.enumTagField("target_anchor", constraint.target_anchor);
+    switch (constraint.source) {
+        .page => |anchor| {
+            try item.stringField("source_kind", "page");
+            try item.enumTagField("source_anchor", anchor);
+            try item.nullField("source_handle");
+        },
+        .node => |source| {
+            try item.stringField("source_kind", "object");
+            try item.enumTagField("source_anchor", source.anchor);
+            try item.intField("source_handle", source.node_id);
+        },
+    }
+    try item.floatField("offset", constraint.offset, "{d:.1}");
+    try item.optionalStringField("origin", constraint.origin);
 }
 
 fn writeExpr(allocator: std.mem.Allocator, object: *json.Object, key: []const u8, expr: ast.Expr) !void {

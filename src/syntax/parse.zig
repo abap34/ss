@@ -1,8 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const names = @import("names.zig");
-const typecheck = @import("typecheck.zig");
+const names = @import("../language/names.zig");
 const source_utils = @import("utils").source;
 
 const Allocator = std.mem.Allocator;
@@ -134,7 +133,7 @@ const Parser = struct {
         const result_sort = try self.parseSortAnnotation();
 
         const statements = try self.parseBodyStatements();
-        if (!typecheck.functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+        if (!functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_sort = result_sort, .statements = statements };
     }
 
@@ -998,6 +997,20 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.ExpectedReturn => "return statement",
         error.ExpectedEqualityOperator => "'=='",
         else => null,
+    };
+}
+
+fn functionBodyReturns(statements: []const Statement) bool {
+    for (statements) |stmt| {
+        if (statementReturns(stmt)) return true;
+    }
+    return false;
+}
+
+fn statementReturns(stmt: Statement) bool {
+    return switch (stmt.kind) {
+        .return_expr => true,
+        else => false,
     };
 }
 

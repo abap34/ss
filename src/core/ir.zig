@@ -248,7 +248,14 @@ pub const Ir = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
         }
+        for (gop.value_ptr.items) |existing| {
+            if (existing == child) return;
+        }
         try gop.value_ptr.append(self.allocator, child);
+    }
+
+    pub fn addContainmentFromStage(self: *Ir, parent: NodeId, child: NodeId) !void {
+        try self.addContainment(parent, child);
     }
 
     pub fn addPage(self: *Ir, name: []const u8) !NodeId {
@@ -407,6 +414,22 @@ pub const Ir = struct {
         });
         if (attached) try self.addContainment(page_id, obj_id);
         return obj_id;
+    }
+
+    pub fn makeNodeFromStage(
+        self: *Ir,
+        page_id: NodeId,
+        attached: bool,
+        kind: NodeKind,
+        derived_from: ?NodeId,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return self.makeNodeWithOrigin(page_id, attached, kind, derived_from, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn createFragment(
