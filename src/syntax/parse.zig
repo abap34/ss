@@ -6,6 +6,7 @@ const source_utils = @import("utils").source;
 
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
+const PropertyDecl = ast.PropertyDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
 const Statement = ast.Statement;
@@ -72,6 +73,10 @@ const Parser = struct {
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
                 try program.functions.append(self.allocator, constant);
+            } else if (try self.consumeKeyword("property")) {
+                const property = try self.parsePropertyAfterKeyword(item_start);
+                try self.consumeStatementTerminator();
+                try program.properties.append(self.allocator, property);
             } else {
                 const page = try self.parsePage();
                 try program.pages.append(self.allocator, page);
@@ -169,6 +174,35 @@ const Parser = struct {
             .result_type = result_type,
             .result_sort = result_sort,
             .statements = statements,
+        };
+    }
+
+    fn parsePropertyAfterKeyword(self: *Parser, start: usize) !PropertyDecl {
+        const key = try self.parseIdentifier();
+        self.skipInlineSpaces();
+        try self.expectChar(':');
+        const value_type = try self.parseIdentifier();
+        self.skipTrivia();
+        try self.expectKeyword("for");
+
+        var shapes = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (shapes.items) |shape| self.allocator.free(shape);
+            shapes.deinit(self.allocator);
+        }
+        while (true) {
+            try shapes.append(self.allocator, try self.parseIdentifier());
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != ',') break;
+            self.pos += 1;
+            self.skipInlineSpaces();
+        }
+
+        return .{
+            .key = key,
+            .value_type = value_type,
+            .shapes = shapes,
+            .span = .{ .start = start, .end = self.pos },
         };
     }
 
