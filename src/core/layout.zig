@@ -111,6 +111,10 @@ fn assetScale(node: *const Node) f32 {
     return parseNodeFloatProperty(node, "asset_scale") orelse 1.0;
 }
 
+fn mathScale(node: *const Node) f32 {
+    return parseNodeFloatProperty(node, "math_scale") orelse 1.0;
+}
+
 pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
     const style = styleForNode(ir, node);
     const content = node.content orelse "";
@@ -153,7 +157,7 @@ pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
             const content = node.content orelse "";
             const lines = @max(lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
-            break :blk @min(PageLayout.max_math_height, @max(@as(f32, 30.0), base));
+            break :blk @min(PageLayout.max_math_height * mathScale(node), @max(@as(f32, 30.0), base) * mathScale(node));
         },
         else => blk: {
             const content = node.content orelse "";

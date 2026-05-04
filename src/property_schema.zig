@@ -65,6 +65,7 @@ const property_schemas = [_]PropertySchema{
     .{ .key = "layout_spacing_after", .value_type = .scalar_like, .allowed_shapes = &text_shapes },
     .{ .key = "layout_x", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
     .{ .key = "layout_right_inset", .value_type = .scalar_like, .allowed_shapes = &any_shapes },
+    .{ .key = "math_scale", .value_type = .scalar_like, .allowed_shapes = &.{.math} },
     .{ .key = "asset_scale", .value_type = .scalar_like, .allowed_shapes = &asset_shapes },
     .{ .key = "language", .value_type = .string, .allowed_shapes = &text_shapes },
     .{ .key = "style", .value_type = .string, .allowed_shapes = &any_shapes },

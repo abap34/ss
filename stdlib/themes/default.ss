@@ -38,80 +38,34 @@ fn text(text_value: string) -> object
   return body_object(text_value)
 end
 
-fn lead(text_value: string) -> object
-  return text(text_value)
-end
-
-fn math_text_block(text_value: string) -> object
-  return framed_object(text_value, "math", "math_text", "102", "102", 8, 8, "1,1,1", "0.9,0.92,0.96", "0.8", "10")
-end
-
-fn math_block(text_value: string) -> object
-  return math_text_block(text_value)
-end
-
-fn mathtex_block(text_value: string) -> object
-  return framed_object(text_value, "math", "math_tex", "102", "102", 8, 8, "1,1,1", "0.9,0.92,0.96", "0.8", "10")
-end
-
-fn tex(text_value: string) -> object
-  return mathtex_block(text_value)
-end
-
-fn figure_text_block(text_value: string) -> object
-  return flow_inset(figure_text_object(text_value), "102", "102")
-end
-
-fn figure(text_value: string) -> object
-  return figure_text_block(text_value)
-end
-
-fn image_figure(path_value: string, scale: number = 1) -> object
-  return with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
-end
-
-fn image(path_value: string, scale: number = 1) -> object
-  let obj = image_figure(path_value, scale)
-  require_asset_exists(obj)
+fn tex(text_value: string, scale: number = 1) -> object
+  let obj = framed_object(text_value, "math", "math_tex", "102", "102", 8, 8, "1,1,1", "0.9,0.92,0.96", "0.8", "10")
+  set_prop(obj, "math_scale", str(scale))
   return obj
 end
 
-fn pdf_figure(path_value: string, scale: number = 1) -> object
-  let obj = with_asset_scale(flow_inset(pdf_object(path_value), "102", "102"), scale)
+fn figure(text_value: string) -> object
+  return flow_inset(figure_text_object(text_value), "102", "102")
+end
+
+fn image(path_value: string, scale: number = 1) -> object
+  let obj = with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
   require_asset_exists(obj)
   return obj
 end
 
 fn pdf(path_value: string, scale: number = 1) -> object
-  return pdf_figure(path_value, scale)
+  let obj = with_asset_scale(flow_inset(pdf_object(path_value), "102", "102"), scale)
+  require_asset_exists(obj)
+  return obj
 end
 
-fn code(text_value: string) -> object
-  return framed_code_with_language(text_value, "python", "102", "102", 12, 10, "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "10")
-end
-
-fn python_code(text_value: string) -> object
-  return code(text_value)
-end
-
-fn code_block(text_value: string) -> object
-  return framed_object(text_value, "code", "code", "102", "102", 12, 10, "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "10")
-end
-
-fn plain_code(text_value: string) -> object
-  return code_block(text_value)
+fn code(text_value: string, language_name: string = "python") -> object
+  return framed_code_with_language(text_value, language_name, "102", "102", 12, 10, "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "10")
 end
 
 fn note(text_value: string) -> object
   return flow_inset(note_object(text_value), "120", "120")
-end
-
-fn callout(text_value: string) -> object
-  return note(text_value)
-end
-
-fn quote(text_value: string) -> object
-  return note(text_value)
 end
 
 fn toc_page(title_text: string) -> object
