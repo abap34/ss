@@ -21,7 +21,7 @@ fn mathtex(text_value: string) -> object
 end
 
 fn panel(style_value: style) -> object
-  let panel = text_object("", "panel")
+  let panel = panel_object()
   set_style(panel, style_value)
   return panel
 end

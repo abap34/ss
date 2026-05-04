@@ -57,6 +57,7 @@ end
 fn flow_inset(node: object, left: string, right: string) -> object
   set_prop(node, "layout_x", left)
   set_prop(node, "layout_right_inset", right)
+  set_prop(node, "wrap", "on")
   return node
 end
 
