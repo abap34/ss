@@ -262,13 +262,8 @@ pub fn valueTypeLabel(kind: PropertyValueType) []const u8 {
 }
 
 pub fn shapeForNode(role: ?core.Role, object_kind: ?core.ObjectKind, payload_kind: ?core.PayloadKind) ObjectShape {
-    if (role) |name| {
-        if (std.mem.eql(u8, name, "panel")) return .panel;
-        if (std.mem.eql(u8, name, "rule")) return .rule;
-        if (std.mem.eql(u8, name, "group")) return .group;
-        if (std.mem.eql(u8, name, "page_number")) return .page_number;
-        if (std.mem.eql(u8, name, "toc")) return .toc;
-    }
+    const role_shape = shapeForRole(role);
+    if (role_shape != .generic) return role_shape;
     _ = object_kind;
     return switch (payload_kind orelse .text) {
         .text => .text,
@@ -278,4 +273,23 @@ pub fn shapeForNode(role: ?core.Role, object_kind: ?core.ObjectKind, payload_kin
         .image_ref => .asset_image,
         .pdf_ref => .asset_pdf,
     };
+}
+
+pub fn shapeForRole(role: ?core.Role) ObjectShape {
+    const name = role orelse return .generic;
+    if (std.mem.eql(u8, name, "panel")) return .panel;
+    if (std.mem.eql(u8, name, "rule")) return .rule;
+    if (std.mem.eql(u8, name, "group")) return .group;
+    if (std.mem.eql(u8, name, "page_number")) return .page_number;
+    if (std.mem.eql(u8, name, "toc")) return .toc;
+    if (std.mem.eql(u8, name, "code")) return .code;
+    if (std.mem.eql(u8, name, "math")) return .math;
+    if (std.mem.eql(u8, name, "figure")) return .figure;
+    if (std.mem.eql(u8, name, "title")) return .text;
+    if (std.mem.eql(u8, name, "subtitle")) return .text;
+    if (std.mem.eql(u8, name, "body")) return .text;
+    if (std.mem.eql(u8, name, "note")) return .text;
+    if (std.mem.eql(u8, name, "byline")) return .text;
+    if (std.mem.eql(u8, name, "label")) return .text;
+    return .generic;
 }
