@@ -1178,7 +1178,7 @@ fn flowChildIndex(
     const index = indexOfNode(child_ids, child_id) orelse return null;
     if (componentFind(parent, index) != component_root) return null;
     const node = ir.getNode(child_id) orelse return null;
-    if (isGroupNode(node)) return null;
+    if (isGroupNode(node) and scope != .group) return null;
     if (scope == .page and directParentGroupIndex(ir, child_ids, parent, component_root, child_id) != null) return null;
     const state = states[index];
     if (state.start != null or state.end != null or state.center != null) return null;
