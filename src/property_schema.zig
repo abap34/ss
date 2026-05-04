@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const ast = @import("ast");
 
 pub const ObjectShape = enum {
     unknown,
@@ -33,6 +34,11 @@ pub const PropertySchema = struct {
     key: []const u8,
     value_type: PropertyValueType,
     allowed_shapes: []const ObjectShape,
+};
+
+pub const SchemaRef = union(enum) {
+    builtin: PropertySchema,
+    declared: *const ast.PropertyDecl,
 };
 
 const any_shapes = [_]ObjectShape{};
@@ -106,6 +112,77 @@ pub fn lookup(key: []const u8) ?PropertySchema {
     return null;
 }
 
+pub fn lookupInIr(ir: *const core.Ir, key: []const u8) ?SchemaRef {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        if (lookupInProgram(module.program, key)) |property| return .{ .declared = property };
+    }
+    if (lookup(key)) |schema| return .{ .builtin = schema };
+    return null;
+}
+
+pub fn lookupRef(key: []const u8) ?SchemaRef {
+    if (lookup(key)) |schema| return .{ .builtin = schema };
+    return null;
+}
+
+fn lookupInProgram(program: ast.Program, key: []const u8) ?*const ast.PropertyDecl {
+    var index = program.properties.items.len;
+    while (index > 0) {
+        index -= 1;
+        const property = &program.properties.items[index];
+        if (std.mem.eql(u8, property.key, key)) return property;
+    }
+    return null;
+}
+
+pub fn schemaKey(schema: SchemaRef) []const u8 {
+    return switch (schema) {
+        .builtin => |builtin| builtin.key,
+        .declared => |declared| declared.key,
+    };
+}
+
+pub fn schemaValueType(schema: SchemaRef) ?PropertyValueType {
+    return switch (schema) {
+        .builtin => |builtin| builtin.value_type,
+        .declared => |declared| parseValueType(declared.value_type),
+    };
+}
+
+pub fn isSchemaShapeAllowed(schema: SchemaRef, shape: ObjectShape) bool {
+    return switch (schema) {
+        .builtin => |builtin| isShapeAllowed(builtin, shape),
+        .declared => |declared| isDeclaredShapeAllowed(declared, shape),
+    };
+}
+
+pub fn schemaValueMatches(schema: SchemaRef, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
+    const value_type = schemaValueType(schema) orelse return false;
+    return valueTypeMatches(value_type, string_literal, sort);
+}
+
+pub fn schemaValueTypeLabel(schema: SchemaRef) []const u8 {
+    const value_type = schemaValueType(schema) orelse return "known property value type";
+    return valueTypeLabel(value_type);
+}
+
+pub fn parseValueType(name: []const u8) ?PropertyValueType {
+    inline for (std.meta.fields(PropertyValueType)) |field| {
+        if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
+    }
+    return null;
+}
+
+pub fn parseShape(name: []const u8) ?ObjectShape {
+    inline for (std.meta.fields(ObjectShape)) |field| {
+        if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
+    }
+    return null;
+}
+
 pub fn isShapeAllowed(schema: PropertySchema, shape: ObjectShape) bool {
     if (shape == .unknown or shape == .generic) return true;
     for (schema.allowed_shapes) |allowed| {
@@ -116,12 +193,31 @@ pub fn isShapeAllowed(schema: PropertySchema, shape: ObjectShape) bool {
     return false;
 }
 
+fn isDeclaredShapeAllowed(declared: *const ast.PropertyDecl, shape: ObjectShape) bool {
+    if (shape == .unknown or shape == .generic) return true;
+    var has_any = false;
+    for (declared.shapes.items) |shape_name| {
+        if (std.mem.eql(u8, shape_name, "any")) {
+            has_any = true;
+            continue;
+        }
+        const allowed = parseShape(shape_name) orelse continue;
+        if (allowed == shape) return true;
+    }
+    if (shape == .document or shape == .page) return false;
+    return has_any;
+}
+
 pub fn shapeLabel(shape: ObjectShape) []const u8 {
     return @tagName(shape);
 }
 
 pub fn valueMatches(schema: PropertySchema, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
-    return switch (schema.value_type) {
+    return valueTypeMatches(schema.value_type, string_literal, sort);
+}
+
+fn valueTypeMatches(value_type: PropertyValueType, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
+    return switch (value_type) {
         .string => sort == .string,
         .scalar_like => sort == .string or sort == .number,
         .color_string => sort == .string,
