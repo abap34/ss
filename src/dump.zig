@@ -34,6 +34,8 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try writeFunctionsField(allocator, &root, ir);
     try writeVariablesField(allocator, &root, ir);
     try writePropertySchemasField(&root);
+    try writeQueryContractsField(allocator, &root);
+    try writeTransformContractsField(allocator, &root);
     try writeDefinitionsField(&root, ir);
     try writeHintsField(&root, ir.hints.items);
 
@@ -105,6 +107,76 @@ fn writePropertySchemasField(root: *json.Object) !void {
         try item.end();
     }
     try schemas.end();
+}
+
+fn writeQueryContractsField(allocator: std.mem.Allocator, root: *json.Object) !void {
+    var queries = try root.arrayField("query_contracts");
+    for (registry.queryDescriptors()) |descriptor| {
+        var item = try queries.objectItem();
+        try item.stringField("name", descriptor.name);
+        try item.stringField("summary", descriptor.summary);
+        try item.stringField("inputName", descriptor.input_name);
+        const input_label = try registry.queryInputType(descriptor).formatAlloc(allocator);
+        defer allocator.free(input_label);
+        try item.stringField("inputType", input_label);
+        const output_label = try registry.queryOutputType(descriptor).formatAlloc(allocator);
+        defer allocator.free(output_label);
+        try item.stringField("outputType", output_label);
+        var args = try item.arrayField("extraArgs");
+        for (descriptor.extra_arg_names, 0..) |name, index| {
+            var arg = try args.objectItem();
+            try arg.stringField("name", name);
+            if (registry.argSortType(descriptor.extra_arg_sorts[index])) |ty| {
+                const label = try ty.formatAlloc(allocator);
+                defer allocator.free(label);
+                try arg.stringField("type", label);
+            } else {
+                try arg.stringField("type", "any");
+            }
+            try arg.end();
+        }
+        try args.end();
+        try item.end();
+    }
+    try queries.end();
+}
+
+fn writeTransformContractsField(allocator: std.mem.Allocator, root: *json.Object) !void {
+    var transforms = try root.arrayField("transform_contracts");
+    for (registry.transformDescriptors()) |descriptor| {
+        var item = try transforms.objectItem();
+        try item.stringField("name", descriptor.name);
+        try item.stringField("summary", descriptor.summary);
+        try item.intField("minArity", descriptor.min_arity);
+        try item.intField("maxArity", descriptor.max_arity);
+        try item.optionalStringField("inputName", descriptor.input_name);
+        if (registry.transformInputType(descriptor)) |input_type| {
+            const input_label = try input_type.formatAlloc(allocator);
+            defer allocator.free(input_label);
+            try item.stringField("inputType", input_label);
+        } else {
+            try item.nullField("inputType");
+        }
+        const output_label = try registry.transformOutputType(descriptor).formatAlloc(allocator);
+        defer allocator.free(output_label);
+        try item.stringField("outputType", output_label);
+        var args = try item.arrayField("extraArgs");
+        for (descriptor.extra_arg_names, 0..) |name, index| {
+            var arg = try args.objectItem();
+            try arg.stringField("name", name);
+            if (registry.argSortType(descriptor.extra_arg_sorts[index])) |ty| {
+                const label = try ty.formatAlloc(allocator);
+                defer allocator.free(label);
+                try arg.stringField("type", label);
+            } else {
+                try arg.stringField("type", "any");
+            }
+            try arg.end();
+        }
+        try args.end();
+        try item.end();
+    }
+    try transforms.end();
 }
 
 fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
