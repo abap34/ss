@@ -12,6 +12,12 @@ const EmbeddedModule = struct {
 };
 
 const embedded_modules = [_]EmbeddedModule{
+    .{ .spec = "std:core/layout", .source = stdlib_assets.core_layout },
+    .{ .spec = "std:core/objects", .source = stdlib_assets.core_objects },
+    .{ .spec = "std:core/render", .source = stdlib_assets.core_render },
+    .{ .spec = "std:core/selectors", .source = stdlib_assets.core_selectors },
+    .{ .spec = "std:core/transforms", .source = stdlib_assets.core_transforms },
+    .{ .spec = "std:core/components", .source = stdlib_assets.core_components },
     .{ .spec = "std:themes/base", .source = stdlib_assets.themes_base },
     .{ .spec = "std:themes/default", .source = stdlib_assets.themes_default },
     .{ .spec = "std:themes/academic", .source = stdlib_assets.themes_academic },
