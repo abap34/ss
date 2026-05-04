@@ -1,3 +1,5 @@
+import std:core/properties
+
 fn layout_v(policy: string) -> page
   set_prop(pagectx(), "layout_v", policy)
   return pagectx()

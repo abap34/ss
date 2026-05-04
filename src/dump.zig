@@ -4,7 +4,6 @@ const ast = @import("ast");
 const registry = @import("language/registry.zig");
 const stage0 = @import("stage0.zig");
 const typecheck = @import("analysis/typecheck.zig");
-const property_schema = @import("property_schema.zig");
 const json = @import("utils").json;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
@@ -33,7 +32,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
     try writeFunctionsField(allocator, &root, ir);
     try writeVariablesField(allocator, &root, ir);
-    try writePropertySchemasField(&root);
+    try writePropertySchemasField(&root, ir);
     try writeQueryContractsField(allocator, &root);
     try writeTransformContractsField(allocator, &root);
     try writeDefinitionsField(&root, ir);
@@ -95,16 +94,23 @@ fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
     try variables.end();
 }
 
-fn writePropertySchemasField(root: *json.Object) !void {
+fn writePropertySchemasField(root: *json.Object, ir: *core.Ir) !void {
     var schemas = try root.arrayField("property_schemas");
-    for (property_schema.propertySchemas()) |schema| {
-        var item = try schemas.objectItem();
-        try item.stringField("key", schema.key);
-        try item.stringField("valueType", @tagName(schema.value_type));
-        var allowed = try item.arrayField("allowedShapes");
-        for (schema.allowed_shapes) |shape| try allowed.stringItem(property_schema.shapeLabel(shape));
-        try allowed.end();
-        try item.end();
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        for (module.program.properties.items) |property| {
+            var item = try schemas.objectItem();
+            try item.stringField("key", property.key);
+            try item.stringField("valueType", property.value_type);
+            var allowed = try item.arrayField("allowedShapes");
+            for (property.shapes.items) |shape| try allowed.stringItem(shape);
+            try allowed.end();
+            try item.intField("moduleId", module.id);
+            try item.stringField("moduleSpec", module.spec);
+            try item.optionalStringField("file", module.path);
+            try writeSpan(&item, property.span);
+            try item.end();
+        }
     }
     try schemas.end();
 }

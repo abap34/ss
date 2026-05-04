@@ -1548,6 +1548,7 @@ fn validatePropertySetStatement(
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
     const schema = lookupPropertySchema(ir, property_name) orelse {
+        if (ir == null) return;
         try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{property_name});
         return error.InvalidSemanticSort;
     };
@@ -1574,7 +1575,7 @@ fn validatePropertySetStatement(
 
 fn lookupPropertySchema(ir: ?*core.Ir, property_name: []const u8) ?property_schema.SchemaRef {
     if (ir) |sink| return property_schema.lookupInIr(sink, property_name);
-    return property_schema.lookupRef(property_name);
+    return null;
 }
 
 fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
