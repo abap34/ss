@@ -49,4 +49,5 @@ pub const InlayHint = @import("core/ir.zig").InlayHint;
 pub const formatConstraint = @import("core/ir.zig").formatConstraint;
 pub const layout = @import("core/layout.zig");
 pub const render_policy = @import("core/render_policy.zig");
+pub const render_doc = @import("core/render_doc.zig");
 pub const markdown = @import("core/markdown.zig");

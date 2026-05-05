@@ -43,6 +43,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try root.intField("document_id", ir.document_id);
     try writePageOrderField(&root, ir.page_order.items);
     try writeNodesField(allocator, &root, ir);
+    try writeRenderDocField(allocator, &root, ir);
     try writeContainsField(&root, &ir.contains);
     try writeConstraintsField(&root, ir.constraints.items);
     try writeDiagnosticsField(&root, ir.diagnostics.items);
@@ -323,6 +324,35 @@ fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.I
         try writeNode(allocator, &nodes, ir, node);
     }
     try nodes.end();
+}
+
+fn writeRenderDocField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+    var render_doc = try core.render_doc.build(allocator, ir);
+    defer render_doc.deinit(allocator);
+
+    var object = try root.objectField("render_doc");
+    var ops = try object.arrayField("ops");
+    for (render_doc.ops.items) |op| {
+        var item = try ops.objectItem();
+        try item.intField("nodeId", op.node_id);
+        try item.stringField("op", op.op);
+        try writeFrame(&item, op.frame);
+        var args = try item.objectField("args");
+        for (op.args.items) |arg| try args.stringField(arg.key, arg.value);
+        try args.end();
+        try item.end();
+    }
+    try ops.end();
+    try object.end();
+}
+
+fn writeFrame(object: *json.Object, frame: core.Frame) !void {
+    var frame_object = try object.objectField("frame");
+    try frame_object.floatField("x", frame.x, "{d:.1}");
+    try frame_object.floatField("y", frame.y, "{d:.1}");
+    try frame_object.floatField("width", frame.width, "{d:.1}");
+    try frame_object.floatField("height", frame.height, "{d:.1}");
+    try frame_object.end();
 }
 
 fn writeContainsField(root: *json.Object, contains_map: *std.AutoHashMap(core.NodeId, std.ArrayList(core.NodeId))) !void {
