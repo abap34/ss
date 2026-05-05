@@ -2,7 +2,9 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const names = @import("../language/names.zig");
-const source_utils = @import("utils").source;
+const utils = @import("utils");
+const source_utils = utils.source;
+const color_utils = utils.color;
 
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
@@ -716,6 +718,9 @@ const Parser = struct {
             try self.expectChar(')');
             return expr;
         }
+        if (self.startsColorLiteral()) {
+            return .{ .string = try self.parseColorLiteralString() };
+        }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .string = try self.parseString() };
         }
@@ -1044,6 +1049,20 @@ const Parser = struct {
         return self.fail(error.UnterminatedString);
     }
 
+    fn startsColorLiteral(self: *Parser) bool {
+        return self.pos + 1 < self.source.len and self.source[self.pos] == 'c' and self.source[self.pos + 1] == '"';
+    }
+
+    fn parseColorLiteralString(self: *Parser) ![]const u8 {
+        if (!self.startsColorLiteral()) return self.fail(error.ExpectedString);
+        self.pos += 1;
+        const raw = try self.parseString();
+        errdefer self.allocator.free(raw);
+        const normalized = (try color_utils.normalizeAlloc(self.allocator, raw)) orelse return self.fail(error.InvalidColorLiteral);
+        self.allocator.free(raw);
+        return normalized;
+    }
+
     fn parseIdentifier(self: *Parser) ![]const u8 {
         self.skipTrivia();
         if (self.eof()) return self.fail(error.ExpectedIdentifier);
@@ -1260,6 +1279,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.UnterminatedString => "closing string delimiter",
         error.UnterminatedEscape => "escape target",
         error.InvalidEscape => "valid escape sequence",
+        error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",

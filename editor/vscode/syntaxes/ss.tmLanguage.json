@@ -4,6 +4,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#block-string" },
+    { "include": "#color-string" },
     { "include": "#double-string" },
     { "include": "#annotations" },
     { "include": "#declarations" },
@@ -44,6 +45,16 @@
         {
           "name": "string.quoted.double.ss",
           "match": "\"(?:\\\\.|[^\"\\\\])*\""
+        }
+      ]
+    },
+    "color-string": {
+      "patterns": [
+        {
+          "captures": {
+            "0": { "name": "constant.other.color.ss" }
+          },
+          "match": "c\"(?:\\\\.|[^\"\\\\])*\""
         }
       ]
     },

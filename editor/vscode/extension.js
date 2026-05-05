@@ -402,6 +402,113 @@ function activate(context) {
     return null;
   }
 
+  const cssNamedColors = new Map([
+    ["black", [0, 0, 0]],
+    ["white", [1, 1, 1]],
+    ["red", [1, 0, 0]],
+    ["green", [0, 128 / 255, 0]],
+    ["lime", [0, 1, 0]],
+    ["blue", [0, 0, 1]],
+    ["yellow", [1, 1, 0]],
+    ["cyan", [0, 1, 1]],
+    ["aqua", [0, 1, 1]],
+    ["magenta", [1, 0, 1]],
+    ["fuchsia", [1, 0, 1]],
+    ["gray", [128 / 255, 128 / 255, 128 / 255]],
+    ["grey", [128 / 255, 128 / 255, 128 / 255]],
+    ["silver", [192 / 255, 192 / 255, 192 / 255]],
+    ["maroon", [128 / 255, 0, 0]],
+    ["olive", [128 / 255, 128 / 255, 0]],
+    ["purple", [128 / 255, 0, 128 / 255]],
+    ["teal", [0, 128 / 255, 128 / 255]],
+    ["navy", [0, 0, 128 / 255]],
+    ["orange", [1, 165 / 255, 0]],
+  ]);
+
+  function parseSsColorLiteral(raw) {
+    const match = /^c"((?:\\.|[^"\\])*)"$/.exec(raw.trim());
+    if (!match) {
+      return null;
+    }
+    let inner;
+    try {
+      inner = JSON.parse(`"${match[1]}"`);
+    } catch {
+      inner = match[1];
+    }
+    return parseSsColor(inner);
+  }
+
+  function parseSsColor(raw) {
+    const text = String(raw || "").trim();
+    if (!text) {
+      return null;
+    }
+    if (text.startsWith("#")) {
+      return parseHexColor(text.slice(1));
+    }
+    if (text.includes(",")) {
+      const parts = text.split(",").map((part) => Number(part.trim()));
+      if (parts.length !== 3 || parts.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+        return null;
+      }
+      return parts;
+    }
+    return cssNamedColors.get(text.toLowerCase()) || null;
+  }
+
+  function parseHexColor(hex) {
+    if (![3, 4, 6, 8].includes(hex.length) || /[^0-9a-fA-F]/.test(hex)) {
+      return null;
+    }
+    if (hex.length === 3 || hex.length === 4) {
+      return [
+        parseInt(hex[0] + hex[0], 16) / 255,
+        parseInt(hex[1] + hex[1], 16) / 255,
+        parseInt(hex[2] + hex[2], 16) / 255,
+      ];
+    }
+    return [
+      parseInt(hex.slice(0, 2), 16) / 255,
+      parseInt(hex.slice(2, 4), 16) / 255,
+      parseInt(hex.slice(4, 6), 16) / 255,
+    ];
+  }
+
+  function colorToHex(color) {
+    const toByte = (value) => Math.max(0, Math.min(255, Math.round(value * 255)));
+    const toHex = (value) => toByte(value).toString(16).padStart(2, "0");
+    return `#${toHex(color.red)}${toHex(color.green)}${toHex(color.blue)}`;
+  }
+
+  const colorProvider = {
+    provideDocumentColors(document, token) {
+      if (document.languageId !== "ss-slide" || token.isCancellationRequested) {
+        return [];
+      }
+      const text = document.getText();
+      const colors = [];
+      const pattern = /c"(?:\\.|[^"\\])*"/g;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const rgb = parseSsColorLiteral(match[0]);
+        if (!rgb) {
+          continue;
+        }
+        const range = new vscode.Range(document.positionAt(match.index), document.positionAt(match.index + match[0].length));
+        colors.push(new vscode.ColorInformation(range, new vscode.Color(rgb[0], rgb[1], rgb[2], 1)));
+      }
+      return colors;
+    },
+    provideColorPresentations(color) {
+      const hex = colorToHex(color);
+      return [
+        new vscode.ColorPresentation(`c"${hex}"`),
+        new vscode.ColorPresentation(`c"${Number(color.red.toFixed(4))},${Number(color.green.toFixed(4))},${Number(color.blue.toFixed(4))}"`),
+      ];
+    },
+  };
+
   function documentKey(document) {
     return document.uri.toString();
   }
@@ -1223,6 +1330,9 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider({ language: "ss-slide" }, provider),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerColorProvider({ language: "ss-slide" }, colorProvider),
   );
 
   context.subscriptions.push(

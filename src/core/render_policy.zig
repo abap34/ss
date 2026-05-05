@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model");
+const color_utils = @import("utils").color;
 const class_fields = @import("class_fields.zig");
 const layout = @import("layout.zig");
 
@@ -233,16 +234,8 @@ fn parseColorProperty(ir: anytype, node: *const Node, key: []const u8) ?Color {
 }
 
 fn parseColor(value: []const u8) ?Color {
-    var parts = std.mem.splitScalar(u8, value, ',');
-    const r_text = parts.next() orelse return null;
-    const g_text = parts.next() orelse return null;
-    const b_text = parts.next() orelse return null;
-    if (parts.next() != null) return null;
-    return .{
-        .r = std.fmt.parseFloat(f32, std.mem.trim(u8, r_text, " ")) catch return null,
-        .g = std.fmt.parseFloat(f32, std.mem.trim(u8, g_text, " ")) catch return null,
-        .b = std.fmt.parseFloat(f32, std.mem.trim(u8, b_text, " ")) catch return null,
-    };
+    const rgb = color_utils.parse(value) orelse return null;
+    return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };
 }
 
 fn parseDashProperty(ir: anytype, node: *const Node, key: []const u8) ?Dash {

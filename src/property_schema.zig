@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
+const color_utils = @import("utils").color;
 
 pub const ObjectShape = enum {
     unknown,
@@ -161,7 +162,7 @@ fn valueTypeMatches(value_type: PropertyValueType, string_literal: ?[]const u8, 
     return switch (value_type) {
         .string => sort == .string,
         .scalar_like => sort == .string or sort == .number,
-        .color_string => sort == .string,
+        .color_string => if (string_literal) |text| text.len == 0 or color_utils.parse(text) != null else sort == .string,
         .fit_policy => if (string_literal) |text|
             std.mem.eql(u8, text, "warn") or std.mem.eql(u8, text, "error") or std.mem.eql(u8, text, "ignore")
         else
