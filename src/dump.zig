@@ -91,6 +91,7 @@ fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
         try item.stringField("type", type_label);
         try item.enumTagField("runtimeSort", entry.value_ptr.sort);
         try item.enumTagField("objectShape", entry.value_ptr.object_shape);
+        try item.optionalStringField("objectClass", entry.value_ptr.object_class);
         try item.end();
     }
     try variables.end();

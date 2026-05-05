@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const names = @import("../language/names.zig");
+const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
 const syntax = @import("../syntax/parse.zig");
@@ -21,6 +22,7 @@ const TypeInfo = struct {
     ty: Type = Type.any,
     sort: core.SemanticSort,
     object_shape: property_schema.ObjectShape = .unknown,
+    object_class: ?[]const u8 = null,
     string_literal: ?[]const u8 = null,
 };
 
@@ -142,7 +144,11 @@ fn infoFromSort(sort: core.SemanticSort) TypeInfo {
 }
 
 fn infoFromType(ty: Type) TypeInfo {
-    return .{ .ty = ty, .sort = ty.toRuntimeSort() orelse .fragment };
+    return .{
+        .ty = ty,
+        .sort = ty.toRuntimeSort() orelse .fragment,
+        .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
+    };
 }
 
 fn infoForSelectionItem(sort: core.SelectionItemSort) TypeInfo {
@@ -1183,6 +1189,7 @@ fn inferUserFunctionReturnInfoInner(
     if (visiting.contains(func.name)) {
         var info = infoFromType(func.result_type);
         info.object_shape = .generic;
+        info.object_class = func.result_type.class_name;
         return info;
     }
     try visiting.put(func.name, {});
@@ -1228,6 +1235,7 @@ fn inferUserFunctionReturnInfoInner(
     }
     result.ty = func.result_type;
     result.sort = func.result_sort;
+    if (func.result_type.class_name) |class_name| result.object_class = class_name;
     return result;
 }
 
@@ -1236,6 +1244,7 @@ fn mergeTypeInfo(a: TypeInfo, b: TypeInfo) TypeInfo {
         .ty = a.ty,
         .sort = a.sort,
         .object_shape = mergeObjectShape(a.object_shape, b.object_shape),
+        .object_class = mergeObjectClass(a.object_class, b.object_class),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
     };
 }
@@ -1245,6 +1254,13 @@ fn mergeObjectShape(a: property_schema.ObjectShape, b: property_schema.ObjectSha
     if (b == .unknown) return a;
     if (a == b) return a;
     return .generic;
+}
+
+fn mergeObjectClass(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
+    if (a == null) return b;
+    if (b == null) return a;
+    if (std.mem.eql(u8, a.?, b.?)) return a;
+    return null;
 }
 
 fn mergeStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
@@ -1266,11 +1282,17 @@ fn primitiveResultTypeInfo(
     if (descriptor.op == .first) {
         if (call.args.items.len == 0) return infoFromSort(.object);
         const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-        return switch (selection_info.ty.param) {
+        var info = switch (selection_info.ty.param) {
             .page => infoFromSort(.page),
             .object, .any, .none => infoFromSort(.object),
             else => infoFromSort(selection_info.sort),
         };
+        if (info.sort == .object) {
+            info.object_shape = selection_info.object_shape;
+            info.object_class = selection_info.object_class;
+            info.ty.class_name = selection_info.object_class;
+        }
+        return info;
     }
 
     if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
@@ -1307,6 +1329,7 @@ fn primitiveResultTypeInfo(
                 else => .object,
             },
             .object_shape = target_info.object_shape,
+            .object_class = target_info.object_class,
         };
     }
 
@@ -1325,6 +1348,7 @@ fn primitiveResultTypeInfo(
     };
     var info = infoFromSort(result_sort);
     info.object_shape = shape;
+    info.object_class = inferObjectConstructorClass(ir, env, call) orelse classNameForShape(shape);
     return info;
 }
 
@@ -1359,6 +1383,8 @@ fn inferSelectionAlgebraInfo(
     const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
     var info = infoFromType(Type.selection(item_tag));
     info.object_shape = mergeObjectShape(left.object_shape, right.object_shape);
+    info.object_class = mergeObjectClass(left.object_class, right.object_class);
+    if (info.ty.param == .object) info.ty.param_class_name = info.object_class;
     return info;
 }
 
@@ -1392,6 +1418,8 @@ fn inferSelectCallInfo(
     }
     var info = infoFromType(registry.queryOutputType(query));
     info.object_shape = inferQueryOutputShape(env, query, call, base);
+    info.object_class = inferQueryOutputClass(ir, env, query, call, base) orelse classNameForShape(info.object_shape);
+    if (info.ty.tag == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
     return info;
 }
 
@@ -1410,6 +1438,27 @@ fn inferQueryOutputShape(
         },
         .children, .descendants => .generic,
         .document_pages, .previous_page, .parent_page => .unknown,
+    };
+}
+
+fn inferQueryOutputClass(
+    ir: ?*core.Ir,
+    env: *const TypeEnv,
+    query: registry.QueryDescriptor,
+    call: ast.CallExpr,
+    base: TypeInfo,
+) ?[]const u8 {
+    return switch (query.op) {
+        .self_object => base.object_class,
+        .page_objects_by_role, .document_objects_by_role => blk: {
+            if (call.args.items.len < 3) break :blk null;
+            const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk null;
+            if (ir) |sink| {
+                if (declarations.findRoleClass(sink, role_name)) |class_name| break :blk class_name;
+            }
+            break :blk classNameForShape(property_schema.shapeForRole(role_name));
+        },
+        .children, .descendants, .document_pages, .previous_page, .parent_page => null,
     };
 }
 
@@ -1455,6 +1504,7 @@ fn inferDeriveCallInfo(
     }
     var info = infoFromType(registry.transformOutputType(transform));
     info.object_shape = inferDeriveShape(env, call);
+    info.object_class = classNameForShape(info.object_shape);
     return info;
 }
 
@@ -1465,6 +1515,15 @@ fn inferObjectConstructorShape(env: *const TypeEnv, call: ast.CallExpr) property
     return property_schema.shapeForNode(role_name, if (payload) |p| p.object_kind else null, if (payload) |p| p.payload_kind else null);
 }
 
+fn inferObjectConstructorClass(ir: ?*core.Ir, env: *const TypeEnv, call: ast.CallExpr) ?[]const u8 {
+    if (call.args.items.len < 3) return null;
+    const role_name = resolveStringLiteral(env, call.args.items[1]) orelse return null;
+    if (ir) |sink| {
+        if (declarations.findRoleClass(sink, role_name)) |class_name| return class_name;
+    }
+    return classNameForShape(property_schema.shapeForRole(role_name));
+}
+
 fn inferDeriveShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.ObjectShape {
     if (call.args.items.len < 2) return .generic;
     const name = resolveStringLiteral(env, call.args.items[1]) orelse return .generic;
@@ -1473,6 +1532,25 @@ fn inferDeriveShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.Obj
     if (std.mem.eql(u8, name, "rewrite_text")) return .text;
     if (std.mem.eql(u8, name, "highlight")) return .generic;
     return .generic;
+}
+
+fn classNameForShape(shape: property_schema.ObjectShape) ?[]const u8 {
+    return switch (shape) {
+        .document => "DocumentObject",
+        .page => "PageObject",
+        .generic, .unknown => null,
+        .text => "TextObject",
+        .code => "CodeObject",
+        .math => "MathObject",
+        .figure => "FigureObject",
+        .asset_image => "ImageObject",
+        .asset_pdf => "PdfObject",
+        .panel => "PanelObject",
+        .rule => "RuleObject",
+        .page_number => "PageNumberObject",
+        .toc => "TocObject",
+        .group => "GroupObject",
+    };
 }
 
 fn validateSetPropCall(

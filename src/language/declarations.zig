@@ -104,6 +104,71 @@ pub fn build(allocator: std.mem.Allocator, ir: *const core.Ir) !DeclarationIndex
     return index;
 }
 
+pub fn findRoleClass(ir: *const core.Ir, role_name: []const u8) ?[]const u8 {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.objects.items) |decl| {
+            for (decl.roles.items) |role| {
+                if (std.mem.eql(u8, role, role_name)) return decl.name;
+            }
+        }
+        for (module.program.object_extensions.items) |extension| {
+            for (extension.roles.items) |role| {
+                if (std.mem.eql(u8, role, role_name)) return extension.target;
+            }
+        }
+    }
+    return null;
+}
+
+pub fn findField(ir: *const core.Ir, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+    var current: ?[]const u8 = class_name;
+    while (current) |name| {
+        if (findFieldInClass(ir, name, field_name)) |field| return field;
+        current = findClassBase(ir, name);
+    }
+    return null;
+}
+
+pub fn findClassBase(ir: *const core.Ir, class_name: []const u8) ?[]const u8 {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.objects.items) |decl| {
+            if (std.mem.eql(u8, decl.name, class_name)) return decl.base;
+        }
+    }
+    return null;
+}
+
+fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.object_extensions.items) |extension| {
+            if (!std.mem.eql(u8, extension.target, class_name)) continue;
+            for (extension.fields.items) |field| {
+                if (std.mem.eql(u8, field.name, field_name)) {
+                    return .{ .name = field.name, .class_name = class_name, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                }
+            }
+        }
+        for (module.program.objects.items) |decl| {
+            if (!std.mem.eql(u8, decl.name, class_name)) continue;
+            for (decl.fields.items) |field| {
+                if (std.mem.eql(u8, field.name, field_name)) {
+                    return .{ .name = field.name, .class_name = class_name, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                }
+            }
+        }
+    }
+    return null;
+}
+
 fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void {
     for (module.program.types.items) |decl| {
         try index.value_domains.append(index.allocator, .{
