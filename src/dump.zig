@@ -19,14 +19,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
     try writeModulesField(allocator, &root, ir.modules.items);
 
-    var document_code = try stage0.elaborateProgram(
-        allocator,
-        ir.asset_base_dir,
-        ir.projectProgram(),
-        ir.projectSource(),
-        ir.projectPath(),
-        &ir.functions,
-    );
+    var document_code = try stage0.elaborateIr(allocator, ir);
     defer document_code.deinit();
     try root.intField("stage0_document_handle", document_code.document_id);
     try writeDocTermsField(&root, document_code.terms.items);

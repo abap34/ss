@@ -79,10 +79,6 @@ pub fn loadGraph(
     return graph;
 }
 
-pub fn validateImportedProgram(program: ast.Program) !void {
-    if (program.pages.items.len != 0) return error.InvalidLibraryModule;
-}
-
 pub fn formatUnknownImportMessage(
     allocator: std.mem.Allocator,
     base_dir: []const u8,
@@ -167,10 +163,7 @@ const Builder = struct {
             var cleanup = program;
             cleanup.deinit(self.allocator);
         }
-        switch (kind) {
-            .library => try validateImportedProgram(program),
-            .project => unreachable,
-        }
+        if (kind == .project) unreachable;
 
         const key = try self.allocator.dupe(u8, resolved.key);
         errdefer self.allocator.free(key);

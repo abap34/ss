@@ -222,6 +222,16 @@ pub const Ir = struct {
         return null;
     }
 
+    pub fn moduleByPathOrSpec(self: *const Ir, key: []const u8) ?*const SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.path) |module_path| {
+                if (std.mem.eql(u8, module_path, key)) return module;
+            }
+            if (std.mem.eql(u8, module.spec, key)) return module;
+        }
+        return null;
+    }
+
     pub fn projectModuleMutable(self: *Ir) *SourceModule {
         return self.moduleByIdMutable(self.project_module_id).?;
     }

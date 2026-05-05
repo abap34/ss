@@ -207,6 +207,17 @@ pub fn elaborateProgram(
     return document;
 }
 
+pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Document {
+    var document = try doc.Document.init(allocator, ir.asset_base_dir);
+    errdefer document.deinit();
+
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        try executeProgram(module.program, module.source, module.path orelse module.spec, &document, &ir.functions);
+    }
+    return document;
+}
+
 pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *doc.Document, io: std.Io) !void {
     diagnostic_source = source;
     diagnostic_path = "";
@@ -1206,6 +1217,9 @@ fn invokeUserFunctionValue(
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
+    if (diagnostic_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_path, span.start, span.end });
+    }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
