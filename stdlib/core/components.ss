@@ -132,6 +132,19 @@ fn note(text_value: string) -> object
   return flow_inset(note_object(text_value), "120", "120")
 end
 
+fn citation(target: object, number: number, reference_text: string) -> object
+  let number_text = str(number)
+  let marker = "[" ++ number_text ++ "]"
+  let escaped_marker = "\\[" ++ number_text ++ "\\]"
+  let id = "citation:" ++ str(page_index(pagectx())) ++ ":" ++ number_text
+  rewrite_text(target, marker, markdown_link(escaped_marker, "#" ++ id))
+
+  let ref = link_target(citation_object(marker ++ " " ++ reference_text), id)
+  inset_x(ref, 90, 90)
+  top_inset(ref, add(632, mul(sub(number, 1), 16)))
+  return ref
+end
+
 fn page_no() -> object
   let page_no = page_number_object()
   return page_no

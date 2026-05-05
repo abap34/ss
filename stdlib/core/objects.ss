@@ -29,6 +29,10 @@ fn label_object(text_value: string) -> object
   return text_object(text_value, "label")
 end
 
+fn citation_object(text_value: string) -> object
+  return text_object(text_value, "citation")
+end
+
 fn rule_object() -> object
   let obj = text_object("", "rule")
   return obj
