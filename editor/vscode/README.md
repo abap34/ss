@@ -12,6 +12,7 @@ Included:
 - a sample task that runs `ss check`
 - inlay hints for argument names and solved width/height
 - completion and hover support for functions, variables, object classes, roles, value domains, and class fields
+- color decorators and color editing for `c"..."` literals
 
 ## If `.ss` opens as Scheme
 
@@ -107,6 +108,18 @@ The extension reads declaration metadata from `ss dump`, including:
 - function annotations such as `@render`, `@phase`, `@host`, and `@op`
 
 Field completions are class-aware. For an object variable with a known class, `obj.` and `set_prop(obj, "...")` complete inherited fields from that object class instead of the old global property schema.
+
+## Color literals
+
+Color literals use `c"..."` and are shown through VS Code's color decorator:
+
+```ss
+set_prop(title, "text_color", c"red")
+set_prop(panel, "chrome_fill", c"#eeee")
+set_prop(body, "text_link_color", c"0.1,0.25,0.75")
+```
+
+The extension recognizes named colors, RGB float triples, and short or long hex forms.
 
 If `ss` is not on your `PATH`, set `ss.cli.path` to the full executable path.
 

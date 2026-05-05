@@ -44,6 +44,7 @@
       "  roles = [\"${3:my_role}\"]",
       "",
       "  ${4:field_name}: ${5:string} = \"${6:value}\"",
+      "  ${7:accent}: Color = c\"${8:#eeee}\"",
       "}"
     ],
     "description": "Declare an object class with fields"
@@ -57,6 +58,13 @@
       "}"
     ],
     "description": "Extend an existing object class"
+  },
+  "color literal": {
+    "prefix": "ss-color",
+    "body": [
+      "c\"${1:#eeee}\""
+    ],
+    "description": "Insert a color literal"
   },
   "value domain": {
     "prefix": "ss-type",
