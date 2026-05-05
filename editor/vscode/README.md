@@ -42,7 +42,18 @@ The extension runs:
 ss check path/to/file.ss
 ```
 
-and publishes both `ERROR:` and `WARNING:` output as VS Code diagnostics. It checks the current buffer through a temporary snapshot next to the source file, so unsaved edits are reflected while relative assets and local themes still resolve from the source directory.
+and publishes both `ERROR:` and `WARNING:` output as VS Code diagnostics.
+
+When a `.ss` file in the current directory or a parent directory starts with
+`;; !root`, that file is treated as the VS Code project root. Diagnostics,
+definition lookup, metadata dumps, and live preview are run against that root
+file even when the active editor is an imported chapter file. Relative imports
+still resolve from the file that wrote the import; the root only chooses the
+entrypoint and asset base directory.
+
+For diagnostics and preview, the extension writes a temporary snapshot tree
+under `.ss-cache/vscode-projects/` so unsaved edits in open project files are
+included without requiring a project config file.
 
 Use `ss: Check Current File` from the command palette to force a check.
 
@@ -90,6 +101,9 @@ The extension asks the local CLI for IR JSON with:
 ```sh
 ss dump path/to/file.ss
 ```
+
+If a `;; !root` file is found, the dump target is the root file, not necessarily
+the active editor file.
 
 This currently shows:
 
