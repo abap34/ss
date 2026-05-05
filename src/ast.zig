@@ -7,17 +7,20 @@ pub const Type = types.Type;
 
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
+    types: std.ArrayList(TypeDecl),
     properties: std.ArrayList(PropertyDecl),
     functions: std.ArrayList(FunctionDecl),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .properties = .empty, .functions = .empty, .pages = .empty };
+        return .{ .imports = .empty, .types = .empty, .properties = .empty, .functions = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
         self.imports.deinit(allocator);
+        for (self.types.items) |type_decl| type_decl.deinit(allocator);
+        self.types.deinit(allocator);
         for (self.properties.items) |*property| property.deinit(allocator);
         self.properties.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
@@ -33,6 +36,17 @@ pub const Program = struct {
 pub const ImportDecl = struct {
     spec: []const u8,
     span: Span,
+};
+
+pub const TypeDecl = struct {
+    name: []const u8,
+    body: []const u8,
+    span: Span,
+
+    pub fn deinit(self: TypeDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.body);
+    }
 };
 
 pub const PropertyDecl = struct {

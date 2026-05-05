@@ -295,6 +295,16 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     }
     try imports.end();
 
+    var types = try program_object.arrayField("types");
+    for (program.types.items) |type_decl| {
+        var item = try types.objectItem();
+        try item.stringField("name", type_decl.name);
+        try item.stringField("body", type_decl.body);
+        try writeSpan(&item, type_decl.span);
+        try item.end();
+    }
+    try types.end();
+
     var properties = try program_object.arrayField("properties");
     for (program.properties.items) |property| try writePropertyDeclaration(&properties, property);
     try properties.end();

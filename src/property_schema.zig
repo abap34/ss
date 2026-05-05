@@ -30,14 +30,22 @@ pub const PropertyValueType = enum {
     layout_policy,
 };
 
-pub const SchemaRef = *const ast.PropertyDecl;
+pub const SchemaRef = struct {
+    declaration: *const ast.PropertyDecl,
+    value_type: PropertyValueType,
+};
 
 pub fn lookupInIr(ir: *const core.Ir, key: []const u8) ?SchemaRef {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
         const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
-        if (lookupInProgram(module.program, key)) |property| return property;
+        if (lookupInProgram(module.program, key)) |property| {
+            return .{
+                .declaration = property,
+                .value_type = resolveValueType(ir, module.id, property.value_type) orelse return null,
+            };
+        }
     }
     return null;
 }
@@ -53,11 +61,11 @@ fn lookupInProgram(program: ast.Program, key: []const u8) ?*const ast.PropertyDe
 }
 
 pub fn schemaValueType(schema: SchemaRef) ?PropertyValueType {
-    return parseValueType(schema.value_type);
+    return schema.value_type;
 }
 
 pub fn isSchemaShapeAllowed(schema: SchemaRef, shape: ObjectShape) bool {
-    return isDeclaredShapeAllowed(schema, shape);
+    return isDeclaredShapeAllowed(schema.declaration, shape);
 }
 
 pub fn schemaValueMatches(schema: SchemaRef, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
@@ -97,6 +105,40 @@ fn isDeclaredShapeAllowed(declared: *const ast.PropertyDecl, shape: ObjectShape)
     }
     if (shape == .document or shape == .page) return false;
     return has_any;
+}
+
+pub fn resolveValueType(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?PropertyValueType {
+    if (parseValueType(name)) |value_type| return value_type;
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const current_id = ir.module_order.items[index];
+        if (current_id != module_id) continue;
+        const module = ir.moduleById(current_id) orelse return null;
+        return resolveValueTypeInProgram(module.program, name);
+    }
+    return null;
+}
+
+fn resolveValueTypeInProgram(program: ast.Program, name: []const u8) ?PropertyValueType {
+    for (program.types.items) |decl| {
+        if (!std.mem.eql(u8, decl.name, name)) continue;
+        return inferValueType(decl.name, decl.body);
+    }
+    return null;
+}
+
+fn inferValueType(name: []const u8, body: []const u8) ?PropertyValueType {
+    if (std.mem.eql(u8, body, "string")) {
+        if (std.mem.eql(u8, name, "Color")) return .color_string;
+        return .string;
+    }
+    if (std.mem.eql(u8, body, "string | number")) return .scalar_like;
+    if (std.mem.indexOf(u8, body, "\"top\"") != null) return .layout_policy;
+    if (std.mem.indexOf(u8, body, "\"vector_math\"") != null) return .render_kind;
+    if (std.mem.indexOf(u8, body, "\"on\"") != null and std.mem.indexOf(u8, body, "\"off\"") != null) return .wrap_mode;
+    if (std.mem.indexOf(u8, body, "\"warn\"") != null) return .fit_policy;
+    return parseValueType(body);
 }
 
 pub fn shapeLabel(shape: ObjectShape) []const u8 {

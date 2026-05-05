@@ -209,7 +209,7 @@ pub fn typecheckProgram(
 fn checkPropertyDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         for (module.program.properties.items) |property| {
-            try checkPropertyDeclaration(allocator, ir, property);
+            try checkPropertyDeclaration(allocator, ir, module.id, property);
         }
     }
 }
@@ -217,11 +217,12 @@ fn checkPropertyDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
 fn checkPropertyDeclaration(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
+    module_id: core.SourceModuleId,
     property: ast.PropertyDecl,
 ) !void {
     const origin = try statementOrigin(allocator, property.span);
     defer allocator.free(origin);
-    if (property_schema.parseValueType(property.value_type) == null) {
+    if (property_schema.resolveValueType(ir, module_id, property.value_type) == null) {
         try addUserReport(ir, origin, "InvalidPropertySchema: unknown property value type: {s}", .{property.value_type});
         return error.InvalidSemanticSort;
     }

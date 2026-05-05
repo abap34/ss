@@ -6,6 +6,7 @@ const source_utils = @import("utils").source;
 
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
+const TypeDecl = ast.TypeDecl;
 const PropertyDecl = ast.PropertyDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
@@ -73,9 +74,12 @@ const Parser = struct {
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
                 try program.functions.append(self.allocator, constant);
+            } else if (try self.consumeKeyword("type")) {
+                const type_decl = try self.parseTypeAfterKeyword(item_start);
+                try self.consumeStatementTerminator();
+                try program.types.append(self.allocator, type_decl);
             } else if (try self.consumeKeyword("property")) {
                 const property = try self.parsePropertyAfterKeyword(item_start);
-                try self.consumeStatementTerminator();
                 try program.properties.append(self.allocator, property);
             } else {
                 const page = try self.parsePage();
@@ -177,13 +181,36 @@ const Parser = struct {
         };
     }
 
+    fn parseTypeAfterKeyword(self: *Parser, start: usize) !TypeDecl {
+        const name = try self.parseIdentifier();
+        self.skipInlineSpaces();
+        try self.expectChar('=');
+        self.skipInlineSpaces();
+        const body_start = self.pos;
+        while (!self.eof() and self.source[self.pos] != '\n') {
+            if (self.lineCommentStart()) break;
+            self.pos += 1;
+        }
+        const body = trimRightSpaces(self.source[body_start..self.pos]);
+        if (body.len == 0) return self.fail(error.ExpectedTypeAnnotation);
+        return .{
+            .name = name,
+            .body = try self.allocator.dupe(u8, body),
+            .span = .{ .start = start, .end = self.pos },
+        };
+    }
+
     fn parsePropertyAfterKeyword(self: *Parser, start: usize) !PropertyDecl {
         const key = try self.parseIdentifier();
         self.skipInlineSpaces();
         try self.expectChar(':');
         const value_type = try self.parseIdentifier();
         self.skipTrivia();
-        try self.expectKeyword("for");
+        try self.expectChar('{');
+        self.skipTrivia();
+        try self.expectKeyword("target");
+        self.skipInlineSpaces();
+        try self.expectChar(':');
 
         var shapes = std.ArrayList([]const u8).empty;
         errdefer {
@@ -193,10 +220,13 @@ const Parser = struct {
         while (true) {
             try shapes.append(self.allocator, try self.parseIdentifier());
             self.skipInlineSpaces();
-            if (self.eof() or self.source[self.pos] != ',') break;
+            if (self.eof() or self.source[self.pos] != '|') break;
             self.pos += 1;
             self.skipInlineSpaces();
         }
+        self.skipTrivia();
+        try self.expectChar('}');
+        try self.consumeStatementTerminator();
 
         return .{
             .key = key,
