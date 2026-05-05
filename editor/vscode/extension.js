@@ -842,6 +842,45 @@ function activate(context) {
     return path.dirname(document.uri.fsPath);
   }
 
+  function projectSnapshotBaseDir(document) {
+    const root = commandCwd(document) || (document && document.uri.scheme === "file" ? path.dirname(document.uri.fsPath) : os.tmpdir());
+    return path.join(root, ".ss-cache", "vscode-projects");
+  }
+
+  async function removeDirectoryIfExists(dirPath) {
+    if (!dirPath) {
+      return;
+    }
+    try {
+      await fs.promises.rm(dirPath, { recursive: true, force: true });
+    } catch (error) {
+      output.appendLine(`[cache cleanup] ${error.message}`);
+    }
+  }
+
+  async function cleanupProjectSnapshotCache(document) {
+    const baseDir = projectSnapshotBaseDir(document);
+    const ttlMs = 7 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - ttlMs;
+    try {
+      const entries = await fs.promises.readdir(baseDir, { withFileTypes: true });
+      await Promise.all(entries.map(async (entry) => {
+        if (!entry.isDirectory()) {
+          return;
+        }
+        const dirPath = path.join(baseDir, entry.name);
+        const stat = await fs.promises.stat(dirPath);
+        if (stat.mtimeMs < cutoff) {
+          await removeDirectoryIfExists(dirPath);
+        }
+      }));
+    } catch (error) {
+      if (error && error.code !== "ENOENT") {
+        output.appendLine(`[cache cleanup] ${error.message}`);
+      }
+    }
+  }
+
   function openTextForPath(filePath) {
     const resolved = path.resolve(filePath);
     return vscode.workspace.textDocuments.find(
@@ -882,8 +921,9 @@ function activate(context) {
       return null;
     }
     const projectDir = contextInfo.projectDir || path.dirname(contextInfo.entryPath);
-    const root = commandCwd(document) || projectDir || os.tmpdir();
-    const snapshotDir = path.join(root, ".ss-cache", "vscode-projects", stableHash(contextInfo.entryPath));
+    const snapshotDir = path.join(projectSnapshotBaseDir(document), stableHash(contextInfo.entryPath));
+    await cleanupProjectSnapshotCache(document);
+    await removeDirectoryIfExists(snapshotDir);
     const pathMap = new Map();
     const seen = new Set();
 
