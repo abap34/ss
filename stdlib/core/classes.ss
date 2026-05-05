@@ -140,6 +140,23 @@ type LabelObject = object {
   wrap: WrapMode = "off"
 }
 
+type CitationObject = object {
+  base = TextObject
+  roles = ["citation"]
+
+  text_parse: TextParseMode = "inline"
+  text_size: ScalarLike = "11"
+  text_line_height: ScalarLike = "14"
+  text_color: Color = c"0.22,0.22,0.22"
+  text_link_color: Color = c"0.1,0.25,0.75"
+  layout_font_size: ScalarLike = "11"
+  layout_line_height: ScalarLike = "14"
+  layout_spacing_after: ScalarLike = "0"
+  layout_x: ScalarLike = "90"
+  layout_right_inset: ScalarLike = "90"
+  wrap: WrapMode = "off"
+}
+
 type CodeObject = object {
   base = TextObject
   roles = ["code"]
