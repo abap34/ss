@@ -78,6 +78,16 @@ pub fn schemaValueTypeLabel(schema: SchemaRef) []const u8 {
     return valueTypeLabel(value_type);
 }
 
+pub fn valueTypeNameMatches(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
+    const value_type = resolveValueType(ir, module_id, name) orelse return false;
+    return valueTypeMatches(value_type, string_literal, sort);
+}
+
+pub fn valueTypeNameLabel(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) []const u8 {
+    const value_type = resolveValueType(ir, module_id, name) orelse return "known value type";
+    return valueTypeLabel(value_type);
+}
+
 pub fn parseValueType(name: []const u8) ?PropertyValueType {
     inline for (std.meta.fields(PropertyValueType)) |field| {
         if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
@@ -109,6 +119,7 @@ fn isDeclaredShapeAllowed(declared: *const ast.PropertyDecl, shape: ObjectShape)
 
 pub fn resolveValueType(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?PropertyValueType {
     if (parseValueType(name)) |value_type| return value_type;
+    if (inferValueType("", name)) |value_type| return value_type;
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;

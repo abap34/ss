@@ -1,3 +1,4 @@
+pub const core_classes = @embedFile("core/classes.ss");
 pub const core_properties = @embedFile("core/properties.ss");
 pub const core_layout = @embedFile("core/layout.ss");
 pub const core_objects = @embedFile("core/objects.ss");

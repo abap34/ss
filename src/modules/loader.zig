@@ -12,6 +12,7 @@ const EmbeddedModule = struct {
 };
 
 const embedded_modules = [_]EmbeddedModule{
+    .{ .spec = "std:core/classes", .source = stdlib_assets.core_classes },
     .{ .spec = "std:core/properties", .source = stdlib_assets.core_properties },
     .{ .spec = "std:core/layout", .source = stdlib_assets.core_layout },
     .{ .spec = "std:core/objects", .source = stdlib_assets.core_objects },
