@@ -18,7 +18,7 @@ pub fn classNameForNode(ir: anytype, node: *const Node) ?[]const u8 {
     return switch (node.kind) {
         .document => "DocumentObject",
         .page => "PageObject",
-        .object, .derived => if (node.role) |role| roleClass(ir, role) else null,
+        .object => if (node.role) |role| roleClass(ir, role) else null,
     };
 }
 

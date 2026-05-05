@@ -27,10 +27,8 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
     try writeFunctionsField(allocator, &root, ir);
     try writeVariablesField(allocator, &root, ir);
-    try writePropertySchemasField(&root, ir);
     try writeDeclarationIndexField(&root, allocator, ir);
     try writeQueryContractsField(allocator, &root);
-    try writeTransformContractsField(allocator, &root);
     try writeDefinitionsField(&root, ir);
     try writeHintsField(&root, ir.hints.items);
 
@@ -85,32 +83,10 @@ fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
         defer allocator.free(type_label);
         try item.stringField("type", type_label);
         try item.enumTagField("runtimeSort", entry.value_ptr.sort);
-        try item.enumTagField("objectShape", entry.value_ptr.object_shape);
         try item.optionalStringField("objectClass", entry.value_ptr.object_class);
         try item.end();
     }
     try variables.end();
-}
-
-fn writePropertySchemasField(root: *json.Object, ir: *core.Ir) !void {
-    var schemas = try root.arrayField("property_schemas");
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        for (module.program.properties.items) |property| {
-            var item = try schemas.objectItem();
-            try item.stringField("key", property.key);
-            try item.stringField("valueType", property.value_type);
-            var allowed = try item.arrayField("allowedShapes");
-            for (property.shapes.items) |shape| try allowed.stringItem(shape);
-            try allowed.end();
-            try item.intField("moduleId", module.id);
-            try item.stringField("moduleSpec", module.spec);
-            try item.optionalStringField("file", module.path);
-            try writeSpan(&item, property.span);
-            try item.end();
-        }
-    }
-    try schemas.end();
 }
 
 fn writeDeclarationIndexField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -240,44 +216,6 @@ fn writeQueryContractsField(allocator: std.mem.Allocator, root: *json.Object) !v
     try queries.end();
 }
 
-fn writeTransformContractsField(allocator: std.mem.Allocator, root: *json.Object) !void {
-    var transforms = try root.arrayField("transform_contracts");
-    for (registry.transformDescriptors()) |descriptor| {
-        var item = try transforms.objectItem();
-        try item.stringField("name", descriptor.name);
-        try item.stringField("summary", descriptor.summary);
-        try item.intField("minArity", descriptor.min_arity);
-        try item.intField("maxArity", descriptor.max_arity);
-        try item.optionalStringField("inputName", descriptor.input_name);
-        if (registry.transformInputType(descriptor)) |input_type| {
-            const input_label = try input_type.formatAlloc(allocator);
-            defer allocator.free(input_label);
-            try item.stringField("inputType", input_label);
-        } else {
-            try item.nullField("inputType");
-        }
-        const output_label = try registry.transformOutputType(descriptor).formatAlloc(allocator);
-        defer allocator.free(output_label);
-        try item.stringField("outputType", output_label);
-        var args = try item.arrayField("extraArgs");
-        for (descriptor.extra_arg_names, 0..) |name, index| {
-            var arg = try args.objectItem();
-            try arg.stringField("name", name);
-            if (registry.argSortType(descriptor.extra_arg_sorts[index])) |ty| {
-                const label = try ty.formatAlloc(allocator);
-                defer allocator.free(label);
-                try arg.stringField("type", label);
-            } else {
-                try arg.stringField("type", "any");
-            }
-            try arg.end();
-        }
-        try args.end();
-        try item.end();
-    }
-    try transforms.end();
-}
-
 fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
     var definitions = try root.arrayField("definitions");
     var definition_iterator = ir.definitions.iterator();
@@ -326,7 +264,7 @@ fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !voi
 fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var nodes = try root.arrayField("nodes");
     for (ir.nodes.items) |node| {
-        if ((node.kind == .object or node.kind == .derived) and !node.attached) continue;
+        if (node.kind == .object and !node.attached) continue;
         try writeNode(allocator, &nodes, ir, node);
     }
     try nodes.end();
@@ -446,10 +384,6 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.object_extensions.items) |extension| try writeObjectExtension(&object_extensions, extension);
     try object_extensions.end();
 
-    var properties = try program_object.arrayField("properties");
-    for (program.properties.items) |property| try writePropertyDeclaration(&properties, property);
-    try properties.end();
-
     var functions = try program_object.arrayField("functions");
     for (program.functions.items) |func| {
         var item = try functions.objectItem();
@@ -545,17 +479,6 @@ fn writeAnnotation(annotations: *json.Array, annotation: ast.Annotation) !void {
     try item.end();
 }
 
-fn writePropertyDeclaration(properties: *json.Array, property: ast.PropertyDecl) !void {
-    var item = try properties.objectItem();
-    try item.stringField("key", property.key);
-    try item.stringField("valueType", property.value_type);
-    var shapes = try item.arrayField("shapes");
-    for (property.shapes.items) |shape| try shapes.stringItem(shape);
-    try shapes.end();
-    try writeSpan(&item, property.span);
-    try item.end();
-}
-
 fn writeSpan(object: *json.Object, span: ast.Span) !void {
     var span_object = try object.objectField("span");
     try span_object.intField("start", span.start);
@@ -627,7 +550,6 @@ fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
             try item.intField("page", node.page);
             try item.boolField("attached", node.attached);
             try item.enumTagField("node_kind", node.kind);
-            try item.optionalIntField("derived_from", node.derived_from);
             try item.stringField("name", node.name);
             try item.optionalStringField("role", node.role);
             try item.enumTagField("object_kind", node.object_kind);
@@ -852,7 +774,6 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, nod
     }
     try writeProperties(&item, node.properties.items);
     try item.optionalIntField("page_index", node.page_index);
-    try item.optionalIntField("derived_from", node.derived_from);
     try item.optionalStringField("origin", node.origin);
     try item.floatField("x", node.frame.x, "{d:.1}");
     try item.floatField("y", node.frame.y, "{d:.1}");

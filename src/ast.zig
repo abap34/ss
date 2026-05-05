@@ -10,13 +10,12 @@ pub const Program = struct {
     types: std.ArrayList(TypeDecl),
     objects: std.ArrayList(ObjectDecl),
     object_extensions: std.ArrayList(ObjectExtensionDecl),
-    properties: std.ArrayList(PropertyDecl),
     functions: std.ArrayList(FunctionDecl),
     document_statements: std.ArrayList(Statement),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .properties = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
@@ -28,8 +27,6 @@ pub const Program = struct {
         self.objects.deinit(allocator);
         for (self.object_extensions.items) |*extension| extension.deinit(allocator);
         self.object_extensions.deinit(allocator);
-        for (self.properties.items) |*property| property.deinit(allocator);
-        self.properties.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
         for (self.document_statements.items) |*stmt| stmt.deinit(allocator);
@@ -104,20 +101,6 @@ pub const ObjectExtensionDecl = struct {
         self.roles.deinit(allocator);
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
-    }
-};
-
-pub const PropertyDecl = struct {
-    key: []const u8,
-    value_type: []const u8,
-    shapes: std.ArrayList([]const u8),
-    span: Span,
-
-    pub fn deinit(self: *PropertyDecl, allocator: Allocator) void {
-        allocator.free(self.key);
-        allocator.free(self.value_type);
-        for (self.shapes.items) |shape| allocator.free(shape);
-        self.shapes.deinit(allocator);
     }
 };
 

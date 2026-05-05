@@ -1,10 +1,9 @@
 pub const core_classes = @embedFile("core/classes.ss");
-pub const core_properties = @embedFile("core/properties.ss");
 pub const core_layout = @embedFile("core/layout.ss");
 pub const core_objects = @embedFile("core/objects.ss");
 pub const core_render = @embedFile("core/render.ss");
 pub const core_selectors = @embedFile("core/selectors.ss");
-pub const core_transforms = @embedFile("core/transforms.ss");
+pub const core_generated = @embedFile("core/generated.ss");
 pub const core_components = @embedFile("core/components.ss");
 pub const themes_base = @embedFile("themes/base.ss");
 pub const themes_default = @embedFile("themes/default.ss");

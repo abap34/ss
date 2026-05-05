@@ -15,7 +15,6 @@ pub const Term = union(enum) {
         page: HandleId,
         attached: bool,
         kind: core.NodeKind,
-        derived_from: ?HandleId,
         name: []const u8,
         role: ?core.Role,
         object_kind: core.ObjectKind,
@@ -150,7 +149,7 @@ pub const Document = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !HandleId {
-        return self.makeNodeWithOrigin(page_id, true, .object, null, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeDetachedObjectWithOrigin(
@@ -163,7 +162,7 @@ pub const Document = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !HandleId {
-        return self.makeNodeWithOrigin(page_id, false, .object, null, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, false, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeGroupWithOrigin(
@@ -173,7 +172,7 @@ pub const Document = struct {
         children: []const HandleId,
         origin: ?[]const u8,
     ) !HandleId {
-        const group_id = try self.makeNodeWithOrigin(page_id, attached, .object, null, "group", core.GroupRole, .overlay, .text, "", origin);
+        const group_id = try self.makeNodeWithOrigin(page_id, attached, .object, "group", core.GroupRole, .overlay, .text, "", origin);
         for (children) |child_id| try self.addContainment(group_id, child_id);
         return group_id;
     }
@@ -183,7 +182,6 @@ pub const Document = struct {
         page_id: HandleId,
         attached: bool,
         kind: core.NodeKind,
-        derived_from: ?HandleId,
         name: []const u8,
         role: ?core.Role,
         object_kind: core.ObjectKind,
@@ -201,7 +199,6 @@ pub const Document = struct {
             .object_kind = object_kind,
             .payload_kind = payload_kind,
             .content = content,
-            .derived_from = derived_from,
             .origin = origin,
         });
         try self.terms.append(self.allocator, .{ .make_node = .{
@@ -209,7 +206,6 @@ pub const Document = struct {
             .page = page_id,
             .attached = attached,
             .kind = kind,
-            .derived_from = derived_from,
             .name = name,
             .role = role,
             .object_kind = object_kind,
@@ -418,7 +414,7 @@ pub const Document = struct {
         const children = self.contains.get(parent_id) orelse return selection;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
-            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
         }
         return selection;
     }
@@ -427,7 +423,7 @@ pub const Document = struct {
         const children = self.contains.get(parent_id) orelse return;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
-            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
             try self.appendDescendants(allocator, child_id, selection);
         }
     }
@@ -449,42 +445,6 @@ pub const Document = struct {
             .page_objects_by_role => |role| .{ .selection = try self.selectPageObjectsByRole(allocator, base.page, role, query.name) },
             .document_objects_by_role => |role| .{ .selection = try self.selectDocumentObjectsByRole(allocator, role, query.name) },
             .document_pages => .{ .selection = try self.selectDocumentPages(allocator, query.name) },
-        };
-    }
-
-    fn rewriteText(self: *Document, allocator: Allocator, from_id: HandleId, old: []const u8, new: []const u8) ![]const u8 {
-        const from = self.getNode(from_id) orelse return error.UnknownNode;
-        const source = from.content orelse return error.MissingContent;
-        return std.mem.replaceOwned(u8, allocator, source, old, new);
-    }
-
-    fn copyNodeProperties(self: *Document, from_id: HandleId, to_id: HandleId) !void {
-        const from = self.getNode(from_id) orelse return error.UnknownNode;
-        for (from.properties.items) |property| try self.setNodeProperty(to_id, property.key, property.value);
-    }
-
-    pub fn deriveWithOrigin(self: *Document, page_id: HandleId, base: core.Value, transform: core.Transform, origin: []const u8) !HandleId {
-        return self.deriveWithMode(page_id, true, base, transform, origin);
-    }
-
-    pub fn deriveDetachedWithOrigin(self: *Document, page_id: HandleId, base: core.Value, transform: core.Transform, origin: []const u8) !HandleId {
-        return self.deriveWithMode(page_id, false, base, transform, origin);
-    }
-
-    fn deriveWithMode(self: *Document, page_id: HandleId, attached: bool, base: core.Value, transform: core.Transform, origin: []const u8) !HandleId {
-        try self.ensureSort(base, transform.input, transform.name);
-        return switch (transform.op) {
-            .rewrite_text => |rewrite| blk: {
-                const updated = try self.rewriteText(self.allocator, base.object, rewrite.old, rewrite.new);
-                const id = try self.makeNodeWithOrigin(page_id, attached, .derived, base.object, "rewritten-copy", "code", .source, .code, updated, origin);
-                try self.copyNodeProperties(base.object, id);
-                break :blk id;
-            },
-            .highlight => |highlight| blk: {
-                if (base.selection.item_sort != .object) return error.InvalidSelectionSort;
-                const source_id = base.selection.first() orelse return error.EmptySelection;
-                break :blk try self.makeNodeWithOrigin(page_id, attached, .derived, source_id, "highlight", "highlight", .overlay, .text, highlight.note, origin);
-            },
         };
     }
 

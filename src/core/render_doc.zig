@@ -79,7 +79,7 @@ pub fn build(allocator: std.mem.Allocator, ir: anytype) !RenderDoc {
     errdefer doc.deinit(allocator);
 
     for (ir.nodes.items) |*node| {
-        if ((node.kind != .object and node.kind != .derived) or !node.attached) continue;
+        if (node.kind != .object or !node.attached) continue;
         const resolved = render_policy.resolve(ir, node);
         if (resolved.rule.stroke != null) try appendRule(allocator, &doc, node, resolved.rule);
         if (hasChrome(resolved.chrome)) try appendChrome(allocator, &doc, node, resolved.chrome);

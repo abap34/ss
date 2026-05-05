@@ -111,10 +111,6 @@ fn reportUnknownQuery(name: []const u8, origin: []const u8) void {
     reportNamedResolutionError(error.UnknownQuery, "query", name, origin);
 }
 
-fn reportUnknownTransform(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError(error.UnknownTransform, "transform", name, origin);
-}
-
 fn reportUnknownIdentifier(name: []const u8, origin: []const u8) void {
     reportNamedResolutionError(error.UnknownIdentifier, "identifier", name, origin);
 }
@@ -165,7 +161,6 @@ fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
 fn unknownNameCode(kind: []const u8) []const u8 {
     if (std.mem.eql(u8, kind, "function")) return "UnknownFunction";
     if (std.mem.eql(u8, kind, "query")) return "UnknownQuery";
-    if (std.mem.eql(u8, kind, "transform")) return "UnknownTransform";
     if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
     if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
     if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
@@ -192,7 +187,6 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
-        error.MissingHighlightTarget => "MissingHighlightTarget: highlight needs a previous code-like object",
         error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => @errorName(err),
@@ -397,10 +391,6 @@ const BuiltinContext = struct {
 
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
         return try evalSelectCall(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call);
-    }
-
-    pub fn runDeriveCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        return try evalDeriveCall(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call);
     }
 
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
@@ -694,79 +684,6 @@ fn evalSelectCall(
             return try ir.select(ir.allocator, base, core.Query.documentObjectsByRole(role));
         },
     }
-}
-
-fn evalDeriveCall(
-    ir: *doc.Document,
-    page_id: core.NodeId,
-    context: EvalContext,
-    mode: EvalMode,
-    env: *std.StringHashMap(core.Value),
-    functions: *const std.StringHashMap(FunctionDecl),
-    current_origin: []const u8,
-    call: CallExpr,
-) anyerror!core.Value {
-    if (context != .page) return error.NoCurrentPage;
-    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[0]));
-    const op_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 1);
-    const descriptor = registry.lookupTransformOp(op_name) orelse {
-        reportUnknownTransform(op_name, current_origin);
-        return error.UnknownTransform;
-    };
-    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
-    if (descriptor.input_sort) |expected| try typecheck.ensureValueSortWithCode(ir, null, base, expected, current_origin, .UnmatchedInputType);
-    switch (descriptor.op) {
-        .rewrite_text => {
-            const old = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
-            const new = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 3);
-            return .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-        },
-        .highlight => {
-            const note = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
-            return .{ .object = try deriveHighlight(ir, page_id, mode, current_origin, base, note) };
-        },
-    }
-}
-
-fn deriveHighlight(
-    ir: *doc.Document,
-    page_id: core.NodeId,
-    mode: EvalMode,
-    current_origin: []const u8,
-    base: core.Value,
-    note: []const u8,
-) !core.NodeId {
-    return switch (base) {
-        .object => |id| blk: {
-            const selection = try ir.select(ir.allocator, .{ .object = id }, core.Query.selfObject());
-            break :blk switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, selection, core.Transform.highlight(note), current_origin),
-                .detached => |builder| blk2: {
-                    const derived = try ir.deriveDetachedWithOrigin(page_id, selection, core.Transform.highlight(note), current_origin);
-                    try builder.trackNode(ir.allocator, derived);
-                    break :blk2 derived;
-                },
-            };
-        },
-        .selection => blk: {
-            break :blk switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.highlight(note), current_origin),
-                .detached => |builder| blk2: {
-                    const derived = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.highlight(note), current_origin);
-                    try builder.trackNode(ir.allocator, derived);
-                    break :blk2 derived;
-                },
-            };
-        },
-        else => return error.ExpectedObject,
-    };
 }
 
 fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void {

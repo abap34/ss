@@ -4,9 +4,9 @@ const ast = @import("ast");
 const names = @import("../language/names.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
+const value_domains = @import("../language/value_domains.zig");
 const module_loader = @import("../modules/loader.zig");
 const syntax = @import("../syntax/parse.zig");
-const property_schema = @import("../property_schema.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
 const Type = ast.Type;
@@ -21,7 +21,6 @@ pub const FunctionContract = struct {
 const TypeInfo = struct {
     ty: Type = Type.any,
     sort: core.SemanticSort,
-    object_shape: property_schema.ObjectShape = .unknown,
     object_class: ?[]const u8 = null,
     string_literal: ?[]const u8 = null,
 };
@@ -229,7 +228,6 @@ pub fn typecheckProgram(
 ) !void {
     defer clearDiagnosticOriginModule();
     try checkObjectDeclarations(allocator, ir);
-    try checkPropertyDeclarations(allocator, ir);
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
@@ -302,7 +300,7 @@ fn checkObjectFields(
     fields: []const ast.ObjectFieldDecl,
 ) !void {
     for (fields) |field| {
-        if (property_schema.resolveValueType(ir, module_id, field.value_type) != null) continue;
+        if (value_domains.resolve(ir, module_id, field.value_type) != null) continue;
         const origin = try statementOrigin(allocator, field.span);
         defer allocator.free(origin);
         try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
@@ -331,36 +329,6 @@ fn checkRolesUnique(
             return error.InvalidSemanticSort;
         }
         try roles.put(role_name, class_name);
-    }
-}
-
-fn checkPropertyDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    defer clearDiagnosticOriginModule();
-    for (ir.modules.items) |module| {
-        setDiagnosticOriginModule(&module);
-        for (module.program.properties.items) |property| {
-            try checkPropertyDeclaration(allocator, ir, module.id, property);
-        }
-    }
-}
-
-fn checkPropertyDeclaration(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    module_id: core.SourceModuleId,
-    property: ast.PropertyDecl,
-) !void {
-    const origin = try statementOrigin(allocator, property.span);
-    defer allocator.free(origin);
-    if (property_schema.resolveValueType(ir, module_id, property.value_type) == null) {
-        try addUserReport(ir, origin, "InvalidPropertySchema: unknown property value type: {s}", .{property.value_type});
-        return error.InvalidSemanticSort;
-    }
-    for (property.shapes.items) |shape_name| {
-        if (std.mem.eql(u8, shape_name, "any")) continue;
-        if (property_schema.parseShape(shape_name) != null) continue;
-        try addUserReport(ir, origin, "InvalidPropertySchema: unknown property shape: {s}", .{shape_name});
-        return error.InvalidSemanticSort;
     }
 }
 
@@ -828,7 +796,7 @@ fn collectSolvedSizeHints(
     defer best_by_origin.deinit();
 
     for (ir.nodes.items) |node| {
-        if ((node.kind != .object and node.kind != .derived) or !node.attached) continue;
+        if (node.kind != .object or !node.attached) continue;
         const origin = node.origin orelse continue;
         if (node.role != null and std.mem.eql(u8, node.role.?, "panel")) continue;
         if (best_by_origin.get(origin)) |existing| {
@@ -1377,7 +1345,6 @@ fn inferUserFunctionReturnInfoInner(
 ) !TypeInfo {
     if (visiting.contains(func.name)) {
         var info = infoFromType(func.result_type);
-        info.object_shape = .generic;
         info.object_class = func.result_type.class_name;
         return info;
     }
@@ -1435,17 +1402,9 @@ fn mergeTypeInfo(a: TypeInfo, b: TypeInfo) TypeInfo {
     return .{
         .ty = a.ty,
         .sort = a.sort,
-        .object_shape = mergeObjectShape(a.object_shape, b.object_shape),
         .object_class = mergeObjectClass(a.object_class, b.object_class),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
     };
-}
-
-fn mergeObjectShape(a: property_schema.ObjectShape, b: property_schema.ObjectShape) property_schema.ObjectShape {
-    if (a == .unknown) return b;
-    if (b == .unknown) return a;
-    if (a == b) return a;
-    return .generic;
 }
 
 fn mergeObjectClass(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
@@ -1480,7 +1439,6 @@ fn primitiveResultTypeInfo(
             else => infoFromSort(selection_info.sort),
         };
         if (info.sort == .object) {
-            info.object_shape = selection_info.object_shape;
             info.object_class = selection_info.object_class;
             info.ty.class_name = selection_info.object_class;
         }
@@ -1521,10 +1479,6 @@ fn primitiveResultTypeInfo(
         return try inferSelectCallInfo(allocator, ir, functions, env, call, origin);
     }
 
-    if (descriptor.op == .derive) {
-        return try inferDeriveCallInfo(allocator, ir, functions, env, call, origin);
-    }
-
     if (descriptor.op == .set_style) {
         if (call.args.items.len == 0) return infoFromSort(.object);
         const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
@@ -1546,7 +1500,6 @@ fn primitiveResultTypeInfo(
                 .document, .page, .object, .selection => target_info.sort,
                 else => .object,
             },
-            .object_shape = target_info.object_shape,
             .object_class = target_info.object_class,
         };
     }
@@ -1554,19 +1507,17 @@ fn primitiveResultTypeInfo(
     const result_sort = descriptor.result_sort orelse .object;
     if (result_sort != .object) return infoFromSort(result_sort);
 
-    const shape = switch (descriptor.op) {
-        .group => .group,
+    var info = infoFromSort(result_sort);
+    info.object_class = switch (descriptor.op) {
+        .group => "GroupObject",
         .set_style => blk: {
             const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-            break :blk object_info.object_shape;
+            break :blk object_info.object_class;
         },
-        .object => inferObjectConstructorShape(env, call),
-        .derive => inferDeriveShape(env, call),
-        else => .generic,
+        .object => inferObjectConstructorClass(ir, env, call),
+        else => null,
     };
-    var info = infoFromSort(result_sort);
-    info.object_shape = shape;
-    info.object_class = inferObjectConstructorClass(ir, env, call) orelse classNameForShape(shape);
+    if (info.object_class) |class_name| info.ty.class_name = class_name;
     return info;
 }
 
@@ -1657,7 +1608,6 @@ fn inferSelectionAlgebraInfo(
 
     const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
     var info = infoFromType(Type.selection(item_tag));
-    info.object_shape = mergeObjectShape(left.object_shape, right.object_shape);
     info.object_class = mergeObjectClass(left.object_class, right.object_class);
     if (info.ty.param == .object) info.ty.param_class_name = info.object_class;
     return info;
@@ -1692,28 +1642,9 @@ fn inferSelectCallInfo(
         }
     }
     var info = infoFromType(registry.queryOutputType(query));
-    info.object_shape = inferQueryOutputShape(env, query, call, base);
-    info.object_class = inferQueryOutputClass(ir, env, query, call, base) orelse classNameForShape(info.object_shape);
+    info.object_class = inferQueryOutputClass(ir, env, query, call, base);
     if (info.ty.tag == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
     return info;
-}
-
-fn inferQueryOutputShape(
-    env: *const TypeEnv,
-    query: registry.QueryDescriptor,
-    call: ast.CallExpr,
-    base: TypeInfo,
-) property_schema.ObjectShape {
-    return switch (query.op) {
-        .self_object => base.object_shape,
-        .page_objects_by_role, .document_objects_by_role => blk: {
-            if (call.args.items.len < 3) break :blk .generic;
-            const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk .generic;
-            break :blk property_schema.shapeForRole(role_name);
-        },
-        .children, .descendants => .generic,
-        .document_pages, .previous_page, .parent_page => .unknown,
-    };
 }
 
 fn inferQueryOutputClass(
@@ -1731,63 +1662,10 @@ fn inferQueryOutputClass(
             if (ir) |sink| {
                 if (declarations.findRoleClass(sink, role_name)) |class_name| break :blk class_name;
             }
-            break :blk classNameForShape(property_schema.shapeForRole(role_name));
+            break :blk null;
         },
         .children, .descendants, .document_pages, .previous_page, .parent_page => null,
     };
-}
-
-fn inferDeriveCallInfo(
-    allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
-    env: *const TypeEnv,
-    call: ast.CallExpr,
-    origin: []const u8,
-) !TypeInfo {
-    if (call.args.items.len < 2) return infoFromSort(.object);
-    const transform_name = resolveStringLiteral(env, call.args.items[1]) orelse {
-        var info = infoFromSort(.object);
-        info.object_shape = inferDeriveShape(env, call);
-        return info;
-    };
-    const transform = registry.lookupTransformOp(transform_name) orelse {
-        try addUserReport(ir, origin, "UnknownTransform: unknown transform: {s}", .{transform_name});
-        return error.UnknownTransform;
-    };
-    if (call.args.items.len < transform.min_arity or call.args.items.len > transform.max_arity) {
-        if (transform.min_arity == transform.max_arity) {
-            try addUserReport(ir, origin, "InvalidArity: transform {s} expects {d} arguments, got {d}", .{ transform_name, transform.min_arity, call.args.items.len });
-        } else {
-            try addUserReport(ir, origin, "InvalidArity: transform {s} expects {d}..{d} arguments, got {d}", .{ transform_name, transform.min_arity, transform.max_arity, call.args.items.len });
-        }
-        return error.InvalidArity;
-    }
-    const base = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-    if (registry.transformInputType(transform)) |expected| {
-        try ensureType(ir, allocator, base, expected, origin, .UnmatchedInputType);
-    } else if (transform.op == .highlight and !(base.ty.tag == .object or (base.ty.tag == .selection and (base.ty.param == .object or base.ty.param == .any)))) {
-        try ensureType(ir, allocator, base, Type.object, origin, .UnmatchedInputType);
-    }
-    for (transform.extra_arg_sorts, 0..) |_, extra_index| {
-        const arg_index = 2 + extra_index;
-        if (arg_index >= call.args.items.len) break;
-        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[arg_index], origin);
-        if (registry.argSortType(transform.extra_arg_sorts[extra_index])) |expected| {
-            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
-        }
-    }
-    var info = infoFromType(registry.transformOutputType(transform));
-    info.object_shape = inferDeriveShape(env, call);
-    info.object_class = classNameForShape(info.object_shape);
-    return info;
-}
-
-fn inferObjectConstructorShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.ObjectShape {
-    if (call.args.items.len < 3) return .generic;
-    const role_name = resolveStringLiteral(env, call.args.items[1]);
-    const payload = if (resolveStringLiteral(env, call.args.items[2])) |text| names.parsePayloadName(text) else null;
-    return property_schema.shapeForNode(role_name, if (payload) |p| p.object_kind else null, if (payload) |p| p.payload_kind else null);
 }
 
 fn inferObjectConstructorClass(ir: ?*core.Ir, env: *const TypeEnv, call: ast.CallExpr) ?[]const u8 {
@@ -1796,36 +1674,7 @@ fn inferObjectConstructorClass(ir: ?*core.Ir, env: *const TypeEnv, call: ast.Cal
     if (ir) |sink| {
         if (declarations.findRoleClass(sink, role_name)) |class_name| return class_name;
     }
-    return classNameForShape(property_schema.shapeForRole(role_name));
-}
-
-fn inferDeriveShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.ObjectShape {
-    if (call.args.items.len < 2) return .generic;
-    const name = resolveStringLiteral(env, call.args.items[1]) orelse return .generic;
-    if (std.mem.eql(u8, name, "page_number")) return .page_number;
-    if (std.mem.eql(u8, name, "toc")) return .toc;
-    if (std.mem.eql(u8, name, "rewrite_text")) return .text;
-    if (std.mem.eql(u8, name, "highlight")) return .generic;
-    return .generic;
-}
-
-fn classNameForShape(shape: property_schema.ObjectShape) ?[]const u8 {
-    return switch (shape) {
-        .document => "DocumentObject",
-        .page => "PageObject",
-        .generic, .unknown => null,
-        .text => "TextObject",
-        .code => "CodeObject",
-        .math => "MathObject",
-        .figure => "FigureObject",
-        .asset_image => "ImageObject",
-        .asset_pdf => "PdfObject",
-        .panel => "PanelObject",
-        .rule => "RuleObject",
-        .page_number => "PageNumberObject",
-        .toc => "TocObject",
-        .group => "GroupObject",
-    };
+    return null;
 }
 
 fn validateSetPropCall(
@@ -1857,30 +1706,6 @@ fn validateSetPropCall(
         return;
     }
 
-    if (property_schema.lookupInIr(ir, key)) |schema| {
-        if (propertyShapeForInfo(target_info)) |target_shape| {
-            if (!property_schema.isSchemaShapeAllowed(schema, target_shape)) {
-                try addUserReport(
-                    ir,
-                    origin,
-                    "InvalidProperty: property '{s}' is not valid for {s}",
-                    .{ key, property_schema.shapeLabel(target_shape) },
-                );
-                return error.InvalidSemanticSort;
-            }
-        }
-        if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
-            try addUserReport(
-                ir,
-                origin,
-                "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-                .{ key, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
-            );
-            return error.InvalidSemanticSort;
-        }
-        return;
-    }
-
     try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
     return error.InvalidSemanticSort;
 }
@@ -1907,8 +1732,8 @@ fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
     return switch (info.ty.tag) {
         .document => "DocumentObject",
         .page => "PageObject",
-        .object => info.object_class orelse classNameForShape(info.object_shape),
-        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class orelse classNameForShape(info.object_shape) else null,
+        .object => info.object_class,
+        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
         else => null,
     };
 }
@@ -1920,25 +1745,15 @@ fn validateFieldValue(
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    if (!property_schema.valueTypeNameMatches(ir, field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
+    if (!value_domains.nameMatches(ir, field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
         try addUserReport(
             ir,
             origin,
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
-            .{ key, property_schema.valueTypeNameLabel(ir, field.module_id, field.value_type), @tagName(value_info.sort) },
+            .{ key, value_domains.nameLabel(ir, field.module_id, field.value_type), @tagName(value_info.sort) },
         );
         return error.InvalidSemanticSort;
     }
-}
-
-fn propertyShapeForInfo(info: TypeInfo) ?property_schema.ObjectShape {
-    return switch (info.ty.tag) {
-        .document => .document,
-        .page => .page,
-        .object => info.object_shape,
-        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_shape else null,
-        else => null,
-    };
 }
 
 fn validatePropertySetStatement(
@@ -1962,35 +1777,9 @@ fn validatePropertySetStatement(
             try validateFieldValue(sink, field, property_name, value_info, origin);
             return;
         }
-        if (lookupPropertySchema(ir, property_name)) |schema| {
-            if (!property_schema.isSchemaShapeAllowed(schema, object_info.object_shape)) {
-                try addUserReport(
-                    ir,
-                    origin,
-                    "InvalidProperty: property '{s}' is not valid for {s}",
-                    .{ property_name, property_schema.shapeLabel(object_info.object_shape) },
-                );
-                return error.InvalidSemanticSort;
-            }
-            if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
-                try addUserReport(
-                    ir,
-                    origin,
-                    "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-                    .{ property_name, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
-                );
-                return error.InvalidSemanticSort;
-            }
-            return;
-        }
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
         return error.InvalidSemanticSort;
     }
-}
-
-fn lookupPropertySchema(ir: ?*core.Ir, property_name: []const u8) ?property_schema.SchemaRef {
-    if (ir) |sink| return property_schema.lookupInIr(sink, property_name);
-    return null;
 }
 
 fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {

@@ -56,21 +56,3 @@ fn append_toc_title(title: object, toc: object, page: page) -> object
   append_content(toc, concat("- ", concat(content(title), concat(" .... ", concat(str(page_index(page)), "\n")))))
   return title
 end
-
-fn rewrite_text(base: object, old: string, new: string) -> object
-  let obj = derive(base, "rewrite_text", old, new)
-  set_prop(obj, "render_kind", "code")
-  return obj
-end
-
-fn highlight(base: object, note: string) -> object
-  let obj = derive(select(base, "self_object"), "highlight", note)
-  text_preset(obj, "Helvetica", "14", "18", "1,0.5961,0", "20", "120", "120")
-  return obj
-end
-
-fn highlight_selection(base: selection<object>, note: string) -> object
-  let obj = derive(base, "highlight", note)
-  text_preset(obj, "Helvetica", "14", "18", "1,0.5961,0", "20", "120", "120")
-  return obj
-end

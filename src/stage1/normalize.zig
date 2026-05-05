@@ -58,12 +58,10 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
             },
             .make_node => |node| {
                 const page_id = try ctx.node(node.page);
-                const derived_from = try ctx.maybeNode(node.derived_from);
                 const node_id = try ir.makeNodeFromStage(
                     page_id,
                     node.attached,
                     node.kind,
-                    derived_from,
                     node.name,
                     node.role,
                     node.object_kind,

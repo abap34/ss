@@ -9,7 +9,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .pagectx => ctx.currentPageValue(),
         .docctx => ctx.currentDocumentValue(),
         .select => try ctx.runSelectCall(call),
-        .derive => try ctx.runDeriveCall(call),
         .anchor => blk: {
             const node_id = try ctx.evalObjectArg(call, 0);
             const anchor_name = try ctx.evalStringArg(call, 1);
