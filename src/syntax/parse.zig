@@ -65,6 +65,21 @@ const Parser = struct {
         self.skipTrivia();
         while (!self.eof()) {
             const item_start = self.pos;
+            var prefix_annotations = std.ArrayList(ast.Annotation).empty;
+            var has_prefix_annotations = false;
+            if (self.source[self.pos] == '@') {
+                prefix_annotations = try self.parseAnnotations();
+                has_prefix_annotations = true;
+                self.skipTrivia();
+            }
+            errdefer {
+                if (has_prefix_annotations) {
+                    for (prefix_annotations.items) |*annotation| annotation.deinit(self.allocator);
+                    prefix_annotations.deinit(self.allocator);
+                }
+            }
+            if (has_prefix_annotations and !(try self.peekKeyword("fn"))) return self.fail(error.ExpectedKeyword);
+
             if (try self.consumeKeyword("import")) {
                 const spec = try self.parseImportSpec();
                 try self.consumeStatementTerminator();
@@ -73,7 +88,8 @@ const Parser = struct {
                     .span = .{ .start = item_start, .end = self.pos },
                 });
             } else if (try self.consumeKeyword("fn")) {
-                const func = try self.parseFunctionAfterKeyword(item_start);
+                const func = try self.parseFunctionAfterKeyword(item_start, prefix_annotations);
+                has_prefix_annotations = false;
                 try program.functions.append(self.allocator, func);
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
@@ -102,7 +118,7 @@ const Parser = struct {
         return program;
     }
 
-    fn parseFunctionAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
+    fn parseFunctionAfterKeyword(self: *Parser, start: usize, prefix_annotations: std.ArrayList(ast.Annotation)) !FunctionDecl {
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
         try self.expectChar('(');
@@ -155,7 +171,14 @@ const Parser = struct {
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
         const result_sort = try self.runtimeSortForType(result_type);
-        const annotations = try self.parseAnnotations();
+        var annotations = prefix_annotations;
+        errdefer {
+            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
+            annotations.deinit(self.allocator);
+        }
+        var suffix_annotations = try self.parseAnnotations();
+        defer suffix_annotations.deinit(self.allocator);
+        try annotations.appendSlice(self.allocator, suffix_annotations.items);
 
         const bodyless = annotationsAllowBodyless(annotations.items);
         var statements = std.ArrayList(Statement).empty;
@@ -384,6 +407,12 @@ const Parser = struct {
             });
         }
         return annotations;
+    }
+
+    fn peekKeyword(self: *Parser, keyword: []const u8) !bool {
+        const saved = self.pos;
+        defer self.pos = saved;
+        return try self.consumeKeyword(keyword);
     }
 
     fn parseAnnotationArgs(self: *Parser) ![]const u8 {

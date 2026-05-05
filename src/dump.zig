@@ -639,6 +639,11 @@ fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
             try item.stringField("key", property.key);
             try item.stringField("value", property.value);
         },
+        .set_content => |content| {
+            try item.stringField("kind", "set_content");
+            try item.intField("node", content.node);
+            try item.stringField("value", content.value);
+        },
         .add_constraint => |constraint| {
             try item.stringField("kind", "add_constraints");
             try writeDocConstraint(&item, constraint);

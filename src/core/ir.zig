@@ -368,6 +368,17 @@ pub const Ir = struct {
         return nodeProperty(node, key);
     }
 
+    pub fn setNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        node.content = try self.allocator.dupe(u8, value);
+    }
+
+    pub fn appendNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        const current = node.content orelse "";
+        node.content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
+    }
+
     fn copyNodeProperties(self: *Ir, from_id: NodeId, to_id: NodeId) !void {
         const from = self.getNode(from_id) orelse return error.UnknownNode;
         for (from.properties.items) |property| {
@@ -602,10 +613,6 @@ pub const Ir = struct {
         return self.page_order.items.len;
     }
 
-    fn pageNumberText(self: *Ir, allocator: Allocator, page_id: NodeId) ![]const u8 {
-        return std.fmt.allocPrint(allocator, "{d}/{d}", .{ self.pageIndexOf(page_id), self.pageCount() });
-    }
-
     pub fn parentPageOf(self: *Ir, child_id: NodeId) ?NodeId {
         var it = self.contains.iterator();
         while (it.next()) |entry| {
@@ -821,35 +828,6 @@ pub const Ir = struct {
         };
     }
 
-    fn buildTocText(self: *Ir, document_id: NodeId) ![]const u8 {
-        var pages = try self.select(self.allocator, .{ .document = document_id }, Query.documentPages());
-        defer pages.deinit(self.allocator);
-
-        var text = std.ArrayList(u8).empty;
-        defer text.deinit(self.allocator);
-        try text.appendSlice(self.allocator, "Table of Contents\n");
-
-        for (pages.selection.ids.items) |member_page_id| {
-            var titles = try self.select(
-                self.allocator,
-                .{ .page = member_page_id },
-                Query.pageObjectsByRole("title"),
-            );
-            defer titles.deinit(self.allocator);
-
-            const title_id = titles.firstId() orelse continue;
-            const title = self.getNode(title_id) orelse continue;
-            const line = try std.fmt.allocPrint(
-                self.allocator,
-                "- {s} .... {d}\n",
-                .{ title.content.?, self.pageIndexOf(member_page_id) },
-            );
-            try text.appendSlice(self.allocator, line);
-        }
-
-        return text.toOwnedSlice(self.allocator);
-    }
-
     pub fn fragmentRootSort(self: *Ir, fragment: *const Fragment) SemanticSort {
         _ = self;
         const root = fragment.root orelse unreachable;
@@ -871,30 +849,12 @@ pub const Ir = struct {
         self.clearDiagnosticsForPhase(.layout);
         self.last_constraint_failure = null;
         self.constraint_failures.clearRetainingCapacity();
-        try self.refreshPageNumbers();
-        try self.refreshTocs();
         try layout.solveLayout(self);
         if (self.constraint_failures.items.len > 0) {
             switch (self.constraint_failures.items[0].kind) {
                 .conflict => return error.ConstraintConflict,
                 .negative_size => return error.NegativeConstraintSize,
             }
-        }
-    }
-
-    fn refreshPageNumbers(self: *Ir) !void {
-        for (self.nodes.items) |*node| {
-            if (!roleEq(node.role, "page_number")) continue;
-            const page_id = self.parentPageOf(node.id) orelse continue;
-            node.content = try self.pageNumberText(self.allocator, page_id);
-        }
-    }
-
-    fn refreshTocs(self: *Ir) !void {
-        for (self.nodes.items) |*node| {
-            if (!roleEq(node.role, "toc")) continue;
-            const document_id = node.derived_from orelse self.document_id;
-            node.content = try self.buildTocText(document_id);
         }
     }
 

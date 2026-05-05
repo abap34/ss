@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const stage0 = @import("../stage0/eval.zig");
 const doc = @import("../stage0/doc.zig");
+const stage_pass = @import("../stage_pass.zig");
 const typecheck = @import("../analysis/typecheck.zig");
 
 const NormalizeContext = struct {
@@ -40,6 +41,7 @@ pub fn lowerToIr(ir: *core.Ir) !void {
     defer code.deinit();
 
     try normalizeDocumentCode(ir, &code);
+    try stage_pass.runAfterPages(ir);
     try ir.finalize();
     try typecheck.refreshSolvedFrameHints(ir.allocator, ir);
 }
@@ -78,6 +80,9 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
             },
             .set_property => |property| {
                 try ir.setNodeProperty(try ctx.node(property.node), property.key, property.value);
+            },
+            .set_content => |content| {
+                try ir.setNodeContent(try ctx.node(content.node), content.value);
             },
             .add_constraint => |constraint| {
                 try ir.constraints.append(ir.allocator, try mapConstraint(&ctx, constraint));

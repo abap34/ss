@@ -32,6 +32,10 @@ pub const Term = union(enum) {
         key: []const u8,
         value: []const u8,
     },
+    set_content: struct {
+        node: HandleId,
+        value: []const u8,
+    },
     add_constraint: core.Constraint,
     materialize_fragment: *core.Fragment,
 };
@@ -99,6 +103,7 @@ pub const Document = struct {
                 allocator.free(property.key);
                 allocator.free(property.value);
             },
+            .set_content => |content| allocator.free(content.value),
             else => {},
         }
     }
@@ -245,6 +250,22 @@ pub const Document = struct {
     pub fn getNodeProperty(self: *Document, node_id: HandleId, key: []const u8) ?[]const u8 {
         const node = self.getNode(node_id) orelse return null;
         return core.nodeProperty(node, key);
+    }
+
+    pub fn setNodeContent(self: *Document, node_id: HandleId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        node.content = try self.allocator.dupe(u8, value);
+        try self.terms.append(self.allocator, .{ .set_content = .{
+            .node = node_id,
+            .value = try self.allocator.dupe(u8, value),
+        } });
+    }
+
+    pub fn appendNodeContent(self: *Document, node_id: HandleId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        const current = node.content orelse "";
+        const updated = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
+        try self.setNodeContent(node_id, updated);
     }
 
     pub fn addAnchorConstraint(
@@ -465,23 +486,6 @@ pub const Document = struct {
                 break :blk try self.makeNodeWithOrigin(page_id, attached, .derived, source_id, "highlight", "highlight", .overlay, .text, highlight.note, origin);
             },
         };
-    }
-
-    fn buildTocText(self: *Document, document_id: HandleId) ![]const u8 {
-        var pages = try self.select(self.allocator, .{ .document = document_id }, core.Query.documentPages());
-        defer pages.deinit(self.allocator);
-        var text = std.ArrayList(u8).empty;
-        defer text.deinit(self.allocator);
-        try text.appendSlice(self.allocator, "Table of Contents\n");
-        for (pages.selection.ids.items) |member_page_id| {
-            var titles = try self.select(self.allocator, .{ .page = member_page_id }, core.Query.pageObjectsByRole("title"));
-            defer titles.deinit(self.allocator);
-            const title_id = titles.firstId() orelse continue;
-            const title = self.getNode(title_id) orelse continue;
-            const line = try std.fmt.allocPrint(self.allocator, "- {s} .... {d}\n", .{ title.content.?, self.pageIndexOf(member_page_id) });
-            try text.appendSlice(self.allocator, line);
-        }
-        return text.toOwnedSlice(self.allocator);
     }
 
     pub fn createFragment(

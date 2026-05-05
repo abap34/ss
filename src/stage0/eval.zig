@@ -297,6 +297,7 @@ fn evalExpr(
                         .args = std.ArrayList(Expr).empty,
                     });
                 }
+                break :blk .{ .function = try typecheck.functionRefFor(ir.allocator, func) };
             }
             reportUnknownIdentifier(name, current_origin);
             break :blk error.UnknownIdentifier;
@@ -460,6 +461,35 @@ const BuiltinContext = struct {
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
         try self.ir.setNodeProperty(object_id, key, value);
+    }
+
+    pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
+        const func = self.functions.get(function.name) orelse {
+            reportUnknownFunction(function.name, self.current_origin);
+            return error.UnknownFunction;
+        };
+        return try invokeUserFunctionValues(self.ir, self.page_id, self.mode, self.env, self.functions, func, self.current_origin, args);
+    }
+
+    pub fn pageIndex(self: *BuiltinContext, page_id: core.NodeId) usize {
+        return self.ir.pageIndexOf(page_id);
+    }
+
+    pub fn pageCount(self: *BuiltinContext) usize {
+        return self.ir.pageCount();
+    }
+
+    pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
+        const node = self.ir.getNode(object_id) orelse return null;
+        return node.content;
+    }
+
+    pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
+        try self.ir.setNodeContent(object_id, text);
+    }
+
+    pub fn appendNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
+        try self.ir.appendNodeContent(object_id, text);
     }
 
     pub fn equalAnchorConstraintSet(
@@ -757,6 +787,30 @@ fn bindUserFunctionArgs(
         try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
+}
+
+fn bindUserFunctionValueArgs(
+    ir: *doc.Document,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    caller_env: *std.StringHashMap(core.Value),
+    local_env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    func: FunctionDecl,
+    current_origin: []const u8,
+    args: []const core.Value,
+) !void {
+    const min = typecheck.requiredParamCount(func);
+    if (args.len < min or args.len > func.params.items.len) return error.InvalidArity;
+    for (func.params.items, 0..) |param, index| {
+        const value = if (index < args.len)
+            args[index]
+        else
+            try evalExpr(ir, page_id, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
+        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
+    }
+    _ = caller_env;
 }
 
 fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.Value {
@@ -1200,6 +1254,41 @@ fn invokeUserFunctionValue(
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
     try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
+
+    var last_code_like: ?core.NodeId = null;
+    for (func.statements.items) |inner| {
+        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, &last_code_like, inner, current_origin);
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                return value;
+            },
+        }
+    }
+
+    return error.FunctionDidNotReturnValue;
+}
+
+fn invokeUserFunctionValues(
+    ir: *doc.Document,
+    page_id: core.NodeId,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    func: FunctionDecl,
+    current_origin: []const u8,
+    args: []const core.Value,
+) anyerror!core.Value {
+    if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+
+    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer local_env.deinit();
+    var it = env.iterator();
+    while (it.next()) |entry| {
+        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    try bindUserFunctionValueArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, args);
 
     var last_code_like: ?core.NodeId = null;
     for (func.statements.items) |inner| {

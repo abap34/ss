@@ -72,6 +72,90 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const right = try ctx.evalStringArg(call, 1);
             break :blk .{ .string = try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right }) };
         },
+        .foreach => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            errdefer target.deinit(ctx.ir.allocator);
+            const callback = try evalFunctionArg(ctx, call, 1);
+            var extras = try evalExtraArgs(ctx, call, 2);
+            defer extras.deinit(ctx.ir.allocator);
+            defer deinitValues(ctx.ir.allocator, extras.items);
+            const selection = switch (target) {
+                .selection => |sel| sel,
+                else => return error.ExpectedSelection,
+            };
+            var snapshot = try selection.clone(ctx.ir.allocator);
+            defer snapshot.deinit(ctx.ir.allocator);
+            for (snapshot.ids.items) |id| {
+                var args = std.ArrayList(core.Value).empty;
+                defer args.deinit(ctx.ir.allocator);
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_sort, id));
+                try args.appendSlice(ctx.ir.allocator, extras.items);
+                var result = try ctx.invokeCallback(callback, args.items);
+                defer result.deinit(ctx.ir.allocator);
+            }
+            break :blk target;
+        },
+        .fold => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
+            var accumulator = try ctx.evalStringArg(call, 1);
+            const callback = try evalFunctionArg(ctx, call, 2);
+            var extras = try evalExtraArgs(ctx, call, 3);
+            defer extras.deinit(ctx.ir.allocator);
+            defer deinitValues(ctx.ir.allocator, extras.items);
+            const selection = switch (target) {
+                .selection => |sel| sel,
+                else => return error.ExpectedSelection,
+            };
+            var snapshot = try selection.clone(ctx.ir.allocator);
+            defer snapshot.deinit(ctx.ir.allocator);
+            for (snapshot.ids.items) |id| {
+                var args = std.ArrayList(core.Value).empty;
+                defer args.deinit(ctx.ir.allocator);
+                try args.append(ctx.ir.allocator, .{ .string = accumulator });
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_sort, id));
+                try args.appendSlice(ctx.ir.allocator, extras.items);
+                var result = try ctx.invokeCallback(callback, args.items);
+                defer result.deinit(ctx.ir.allocator);
+                accumulator = switch (result) {
+                    .string => |text| text,
+                    else => return error.ExpectedStringArgument,
+                };
+            }
+            break :blk .{ .string = accumulator };
+        },
+        .join => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
+            const separator = try ctx.evalStringArg(call, 1);
+            const callback = try evalFunctionArg(ctx, call, 2);
+            var extras = try evalExtraArgs(ctx, call, 3);
+            defer extras.deinit(ctx.ir.allocator);
+            defer deinitValues(ctx.ir.allocator, extras.items);
+            const selection = switch (target) {
+                .selection => |sel| sel,
+                else => return error.ExpectedSelection,
+            };
+            var snapshot = try selection.clone(ctx.ir.allocator);
+            defer snapshot.deinit(ctx.ir.allocator);
+            var out = std.ArrayList(u8).empty;
+            defer out.deinit(ctx.ir.allocator);
+            for (snapshot.ids.items, 0..) |id, index| {
+                var args = std.ArrayList(core.Value).empty;
+                defer args.deinit(ctx.ir.allocator);
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_sort, id));
+                try args.appendSlice(ctx.ir.allocator, extras.items);
+                var result = try ctx.invokeCallback(callback, args.items);
+                defer result.deinit(ctx.ir.allocator);
+                const text = switch (result) {
+                    .string => |value| value,
+                    else => return error.ExpectedStringArgument,
+                };
+                if (index > 0) try out.appendSlice(ctx.ir.allocator, separator);
+                try out.appendSlice(ctx.ir.allocator, text);
+            }
+            break :blk .{ .string = try out.toOwnedSlice(ctx.ir.allocator) };
+        },
         .first => blk: {
             const selection = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             break :blk switch (selection) {
@@ -116,6 +200,35 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 else => unreachable,
             }
             break :blk .{ .selection = result };
+        },
+        .page_index => blk: {
+            const page_id = try evalPageArg(ctx, call, 0);
+            break :blk .{ .number = @floatFromInt(ctx.pageIndex(page_id)) };
+        },
+        .page_count => blk: {
+            _ = try evalDocumentArg(ctx, call, 0);
+            break :blk .{ .number = @floatFromInt(ctx.pageCount()) };
+        },
+        .content => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
+        },
+        .set_content => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            const text = try ctx.evalStringArg(call, 1);
+            try ctx.setNodeContent(object_id, text);
+            break :blk .{ .object = object_id };
+        },
+        .clear_content => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            try ctx.setNodeContent(object_id, "");
+            break :blk .{ .object = object_id };
+        },
+        .append_content => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            const text = try ctx.evalStringArg(call, 1);
+            try ctx.appendNodeContent(object_id, text);
+            break :blk .{ .object = object_id };
         },
         .object => blk: {
             const content = try ctx.evalStringArg(call, 0);
@@ -218,4 +331,58 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .object = object_id };
         },
     };
+}
+
+fn itemValue(sort: core.SelectionItemSort, id: core.NodeId) core.Value {
+    return switch (sort) {
+        .page => .{ .page = id },
+        .object => .{ .object = id },
+    };
+}
+
+fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.FunctionRef {
+    var value = try ctx.evalExprValue(call.args.items[index]);
+    defer value.deinit(ctx.ir.allocator);
+    return switch (value) {
+        .function => |function| function,
+        else => error.InvalidSemanticSort,
+    };
+}
+
+fn evalPageArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId {
+    var value = try ctx.evalExprValue(call.args.items[index]);
+    defer value.deinit(ctx.ir.allocator);
+    return switch (value) {
+        .page => |id| id,
+        else => error.InvalidSemanticSort,
+    };
+}
+
+fn evalDocumentArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId {
+    var value = try ctx.evalExprValue(call.args.items[index]);
+    defer value.deinit(ctx.ir.allocator);
+    return switch (value) {
+        .document => |id| id,
+        else => error.InvalidSemanticSort,
+    };
+}
+
+fn evalExtraArgs(ctx: anytype, call: ast.CallExpr, start_index: usize) !std.ArrayList(core.Value) {
+    var values = std.ArrayList(core.Value).empty;
+    errdefer {
+        deinitValues(ctx.ir.allocator, values.items);
+        values.deinit(ctx.ir.allocator);
+    }
+    var index = start_index;
+    while (index < call.args.items.len) : (index += 1) {
+        try values.append(ctx.ir.allocator, try ctx.evalExprValue(call.args.items[index]));
+    }
+    return values;
+}
+
+fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
+    for (values) |value| {
+        var owned = value;
+        owned.deinit(allocator);
+    }
 }
