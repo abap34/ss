@@ -1,5 +1,7 @@
 import std:core/objects
 
+fn compile_math(source: string) -> string @host(effects = [ExternalProcess, ReadTemp, WriteTemp], cache = math_hash(source))
+
 fn draw_text_op(self: object) -> object @op(draw_text)
 fn draw_code_highlight_op(self: object) -> object @op(draw_code_highlight)
 fn draw_vector_math_op(self: object) -> object @op(draw_vector_math)
