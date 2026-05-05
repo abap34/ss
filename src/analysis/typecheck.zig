@@ -406,6 +406,14 @@ pub fn collectVariableInfoFromProgram(
         }
     }
 
+    {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (program.document_statements.items) |stmt| {
+            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+        }
+    }
+
     for (program.pages.items) |page| {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
@@ -646,6 +654,9 @@ fn collectDefinitionsFromProgram(
         }
     }
     if (include_variables) {
+        for (program.document_statements.items) |stmt| {
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
+        }
         for (program.pages.items) |page| {
             for (page.statements.items) |stmt| {
                 try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
@@ -722,6 +733,9 @@ fn collectProgramHints(
         for (func.statements.items) |stmt| {
             try collectStatementHints(allocator, hints, functions, source, stmt);
         }
+    }
+    for (program.document_statements.items) |stmt| {
+        try collectStatementHints(allocator, hints, functions, source, stmt);
     }
     for (program.pages.items) |page| {
         for (page.statements.items) |stmt| {
@@ -1126,6 +1140,13 @@ fn checkPageStatements(
     functions: *const std.StringHashMap(ast.FunctionDecl),
     program: ast.Program,
 ) !void {
+    {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (program.document_statements.items) |stmt| {
+            try checkTopLevelStatement(allocator, ir, functions, &env, stmt);
+        }
+    }
     for (program.pages.items) |page| {
         var env = TypeEnv.init(allocator);
         defer env.deinit();

@@ -27,6 +27,11 @@ const EvalMode = union(enum) {
     detached: *DetachedBuilder,
 };
 
+const EvalContext = enum {
+    document,
+    page,
+};
+
 const DetachedBuilder = struct {
     page_id: core.NodeId,
     node_ids: std.ArrayList(core.NodeId),
@@ -182,6 +187,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.ExpectedStyleArgument => "ExpectedStyleArgument: expected a style argument",
         error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
         error.ExpectedObject => "ExpectedObject: expected an object argument",
+        error.NoCurrentPage => "NoCurrentPage: this operation is only valid inside a page block",
         error.UnknownAnchor => "UnknownAnchor: unknown anchor",
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
@@ -254,6 +260,25 @@ pub fn executeProgram(
     diagnostic_path = path;
     diagnostic_reported = false;
 
+    var document_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer document_env.deinit();
+    var document_last_code_like: ?core.NodeId = null;
+    for (program.document_statements.items) |stmt| {
+        const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, &document_last_code_like, stmt, null) catch |err| {
+            const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
+            if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+            return err;
+        };
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                var owned = value;
+                owned.deinit(ir.allocator);
+                return error.ReturnOutsideFunction;
+            },
+        }
+    }
+
     for (program.pages.items) |page| {
         const page_id = try ir.addPage(page.name);
         var last_code_like: ?core.NodeId = null;
@@ -261,7 +286,7 @@ pub fn executeProgram(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            const flow = executeStatement(ir, page_id, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
+            const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
                 const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
                 if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
                 return err;
@@ -281,6 +306,7 @@ pub fn executeProgram(
 fn evalExpr(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -292,7 +318,7 @@ fn evalExpr(
             if (env.get(name)) |value| break :blk value;
             if (functions.get(name)) |func| {
                 if (func.kind == .constant) {
-                    break :blk try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, .{
+                    break :blk try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, .{
                         .name = name,
                         .args = std.ArrayList(Expr).empty,
                     });
@@ -304,13 +330,14 @@ fn evalExpr(
         },
         .string => |text| .{ .string = text },
         .number => |value| .{ .number = value },
-        .call => |call| try evalCall(ir, page_id, mode, env, functions, current_origin, call),
+        .call => |call| try evalCall(ir, page_id, context, mode, env, functions, current_origin, call),
     };
 }
 
 fn evalCall(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -326,7 +353,7 @@ fn evalCall(
                     return error.UnknownFunction;
                 };
                 try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
-                return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
+                return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
             },
             else => {},
         }
@@ -337,10 +364,10 @@ fn evalCall(
             return error.UnknownFunction;
         }
         if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
-        return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
+        return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
     }
     if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
-        return try evalPrimitiveCall(ir, page_id, mode, env, functions, current_origin, call, descriptor);
+        return try evalPrimitiveCall(ir, page_id, context, mode, env, functions, current_origin, call, descriptor);
     }
     reportUnknownFunction(call.name, current_origin);
     return error.UnknownFunction;
@@ -349,6 +376,7 @@ fn evalCall(
 const BuiltinContext = struct {
     ir: *doc.Document,
     page_id: core.NodeId,
+    eval_context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -358,7 +386,8 @@ const BuiltinContext = struct {
         try validateArityRange(actual, min, max, self.current_origin);
     }
 
-    pub fn currentPageValue(self: *const BuiltinContext) core.Value {
+    pub fn currentPageValue(self: *const BuiltinContext) !core.Value {
+        if (self.eval_context != .page) return error.NoCurrentPage;
         return .{ .page = self.page_id };
     }
 
@@ -367,19 +396,19 @@ const BuiltinContext = struct {
     }
 
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        return try evalSelectCall(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call);
+        return try evalSelectCall(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call);
     }
 
     pub fn runDeriveCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        return try evalDeriveCall(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call);
+        return try evalDeriveCall(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call);
     }
 
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
-        return try evalExpr(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, expr);
+        return try evalExpr(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, expr);
     }
 
     pub fn evalStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
-        return try evalCallStringArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallStringArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalPropertyStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
@@ -387,27 +416,27 @@ const BuiltinContext = struct {
     }
 
     pub fn evalNumberArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!f32 {
-        return try evalCallNumberArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallNumberArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalObjectArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.NodeId {
-        return try evalCallObjectArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallObjectArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalAnchorArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.AnchorValue {
-        return try evalCallAnchorArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallAnchorArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalRoleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.Role {
-        return try evalCallRoleArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallRoleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalPayloadArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!names.ParsedPayload {
-        return try evalCallPayloadArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallPayloadArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalStyleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.StyleRef {
-        return try evalCallStyleArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallStyleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
@@ -438,6 +467,7 @@ const BuiltinContext = struct {
         payload_kind: core.PayloadKind,
         content: []const u8,
     ) !core.NodeId {
+        if (self.eval_context != .page) return error.NoCurrentPage;
         return switch (self.mode) {
             .attached => try self.ir.makeObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin),
             .detached => |builder| blk: {
@@ -449,6 +479,7 @@ const BuiltinContext = struct {
     }
 
     pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
+        if (self.eval_context != .page) return error.NoCurrentPage;
         return switch (self.mode) {
             .attached => try self.ir.makeGroupWithOrigin(self.page_id, true, child_ids, self.current_origin),
             .detached => |builder| blk: {
@@ -468,7 +499,7 @@ const BuiltinContext = struct {
             reportUnknownFunction(function.name, self.current_origin);
             return error.UnknownFunction;
         };
-        return try invokeUserFunctionValues(self.ir, self.page_id, self.mode, self.env, self.functions, func, self.current_origin, args);
+        return try invokeUserFunctionValues(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, func, self.current_origin, args);
     }
 
     pub fn pageIndex(self: *BuiltinContext, page_id: core.NodeId) usize {
@@ -513,6 +544,7 @@ const BuiltinContext = struct {
 fn evalPrimitiveCall(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -523,6 +555,7 @@ fn evalPrimitiveCall(
     var ctx = BuiltinContext{
         .ir = ir,
         .page_id = page_id,
+        .eval_context = context,
         .mode = mode,
         .env = env,
         .functions = functions,
@@ -618,14 +651,15 @@ fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requeste
 fn evalSelectCall(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[0]));
-    const op_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 1);
+    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[0]));
+    const op_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 1);
     const descriptor = registry.lookupQueryOp(op_name) orelse {
         reportUnknownQuery(op_name, current_origin);
         return error.UnknownQuery;
@@ -652,11 +686,11 @@ fn evalSelectCall(
             return try ir.select(ir.allocator, base, core.Query.documentPages());
         },
         .page_objects_by_role => {
-            const role = try evalCallRoleArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            const role = try evalCallRoleArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
             return try ir.select(ir.allocator, base, core.Query.pageObjectsByRole(role));
         },
         .document_objects_by_role => {
-            const role = try evalCallRoleArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            const role = try evalCallRoleArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
             return try ir.select(ir.allocator, base, core.Query.documentObjectsByRole(role));
         },
     }
@@ -665,14 +699,16 @@ fn evalSelectCall(
 fn evalDeriveCall(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[0]));
-    const op_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 1);
+    if (context != .page) return error.NoCurrentPage;
+    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[0]));
+    const op_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 1);
     const descriptor = registry.lookupTransformOp(op_name) orelse {
         reportUnknownTransform(op_name, current_origin);
         return error.UnknownTransform;
@@ -681,8 +717,8 @@ fn evalDeriveCall(
     if (descriptor.input_sort) |expected| try typecheck.ensureValueSortWithCode(ir, null, base, expected, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .rewrite_text => {
-            const old = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
-            const new = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 3);
+            const old = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
+            const new = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 3);
             return .{ .object = switch (mode) {
                 .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin),
                 .detached => |builder| blk: {
@@ -693,7 +729,7 @@ fn evalDeriveCall(
             } };
         },
         .highlight => {
-            const note = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            const note = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
             return .{ .object = try deriveHighlight(ir, page_id, mode, current_origin, base, note) };
         },
     }
@@ -771,6 +807,7 @@ fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8)
 fn bindUserFunctionArgs(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     caller_env: *std.StringHashMap(core.Value),
     local_env: *std.StringHashMap(core.Value),
@@ -781,9 +818,9 @@ fn bindUserFunctionArgs(
 ) !void {
     for (func.params.items, 0..) |param, index| {
         const value = if (index < call.args.items.len)
-            try evalExpr(ir, page_id, mode, caller_env, functions, current_origin, call.args.items[index])
+            try evalExpr(ir, page_id, context, mode, caller_env, functions, current_origin, call.args.items[index])
         else
-            try evalExpr(ir, page_id, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
         try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
@@ -792,6 +829,7 @@ fn bindUserFunctionArgs(
 fn bindUserFunctionValueArgs(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     caller_env: *std.StringHashMap(core.Value),
     local_env: *std.StringHashMap(core.Value),
@@ -806,7 +844,7 @@ fn bindUserFunctionValueArgs(
         const value = if (index < args.len)
             args[index]
         else
-            try evalExpr(ir, page_id, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
         try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
@@ -896,6 +934,7 @@ fn resolveValueObjectId(ir: *doc.Document, mode: EvalMode, value: core.Value) !c
 fn evalCallArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -903,12 +942,13 @@ fn evalCallArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.Value {
-    return try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[index]);
+    return try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[index]);
 }
 
 fn evalCallStringArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -916,12 +956,13 @@ fn evalCallStringArg(
     call: CallExpr,
     index: usize,
 ) anyerror![]const u8 {
-    return try resolveValueString(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueString(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallNumberArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -929,12 +970,13 @@ fn evalCallNumberArg(
     call: CallExpr,
     index: usize,
 ) anyerror!f32 {
-    return try resolveValueNumber(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueNumber(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallObjectArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -942,12 +984,13 @@ fn evalCallObjectArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.NodeId {
-    return try resolveValueObjectId(ir, mode, try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueObjectId(ir, mode, try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallAnchorArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -955,12 +998,13 @@ fn evalCallAnchorArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.AnchorValue {
-    return try resolveValueAnchor(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueAnchor(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallStyleArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -968,12 +1012,13 @@ fn evalCallStyleArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.StyleRef {
-    return try resolveValueStyle(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueStyle(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallRoleArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -981,7 +1026,7 @@ fn evalCallRoleArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.Role {
-    const role_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, index);
+    const role_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, index);
     return names.parseRoleName(role_name) orelse {
         reportNamedResolutionError(error.UnknownRole, "role", role_name, current_origin);
         return error.UnknownRole;
@@ -991,6 +1036,7 @@ fn evalCallRoleArg(
 fn evalCallPayloadArg(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -998,7 +1044,7 @@ fn evalCallPayloadArg(
     call: CallExpr,
     index: usize,
 ) anyerror!names.ParsedPayload {
-    const payload_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, index);
+    const payload_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, index);
     return names.parsePayloadName(payload_name) orelse {
         reportNamedResolutionError(error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
         return error.UnknownPayloadKind;
@@ -1039,6 +1085,7 @@ const ResolvedTarget = struct {
 fn executeStatement(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1049,7 +1096,7 @@ fn executeStatement(
     const origin = if (origin_override) |override| override else try statementOrigin(ir.allocator, stmt.span);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
             switch (mode) {
                 .attached => try materializeStatementValue(ir, mode, last_code_like, value),
                 .detached => {},
@@ -1057,11 +1104,12 @@ fn executeStatement(
             try env.put(binding.name, value);
         },
         .bind_binding => |binding| {
+            if (context != .page) return error.NoCurrentPage;
             switch (mode) {
                 .attached => {
                     var builder = DetachedBuilder.init(page_id);
                     errdefer builder.deinit(ir.allocator);
-                    const value = try evalExpr(ir, page_id, .{ .detached = &builder }, env, functions, origin, binding.expr);
+                    const value = try evalExpr(ir, page_id, context, .{ .detached = &builder }, env, functions, origin, binding.expr);
                     switch (value) {
                         .fragment => {
                             if (builder.isEmpty()) {
@@ -1082,19 +1130,19 @@ fn executeStatement(
                     }
                 },
                 .detached => {
-                    const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
+                    const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
                     try env.put(binding.name, value);
                 },
             }
         },
         .return_expr => |expr| {
-            const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
             return .{ .returned = value };
         },
         .property_set => |property_set| {
             const base = env.get(property_set.object_name) orelse return error.UnknownIdentifier;
             const object_id = try resolveValueObjectId(ir, mode, base);
-            const value = try evalExpr(ir, page_id, mode, env, functions, origin, property_set.value);
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, property_set.value);
             defer {
                 var owned = value;
                 owned.deinit(ir.allocator);
@@ -1104,10 +1152,11 @@ fn executeStatement(
             try ir.setNodeProperty(object_id, property_set.property_name, text);
         },
         .constrain => |decl| {
+            if (context != .page) return error.NoCurrentPage;
             const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
             const source = try resolveAnchorRef(ir, mode, env, origin, decl.source, false);
             const offset: f32 = if (decl.offset) |expr| blk: {
-                const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
                 break :blk try resolveValueNumber(value);
             } else 0;
             switch (mode) {
@@ -1123,15 +1172,15 @@ fn executeStatement(
         .expr_stmt => |expr| switch (expr) {
             .call => |call| {
                 if (functions.contains(call.name)) {
-                    try executeCallStatement(ir, page_id, mode, env, functions, last_code_like, origin, call);
+                    try executeCallStatement(ir, page_id, context, mode, env, functions, last_code_like, origin, call);
                 } else {
-                    var value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                    var value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
                     defer value.deinit(ir.allocator);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
             },
             else => {
-                var value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                var value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
                 defer value.deinit(ir.allocator);
                 try materializeStatementValue(ir, mode, last_code_like, value);
             },
@@ -1196,6 +1245,7 @@ fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
 fn executeCallStatement(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1204,7 +1254,7 @@ fn executeCallStatement(
     call: CallExpr,
 ) anyerror!void {
     const func = functions.get(call.name) orelse {
-        _ = try evalCall(ir, page_id, mode, env, functions, current_origin, call);
+        _ = try evalCall(ir, page_id, context, mode, env, functions, current_origin, call);
         return;
     };
     try validateUserFunctionArity(call.args.items.len, func, current_origin);
@@ -1215,9 +1265,9 @@ fn executeCallStatement(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
+    try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, call);
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -1236,6 +1286,7 @@ fn executeCallStatement(
 fn invokeUserFunctionValue(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1253,11 +1304,11 @@ fn invokeUserFunctionValue(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
+    try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, &last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, &last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -1273,6 +1324,7 @@ fn invokeUserFunctionValue(
 fn invokeUserFunctionValues(
     ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1288,11 +1340,11 @@ fn invokeUserFunctionValues(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    try bindUserFunctionValueArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, args);
+    try bindUserFunctionValueArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, args);
 
     var last_code_like: ?core.NodeId = null;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, &last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, &last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {

@@ -109,6 +109,10 @@ const Parser = struct {
             } else if (try self.consumeKeyword("property")) {
                 const property = try self.parsePropertyAfterKeyword(item_start);
                 try program.properties.append(self.allocator, property);
+            } else if (try self.consumeKeyword("document")) {
+                var statements = try self.parseBodyStatements();
+                try program.document_statements.appendSlice(self.allocator, statements.items);
+                statements.deinit(self.allocator);
             } else {
                 const page = try self.parsePage();
                 try program.pages.append(self.allocator, page);
