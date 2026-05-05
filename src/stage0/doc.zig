@@ -464,21 +464,7 @@ pub const Document = struct {
                 const source_id = base.selection.first() orelse return error.EmptySelection;
                 break :blk try self.makeNodeWithOrigin(page_id, attached, .derived, source_id, "highlight", "highlight", .overlay, .text, highlight.note, origin);
             },
-            .page_number => blk: {
-                const id = try self.makeNodeWithOrigin(page_id, attached, .derived, base.page, "page-number", "page_number", .text, .text, "", origin);
-                if (attached) {
-                    try self.addAnchorConstraint(id, .right, .{ .page = .right }, -core.PageLayout.page_number_right_inset, origin);
-                    try self.addAnchorConstraint(id, .bottom, .{ .page = .bottom }, core.PageLayout.page_number_bottom_inset, origin);
-                }
-                break :blk id;
-            },
-            .toc => try self.deriveToc(page_id, attached, base.document, origin),
         };
-    }
-
-    fn deriveToc(self: *Document, page_id: HandleId, attached: bool, document_id: HandleId, origin: []const u8) !HandleId {
-        const owned = try self.buildTocText(document_id);
-        return self.makeNodeWithOrigin(page_id, attached, .derived, document_id, "toc", "toc", .text, .text, owned, origin);
     }
 
     fn buildTocText(self: *Document, document_id: HandleId) ![]const u8 {

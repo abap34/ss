@@ -348,8 +348,6 @@ pub const PageLayout = struct {
     pub const height: f32 = 720;
     pub const flow_margin_x: f32 = 60;
     pub const flow_top: f32 = 660;
-    pub const page_number_right_inset: f32 = 24;
-    pub const page_number_bottom_inset: f32 = 20;
     pub const content_indent: f32 = 18;
     pub const max_visual_width: f32 = 1160;
     pub const default_asset_width: f32 = 220;
@@ -557,8 +555,6 @@ pub const Transform = struct {
         highlight: struct {
             note: []const u8,
         },
-        page_number: void,
-        toc: void,
     };
 
     pub fn rewriteText(old: []const u8, new: []const u8) Transform {
@@ -577,19 +573,4 @@ pub const Transform = struct {
         };
     }
 
-    pub fn pageNumber() Transform {
-        return .{
-            .input = .page,
-            .name = "page-number",
-            .op = .{ .page_number = {} },
-        };
-    }
-
-    pub fn toc() Transform {
-        return .{
-            .input = .document,
-            .name = "toc",
-            .op = .{ .toc = {} },
-        };
-    }
 };
