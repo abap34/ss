@@ -294,6 +294,14 @@ fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
         try item.intField("line", entry.value_ptr.line);
         try item.intField("column", entry.value_ptr.column);
         try item.intField("length", entry.value_ptr.length);
+        try item.intField("moduleId", entry.value_ptr.module_id);
+        if (ir.moduleById(entry.value_ptr.module_id)) |module| {
+            try item.stringField("moduleSpec", module.spec);
+            try item.enumTagField("moduleKind", module.kind);
+        } else {
+            try item.nullField("moduleSpec");
+            try item.stringField("moduleKind", "unknown");
+        }
         try item.optionalStringField("file", entry.value_ptr.file);
         try item.end();
     }

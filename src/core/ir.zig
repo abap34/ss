@@ -72,6 +72,7 @@ pub const Definition = struct {
     column: usize,
     length: usize,
     kind: DefinitionKind,
+    module_id: SourceModuleId,
     file: ?[]const u8 = null,
 };
 
