@@ -18,6 +18,15 @@
     ],
     "description": "Create an ss function"
   },
+  "annotated function": {
+    "prefix": "ss-fn-ann",
+    "body": [
+      "fn ${1:name}(${2:self}: object<${3:TextObject}>) -> ${4:RenderDoc} @${5:render}(${3})",
+      "${6:return draw_text(${2}.frame, { text: ${2}.content })}",
+      "end"
+    ],
+    "description": "Create an annotated function declaration"
+  },
   "constant": {
     "prefix": "ss-const",
     "body": [
@@ -26,6 +35,42 @@
       ">>"
     ],
     "description": "Create a top-level shared constant"
+  },
+  "object class": {
+    "prefix": "ss-type-object",
+    "body": [
+      "type ${1:MyObject} = object {",
+      "  base = ${2:TextObject}",
+      "  roles = [\"${3:my_role}\"]",
+      "",
+      "  ${4:field_name}: ${5:string} = \"${6:value}\"",
+      "}"
+    ],
+    "description": "Declare an object class with fields"
+  },
+  "extend object": {
+    "prefix": "ss-extend",
+    "body": [
+      "extend ${1:TextObject} {",
+      "  roles = [\"${2:my_role}\"]",
+      "  ${3:field_name}: ${4:string} = \"${5:value}\"",
+      "}"
+    ],
+    "description": "Extend an existing object class"
+  },
+  "value domain": {
+    "prefix": "ss-type",
+    "body": [
+      "type ${1:MyDomain} = \"${2:a}\" | \"${3:b}\""
+    ],
+    "description": "Declare a value-domain alias"
+  },
+  "host capability": {
+    "prefix": "ss-host",
+    "body": [
+      "fn ${1:compile_asset}(${2:source}: ${3:string}) -> ${4:string} @host(effects = [${5:ExternalProcess}], cache = ${6:hash_key})"
+    ],
+    "description": "Declare a host capability boundary"
   },
   "text block": {
     "prefix": "ss-text",
