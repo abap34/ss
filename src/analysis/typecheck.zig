@@ -147,7 +147,8 @@ fn clearDiagnosticOriginModule() void {
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
-    try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
+    const diagnostic_origin = try sink.allocator.dupe(u8, origin);
+    try sink.addValidationDiagnostic(.@"error", null, null, diagnostic_origin, .{
         .user_report = .{ .message = message },
     });
 }
@@ -337,7 +338,7 @@ pub fn collectVariableTypesFromProgram(
     functions: *const std.StringHashMap(ast.FunctionDecl),
     program: ast.Program,
 ) !std.StringHashMap(core.SemanticSort) {
-    var infos = try collectVariableInfoFromProgram(allocator, functions, program);
+    var infos = try collectVariableInfoFromProgram(allocator, functions, program, null);
     defer infos.deinit();
     var variables = std.StringHashMap(core.SemanticSort).init(allocator);
     errdefer variables.deinit();
@@ -352,6 +353,7 @@ pub fn collectVariableInfoFromProgram(
     allocator: std.mem.Allocator,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     program: ast.Program,
+    diagnostic_ir: ?*core.Ir,
 ) !std.StringHashMap(VariableInfo) {
     var variables = std.StringHashMap(VariableInfo).init(allocator);
     errdefer variables.deinit();
@@ -362,15 +364,17 @@ pub fn collectVariableInfoFromProgram(
 
         for (func.params.items) |param| {
             if (param.default_value) |default_value| {
-                const info = try inferExprInfo(allocator, null, functions, &env, default_value.*, "");
-                try ensureType(null, allocator, info, param.ty, "", .UnmatchedArgumentType);
+                const origin = try statementOrigin(allocator, func.span);
+                defer allocator.free(origin);
+                const info = try inferExprInfo(allocator, diagnostic_ir, functions, &env, default_value.*, origin);
+                try ensureType(diagnostic_ir, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
             try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
             try variables.put(param.name, .{ .ty = param.ty, .sort = param.sort });
         }
 
         for (func.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, functions, stmt, &variables);
         }
     }
 
@@ -378,7 +382,7 @@ pub fn collectVariableInfoFromProgram(
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         for (program.document_statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, functions, stmt, &variables);
         }
     }
 
@@ -387,7 +391,7 @@ pub fn collectVariableInfoFromProgram(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, functions, stmt, &variables);
         }
     }
 
@@ -436,9 +440,37 @@ pub fn buildIr(
     if (ir.module_order.items.len == 0 or ir.module_order.items[ir.module_order.items.len - 1] != ir.project_module_id) {
         try ir.module_order.append(allocator, ir.project_module_id);
     }
-    ir.variable_types = try collectVariableTypesFromProgram(allocator, &ir.functions, ir.projectProgram());
+    ir.variable_types = collectVariableTypesFromProgramWithDiagnostics(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| {
+        printIrDiagnosticsOrFallback(&ir, err);
+        return error.DiagnosticsFailed;
+    };
     try populateIrAnalysis(allocator, &ir);
     return ir;
+}
+
+fn collectVariableTypesFromProgramWithDiagnostics(
+    allocator: std.mem.Allocator,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    program: ast.Program,
+    diagnostic_ir: *core.Ir,
+) !std.StringHashMap(core.SemanticSort) {
+    var infos = try collectVariableInfoFromProgram(allocator, functions, program, diagnostic_ir);
+    defer infos.deinit();
+    var variables = std.StringHashMap(core.SemanticSort).init(allocator);
+    errdefer variables.deinit();
+    var iterator = infos.iterator();
+    while (iterator.next()) |entry| {
+        try variables.put(entry.key_ptr.*, entry.value_ptr.sort);
+    }
+    return variables;
+}
+
+fn printIrDiagnosticsOrFallback(ir: *core.Ir, err: anyerror) void {
+    if (utils.err.hasIrErrors(ir)) {
+        utils.err.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    } else {
+        std.debug.print("error: {s}\n", .{@errorName(err)});
+    }
 }
 
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -933,6 +965,7 @@ fn findIdentifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: [
 
 fn collectVariableTypesFromStatement(
     allocator: std.mem.Allocator,
+    diagnostic_ir: ?*core.Ir,
     env: *TypeEnv,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     stmt: ast.Statement,
@@ -942,27 +975,27 @@ fn collectVariableTypesFromStatement(
     defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, null, functions, env, binding.expr, origin);
+            const info = try inferExprInfo(allocator, diagnostic_ir, functions, env, binding.expr, origin);
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
         },
         .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, null, functions, env, binding.expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, binding.expr, origin);
             try env.put(binding.name, infoFromSort(.fragment));
             try variables.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, expr, origin);
         },
         .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, null, functions, env, property_set.value, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, property_set.value, origin);
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
+                _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, expr, origin);
             }
         },
     }
