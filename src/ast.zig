@@ -1,22 +1,36 @@
 const std = @import("std");
 const core = @import("model");
+pub const types = @import("language_type");
 
 const Allocator = std.mem.Allocator;
+pub const Type = types.Type;
 
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
+    types: std.ArrayList(TypeDecl),
+    objects: std.ArrayList(ObjectDecl),
+    object_extensions: std.ArrayList(ObjectExtensionDecl),
     functions: std.ArrayList(FunctionDecl),
+    document_statements: std.ArrayList(Statement),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .functions = .empty, .pages = .empty };
+        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
         self.imports.deinit(allocator);
+        for (self.types.items) |type_decl| type_decl.deinit(allocator);
+        self.types.deinit(allocator);
+        for (self.objects.items) |*object| object.deinit(allocator);
+        self.objects.deinit(allocator);
+        for (self.object_extensions.items) |*extension| extension.deinit(allocator);
+        self.object_extensions.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
+        for (self.document_statements.items) |*stmt| stmt.deinit(allocator);
+        self.document_statements.deinit(allocator);
         for (self.pages.items) |*page| {
             for (page.statements.items) |*stmt| stmt.deinit(allocator);
             page.statements.deinit(allocator);
@@ -28,6 +42,66 @@ pub const Program = struct {
 pub const ImportDecl = struct {
     spec: []const u8,
     span: Span,
+};
+
+pub const TypeDecl = struct {
+    name: []const u8,
+    body: []const u8,
+    refinement: ?[]const u8 = null,
+    span: Span,
+
+    pub fn deinit(self: TypeDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.body);
+        if (self.refinement) |refinement| allocator.free(refinement);
+    }
+};
+
+pub const ObjectFieldDecl = struct {
+    name: []const u8,
+    value_type: []const u8,
+    default_value: ?[]const u8 = null,
+    span: Span,
+
+    pub fn deinit(self: *ObjectFieldDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.value_type);
+        if (self.default_value) |default_value| allocator.free(default_value);
+    }
+};
+
+pub const ObjectDecl = struct {
+    name: []const u8,
+    base: ?[]const u8 = null,
+    roles: std.ArrayList([]const u8),
+    fields: std.ArrayList(ObjectFieldDecl),
+    span: Span,
+
+    pub fn deinit(self: *ObjectDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        if (self.base) |base| allocator.free(base);
+        for (self.roles.items) |role| allocator.free(role);
+        self.roles.deinit(allocator);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+};
+
+pub const ObjectExtensionDecl = struct {
+    target: []const u8,
+    implements: ?[]const u8 = null,
+    roles: std.ArrayList([]const u8),
+    fields: std.ArrayList(ObjectFieldDecl),
+    span: Span,
+
+    pub fn deinit(self: *ObjectExtensionDecl, allocator: Allocator) void {
+        allocator.free(self.target);
+        if (self.implements) |implements| allocator.free(implements);
+        for (self.roles.items) |role| allocator.free(role);
+        self.roles.deinit(allocator);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
 };
 
 pub const PageDecl = struct {
@@ -45,19 +119,35 @@ pub const FunctionDecl = struct {
     name: []const u8,
     span: Span,
     params: std.ArrayList(ParamDecl),
+    result_type: Type,
     result_sort: core.SemanticSort,
+    annotations: std.ArrayList(Annotation),
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
+        for (self.annotations.items) |*annotation| annotation.deinit(allocator);
+        self.annotations.deinit(allocator);
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
     }
 };
 
+pub const Annotation = struct {
+    name: []const u8,
+    args: ?[]const u8 = null,
+    span: Span,
+
+    pub fn deinit(self: *Annotation, allocator: Allocator) void {
+        allocator.free(self.name);
+        if (self.args) |args| allocator.free(args);
+    }
+};
+
 pub const ParamDecl = struct {
     name: []const u8,
+    ty: Type,
     sort: core.SemanticSort,
     default_value: ?*Expr = null,
 
@@ -122,16 +212,6 @@ pub const Statement = struct {
     kind: Kind,
 
     pub const Kind = union(enum) {
-        title: []const u8,
-        subtitle: []const u8,
-        math: []const u8,
-        mathtex: []const u8,
-        figure: []const u8,
-        image: []const u8,
-        pdf_ref: []const u8,
-        code: []const u8,
-        page_number: void,
-        toc: void,
         let_binding: struct {
             name: []const u8,
             expr: Expr,
@@ -148,7 +228,6 @@ pub const Statement = struct {
             value: Expr,
         },
         expr_stmt: Expr,
-        highlight: []const u8,
     };
 
     pub fn deinit(self: *Statement, allocator: Allocator) void {
@@ -159,7 +238,6 @@ pub const Statement = struct {
             .constrain => |*decl| decl.deinit(allocator),
             .property_set => |*property_set| property_set.value.deinit(allocator),
             .expr_stmt => |*expr| expr.deinit(allocator),
-            else => {},
         }
     }
 };

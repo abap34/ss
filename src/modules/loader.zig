@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
-const syntax = @import("parser/syntax.zig");
+const syntax = @import("../syntax/parse.zig");
 const stdlib_assets = @import("stdlib_assets");
 
 const max_module_bytes = 256 * 1024;
@@ -12,6 +12,13 @@ const EmbeddedModule = struct {
 };
 
 const embedded_modules = [_]EmbeddedModule{
+    .{ .spec = "std:core/classes", .source = stdlib_assets.core_classes },
+    .{ .spec = "std:core/layout", .source = stdlib_assets.core_layout },
+    .{ .spec = "std:core/objects", .source = stdlib_assets.core_objects },
+    .{ .spec = "std:core/render", .source = stdlib_assets.core_render },
+    .{ .spec = "std:core/selectors", .source = stdlib_assets.core_selectors },
+    .{ .spec = "std:core/generated", .source = stdlib_assets.core_generated },
+    .{ .spec = "std:core/components", .source = stdlib_assets.core_components },
     .{ .spec = "std:themes/base", .source = stdlib_assets.themes_base },
     .{ .spec = "std:themes/default", .source = stdlib_assets.themes_default },
     .{ .spec = "std:themes/academic", .source = stdlib_assets.themes_academic },
@@ -69,10 +76,6 @@ pub fn loadGraph(
 
     graph.modules = try builder.takeModules();
     return graph;
-}
-
-pub fn validateImportedProgram(program: ast.Program) !void {
-    if (program.pages.items.len != 0) return error.InvalidLibraryModule;
 }
 
 pub fn formatUnknownImportMessage(
@@ -153,25 +156,26 @@ const Builder = struct {
         self.next_id += 1;
 
         const source = try self.allocator.dupe(u8, resolved.source);
-        errdefer self.allocator.free(source);
+        var owns_source = true;
+        errdefer if (owns_source) self.allocator.free(source);
         const program = try syntax.parse(self.allocator, source);
-        errdefer {
+        var owns_program = true;
+        errdefer if (owns_program) {
             var cleanup = program;
             cleanup.deinit(self.allocator);
-        }
-        switch (kind) {
-            .library => try validateImportedProgram(program),
-            .project => unreachable,
-        }
+        };
+        if (kind == .project) unreachable;
 
         const key = try self.allocator.dupe(u8, resolved.key);
         errdefer self.allocator.free(key);
         try self.by_key.put(key, module_id);
 
         const spec = try self.allocator.dupe(u8, resolved.spec);
-        errdefer self.allocator.free(spec);
+        var owns_spec = true;
+        errdefer if (owns_spec) self.allocator.free(spec);
         const path = if (resolved.path) |path_value| try self.allocator.dupe(u8, path_value) else null;
-        errdefer if (path) |owned_path| self.allocator.free(owned_path);
+        var owns_path = path != null;
+        errdefer if (owns_path) if (path) |owned_path| self.allocator.free(owned_path);
 
         try self.modules.append(self.allocator, .{
             .id = module_id,
@@ -182,6 +186,10 @@ const Builder = struct {
             .program = program,
             .resolved_import_ids = .empty,
         });
+        owns_source = false;
+        owns_program = false;
+        owns_spec = false;
+        owns_path = false;
 
         const importer_base_dir = if (path) |module_path| std.fs.path.dirname(module_path) orelse "." else ".";
         for (program.imports.items) |import_decl| {

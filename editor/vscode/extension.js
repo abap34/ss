@@ -119,15 +119,395 @@ function activate(context) {
   function getPropertyCompletionContext(document, position) {
     const line = document.lineAt(position.line).text;
     const head = line.slice(0, position.character);
-    const match = /([A-Za-z_][A-Za-z0-9_]*)\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(head);
+    const memberMatch = /([A-Za-z_][A-Za-z0-9_]*)\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(head);
+    if (memberMatch) {
+      return {
+        kind: "member",
+        objectName: memberMatch[1],
+        prefix: memberMatch[2] || "",
+      };
+    }
+    const setPropMatch = /\bset_prop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"([^"]*)$/.exec(head);
+    if (setPropMatch) {
+      return {
+        kind: "set_prop",
+        objectName: setPropMatch[1],
+        prefix: setPropMatch[2] || "",
+      };
+    }
+    return null;
+  }
+
+  function declarations(payload) {
+    return payload && payload.declarations && typeof payload.declarations === "object"
+      ? payload.declarations
+      : {};
+  }
+
+  function asArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function classBaseMap(payload) {
+    const result = new Map();
+    for (const item of asArray(declarations(payload).classes)) {
+      const name = String(item && item.name ? item.name : "");
+      if (!name) {
+        continue;
+      }
+      result.set(name, item.base ? String(item.base) : null);
+    }
+    return result;
+  }
+
+  function variableClassName(variable) {
+    if (!variable) {
+      return null;
+    }
+    const explicitClass = String(variable.objectClass || "");
+    if (explicitClass) {
+      return explicitClass;
+    }
+    const type = String(variable.type || variable.runtimeSort || "");
+    if (type === "document") {
+      return "DocumentObject";
+    }
+    if (type === "page") {
+      return "PageObject";
+    }
+    return null;
+  }
+
+  function inheritedFields(payload, className) {
+    const fields = asArray(declarations(payload).fields);
+    if (!className) {
+      return uniqueFields(fields);
+    }
+
+    const bases = classBaseMap(payload);
+    const chain = [];
+    const seen = new Set();
+    let current = className;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      chain.push(current);
+      current = bases.get(current);
+    }
+    chain.reverse();
+
+    const byName = new Map();
+    for (const classItem of chain) {
+      for (const field of fields) {
+        if (String(field && field.class ? field.class : "") !== classItem) {
+          continue;
+        }
+        const name = String(field && field.name ? field.name : "");
+        if (name) {
+          byName.set(name, field);
+        }
+      }
+    }
+    return Array.from(byName.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  }
+
+  function uniqueFields(fields) {
+    const byName = new Map();
+    for (const field of fields) {
+      const name = String(field && field.name ? field.name : "");
+      if (name) {
+        byName.set(name, field);
+      }
+    }
+    return Array.from(byName.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  }
+
+  function fieldCompletionItems(payload, objectName, prefix) {
+    const variable = asArray(payload.variables).find((item) => String(item && item.name ? item.name : "") === objectName);
+    const runtimeSort = String(variable && (variable.runtimeSort || variable.type) ? variable.runtimeSort || variable.type : "");
+    const staticType = String(variable && variable.type ? variable.type : "");
+    const isSelectionObject = runtimeSort === "selection" && staticType.startsWith("selection<object");
+    if (!variable || (!["document", "page", "object"].includes(runtimeSort) && !isSelectionObject)) {
+      return [];
+    }
+
+    const className = variableClassName(variable);
+    const fields = inheritedFields(payload, className);
+    return fields
+      .filter((field) => {
+        const name = String(field && field.name ? field.name : "");
+        return name && (!prefix || name.startsWith(prefix));
+      })
+      .map((field) => {
+        const name = String(field.name);
+        const completion = new vscode.CompletionItem(name, vscode.CompletionItemKind.Property);
+        completion.insertText = name;
+        completion.filterText = name;
+        const type = field.type ? String(field.type) : "";
+        const owner = field.class ? String(field.class) : "";
+        completion.detail = type ? `${type}${owner ? ` (${owner})` : ""}` : owner || "field";
+        const documentation = new vscode.MarkdownString();
+        if (type) {
+          documentation.appendMarkdown(`type: \`${type}\``);
+        }
+        if (field.default !== undefined && field.default !== null) {
+          if (documentation.value) {
+            documentation.appendText("\n\n");
+          }
+          documentation.appendMarkdown(`default: \`${String(field.default)}\``);
+        }
+        if (owner) {
+          if (documentation.value) {
+            documentation.appendText("\n\n");
+          }
+          documentation.appendMarkdown(`declared on: \`${owner}\``);
+        }
+        if (documentation.value) {
+          completion.documentation = documentation;
+        }
+        return completion;
+      });
+  }
+
+  function declarationCompletionItems(payload, prefix) {
+    const items = [];
+    const decl = declarations(payload);
+    const staticKeywords = ["import", "const", "document", "page", "fn", "let", "bind", "return", "end", "constrain", "type", "extend"];
+    const builtinTypes = ["document", "page", "object", "selection", "anchor", "style", "string", "number", "constraints", "fragment", "code", "list"];
+    const annotations = ["@render", "@phase", "@host", "@op", "@measure", "@layout", "@refine"];
+
+    for (const keyword of staticKeywords) {
+      if (prefix && !keyword.startsWith(prefix)) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(keyword, vscode.CompletionItemKind.Keyword);
+      completion.insertText = keyword;
+      completion.detail = "keyword";
+      items.push(completion);
+    }
+
+    for (const typeName of builtinTypes) {
+      if (prefix && !typeName.startsWith(prefix)) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(typeName, vscode.CompletionItemKind.TypeParameter);
+      completion.insertText = typeName;
+      completion.detail = "kernel type";
+      items.push(completion);
+    }
+
+    for (const annotation of annotations) {
+      const name = annotation.slice(1);
+      if (prefix && !name.startsWith(prefix) && !annotation.startsWith(prefix)) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(annotation, vscode.CompletionItemKind.Event);
+      completion.insertText = annotation;
+      completion.filterText = annotation;
+      completion.detail = "function annotation";
+      items.push(completion);
+    }
+
+    for (const item of asArray(decl.valueDomains)) {
+      const label = String(item && item.name ? item.name : "");
+      if (!label || (prefix && !label.startsWith(prefix))) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.TypeParameter);
+      completion.insertText = label;
+      completion.detail = item.body ? `type = ${String(item.body)}` : "type";
+      if (item.refinement) {
+        completion.documentation = new vscode.MarkdownString(`refinement: \`${String(item.refinement)}\``);
+      }
+      items.push(completion);
+    }
+
+    for (const item of asArray(decl.classes)) {
+      const label = String(item && item.name ? item.name : "");
+      if (!label || (prefix && !label.startsWith(prefix))) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.Class);
+      completion.insertText = label;
+      completion.detail = item.base ? `object class, base ${String(item.base)}` : "object class";
+      items.push(completion);
+    }
+
+    for (const item of asArray(decl.roles)) {
+      const label = String(item && item.name ? item.name : "");
+      if (!label || (prefix && !label.startsWith(prefix))) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.EnumMember);
+      completion.insertText = label;
+      completion.detail = item.class ? `role: ${String(item.class)}` : "role";
+      items.push(completion);
+    }
+
+    return items;
+  }
+
+  function declarationHover(payload, target) {
+    const decl = declarations(payload);
+    const markdown = new vscode.MarkdownString();
+
+    for (const item of asArray(decl.classes)) {
+      if (String(item && item.name ? item.name : "") !== target) {
+        continue;
+      }
+      markdown.appendCodeblock(`type ${target} = object { ... }`, "ss");
+      if (item.base) {
+        markdown.appendMarkdown(`base: \`${String(item.base)}\``);
+      } else {
+        markdown.appendMarkdown("object class");
+      }
+      return new vscode.Hover(markdown);
+    }
+
+    for (const item of asArray(decl.valueDomains)) {
+      if (String(item && item.name ? item.name : "") !== target) {
+        continue;
+      }
+      markdown.appendCodeblock(`type ${target} = ${String(item.body || "unknown")}`, "ss");
+      if (item.refinement) {
+        markdown.appendMarkdown(`refinement: \`${String(item.refinement)}\``);
+      }
+      return new vscode.Hover(markdown);
+    }
+
+    for (const item of asArray(decl.roles)) {
+      if (String(item && item.name ? item.name : "") !== target) {
+        continue;
+      }
+      markdown.appendCodeblock(target, "ss");
+      markdown.appendMarkdown(item.class ? `role of \`${String(item.class)}\`` : "role");
+      return new vscode.Hover(markdown);
+    }
+
+    const field = uniqueFields(asArray(decl.fields)).find((item) => String(item && item.name ? item.name : "") === target);
+    if (field) {
+      const type = field.type ? String(field.type) : "unknown";
+      markdown.appendCodeblock(`${target}: ${type}`, "ss");
+      if (field.class) {
+        markdown.appendMarkdown(`declared on: \`${String(field.class)}\``);
+      }
+      if (field.default !== undefined && field.default !== null) {
+        if (markdown.value) {
+          markdown.appendText("\n\n");
+        }
+        markdown.appendMarkdown(`default: \`${String(field.default)}\``);
+      }
+      return new vscode.Hover(markdown);
+    }
+
+    return null;
+  }
+
+  const cssNamedColors = new Map([
+    ["black", [0, 0, 0]],
+    ["white", [1, 1, 1]],
+    ["red", [1, 0, 0]],
+    ["green", [0, 128 / 255, 0]],
+    ["lime", [0, 1, 0]],
+    ["blue", [0, 0, 1]],
+    ["yellow", [1, 1, 0]],
+    ["cyan", [0, 1, 1]],
+    ["aqua", [0, 1, 1]],
+    ["magenta", [1, 0, 1]],
+    ["fuchsia", [1, 0, 1]],
+    ["gray", [128 / 255, 128 / 255, 128 / 255]],
+    ["grey", [128 / 255, 128 / 255, 128 / 255]],
+    ["silver", [192 / 255, 192 / 255, 192 / 255]],
+    ["maroon", [128 / 255, 0, 0]],
+    ["olive", [128 / 255, 128 / 255, 0]],
+    ["purple", [128 / 255, 0, 128 / 255]],
+    ["teal", [0, 128 / 255, 128 / 255]],
+    ["navy", [0, 0, 128 / 255]],
+    ["orange", [1, 165 / 255, 0]],
+  ]);
+
+  function parseSsColorLiteral(raw) {
+    const match = /^c"((?:\\.|[^"\\])*)"$/.exec(raw.trim());
     if (!match) {
       return null;
     }
-    return {
-      objectName: match[1],
-      prefix: match[2] || "",
-    };
+    let inner;
+    try {
+      inner = JSON.parse(`"${match[1]}"`);
+    } catch {
+      inner = match[1];
+    }
+    return parseSsColor(inner);
   }
+
+  function parseSsColor(raw) {
+    const text = String(raw || "").trim();
+    if (!text) {
+      return null;
+    }
+    if (text.startsWith("#")) {
+      return parseHexColor(text.slice(1));
+    }
+    if (text.includes(",")) {
+      const parts = text.split(",").map((part) => Number(part.trim()));
+      if (parts.length !== 3 || parts.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+        return null;
+      }
+      return parts;
+    }
+    return cssNamedColors.get(text.toLowerCase()) || null;
+  }
+
+  function parseHexColor(hex) {
+    if (![3, 4, 6, 8].includes(hex.length) || /[^0-9a-fA-F]/.test(hex)) {
+      return null;
+    }
+    if (hex.length === 3 || hex.length === 4) {
+      return [
+        parseInt(hex[0] + hex[0], 16) / 255,
+        parseInt(hex[1] + hex[1], 16) / 255,
+        parseInt(hex[2] + hex[2], 16) / 255,
+      ];
+    }
+    return [
+      parseInt(hex.slice(0, 2), 16) / 255,
+      parseInt(hex.slice(2, 4), 16) / 255,
+      parseInt(hex.slice(4, 6), 16) / 255,
+    ];
+  }
+
+  function colorToHex(color) {
+    const toByte = (value) => Math.max(0, Math.min(255, Math.round(value * 255)));
+    const toHex = (value) => toByte(value).toString(16).padStart(2, "0");
+    return `#${toHex(color.red)}${toHex(color.green)}${toHex(color.blue)}`;
+  }
+
+  const colorProvider = {
+    provideDocumentColors(document, token) {
+      if (document.languageId !== "ss-slide" || token.isCancellationRequested) {
+        return [];
+      }
+      const text = document.getText();
+      const colors = [];
+      const pattern = /c"(?:\\.|[^"\\])*"/g;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const rgb = parseSsColorLiteral(match[0]);
+        if (!rgb) {
+          continue;
+        }
+        const range = new vscode.Range(document.positionAt(match.index), document.positionAt(match.index + match[0].length));
+        colors.push(new vscode.ColorInformation(range, new vscode.Color(rgb[0], rgb[1], rgb[2], 1)));
+      }
+      return colors;
+    },
+    provideColorPresentations(color) {
+      const hex = colorToHex(color);
+      return [
+        new vscode.ColorPresentation(`c"${hex}"`),
+        new vscode.ColorPresentation(`c"${Number(color.red.toFixed(4))},${Number(color.green.toFixed(4))},${Number(color.blue.toFixed(4))}"`),
+      ];
+    },
+  };
 
   function documentKey(document) {
     return document.uri.toString();
@@ -152,6 +532,220 @@ function activate(context) {
     return null;
   }
 
+  function projectRootMarkerIn(text) {
+    return String(text || "")
+      .split(/\r?\n/, 12)
+      .some((line) => /^\s*;;\s*!root\b/.test(line));
+  }
+
+  async function fileHasProjectRootMarker(filePath) {
+    try {
+      const handle = await fs.promises.open(filePath, "r");
+      try {
+        const buffer = Buffer.alloc(2048);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        return projectRootMarkerIn(buffer.slice(0, bytesRead).toString("utf8"));
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  async function findProjectRootPath(document) {
+    if (!document || document.uri.scheme !== "file") {
+      return null;
+    }
+    if (projectRootMarkerIn(document.getText())) {
+      return document.uri.fsPath;
+    }
+
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const stopDir = workspaceFolder && workspaceFolder.uri ? workspaceFolder.uri.fsPath : path.parse(document.uri.fsPath).root;
+    let dir = path.dirname(document.uri.fsPath);
+    while (true) {
+      let entries = [];
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch {}
+      const candidates = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".ss"))
+        .map((entry) => path.join(dir, entry.name))
+        .sort((a, b) => {
+          if (a === document.uri.fsPath) return -1;
+          if (b === document.uri.fsPath) return 1;
+          return path.basename(a).localeCompare(path.basename(b));
+        });
+      for (const candidate of candidates) {
+        if (await fileHasProjectRootMarker(candidate)) {
+          return candidate;
+        }
+      }
+
+      if (path.resolve(dir) === path.resolve(stopDir)) {
+        break;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
+    }
+    return null;
+  }
+
+  async function projectContext(document) {
+    const rootPath = await findProjectRootPath(document);
+    const entryPath = rootPath || (document && document.uri && document.uri.scheme === "file" ? document.uri.fsPath : null);
+    const projectDir = entryPath ? path.dirname(entryPath) : commandCwd(document);
+    return { entryPath, projectDir, hasProjectRoot: Boolean(rootPath) };
+  }
+
+  function uniquePaths(paths) {
+    const result = [];
+    const seen = new Set();
+    for (const item of paths) {
+      if (!item) {
+        continue;
+      }
+      const normalized = path.resolve(String(item));
+      if (seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      result.push(normalized);
+    }
+    return result;
+  }
+
+  function definitionSearchRoots(document) {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    return uniquePaths([
+      workspaceFolder && workspaceFolder.uri && workspaceFolder.uri.fsPath ? workspaceFolder.uri.fsPath : null,
+      commandCwd(document),
+      context.extensionUri && context.extensionUri.fsPath ? context.extensionUri.fsPath : null,
+      context.extensionUri && context.extensionUri.fsPath ? path.resolve(context.extensionUri.fsPath, "..") : null,
+      context.extensionUri && context.extensionUri.fsPath ? path.resolve(context.extensionUri.fsPath, "..", "..") : null,
+    ]);
+  }
+
+  async function fileExists(filePath) {
+    try {
+      await fs.promises.access(filePath, fs.constants.R_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function moduleForDefinition(payload, item) {
+    const modules = Array.isArray(payload && payload.modules) ? payload.modules : [];
+    const moduleId = item && item.moduleId !== undefined && item.moduleId !== null ? Number(item.moduleId) : null;
+    if (moduleId !== null && Number.isFinite(moduleId)) {
+      const found = modules.find((module) => Number(module && module.id) === moduleId);
+      if (found) {
+        return found;
+      }
+    }
+
+    const moduleSpec = item && item.moduleSpec ? String(item.moduleSpec) : "";
+    if (!moduleSpec) {
+      return null;
+    }
+    return modules.find((module) => String(module && module.spec ? module.spec : "") === moduleSpec) || null;
+  }
+
+  function hintBelongsToDocument(document, item) {
+    if (!item || !item.file) {
+      return false;
+    }
+    return path.resolve(String(item.file)) === path.resolve(document.uri.fsPath);
+  }
+
+  function stdlibPathFromSpec(moduleSpec) {
+    const spec = String(moduleSpec || "");
+    if (!spec.startsWith("std:")) {
+      return null;
+    }
+    const name = spec.slice("std:".length);
+    if (!name || !/^[A-Za-z0-9_./-]+$/.test(name) || name.split("/").includes("..")) {
+      return null;
+    }
+    return path.join("stdlib", ...name.split("/")) + ".ss";
+  }
+
+  async function resolveFileDefinitionUri(document, filePath) {
+    const raw = String(filePath || "");
+    if (!raw) {
+      return null;
+    }
+    if (path.isAbsolute(raw)) {
+      return vscode.Uri.file(raw);
+    }
+
+    for (const root of definitionSearchRoots(document)) {
+      const candidate = path.join(root, raw);
+      if (await fileExists(candidate)) {
+        return vscode.Uri.file(candidate);
+      }
+    }
+
+    const cwd = commandCwd(document);
+    return cwd ? vscode.Uri.file(path.join(cwd, raw)) : vscode.Uri.file(raw);
+  }
+
+  async function resolveStdlibDefinitionUri(document, moduleSpec) {
+    const relativePath = stdlibPathFromSpec(moduleSpec);
+    if (!relativePath) {
+      return null;
+    }
+    for (const root of definitionSearchRoots(document)) {
+      const candidate = path.join(root, relativePath);
+      if (await fileExists(candidate)) {
+        return vscode.Uri.file(candidate);
+      }
+    }
+    return null;
+  }
+
+  async function cachedModuleDefinitionUri(document, module) {
+    const source = module && module.source ? String(module.source) : "";
+    if (!source) {
+      return null;
+    }
+    const root = commandCwd(document) || os.tmpdir();
+    const cacheDir = path.join(root, ".ss-cache", "vscode-modules");
+    const spec = String((module && module.spec) || `module-${module && module.id !== undefined ? module.id : "unknown"}`);
+    const safeName = spec.replace(/[^A-Za-z0-9_.-]/g, "_") || "module";
+    const filePath = path.join(cacheDir, `${safeName}.ss`);
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+    await fs.promises.writeFile(filePath, source, "utf8");
+    return vscode.Uri.file(filePath);
+  }
+
+  async function resolveDefinitionUri(document, payload, item) {
+    if (item && item.file) {
+      return resolveFileDefinitionUri(document, item.file);
+    }
+
+    const module = moduleForDefinition(payload, item);
+    if (module && module.path) {
+      return resolveFileDefinitionUri(document, module.path);
+    }
+
+    const moduleSpec = String((item && item.moduleSpec) || (module && module.spec) || "");
+    const stdlibUri = await resolveStdlibDefinitionUri(document, moduleSpec);
+    if (stdlibUri) {
+      return stdlibUri;
+    }
+
+    if (module) {
+      return cachedModuleDefinitionUri(document, module);
+    }
+    return null;
+  }
+
   function queryEditorInfo(document) {
     if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
       return Promise.resolve(null);
@@ -170,52 +764,59 @@ function activate(context) {
     }
 
     const runRequest = new Promise((resolve) => {
-      const cwd = commandCwd(document);
-      if (!cwd) {
-        resolve(cached ? cached.payload : null);
-        return;
-      }
-      const command = cliPath();
-      const args = ["dump", document.uri.fsPath, "--asset-base-dir", assetBaseDir(document)];
-      output.appendLine(`[info] ${command} ${args.join(" ")}`);
-      output.appendLine(`[info] cwd: ${cwd}`);
-      stopActiveCommand(document, "dump");
-      const child = cp.execFile(
-        command,
-        args,
-        { cwd, maxBuffer: 10 * 1024 * 1024 },
-        (error, stdout, stderr) => {
-          const activeKey = commandKey(document, "dump");
-          if (activeCommands.get(activeKey) === child) {
-            activeCommands.delete(activeKey);
-          }
-          if (stderr && stderr.trim().length > 0) {
-            output.appendLine("[info] stderr:");
-            output.appendLine(stderr.trimEnd());
-          }
-
-          if (error) {
-            output.appendLine(`[info] failed: ${error.message}`);
-            resolve(cached ? cached.payload : null);
-            return;
-          }
-
-          const payload = extractJsonPayload(stdout, stderr);
-          if (!payload) {
-            output.appendLine("[info] no JSON payload");
-            if (!stdout || stdout.trim().length === 0) {
-              output.appendLine("[info] empty stdout");
+      void (async () => {
+        const contextInfo = await projectContext(document);
+        const cwd = contextInfo.projectDir || commandCwd(document);
+        if (!cwd) {
+          resolve(cached ? cached.payload : null);
+          return;
+        }
+        const entryPath = contextInfo.entryPath || document.uri.fsPath;
+        const command = cliPath();
+        const args = ["dump", entryPath, "--asset-base-dir", contextInfo.projectDir || assetBaseDir(document)];
+        output.appendLine(`[info] ${command} ${args.join(" ")}`);
+        output.appendLine(`[info] cwd: ${cwd}`);
+        stopActiveCommand(document, "dump");
+        const child = cp.execFile(
+          command,
+          args,
+          { cwd, maxBuffer: 10 * 1024 * 1024 },
+          (error, stdout, stderr) => {
+            const activeKey = commandKey(document, "dump");
+            if (activeCommands.get(activeKey) === child) {
+              activeCommands.delete(activeKey);
             }
-            resolve(cached ? cached.payload : null);
-            return;
-          }
+            if (stderr && stderr.trim().length > 0) {
+              output.appendLine("[info] stderr:");
+              output.appendLine(stderr.trimEnd());
+            }
 
-          editorInfoCache.set(key, { generation, payload });
-          emitter.fire();
-          resolve(payload);
-        },
-      );
-      activeCommands.set(commandKey(document, "dump"), child);
+            if (error) {
+              output.appendLine(`[info] failed: ${error.message}`);
+              resolve(cached ? cached.payload : null);
+              return;
+            }
+
+            const payload = extractJsonPayload(stdout, stderr);
+            if (!payload) {
+              output.appendLine("[info] no JSON payload");
+              if (!stdout || stdout.trim().length === 0) {
+                output.appendLine("[info] empty stdout");
+              }
+              resolve(cached ? cached.payload : null);
+              return;
+            }
+
+            editorInfoCache.set(key, { generation, payload });
+            emitter.fire();
+            resolve(payload);
+          },
+        );
+        activeCommands.set(commandKey(document, "dump"), child);
+      })().catch((error) => {
+        output.appendLine(`[info] failed: ${error.message}`);
+        resolve(cached ? cached.payload : null);
+      });
     });
 
     const finalize = runRequest.finally(() => {
@@ -246,6 +847,119 @@ function activate(context) {
 
   function assetBaseDir(document) {
     return path.dirname(document.uri.fsPath);
+  }
+
+  function projectSnapshotBaseDir(document) {
+    const root = commandCwd(document) || (document && document.uri.scheme === "file" ? path.dirname(document.uri.fsPath) : os.tmpdir());
+    return path.join(root, ".ss-cache", "vscode-projects");
+  }
+
+  async function removeDirectoryIfExists(dirPath) {
+    if (!dirPath) {
+      return;
+    }
+    try {
+      await fs.promises.rm(dirPath, { recursive: true, force: true });
+    } catch (error) {
+      output.appendLine(`[cache cleanup] ${error.message}`);
+    }
+  }
+
+  async function cleanupProjectSnapshotCache(document) {
+    const baseDir = projectSnapshotBaseDir(document);
+    const ttlMs = 7 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - ttlMs;
+    try {
+      const entries = await fs.promises.readdir(baseDir, { withFileTypes: true });
+      await Promise.all(entries.map(async (entry) => {
+        if (!entry.isDirectory()) {
+          return;
+        }
+        const dirPath = path.join(baseDir, entry.name);
+        const stat = await fs.promises.stat(dirPath);
+        if (stat.mtimeMs < cutoff) {
+          await removeDirectoryIfExists(dirPath);
+        }
+      }));
+    } catch (error) {
+      if (error && error.code !== "ENOENT") {
+        output.appendLine(`[cache cleanup] ${error.message}`);
+      }
+    }
+  }
+
+  function openTextForPath(filePath) {
+    const resolved = path.resolve(filePath);
+    return vscode.workspace.textDocuments.find(
+      (doc) => doc.uri && doc.uri.scheme === "file" && path.resolve(doc.uri.fsPath) === resolved,
+    );
+  }
+
+  async function sourceTextForPath(filePath) {
+    const open = openTextForPath(filePath);
+    if (open) {
+      return open.getText();
+    }
+    return fs.promises.readFile(filePath, "utf8");
+  }
+
+  function importSpecsFromSource(source) {
+    const specs = [];
+    const pattern = /^\s*import\s+([^\s;]+)/gm;
+    let match;
+    while ((match = pattern.exec(source)) !== null) {
+      const raw = String(match[1] || "").trim().replace(/^"|"$/g, "");
+      if (raw && !raw.startsWith("std:")) {
+        specs.push(raw);
+      }
+    }
+    return specs;
+  }
+
+  function resolveLocalImport(fromFile, spec) {
+    if (path.isAbsolute(spec)) {
+      return spec;
+    }
+    return path.resolve(path.dirname(fromFile), spec);
+  }
+
+  async function writeProjectSnapshot(document, contextInfo) {
+    if (!contextInfo.entryPath) {
+      return null;
+    }
+    const projectDir = contextInfo.projectDir || path.dirname(contextInfo.entryPath);
+    const snapshotDir = path.join(projectSnapshotBaseDir(document), stableHash(contextInfo.entryPath));
+    await cleanupProjectSnapshotCache(document);
+    await removeDirectoryIfExists(snapshotDir);
+    const pathMap = new Map();
+    const seen = new Set();
+
+    async function copyModule(filePath) {
+      const original = path.resolve(filePath);
+      if (seen.has(original)) {
+        return;
+      }
+      seen.add(original);
+
+      const source = await sourceTextForPath(original);
+      const relative = path.relative(projectDir, original);
+      const safeRelative = relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+        ? relative
+        : path.join("__external", stableHash(original), path.basename(original));
+      const snapshotPath = path.join(snapshotDir, safeRelative);
+      await fs.promises.mkdir(path.dirname(snapshotPath), { recursive: true });
+      await fs.promises.writeFile(snapshotPath, source, "utf8");
+      pathMap.set(path.resolve(snapshotPath), original);
+
+      for (const spec of importSpecsFromSource(source)) {
+        await copyModule(resolveLocalImport(original, spec));
+      }
+    }
+
+    await copyModule(contextInfo.entryPath);
+    const relativeEntry = path.relative(projectDir, path.resolve(contextInfo.entryPath));
+    const snapshotEntry = path.join(snapshotDir, relativeEntry && !relativeEntry.startsWith("..") ? relativeEntry : path.basename(contextInfo.entryPath));
+    return { entryPath: snapshotEntry, dir: snapshotDir, pathMap };
   }
 
   function snapshotOutputPath(document) {
@@ -349,8 +1063,32 @@ function activate(context) {
     });
   }
 
-  function parseCliDiagnostics(document, stdout, stderr) {
-    const diagnostics = [];
+  function diagnosticOriginalPath(rawPath, pathMap) {
+    const resolved = path.resolve(String(rawPath || ""));
+    return (pathMap && pathMap.get(resolved)) || resolved;
+  }
+
+  function diagnosticRange(filePath, lineNumber, columnNumber) {
+    const open = openTextForPath(filePath);
+    const zeroLine = Math.max(0, lineNumber - 1);
+    const zeroColumn = Math.max(0, columnNumber - 1);
+    if (!open || zeroLine >= open.lineCount) {
+      return new vscode.Range(
+        new vscode.Position(zeroLine, zeroColumn),
+        new vscode.Position(zeroLine, zeroColumn + 1),
+      );
+    }
+    const lineText = open.lineAt(zeroLine).text;
+    const column = Math.min(lineText.length, zeroColumn);
+    const endColumn = lineText.length > column ? lineText.length : column + 1;
+    return new vscode.Range(
+      new vscode.Position(zeroLine, column),
+      new vscode.Position(zeroLine, endColumn),
+    );
+  }
+
+  function parseCliDiagnosticsByFile(fallbackDocument, stdout, stderr, pathMap) {
+    const diagnosticsByUri = new Map();
     const seen = new Set();
     const text = stripAnsi(`${stderr || ""}\n${stdout || ""}`);
     const lines = text.split(/\r?\n/);
@@ -358,12 +1096,14 @@ function activate(context) {
     for (const line of lines) {
       let match = /^(ERROR|WARNING):\s+(.*):(\d+):(\d+):\s+(.*)$/.exec(line);
       let severityText;
+      let filePath;
       let lineNumber;
       let columnNumber;
       let message;
 
       if (match) {
         severityText = match[1];
+        filePath = match[2];
         lineNumber = Number(match[3]);
         columnNumber = Number(match[4]);
         message = match[5];
@@ -373,34 +1113,49 @@ function activate(context) {
           continue;
         }
         severityText = match[4].toUpperCase();
+        filePath = match[1];
         lineNumber = Number(match[2]);
         columnNumber = Number(match[3]);
         message = match[5];
       }
 
-      const zeroLine = Math.max(0, Math.min(document.lineCount - 1, lineNumber - 1));
-      const lineText = zeroLine < document.lineCount ? document.lineAt(zeroLine).text : "";
-      const zeroColumn = Math.max(0, Math.min(lineText.length, columnNumber - 1));
-      const endColumn = lineText.length > zeroColumn ? lineText.length : zeroColumn;
-      const range = new vscode.Range(
-        new vscode.Position(zeroLine, zeroColumn),
-        new vscode.Position(zeroLine, endColumn),
-      );
+      const originalPath = path.isAbsolute(filePath)
+        ? diagnosticOriginalPath(filePath, pathMap)
+        : (fallbackDocument && fallbackDocument.uri.scheme === "file" ? fallbackDocument.uri.fsPath : filePath);
+      const range = diagnosticRange(originalPath, lineNumber, columnNumber);
       const diagnostic = new vscode.Diagnostic(
         range,
         message,
         severityText === "WARNING" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error,
       );
-      const key = `${severityText}:${zeroLine}:${zeroColumn}:${message}`;
+      const uri = vscode.Uri.file(originalPath);
+      const key = `${uri.toString()}:${severityText}:${lineNumber}:${columnNumber}:${message}`;
       if (seen.has(key)) {
         continue;
       }
       seen.add(key);
       diagnostic.source = "ss";
+      const uriKey = uri.toString();
+      const diagnostics = diagnosticsByUri.get(uriKey) || [];
       diagnostics.push(diagnostic);
+      diagnosticsByUri.set(uriKey, diagnostics);
     }
 
-    return diagnostics;
+    return diagnosticsByUri;
+  }
+
+  function publishDiagnostics(fallbackDocument, diagnosticsByUri) {
+    diagnosticCollection.clear();
+    if (diagnosticsByUri.size === 0 && fallbackDocument) {
+      diagnosticCollection.set(fallbackDocument.uri, []);
+      return 0;
+    }
+    let count = 0;
+    for (const [uriText, diagnostics] of diagnosticsByUri.entries()) {
+      diagnosticCollection.set(vscode.Uri.parse(uriText), diagnostics);
+      count += diagnostics.length;
+    }
+    return count;
   }
 
   async function refreshDiagnostics(document) {
@@ -408,21 +1163,24 @@ function activate(context) {
       return;
     }
 
-    const snapshotPath = await writeSnapshot(document);
-    if (!snapshotPath) {
+    const contextInfo = await projectContext(document);
+    const snapshot = await writeProjectSnapshot(document, contextInfo);
+    const entryPath = snapshot ? snapshot.entryPath : contextInfo.entryPath || document.uri.fsPath;
+    const baseDir = contextInfo.projectDir || assetBaseDir(document);
+    if (!entryPath) {
       return;
     }
 
     try {
-      const result = await runSs(document, ["check", snapshotPath, "--asset-base-dir", assetBaseDir(document)], "diagnostics", "diagnostics");
-      const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
-      diagnosticCollection.set(document.uri, diagnostics);
-      if (result.error && diagnostics.length === 0) {
+      const result = await runSs(document, ["check", entryPath, "--asset-base-dir", baseDir], "diagnostics", "diagnostics");
+      const diagnosticsByUri = parseCliDiagnosticsByFile(document, result.stdout, result.stderr, snapshot && snapshot.pathMap);
+      const diagnosticCount = publishDiagnostics(document, diagnosticsByUri);
+      if (result.error && diagnosticCount === 0) {
         output.appendLine(`[diagnostics] failed: ${result.error.message}`);
         if (result.stderr.trim().length > 0) output.appendLine(result.stderr.trimEnd());
         if (result.stdout.trim().length > 0) output.appendLine(result.stdout.trimEnd());
       } else {
-        output.appendLine(`[diagnostics] ${diagnostics.length} diagnostics`);
+        output.appendLine(`[diagnostics] ${diagnosticCount} diagnostics`);
       }
     } finally {}
   }
@@ -548,8 +1306,11 @@ function activate(context) {
     const renderId = (session.renderId || 0) + 1;
     previewSessions.set(key, { ...session, renderId });
 
-    const snapshotPath = await writeSnapshot(document);
-    if (!snapshotPath) {
+    const contextInfo = await projectContext(document);
+    const snapshot = await writeProjectSnapshot(document, contextInfo);
+    const entryPath = snapshot ? snapshot.entryPath : contextInfo.entryPath || document.uri.fsPath;
+    const baseDir = contextInfo.projectDir || assetBaseDir(document);
+    if (!entryPath) {
       return;
     }
 
@@ -557,15 +1318,15 @@ function activate(context) {
     await fs.promises.mkdir(dir, { recursive: true });
 
     try {
-      const result = await runSs(document, ["render", snapshotPath, tempPdf, "--asset-base-dir", assetBaseDir(document)], "preview", "preview");
+      const result = await runSs(document, ["render", entryPath, tempPdf, "--asset-base-dir", baseDir], "preview", "preview");
       const latestSession = previewSessions.get(key);
       if (!latestSession || latestSession.renderId !== renderId) {
         await removeFileIfExists(tempPdf);
         return;
       }
 
-      const diagnostics = parseCliDiagnostics(document, result.stdout, result.stderr);
-      diagnosticCollection.set(document.uri, diagnostics);
+      const diagnosticsByUri = parseCliDiagnosticsByFile(document, result.stdout, result.stderr, snapshot && snapshot.pathMap);
+      publishDiagnostics(document, diagnosticsByUri);
       if (result.error) {
         output.appendLine("[preview] failed:");
         if (result.stderr.trim().length > 0) output.appendLine(result.stderr.trimEnd());
@@ -751,6 +1512,9 @@ function activate(context) {
 
         const hints = [];
         for (const item of payload.hints) {
+          if (!hintBelongsToDocument(document, item)) {
+            continue;
+          }
           const pos = new vscode.Position(
             Math.max(0, Number(item.line || 1) - 1),
             Math.max(0, Number(item.column || 1) - 1),
@@ -784,43 +1548,10 @@ function activate(context) {
         }
 
         if (propertyContext) {
-          const variable = (payload.variables || []).find((item) => String(item && item.name ? item.name : "") === propertyContext.objectName);
-          if (!variable || String(variable.type || "") !== "object") {
-            return [];
-          }
-          const objectShape = String(variable.objectShape || "unknown");
-          const items = [];
-          for (const schema of payload.property_schemas || []) {
-            const key = String(schema && schema.key ? schema.key : "");
-            if (!key) {
-              continue;
-            }
-            const allowedShapes = Array.isArray(schema.allowedShapes) ? schema.allowedShapes.map((item) => String(item)) : [];
-            const shapeAllowed =
-              objectShape === "unknown" ||
-              objectShape === "generic" ||
-              allowedShapes.length === 0 ||
-              allowedShapes.includes(objectShape);
-            if (!shapeAllowed) {
-              continue;
-            }
-            if (propertyContext.prefix && !key.startsWith(propertyContext.prefix)) {
-              continue;
-            }
-            const completion = new vscode.CompletionItem(key, vscode.CompletionItemKind.Property);
-            completion.insertText = key;
-            completion.filterText = key;
-            const valueType = schema && schema.valueType ? String(schema.valueType) : "";
-            completion.detail = valueType ? `property: ${valueType}` : "property";
-            if (allowedShapes.length > 0) {
-              completion.documentation = new vscode.MarkdownString(`allowed on: ${allowedShapes.join(", ")}`);
-            }
-            items.push(completion);
-          }
-          return items;
+          return fieldCompletionItems(payload, propertyContext.objectName, propertyContext.prefix);
         }
 
-        const items = [];
+        const items = declarationCompletionItems(payload, prefix);
         for (const item of payload.functions || []) {
           const label = String(item.name || "");
           if (!label) {
@@ -882,12 +1613,11 @@ function activate(context) {
         return null;
       }
 
-      return queryEditorInfo(document).then((payload) => {
+      return queryEditorInfo(document).then(async (payload) => {
         if (!payload || !payload.definitions || token.isCancellationRequested) {
           return null;
         }
 
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
         for (const item of payload.definitions) {
           if (String(item && item.name ? item.name : "") !== target) {
             continue;
@@ -895,14 +1625,7 @@ function activate(context) {
           const line = Math.max(0, Number(item.line || 1) - 1);
           const column = Math.max(0, Number(item.column || 1) - 1);
           const length = Math.max(1, Number(item.length || target.length || 1));
-          let definitionPath = null;
-          if (item.file) {
-            definitionPath = String(item.file);
-            if (!path.isAbsolute(definitionPath) && workspaceFolder && workspaceFolder.uri && workspaceFolder.uri.fsPath) {
-              definitionPath = path.join(workspaceFolder.uri.fsPath, definitionPath);
-            }
-          }
-          const definitionUri = definitionPath ? vscode.Uri.file(definitionPath) : document.uri;
+          const definitionUri = (await resolveDefinitionUri(document, payload, item)) || document.uri;
           return new vscode.Location(
             definitionUri,
             new vscode.Range(
@@ -925,7 +1648,7 @@ function activate(context) {
       }
 
       return queryEditorInfo(document).then((payload) => {
-        if (!payload || (!payload.functions && !payload.variables) || token.isCancellationRequested) {
+        if (!payload || token.isCancellationRequested) {
           return null;
         }
 
@@ -967,7 +1690,7 @@ function activate(context) {
           }
           return new vscode.Hover(markdown);
         }
-        return null;
+        return declarationHover(payload, target);
       });
     },
   };
@@ -976,13 +1699,16 @@ function activate(context) {
     vscode.languages.registerInlayHintsProvider({ language: "ss-slide" }, provider),
   );
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider, "."),
+    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider, ".", "\"", "@"),
   );
   context.subscriptions.push(
     vscode.languages.registerHoverProvider({ language: "ss-slide" }, provider),
   );
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider({ language: "ss-slide" }, provider),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerColorProvider({ language: "ss-slide" }, colorProvider),
   );
 
   context.subscriptions.push(

@@ -21,7 +21,6 @@ const SelectionItemSort = model.SelectionItemSort;
 const SemanticSort = model.SemanticSort;
 const Value = model.Value;
 const Query = model.Query;
-const Transform = model.Transform;
 const PageLayout = model.PageLayout;
 const Diagnostic = model.Diagnostic;
 const DiagnosticPhase = model.DiagnosticPhase;
@@ -72,6 +71,7 @@ pub const Definition = struct {
     column: usize,
     length: usize,
     kind: DefinitionKind,
+    module_id: SourceModuleId,
     file: ?[]const u8 = null,
 };
 
@@ -85,6 +85,8 @@ pub const InlayHint = struct {
     column: usize,
     label: []const u8,
     kind: InlayHintKind,
+    module_id: SourceModuleId,
+    file: ?[]const u8 = null,
 };
 
 pub const Ir = struct {
@@ -221,6 +223,16 @@ pub const Ir = struct {
         return null;
     }
 
+    pub fn moduleByPathOrSpec(self: *const Ir, key: []const u8) ?*const SourceModule {
+        for (self.modules.items) |*module| {
+            if (module.path) |module_path| {
+                if (std.mem.eql(u8, module_path, key)) return module;
+            }
+            if (std.mem.eql(u8, module.spec, key)) return module;
+        }
+        return null;
+    }
+
     pub fn projectModuleMutable(self: *Ir) *SourceModule {
         return self.moduleByIdMutable(self.project_module_id).?;
     }
@@ -248,7 +260,14 @@ pub const Ir = struct {
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
         }
+        for (gop.value_ptr.items) |existing| {
+            if (existing == child) return;
+        }
         try gop.value_ptr.append(self.allocator, child);
+    }
+
+    pub fn addContainmentFromStage(self: *Ir, parent: NodeId, child: NodeId) !void {
+        try self.addContainment(parent, child);
     }
 
     pub fn addPage(self: *Ir, name: []const u8) !NodeId {
@@ -288,7 +307,7 @@ pub const Ir = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, true, .object, null, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeDetachedObjectWithOrigin(
@@ -301,7 +320,7 @@ pub const Ir = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, false, .object, null, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, false, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeGroupWithOrigin(
@@ -315,7 +334,6 @@ pub const Ir = struct {
             page_id,
             attached,
             .object,
-            null,
             "group",
             GroupRole,
             .overlay,
@@ -345,38 +363,20 @@ pub const Ir = struct {
         });
     }
 
-    pub fn setAllPageProperty(self: *Ir, key: []const u8, value: []const u8) !void {
-        try self.setNodeProperty(self.document_id, key, value);
-        for (self.page_order.items) |page_id| {
-            try self.setNodeProperty(page_id, key, value);
-        }
-    }
-
     pub fn getNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) ?[]const u8 {
         const node = self.getNode(node_id) orelse return null;
         return nodeProperty(node, key);
     }
 
-    fn copyNodeProperties(self: *Ir, from_id: NodeId, to_id: NodeId) !void {
-        const from = self.getNode(from_id) orelse return error.UnknownNode;
-        for (from.properties.items) |property| {
-            try self.setNodeProperty(to_id, property.key, property.value);
-        }
+    pub fn setNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        node.content = try self.allocator.dupe(u8, value);
     }
 
-    fn deriveObject(
-        self: *Ir,
-        page_id: NodeId,
-        attached: bool,
-        from_id: NodeId,
-        name: []const u8,
-        role: ?Role,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: []const u8,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, attached, .derived, from_id, name, role, object_kind, payload_kind, content, origin);
+    pub fn appendNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        const current = node.content orelse "";
+        node.content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
     }
 
     fn makeNodeWithOrigin(
@@ -384,7 +384,6 @@ pub const Ir = struct {
         page_id: NodeId,
         attached: bool,
         kind: NodeKind,
-        derived_from: ?NodeId,
         name: []const u8,
         role: ?Role,
         object_kind: ObjectKind,
@@ -402,11 +401,25 @@ pub const Ir = struct {
             .object_kind = object_kind,
             .payload_kind = payload_kind,
             .content = content,
-            .derived_from = derived_from,
             .origin = origin,
         });
         if (attached) try self.addContainment(page_id, obj_id);
         return obj_id;
+    }
+
+    pub fn makeNodeFromStage(
+        self: *Ir,
+        page_id: NodeId,
+        attached: bool,
+        kind: NodeKind,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return self.makeNodeWithOrigin(page_id, attached, kind, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn createFragment(
@@ -575,10 +588,6 @@ pub const Ir = struct {
         return self.page_order.items.len;
     }
 
-    fn pageNumberText(self: *Ir, allocator: Allocator, page_id: NodeId) ![]const u8 {
-        return std.fmt.allocPrint(allocator, "{d}/{d}", .{ self.pageIndexOf(page_id), self.pageCount() });
-    }
-
     pub fn parentPageOf(self: *Ir, child_id: NodeId) ?NodeId {
         var it = self.contains.iterator();
         while (it.next()) |entry| {
@@ -682,6 +691,31 @@ pub const Ir = struct {
         return selection;
     }
 
+    fn selectChildren(self: *Ir, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+        var selection = Selection.init(.object, provenance);
+        const children = self.contains.get(parent_id) orelse return selection;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
+        }
+        return selection;
+    }
+
+    fn appendDescendants(self: *Ir, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
+        const children = self.contains.get(parent_id) orelse return;
+        for (children.items) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
+            try self.appendDescendants(allocator, child_id, selection);
+        }
+    }
+
+    fn selectDescendants(self: *Ir, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+        var selection = Selection.init(.object, provenance);
+        try self.appendDescendants(allocator, parent_id, &selection);
+        return selection;
+    }
+
     pub fn select(self: *Ir, allocator: Allocator, base: Value, query: Query) !Value {
         try self.ensureSort(base, query.input, query.name);
 
@@ -695,6 +729,12 @@ pub const Ir = struct {
             .parent_page => .{
                 .page = self.parentPageOf(base.object) orelse return error.MissingParentPage,
             },
+            .children => .{
+                .selection = try self.selectChildren(allocator, base.object, query.name),
+            },
+            .descendants => .{
+                .selection = try self.selectDescendants(allocator, base.object, query.name),
+            },
             .page_objects_by_role => |role| .{
                 .selection = try self.selectPageObjectsByRole(allocator, base.page, role, query.name),
             },
@@ -705,127 +745,6 @@ pub const Ir = struct {
                 .selection = try self.selectDocumentPages(allocator, query.name),
             },
         };
-    }
-
-    fn rewriteText(self: *Ir, allocator: Allocator, from_id: NodeId, old: []const u8, new: []const u8) ![]const u8 {
-        const from = self.getNode(from_id) orelse return error.UnknownNode;
-        const source = from.content orelse return error.MissingContent;
-        return std.mem.replaceOwned(u8, allocator, source, old, new);
-    }
-
-    pub fn derive(self: *Ir, page_id: NodeId, base: Value, transform: Transform) !NodeId {
-        return self.deriveWithOrigin(page_id, base, transform, transform.name);
-    }
-
-    pub fn deriveWithOrigin(self: *Ir, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
-        return self.deriveWithMode(page_id, true, base, transform, origin);
-    }
-
-    pub fn deriveDetachedWithOrigin(self: *Ir, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
-        return self.deriveWithMode(page_id, false, base, transform, origin);
-    }
-
-    fn deriveWithMode(self: *Ir, page_id: NodeId, attached: bool, base: Value, transform: Transform, origin: []const u8) !NodeId {
-        try self.ensureSort(base, transform.input, transform.name);
-
-        return switch (transform.op) {
-            .rewrite_text => |rewrite| blk: {
-                const updated = try self.rewriteText(self.allocator, base.object, rewrite.old, rewrite.new);
-                const id = try self.deriveObject(
-                    page_id,
-                    attached,
-                    base.object,
-                    "rewritten-copy",
-                    "code",
-                    .source,
-                    .code,
-                    updated,
-                    origin,
-                );
-                try self.copyNodeProperties(base.object, id);
-                break :blk id;
-            },
-            .highlight => |highlight| blk: {
-                if (base.selection.item_sort != .object) return error.InvalidSelectionSort;
-                const source_id = base.selection.first() orelse return error.EmptySelection;
-                break :blk try self.deriveObject(
-                    page_id,
-                    attached,
-                    source_id,
-                    "highlight",
-                    "highlight",
-                    .overlay,
-                    .text,
-                    highlight.note,
-                    origin,
-                );
-            },
-            .page_number => blk: {
-                const id = try self.deriveObject(
-                    page_id,
-                    attached,
-                    base.page,
-                    "page-number",
-                    "page_number",
-                    .text,
-                    .text,
-                    "",
-                    origin,
-                );
-                if (attached) {
-                    try self.addAnchorConstraint(id, .right, .{ .page = .right }, -PageLayout.page_number_right_inset, origin);
-                    try self.addAnchorConstraint(id, .bottom, .{ .page = .bottom }, PageLayout.page_number_bottom_inset, origin);
-                }
-                break :blk id;
-            },
-            .toc => blk: {
-                break :blk try self.deriveToc(page_id, attached, base.document, origin);
-            },
-        };
-    }
-
-    fn deriveToc(self: *Ir, page_id: NodeId, attached: bool, document_id: NodeId, origin: []const u8) !NodeId {
-        const owned = try self.buildTocText(document_id);
-        return self.deriveObject(
-            page_id,
-            attached,
-            document_id,
-            "toc",
-            "toc",
-            .text,
-            .text,
-            owned,
-            origin,
-        );
-    }
-
-    fn buildTocText(self: *Ir, document_id: NodeId) ![]const u8 {
-        var pages = try self.select(self.allocator, .{ .document = document_id }, Query.documentPages());
-        defer pages.deinit(self.allocator);
-
-        var text = std.ArrayList(u8).empty;
-        defer text.deinit(self.allocator);
-        try text.appendSlice(self.allocator, "Table of Contents\n");
-
-        for (pages.selection.ids.items) |member_page_id| {
-            var titles = try self.select(
-                self.allocator,
-                .{ .page = member_page_id },
-                Query.pageObjectsByRole("title"),
-            );
-            defer titles.deinit(self.allocator);
-
-            const title_id = titles.firstId() orelse continue;
-            const title = self.getNode(title_id) orelse continue;
-            const line = try std.fmt.allocPrint(
-                self.allocator,
-                "- {s} .... {d}\n",
-                .{ title.content.?, self.pageIndexOf(member_page_id) },
-            );
-            try text.appendSlice(self.allocator, line);
-        }
-
-        return text.toOwnedSlice(self.allocator);
     }
 
     pub fn fragmentRootSort(self: *Ir, fragment: *const Fragment) SemanticSort {
@@ -849,30 +768,12 @@ pub const Ir = struct {
         self.clearDiagnosticsForPhase(.layout);
         self.last_constraint_failure = null;
         self.constraint_failures.clearRetainingCapacity();
-        try self.refreshPageNumbers();
-        try self.refreshTocs();
         try layout.solveLayout(self);
         if (self.constraint_failures.items.len > 0) {
             switch (self.constraint_failures.items[0].kind) {
                 .conflict => return error.ConstraintConflict,
                 .negative_size => return error.NegativeConstraintSize,
             }
-        }
-    }
-
-    fn refreshPageNumbers(self: *Ir) !void {
-        for (self.nodes.items) |*node| {
-            if (!roleEq(node.role, "page_number")) continue;
-            const page_id = self.parentPageOf(node.id) orelse continue;
-            node.content = try self.pageNumberText(self.allocator, page_id);
-        }
-    }
-
-    fn refreshTocs(self: *Ir) !void {
-        for (self.nodes.items) |*node| {
-            if (!roleEq(node.role, "toc")) continue;
-            const document_id = node.derived_from orelse self.document_id;
-            node.content = try self.buildTocText(document_id);
         }
     }
 
