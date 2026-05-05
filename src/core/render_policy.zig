@@ -1,10 +1,9 @@
 const std = @import("std");
 const model = @import("model");
+const class_fields = @import("class_fields.zig");
 const layout = @import("layout.zig");
 
 const Node = model.Node;
-const PayloadKind = model.PayloadKind;
-const roleEq = model.roleEq;
 
 pub const Color = struct {
     r: f32,
@@ -98,32 +97,24 @@ pub const ResolvedRender = struct {
     rule: RulePaint,
 };
 
-const DEFAULT_TEXT_COLOR = Color{ .r = 0.08, .g = 0.08, .b = 0.08 };
-const DEFAULT_LINK_COLOR = Color{ .r = 0.1, .g = 0.25, .b = 0.75 };
-const CODE_KEYWORD_BLUE = Color{ .r = 44.0 / 255.0, .g = 88.0 / 255.0, .b = 201.0 / 255.0 };
-const CODE_COMMENT_GREEN = Color{ .r = 78.0 / 255.0, .g = 138.0 / 255.0, .b = 92.0 / 255.0 };
-const CODE_STRING_RED = Color{ .r = 178.0 / 255.0, .g = 65.0 / 255.0, .b = 55.0 / 255.0 };
+const FALLBACK_TEXT_COLOR = Color{ .r = 0.08, .g = 0.08, .b = 0.08 };
+const FALLBACK_LINK_COLOR = Color{ .r = 0.1, .g = 0.25, .b = 0.75 };
 
 pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
-    const kind = resolveKind(node);
+    const kind = resolveKind(ir, node);
     return .{
         .kind = kind,
         .text = resolveText(ir, node, kind),
-        .math = resolveMath(node, kind),
-        .code = resolveCode(node, kind),
-        .chrome = resolveChrome(node),
-        .underline = resolveUnderline(node),
-        .rule = resolveRule(node),
+        .math = resolveMath(ir, node, kind),
+        .code = resolveCode(ir, node, kind),
+        .chrome = resolveChrome(ir, node),
+        .underline = resolveUnderline(ir, node),
+        .rule = resolveRule(ir, node),
     };
 }
 
-pub fn resolveKind(node: *const Node) RenderKind {
-    if (parseRenderKindProperty(node)) |kind| return kind;
-    if (roleEq(node.role, "group")) return .chrome_only;
-    if (node.payload_kind == .code) return .code;
-    if (node.payload_kind == .math_tex) return .vector_math;
-    if (node.payload_kind == .pdf_ref) return .vector_asset;
-    if (node.payload_kind == .image_ref) return .raster_asset;
+pub fn resolveKind(ir: anytype, node: *const Node) RenderKind {
+    if (parseRenderKindProperty(ir, node)) |kind| return kind;
     return .text;
 }
 
@@ -134,97 +125,85 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
     }
 
     const layout_style = layout.styleForNode(ir, node);
-    const font = model.nodeProperty(node, "text_font") orelse "Helvetica";
+    const font = stringProperty(ir, node, "text_font", "Helvetica");
     return .{
         .font = font,
-        .bold_font = model.nodeProperty(node, "text_bold_font") orelse defaultBoldFont(font),
-        .italic_font = model.nodeProperty(node, "text_italic_font") orelse defaultItalicFont(font),
-        .code_font = model.nodeProperty(node, "text_code_font") orelse "Courier",
-        .font_size = parseFloatProperty(node, "text_size") orelse layout_style.font_size,
-        .line_height = parseFloatProperty(node, "text_line_height") orelse layout_style.line_height,
-        .color = parseColorProperty(node, "text_color") orelse DEFAULT_TEXT_COLOR,
-        .link_color = parseColorProperty(node, "text_link_color") orelse DEFAULT_LINK_COLOR,
-        .link_underline_width = parseFloatProperty(node, "text_link_underline_width") orelse 0.8,
-        .link_underline_offset = parseFloatProperty(node, "text_link_underline_offset") orelse -1.5,
-        .inline_math_height_factor = parseFloatProperty(node, "text_inline_math_height_factor") orelse 1.02,
-        .inline_math_spacing = parseFloatProperty(node, "text_inline_math_spacing") orelse 0.08,
-        .markdown_block_gap = parseFloatProperty(node, "text_markdown_block_gap") orelse layout_style.line_height * 0.15,
-        .markdown_list_indent = parseFloatProperty(node, "text_markdown_list_indent") orelse layout_style.font_size * 1.3,
-        .markdown_code_font_size = parseFloatProperty(node, "text_markdown_code_font_size") orelse 15.0,
-        .markdown_code_line_height = parseFloatProperty(node, "text_markdown_code_line_height") orelse 20.0,
-        .markdown_code_pad_x = parseFloatProperty(node, "text_markdown_code_pad_x") orelse 12.0,
-        .markdown_code_pad_y = parseFloatProperty(node, "text_markdown_code_pad_y") orelse 10.0,
-        .markdown_code_fill = parseColorProperty(node, "text_markdown_code_fill"),
-        .markdown_code_stroke = parseColorProperty(node, "text_markdown_code_stroke"),
-        .markdown_code_line_width = parseFloatProperty(node, "text_markdown_code_line_width") orelse 1.0,
-        .markdown_code_radius = parseFloatProperty(node, "text_markdown_code_radius") orelse 10.0,
-        .cjk_bold_passes = parseIntProperty(node, "text_cjk_bold_passes") orelse 1,
-        .cjk_bold_dx = parseFloatProperty(node, "text_cjk_bold_dx") orelse 0.05,
+        .bold_font = stringProperty(ir, node, "text_bold_font", font),
+        .italic_font = stringProperty(ir, node, "text_italic_font", font),
+        .code_font = stringProperty(ir, node, "text_code_font", "Courier"),
+        .font_size = parseFloatProperty(ir, node, "text_size") orelse layout_style.font_size,
+        .line_height = parseFloatProperty(ir, node, "text_line_height") orelse layout_style.line_height,
+        .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
+        .link_color = parseColorProperty(ir, node, "text_link_color") orelse FALLBACK_LINK_COLOR,
+        .link_underline_width = parseFloatProperty(ir, node, "text_link_underline_width") orelse 0,
+        .link_underline_offset = parseFloatProperty(ir, node, "text_link_underline_offset") orelse 0,
+        .inline_math_height_factor = parseFloatProperty(ir, node, "text_inline_math_height_factor") orelse 1,
+        .inline_math_spacing = parseFloatProperty(ir, node, "text_inline_math_spacing") orelse 0,
+        .markdown_block_gap = parseFloatProperty(ir, node, "text_markdown_block_gap") orelse 0,
+        .markdown_list_indent = parseFloatProperty(ir, node, "text_markdown_list_indent") orelse 0,
+        .markdown_code_font_size = parseFloatProperty(ir, node, "text_markdown_code_font_size") orelse layout_style.font_size,
+        .markdown_code_line_height = parseFloatProperty(ir, node, "text_markdown_code_line_height") orelse layout_style.line_height,
+        .markdown_code_pad_x = parseFloatProperty(ir, node, "text_markdown_code_pad_x") orelse 0,
+        .markdown_code_pad_y = parseFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 0,
+        .markdown_code_fill = parseColorProperty(ir, node, "text_markdown_code_fill"),
+        .markdown_code_stroke = parseColorProperty(ir, node, "text_markdown_code_stroke"),
+        .markdown_code_line_width = parseFloatProperty(ir, node, "text_markdown_code_line_width") orelse 0,
+        .markdown_code_radius = parseFloatProperty(ir, node, "text_markdown_code_radius") orelse 0,
+        .cjk_bold_passes = parseIntProperty(ir, node, "text_cjk_bold_passes") orelse 1,
+        .cjk_bold_dx = parseFloatProperty(ir, node, "text_cjk_bold_dx") orelse 0,
         .wrap = layout.shouldWrapNode(ir, node),
     };
 }
 
-fn resolveMath(node: *const Node, kind: RenderKind) ?MathPaint {
+fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
-        .block_line_height = 22.0,
-        .block_min_height = 30.0,
-        .block_vertical_padding = 2.0,
-        .scale = parseFloatProperty(node, "math_scale") orelse 1.0,
+        .block_line_height = parseFloatProperty(ir, node, "math_block_line_height") orelse 22,
+        .block_min_height = parseFloatProperty(ir, node, "math_block_min_height") orelse 30,
+        .block_vertical_padding = parseFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
+        .scale = parseFloatProperty(ir, node, "math_scale") orelse 1,
     };
 }
 
-fn resolveCode(node: *const Node, kind: RenderKind) ?CodePaint {
+fn resolveCode(ir: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     if (kind != .code) return null;
-    const plain = parseColorProperty(node, "code_plain_color") orelse parseColorProperty(node, "text_color") orelse DEFAULT_TEXT_COLOR;
+    const plain = parseColorProperty(ir, node, "code_plain_color") orelse parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR;
     return .{
-        .language = model.nodeProperty(node, "language"),
+        .language = class_fields.property(ir, node, "language"),
         .plain = plain,
-        .keyword = parseColorProperty(node, "code_keyword_color") orelse CODE_KEYWORD_BLUE,
-        .comment = parseColorProperty(node, "code_comment_color") orelse CODE_COMMENT_GREEN,
-        .string = parseColorProperty(node, "code_string_color") orelse CODE_STRING_RED,
+        .keyword = parseColorProperty(ir, node, "code_keyword_color") orelse plain,
+        .comment = parseColorProperty(ir, node, "code_comment_color") orelse plain,
+        .string = parseColorProperty(ir, node, "code_string_color") orelse plain,
     };
 }
 
-fn resolveChrome(node: *const Node) ChromePaint {
+fn resolveChrome(ir: anytype, node: *const Node) ChromePaint {
     return .{
-        .fill = parseColorProperty(node, "chrome_fill"),
-        .stroke = parseColorProperty(node, "chrome_stroke"),
-        .line_width = parseFloatProperty(node, "chrome_line_width") orelse 1.0,
-        .radius = parseFloatProperty(node, "chrome_radius") orelse 10.0,
+        .fill = parseColorProperty(ir, node, "chrome_fill"),
+        .stroke = parseColorProperty(ir, node, "chrome_stroke"),
+        .line_width = parseFloatProperty(ir, node, "chrome_line_width") orelse 0,
+        .radius = parseFloatProperty(ir, node, "chrome_radius") orelse 0,
     };
 }
 
-fn resolveUnderline(node: *const Node) UnderlinePaint {
+fn resolveUnderline(ir: anytype, node: *const Node) UnderlinePaint {
     return .{
-        .color = parseColorProperty(node, "underline_color"),
-        .width = parseFloatProperty(node, "underline_width") orelse 1.0,
-        .offset = parseFloatProperty(node, "underline_offset") orelse -2.0,
+        .color = parseColorProperty(ir, node, "underline_color"),
+        .width = parseFloatProperty(ir, node, "underline_width") orelse 0,
+        .offset = parseFloatProperty(ir, node, "underline_offset") orelse 0,
     };
 }
 
-fn resolveRule(node: *const Node) RulePaint {
+fn resolveRule(ir: anytype, node: *const Node) RulePaint {
     return .{
-        .stroke = parseColorProperty(node, "rule_stroke"),
-        .line_width = parseFloatProperty(node, "rule_line_width") orelse 1.0,
-        .dash = parseDashProperty(node, "rule_dash"),
+        .stroke = parseColorProperty(ir, node, "rule_stroke"),
+        .line_width = parseFloatProperty(ir, node, "rule_line_width") orelse 0,
+        .dash = parseDashProperty(ir, node, "rule_dash"),
     };
 }
 
-fn defaultBoldFont(font: []const u8) []const u8 {
-    if (std.mem.eql(u8, font, "Helvetica")) return "Helvetica-Bold";
-    if (std.mem.eql(u8, font, "Courier")) return "Courier-Bold";
-    return font;
-}
-
-fn defaultItalicFont(font: []const u8) []const u8 {
-    if (std.mem.eql(u8, font, "Helvetica")) return "Helvetica-Oblique";
-    if (std.mem.eql(u8, font, "Courier")) return "Courier-Oblique";
-    return font;
-}
-
-fn parseRenderKindProperty(node: *const Node) ?RenderKind {
-    const value = model.nodeProperty(node, "render_kind") orelse return null;
+fn parseRenderKindProperty(ir: anytype, node: *const Node) ?RenderKind {
+    const value = class_fields.property(ir, node, "render_kind") orelse return null;
     if (std.mem.eql(u8, value, "text")) return .text;
     if (std.mem.eql(u8, value, "code")) return .code;
     if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
@@ -234,18 +213,22 @@ fn parseRenderKindProperty(node: *const Node) ?RenderKind {
     return null;
 }
 
-fn parseFloatProperty(node: *const Node, key: []const u8) ?f32 {
-    const value = model.nodeProperty(node, key) orelse return null;
+fn stringProperty(ir: anytype, node: *const Node, key: []const u8, fallback: []const u8) []const u8 {
+    return class_fields.property(ir, node, key) orelse fallback;
+}
+
+fn parseFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = class_fields.property(ir, node, key) orelse return null;
     return std.fmt.parseFloat(f32, value) catch null;
 }
 
-fn parseIntProperty(node: *const Node, key: []const u8) ?u32 {
-    const raw = model.nodeProperty(node, key) orelse return null;
+fn parseIntProperty(ir: anytype, node: *const Node, key: []const u8) ?u32 {
+    const raw = class_fields.property(ir, node, key) orelse return null;
     return std.fmt.parseInt(u32, raw, 10) catch null;
 }
 
-fn parseColorProperty(node: *const Node, key: []const u8) ?Color {
-    const value = model.nodeProperty(node, key) orelse return null;
+fn parseColorProperty(ir: anytype, node: *const Node, key: []const u8) ?Color {
+    const value = class_fields.property(ir, node, key) orelse return null;
     return parseColor(value);
 }
 
@@ -262,8 +245,8 @@ fn parseColor(value: []const u8) ?Color {
     };
 }
 
-fn parseDashProperty(node: *const Node, key: []const u8) ?Dash {
-    const value = model.nodeProperty(node, key) orelse return null;
+fn parseDashProperty(ir: anytype, node: *const Node, key: []const u8) ?Dash {
+    const value = class_fields.property(ir, node, key) orelse return null;
     var parts = std.mem.splitScalar(u8, value, ',');
     const on_text = parts.next() orelse return null;
     const off_text = parts.next() orelse return null;

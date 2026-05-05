@@ -16,12 +16,12 @@ fn maxWidthForStyle(style: TextStyle) f32 {
     return @min(PageLayout.max_visual_width, PageLayout.width - style.default_x - style.default_right_inset);
 }
 
-fn assetScale(node: *const Node) f32 {
-    return parseNodeFloatProperty(node, "asset_scale") orelse 1.0;
+fn assetScale(ir: anytype, node: *const Node) f32 {
+    return parseNodeFloatProperty(ir, node, "asset_scale") orelse 1.0;
 }
 
-fn mathScale(node: *const Node) f32 {
-    return parseNodeFloatProperty(node, "math_scale") orelse 1.0;
+fn mathScale(ir: anytype, node: *const Node) f32 {
+    return parseNodeFloatProperty(ir, node, "math_scale") orelse 1.0;
 }
 
 pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
@@ -29,8 +29,8 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
     const content = node.content orelse "";
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
-            const base_width = parseNodeFloatProperty(node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
-            return base_width * assetScale(node);
+            const base_width = parseNodeFloatProperty(ir, node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
+            return base_width * assetScale(ir, node);
         },
         .figure_text => return maxWidthForStyle(style),
         .math_tex => return maxWidthForStyle(style),
@@ -58,24 +58,24 @@ pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
     const style = styleForNode(ir, node);
     return switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => blk: {
-            const base_height = parseNodeFloatProperty(node, "asset_height") orelse PageLayout.max_figure_height;
-            break :blk base_height * assetScale(node);
+            const base_height = parseNodeFloatProperty(ir, node, "asset_height") orelse PageLayout.max_figure_height;
+            break :blk base_height * assetScale(ir, node);
         },
         .figure_text => PageLayout.max_figure_height,
         .math_tex => blk: {
             const content = node.content orelse "";
             const lines = @max(lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
-            break :blk @min(PageLayout.max_math_height * mathScale(node), @max(@as(f32, 30.0), base) * mathScale(node));
+            break :blk @min(PageLayout.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node));
         },
         else => blk: {
             const content = node.content orelse "";
             const width = if (node.frame.width > 0) node.frame.width else intrinsicWidth(ir, node);
-            if (shouldWrapNode(ir, node) and markdown.shouldParseBlocks(node.role, if (node.payload_kind) |kind| @tagName(kind) else null)) {
-                var doc = markdown.parseMarkdownDocument(
+            if (shouldWrapNode(ir, node) and markdown.shouldParseBlocksNode(ir, node)) {
+                var doc = markdown.parseMarkdownDocumentForNode(
                     ir.allocator,
-                    node.role,
-                    if (node.payload_kind) |kind| @tagName(kind) else null,
+                    ir,
+                    node,
                     content,
                 ) catch break :blk fallbackTextHeight(ir, node, style, content, width);
                 defer doc.deinit();
@@ -98,50 +98,49 @@ fn fallbackTextHeight(ir: anytype, node: *const Node, style: TextStyle, content:
     return @as(f32, @floatFromInt(lines)) * style.line_height;
 }
 
-fn markdownBlockGap(node: *const Node, style: TextStyle) f32 {
-    return parseNodeFloatProperty(node, "text_markdown_block_gap") orelse style.line_height * 0.15;
+fn markdownBlockGap(ir: anytype, node: *const Node, style: TextStyle) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_block_gap") orelse style.line_height * 0.15;
 }
 
-fn markdownGapBetweenBlocks(node: *const Node, style: TextStyle, current: *const markdown.Block, next: *const markdown.Block) f32 {
-    const base = markdownBlockGap(node, style);
+fn markdownGapBetweenBlocks(ir: anytype, node: *const Node, style: TextStyle, current: *const markdown.Block, next: *const markdown.Block) f32 {
+    const base = markdownBlockGap(ir, node, style);
     if (current.kind == .code_block or next.kind == .code_block) {
         return @max(base, style.line_height);
     }
     return base;
 }
 
-fn markdownListIndent(node: *const Node, style: TextStyle) f32 {
-    return parseNodeFloatProperty(node, "text_markdown_list_indent") orelse style.font_size * 1.3;
+fn markdownListIndent(ir: anytype, node: *const Node, style: TextStyle) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_list_indent") orelse style.font_size * 1.3;
 }
 
-fn markdownCodeLineHeight(node: *const Node) f32 {
-    return parseNodeFloatProperty(node, "text_markdown_code_line_height") orelse 20.0;
+fn markdownCodeLineHeight(ir: anytype, node: *const Node) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_code_line_height") orelse 20.0;
 }
 
-fn markdownCodePadY(node: *const Node) f32 {
-    return parseNodeFloatProperty(node, "text_markdown_code_pad_y") orelse 10.0;
+fn markdownCodePadY(ir: anytype, node: *const Node) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 10.0;
 }
 
 fn markdownBlocksHeight(ir: anytype, node: *const Node, style: TextStyle, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
-    _ = ir;
     if (blocks.len == 0) return style.line_height;
 
     var total: f32 = 0;
     for (blocks, 0..) |block, index| {
-        total += markdownBlockHeight(node, style, block, max_width, list_depth);
-        if (index != blocks.len - 1) total += markdownGapBetweenBlocks(node, style, block, blocks[index + 1]);
+        total += markdownBlockHeight(ir, node, style, block, max_width, list_depth);
+        if (index != blocks.len - 1) total += markdownGapBetweenBlocks(ir, node, style, block, blocks[index + 1]);
     }
     return total;
 }
 
-fn markdownBlockHeight(node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
+fn markdownBlockHeight(ir: anytype, node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     return switch (block.kind) {
         .paragraph => markdownLinesHeight(style, block.paragraph.?.lines.items, max_width),
         .code_block => blk: {
             const lines = markdownCodeBlockLineCount(block);
-            break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(node) + 2.0 * markdownCodePadY(node);
+            break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(ir, node) + 2.0 * markdownCodePadY(ir, node);
         },
-        .bullet_list, .ordered_list => markdownListHeight(node, style, block, max_width, list_depth),
+        .bullet_list, .ordered_list => markdownListHeight(ir, node, style, block, max_width, list_depth),
     };
 }
 
@@ -177,19 +176,19 @@ fn markdownCodeBlockLineCount(block: *const markdown.Block) usize {
     return @max(@as(usize, 1), total);
 }
 
-fn markdownListHeight(node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
+fn markdownListHeight(ir: anytype, node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     const list = block.list.?;
     if (list.items.items.len == 0) return style.line_height;
 
     var total: f32 = 0;
     for (list.items.items, 0..) |item, item_index| {
-        total += markdownListItemHeight(node, style, block.kind, item, max_width, list_depth);
-        if (item_index != list.items.items.len - 1) total += markdownBlockGap(node, style);
+        total += markdownListItemHeight(ir, node, style, block.kind, item, max_width, list_depth);
+        if (item_index != list.items.items.len - 1) total += markdownBlockGap(ir, node, style);
     }
     return total;
 }
 
-fn markdownListItemHeight(node: *const Node, style: TextStyle, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize) f32 {
+fn markdownListItemHeight(ir: anytype, node: *const Node, style: TextStyle, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize) f32 {
     _ = kind;
     const marker_gap = @max(@as(f32, 8.0), style.font_size * 0.35);
     const marker_width = style.font_size * 0.58;
@@ -199,11 +198,11 @@ fn markdownListItemHeight(node: *const Node, style: TextStyle, kind: markdown.Bl
     var total: f32 = 0;
     for (item.blocks.items, 0..) |block, block_index| {
         const block_width = if (block.kind == .bullet_list or block.kind == .ordered_list)
-            @max(@as(f32, 1.0), content_width - markdownListIndent(node, style))
+            @max(@as(f32, 1.0), content_width - markdownListIndent(ir, node, style))
         else
             content_width;
-        total += markdownBlockHeight(node, style, block, block_width, list_depth + 1);
-        if (block_index != item.blocks.items.len - 1) total += markdownGapBetweenBlocks(node, style, block, item.blocks.items[block_index + 1]);
+        total += markdownBlockHeight(ir, node, style, block, block_width, list_depth + 1);
+        if (block_index != item.blocks.items.len - 1) total += markdownGapBetweenBlocks(ir, node, style, block, item.blocks.items[block_index + 1]);
     }
     return total;
 }
@@ -249,12 +248,12 @@ fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
 fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) bool {
     if (!shouldWrapNode(ir, node)) return false;
     if (lineCount(content) > 1) return true;
-    if (!markdown.shouldParseBlocks(node.role, if (node.payload_kind) |kind| @tagName(kind) else null)) return false;
+    if (!markdown.shouldParseBlocksNode(ir, node)) return false;
 
-    var doc = markdown.parseMarkdownDocument(
+    var doc = markdown.parseMarkdownDocumentForNode(
         ir.allocator,
-        node.role,
-        if (node.payload_kind) |kind| @tagName(kind) else null,
+        ir,
+        node,
         content,
     ) catch return false;
     defer doc.deinit();
@@ -270,15 +269,11 @@ fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) b
 }
 
 pub fn shouldWrapNode(ir: anytype, node: *const Node) bool {
-    if (model.nodeProperty(node, "wrap")) |wrap_mode| {
-        if (std.mem.eql(u8, wrap_mode, "on")) return true;
-        if (std.mem.eql(u8, wrap_mode, "off")) return false;
-    }
     return style_defaults.shouldWrapNode(ir, node);
 }
 
-fn parseNodeFloatProperty(node: *const Node, key: []const u8) ?f32 {
-    return style_defaults.parseNodeFloatProperty(node, key);
+fn parseNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    return style_defaults.parseNodeFloatProperty(ir, node, key);
 }
 
 pub fn lineCount(text: []const u8) usize {

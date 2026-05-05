@@ -795,32 +795,26 @@ fn writeUserFunction(
 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
     const render = core.render_policy.resolve(ir, &node);
-    const should_parse_blocks = core.markdown.shouldParseBlocks(
-        node.role,
-        if (node.payload_kind) |payload_kind| @tagName(payload_kind) else null,
-    ) and node.content != null;
-    const should_parse_inline = core.markdown.shouldParseInline(
-        node.role,
-        if (node.payload_kind) |payload_kind| @tagName(payload_kind) else null,
-    ) and node.content != null and !should_parse_blocks;
+    const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and node.content != null;
+    const should_parse_inline = core.markdown.shouldParseInlineNode(ir, &node) and node.content != null and !should_parse_blocks;
 
     var markdown_doc_storage = core.markdown.MarkdownDocument.init(allocator);
     defer markdown_doc_storage.deinit();
     var inline_layout_storage: core.markdown.TextLayout = .{};
     defer if (should_parse_inline) inline_layout_storage.deinit(allocator);
     if (should_parse_blocks) {
-        markdown_doc_storage = try core.markdown.parseMarkdownDocument(
+        markdown_doc_storage = try core.markdown.parseMarkdownDocumentForNode(
             allocator,
-            node.role,
-            if (node.payload_kind) |payload_kind| @tagName(payload_kind) else null,
+            ir,
+            &node,
             node.content.?,
         );
     }
     if (should_parse_inline) {
-        inline_layout_storage = try core.markdown.parseTextLayout(
+        inline_layout_storage = try core.markdown.parseTextLayoutForNode(
             allocator,
-            node.role,
-            if (node.payload_kind) |payload_kind| @tagName(payload_kind) else null,
+            ir,
+            &node,
             node.content.?,
         );
     }
