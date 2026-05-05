@@ -371,7 +371,6 @@ pub const ComponentSet = struct {
             if (!self.contains(component_root, index)) continue;
             const node = ir.getNode(child_id) orelse continue;
             if (isGroupNode(node)) continue;
-            if (roleEq(node.role, "page_number")) continue;
             return index;
         }
         return null;
@@ -383,7 +382,6 @@ pub const ComponentSet = struct {
             if (!self.contains(component_root, index)) continue;
             const node = ir.getNode(child_id) orelse continue;
             if (isGroupNode(node)) continue;
-            if (roleEq(node.role, "page_number")) continue;
             if (fallback == null) fallback = index;
             if (state.start == null and !self.workspace.graph.hasTargetConstraint(ir, child_id, self.workspace.axis, self.workspace.soft_constraints)) return index;
         }
@@ -403,9 +401,9 @@ pub const ComponentSet = struct {
     }
 
     fn markKnownAnchors(self: *ComponentSet, ir: anytype) !void {
-        for (self.workspace.graph.child_ids, self.workspace.states, 0..) |child_id, state, index| {
-            const node = ir.getNode(child_id) orelse return error.UnknownNode;
-            if (roleEq(node.role, "page_number") or state.start != null or state.end != null or state.center != null) {
+        _ = ir;
+        for (self.workspace.states, 0..) |state, index| {
+            if (state.start != null or state.end != null or state.center != null) {
                 self.markPageDependent(index);
             }
         }

@@ -22,8 +22,20 @@ fn document_pages() -> selection<page>
   return select(docctx(), "document_pages")
 end
 
+fn pages(doc: document) -> selection<page>
+  return select(doc, "document_pages")
+end
+
 fn document_objects(role_name: string) -> selection<object>
   return select(docctx(), "document_objects_by_role", role_name)
+end
+
+fn objects_in_document(doc: document, role_name: string) -> selection<object>
+  return select(doc, "document_objects_by_role", role_name)
+end
+
+fn parent_page(obj: object) -> page
+  return select(obj, "parent_page")
 end
 
 fn all_objects(role_name: string) -> selection<object>

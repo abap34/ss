@@ -10,7 +10,6 @@ const AxisState = model.AxisState;
 const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
 const PageLayout = model.PageLayout;
-const roleEq = model.roleEq;
 
 const VerticalFallbackPolicy = enum {
     top_flow,
@@ -86,7 +85,6 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
     for (workspace.graph.child_ids, workspace.states, 0..) |child_id, state, index| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         if (groups.isGroupNode(node)) continue;
-        if (roleEq(node.role, "page_number")) continue;
 
         const root = components.findConst(index);
         if (components.isPageDependent(root)) {
@@ -249,7 +247,6 @@ fn computeVerticalComponentUnit(
     for (workspace.graph.child_ids, 0..) |child_id, index| {
         if (!components.contains(component_root, index)) continue;
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
-        if (roleEq(node.role, "page_number")) continue;
         if (groups.isGroupNode(node) and (temp[index].start == null or temp[index].end == null)) continue;
         const start = temp[index].start orelse return null;
         const end = temp[index].end orelse return null;

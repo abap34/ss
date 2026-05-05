@@ -1070,6 +1070,17 @@ fn collectExprCallees(
             if (functions.get(call.name)) |func| {
                 if (!isConst(func)) try appendUniqueCallee(allocator, callees, call.name);
             }
+            if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+                if (descriptor.op == .foreach or descriptor.op == .fold or descriptor.op == .join) {
+                    const callback_index: usize = if (descriptor.op == .foreach) 1 else 2;
+                    if (call.args.items.len > callback_index) {
+                        switch (call.args.items[callback_index]) {
+                            .ident => |name| if (functions.contains(name)) try appendUniqueCallee(allocator, callees, name),
+                            else => {},
+                        }
+                    }
+                }
+            }
             for (call.args.items) |arg| try collectExprCallees(allocator, functions, arg, callees);
         },
         else => {},
@@ -1228,6 +1239,7 @@ fn inferExprInfo(
             if (env.get(name)) |info| break :blk info;
             if (functions.get(name)) |func| {
                 if (isConst(func)) break :blk infoFromType(func.result_type);
+                break :blk infoFromSort(.function);
             }
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
@@ -1432,6 +1444,32 @@ fn primitiveResultTypeInfo(
         return info;
     }
 
+    if (descriptor.op == .foreach) {
+        if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, functions, env, call, origin, 1, selection_info, 1, null);
+        return selection_info;
+    }
+
+    if (descriptor.op == .fold) {
+        if (call.args.items.len < 3) return infoFromSort(.string);
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, functions, env, call, origin, 2, selection_info, 2, .string);
+        return infoFromSort(.string);
+    }
+
+    if (descriptor.op == .join) {
+        if (call.args.items.len < 3) return infoFromSort(.string);
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, functions, env, call, origin, 2, selection_info, 1, .string);
+        return infoFromSort(.string);
+    }
+
+    if (descriptor.op == .set_content or descriptor.op == .clear_content or descriptor.op == .append_content) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        return try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    }
+
     if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
         return try inferSelectionAlgebraInfo(allocator, ir, functions, env, call, origin);
     }
@@ -1487,6 +1525,63 @@ fn primitiveResultTypeInfo(
     info.object_shape = shape;
     info.object_class = inferObjectConstructorClass(ir, env, call) orelse classNameForShape(shape);
     return info;
+}
+
+fn validateCallbackShape(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+    callback_index: usize,
+    selection_info: TypeInfo,
+    fixed_prefix_count: usize,
+    expected_result: ?core.SemanticSort,
+) !void {
+    if (call.args.items.len <= callback_index) return;
+    const callback_name = switch (call.args.items[callback_index]) {
+        .ident => |name| name,
+        else => {
+            try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function", .{});
+            return error.InvalidSemanticSort;
+        },
+    };
+    const callback = functions.get(callback_name) orelse {
+        try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function: {s}", .{callback_name});
+        return error.UnknownFunction;
+    };
+    const extra_count = if (call.args.items.len > callback_index + 1) call.args.items.len - callback_index - 1 else 0;
+    const expected_arg_count = fixed_prefix_count + extra_count;
+    if (expected_arg_count < requiredParamCount(callback) or expected_arg_count > callback.params.items.len) {
+        try addUserReport(ir, origin, "InvalidCallback: callback {s} receives {d} arguments here, but its contract is {d}..{d}", .{
+            callback_name,
+            expected_arg_count,
+            requiredParamCount(callback),
+            callback.params.items.len,
+        });
+        return error.InvalidArity;
+    }
+    const item_type = switch (selection_info.ty.param) {
+        .page => Type.page,
+        .object, .any, .none => Type.object,
+        else => Type.any,
+    };
+    if (fixed_prefix_count == 1) {
+        try ensureType(ir, allocator, infoFromType(callback.params.items[0].ty), item_type, origin, .UnmatchedArgumentType);
+    } else if (fixed_prefix_count == 2) {
+        try ensureType(ir, allocator, infoFromType(callback.params.items[0].ty), Type.string, origin, .UnmatchedArgumentType);
+        try ensureType(ir, allocator, infoFromType(callback.params.items[1].ty), item_type, origin, .UnmatchedArgumentType);
+    }
+    var extra_index: usize = 0;
+    while (extra_index < extra_count) : (extra_index += 1) {
+        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[callback_index + 1 + extra_index], origin);
+        const param_index = fixed_prefix_count + extra_index;
+        try ensureType(ir, allocator, actual, callback.params.items[param_index].ty, origin, .UnmatchedArgumentType);
+    }
+    if (expected_result) |result_sort| {
+        try ensureSort(ir, callback.result_sort, result_sort, origin, .UnmatchedReturnType);
+    }
 }
 
 fn inferSelectionAlgebraInfo(

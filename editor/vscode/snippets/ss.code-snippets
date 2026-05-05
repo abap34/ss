@@ -21,11 +21,22 @@
   "annotated function": {
     "prefix": "ss-fn-ann",
     "body": [
-      "fn ${1:name}(${2:self}: object<${3:TextObject}>) -> ${4:RenderDoc} @${5:render}(${3})",
+      "@${5:render}(${3})",
+      "fn ${1:name}(${2:self}: object<${3:TextObject}>) -> ${4:RenderDoc}",
       "${6:return draw_text(${2}.frame, { text: ${2}.content })}",
       "end"
     ],
     "description": "Create an annotated function declaration"
+  },
+  "phase function": {
+    "prefix": "ss-phase",
+    "body": [
+      "@phase(${1:after_pages})",
+      "fn ${2:refresh_document}(doc: document) -> document",
+      "${3:  return doc}",
+      "end"
+    ],
+    "description": "Create a staged document phase function"
   },
   "constant": {
     "prefix": "ss-const",
@@ -76,7 +87,8 @@
   "host capability": {
     "prefix": "ss-host",
     "body": [
-      "fn ${1:compile_asset}(${2:source}: ${3:string}) -> ${4:string} @host(effects = [${5:ExternalProcess}], cache = ${6:hash_key})"
+      "@host(effects = [${5:ExternalProcess}], cache = ${6:hash_key})",
+      "fn ${1:compile_asset}(${2:source}: ${3:string}) -> ${4:string}"
     ],
     "description": "Declare a host capability boundary"
   },
