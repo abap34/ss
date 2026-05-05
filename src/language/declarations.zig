@@ -132,6 +132,41 @@ pub fn findField(ir: *const core.Ir, class_name: []const u8, field_name: []const
     return null;
 }
 
+pub fn findFieldByName(ir: *const core.Ir, field_name: []const u8) ?FieldDescriptor {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.object_extensions.items) |extension| {
+            for (extension.fields.items) |field| {
+                if (std.mem.eql(u8, field.name, field_name)) {
+                    return .{ .name = field.name, .class_name = extension.target, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                }
+            }
+        }
+        for (module.program.objects.items) |decl| {
+            for (decl.fields.items) |field| {
+                if (std.mem.eql(u8, field.name, field_name)) {
+                    return .{ .name = field.name, .class_name = decl.name, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                }
+            }
+        }
+    }
+    return null;
+}
+
+pub fn classExists(ir: *const core.Ir, class_name: []const u8) bool {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.objects.items) |decl| {
+            if (std.mem.eql(u8, decl.name, class_name)) return true;
+        }
+    }
+    return false;
+}
+
 pub fn findClassBase(ir: *const core.Ir, class_name: []const u8) ?[]const u8 {
     var index = ir.module_order.items.len;
     while (index > 0) {

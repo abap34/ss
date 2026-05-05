@@ -207,9 +207,104 @@ pub fn typecheckProgram(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {
+    try checkObjectDeclarations(allocator, ir);
     try checkPropertyDeclarations(allocator, ir);
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
     try checkPageStatements(allocator, ir, &ir.functions, ir.projectProgram());
+}
+
+fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    var roles = std.StringHashMap([]const u8).init(allocator);
+    defer roles.deinit();
+
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        for (module.program.objects.items) |object_decl| {
+            try checkObjectDeclaration(allocator, ir, module.id, object_decl);
+            try checkRolesUnique(allocator, ir, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
+        }
+        for (module.program.object_extensions.items) |extension| {
+            try checkObjectExtension(allocator, ir, module.id, extension);
+            try checkRolesUnique(allocator, ir, &roles, extension.target, extension.roles.items, extension.span);
+        }
+    }
+}
+
+fn checkObjectDeclaration(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    module_id: core.SourceModuleId,
+    object_decl: ast.ObjectDecl,
+) !void {
+    const origin = try statementOrigin(allocator, object_decl.span);
+    defer allocator.free(origin);
+    if (object_decl.base) |base| {
+        if (!declarations.classExists(ir, base)) {
+            try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
+            return error.InvalidSemanticSort;
+        }
+    }
+    try checkObjectFields(allocator, ir, module_id, object_decl.fields.items);
+}
+
+fn checkObjectExtension(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    module_id: core.SourceModuleId,
+    extension: ast.ObjectExtensionDecl,
+) !void {
+    const origin = try statementOrigin(allocator, extension.span);
+    defer allocator.free(origin);
+    if (!declarations.classExists(ir, extension.target)) {
+        try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
+        return error.InvalidSemanticSort;
+    }
+    if (extension.implements) |implements| {
+        if (!declarations.classExists(ir, implements)) {
+            try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
+            return error.InvalidSemanticSort;
+        }
+    }
+    try checkObjectFields(allocator, ir, module_id, extension.fields.items);
+}
+
+fn checkObjectFields(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    module_id: core.SourceModuleId,
+    fields: []const ast.ObjectFieldDecl,
+) !void {
+    for (fields) |field| {
+        if (property_schema.resolveValueType(ir, module_id, field.value_type) != null) continue;
+        const origin = try statementOrigin(allocator, field.span);
+        defer allocator.free(origin);
+        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+        return error.InvalidSemanticSort;
+    }
+}
+
+fn checkRolesUnique(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    roles: *std.StringHashMap([]const u8),
+    class_name: []const u8,
+    role_names: []const []const u8,
+    span: ast.Span,
+) !void {
+    for (role_names) |role_name| {
+        if (roles.get(role_name)) |existing_class| {
+            const origin = try statementOrigin(allocator, span);
+            defer allocator.free(origin);
+            try addUserReport(
+                ir,
+                origin,
+                "DuplicateRole: role '{s}' is already provided by {s}",
+                .{ role_name, existing_class },
+            );
+            return error.InvalidSemanticSort;
+        }
+        try roles.put(role_name, class_name);
+    }
 }
 
 fn checkPropertyDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -967,7 +1062,9 @@ fn checkFunction(
             const info = try inferExprInfo(allocator, ir, functions, &env, default_value.*, func_origin);
             try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
-        try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
+        var param_info = infoFromType(param.ty);
+        param_info.sort = param.sort;
+        try env.put(param.name, param_info);
     }
 
     for (func.statements.items) |stmt| {
@@ -1203,7 +1300,11 @@ fn inferUserFunctionReturnInfoInner(
         else if (param.default_value) |default_value|
             try inferExprInfo(allocator, ir, functions, &env, default_value.*, origin)
         else
-            .{ .ty = param.ty, .sort = param.sort };
+            blk: {
+                var param_info = infoFromType(param.ty);
+                param_info.sort = param.sort;
+                break :blk param_info;
+            };
         try env.put(param.name, info);
     }
 
@@ -1565,12 +1666,8 @@ fn validateSetPropCall(
         .string => |text| text,
         else => return,
     };
-    const schema = property_schema.lookupInIr(ir, key) orelse {
-        try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{key});
-        return error.InvalidSemanticSort;
-    };
     const target_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
-    const target_shape = propertyShapeForInfo(target_info) orelse {
+    if (!isPropertyTarget(target_info)) {
         try addUserReport(
             ir,
             origin,
@@ -1578,24 +1675,83 @@ fn validateSetPropCall(
             .{@tagName(target_info.sort)},
         );
         return error.InvalidSemanticSort;
-    };
-    if (!property_schema.isSchemaShapeAllowed(schema, target_shape)) {
-        try addUserReport(
-            ir,
-            origin,
-            "InvalidProperty: property '{s}' is not valid for {s}",
-            .{ key, property_schema.shapeLabel(target_shape) },
-        );
-        return error.InvalidSemanticSort;
     }
 
     const value_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[2], origin);
-    if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
+    if (lookupFieldForTarget(ir, target_info, key)) |field| {
+        try validateFieldValue(ir, field, key, value_info, origin);
+        return;
+    }
+
+    if (property_schema.lookupInIr(ir, key)) |schema| {
+        if (propertyShapeForInfo(target_info)) |target_shape| {
+            if (!property_schema.isSchemaShapeAllowed(schema, target_shape)) {
+                try addUserReport(
+                    ir,
+                    origin,
+                    "InvalidProperty: property '{s}' is not valid for {s}",
+                    .{ key, property_schema.shapeLabel(target_shape) },
+                );
+                return error.InvalidSemanticSort;
+            }
+        }
+        if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
+            try addUserReport(
+                ir,
+                origin,
+                "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
+                .{ key, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
+            );
+            return error.InvalidSemanticSort;
+        }
+        return;
+    }
+
+    try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
+    return error.InvalidSemanticSort;
+}
+
+fn isPropertyTarget(info: TypeInfo) bool {
+    return switch (info.ty.tag) {
+        .document, .page, .object => true,
+        .selection => info.ty.param == .object or info.ty.param == .any,
+        else => false,
+    };
+}
+
+fn lookupFieldForTarget(ir: *core.Ir, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
+    if (targetClassForInfo(target_info)) |class_name| {
+        return declarations.findField(ir, class_name, key);
+    }
+    if (target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {
+        return declarations.findFieldByName(ir, key);
+    }
+    return null;
+}
+
+fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
+    return switch (info.ty.tag) {
+        .document => "DocumentObject",
+        .page => "PageObject",
+        .object => info.object_class orelse classNameForShape(info.object_shape),
+        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class orelse classNameForShape(info.object_shape) else null,
+        else => null,
+    };
+}
+
+fn validateFieldValue(
+    ir: *core.Ir,
+    field: declarations.FieldDescriptor,
+    key: []const u8,
+    value_info: TypeInfo,
+    origin: []const u8,
+) !void {
+    if (!property_schema.valueTypeNameMatches(ir, field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
         try addUserReport(
             ir,
             origin,
-            "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-            .{ key, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
+            "InvalidFieldValue: field '{s}' expects {s}, got {s}",
+            .{ key, property_schema.valueTypeNameLabel(ir, field.module_id, field.value_type), @tagName(value_info.sort) },
         );
         return error.InvalidSemanticSort;
     }
@@ -1626,28 +1782,34 @@ fn validatePropertySetStatement(
         return error.UnknownIdentifier;
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
-    const schema = lookupPropertySchema(ir, property_name) orelse {
-        if (ir == null) return;
-        try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{property_name});
-        return error.InvalidSemanticSort;
-    };
-    if (!property_schema.isSchemaShapeAllowed(schema, object_info.object_shape)) {
-        try addUserReport(
-            ir,
-            origin,
-            "InvalidProperty: property '{s}' is not valid for {s}",
-            .{ property_name, property_schema.shapeLabel(object_info.object_shape) },
-        );
-        return error.InvalidSemanticSort;
-    }
     const value_info = try inferExprInfo(allocator, ir, functions, env, value, origin);
-    if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
-        try addUserReport(
-            ir,
-            origin,
-            "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-            .{ property_name, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
-        );
+    if (ir) |sink| {
+        if (lookupFieldForTarget(sink, object_info, property_name)) |field| {
+            try validateFieldValue(sink, field, property_name, value_info, origin);
+            return;
+        }
+        if (lookupPropertySchema(ir, property_name)) |schema| {
+            if (!property_schema.isSchemaShapeAllowed(schema, object_info.object_shape)) {
+                try addUserReport(
+                    ir,
+                    origin,
+                    "InvalidProperty: property '{s}' is not valid for {s}",
+                    .{ property_name, property_schema.shapeLabel(object_info.object_shape) },
+                );
+                return error.InvalidSemanticSort;
+            }
+            if (!property_schema.schemaValueMatches(schema, value_info.string_literal, value_info.sort)) {
+                try addUserReport(
+                    ir,
+                    origin,
+                    "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
+                    .{ property_name, property_schema.schemaValueTypeLabel(schema), @tagName(value_info.sort) },
+                );
+                return error.InvalidSemanticSort;
+            }
+            return;
+        }
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
         return error.InvalidSemanticSort;
     }
 }
