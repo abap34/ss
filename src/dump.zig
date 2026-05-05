@@ -15,6 +15,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try root.intField("ir_version", 1);
     try root.stringField("stage", "finalized_ir");
     try root.stringField("project_path", ir.projectPath());
+    try root.intField("projectModuleId", ir.project_module_id);
     try root.stringField("asset_base_dir", ir.asset_base_dir);
 
     try writeModulesField(allocator, &root, ir.modules.items);
@@ -309,6 +310,8 @@ fn writeHintsField(root: *json.Object, hints: []const core.InlayHint) !void {
         try item.intField("column", hint.column);
         try item.stringField("label", hint.label);
         try item.enumTagField("kind", hint.kind);
+        try item.intField("moduleId", hint.module_id);
+        try item.optionalStringField("file", hint.file);
         try item.end();
     }
     try array.end();

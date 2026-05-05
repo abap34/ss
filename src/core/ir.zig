@@ -86,6 +86,8 @@ pub const InlayHint = struct {
     column: usize,
     label: []const u8,
     kind: InlayHintKind,
+    module_id: SourceModuleId,
+    file: ?[]const u8 = null,
 };
 
 pub const Ir = struct {
