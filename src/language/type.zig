@@ -4,6 +4,8 @@ const model = @import("model");
 pub const Type = struct {
     tag: Tag,
     param: Tag = .none,
+    class_name: ?[]const u8 = null,
+    param_class_name: ?[]const u8 = null,
 
     pub const Tag = enum {
         none,
@@ -34,8 +36,20 @@ pub const Type = struct {
     pub const number = Type{ .tag = .number };
     pub const constraints = Type{ .tag = .constraints };
 
+    pub fn objectClass(name: []const u8) Type {
+        return .{ .tag = .object, .class_name = name };
+    }
+
     pub fn selection(item: Tag) Type {
         return .{ .tag = .selection, .param = normalizeParam(item) };
+    }
+
+    pub fn selectionType(item: Type) Type {
+        return .{
+            .tag = .selection,
+            .param = normalizeParam(item.tag),
+            .param_class_name = if (item.tag == .object) item.class_name else null,
+        };
     }
 
     pub fn fragment(root: Tag) Type {
@@ -88,15 +102,25 @@ pub const Type = struct {
     }
 
     pub fn eql(a: Type, b: Type) bool {
-        return a.tag == b.tag and normalizeParam(a.param) == normalizeParam(b.param);
+        return a.tag == b.tag and
+            normalizeParam(a.param) == normalizeParam(b.param) and
+            optionalStringEql(a.class_name, b.class_name) and
+            optionalStringEql(a.param_class_name, b.param_class_name);
     }
 
     pub fn accepts(expected: Type, actual: Type) bool {
         if (expected.tag == .any or actual.tag == .any) return true;
         if (expected.tag != actual.tag) return false;
+        if (expected.tag == .object and expected.class_name != null and actual.class_name != null) {
+            if (!std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
+        }
         const expected_param = normalizeParam(expected.param);
         const actual_param = normalizeParam(actual.param);
-        return expected_param == .any or actual_param == .any or expected_param == actual_param;
+        if (!(expected_param == .any or actual_param == .any or expected_param == actual_param)) return false;
+        if (expected_param == .object and expected.param_class_name != null and actual.param_class_name != null) {
+            if (!std.mem.eql(u8, expected.param_class_name.?, actual.param_class_name.?)) return false;
+        }
+        return true;
     }
 
     pub fn fromSelectionItemSort(sort: model.SelectionItemSort) Type {
@@ -134,8 +158,22 @@ pub const Type = struct {
             .selection, .fragment, .code, .list => {
                 try out.appendSlice(allocator, @tagName(self.tag));
                 try out.append(allocator, '<');
-                try out.appendSlice(allocator, @tagName(normalizeParam(self.param)));
+                if (normalizeParam(self.param) == .object and self.param_class_name != null) {
+                    try out.appendSlice(allocator, "object<");
+                    try out.appendSlice(allocator, self.param_class_name.?);
+                    try out.append(allocator, '>');
+                } else {
+                    try out.appendSlice(allocator, @tagName(normalizeParam(self.param)));
+                }
                 try out.append(allocator, '>');
+            },
+            .object => {
+                try out.appendSlice(allocator, "object");
+                if (self.class_name) |class_name| {
+                    try out.append(allocator, '<');
+                    try out.appendSlice(allocator, class_name);
+                    try out.append(allocator, '>');
+                }
             },
             else => try out.appendSlice(allocator, @tagName(self.tag)),
         }
@@ -145,3 +183,9 @@ pub const Type = struct {
         return @tagName(self.tag);
     }
 };
+
+fn optionalStringEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
+}

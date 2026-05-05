@@ -8,12 +8,14 @@ pub const Type = types.Type;
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
     types: std.ArrayList(TypeDecl),
+    objects: std.ArrayList(ObjectDecl),
+    object_extensions: std.ArrayList(ObjectExtensionDecl),
     properties: std.ArrayList(PropertyDecl),
     functions: std.ArrayList(FunctionDecl),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .types = .empty, .properties = .empty, .functions = .empty, .pages = .empty };
+        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .properties = .empty, .functions = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
@@ -21,6 +23,10 @@ pub const Program = struct {
         self.imports.deinit(allocator);
         for (self.types.items) |type_decl| type_decl.deinit(allocator);
         self.types.deinit(allocator);
+        for (self.objects.items) |*object| object.deinit(allocator);
+        self.objects.deinit(allocator);
+        for (self.object_extensions.items) |*extension| extension.deinit(allocator);
+        self.object_extensions.deinit(allocator);
         for (self.properties.items) |*property| property.deinit(allocator);
         self.properties.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
@@ -41,11 +47,60 @@ pub const ImportDecl = struct {
 pub const TypeDecl = struct {
     name: []const u8,
     body: []const u8,
+    refinement: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: TypeDecl, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.body);
+        if (self.refinement) |refinement| allocator.free(refinement);
+    }
+};
+
+pub const ObjectFieldDecl = struct {
+    name: []const u8,
+    value_type: []const u8,
+    default_value: ?[]const u8 = null,
+    span: Span,
+
+    pub fn deinit(self: *ObjectFieldDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.value_type);
+        if (self.default_value) |default_value| allocator.free(default_value);
+    }
+};
+
+pub const ObjectDecl = struct {
+    name: []const u8,
+    base: ?[]const u8 = null,
+    roles: std.ArrayList([]const u8),
+    fields: std.ArrayList(ObjectFieldDecl),
+    span: Span,
+
+    pub fn deinit(self: *ObjectDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        if (self.base) |base| allocator.free(base);
+        for (self.roles.items) |role| allocator.free(role);
+        self.roles.deinit(allocator);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+};
+
+pub const ObjectExtensionDecl = struct {
+    target: []const u8,
+    implements: ?[]const u8 = null,
+    roles: std.ArrayList([]const u8),
+    fields: std.ArrayList(ObjectFieldDecl),
+    span: Span,
+
+    pub fn deinit(self: *ObjectExtensionDecl, allocator: Allocator) void {
+        allocator.free(self.target);
+        if (self.implements) |implements| allocator.free(implements);
+        for (self.roles.items) |role| allocator.free(role);
+        self.roles.deinit(allocator);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
     }
 };
 
@@ -80,13 +135,27 @@ pub const FunctionDecl = struct {
     params: std.ArrayList(ParamDecl),
     result_type: Type,
     result_sort: core.SemanticSort,
+    annotations: std.ArrayList(Annotation),
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
+        for (self.annotations.items) |*annotation| annotation.deinit(allocator);
+        self.annotations.deinit(allocator);
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
+    }
+};
+
+pub const Annotation = struct {
+    name: []const u8,
+    args: ?[]const u8 = null,
+    span: Span,
+
+    pub fn deinit(self: *Annotation, allocator: Allocator) void {
+        allocator.free(self.name);
+        if (self.args) |args| allocator.free(args);
     }
 };
 
