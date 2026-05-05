@@ -28,6 +28,8 @@ const TypeInfo = struct {
 
 const TypeEnv = std.StringHashMap(TypeInfo);
 pub const VariableInfo = TypeInfo;
+
+var diagnostic_origin_path: []const u8 = "";
 pub const FunctionMetadata = core.FunctionMetadata;
 
 pub const ProgramIndex = struct {
@@ -131,6 +133,18 @@ fn isConst(func: ast.FunctionDecl) bool {
     return func.kind == .constant;
 }
 
+fn originPathForModule(module: *const core.SourceModule) []const u8 {
+    return module.path orelse module.spec;
+}
+
+fn setDiagnosticOriginModule(module: *const core.SourceModule) void {
+    diagnostic_origin_path = originPathForModule(module);
+}
+
+fn clearDiagnosticOriginModule() void {
+    diagnostic_origin_path = "";
+}
+
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
@@ -195,10 +209,16 @@ pub fn checkFunctionDefinitions(
     ir: *core.Ir,
     functions: *const std.StringHashMap(ast.FunctionDecl),
 ) !void {
+    defer clearDiagnosticOriginModule();
     try checkFunctionCallGraph(allocator, ir, functions);
 
     var it = functions.iterator();
     while (it.next()) |entry| {
+        if (ir.function_metadata.get(entry.key_ptr.*)) |metadata| {
+            if (ir.moduleById(metadata.module_id)) |module| setDiagnosticOriginModule(module);
+        } else {
+            clearDiagnosticOriginModule();
+        }
         try checkFunction(allocator, ir, functions, entry.value_ptr.*);
     }
 }
@@ -207,18 +227,25 @@ pub fn typecheckProgram(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {
+    defer clearDiagnosticOriginModule();
     try checkObjectDeclarations(allocator, ir);
     try checkPropertyDeclarations(allocator, ir);
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
-    try checkPageStatements(allocator, ir, &ir.functions, ir.projectProgram());
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        setDiagnosticOriginModule(module);
+        try checkPageStatements(allocator, ir, &ir.functions, module.program);
+    }
 }
 
 fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     var roles = std.StringHashMap([]const u8).init(allocator);
     defer roles.deinit();
+    defer clearDiagnosticOriginModule();
 
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
+        setDiagnosticOriginModule(module);
         for (module.program.objects.items) |object_decl| {
             try checkObjectDeclaration(allocator, ir, module.id, object_decl);
             try checkRolesUnique(allocator, ir, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
@@ -308,7 +335,9 @@ fn checkRolesUnique(
 }
 
 fn checkPropertyDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    defer clearDiagnosticOriginModule();
     for (ir.modules.items) |module| {
+        setDiagnosticOriginModule(&module);
         for (module.program.properties.items) |property| {
             try checkPropertyDeclaration(allocator, ir, module.id, property);
         }
@@ -985,6 +1014,9 @@ fn visitFunction(
 }
 
 fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Ir, func: ast.FunctionDecl) !void {
+    if (ir.function_metadata.get(func.name)) |metadata| {
+        if (ir.moduleById(metadata.module_id)) |module| setDiagnosticOriginModule(module);
+    }
     try ir.addValidationDiagnostic(.@"error", null, null, try statementOrigin(allocator, func.span), .{
         .recursive_function = .{ .function_name = func.name },
     });
@@ -1304,12 +1336,11 @@ fn inferUserFunctionReturnInfoInner(
             try inferExprInfo(allocator, ir, functions, caller_env, call.args.items[index], origin)
         else if (param.default_value) |default_value|
             try inferExprInfo(allocator, ir, functions, &env, default_value.*, origin)
-        else
-            blk: {
-                var param_info = infoFromType(param.ty);
-                param_info.sort = param.sort;
-                break :blk param_info;
-            };
+        else blk: {
+            var param_info = infoFromType(param.ty);
+            param_info.sort = param.sort;
+            break :blk param_info;
+        };
         try env.put(param.name, info);
     }
 
@@ -1894,5 +1925,8 @@ fn ensureType(
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
+    if (diagnostic_origin_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_origin_path, span.start, span.end });
+    }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }

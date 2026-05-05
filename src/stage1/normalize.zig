@@ -36,14 +36,7 @@ const NormalizeContext = struct {
 };
 
 pub fn lowerToIr(ir: *core.Ir) !void {
-    var code = try stage0.elaborateProgram(
-        ir.allocator,
-        ir.asset_base_dir,
-        ir.projectProgram(),
-        ir.projectSource(),
-        ir.projectPath(),
-        &ir.functions,
-    );
+    var code = try stage0.elaborateIr(ir.allocator, ir);
     defer code.deinit();
 
     try normalizeDocumentCode(ir, &code);

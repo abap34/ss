@@ -11,6 +11,11 @@ pub const ByteSpan = struct {
     end: usize,
 };
 
+pub const LocatedOrigin = struct {
+    path: ?[]const u8,
+    span: ByteSpan,
+};
+
 pub const Location = struct {
     line: usize,
     column: usize,
@@ -40,6 +45,20 @@ pub fn parseByteOrigin(origin: []const u8) ?ByteSpan {
     return .{ .start = start, .end = end };
 }
 
+pub fn parseLocatedOrigin(origin: []const u8) ?LocatedOrigin {
+    if (parseByteOrigin(origin)) |span| {
+        return .{ .path = null, .span = span };
+    }
+    if (!std.mem.startsWith(u8, origin, "path:")) return null;
+    const marker = std.mem.lastIndexOf(u8, origin, ":bytes:") orelse return null;
+    const bytes_text = origin[marker + 1 ..];
+    const span = parseByteOrigin(bytes_text) orelse return null;
+    return .{
+        .path = origin["path:".len..marker],
+        .span = span,
+    };
+}
+
 pub fn computeLineColumn(source: []const u8, byte_index: usize) Location {
     var line: usize = 1;
     var line_start: usize = 0;
@@ -58,7 +77,8 @@ pub fn computeLineColumn(source: []const u8, byte_index: usize) Location {
 
 pub fn spanFromOrigin(origin: ?[]const u8) ?ByteSpan {
     const text = origin orelse return null;
-    return parseByteOrigin(text);
+    const located = parseLocatedOrigin(text) orelse return null;
+    return located.span;
 }
 
 pub fn print(report: SourceReport) void {
@@ -129,15 +149,28 @@ pub fn printIrDiagnostics(path: []const u8, source: []const u8, ir: anytype) voi
     for (ir.diagnostics.items) |diagnostic| {
         const message = formatIrDiagnostic(ir.allocator, diagnostic) catch @tagName(diagnostic.phase);
         defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) ir.allocator.free(message);
-        const span = if (spanFromOrigin(diagnostic.origin)) |origin_span|
-            origin_span
+        var report_path = path;
+        var report_source = source;
+        const located = if (diagnostic.origin) |origin|
+            parseLocatedOrigin(origin)
         else if (diagnostic.node_id) |node_id| blk: {
             const node = ir.getNode(node_id) orelse break :blk null;
-            break :blk spanFromOrigin(node.origin);
+            break :blk if (node.origin) |origin| parseLocatedOrigin(origin) else null;
+        } else null;
+        const span = if (located) |origin| blk: {
+            if (origin.path) |origin_path| {
+                if (ir.moduleByPathOrSpec(origin_path)) |module| {
+                    report_path = module.path orelse module.spec;
+                    report_source = module.source;
+                } else {
+                    report_path = origin_path;
+                }
+            }
+            break :blk origin.span;
         } else null;
         print(.{
-            .path = path,
-            .source = source,
+            .path = report_path,
+            .source = report_source,
             .severity = switch (diagnostic.severity) {
                 .warning => .warning,
                 .@"error" => .@"error",
