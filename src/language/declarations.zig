@@ -50,6 +50,7 @@ pub const DeclarationIndex = struct {
     roles: std.ArrayList(RoleDescriptor),
     fields: std.ArrayList(FieldDescriptor),
     function_annotations: std.ArrayList(FunctionAnnotationDescriptor),
+    phases: std.ArrayList(FunctionAnnotationDescriptor),
     capabilities: std.ArrayList(CapabilityDescriptor),
     render_ops: std.ArrayList(CapabilityDescriptor),
     class_by_name: std.StringHashMap(usize),
@@ -63,6 +64,7 @@ pub const DeclarationIndex = struct {
             .roles = .empty,
             .fields = .empty,
             .function_annotations = .empty,
+            .phases = .empty,
             .capabilities = .empty,
             .render_ops = .empty,
             .class_by_name = std.StringHashMap(usize).init(allocator),
@@ -76,6 +78,7 @@ pub const DeclarationIndex = struct {
         self.roles.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.function_annotations.deinit(self.allocator);
+        self.phases.deinit(self.allocator);
         self.capabilities.deinit(self.allocator);
         self.render_ops.deinit(self.allocator);
         self.class_by_name.deinit();
@@ -240,7 +243,9 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
                 .module_id = module.id,
             };
             try index.function_annotations.append(index.allocator, descriptor);
-            if (std.mem.eql(u8, annotation.name, "host")) {
+            if (std.mem.eql(u8, annotation.name, "phase")) {
+                try index.phases.append(index.allocator, descriptor);
+            } else if (std.mem.eql(u8, annotation.name, "host")) {
                 try index.capabilities.append(index.allocator, .{
                     .function_name = func.name,
                     .annotation_name = annotation.name,

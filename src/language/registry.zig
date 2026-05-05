@@ -46,8 +46,6 @@ pub const QueryOp = enum {
 };
 
 pub const TransformOp = enum {
-    page_number,
-    toc,
     rewrite_text,
     highlight,
 };
@@ -147,8 +145,6 @@ const query_descriptors = [_]QueryDescriptor{
 };
 
 const transform_descriptors = [_]TransformDescriptor{
-    .{ .op = .page_number, .name = "page_number", .min_arity = 2, .max_arity = 2, .input_name = "base", .input_sort = .page, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .object, .summary = "Generate a page number object from a page" },
-    .{ .op = .toc, .name = "toc", .min_arity = 2, .max_arity = 2, .input_name = "base", .input_sort = .document, .extra_arg_names = &.{}, .extra_arg_sorts = &.{}, .output_sort = .object, .summary = "Generate a ToC object from a document" },
     .{ .op = .rewrite_text, .name = "rewrite_text", .min_arity = 4, .max_arity = 4, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{ "old", "new" }, .extra_arg_sorts = &.{ .string, .string }, .output_sort = .object, .summary = "Apply text-based rewrite" },
     .{ .op = .highlight, .name = "highlight", .min_arity = 3, .max_arity = 3, .input_name = "base", .input_sort = null, .extra_arg_names = &.{"note"}, .extra_arg_sorts = &.{.string}, .output_sort = .object, .summary = "Highlight an object or a selection" },
 };
