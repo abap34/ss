@@ -6,7 +6,6 @@ pub const PrimitiveCall = enum {
     pagectx,
     docctx,
     select,
-    derive,
     anchor,
     page_anchor,
     equal,
@@ -54,11 +53,6 @@ pub const QueryOp = enum {
     document_objects_by_role,
 };
 
-pub const TransformOp = enum {
-    rewrite_text,
-    highlight,
-};
-
 pub const ArgSort = enum {
     any,
     document,
@@ -97,24 +91,10 @@ pub const QueryDescriptor = struct {
     summary: []const u8,
 };
 
-pub const TransformDescriptor = struct {
-    op: TransformOp,
-    name: []const u8,
-    min_arity: u8,
-    max_arity: u8,
-    input_name: ?[]const u8,
-    input_sort: ?core.SemanticSort,
-    extra_arg_names: []const []const u8,
-    extra_arg_sorts: []const ArgSort,
-    output_sort: core.SemanticSort,
-    summary: []const u8,
-};
-
 const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_sorts = &.{}, .result_sort = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_sorts = &.{}, .result_sort = .document, .summary = "Return the current document context" },
     .{ .op = .select, .name = "select", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "base", "query_name" }, .arg_sorts = &.{ .any, .string }, .result_sort = .selection, .summary = "Build a Selection using the query registry" },
-    .{ .op = .derive, .name = "derive", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "base", "transform_name" }, .arg_sorts = &.{ .any, .string }, .result_sort = .object, .summary = "Build a derived object using the transform registry" },
     .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "anchor_name" }, .arg_sorts = &.{ .object, .string }, .result_sort = .anchor, .summary = "Return an object anchor" },
     .{ .op = .page_anchor, .name = "page_anchor", .min_arity = 1, .max_arity = 1, .arg_names = &.{"anchor_name"}, .arg_sorts = &.{.string}, .result_sort = .anchor, .summary = "Return a page anchor" },
     .{ .op = .equal, .name = "equal", .min_arity = 2, .max_arity = 3, .arg_names = &.{ "target", "source", "offset" }, .arg_sorts = &.{ .anchor, .anchor, .number }, .result_sort = .constraints, .summary = "Create an anchor equality constraint" },
@@ -162,21 +142,12 @@ const query_descriptors = [_]QueryDescriptor{
     .{ .op = .document_objects_by_role, .name = "document_objects_by_role", .arity = 3, .input_name = "base", .input_sort = .document, .extra_arg_names = &.{"role_name"}, .extra_arg_sorts = &.{.string}, .output_sort = .selection, .summary = "Select objects by role across the whole document" },
 };
 
-const transform_descriptors = [_]TransformDescriptor{
-    .{ .op = .rewrite_text, .name = "rewrite_text", .min_arity = 4, .max_arity = 4, .input_name = "base", .input_sort = .object, .extra_arg_names = &.{ "old", "new" }, .extra_arg_sorts = &.{ .string, .string }, .output_sort = .object, .summary = "Apply text-based rewrite" },
-    .{ .op = .highlight, .name = "highlight", .min_arity = 3, .max_arity = 3, .input_name = "base", .input_sort = null, .extra_arg_names = &.{"note"}, .extra_arg_sorts = &.{.string}, .output_sort = .object, .summary = "Highlight an object or a selection" },
-};
-
 pub fn primitiveDescriptors() []const PrimitiveDescriptor {
     return &primitive_descriptors;
 }
 
 pub fn queryDescriptors() []const QueryDescriptor {
     return &query_descriptors;
-}
-
-pub fn transformDescriptors() []const TransformDescriptor {
-    return &transform_descriptors;
 }
 
 pub fn lookupPrimitiveCall(name: []const u8) ?PrimitiveDescriptor {
@@ -188,13 +159,6 @@ pub fn lookupPrimitiveCall(name: []const u8) ?PrimitiveDescriptor {
 
 pub fn lookupQueryOp(name: []const u8) ?QueryDescriptor {
     inline for (query_descriptors) |descriptor| {
-        if (std.mem.eql(u8, name, descriptor.name)) return descriptor;
-    }
-    return null;
-}
-
-pub fn lookupTransformOp(name: []const u8) ?TransformDescriptor {
-    inline for (transform_descriptors) |descriptor| {
         if (std.mem.eql(u8, name, descriptor.name)) return descriptor;
     }
     return null;
@@ -241,12 +205,4 @@ pub fn queryOutputType(descriptor: QueryDescriptor) types.Type {
         .document_pages => types.Type.selection(.page),
         .previous_page, .parent_page => types.Type.page,
     };
-}
-
-pub fn transformInputType(descriptor: TransformDescriptor) ?types.Type {
-    return if (descriptor.input_sort) |sort| types.Type.fromSort(sort) else null;
-}
-
-pub fn transformOutputType(descriptor: TransformDescriptor) types.Type {
-    return types.Type.fromSort(descriptor.output_sort);
 }

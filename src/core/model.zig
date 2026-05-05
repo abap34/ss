@@ -14,7 +14,6 @@ pub const NodeKind = enum {
     document,
     page,
     object,
-    derived,
 };
 
 pub const ObjectKind = enum {
@@ -122,7 +121,6 @@ pub const Node = struct {
     payload_kind: ?PayloadKind = null,
     content: ?[]const u8 = null,
     page_index: ?usize = null,
-    derived_from: ?NodeId = null,
     origin: ?[]const u8 = null,
     properties: std.ArrayList(Property) = .empty,
     frame: Frame = .{},
@@ -540,37 +538,4 @@ pub const Query = struct {
             .op = .{ .document_pages = {} },
         };
     }
-};
-
-pub const Transform = struct {
-    input: SemanticSort,
-    name: []const u8,
-    op: Op,
-
-    pub const Op = union(enum) {
-        rewrite_text: struct {
-            old: []const u8,
-            new: []const u8,
-        },
-        highlight: struct {
-            note: []const u8,
-        },
-    };
-
-    pub fn rewriteText(old: []const u8, new: []const u8) Transform {
-        return .{
-            .input = .object,
-            .name = "rewrite-text",
-            .op = .{ .rewrite_text = .{ .old = old, .new = new } },
-        };
-    }
-
-    pub fn highlight(note: []const u8) Transform {
-        return .{
-            .input = .selection,
-            .name = "highlight",
-            .op = .{ .highlight = .{ .note = note } },
-        };
-    }
-
 };

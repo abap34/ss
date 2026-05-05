@@ -21,7 +21,6 @@ const SelectionItemSort = model.SelectionItemSort;
 const SemanticSort = model.SemanticSort;
 const Value = model.Value;
 const Query = model.Query;
-const Transform = model.Transform;
 const PageLayout = model.PageLayout;
 const Diagnostic = model.Diagnostic;
 const DiagnosticPhase = model.DiagnosticPhase;
@@ -308,7 +307,7 @@ pub const Ir = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, true, .object, null, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeDetachedObjectWithOrigin(
@@ -321,7 +320,7 @@ pub const Ir = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, false, .object, null, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, false, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeGroupWithOrigin(
@@ -335,7 +334,6 @@ pub const Ir = struct {
             page_id,
             attached,
             .object,
-            null,
             "group",
             GroupRole,
             .overlay,
@@ -381,34 +379,11 @@ pub const Ir = struct {
         node.content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
     }
 
-    fn copyNodeProperties(self: *Ir, from_id: NodeId, to_id: NodeId) !void {
-        const from = self.getNode(from_id) orelse return error.UnknownNode;
-        for (from.properties.items) |property| {
-            try self.setNodeProperty(to_id, property.key, property.value);
-        }
-    }
-
-    fn deriveObject(
-        self: *Ir,
-        page_id: NodeId,
-        attached: bool,
-        from_id: NodeId,
-        name: []const u8,
-        role: ?Role,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: []const u8,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, attached, .derived, from_id, name, role, object_kind, payload_kind, content, origin);
-    }
-
     fn makeNodeWithOrigin(
         self: *Ir,
         page_id: NodeId,
         attached: bool,
         kind: NodeKind,
-        derived_from: ?NodeId,
         name: []const u8,
         role: ?Role,
         object_kind: ObjectKind,
@@ -426,7 +401,6 @@ pub const Ir = struct {
             .object_kind = object_kind,
             .payload_kind = payload_kind,
             .content = content,
-            .derived_from = derived_from,
             .origin = origin,
         });
         if (attached) try self.addContainment(page_id, obj_id);
@@ -438,7 +412,6 @@ pub const Ir = struct {
         page_id: NodeId,
         attached: bool,
         kind: NodeKind,
-        derived_from: ?NodeId,
         name: []const u8,
         role: ?Role,
         object_kind: ObjectKind,
@@ -446,7 +419,7 @@ pub const Ir = struct {
         content: ?[]const u8,
         origin: ?[]const u8,
     ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, attached, kind, derived_from, name, role, object_kind, payload_kind, content, origin);
+        return self.makeNodeWithOrigin(page_id, attached, kind, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn createFragment(
@@ -723,7 +696,7 @@ pub const Ir = struct {
         const children = self.contains.get(parent_id) orelse return selection;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
-            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
         }
         return selection;
     }
@@ -732,7 +705,7 @@ pub const Ir = struct {
         const children = self.contains.get(parent_id) orelse return;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
-            if (child.kind == .object or child.kind == .derived) try selection.ids.append(allocator, child_id);
+            if (child.kind == .object) try selection.ids.append(allocator, child_id);
             try self.appendDescendants(allocator, child_id, selection);
         }
     }
@@ -770,62 +743,6 @@ pub const Ir = struct {
             },
             .document_pages => .{
                 .selection = try self.selectDocumentPages(allocator, query.name),
-            },
-        };
-    }
-
-    fn rewriteText(self: *Ir, allocator: Allocator, from_id: NodeId, old: []const u8, new: []const u8) ![]const u8 {
-        const from = self.getNode(from_id) orelse return error.UnknownNode;
-        const source = from.content orelse return error.MissingContent;
-        return std.mem.replaceOwned(u8, allocator, source, old, new);
-    }
-
-    pub fn derive(self: *Ir, page_id: NodeId, base: Value, transform: Transform) !NodeId {
-        return self.deriveWithOrigin(page_id, base, transform, transform.name);
-    }
-
-    pub fn deriveWithOrigin(self: *Ir, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
-        return self.deriveWithMode(page_id, true, base, transform, origin);
-    }
-
-    pub fn deriveDetachedWithOrigin(self: *Ir, page_id: NodeId, base: Value, transform: Transform, origin: []const u8) !NodeId {
-        return self.deriveWithMode(page_id, false, base, transform, origin);
-    }
-
-    fn deriveWithMode(self: *Ir, page_id: NodeId, attached: bool, base: Value, transform: Transform, origin: []const u8) !NodeId {
-        try self.ensureSort(base, transform.input, transform.name);
-
-        return switch (transform.op) {
-            .rewrite_text => |rewrite| blk: {
-                const updated = try self.rewriteText(self.allocator, base.object, rewrite.old, rewrite.new);
-                const id = try self.deriveObject(
-                    page_id,
-                    attached,
-                    base.object,
-                    "rewritten-copy",
-                    "code",
-                    .source,
-                    .code,
-                    updated,
-                    origin,
-                );
-                try self.copyNodeProperties(base.object, id);
-                break :blk id;
-            },
-            .highlight => |highlight| blk: {
-                if (base.selection.item_sort != .object) return error.InvalidSelectionSort;
-                const source_id = base.selection.first() orelse return error.EmptySelection;
-                break :blk try self.deriveObject(
-                    page_id,
-                    attached,
-                    source_id,
-                    "highlight",
-                    "highlight",
-                    .overlay,
-                    .text,
-                    highlight.note,
-                    origin,
-                );
             },
         };
     }

@@ -1,4 +1,4 @@
-import std:core/properties
+import std:core/classes
 
 fn layout_v(policy: string) -> page
   set_prop(pagectx(), "layout_v", policy)

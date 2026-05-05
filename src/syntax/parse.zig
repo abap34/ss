@@ -11,7 +11,6 @@ const Program = ast.Program;
 const TypeDecl = ast.TypeDecl;
 const ObjectDecl = ast.ObjectDecl;
 const ObjectExtensionDecl = ast.ObjectExtensionDecl;
-const PropertyDecl = ast.PropertyDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
 const Statement = ast.Statement;
@@ -106,9 +105,6 @@ const Parser = struct {
             } else if (try self.consumeKeyword("extend")) {
                 const extension = try self.parseObjectExtensionAfterKeyword(item_start);
                 try program.object_extensions.append(self.allocator, extension);
-            } else if (try self.consumeKeyword("property")) {
-                const property = try self.parsePropertyAfterKeyword(item_start);
-                try program.properties.append(self.allocator, property);
             } else if (try self.consumeKeyword("document")) {
                 var statements = try self.parseBodyStatements();
                 try program.document_statements.appendSlice(self.allocator, statements.items);
@@ -450,42 +446,6 @@ const Parser = struct {
             return try self.allocator.dupe(u8, annotation.args orelse "");
         }
         return null;
-    }
-
-    fn parsePropertyAfterKeyword(self: *Parser, start: usize) !PropertyDecl {
-        const key = try self.parseIdentifier();
-        self.skipInlineSpaces();
-        try self.expectChar(':');
-        const value_type = try self.parseIdentifier();
-        self.skipTrivia();
-        try self.expectChar('{');
-        self.skipTrivia();
-        try self.expectKeyword("target");
-        self.skipInlineSpaces();
-        try self.expectChar(':');
-
-        var shapes = std.ArrayList([]const u8).empty;
-        errdefer {
-            for (shapes.items) |shape| self.allocator.free(shape);
-            shapes.deinit(self.allocator);
-        }
-        while (true) {
-            try shapes.append(self.allocator, try self.parseIdentifier());
-            self.skipInlineSpaces();
-            if (self.eof() or self.source[self.pos] != '|') break;
-            self.pos += 1;
-            self.skipInlineSpaces();
-        }
-        self.skipTrivia();
-        try self.expectChar('}');
-        try self.consumeStatementTerminator();
-
-        return .{
-            .key = key,
-            .value_type = value_type,
-            .shapes = shapes,
-            .span = .{ .start = start, .end = self.pos },
-        };
     }
 
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {

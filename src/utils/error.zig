@@ -297,7 +297,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
     return switch (err) {
         error.UnknownFunction,
         error.UnknownQuery,
-        error.UnknownTransform,
         error.UnknownIdentifier,
         error.ExpectedString,
         error.ExpectedIdentifier,
@@ -332,7 +331,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownRole,
         error.UnknownPayloadKind,
         error.PageCannotBeConstraintTarget,
-        error.MissingHighlightTarget,
         error.UnsupportedFragmentRoot,
         error.FunctionDidNotReturnValue,
         error.ConstraintConflict,

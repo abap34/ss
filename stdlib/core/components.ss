@@ -1,9 +1,9 @@
-import std:core/properties
+import std:core/classes
 import std:core/layout
 import std:core/objects
 import std:core/render
 import std:core/selectors
-import std:core/transforms
+import std:core/generated
 
 fn title(text_value: string) -> object
   return title_object(text_value)

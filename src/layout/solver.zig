@@ -33,7 +33,7 @@ pub fn solveLayout(ir: anytype) !void {
                     .y_set = true,
                 };
             },
-            .object, .derived => {
+            .object => {
                 node.frame.x = 0;
                 node.frame.y = 0;
                 node.frame.x_set = false;

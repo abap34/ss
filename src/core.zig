@@ -34,7 +34,6 @@ pub const TypeMismatchCode = model.TypeMismatchCode;
 pub const ConstraintFailureKind = model.ConstraintFailureKind;
 pub const ConstraintFailure = model.ConstraintFailure;
 pub const Query = model.Query;
-pub const Transform = model.Transform;
 pub const roleEq = model.roleEq;
 pub const nodeProperty = model.nodeProperty;
 pub const Ir = @import("core/ir.zig").Ir;
