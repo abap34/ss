@@ -9,6 +9,15 @@
     ],
     "description": "Create an ss page block"
   },
+  "document": {
+    "prefix": "ss-document",
+    "body": [
+      "document",
+      "  ${1:layout_v_all(\"center\")}",
+      "end"
+    ],
+    "description": "Create a document-level block"
+  },
   "function": {
     "prefix": "ss-fn",
     "body": [

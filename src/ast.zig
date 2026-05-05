@@ -12,10 +12,11 @@ pub const Program = struct {
     object_extensions: std.ArrayList(ObjectExtensionDecl),
     properties: std.ArrayList(PropertyDecl),
     functions: std.ArrayList(FunctionDecl),
+    document_statements: std.ArrayList(Statement),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .properties = .empty, .functions = .empty, .pages = .empty };
+        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .properties = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
@@ -31,6 +32,8 @@ pub const Program = struct {
         self.properties.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
+        for (self.document_statements.items) |*stmt| stmt.deinit(allocator);
+        self.document_statements.deinit(allocator);
         for (self.pages.items) |*page| {
             for (page.statements.items) |*stmt| stmt.deinit(allocator);
             page.statements.deinit(allocator);
