@@ -662,7 +662,18 @@ const Parser = struct {
     }
 
     fn parseExpr(self: *Parser) anyerror!Expr {
-        return self.parseAddSubExpr();
+        return self.parseConcatExpr();
+    }
+
+    fn parseConcatExpr(self: *Parser) anyerror!Expr {
+        var left = try self.parseAddSubExpr();
+        while (true) {
+            self.skipTrivia();
+            if (!self.startsWith("++")) return left;
+            self.pos += 2;
+            const right = try self.parseAddSubExpr();
+            left = try self.makeBinaryCall("concat", left, right);
+        }
     }
 
     fn parseAddSubExpr(self: *Parser) anyerror!Expr {
@@ -670,6 +681,7 @@ const Parser = struct {
         while (true) {
             self.skipTrivia();
             if (self.eof()) return left;
+            if (self.startsWith("++")) return left;
             const op = self.source[self.pos];
             if (op != '+' and op != '-') return left;
             self.pos += 1;
