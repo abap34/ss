@@ -439,9 +439,9 @@ pub fn buildIr(
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromProgram(allocator, module.source, module.program, module.path, false, &ir.definitions);
+        try collectDefinitionsFromProgram(allocator, module.source, module.program, module.id, module.path, false, &ir.definitions);
     }
-    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), null, true, &ir.definitions);
+    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), ir.project_module_id, null, true, &ir.definitions);
     try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectProgram(), &ir.functions);
 }
 
@@ -598,6 +598,7 @@ fn collectDefinitionsFromProgram(
     allocator: std.mem.Allocator,
     source: []const u8,
     program: ast.Program,
+    module_id: core.SourceModuleId,
     file: ?[]const u8,
     include_variables: bool,
     definitions: *std.StringHashMap(core.Definition),
@@ -607,18 +608,18 @@ fn collectDefinitionsFromProgram(
         const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
         if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, kind, file);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, kind, module_id, file);
         }
         if (include_variables) {
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, stmt, definitions);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
             }
         }
     }
     if (include_variables) {
         for (program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, stmt, definitions);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
             }
         }
     }
@@ -627,12 +628,13 @@ fn collectDefinitionsFromProgram(
 fn collectDefinitionsFromStatement(
     allocator: std.mem.Allocator,
     source: []const u8,
+    module_id: core.SourceModuleId,
     stmt: ast.Statement,
     definitions: *std.StringHashMap(core.Definition),
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try putStatementDefinition(allocator, source, stmt, "let", binding.name, definitions),
-        .bind_binding => |binding| try putStatementDefinition(allocator, source, stmt, "bind", binding.name, definitions),
+        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions),
+        .bind_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "bind", binding.name, definitions),
         else => {},
     }
 }
@@ -640,6 +642,7 @@ fn collectDefinitionsFromStatement(
 fn putStatementDefinition(
     allocator: std.mem.Allocator,
     source: []const u8,
+    module_id: core.SourceModuleId,
     stmt: ast.Statement,
     keyword: []const u8,
     name: []const u8,
@@ -647,7 +650,7 @@ fn putStatementDefinition(
 ) !void {
     if (findIdentifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
         const loc = utils.err.computeLineColumn(source, location.offset);
-        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.length, .variable, null);
+        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.length, .variable, module_id, null);
     }
 }
 
@@ -659,6 +662,7 @@ fn putDefinition(
     column: usize,
     length: usize,
     kind: core.DefinitionKind,
+    module_id: core.SourceModuleId,
     file: ?[]const u8,
 ) !void {
     if (definitions.fetchRemove(name)) |entry| {
@@ -672,6 +676,7 @@ fn putDefinition(
             .column = column,
             .length = length,
             .kind = kind,
+            .module_id = module_id,
             .file = if (file) |path| try allocator.dupe(u8, path) else null,
         },
     );

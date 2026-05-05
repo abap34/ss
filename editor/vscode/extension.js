@@ -532,6 +532,143 @@ function activate(context) {
     return null;
   }
 
+  function uniquePaths(paths) {
+    const result = [];
+    const seen = new Set();
+    for (const item of paths) {
+      if (!item) {
+        continue;
+      }
+      const normalized = path.resolve(String(item));
+      if (seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      result.push(normalized);
+    }
+    return result;
+  }
+
+  function definitionSearchRoots(document) {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    return uniquePaths([
+      workspaceFolder && workspaceFolder.uri && workspaceFolder.uri.fsPath ? workspaceFolder.uri.fsPath : null,
+      commandCwd(document),
+      context.extensionUri && context.extensionUri.fsPath ? context.extensionUri.fsPath : null,
+      context.extensionUri && context.extensionUri.fsPath ? path.resolve(context.extensionUri.fsPath, "..") : null,
+      context.extensionUri && context.extensionUri.fsPath ? path.resolve(context.extensionUri.fsPath, "..", "..") : null,
+    ]);
+  }
+
+  async function fileExists(filePath) {
+    try {
+      await fs.promises.access(filePath, fs.constants.R_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function moduleForDefinition(payload, item) {
+    const modules = Array.isArray(payload && payload.modules) ? payload.modules : [];
+    const moduleId = item && item.moduleId !== undefined && item.moduleId !== null ? Number(item.moduleId) : null;
+    if (moduleId !== null && Number.isFinite(moduleId)) {
+      const found = modules.find((module) => Number(module && module.id) === moduleId);
+      if (found) {
+        return found;
+      }
+    }
+
+    const moduleSpec = item && item.moduleSpec ? String(item.moduleSpec) : "";
+    if (!moduleSpec) {
+      return null;
+    }
+    return modules.find((module) => String(module && module.spec ? module.spec : "") === moduleSpec) || null;
+  }
+
+  function stdlibPathFromSpec(moduleSpec) {
+    const spec = String(moduleSpec || "");
+    if (!spec.startsWith("std:")) {
+      return null;
+    }
+    const name = spec.slice("std:".length);
+    if (!name || !/^[A-Za-z0-9_./-]+$/.test(name) || name.split("/").includes("..")) {
+      return null;
+    }
+    return path.join("stdlib", ...name.split("/")) + ".ss";
+  }
+
+  async function resolveFileDefinitionUri(document, filePath) {
+    const raw = String(filePath || "");
+    if (!raw) {
+      return null;
+    }
+    if (path.isAbsolute(raw)) {
+      return vscode.Uri.file(raw);
+    }
+
+    for (const root of definitionSearchRoots(document)) {
+      const candidate = path.join(root, raw);
+      if (await fileExists(candidate)) {
+        return vscode.Uri.file(candidate);
+      }
+    }
+
+    const cwd = commandCwd(document);
+    return cwd ? vscode.Uri.file(path.join(cwd, raw)) : vscode.Uri.file(raw);
+  }
+
+  async function resolveStdlibDefinitionUri(document, moduleSpec) {
+    const relativePath = stdlibPathFromSpec(moduleSpec);
+    if (!relativePath) {
+      return null;
+    }
+    for (const root of definitionSearchRoots(document)) {
+      const candidate = path.join(root, relativePath);
+      if (await fileExists(candidate)) {
+        return vscode.Uri.file(candidate);
+      }
+    }
+    return null;
+  }
+
+  async function cachedModuleDefinitionUri(document, module) {
+    const source = module && module.source ? String(module.source) : "";
+    if (!source) {
+      return null;
+    }
+    const root = commandCwd(document) || os.tmpdir();
+    const cacheDir = path.join(root, ".ss-cache", "vscode-modules");
+    const spec = String((module && module.spec) || `module-${module && module.id !== undefined ? module.id : "unknown"}`);
+    const safeName = spec.replace(/[^A-Za-z0-9_.-]/g, "_") || "module";
+    const filePath = path.join(cacheDir, `${safeName}.ss`);
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+    await fs.promises.writeFile(filePath, source, "utf8");
+    return vscode.Uri.file(filePath);
+  }
+
+  async function resolveDefinitionUri(document, payload, item) {
+    if (item && item.file) {
+      return resolveFileDefinitionUri(document, item.file);
+    }
+
+    const module = moduleForDefinition(payload, item);
+    if (module && module.path) {
+      return resolveFileDefinitionUri(document, module.path);
+    }
+
+    const moduleSpec = String((item && item.moduleSpec) || (module && module.spec) || "");
+    const stdlibUri = await resolveStdlibDefinitionUri(document, moduleSpec);
+    if (stdlibUri) {
+      return stdlibUri;
+    }
+
+    if (module) {
+      return cachedModuleDefinitionUri(document, module);
+    }
+    return null;
+  }
+
   function queryEditorInfo(document) {
     if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
       return Promise.resolve(null);
@@ -1229,12 +1366,11 @@ function activate(context) {
         return null;
       }
 
-      return queryEditorInfo(document).then((payload) => {
+      return queryEditorInfo(document).then(async (payload) => {
         if (!payload || !payload.definitions || token.isCancellationRequested) {
           return null;
         }
 
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
         for (const item of payload.definitions) {
           if (String(item && item.name ? item.name : "") !== target) {
             continue;
@@ -1242,14 +1378,7 @@ function activate(context) {
           const line = Math.max(0, Number(item.line || 1) - 1);
           const column = Math.max(0, Number(item.column || 1) - 1);
           const length = Math.max(1, Number(item.length || target.length || 1));
-          let definitionPath = null;
-          if (item.file) {
-            definitionPath = String(item.file);
-            if (!path.isAbsolute(definitionPath) && workspaceFolder && workspaceFolder.uri && workspaceFolder.uri.fsPath) {
-              definitionPath = path.join(workspaceFolder.uri.fsPath, definitionPath);
-            }
-          }
-          const definitionUri = definitionPath ? vscode.Uri.file(definitionPath) : document.uri;
+          const definitionUri = (await resolveDefinitionUri(document, payload, item)) || document.uri;
           return new vscode.Location(
             definitionUri,
             new vscode.Range(
