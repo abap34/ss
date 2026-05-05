@@ -5,9 +5,12 @@
     { "include": "#comments" },
     { "include": "#block-string" },
     { "include": "#double-string" },
+    { "include": "#annotations" },
+    { "include": "#declarations" },
     { "include": "#keywords" },
     { "include": "#numbers" },
     { "include": "#operators" },
+    { "include": "#types" },
     { "include": "#function-call" },
     { "include": "#bare-call" },
     { "include": "#identifiers" }
@@ -48,7 +51,58 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\b(?:import|const|page|fn|let|bind|return|end|constrain)\\b"
+          "match": "\\b(?:import|const|page|fn|let|bind|return|end|constrain|type|extend|property)\\b"
+        },
+        {
+          "name": "storage.type.ss",
+          "match": "\\b(?:document|object|selection|anchor|style|string|number|constraints|fragment|code|list)\\b"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "captures": {
+            "0": { "name": "storage.modifier.annotation.ss" },
+            "1": { "name": "entity.name.function.annotation.ss" }
+          },
+          "match": "@([A-Za-z_][A-Za-z0-9_]*)"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "captures": {
+            "1": { "name": "keyword.control.ss" },
+            "2": { "name": "entity.name.type.class.ss" },
+            "3": { "name": "keyword.operator.assignment.ss" },
+            "4": { "name": "storage.type.ss" }
+          },
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)\\s*(object)\\b"
+        },
+        {
+          "captures": {
+            "1": { "name": "keyword.control.ss" },
+            "2": { "name": "entity.name.type.class.ss" }
+          },
+          "match": "\\b(extend)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b"
+        },
+        {
+          "captures": {
+            "1": { "name": "keyword.control.ss" },
+            "2": { "name": "entity.name.type.ss" },
+            "3": { "name": "keyword.operator.assignment.ss" }
+          },
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.ss",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
         }
       ]
     },
@@ -64,7 +118,7 @@
       "patterns": [
         {
           "name": "keyword.operator.ss",
-          "match": "=|\\-|\\+"
+          "match": "->|==|=|:|\\||\\.|,|\\-|\\+|\\*|/"
         }
       ]
     },

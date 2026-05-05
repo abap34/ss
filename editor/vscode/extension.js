@@ -119,14 +119,287 @@ function activate(context) {
   function getPropertyCompletionContext(document, position) {
     const line = document.lineAt(position.line).text;
     const head = line.slice(0, position.character);
-    const match = /([A-Za-z_][A-Za-z0-9_]*)\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(head);
-    if (!match) {
+    const memberMatch = /([A-Za-z_][A-Za-z0-9_]*)\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(head);
+    if (memberMatch) {
+      return {
+        kind: "member",
+        objectName: memberMatch[1],
+        prefix: memberMatch[2] || "",
+      };
+    }
+    const setPropMatch = /\bset_prop\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"([^"]*)$/.exec(head);
+    if (setPropMatch) {
+      return {
+        kind: "set_prop",
+        objectName: setPropMatch[1],
+        prefix: setPropMatch[2] || "",
+      };
+    }
+    return null;
+  }
+
+  function declarations(payload) {
+    return payload && payload.declarations && typeof payload.declarations === "object"
+      ? payload.declarations
+      : {};
+  }
+
+  function asArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function classBaseMap(payload) {
+    const result = new Map();
+    for (const item of asArray(declarations(payload).classes)) {
+      const name = String(item && item.name ? item.name : "");
+      if (!name) {
+        continue;
+      }
+      result.set(name, item.base ? String(item.base) : null);
+    }
+    return result;
+  }
+
+  function variableClassName(variable) {
+    if (!variable) {
       return null;
     }
-    return {
-      objectName: match[1],
-      prefix: match[2] || "",
-    };
+    const explicitClass = String(variable.objectClass || "");
+    if (explicitClass) {
+      return explicitClass;
+    }
+    const type = String(variable.type || variable.runtimeSort || "");
+    if (type === "document") {
+      return "DocumentObject";
+    }
+    if (type === "page") {
+      return "PageObject";
+    }
+    return null;
+  }
+
+  function inheritedFields(payload, className) {
+    const fields = asArray(declarations(payload).fields);
+    if (!className) {
+      return uniqueFields(fields);
+    }
+
+    const bases = classBaseMap(payload);
+    const chain = [];
+    const seen = new Set();
+    let current = className;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      chain.push(current);
+      current = bases.get(current);
+    }
+    chain.reverse();
+
+    const byName = new Map();
+    for (const classItem of chain) {
+      for (const field of fields) {
+        if (String(field && field.class ? field.class : "") !== classItem) {
+          continue;
+        }
+        const name = String(field && field.name ? field.name : "");
+        if (name) {
+          byName.set(name, field);
+        }
+      }
+    }
+    return Array.from(byName.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  }
+
+  function uniqueFields(fields) {
+    const byName = new Map();
+    for (const field of fields) {
+      const name = String(field && field.name ? field.name : "");
+      if (name) {
+        byName.set(name, field);
+      }
+    }
+    return Array.from(byName.values()).sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  }
+
+  function fieldCompletionItems(payload, objectName, prefix) {
+    const variable = asArray(payload.variables).find((item) => String(item && item.name ? item.name : "") === objectName);
+    const runtimeSort = String(variable && (variable.runtimeSort || variable.type) ? variable.runtimeSort || variable.type : "");
+    const staticType = String(variable && variable.type ? variable.type : "");
+    const isSelectionObject = runtimeSort === "selection" && staticType.startsWith("selection<object");
+    if (!variable || (!["document", "page", "object"].includes(runtimeSort) && !isSelectionObject)) {
+      return [];
+    }
+
+    const className = variableClassName(variable);
+    const fields = inheritedFields(payload, className);
+    return fields
+      .filter((field) => {
+        const name = String(field && field.name ? field.name : "");
+        return name && (!prefix || name.startsWith(prefix));
+      })
+      .map((field) => {
+        const name = String(field.name);
+        const completion = new vscode.CompletionItem(name, vscode.CompletionItemKind.Property);
+        completion.insertText = name;
+        completion.filterText = name;
+        const type = field.type ? String(field.type) : "";
+        const owner = field.class ? String(field.class) : "";
+        completion.detail = type ? `${type}${owner ? ` (${owner})` : ""}` : owner || "field";
+        const documentation = new vscode.MarkdownString();
+        if (type) {
+          documentation.appendMarkdown(`type: \`${type}\``);
+        }
+        if (field.default !== undefined && field.default !== null) {
+          if (documentation.value) {
+            documentation.appendText("\n\n");
+          }
+          documentation.appendMarkdown(`default: \`${String(field.default)}\``);
+        }
+        if (owner) {
+          if (documentation.value) {
+            documentation.appendText("\n\n");
+          }
+          documentation.appendMarkdown(`declared on: \`${owner}\``);
+        }
+        if (documentation.value) {
+          completion.documentation = documentation;
+        }
+        return completion;
+      });
+  }
+
+  function declarationCompletionItems(payload, prefix) {
+    const items = [];
+    const decl = declarations(payload);
+    const staticKeywords = ["import", "const", "page", "fn", "let", "bind", "return", "end", "constrain", "type", "extend"];
+    const builtinTypes = ["document", "page", "object", "selection", "anchor", "style", "string", "number", "constraints", "fragment", "code", "list"];
+    const annotations = ["@render", "@phase", "@host", "@op", "@measure", "@layout", "@refine"];
+
+    for (const keyword of staticKeywords) {
+      if (prefix && !keyword.startsWith(prefix)) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(keyword, vscode.CompletionItemKind.Keyword);
+      completion.insertText = keyword;
+      completion.detail = "keyword";
+      items.push(completion);
+    }
+
+    for (const typeName of builtinTypes) {
+      if (prefix && !typeName.startsWith(prefix)) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(typeName, vscode.CompletionItemKind.TypeParameter);
+      completion.insertText = typeName;
+      completion.detail = "kernel type";
+      items.push(completion);
+    }
+
+    for (const annotation of annotations) {
+      const name = annotation.slice(1);
+      if (prefix && !name.startsWith(prefix) && !annotation.startsWith(prefix)) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(annotation, vscode.CompletionItemKind.Event);
+      completion.insertText = annotation;
+      completion.filterText = annotation;
+      completion.detail = "function annotation";
+      items.push(completion);
+    }
+
+    for (const item of asArray(decl.valueDomains)) {
+      const label = String(item && item.name ? item.name : "");
+      if (!label || (prefix && !label.startsWith(prefix))) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.TypeParameter);
+      completion.insertText = label;
+      completion.detail = item.body ? `type = ${String(item.body)}` : "type";
+      if (item.refinement) {
+        completion.documentation = new vscode.MarkdownString(`refinement: \`${String(item.refinement)}\``);
+      }
+      items.push(completion);
+    }
+
+    for (const item of asArray(decl.classes)) {
+      const label = String(item && item.name ? item.name : "");
+      if (!label || (prefix && !label.startsWith(prefix))) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.Class);
+      completion.insertText = label;
+      completion.detail = item.base ? `object class, base ${String(item.base)}` : "object class";
+      items.push(completion);
+    }
+
+    for (const item of asArray(decl.roles)) {
+      const label = String(item && item.name ? item.name : "");
+      if (!label || (prefix && !label.startsWith(prefix))) {
+        continue;
+      }
+      const completion = new vscode.CompletionItem(label, vscode.CompletionItemKind.EnumMember);
+      completion.insertText = label;
+      completion.detail = item.class ? `role: ${String(item.class)}` : "role";
+      items.push(completion);
+    }
+
+    return items;
+  }
+
+  function declarationHover(payload, target) {
+    const decl = declarations(payload);
+    const markdown = new vscode.MarkdownString();
+
+    for (const item of asArray(decl.classes)) {
+      if (String(item && item.name ? item.name : "") !== target) {
+        continue;
+      }
+      markdown.appendCodeblock(`type ${target} = object { ... }`, "ss");
+      if (item.base) {
+        markdown.appendMarkdown(`base: \`${String(item.base)}\``);
+      } else {
+        markdown.appendMarkdown("object class");
+      }
+      return new vscode.Hover(markdown);
+    }
+
+    for (const item of asArray(decl.valueDomains)) {
+      if (String(item && item.name ? item.name : "") !== target) {
+        continue;
+      }
+      markdown.appendCodeblock(`type ${target} = ${String(item.body || "unknown")}`, "ss");
+      if (item.refinement) {
+        markdown.appendMarkdown(`refinement: \`${String(item.refinement)}\``);
+      }
+      return new vscode.Hover(markdown);
+    }
+
+    for (const item of asArray(decl.roles)) {
+      if (String(item && item.name ? item.name : "") !== target) {
+        continue;
+      }
+      markdown.appendCodeblock(target, "ss");
+      markdown.appendMarkdown(item.class ? `role of \`${String(item.class)}\`` : "role");
+      return new vscode.Hover(markdown);
+    }
+
+    const field = uniqueFields(asArray(decl.fields)).find((item) => String(item && item.name ? item.name : "") === target);
+    if (field) {
+      const type = field.type ? String(field.type) : "unknown";
+      markdown.appendCodeblock(`${target}: ${type}`, "ss");
+      if (field.class) {
+        markdown.appendMarkdown(`declared on: \`${String(field.class)}\``);
+      }
+      if (field.default !== undefined && field.default !== null) {
+        if (markdown.value) {
+          markdown.appendText("\n\n");
+        }
+        markdown.appendMarkdown(`default: \`${String(field.default)}\``);
+      }
+      return new vscode.Hover(markdown);
+    }
+
+    return null;
   }
 
   function documentKey(document) {
@@ -784,43 +1057,10 @@ function activate(context) {
         }
 
         if (propertyContext) {
-          const variable = (payload.variables || []).find((item) => String(item && item.name ? item.name : "") === propertyContext.objectName);
-          if (!variable || String(variable.type || "") !== "object") {
-            return [];
-          }
-          const objectShape = String(variable.objectShape || "unknown");
-          const items = [];
-          for (const schema of payload.property_schemas || []) {
-            const key = String(schema && schema.key ? schema.key : "");
-            if (!key) {
-              continue;
-            }
-            const allowedShapes = Array.isArray(schema.allowedShapes) ? schema.allowedShapes.map((item) => String(item)) : [];
-            const shapeAllowed =
-              objectShape === "unknown" ||
-              objectShape === "generic" ||
-              allowedShapes.length === 0 ||
-              allowedShapes.includes(objectShape);
-            if (!shapeAllowed) {
-              continue;
-            }
-            if (propertyContext.prefix && !key.startsWith(propertyContext.prefix)) {
-              continue;
-            }
-            const completion = new vscode.CompletionItem(key, vscode.CompletionItemKind.Property);
-            completion.insertText = key;
-            completion.filterText = key;
-            const valueType = schema && schema.valueType ? String(schema.valueType) : "";
-            completion.detail = valueType ? `property: ${valueType}` : "property";
-            if (allowedShapes.length > 0) {
-              completion.documentation = new vscode.MarkdownString(`allowed on: ${allowedShapes.join(", ")}`);
-            }
-            items.push(completion);
-          }
-          return items;
+          return fieldCompletionItems(payload, propertyContext.objectName, propertyContext.prefix);
         }
 
-        const items = [];
+        const items = declarationCompletionItems(payload, prefix);
         for (const item of payload.functions || []) {
           const label = String(item.name || "");
           if (!label) {
@@ -925,7 +1165,7 @@ function activate(context) {
       }
 
       return queryEditorInfo(document).then((payload) => {
-        if (!payload || (!payload.functions && !payload.variables) || token.isCancellationRequested) {
+        if (!payload || token.isCancellationRequested) {
           return null;
         }
 
@@ -967,7 +1207,7 @@ function activate(context) {
           }
           return new vscode.Hover(markdown);
         }
-        return null;
+        return declarationHover(payload, target);
       });
     },
   };
@@ -976,7 +1216,7 @@ function activate(context) {
     vscode.languages.registerInlayHintsProvider({ language: "ss-slide" }, provider),
   );
   context.subscriptions.push(
-    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider, "."),
+    vscode.languages.registerCompletionItemProvider({ language: "ss-slide" }, provider, ".", "\"", "@"),
   );
   context.subscriptions.push(
     vscode.languages.registerHoverProvider({ language: "ss-slide" }, provider),

@@ -11,6 +11,7 @@ Included:
 - a live PDF preview command
 - a sample task that runs `ss check`
 - inlay hints for argument names and solved width/height
+- completion and hover support for functions, variables, object classes, roles, value domains, and class fields
 
 ## If `.ss` opens as Scheme
 
@@ -95,6 +96,17 @@ This currently shows:
 - solved `width×height` hints
 
 The hints refresh while editing with a short debounce, and also refresh immediately on save.
+
+## Object classes and fields
+
+The extension reads declaration metadata from `ss dump`, including:
+
+- `type Name = object { ... }`
+- `extend Name { ... }`
+- value-domain aliases such as `type RenderKind = "..."`
+- function annotations such as `@render`, `@phase`, `@host`, and `@op`
+
+Field completions are class-aware. For an object variable with a known class, `obj.` and `set_prop(obj, "...")` complete inherited fields from that object class instead of the old global property schema.
 
 If `ss` is not on your `PATH`, set `ss.cli.path` to the full executable path.
 
