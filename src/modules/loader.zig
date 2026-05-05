@@ -3,6 +3,8 @@ const ast = @import("ast");
 const core = @import("core");
 const syntax = @import("../syntax/parse.zig");
 const stdlib_assets = @import("stdlib_assets");
+const utils = @import("utils");
+const error_report = utils.err;
 
 const max_module_bytes = 256 * 1024;
 
@@ -158,7 +160,11 @@ const Builder = struct {
         const source = try self.allocator.dupe(u8, resolved.source);
         var owns_source = true;
         errdefer if (owns_source) self.allocator.free(source);
-        const program = try syntax.parse(self.allocator, source);
+        const program = syntax.parse(self.allocator, source) catch |err| {
+            const path = resolved.path orelse resolved.spec;
+            error_report.printParseError(path, source, err, syntax.lastDiagnostic());
+            return err;
+        };
         var owns_program = true;
         errdefer if (owns_program) {
             var cleanup = program;
@@ -193,7 +199,21 @@ const Builder = struct {
 
         const importer_base_dir = if (path) |module_path| std.fs.path.dirname(module_path) orelse "." else ".";
         for (program.imports.items) |import_decl| {
-            const import_id = try self.loadImport(importer_base_dir, import_decl.spec);
+            const import_id = self.loadImport(importer_base_dir, import_decl.spec) catch |err| {
+                if (err == error.UnknownImport) {
+                    const message = try formatUnknownImportMessage(self.allocator, importer_base_dir, import_decl.spec);
+                    defer self.allocator.free(message);
+                    error_report.print(.{
+                        .path = path orelse spec,
+                        .source = source,
+                        .severity = .@"error",
+                        .message = message,
+                        .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
+                    });
+                    return error.DiagnosticsFailed;
+                }
+                return err;
+            };
             const module = self.moduleByIdMutable(module_id).?;
             try module.resolved_import_ids.append(self.allocator, import_id);
         }
