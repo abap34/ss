@@ -155,6 +155,7 @@ fn appendCode(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
 fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, math: render_policy.MathPaint) !void {
     var op = Op.init(node, "draw_vector_math");
     errdefer op.deinit(allocator);
+    try op.put(allocator, "capability", "compile_math");
     try op.put(allocator, "source", node.content orelse "");
     try op.putFloat(allocator, "scale", math.scale);
     try op.putFloat(allocator, "block_line_height", math.block_line_height);

@@ -33,6 +33,8 @@ pub const CapabilityDescriptor = struct {
     function_name: []const u8,
     annotation_name: []const u8,
     args: ?[]const u8,
+    effects: ?[]const u8 = null,
+    cache: ?[]const u8 = null,
     module_id: core.SourceModuleId,
 };
 
@@ -250,6 +252,8 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
                     .function_name = func.name,
                     .annotation_name = annotation.name,
                     .args = annotation.args,
+                    .effects = annotationArgValue(annotation.args, "effects"),
+                    .cache = annotationArgValue(annotation.args, "cache"),
                     .module_id = module.id,
                 });
             } else if (std.mem.eql(u8, annotation.name, "op")) {
@@ -262,6 +266,39 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
             }
         }
     }
+}
+
+fn annotationArgValue(args: ?[]const u8, key: []const u8) ?[]const u8 {
+    const text = args orelse return null;
+    var index: usize = 0;
+    while (index < text.len) {
+        while (index < text.len and (std.ascii.isWhitespace(text[index]) or text[index] == ',')) : (index += 1) {}
+        const key_start = index;
+        while (index < text.len and (std.ascii.isAlphanumeric(text[index]) or text[index] == '_')) : (index += 1) {}
+        const candidate = text[key_start..index];
+        while (index < text.len and std.ascii.isWhitespace(text[index])) : (index += 1) {}
+        if (index >= text.len or text[index] != '=') {
+            while (index < text.len and text[index] != ',') : (index += 1) {}
+            continue;
+        }
+        index += 1;
+        while (index < text.len and std.ascii.isWhitespace(text[index])) : (index += 1) {}
+        const value_start = index;
+        var depth: usize = 0;
+        while (index < text.len) : (index += 1) {
+            switch (text[index]) {
+                '[', '(' => depth += 1,
+                ']', ')' => {
+                    if (depth > 0) depth -= 1;
+                },
+                ',' => if (depth == 0) break,
+                else => {},
+            }
+        }
+        const value = std.mem.trim(u8, text[value_start..index], " \t\r\n");
+        if (std.mem.eql(u8, candidate, key)) return value;
+    }
+    return null;
 }
 
 fn appendRoles(index: *DeclarationIndex, module_id: core.SourceModuleId, class_name: []const u8, roles: []const []const u8) !void {

@@ -194,6 +194,8 @@ fn writeDeclarationIndexField(root: *json.Object, allocator: std.mem.Allocator, 
         var item = try capabilities.objectItem();
         try item.stringField("function", capability.function_name);
         try item.optionalStringField("args", capability.args);
+        try item.optionalStringField("effects", capability.effects);
+        try item.optionalStringField("cache", capability.cache);
         try item.intField("moduleId", capability.module_id);
         try item.end();
     }
