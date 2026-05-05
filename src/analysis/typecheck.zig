@@ -1466,7 +1466,7 @@ fn primitiveResultTypeInfo(
         return infoFromSort(.string);
     }
 
-    if (descriptor.op == .set_content or descriptor.op == .clear_content or descriptor.op == .append_content) {
+    if (descriptor.op == .rewrite_text or descriptor.op == .set_content or descriptor.op == .clear_content or descriptor.op == .append_content) {
         if (call.args.items.len == 0) return infoFromSort(.object);
         return try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
     }
