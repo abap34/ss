@@ -300,10 +300,19 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
         var item = try types.objectItem();
         try item.stringField("name", type_decl.name);
         try item.stringField("body", type_decl.body);
+        try item.optionalStringField("refinement", type_decl.refinement);
         try writeSpan(&item, type_decl.span);
         try item.end();
     }
     try types.end();
+
+    var objects = try program_object.arrayField("objects");
+    for (program.objects.items) |object_decl| try writeObjectDeclaration(&objects, object_decl);
+    try objects.end();
+
+    var object_extensions = try program_object.arrayField("objectExtensions");
+    for (program.object_extensions.items) |extension| try writeObjectExtension(&object_extensions, extension);
+    try object_extensions.end();
 
     var properties = try program_object.arrayField("properties");
     for (program.properties.items) |property| try writePropertyDeclaration(&properties, property);
@@ -319,6 +328,9 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
         defer allocator.free(result_label);
         try item.stringField("resultType", result_label);
         try item.enumTagField("resultSort", func.result_sort);
+        var annotations = try item.arrayField("annotations");
+        for (func.annotations.items) |annotation| try writeAnnotation(&annotations, annotation);
+        try annotations.end();
         var params = try item.arrayField("params");
         for (func.params.items) |param| {
             var param_item = try params.objectItem();
@@ -348,6 +360,53 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     }
     try pages.end();
     try program_object.end();
+}
+
+fn writeObjectDeclaration(objects: *json.Array, object_decl: ast.ObjectDecl) !void {
+    var item = try objects.objectItem();
+    try item.stringField("name", object_decl.name);
+    try item.optionalStringField("base", object_decl.base);
+    try writeStringArrayField(&item, "roles", object_decl.roles.items);
+    try writeObjectFieldsField(&item, object_decl.fields.items);
+    try writeSpan(&item, object_decl.span);
+    try item.end();
+}
+
+fn writeObjectExtension(extensions: *json.Array, extension: ast.ObjectExtensionDecl) !void {
+    var item = try extensions.objectItem();
+    try item.stringField("target", extension.target);
+    try item.optionalStringField("implements", extension.implements);
+    try writeStringArrayField(&item, "roles", extension.roles.items);
+    try writeObjectFieldsField(&item, extension.fields.items);
+    try writeSpan(&item, extension.span);
+    try item.end();
+}
+
+fn writeObjectFieldsField(object: *json.Object, fields: []const ast.ObjectFieldDecl) !void {
+    var array = try object.arrayField("fields");
+    for (fields) |field| {
+        var item = try array.objectItem();
+        try item.stringField("name", field.name);
+        try item.stringField("type", field.value_type);
+        try item.optionalStringField("default", field.default_value);
+        try writeSpan(&item, field.span);
+        try item.end();
+    }
+    try array.end();
+}
+
+fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const []const u8) !void {
+    var array = try object.arrayField(name);
+    for (values) |value| try array.stringItem(value);
+    try array.end();
+}
+
+fn writeAnnotation(annotations: *json.Array, annotation: ast.Annotation) !void {
+    var item = try annotations.objectItem();
+    try item.stringField("name", annotation.name);
+    try item.optionalStringField("args", annotation.args);
+    try writeSpan(&item, annotation.span);
+    try item.end();
 }
 
 fn writePropertyDeclaration(properties: *json.Array, property: ast.PropertyDecl) !void {
