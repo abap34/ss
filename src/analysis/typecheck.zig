@@ -1,13 +1,15 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const names = @import("names.zig");
-const registry = @import("registry.zig");
-const module_loader = @import("../module_loader.zig");
-const syntax = @import("syntax.zig");
-const property_schema = @import("../property_schema.zig");
+const names = @import("../language/names.zig");
+const declarations = @import("../language/declarations.zig");
+const registry = @import("../language/registry.zig");
+const value_domains = @import("../language/value_domains.zig");
+const module_loader = @import("../modules/loader.zig");
+const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
+const Type = ast.Type;
 
 pub const FunctionContract = struct {
     min_param_count: usize,
@@ -17,13 +19,16 @@ pub const FunctionContract = struct {
 };
 
 const TypeInfo = struct {
+    ty: Type = Type.any,
     sort: core.SemanticSort,
-    object_shape: property_schema.ObjectShape = .unknown,
+    object_class: ?[]const u8 = null,
     string_literal: ?[]const u8 = null,
 };
 
 const TypeEnv = std.StringHashMap(TypeInfo);
 pub const VariableInfo = TypeInfo;
+
+var diagnostic_origin_path: []const u8 = "";
 pub const FunctionMetadata = core.FunctionMetadata;
 
 pub const ProgramIndex = struct {
@@ -81,7 +86,7 @@ pub fn valueSort(value: core.Value) core.SemanticSort {
 }
 
 pub fn ensureValueSort(
-    ir: *core.Ir,
+    ir: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.SemanticSort,
@@ -91,7 +96,7 @@ pub fn ensureValueSort(
 }
 
 pub fn ensureValueSortWithCode(
-    ir: *core.Ir,
+    ir: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
     expected: core.SemanticSort,
@@ -127,12 +132,44 @@ fn isConst(func: ast.FunctionDecl) bool {
     return func.kind == .constant;
 }
 
+fn originPathForModule(module: *const core.SourceModule) []const u8 {
+    return module.path orelse module.spec;
+}
+
+fn setDiagnosticOriginModule(module: *const core.SourceModule) void {
+    diagnostic_origin_path = originPathForModule(module);
+}
+
+fn clearDiagnosticOriginModule() void {
+    diagnostic_origin_path = "";
+}
+
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
+}
+
+fn infoFromSort(sort: core.SemanticSort) TypeInfo {
+    return .{ .ty = Type.fromSort(sort), .sort = sort };
+}
+
+fn infoFromType(ty: Type) TypeInfo {
+    return .{
+        .ty = ty,
+        .sort = ty.toRuntimeSort() orelse .fragment,
+        .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
+    };
+}
+
+fn infoForSelectionItem(sort: core.SelectionItemSort) TypeInfo {
+    return infoFromType(Type.fromSelectionItemSort(sort));
+}
+
+fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
+    return ty.formatAlloc(allocator);
 }
 
 pub fn functionContract(func: ast.FunctionDecl) FunctionContract {
@@ -171,10 +208,16 @@ pub fn checkFunctionDefinitions(
     ir: *core.Ir,
     functions: *const std.StringHashMap(ast.FunctionDecl),
 ) !void {
+    defer clearDiagnosticOriginModule();
     try checkFunctionCallGraph(allocator, ir, functions);
 
     var it = functions.iterator();
     while (it.next()) |entry| {
+        if (ir.function_metadata.get(entry.key_ptr.*)) |metadata| {
+            if (ir.moduleById(metadata.module_id)) |module| setDiagnosticOriginModule(module);
+        } else {
+            clearDiagnosticOriginModule();
+        }
         try checkFunction(allocator, ir, functions, entry.value_ptr.*);
     }
 }
@@ -183,8 +226,110 @@ pub fn typecheckProgram(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {
+    defer clearDiagnosticOriginModule();
+    try checkObjectDeclarations(allocator, ir);
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
-    try checkPageStatements(allocator, ir, &ir.functions, ir.projectProgram());
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        setDiagnosticOriginModule(module);
+        try checkPageStatements(allocator, ir, &ir.functions, module.program);
+    }
+}
+
+fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    var roles = std.StringHashMap([]const u8).init(allocator);
+    defer roles.deinit();
+    defer clearDiagnosticOriginModule();
+
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        setDiagnosticOriginModule(module);
+        for (module.program.objects.items) |object_decl| {
+            try checkObjectDeclaration(allocator, ir, module.id, object_decl);
+            try checkRolesUnique(allocator, ir, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
+        }
+        for (module.program.object_extensions.items) |extension| {
+            try checkObjectExtension(allocator, ir, module.id, extension);
+            try checkRolesUnique(allocator, ir, &roles, extension.target, extension.roles.items, extension.span);
+        }
+    }
+}
+
+fn checkObjectDeclaration(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    module_id: core.SourceModuleId,
+    object_decl: ast.ObjectDecl,
+) !void {
+    const origin = try statementOrigin(allocator, object_decl.span);
+    defer allocator.free(origin);
+    if (object_decl.base) |base| {
+        if (!declarations.classExists(ir, base)) {
+            try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
+            return error.InvalidSemanticSort;
+        }
+    }
+    try checkObjectFields(allocator, ir, module_id, object_decl.fields.items);
+}
+
+fn checkObjectExtension(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    module_id: core.SourceModuleId,
+    extension: ast.ObjectExtensionDecl,
+) !void {
+    const origin = try statementOrigin(allocator, extension.span);
+    defer allocator.free(origin);
+    if (!declarations.classExists(ir, extension.target)) {
+        try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
+        return error.InvalidSemanticSort;
+    }
+    if (extension.implements) |implements| {
+        if (!declarations.classExists(ir, implements)) {
+            try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
+            return error.InvalidSemanticSort;
+        }
+    }
+    try checkObjectFields(allocator, ir, module_id, extension.fields.items);
+}
+
+fn checkObjectFields(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    module_id: core.SourceModuleId,
+    fields: []const ast.ObjectFieldDecl,
+) !void {
+    for (fields) |field| {
+        if (value_domains.resolve(ir, module_id, field.value_type) != null) continue;
+        const origin = try statementOrigin(allocator, field.span);
+        defer allocator.free(origin);
+        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+        return error.InvalidSemanticSort;
+    }
+}
+
+fn checkRolesUnique(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    roles: *std.StringHashMap([]const u8),
+    class_name: []const u8,
+    role_names: []const []const u8,
+    span: ast.Span,
+) !void {
+    for (role_names) |role_name| {
+        if (roles.get(role_name)) |existing_class| {
+            const origin = try statementOrigin(allocator, span);
+            defer allocator.free(origin);
+            try addUserReport(
+                ir,
+                origin,
+                "DuplicateRole: role '{s}' is already provided by {s}",
+                .{ role_name, existing_class },
+            );
+            return error.InvalidSemanticSort;
+        }
+        try roles.put(role_name, class_name);
+    }
 }
 
 pub fn collectVariableTypesFromProgram(
@@ -218,13 +363,21 @@ pub fn collectVariableInfoFromProgram(
         for (func.params.items) |param| {
             if (param.default_value) |default_value| {
                 const info = try inferExprInfo(allocator, null, functions, &env, default_value.*, "");
-                try ensureSort(null, info.sort, param.sort, "", .UnmatchedArgumentType);
+                try ensureType(null, allocator, info, param.ty, "", .UnmatchedArgumentType);
             }
-            try env.put(param.name, .{ .sort = param.sort });
-            try variables.put(param.name, .{ .sort = param.sort });
+            try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
+            try variables.put(param.name, .{ .ty = param.ty, .sort = param.sort });
         }
 
         for (func.statements.items) |stmt| {
+            try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
+        }
+    }
+
+    {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (program.document_statements.items) |stmt| {
             try collectVariableTypesFromStatement(allocator, &env, functions, stmt, &variables);
         }
     }
@@ -291,10 +444,11 @@ pub fn buildIr(
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromProgram(allocator, module.source, module.program, module.path, false, &ir.definitions);
+        try collectDefinitionsFromProgram(allocator, module.source, module.program, module.id, module.path, false, &ir.definitions);
+        try collectProgramHints(allocator, &ir.hints, module.source, module.path, module.program, module.id, &ir.functions);
     }
-    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), null, true, &ir.definitions);
-    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectProgram(), &ir.functions);
+    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), ir.project_module_id, null, true, &ir.definitions);
+    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectProgram(), ir.project_module_id, &ir.functions);
 }
 
 pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -308,7 +462,7 @@ pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void
         write_index += 1;
     }
     ir.hints.items.len = write_index;
-    try collectSolvedSizeHints(allocator, ir.projectSource(), ir, &ir.hints);
+    try collectSolvedSizeHints(allocator, ir, &ir.hints);
 }
 
 pub fn loadProgramIndex(
@@ -373,8 +527,10 @@ pub fn formatPrimitiveParam(
     index: usize,
 ) ![]const u8 {
     const name = descriptor.arg_names[index];
-    if (expectedPrimitiveArgSort(descriptor, index)) |sort| {
-        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, @tagName(sort) });
+    if (registry.primitiveArgType(descriptor, index)) |ty| {
+        const label = try ty.formatAlloc(allocator);
+        defer allocator.free(label);
+        return std.fmt.allocPrint(allocator, "{s}: {s}", .{ name, label });
     }
     return allocator.dupe(u8, name);
 }
@@ -384,7 +540,9 @@ pub fn formatUserSignature(
     name: []const u8,
     func: ast.FunctionDecl,
 ) ![]const u8 {
-    if (isConst(func)) return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, @tagName(func.result_sort) });
+    const result_label = try func.result_type.formatAlloc(allocator);
+    defer allocator.free(result_label);
+    if (isConst(func)) return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, result_label });
 
     var params = std.ArrayList(u8).empty;
     defer params.deinit(allocator);
@@ -394,16 +552,18 @@ pub fn formatUserSignature(
         defer allocator.free(label);
         try params.appendSlice(allocator, label);
     }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, @tagName(func.result_sort) });
+    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, result_label });
 }
 
 pub fn formatUserParam(allocator: std.mem.Allocator, param: ast.ParamDecl) ![]const u8 {
+    const label = try param.ty.formatAlloc(allocator);
+    defer allocator.free(label);
     if (param.default_value) |default_value| {
         const text = try formatExpr(allocator, default_value.*);
         defer allocator.free(text);
-        return std.fmt.allocPrint(allocator, "{s}: {s} = {s}", .{ param.name, @tagName(param.sort), text });
+        return std.fmt.allocPrint(allocator, "{s}: {s} = {s}", .{ param.name, label, text });
     }
-    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, @tagName(param.sort) });
+    return std.fmt.allocPrint(allocator, "{s}: {s}", .{ param.name, label });
 }
 
 fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
@@ -444,6 +604,7 @@ fn collectDefinitionsFromProgram(
     allocator: std.mem.Allocator,
     source: []const u8,
     program: ast.Program,
+    module_id: core.SourceModuleId,
     file: ?[]const u8,
     include_variables: bool,
     definitions: *std.StringHashMap(core.Definition),
@@ -453,18 +614,21 @@ fn collectDefinitionsFromProgram(
         const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
         if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, kind, file);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, kind, module_id, file);
         }
         if (include_variables) {
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, stmt, definitions);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
             }
         }
     }
     if (include_variables) {
+        for (program.document_statements.items) |stmt| {
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
+        }
         for (program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, stmt, definitions);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
             }
         }
     }
@@ -473,12 +637,13 @@ fn collectDefinitionsFromProgram(
 fn collectDefinitionsFromStatement(
     allocator: std.mem.Allocator,
     source: []const u8,
+    module_id: core.SourceModuleId,
     stmt: ast.Statement,
     definitions: *std.StringHashMap(core.Definition),
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try putStatementDefinition(allocator, source, stmt, "let", binding.name, definitions),
-        .bind_binding => |binding| try putStatementDefinition(allocator, source, stmt, "bind", binding.name, definitions),
+        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions),
+        .bind_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "bind", binding.name, definitions),
         else => {},
     }
 }
@@ -486,6 +651,7 @@ fn collectDefinitionsFromStatement(
 fn putStatementDefinition(
     allocator: std.mem.Allocator,
     source: []const u8,
+    module_id: core.SourceModuleId,
     stmt: ast.Statement,
     keyword: []const u8,
     name: []const u8,
@@ -493,7 +659,7 @@ fn putStatementDefinition(
 ) !void {
     if (findIdentifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
         const loc = utils.err.computeLineColumn(source, location.offset);
-        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.length, .variable, null);
+        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.length, .variable, module_id, null);
     }
 }
 
@@ -505,6 +671,7 @@ fn putDefinition(
     column: usize,
     length: usize,
     kind: core.DefinitionKind,
+    module_id: core.SourceModuleId,
     file: ?[]const u8,
 ) !void {
     if (definitions.fetchRemove(name)) |entry| {
@@ -518,6 +685,7 @@ fn putDefinition(
             .column = column,
             .length = length,
             .kind = kind,
+            .module_id = module_id,
             .file = if (file) |path| try allocator.dupe(u8, path) else null,
         },
     );
@@ -527,17 +695,22 @@ fn collectProgramHints(
     allocator: std.mem.Allocator,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
+    source_path: ?[]const u8,
     program: ast.Program,
+    module_id: core.SourceModuleId,
     functions: *const std.StringHashMap(ast.FunctionDecl),
 ) !void {
     for (program.functions.items) |func| {
         for (func.statements.items) |stmt| {
-            try collectStatementHints(allocator, hints, functions, source, stmt);
+            try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
         }
+    }
+    for (program.document_statements.items) |stmt| {
+        try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
     }
     for (program.pages.items) |page| {
         for (page.statements.items) |stmt| {
-            try collectStatementHints(allocator, hints, functions, source, stmt);
+            try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
         }
     }
 }
@@ -547,14 +720,16 @@ fn collectStatementHints(
     hints: *std.ArrayList(core.InlayHint),
     functions: *const std.StringHashMap(ast.FunctionDecl),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     stmt: ast.Statement,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try collectExprHints(allocator, hints, functions, source, stmt.span, binding.expr),
-        .bind_binding => |binding| try collectExprHints(allocator, hints, functions, source, stmt.span, binding.expr),
-        .return_expr => |expr| try collectExprHints(allocator, hints, functions, source, stmt.span, expr),
-        .property_set => |property_set| try collectExprHints(allocator, hints, functions, source, stmt.span, property_set.value),
-        .expr_stmt => |expr| try collectExprHints(allocator, hints, functions, source, stmt.span, expr),
+        .let_binding => |binding| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
+        .bind_binding => |binding| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
+        .return_expr => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
+        .property_set => |property_set| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, property_set.value),
+        .expr_stmt => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
         else => {},
     }
 }
@@ -564,13 +739,15 @@ fn collectExprHints(
     hints: *std.ArrayList(core.InlayHint),
     functions: *const std.StringHashMap(ast.FunctionDecl),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     span: ast.Span,
     expr: ast.Expr,
 ) !void {
     switch (expr) {
         .call => |call| {
-            try hintForCallExpr(allocator, hints, functions, source, span, call);
-            for (call.args.items) |arg| try collectExprHints(allocator, hints, functions, source, span, arg);
+            try hintForCallExpr(allocator, hints, functions, source, source_path, module_id, span, call);
+            for (call.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
         },
         else => {},
     }
@@ -581,6 +758,8 @@ fn hintForCallExpr(
     hints: *std.ArrayList(core.InlayHint),
     functions: *const std.StringHashMap(ast.FunctionDecl),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     span: ast.Span,
     call: ast.CallExpr,
 ) !void {
@@ -592,7 +771,7 @@ fn hintForCallExpr(
     for (0..hint_count) |index| {
         const param_name = callParamName(functions, call.name, index) orelse continue;
         const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
-        try appendInlayHint(allocator, hints, source, span.start + arg_starts[index], label, .parameter_names);
+        try appendInlayHint(allocator, hints, source, source_path, module_id, span.start + arg_starts[index], label, .parameter_names);
     }
 }
 
@@ -610,7 +789,6 @@ fn callParamName(functions: *const std.StringHashMap(ast.FunctionDecl), call_nam
 
 fn collectSolvedSizeHints(
     allocator: std.mem.Allocator,
-    source: []const u8,
     ir: *core.Ir,
     hints: *std.ArrayList(core.InlayHint),
 ) !void {
@@ -618,7 +796,7 @@ fn collectSolvedSizeHints(
     defer best_by_origin.deinit();
 
     for (ir.nodes.items) |node| {
-        if ((node.kind != .object and node.kind != .derived) or !node.attached) continue;
+        if (node.kind != .object or !node.attached) continue;
         const origin = node.origin orelse continue;
         if (node.role != null and std.mem.eql(u8, node.role.?, "panel")) continue;
         if (best_by_origin.get(origin)) |existing| {
@@ -630,21 +808,33 @@ fn collectSolvedSizeHints(
 
     var iterator = best_by_origin.iterator();
     while (iterator.next()) |entry| {
-        const span = utils.err.parseByteOrigin(entry.key_ptr.*) orelse continue;
+        const origin = utils.err.parseLocatedOrigin(entry.key_ptr.*) orelse continue;
+        const module = moduleForHintOrigin(ir, origin.path);
         const node = ir.getNode(entry.value_ptr.*) orelse continue;
         const label = try std.fmt.allocPrint(
             allocator,
             " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
             .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height },
         );
-        try appendInlayHint(allocator, hints, source, trimHintByteIndexToLineEnd(source, span.end), label, .solved_frame);
+        try appendInlayHint(allocator, hints, module.source, module.file, module.id, trimHintByteIndexToLineEnd(module.source, origin.span.end), label, .solved_frame);
     }
+}
+
+fn moduleForHintOrigin(ir: *const core.Ir, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
+    if (file) |origin_path| {
+        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+            return .{ .id = module.id, .source = module.source, .file = module.path orelse origin_path };
+        }
+    }
+    return .{ .id = ir.project_module_id, .source = ir.projectSource(), .file = ir.projectPath() };
 }
 
 fn appendInlayHint(
     allocator: std.mem.Allocator,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     byte_index: usize,
     label: []const u8,
     kind: core.InlayHintKind,
@@ -655,6 +845,8 @@ fn appendInlayHint(
         .column = loc.column,
         .label = label,
         .kind = kind,
+        .module_id = module_id,
+        .file = source_path,
     });
 }
 
@@ -756,8 +948,8 @@ fn collectVariableTypesFromStatement(
         },
         .bind_binding => |binding| {
             _ = try inferExprInfo(allocator, null, functions, env, binding.expr, origin);
-            try env.put(binding.name, .{ .sort = .fragment });
-            try variables.put(binding.name, .{ .sort = .fragment });
+            try env.put(binding.name, infoFromSort(.fragment));
+            try variables.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
             _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
@@ -773,7 +965,6 @@ fn collectVariableTypesFromStatement(
                 _ = try inferExprInfo(allocator, null, functions, env, expr, origin);
             }
         },
-        else => {},
     }
 }
 
@@ -827,6 +1018,9 @@ fn visitFunction(
 }
 
 fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Ir, func: ast.FunctionDecl) !void {
+    if (ir.function_metadata.get(func.name)) |metadata| {
+        if (ir.moduleById(metadata.module_id)) |module| setDiagnosticOriginModule(module);
+    }
     try ir.addValidationDiagnostic(.@"error", null, null, try statementOrigin(allocator, func.span), .{
         .recursive_function = .{ .function_name = func.name },
     });
@@ -861,7 +1055,6 @@ fn collectStatementCallees(
         .property_set => |property_set| try collectExprCallees(allocator, functions, property_set.value, callees),
         .constrain => |decl| if (decl.offset) |expr| try collectExprCallees(allocator, functions, expr, callees),
         .expr_stmt => |expr| try collectExprCallees(allocator, functions, expr, callees),
-        else => {},
     }
 }
 
@@ -880,6 +1073,17 @@ fn collectExprCallees(
         .call => |call| {
             if (functions.get(call.name)) |func| {
                 if (!isConst(func)) try appendUniqueCallee(allocator, callees, call.name);
+            }
+            if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+                if (descriptor.op == .foreach or descriptor.op == .fold or descriptor.op == .join) {
+                    const callback_index: usize = if (descriptor.op == .foreach) 1 else 2;
+                    if (call.args.items.len > callback_index) {
+                        switch (call.args.items[callback_index]) {
+                            .ident => |name| if (functions.contains(name)) try appendUniqueCallee(allocator, callees, name),
+                            else => {},
+                        }
+                    }
+                }
             }
             for (call.args.items) |arg| try collectExprCallees(allocator, functions, arg, callees);
         },
@@ -908,13 +1112,15 @@ fn checkFunction(
     for (func.params.items) |param| {
         if (param.default_value) |default_value| {
             const info = try inferExprInfo(allocator, ir, functions, &env, default_value.*, func_origin);
-            try ensureSort(ir, info.sort, param.sort, func_origin, .UnmatchedArgumentType);
+            try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
-        try env.put(param.name, .{ .sort = param.sort });
+        var param_info = infoFromType(param.ty);
+        param_info.sort = param.sort;
+        try env.put(param.name, param_info);
     }
 
     for (func.statements.items) |stmt| {
-        try checkStatement(allocator, ir, functions, &env, func.result_sort, stmt);
+        try checkStatement(allocator, ir, functions, &env, func.result_type, stmt);
     }
 }
 
@@ -924,6 +1130,13 @@ fn checkPageStatements(
     functions: *const std.StringHashMap(ast.FunctionDecl),
     program: ast.Program,
 ) !void {
+    {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (program.document_statements.items) |stmt| {
+            try checkTopLevelStatement(allocator, ir, functions, &env, stmt);
+        }
+    }
     for (program.pages.items) |page| {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
@@ -949,7 +1162,7 @@ fn checkTopLevelStatement(
         },
         .bind_binding => |binding| {
             _ = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
-            try env.put(binding.name, .{ .sort = .fragment });
+            try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => {
             try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
@@ -964,10 +1177,9 @@ fn checkTopLevelStatement(
         .constrain => |decl| {
             if (decl.offset) |expr| {
                 const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
-                try ensureSort(ir, actual.sort, .number, origin, .UnmatchedArgumentType);
+                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
-        .title, .subtitle, .math, .mathtex, .figure, .image, .pdf_ref, .code, .page_number, .toc, .highlight => {},
     }
 }
 
@@ -976,7 +1188,7 @@ fn checkStatement(
     ir: *core.Ir,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     env: *TypeEnv,
-    result_sort: core.SemanticSort,
+    result_type: Type,
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, stmt.span);
@@ -987,11 +1199,11 @@ fn checkStatement(
         },
         .bind_binding => |binding| {
             _ = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
-            try env.put(binding.name, .{ .sort = .fragment });
+            try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
             const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
-            try ensureSort(ir, actual.sort, result_sort, origin, .UnmatchedReturnType);
+            try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
         .property_set => |property_set| {
             try validatePropertySetStatement(allocator, ir, functions, env, property_set.object_name, property_set.property_name, property_set.value, origin);
@@ -1002,10 +1214,9 @@ fn checkStatement(
         .constrain => |decl| {
             if (decl.offset) |expr| {
                 const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
-                try ensureSort(ir, actual.sort, .number, origin, .UnmatchedArgumentType);
+                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
-        .title, .subtitle, .math, .mathtex, .figure, .image, .pdf_ref, .code, .page_number, .toc, .highlight => {},
     }
 }
 
@@ -1029,12 +1240,17 @@ fn inferExprInfo(
     origin: []const u8,
 ) anyerror!TypeInfo {
     return switch (expr) {
-        .string => |text| .{ .sort = .string, .string_literal = text },
-        .number => .{ .sort = .number },
+        .string => |text| blk: {
+            var info = infoFromSort(.string);
+            info.string_literal = text;
+            break :blk info;
+        },
+        .number => infoFromSort(.number),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
             if (functions.get(name)) |func| {
-                if (isConst(func)) break :blk .{ .sort = func.result_sort };
+                if (isConst(func)) break :blk infoFromType(func.result_type);
+                break :blk infoFromSort(.function);
             }
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
@@ -1069,7 +1285,7 @@ fn inferCallInfo(
         for (call.args.items, 0..) |arg, index| {
             const param = func.params.items[index];
             const actual = try inferExprInfo(allocator, ir, functions, env, arg, origin);
-            try ensureSort(ir, actual.sort, param.sort, origin, .UnmatchedArgumentType);
+            try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
         }
         return try inferUserFunctionReturnInfo(allocator, ir, functions, env, func, call, origin);
     }
@@ -1085,15 +1301,14 @@ fn inferCallInfo(
         }
         for (call.args.items, 0..) |arg, index| {
             const actual = try inferExprInfo(allocator, ir, functions, env, arg, origin);
-            if (expectedPrimitiveArgSort(descriptor, index)) |expected| {
-                try ensureSort(ir, actual.sort, expected, origin, .UnmatchedArgumentType);
+            if (registry.primitiveArgType(descriptor, index)) |expected| {
+                try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
             }
         }
         const info = try primitiveResultTypeInfo(allocator, ir, functions, env, call, descriptor, origin);
         if (ir != null) {
             switch (descriptor.op) {
                 .set_prop => try validateSetPropCall(ir.?, call, env, functions, origin),
-                .layout_v, .layout_v_all => try validateLayoutVCall(ir.?, call, env, origin),
                 else => {},
             }
         }
@@ -1128,7 +1343,11 @@ fn inferUserFunctionReturnInfoInner(
     origin: []const u8,
     visiting: *std.StringHashMap(void),
 ) !TypeInfo {
-    if (visiting.contains(func.name)) return .{ .sort = func.result_sort, .object_shape = .generic };
+    if (visiting.contains(func.name)) {
+        var info = infoFromType(func.result_type);
+        info.object_class = func.result_type.class_name;
+        return info;
+    }
     try visiting.put(func.name, {});
     defer _ = visiting.remove(func.name);
 
@@ -1139,12 +1358,15 @@ fn inferUserFunctionReturnInfoInner(
             try inferExprInfo(allocator, ir, functions, caller_env, call.args.items[index], origin)
         else if (param.default_value) |default_value|
             try inferExprInfo(allocator, ir, functions, &env, default_value.*, origin)
-        else
-            .{ .sort = param.sort };
+        else blk: {
+            var param_info = infoFromType(param.ty);
+            param_info.sort = param.sort;
+            break :blk param_info;
+        };
         try env.put(param.name, info);
     }
 
-    var result = TypeInfo{ .sort = func.result_sort };
+    var result = infoFromType(func.result_type);
     for (func.statements.items) |stmt| {
         switch (stmt.kind) {
             .let_binding => |binding| {
@@ -1153,14 +1375,14 @@ fn inferUserFunctionReturnInfoInner(
             },
             .bind_binding => |binding| {
                 _ = try inferExprInfo(allocator, null, functions, &env, binding.expr, "");
-                try env.put(binding.name, .{ .sort = .fragment });
+                try env.put(binding.name, infoFromSort(.fragment));
             },
             .return_expr => |expr| {
                 const info = try inferExprInfo(allocator, null, functions, &env, expr, "");
                 result = mergeTypeInfo(result, info);
             },
             .property_set => |property_set| {
-                try validatePropertySetStatement(allocator, null, functions, &env, property_set.object_name, property_set.property_name, property_set.value, "");
+                try validatePropertySetStatement(allocator, ir, functions, &env, property_set.object_name, property_set.property_name, property_set.value, "");
             },
             .expr_stmt => |expr| {
                 _ = try inferExprInfo(allocator, null, functions, &env, expr, "");
@@ -1168,26 +1390,28 @@ fn inferUserFunctionReturnInfoInner(
             .constrain => |decl| {
                 if (decl.offset) |expr| _ = try inferExprInfo(allocator, null, functions, &env, expr, "");
             },
-            else => {},
         }
     }
+    result.ty = func.result_type;
     result.sort = func.result_sort;
+    if (func.result_type.class_name) |class_name| result.object_class = class_name;
     return result;
 }
 
 fn mergeTypeInfo(a: TypeInfo, b: TypeInfo) TypeInfo {
     return .{
+        .ty = a.ty,
         .sort = a.sort,
-        .object_shape = mergeObjectShape(a.object_shape, b.object_shape),
+        .object_class = mergeObjectClass(a.object_class, b.object_class),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
     };
 }
 
-fn mergeObjectShape(a: property_schema.ObjectShape, b: property_schema.ObjectShape) property_schema.ObjectShape {
-    if (a == .unknown) return b;
-    if (b == .unknown) return a;
-    if (a == b) return a;
-    return .generic;
+fn mergeObjectClass(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
+    if (a == null) return b;
+    if (b == null) return a;
+    if (std.mem.eql(u8, a.?, b.?)) return a;
+    return null;
 }
 
 fn mergeStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
@@ -1206,48 +1430,251 @@ fn primitiveResultTypeInfo(
     descriptor: registry.PrimitiveDescriptor,
     origin: []const u8,
 ) !TypeInfo {
+    if (descriptor.op == .first) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        var info = switch (selection_info.ty.param) {
+            .page => infoFromSort(.page),
+            .object, .any, .none => infoFromSort(.object),
+            else => infoFromSort(selection_info.sort),
+        };
+        if (info.sort == .object) {
+            info.object_class = selection_info.object_class;
+            info.ty.class_name = selection_info.object_class;
+        }
+        return info;
+    }
+
+    if (descriptor.op == .foreach) {
+        if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, functions, env, call, origin, 1, selection_info, 1, null);
+        return selection_info;
+    }
+
+    if (descriptor.op == .fold) {
+        if (call.args.items.len < 3) return infoFromSort(.string);
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, functions, env, call, origin, 2, selection_info, 2, .string);
+        return infoFromSort(.string);
+    }
+
+    if (descriptor.op == .join) {
+        if (call.args.items.len < 3) return infoFromSort(.string);
+        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, functions, env, call, origin, 2, selection_info, 1, .string);
+        return infoFromSort(.string);
+    }
+
+    if (descriptor.op == .set_content or descriptor.op == .clear_content or descriptor.op == .append_content) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        return try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    }
+
+    if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
+        return try inferSelectionAlgebraInfo(allocator, ir, functions, env, call, origin);
+    }
+
+    if (descriptor.op == .select) {
+        return try inferSelectCallInfo(allocator, ir, functions, env, call, origin);
+    }
+
+    if (descriptor.op == .set_style) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        if (!(target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any)))) {
+            try ensureType(ir, allocator, target_info, Type.object, origin, .UnmatchedArgumentType);
+        }
+        return target_info;
+    }
+
+    if (descriptor.op == .set_prop) {
+        if (call.args.items.len == 0) return infoFromSort(.object);
+        const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        return .{
+            .ty = switch (target_info.ty.tag) {
+                .document, .page, .object, .selection => target_info.ty,
+                else => Type.object,
+            },
+            .sort = switch (target_info.sort) {
+                .document, .page, .object, .selection => target_info.sort,
+                else => .object,
+            },
+            .object_class = target_info.object_class,
+        };
+    }
+
     const result_sort = descriptor.result_sort orelse .object;
-    if (result_sort != .object) return .{ .sort = result_sort };
+    if (result_sort != .object) return infoFromSort(result_sort);
 
-    const shape = switch (descriptor.op) {
-        .text => .text,
-        .group => .group,
-        .page_number_object => .page_number,
-        .toc_object => .toc,
-        .set_prop, .set_style => blk: {
+    var info = infoFromSort(result_sort);
+    info.object_class = switch (descriptor.op) {
+        .group => "GroupObject",
+        .set_style => blk: {
             const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-            break :blk object_info.object_shape;
+            break :blk object_info.object_class;
         },
-        .rewrite_text => blk: {
-            const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-            break :blk object_info.object_shape;
-        },
-        .highlight => blk: {
-            const base_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-            break :blk if (base_info.object_shape == .unknown) .generic else base_info.object_shape;
-        },
-        .object => inferObjectConstructorShape(env, call),
-        .derive => inferDeriveShape(env, call),
-        else => .generic,
+        .object => inferObjectConstructorClass(ir, env, call),
+        else => null,
     };
-    return .{ .sort = result_sort, .object_shape = shape };
+    if (info.object_class) |class_name| info.ty.class_name = class_name;
+    return info;
 }
 
-fn inferObjectConstructorShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.ObjectShape {
-    if (call.args.items.len < 3) return .generic;
-    const role_name = resolveStringLiteral(env, call.args.items[1]);
-    const payload = if (resolveStringLiteral(env, call.args.items[2])) |text| names.parsePayloadName(text) else null;
-    return property_schema.shapeForNode(role_name, if (payload) |p| p.object_kind else null, if (payload) |p| p.payload_kind else null);
+fn validateCallbackShape(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+    callback_index: usize,
+    selection_info: TypeInfo,
+    fixed_prefix_count: usize,
+    expected_result: ?core.SemanticSort,
+) !void {
+    if (call.args.items.len <= callback_index) return;
+    const callback_name = switch (call.args.items[callback_index]) {
+        .ident => |name| name,
+        else => {
+            try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function", .{});
+            return error.InvalidSemanticSort;
+        },
+    };
+    const callback = functions.get(callback_name) orelse {
+        try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function: {s}", .{callback_name});
+        return error.UnknownFunction;
+    };
+    const extra_count = if (call.args.items.len > callback_index + 1) call.args.items.len - callback_index - 1 else 0;
+    const expected_arg_count = fixed_prefix_count + extra_count;
+    if (expected_arg_count < requiredParamCount(callback) or expected_arg_count > callback.params.items.len) {
+        try addUserReport(ir, origin, "InvalidCallback: callback {s} receives {d} arguments here, but its contract is {d}..{d}", .{
+            callback_name,
+            expected_arg_count,
+            requiredParamCount(callback),
+            callback.params.items.len,
+        });
+        return error.InvalidArity;
+    }
+    const item_type = switch (selection_info.ty.param) {
+        .page => Type.page,
+        .object, .any, .none => Type.object,
+        else => Type.any,
+    };
+    if (fixed_prefix_count == 1) {
+        try ensureType(ir, allocator, infoFromType(callback.params.items[0].ty), item_type, origin, .UnmatchedArgumentType);
+    } else if (fixed_prefix_count == 2) {
+        try ensureType(ir, allocator, infoFromType(callback.params.items[0].ty), Type.string, origin, .UnmatchedArgumentType);
+        try ensureType(ir, allocator, infoFromType(callback.params.items[1].ty), item_type, origin, .UnmatchedArgumentType);
+    }
+    var extra_index: usize = 0;
+    while (extra_index < extra_count) : (extra_index += 1) {
+        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[callback_index + 1 + extra_index], origin);
+        const param_index = fixed_prefix_count + extra_index;
+        try ensureType(ir, allocator, actual, callback.params.items[param_index].ty, origin, .UnmatchedArgumentType);
+    }
+    if (expected_result) |result_sort| {
+        try ensureSort(ir, callback.result_sort, result_sort, origin, .UnmatchedReturnType);
+    }
 }
 
-fn inferDeriveShape(env: *const TypeEnv, call: ast.CallExpr) property_schema.ObjectShape {
-    if (call.args.items.len < 2) return .generic;
-    const name = resolveStringLiteral(env, call.args.items[1]) orelse return .generic;
-    if (std.mem.eql(u8, name, "page_number")) return .page_number;
-    if (std.mem.eql(u8, name, "toc")) return .toc;
-    if (std.mem.eql(u8, name, "rewrite_text")) return .text;
-    if (std.mem.eql(u8, name, "highlight")) return .generic;
-    return .generic;
+fn inferSelectionAlgebraInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+) !TypeInfo {
+    if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+    const left = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    const right = try inferExprInfo(allocator, ir, functions, env, call.args.items[1], origin);
+    try ensureType(ir, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
+    try ensureType(ir, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
+
+    if (left.ty.param != .any and right.ty.param != .any and left.ty.param != right.ty.param) {
+        const left_label = try typeLabelAlloc(allocator, left.ty);
+        defer allocator.free(left_label);
+        const right_label = try typeLabelAlloc(allocator, right.ty);
+        defer allocator.free(right_label);
+        try addUserReport(
+            ir,
+            origin,
+            "InvalidSelectionAlgebra: cannot combine {s} and {s}",
+            .{ left_label, right_label },
+        );
+        return error.InvalidSemanticSort;
+    }
+
+    const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
+    var info = infoFromType(Type.selection(item_tag));
+    info.object_class = mergeObjectClass(left.object_class, right.object_class);
+    if (info.ty.param == .object) info.ty.param_class_name = info.object_class;
+    return info;
+}
+
+fn inferSelectCallInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+) !TypeInfo {
+    if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
+    const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
+    const query = registry.lookupQueryOp(query_name) orelse {
+        try addUserReport(ir, origin, "UnknownQuery: unknown query: {s}", .{query_name});
+        return error.UnknownQuery;
+    };
+    if (call.args.items.len != query.arity) {
+        try addUserReport(ir, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
+        return error.InvalidArity;
+    }
+    const base = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
+    for (query.extra_arg_sorts, 0..) |_, extra_index| {
+        const arg_index = 2 + extra_index;
+        if (arg_index >= call.args.items.len) break;
+        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[arg_index], origin);
+        if (registry.argSortType(query.extra_arg_sorts[extra_index])) |expected| {
+            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        }
+    }
+    var info = infoFromType(registry.queryOutputType(query));
+    info.object_class = inferQueryOutputClass(ir, env, query, call, base);
+    if (info.ty.tag == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
+    return info;
+}
+
+fn inferQueryOutputClass(
+    ir: ?*core.Ir,
+    env: *const TypeEnv,
+    query: registry.QueryDescriptor,
+    call: ast.CallExpr,
+    base: TypeInfo,
+) ?[]const u8 {
+    return switch (query.op) {
+        .self_object => base.object_class,
+        .page_objects_by_role, .document_objects_by_role => blk: {
+            if (call.args.items.len < 3) break :blk null;
+            const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk null;
+            if (ir) |sink| {
+                if (declarations.findRoleClass(sink, role_name)) |class_name| break :blk class_name;
+            }
+            break :blk null;
+        },
+        .children, .descendants, .document_pages, .previous_page, .parent_page => null,
+    };
+}
+
+fn inferObjectConstructorClass(ir: ?*core.Ir, env: *const TypeEnv, call: ast.CallExpr) ?[]const u8 {
+    if (call.args.items.len < 3) return null;
+    const role_name = resolveStringLiteral(env, call.args.items[1]) orelse return null;
+    if (ir) |sink| {
+        if (declarations.findRoleClass(sink, role_name)) |class_name| return class_name;
+    }
+    return null;
 }
 
 fn validateSetPropCall(
@@ -1262,51 +1689,71 @@ fn validateSetPropCall(
         .string => |text| text,
         else => return,
     };
-    const schema = property_schema.lookup(key) orelse {
-        try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{key});
-        return error.InvalidSemanticSort;
-    };
-    const object_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
-    if (!property_schema.isShapeAllowed(schema, object_info.object_shape)) {
+    const target_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
+    if (!isPropertyTarget(target_info)) {
         try addUserReport(
             ir,
             origin,
-            "InvalidProperty: property '{s}' is not valid for {s}",
-            .{ key, property_schema.shapeLabel(object_info.object_shape) },
+            "InvalidProperty: set_prop target must be document, page, object, or selection<object>; got {s}",
+            .{@tagName(target_info.sort)},
         );
         return error.InvalidSemanticSort;
     }
 
     const value_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[2], origin);
-    if (!property_schema.valueMatches(schema, value_info.string_literal, value_info.sort)) {
-        try addUserReport(
-            ir,
-            origin,
-            "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-            .{ key, property_schema.valueTypeLabel(schema.value_type), @tagName(value_info.sort) },
-        );
-        return error.InvalidSemanticSort;
-    }
-}
-
-fn validateLayoutVCall(
-    ir: *core.Ir,
-    call: ast.CallExpr,
-    env: *const TypeEnv,
-    origin: []const u8,
-) !void {
-    if (call.args.items.len < 1) return;
-    const policy = resolveStringLiteral(env, call.args.items[0]) orelse return;
-    if (std.mem.eql(u8, policy, "top") or
-        std.mem.eql(u8, policy, "top_flow") or
-        std.mem.eql(u8, policy, "center") or
-        std.mem.eql(u8, policy, "center_stack"))
-    {
+    if (lookupFieldForTarget(ir, target_info, key)) |field| {
+        try validateFieldValue(ir, field, key, value_info, origin);
         return;
     }
 
-    try addUserReport(ir, origin, "InvalidLayoutPolicy: expected top or center, got {s}", .{policy});
+    try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
     return error.InvalidSemanticSort;
+}
+
+fn isPropertyTarget(info: TypeInfo) bool {
+    return switch (info.ty.tag) {
+        .document, .page, .object => true,
+        .selection => info.ty.param == .object or info.ty.param == .any,
+        else => false,
+    };
+}
+
+fn lookupFieldForTarget(ir: *core.Ir, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
+    if (targetClassForInfo(target_info)) |class_name| {
+        return declarations.findField(ir, class_name, key);
+    }
+    if (target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {
+        return declarations.findFieldByName(ir, key);
+    }
+    return null;
+}
+
+fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
+    return switch (info.ty.tag) {
+        .document => "DocumentObject",
+        .page => "PageObject",
+        .object => info.object_class,
+        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
+        else => null,
+    };
+}
+
+fn validateFieldValue(
+    ir: *core.Ir,
+    field: declarations.FieldDescriptor,
+    key: []const u8,
+    value_info: TypeInfo,
+    origin: []const u8,
+) !void {
+    if (!value_domains.nameMatches(ir, field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
+        try addUserReport(
+            ir,
+            origin,
+            "InvalidFieldValue: field '{s}' expects {s}, got {s}",
+            .{ key, value_domains.nameLabel(ir, field.module_id, field.value_type), @tagName(value_info.sort) },
+        );
+        return error.InvalidSemanticSort;
+    }
 }
 
 fn validatePropertySetStatement(
@@ -1324,27 +1771,13 @@ fn validatePropertySetStatement(
         return error.UnknownIdentifier;
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
-    const schema = property_schema.lookup(property_name) orelse {
-        try addUserReport(ir, origin, "UnknownProperty: unknown property: {s}", .{property_name});
-        return error.InvalidSemanticSort;
-    };
-    if (!property_schema.isShapeAllowed(schema, object_info.object_shape)) {
-        try addUserReport(
-            ir,
-            origin,
-            "InvalidProperty: property '{s}' is not valid for {s}",
-            .{ property_name, property_schema.shapeLabel(object_info.object_shape) },
-        );
-        return error.InvalidSemanticSort;
-    }
     const value_info = try inferExprInfo(allocator, ir, functions, env, value, origin);
-    if (!property_schema.valueMatches(schema, value_info.string_literal, value_info.sort)) {
-        try addUserReport(
-            ir,
-            origin,
-            "InvalidPropertyValue: property '{s}' expects {s}, got {s}",
-            .{ property_name, property_schema.valueTypeLabel(schema.value_type), @tagName(value_info.sort) },
-        );
+    if (ir) |sink| {
+        if (lookupFieldForTarget(sink, object_info, property_name)) |field| {
+            try validateFieldValue(sink, field, property_name, value_info, origin);
+            return;
+        }
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
         return error.InvalidSemanticSort;
     }
 }
@@ -1397,6 +1830,30 @@ fn ensureSort(
     }
 }
 
+fn ensureType(
+    ir: ?*core.Ir,
+    allocator: std.mem.Allocator,
+    actual: TypeInfo,
+    expected: Type,
+    origin: []const u8,
+    code: core.TypeMismatchCode,
+) !void {
+    if (Type.accepts(expected, actual.ty)) return;
+    const expected_sort = expected.toRuntimeSort() orelse actual.sort;
+    if (expected_sort != actual.sort) return ensureSort(ir, actual.sort, expected_sort, origin, code);
+    if (ir) |_| {
+        const actual_label = try typeLabelAlloc(allocator, actual.ty);
+        defer allocator.free(actual_label);
+        const expected_label = try typeLabelAlloc(allocator, expected);
+        defer allocator.free(expected_label);
+        try addUserReport(ir, origin, "TypeMismatch: expected {s}, got {s}", .{ expected_label, actual_label });
+    }
+    return error.InvalidSemanticSort;
+}
+
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
+    if (diagnostic_origin_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_origin_path, span.start, span.end });
+    }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }

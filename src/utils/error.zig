@@ -11,6 +11,11 @@ pub const ByteSpan = struct {
     end: usize,
 };
 
+pub const LocatedOrigin = struct {
+    path: ?[]const u8,
+    span: ByteSpan,
+};
+
 pub const Location = struct {
     line: usize,
     column: usize,
@@ -40,6 +45,20 @@ pub fn parseByteOrigin(origin: []const u8) ?ByteSpan {
     return .{ .start = start, .end = end };
 }
 
+pub fn parseLocatedOrigin(origin: []const u8) ?LocatedOrigin {
+    if (parseByteOrigin(origin)) |span| {
+        return .{ .path = null, .span = span };
+    }
+    if (!std.mem.startsWith(u8, origin, "path:")) return null;
+    const marker = std.mem.lastIndexOf(u8, origin, ":bytes:") orelse return null;
+    const bytes_text = origin[marker + 1 ..];
+    const span = parseByteOrigin(bytes_text) orelse return null;
+    return .{
+        .path = origin["path:".len..marker],
+        .span = span,
+    };
+}
+
 pub fn computeLineColumn(source: []const u8, byte_index: usize) Location {
     var line: usize = 1;
     var line_start: usize = 0;
@@ -58,7 +77,8 @@ pub fn computeLineColumn(source: []const u8, byte_index: usize) Location {
 
 pub fn spanFromOrigin(origin: ?[]const u8) ?ByteSpan {
     const text = origin orelse return null;
-    return parseByteOrigin(text);
+    const located = parseLocatedOrigin(text) orelse return null;
+    return located.span;
 }
 
 pub fn print(report: SourceReport) void {
@@ -102,6 +122,61 @@ pub fn printLabeledOrigin(source: []const u8, label: []const u8, origin: ?[]cons
     printExcerpt(source, span, .note, label, 0);
 }
 
+fn sourceForLocatedOrigin(
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    located: LocatedOrigin,
+) struct { path: []const u8, source: []const u8 } {
+    if (located.path) |origin_path| {
+        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+            return .{
+                .path = module.path orelse module.spec,
+                .source = module.source,
+            };
+        }
+        return .{ .path = origin_path, .source = default_source };
+    }
+    return .{ .path = default_path, .source = default_source };
+}
+
+fn printLocatedOrigin(
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    severity: Severity,
+    message: []const u8,
+    origin: []const u8,
+) void {
+    const located = parseLocatedOrigin(origin) orelse return;
+    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    print(.{
+        .path = resolved.path,
+        .source = resolved.source,
+        .severity = severity,
+        .message = message,
+        .span = located.span,
+    });
+}
+
+fn printLabeledLocatedOrigin(
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    label: []const u8,
+    origin: ?[]const u8,
+) void {
+    const origin_text = origin orelse return;
+    const located = parseLocatedOrigin(origin_text) orelse return;
+    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    const loc = computeLineColumn(resolved.source, located.span.start);
+    printDim();
+    std.debug.print("  {s} from {s}:{d}:{d}", .{ label, resolved.path, loc.line, loc.column });
+    printReset();
+    std.debug.print("\n", .{});
+    printExcerpt(resolved.source, located.span, .note, label, 0);
+}
+
 pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diagnostic: anytype) void {
     const parsed_diagnostic = diagnostic orelse {
         var message_buf: [128]u8 = undefined;
@@ -129,15 +204,28 @@ pub fn printIrDiagnostics(path: []const u8, source: []const u8, ir: anytype) voi
     for (ir.diagnostics.items) |diagnostic| {
         const message = formatIrDiagnostic(ir.allocator, diagnostic) catch @tagName(diagnostic.phase);
         defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) ir.allocator.free(message);
-        const span = if (spanFromOrigin(diagnostic.origin)) |origin_span|
-            origin_span
+        var report_path = path;
+        var report_source = source;
+        const located = if (diagnostic.origin) |origin|
+            parseLocatedOrigin(origin)
         else if (diagnostic.node_id) |node_id| blk: {
             const node = ir.getNode(node_id) orelse break :blk null;
-            break :blk spanFromOrigin(node.origin);
+            break :blk if (node.origin) |origin| parseLocatedOrigin(origin) else null;
+        } else null;
+        const span = if (located) |origin| blk: {
+            if (origin.path) |origin_path| {
+                if (ir.moduleByPathOrSpec(origin_path)) |module| {
+                    report_path = module.path orelse module.spec;
+                    report_source = module.source;
+                } else {
+                    report_path = origin_path;
+                }
+            }
+            break :blk origin.span;
         } else null;
         print(.{
-            .path = path,
-            .source = source,
+            .path = report_path,
+            .source = report_source,
             .severity = switch (diagnostic.severity) {
                 .warning => .warning,
                 .@"error" => .@"error",
@@ -179,16 +267,10 @@ pub fn printConstraintFailure(
     defer if (existing_text.len > 0) ir.allocator.free(existing_text);
 
     if (failure.constraint.origin) |origin| {
-        if (parseByteOrigin(origin)) |span| {
-            print(.{
-                .path = path,
-                .source = source,
-                .severity = .@"error",
-                .message = kind_text,
-                .span = span,
-            });
+        if (parseLocatedOrigin(origin) != null) {
+            printLocatedOrigin(path, source, ir, .@"error", kind_text, origin);
             if (failure.existing_constraint != null) {
-                printLabeledOrigin(source, "other constraint", failure.existing_constraint.?.origin);
+                printLabeledLocatedOrigin(path, source, ir, "other constraint", failure.existing_constraint.?.origin);
             }
             if (constraint_text.len > 0 and existing_text.len == 0) {
                 std.debug.print("  constraint: {s}\n", .{constraint_text});
@@ -203,11 +285,11 @@ pub fn printConstraintFailure(
         std.debug.print("{s}\n", .{kind_text});
     }
     if (failure.existing_constraint != null) {
-        printLabeledOrigin(source, "other constraint", failure.existing_constraint.?.origin);
+        printLabeledLocatedOrigin(path, source, ir, "other constraint", failure.existing_constraint.?.origin);
     }
     if (constraint_text.len > 0 and existing_text.len == 0) {
         std.debug.print("  constraint: {s}\n", .{constraint_text});
-        printLabeledOrigin(source, "constraint", failure.constraint.origin);
+        printLabeledLocatedOrigin(path, source, ir, "constraint", failure.constraint.origin);
     }
 }
 
@@ -215,7 +297,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
     return switch (err) {
         error.UnknownFunction,
         error.UnknownQuery,
-        error.UnknownTransform,
         error.UnknownIdentifier,
         error.ExpectedString,
         error.ExpectedIdentifier,
@@ -250,7 +331,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownRole,
         error.UnknownPayloadKind,
         error.PageCannotBeConstraintTarget,
-        error.MissingHighlightTarget,
         error.UnsupportedFragmentRoot,
         error.FunctionDidNotReturnValue,
         error.ConstraintConflict,

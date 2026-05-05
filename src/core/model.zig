@@ -14,7 +14,6 @@ pub const NodeKind = enum {
     document,
     page,
     object,
-    derived,
 };
 
 pub const ObjectKind = enum {
@@ -122,7 +121,6 @@ pub const Node = struct {
     payload_kind: ?PayloadKind = null,
     content: ?[]const u8 = null,
     page_index: ?usize = null,
-    derived_from: ?NodeId = null,
     origin: ?[]const u8 = null,
     properties: std.ArrayList(Property) = .empty,
     frame: Frame = .{},
@@ -182,6 +180,18 @@ pub const Selection = struct {
     pub fn first(self: Selection) ?NodeId {
         if (self.ids.items.len == 0) return null;
         return self.ids.items[0];
+    }
+
+    pub fn contains(self: Selection, id: NodeId) bool {
+        for (self.ids.items) |existing| {
+            if (existing == id) return true;
+        }
+        return false;
+    }
+
+    pub fn appendUnique(self: *Selection, allocator: Allocator, id: NodeId) !void {
+        if (self.contains(id)) return;
+        try self.ids.append(allocator, id);
     }
 };
 
@@ -336,8 +346,6 @@ pub const PageLayout = struct {
     pub const height: f32 = 720;
     pub const flow_margin_x: f32 = 60;
     pub const flow_top: f32 = 660;
-    pub const page_number_right_inset: f32 = 24;
-    pub const page_number_bottom_inset: f32 = 20;
     pub const content_indent: f32 = 18;
     pub const max_visual_width: f32 = 1160;
     pub const default_asset_width: f32 = 220;
@@ -452,6 +460,8 @@ pub const Query = struct {
         self_object: void,
         previous_page: void,
         parent_page: void,
+        children: void,
+        descendants: void,
         page_objects_by_role: Role,
         document_objects_by_role: Role,
         document_pages: void,
@@ -484,6 +494,24 @@ pub const Query = struct {
         };
     }
 
+    pub fn children() Query {
+        return .{
+            .input = .object,
+            .output = .selection,
+            .name = "children",
+            .op = .{ .children = {} },
+        };
+    }
+
+    pub fn descendants() Query {
+        return .{
+            .input = .object,
+            .output = .selection,
+            .name = "descendants",
+            .op = .{ .descendants = {} },
+        };
+    }
+
     pub fn pageObjectsByRole(role: Role) Query {
         return .{
             .input = .page,
@@ -508,56 +536,6 @@ pub const Query = struct {
             .output = .selection,
             .name = "document-pages",
             .op = .{ .document_pages = {} },
-        };
-    }
-};
-
-pub const Transform = struct {
-    input: SemanticSort,
-    name: []const u8,
-    op: Op,
-
-    pub const Op = union(enum) {
-        rewrite_text: struct {
-            old: []const u8,
-            new: []const u8,
-        },
-        highlight: struct {
-            note: []const u8,
-        },
-        page_number: void,
-        toc: void,
-    };
-
-    pub fn rewriteText(old: []const u8, new: []const u8) Transform {
-        return .{
-            .input = .object,
-            .name = "rewrite-text",
-            .op = .{ .rewrite_text = .{ .old = old, .new = new } },
-        };
-    }
-
-    pub fn highlight(note: []const u8) Transform {
-        return .{
-            .input = .selection,
-            .name = "highlight",
-            .op = .{ .highlight = .{ .note = note } },
-        };
-    }
-
-    pub fn pageNumber() Transform {
-        return .{
-            .input = .page,
-            .name = "page-number",
-            .op = .{ .page_number = {} },
-        };
-    }
-
-    pub fn toc() Transform {
-        return .{
-            .input = .document,
-            .name = "toc",
-            .op = .{ .toc = {} },
         };
     }
 };

@@ -1,13 +1,14 @@
 const std = @import("std");
 const core = @import("core");
 const builtin = @import("builtin.zig");
+const doc = @import("doc.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 const fs_utils = utils.fs;
 const ast = @import("ast");
-const names = @import("names.zig");
-const registry = @import("registry.zig");
-const typecheck = @import("typecheck.zig");
+const names = @import("../language/names.zig");
+const registry = @import("../language/registry.zig");
+const typecheck = @import("../analysis/typecheck.zig");
 
 const Program = ast.Program;
 const FunctionDecl = ast.FunctionDecl;
@@ -24,6 +25,11 @@ const ExecFlow = union(enum) {
 const EvalMode = union(enum) {
     attached,
     detached: *DetachedBuilder,
+};
+
+const EvalContext = enum {
+    document,
+    page,
 };
 
 const DetachedBuilder = struct {
@@ -105,10 +111,6 @@ fn reportUnknownQuery(name: []const u8, origin: []const u8) void {
     reportNamedResolutionError(error.UnknownQuery, "query", name, origin);
 }
 
-fn reportUnknownTransform(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError(error.UnknownTransform, "transform", name, origin);
-}
-
 fn reportUnknownIdentifier(name: []const u8, origin: []const u8) void {
     reportNamedResolutionError(error.UnknownIdentifier, "identifier", name, origin);
 }
@@ -159,7 +161,6 @@ fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
 fn unknownNameCode(kind: []const u8) []const u8 {
     if (std.mem.eql(u8, kind, "function")) return "UnknownFunction";
     if (std.mem.eql(u8, kind, "query")) return "UnknownQuery";
-    if (std.mem.eql(u8, kind, "transform")) return "UnknownTransform";
     if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
     if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
     if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
@@ -181,28 +182,49 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.ExpectedStyleArgument => "ExpectedStyleArgument: expected a style argument",
         error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
         error.ExpectedObject => "ExpectedObject: expected an object argument",
+        error.NoCurrentPage => "NoCurrentPage: this operation is only valid inside a page block",
         error.UnknownAnchor => "UnknownAnchor: unknown anchor",
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
-        error.MissingHighlightTarget => "MissingHighlightTarget: highlight needs a previous code-like object",
         error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => @errorName(err),
     };
 }
 
-pub fn executeProgramIntoIr(ir: *core.Ir) !void {
-    return executeProgram(ir.projectProgram(), ir.projectSource(), ir.projectPath(), ir, &ir.functions);
+pub fn elaborateProgram(
+    allocator: std.mem.Allocator,
+    asset_base_dir: []const u8,
+    program: Program,
+    source: []const u8,
+    path: []const u8,
+    functions: *const std.StringHashMap(FunctionDecl),
+) !doc.Document {
+    var document = try doc.Document.init(allocator, asset_base_dir);
+    errdefer document.deinit();
+    try executeProgram(program, source, path, &document, functions);
+    return document;
 }
 
-pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *core.Ir, io: std.Io) !void {
+pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Document {
+    var document = try doc.Document.init(allocator, ir.asset_base_dir);
+    errdefer document.deinit();
+
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        try executeProgram(module.program, module.source, module.path orelse module.spec, &document, &ir.functions);
+    }
+    return document;
+}
+
+pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *doc.Document, io: std.Io) !void {
     diagnostic_source = source;
     diagnostic_path = "";
     return executeProgramWithPath(program, source, "", ir, io);
 }
 
-pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *core.Ir, io: std.Io) !void {
+pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *doc.Document, io: std.Io) !void {
     diagnostic_source = source;
     diagnostic_path = path;
     diagnostic_reported = false;
@@ -215,7 +237,7 @@ pub fn executeProgramWithIndex(
     program: Program,
     source: []const u8,
     path: []const u8,
-    ir: *core.Ir,
+    ir: *doc.Document,
     index: *const typecheck.ProgramIndex,
 ) !void {
     return executeProgram(program, source, path, ir, &index.functions);
@@ -225,12 +247,31 @@ pub fn executeProgram(
     program: Program,
     source: []const u8,
     path: []const u8,
-    ir: *core.Ir,
+    ir: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
     diagnostic_source = source;
     diagnostic_path = path;
     diagnostic_reported = false;
+
+    var document_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer document_env.deinit();
+    var document_last_code_like: ?core.NodeId = null;
+    for (program.document_statements.items) |stmt| {
+        const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, &document_last_code_like, stmt, null) catch |err| {
+            const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
+            if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+            return err;
+        };
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                var owned = value;
+                owned.deinit(ir.allocator);
+                return error.ReturnOutsideFunction;
+            },
+        }
+    }
 
     for (program.pages.items) |page| {
         const page_id = try ir.addPage(page.name);
@@ -239,7 +280,7 @@ pub fn executeProgram(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            const flow = executeStatement(ir, page_id, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
+            const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
                 const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
                 if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
                 return err;
@@ -257,8 +298,9 @@ pub fn executeProgram(
 }
 
 fn evalExpr(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -270,24 +312,26 @@ fn evalExpr(
             if (env.get(name)) |value| break :blk value;
             if (functions.get(name)) |func| {
                 if (func.kind == .constant) {
-                    break :blk try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, .{
+                    break :blk try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, .{
                         .name = name,
                         .args = std.ArrayList(Expr).empty,
                     });
                 }
+                break :blk .{ .function = try typecheck.functionRefFor(ir.allocator, func) };
             }
             reportUnknownIdentifier(name, current_origin);
             break :blk error.UnknownIdentifier;
         },
         .string => |text| .{ .string = text },
         .number => |value| .{ .number = value },
-        .call => |call| try evalCall(ir, page_id, mode, env, functions, current_origin, call),
+        .call => |call| try evalCall(ir, page_id, context, mode, env, functions, current_origin, call),
     };
 }
 
 fn evalCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -303,7 +347,7 @@ fn evalCall(
                     return error.UnknownFunction;
                 };
                 try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
-                return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
+                return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
             },
             else => {},
         }
@@ -314,18 +358,19 @@ fn evalCall(
             return error.UnknownFunction;
         }
         if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
-        return try invokeUserFunctionValue(ir, page_id, mode, env, functions, func, current_origin, call);
+        return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
     }
     if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
-        return try evalPrimitiveCall(ir, page_id, mode, env, functions, current_origin, call, descriptor);
+        return try evalPrimitiveCall(ir, page_id, context, mode, env, functions, current_origin, call, descriptor);
     }
     reportUnknownFunction(call.name, current_origin);
     return error.UnknownFunction;
 }
 
 const BuiltinContext = struct {
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    eval_context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -335,7 +380,8 @@ const BuiltinContext = struct {
         try validateArityRange(actual, min, max, self.current_origin);
     }
 
-    pub fn currentPageValue(self: *const BuiltinContext) core.Value {
+    pub fn currentPageValue(self: *const BuiltinContext) !core.Value {
+        if (self.eval_context != .page) return error.NoCurrentPage;
         return .{ .page = self.page_id };
     }
 
@@ -344,19 +390,15 @@ const BuiltinContext = struct {
     }
 
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        return try evalSelectCall(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call);
-    }
-
-    pub fn runDeriveCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        return try evalDeriveCall(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call);
+        return try evalSelectCall(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call);
     }
 
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
-        return try evalExpr(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, expr);
+        return try evalExpr(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, expr);
     }
 
     pub fn evalStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
-        return try evalCallStringArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallStringArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalPropertyStringArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror![]const u8 {
@@ -364,27 +406,27 @@ const BuiltinContext = struct {
     }
 
     pub fn evalNumberArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!f32 {
-        return try evalCallNumberArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallNumberArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalObjectArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.NodeId {
-        return try evalCallObjectArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallObjectArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalAnchorArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.AnchorValue {
-        return try evalCallAnchorArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallAnchorArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalRoleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.Role {
-        return try evalCallRoleArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallRoleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalPayloadArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!names.ParsedPayload {
-        return try evalCallPayloadArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallPayloadArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn evalStyleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.StyleRef {
-        return try evalCallStyleArg(self.ir, self.page_id, self.mode, self.env, self.functions, self.current_origin, call, index);
+        return try evalCallStyleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
     }
 
     pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
@@ -407,10 +449,6 @@ const BuiltinContext = struct {
         return .{ .anchor = .{ .page = anchor } };
     }
 
-    pub fn select(self: *BuiltinContext, base: core.Value, query: core.Query) !core.Value {
-        return try self.ir.select(self.ir.allocator, base, query);
-    }
-
     pub fn makeObject(
         self: *BuiltinContext,
         role_name: []const u8,
@@ -419,6 +457,7 @@ const BuiltinContext = struct {
         payload_kind: core.PayloadKind,
         content: []const u8,
     ) !core.NodeId {
+        if (self.eval_context != .page) return error.NoCurrentPage;
         return switch (self.mode) {
             .attached => try self.ir.makeObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin),
             .detached => |builder| blk: {
@@ -430,6 +469,7 @@ const BuiltinContext = struct {
     }
 
     pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
+        if (self.eval_context != .page) return error.NoCurrentPage;
         return switch (self.mode) {
             .attached => try self.ir.makeGroupWithOrigin(self.page_id, true, child_ids, self.current_origin),
             .detached => |builder| blk: {
@@ -440,68 +480,37 @@ const BuiltinContext = struct {
         };
     }
 
-    pub fn deriveFromPage(self: *BuiltinContext, transform: core.Transform) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.deriveWithOrigin(self.page_id, .{ .page = self.page_id }, transform, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, .{ .page = self.page_id }, transform, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
-    }
-
-    pub fn deriveFromDocument(self: *BuiltinContext, transform: core.Transform) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.deriveWithOrigin(self.page_id, .{ .document = self.ir.document_id }, transform, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, .{ .document = self.ir.document_id }, transform, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
-    }
-
-    pub fn deriveFromBase(self: *BuiltinContext, base: core.Value, transform: core.Transform) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.deriveWithOrigin(self.page_id, base, transform, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.deriveDetachedWithOrigin(self.page_id, base, transform, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
-    }
-
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
         try self.ir.setNodeProperty(object_id, key, value);
     }
 
-    pub fn setCurrentPageProperty(self: *BuiltinContext, key: []const u8, value: []const u8) !void {
-        try self.ir.setNodeProperty(self.page_id, key, value);
+    pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
+        const func = self.functions.get(function.name) orelse {
+            reportUnknownFunction(function.name, self.current_origin);
+            return error.UnknownFunction;
+        };
+        return try invokeUserFunctionValues(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, func, self.current_origin, args);
     }
 
-    pub fn setAllPageProperty(self: *BuiltinContext, key: []const u8, value: []const u8) !void {
-        try self.ir.setAllPageProperty(key, value);
+    pub fn pageIndex(self: *BuiltinContext, page_id: core.NodeId) usize {
+        return self.ir.pageIndexOf(page_id);
     }
 
-    pub fn buildHighlight(self: *BuiltinContext, base: core.Value, note: []const u8) !core.NodeId {
-        return try deriveHighlight(self.ir, self.page_id, self.mode, self.current_origin, base, note);
+    pub fn pageCount(self: *BuiltinContext) usize {
+        return self.ir.pageCount();
     }
 
-    pub fn oneConstraintSet(self: *BuiltinContext, constraint: core.Constraint) !core.ConstraintSet {
-        return try singleConstraintSet(self.ir, constraint);
+    pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
+        const node = self.ir.getNode(object_id) orelse return null;
+        return node.content;
     }
 
-    pub fn anchorConstraintSet(
-        self: *BuiltinContext,
-        target_node: core.NodeId,
-        target_anchor: core.Anchor,
-        source_node: core.NodeId,
-        source_anchor: core.Anchor,
-        offset: f32,
-    ) !core.ConstraintSet {
-        return try nodeAnchorConstraintSet(self.ir, target_node, target_anchor, source_node, source_anchor, offset, self.current_origin);
+    pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
+        try self.ir.setNodeContent(object_id, text);
+    }
+
+    pub fn appendNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
+        try self.ir.appendNodeContent(object_id, text);
     }
 
     pub fn equalAnchorConstraintSet(
@@ -523,8 +532,9 @@ const BuiltinContext = struct {
 };
 
 fn evalPrimitiveCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -535,6 +545,7 @@ fn evalPrimitiveCall(
     var ctx = BuiltinContext{
         .ir = ir,
         .page_id = page_id,
+        .eval_context = context,
         .mode = mode,
         .env = env,
         .functions = functions,
@@ -544,7 +555,7 @@ fn evalPrimitiveCall(
 }
 
 fn emitUserReport(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
     origin: []const u8,
     severity: core.DiagnosticSeverity,
@@ -559,7 +570,7 @@ fn emitUserReport(
     );
 }
 
-fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+fn validateAssetExists(ir: *doc.Document, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
     const node = ir.getNode(object_id) orelse return error.UnknownNode;
     if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
         try ir.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
@@ -591,17 +602,17 @@ fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeI
     }
 }
 
-fn attachIntrinsicImageSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+fn attachIntrinsicImageSize(ir: *doc.Document, object_id: core.NodeId, resolved_path: []const u8) !void {
     const dimensions = fs_utils.readImageDimensions(ir.allocator, resolved_path) catch return;
     try attachIntrinsicAssetSize(ir, object_id, dimensions);
 }
 
-fn attachIntrinsicPdfSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+fn attachIntrinsicPdfSize(ir: *doc.Document, object_id: core.NodeId, resolved_path: []const u8) !void {
     const dimensions = fs_utils.readPdfDimensions(ir.allocator, resolved_path) catch return;
     try attachIntrinsicAssetSize(ir, object_id, dimensions);
 }
 
-fn attachIntrinsicAssetSize(ir: *core.Ir, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
+fn attachIntrinsicAssetSize(ir: *doc.Document, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
     const fitted = fitSize(
         dimensions.width,
         dimensions.height,
@@ -628,16 +639,17 @@ fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requeste
 }
 
 fn evalSelectCall(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[0]));
-    const op_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 1);
+    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[0]));
+    const op_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 1);
     const descriptor = registry.lookupQueryOp(op_name) orelse {
         reportUnknownQuery(op_name, current_origin);
         return error.UnknownQuery;
@@ -654,109 +666,24 @@ fn evalSelectCall(
         .parent_page => {
             return try ir.select(ir.allocator, base, core.Query.parentPage());
         },
+        .children => {
+            return try ir.select(ir.allocator, base, core.Query.children());
+        },
+        .descendants => {
+            return try ir.select(ir.allocator, base, core.Query.descendants());
+        },
         .document_pages => {
             return try ir.select(ir.allocator, base, core.Query.documentPages());
         },
         .page_objects_by_role => {
-            const role = try evalCallRoleArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            const role = try evalCallRoleArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
             return try ir.select(ir.allocator, base, core.Query.pageObjectsByRole(role));
         },
         .document_objects_by_role => {
-            const role = try evalCallRoleArg(ir, page_id, mode, env, functions, current_origin, call, 2);
+            const role = try evalCallRoleArg(ir, page_id, context, mode, env, functions, current_origin, call, 2);
             return try ir.select(ir.allocator, base, core.Query.documentObjectsByRole(role));
         },
     }
-}
-
-fn evalDeriveCall(
-    ir: *core.Ir,
-    page_id: core.NodeId,
-    mode: EvalMode,
-    env: *std.StringHashMap(core.Value),
-    functions: *const std.StringHashMap(FunctionDecl),
-    current_origin: []const u8,
-    call: CallExpr,
-) anyerror!core.Value {
-    const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[0]));
-    const op_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 1);
-    const descriptor = registry.lookupTransformOp(op_name) orelse {
-        reportUnknownTransform(op_name, current_origin);
-        return error.UnknownTransform;
-    };
-    try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
-    if (descriptor.input_sort) |expected| try typecheck.ensureValueSortWithCode(ir, null, base, expected, current_origin, .UnmatchedInputType);
-    switch (descriptor.op) {
-        .page_number => {
-            return .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.pageNumber(), current_origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.pageNumber(), current_origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-        },
-        .toc => {
-            return .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.toc(), current_origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.toc(), current_origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-        },
-        .rewrite_text => {
-            const old = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
-            const new = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 3);
-            return .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.rewriteText(old, new), current_origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-        },
-        .highlight => {
-            const note = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
-            return .{ .object = try deriveHighlight(ir, page_id, mode, current_origin, base, note) };
-        },
-    }
-}
-
-fn deriveHighlight(
-    ir: *core.Ir,
-    page_id: core.NodeId,
-    mode: EvalMode,
-    current_origin: []const u8,
-    base: core.Value,
-    note: []const u8,
-) !core.NodeId {
-    return switch (base) {
-        .object => |id| blk: {
-            const selection = try ir.select(ir.allocator, .{ .object = id }, core.Query.selfObject());
-            break :blk switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, selection, core.Transform.highlight(note), current_origin),
-                .detached => |builder| blk2: {
-                    const derived = try ir.deriveDetachedWithOrigin(page_id, selection, core.Transform.highlight(note), current_origin);
-                    try builder.trackNode(ir.allocator, derived);
-                    break :blk2 derived;
-                },
-            };
-        },
-        .selection => blk: {
-            break :blk switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.highlight(note), current_origin),
-                .detached => |builder| blk2: {
-                    const derived = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.highlight(note), current_origin);
-                    try builder.trackNode(ir.allocator, derived);
-                    break :blk2 derived;
-                },
-            };
-        },
-        else => return error.ExpectedObject,
-    };
 }
 
 fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void {
@@ -795,8 +722,9 @@ fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8)
 }
 
 fn bindUserFunctionArgs(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     caller_env: *std.StringHashMap(core.Value),
     local_env: *std.StringHashMap(core.Value),
@@ -807,12 +735,37 @@ fn bindUserFunctionArgs(
 ) !void {
     for (func.params.items, 0..) |param, index| {
         const value = if (index < call.args.items.len)
-            try evalExpr(ir, page_id, mode, caller_env, functions, current_origin, call.args.items[index])
+            try evalExpr(ir, page_id, context, mode, caller_env, functions, current_origin, call.args.items[index])
         else
-            try evalExpr(ir, page_id, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
+            try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
         try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
+}
+
+fn bindUserFunctionValueArgs(
+    ir: *doc.Document,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    caller_env: *std.StringHashMap(core.Value),
+    local_env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    func: FunctionDecl,
+    current_origin: []const u8,
+    args: []const core.Value,
+) !void {
+    const min = typecheck.requiredParamCount(func);
+    if (args.len < min or args.len > func.params.items.len) return error.InvalidArity;
+    for (func.params.items, 0..) |param, index| {
+        const value = if (index < args.len)
+            args[index]
+        else
+            try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
+        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try local_env.put(param.name, value);
+    }
+    _ = caller_env;
 }
 
 fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.Value {
@@ -836,7 +789,7 @@ fn fragmentRootCloneFromFragment(allocator: std.mem.Allocator, fragment: *const 
     return try root.clone(allocator);
 }
 
-fn normalizeForUse(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.Value {
+fn normalizeForUse(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.Value {
     return switch (value) {
         .fragment => |fragment| switch (mode) {
             .attached => blk: {
@@ -888,7 +841,7 @@ fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
     };
 }
 
-fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.NodeId {
+fn resolveValueObjectId(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.NodeId {
     return switch (try normalizeForUse(ir, mode, value)) {
         .object => |id| id,
         else => return error.ExpectedObject,
@@ -896,8 +849,9 @@ fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.N
 }
 
 fn evalCallArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -905,12 +859,13 @@ fn evalCallArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.Value {
-    return try evalExpr(ir, page_id, mode, env, functions, current_origin, call.args.items[index]);
+    return try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[index]);
 }
 
 fn evalCallStringArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -918,12 +873,13 @@ fn evalCallStringArg(
     call: CallExpr,
     index: usize,
 ) anyerror![]const u8 {
-    return try resolveValueString(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueString(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallNumberArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -931,12 +887,13 @@ fn evalCallNumberArg(
     call: CallExpr,
     index: usize,
 ) anyerror!f32 {
-    return try resolveValueNumber(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueNumber(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallObjectArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -944,12 +901,13 @@ fn evalCallObjectArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.NodeId {
-    return try resolveValueObjectId(ir, mode, try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueObjectId(ir, mode, try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallAnchorArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -957,12 +915,13 @@ fn evalCallAnchorArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.AnchorValue {
-    return try resolveValueAnchor(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueAnchor(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallStyleArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -970,12 +929,13 @@ fn evalCallStyleArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.StyleRef {
-    return try resolveValueStyle(try evalCallArg(ir, page_id, mode, env, functions, current_origin, call, index));
+    return try resolveValueStyle(try evalCallArg(ir, page_id, context, mode, env, functions, current_origin, call, index));
 }
 
 fn evalCallRoleArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -983,7 +943,7 @@ fn evalCallRoleArg(
     call: CallExpr,
     index: usize,
 ) anyerror!core.Role {
-    const role_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, index);
+    const role_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, index);
     return names.parseRoleName(role_name) orelse {
         reportNamedResolutionError(error.UnknownRole, "role", role_name, current_origin);
         return error.UnknownRole;
@@ -991,8 +951,9 @@ fn evalCallRoleArg(
 }
 
 fn evalCallPayloadArg(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1000,40 +961,22 @@ fn evalCallPayloadArg(
     call: CallExpr,
     index: usize,
 ) anyerror!names.ParsedPayload {
-    const payload_name = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, index);
+    const payload_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, index);
     return names.parsePayloadName(payload_name) orelse {
         reportNamedResolutionError(error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
         return error.UnknownPayloadKind;
     };
 }
 
-fn singleConstraintSet(ir: *core.Ir, constraint: core.Constraint) !core.ConstraintSet {
+fn singleConstraintSet(ir: *doc.Document, constraint: core.Constraint) !core.ConstraintSet {
     var bundle = core.ConstraintSet.init();
     errdefer bundle.deinit(ir.allocator);
     try bundle.items.append(ir.allocator, constraint);
     return bundle;
 }
 
-fn nodeAnchorConstraintSet(
-    ir: *core.Ir,
-    target_node: core.NodeId,
-    target_anchor: core.Anchor,
-    source_node: core.NodeId,
-    source_anchor: core.Anchor,
-    offset: f32,
-    origin: []const u8,
-) !core.ConstraintSet {
-    return try singleConstraintSet(ir, .{
-        .target_node = target_node,
-        .target_anchor = target_anchor,
-        .source = .{ .node = .{ .node_id = source_node, .anchor = source_anchor } },
-        .offset = offset,
-        .origin = origin,
-    });
-}
-
 fn anchorEqualityConstraintSet(
-    ir: *core.Ir,
+    ir: *doc.Document,
     target: core.AnchorValue,
     source: core.AnchorValue,
     offset: f32,
@@ -1057,8 +1000,9 @@ const ResolvedTarget = struct {
 };
 
 fn executeStatement(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1068,38 +1012,8 @@ fn executeStatement(
 ) anyerror!ExecFlow {
     const origin = if (origin_override) |override| override else try statementOrigin(ir.allocator, stmt.span);
     switch (stmt.kind) {
-        .title => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "title", "title", .text, .text, text, origin),
-        .subtitle => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "subtitle", "subtitle", .text, .text, text, origin),
-        .math => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "math", "math", .source, .math_text, text, origin),
-        .mathtex => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "mathtex", "math", .asset, .math_tex, text, origin),
-        .figure => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "figure", "figure", .source, .figure_text, text, origin),
-        .image => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "image", "figure", .asset, .image_ref, text, origin),
-        .pdf_ref => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "pdf", "figure", .asset, .pdf_ref, text, origin),
-        .code => |text| last_code_like.* = try makeLegacyNode(ir, page_id, mode, "code", "code", .source, .code, text, origin),
-        .page_number => {
-            const value: core.Value = .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, .{ .page = page_id }, core.Transform.pageNumber(), origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, .{ .page = page_id }, core.Transform.pageNumber(), origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-            try materializeStatementValue(ir, mode, last_code_like, value);
-        },
-        .toc => {
-            const value: core.Value = .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, .{ .document = ir.document_id }, core.Transform.toc(), origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, .{ .document = ir.document_id }, core.Transform.toc(), origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-            try materializeStatementValue(ir, mode, last_code_like, value);
-        },
         .let_binding => |binding| {
-            const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
             switch (mode) {
                 .attached => try materializeStatementValue(ir, mode, last_code_like, value),
                 .detached => {},
@@ -1107,11 +1021,12 @@ fn executeStatement(
             try env.put(binding.name, value);
         },
         .bind_binding => |binding| {
+            if (context != .page) return error.NoCurrentPage;
             switch (mode) {
                 .attached => {
                     var builder = DetachedBuilder.init(page_id);
                     errdefer builder.deinit(ir.allocator);
-                    const value = try evalExpr(ir, page_id, .{ .detached = &builder }, env, functions, origin, binding.expr);
+                    const value = try evalExpr(ir, page_id, context, .{ .detached = &builder }, env, functions, origin, binding.expr);
                     switch (value) {
                         .fragment => {
                             if (builder.isEmpty()) {
@@ -1132,19 +1047,19 @@ fn executeStatement(
                     }
                 },
                 .detached => {
-                    const value = try evalExpr(ir, page_id, mode, env, functions, origin, binding.expr);
+                    const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
                     try env.put(binding.name, value);
                 },
             }
         },
         .return_expr => |expr| {
-            const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
             return .{ .returned = value };
         },
         .property_set => |property_set| {
             const base = env.get(property_set.object_name) orelse return error.UnknownIdentifier;
             const object_id = try resolveValueObjectId(ir, mode, base);
-            const value = try evalExpr(ir, page_id, mode, env, functions, origin, property_set.value);
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, property_set.value);
             defer {
                 var owned = value;
                 owned.deinit(ir.allocator);
@@ -1154,10 +1069,11 @@ fn executeStatement(
             try ir.setNodeProperty(object_id, property_set.property_name, text);
         },
         .constrain => |decl| {
+            if (context != .page) return error.NoCurrentPage;
             const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
             const source = try resolveAnchorRef(ir, mode, env, origin, decl.source, false);
             const offset: f32 = if (decl.offset) |expr| blk: {
-                const value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
                 break :blk try resolveValueNumber(value);
             } else 0;
             switch (mode) {
@@ -1173,30 +1089,24 @@ fn executeStatement(
         .expr_stmt => |expr| switch (expr) {
             .call => |call| {
                 if (functions.contains(call.name)) {
-                    try executeCallStatement(ir, page_id, mode, env, functions, last_code_like, origin, call);
+                    try executeCallStatement(ir, page_id, context, mode, env, functions, last_code_like, origin, call);
                 } else {
-                    var value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                    var value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
                     defer value.deinit(ir.allocator);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
             },
             else => {
-                var value = try evalExpr(ir, page_id, mode, env, functions, origin, expr);
+                var value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
                 defer value.deinit(ir.allocator);
                 try materializeStatementValue(ir, mode, last_code_like, value);
             },
-        },
-        .highlight => |note| {
-            const target = last_code_like.* orelse return error.MissingHighlightTarget;
-            var selection = try ir.select(ir.allocator, .{ .object = target }, core.Query.selfObject());
-            defer selection.deinit(ir.allocator);
-            _ = try deriveHighlight(ir, page_id, mode, origin, selection, note);
         },
     }
     return .none;
 }
 
-fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
+fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
     switch (mode) {
         .attached => switch (value) {
             .fragment => |fragment| {
@@ -1233,27 +1143,6 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
     }
 }
 
-fn makeLegacyNode(
-    ir: *core.Ir,
-    page_id: core.NodeId,
-    mode: EvalMode,
-    name: []const u8,
-    role: []const u8,
-    object_kind: core.ObjectKind,
-    payload_kind: core.PayloadKind,
-    content: []const u8,
-    origin: []const u8,
-) !core.NodeId {
-    return switch (mode) {
-        .attached => try ir.makeObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, origin),
-        .detached => |builder| blk: {
-            const id = try ir.makeDetachedObjectWithOrigin(page_id, name, role, object_kind, payload_kind, content, origin);
-            try builder.trackNode(ir.allocator, id);
-            break :blk id;
-        },
-    };
-}
-
 fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
     return switch (value) {
         .document => |id| .{ .document = id },
@@ -1271,8 +1160,9 @@ fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
 }
 
 fn executeCallStatement(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1281,7 +1171,7 @@ fn executeCallStatement(
     call: CallExpr,
 ) anyerror!void {
     const func = functions.get(call.name) orelse {
-        _ = try evalCall(ir, page_id, mode, env, functions, current_origin, call);
+        _ = try evalCall(ir, page_id, context, mode, env, functions, current_origin, call);
         return;
     };
     try validateUserFunctionArity(call.args.items.len, func, current_origin);
@@ -1292,9 +1182,9 @@ fn executeCallStatement(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
+    try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, call);
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -1311,8 +1201,9 @@ fn executeCallStatement(
 }
 
 fn invokeUserFunctionValue(
-    ir: *core.Ir,
+    ir: *doc.Document,
     page_id: core.NodeId,
+    context: EvalContext,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     functions: *const std.StringHashMap(FunctionDecl),
@@ -1330,11 +1221,47 @@ fn invokeUserFunctionValue(
     while (it.next()) |entry| {
         try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
     }
-    try bindUserFunctionArgs(ir, page_id, mode, env, &local_env, functions, func, current_origin, call);
+    try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, mode, &local_env, functions, &last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, &last_code_like, inner, current_origin);
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                return value;
+            },
+        }
+    }
+
+    return error.FunctionDidNotReturnValue;
+}
+
+fn invokeUserFunctionValues(
+    ir: *doc.Document,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    func: FunctionDecl,
+    current_origin: []const u8,
+    args: []const core.Value,
+) anyerror!core.Value {
+    if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+
+    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer local_env.deinit();
+    var it = env.iterator();
+    while (it.next()) |entry| {
+        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    try bindUserFunctionValueArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, args);
+
+    var last_code_like: ?core.NodeId = null;
+    for (func.statements.items) |inner| {
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, &last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -1348,11 +1275,14 @@ fn invokeUserFunctionValue(
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
+    if (diagnostic_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_path, span.start, span.end });
+    }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
 fn resolveAnchorRef(
-    ir: *core.Ir,
+    ir: *doc.Document,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     current_origin: []const u8,

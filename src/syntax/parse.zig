@@ -1,12 +1,16 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const names = @import("names.zig");
-const typecheck = @import("typecheck.zig");
-const source_utils = @import("utils").source;
+const names = @import("../language/names.zig");
+const utils = @import("utils");
+const source_utils = utils.source;
+const color_utils = utils.color;
 
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
+const TypeDecl = ast.TypeDecl;
+const ObjectDecl = ast.ObjectDecl;
+const ObjectExtensionDecl = ast.ObjectExtensionDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
 const Statement = ast.Statement;
@@ -60,6 +64,21 @@ const Parser = struct {
         self.skipTrivia();
         while (!self.eof()) {
             const item_start = self.pos;
+            var prefix_annotations = std.ArrayList(ast.Annotation).empty;
+            var has_prefix_annotations = false;
+            if (self.source[self.pos] == '@') {
+                prefix_annotations = try self.parseAnnotations();
+                has_prefix_annotations = true;
+                self.skipTrivia();
+            }
+            errdefer {
+                if (has_prefix_annotations) {
+                    for (prefix_annotations.items) |*annotation| annotation.deinit(self.allocator);
+                    prefix_annotations.deinit(self.allocator);
+                }
+            }
+            if (has_prefix_annotations and !(try self.peekKeyword("fn"))) return self.fail(error.ExpectedKeyword);
+
             if (try self.consumeKeyword("import")) {
                 const spec = try self.parseImportSpec();
                 try self.consumeStatementTerminator();
@@ -68,11 +87,28 @@ const Parser = struct {
                     .span = .{ .start = item_start, .end = self.pos },
                 });
             } else if (try self.consumeKeyword("fn")) {
-                const func = try self.parseFunctionAfterKeyword(item_start);
+                const func = try self.parseFunctionAfterKeyword(item_start, prefix_annotations);
+                has_prefix_annotations = false;
                 try program.functions.append(self.allocator, func);
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
                 try program.functions.append(self.allocator, constant);
+            } else if (try self.consumeKeyword("type")) {
+                const type_item = try self.parseTypeItemAfterKeyword(item_start);
+                switch (type_item) {
+                    .alias => |type_decl| {
+                        try self.consumeStatementTerminator();
+                        try program.types.append(self.allocator, type_decl);
+                    },
+                    .object => |object_decl| try program.objects.append(self.allocator, object_decl),
+                }
+            } else if (try self.consumeKeyword("extend")) {
+                const extension = try self.parseObjectExtensionAfterKeyword(item_start);
+                try program.object_extensions.append(self.allocator, extension);
+            } else if (try self.consumeKeyword("document")) {
+                var statements = try self.parseBodyStatements();
+                try program.document_statements.appendSlice(self.allocator, statements.items);
+                statements.deinit(self.allocator);
             } else {
                 const page = try self.parsePage();
                 try program.pages.append(self.allocator, page);
@@ -82,7 +118,7 @@ const Parser = struct {
         return program;
     }
 
-    fn parseFunctionAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
+    fn parseFunctionAfterKeyword(self: *Parser, start: usize, prefix_annotations: std.ArrayList(ast.Annotation)) !FunctionDecl {
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
         try self.expectChar('(');
@@ -100,7 +136,8 @@ const Parser = struct {
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
             self.skipInlineSpaces();
-            const param_sort = try self.parseSortAnnotation();
+            const param_type = try self.parseTypeAnnotation();
+            const param_sort = try self.runtimeSortForType(param_type);
             self.skipInlineSpaces();
             var default_value: ?*Expr = null;
             if (!self.eof() and self.source[self.pos] == '=') {
@@ -115,6 +152,7 @@ const Parser = struct {
             }
             try params.append(self.allocator, .{
                 .name = param_name,
+                .ty = param_type,
                 .sort = param_sort,
                 .default_value = default_value,
             });
@@ -131,11 +169,26 @@ const Parser = struct {
         if (!self.startsWith("->")) return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 2;
         self.skipInlineSpaces();
-        const result_sort = try self.parseSortAnnotation();
+        const result_type = try self.parseTypeAnnotation();
+        const result_sort = try self.runtimeSortForType(result_type);
+        var annotations = prefix_annotations;
+        errdefer {
+            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
+            annotations.deinit(self.allocator);
+        }
+        var suffix_annotations = try self.parseAnnotations();
+        defer suffix_annotations.deinit(self.allocator);
+        try annotations.appendSlice(self.allocator, suffix_annotations.items);
 
-        const statements = try self.parseBodyStatements();
-        if (!typecheck.functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
-        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_sort = result_sort, .statements = statements };
+        const bodyless = annotationsAllowBodyless(annotations.items);
+        var statements = std.ArrayList(Statement).empty;
+        if (bodyless and self.atStatementBoundary()) {
+            try self.consumeStatementTerminator();
+        } else {
+            statements = try self.parseBodyStatements();
+            if (!functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+        }
+        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_sort = result_sort, .annotations = annotations, .statements = statements };
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
@@ -144,7 +197,8 @@ const Parser = struct {
         if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 1;
         self.skipInlineSpaces();
-        const result_sort = try self.parseSortAnnotation();
+        const result_type = try self.parseTypeAnnotation();
+        const result_sort = try self.runtimeSortForType(result_type);
         self.skipTrivia();
         try self.expectChar('=');
         const expr_start = self.pos;
@@ -163,25 +217,286 @@ const Parser = struct {
             .name = name,
             .span = .{ .start = start, .end = self.pos },
             .params = std.ArrayList(ast.ParamDecl).empty,
+            .result_type = result_type,
             .result_sort = result_sort,
+            .annotations = std.ArrayList(ast.Annotation).empty,
             .statements = statements,
         };
     }
 
-    fn parseSortAnnotation(self: *Parser) !core.SemanticSort {
+    const TypeItem = union(enum) {
+        alias: TypeDecl,
+        object: ObjectDecl,
+    };
+
+    fn parseTypeItemAfterKeyword(self: *Parser, start: usize) !TypeItem {
         const name = try self.parseIdentifier();
-        if (std.mem.eql(u8, name, "document")) return .document;
-        if (std.mem.eql(u8, name, "page")) return .page;
-        if (std.mem.eql(u8, name, "object")) return .object;
-        if (std.mem.eql(u8, name, "selection")) return .selection;
-        if (std.mem.eql(u8, name, "anchor")) return .anchor;
-        if (std.mem.eql(u8, name, "function")) return .function;
-        if (std.mem.eql(u8, name, "style")) return .style;
-        if (std.mem.eql(u8, name, "string")) return .string;
-        if (std.mem.eql(u8, name, "number")) return .number;
-        if (std.mem.eql(u8, name, "constraints")) return .constraints;
-        if (std.mem.eql(u8, name, "fragment")) return .fragment;
+        self.skipInlineSpaces();
+        try self.expectChar('=');
+        self.skipInlineSpaces();
+        if (try self.consumeKeyword("object")) {
+            return .{ .object = try self.parseObjectDeclBody(start, name) };
+        }
+        if (try self.consumeKeyword("protocol")) {
+            return .{ .object = try self.parseObjectDeclBody(start, name) };
+        }
+        const body_start = self.pos;
+        while (!self.eof() and self.source[self.pos] != '\n' and self.source[self.pos] != '@') {
+            if (self.lineCommentStart()) break;
+            self.pos += 1;
+        }
+        const body = trimRightSpaces(self.source[body_start..self.pos]);
+        if (body.len == 0) return self.fail(error.ExpectedTypeAnnotation);
+        var annotations = try self.parseAnnotations();
+        defer {
+            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
+            annotations.deinit(self.allocator);
+        }
+        const refinement = try self.refinementFromAnnotations(annotations.items);
+        return .{ .alias = .{
+            .name = name,
+            .body = try self.allocator.dupe(u8, body),
+            .refinement = refinement,
+            .span = .{ .start = start, .end = self.pos },
+        } };
+    }
+
+    fn parseObjectExtensionAfterKeyword(self: *Parser, start: usize) !ObjectExtensionDecl {
+        const target = try self.parseIdentifier();
+        self.skipTrivia();
+        try self.expectChar('{');
+        var extension = ObjectExtensionDecl{
+            .target = target,
+            .roles = .empty,
+            .fields = .empty,
+            .span = .{ .start = start, .end = start },
+        };
+        errdefer extension.deinit(self.allocator);
+        try self.parseObjectMembers(null, &extension.implements, &extension.roles, &extension.fields);
+        extension.span.end = self.pos;
+        return extension;
+    }
+
+    fn parseObjectDeclBody(self: *Parser, start: usize, name: []const u8) !ObjectDecl {
+        self.skipTrivia();
+        try self.expectChar('{');
+        var decl = ObjectDecl{
+            .name = name,
+            .roles = .empty,
+            .fields = .empty,
+            .span = .{ .start = start, .end = start },
+        };
+        errdefer decl.deinit(self.allocator);
+        try self.parseObjectMembers(&decl.base, null, &decl.roles, &decl.fields);
+        decl.span.end = self.pos;
+        return decl;
+    }
+
+    fn parseObjectMembers(
+        self: *Parser,
+        maybe_base: ?*?[]const u8,
+        maybe_implements: ?*?[]const u8,
+        roles: *std.ArrayList([]const u8),
+        fields: *std.ArrayList(ast.ObjectFieldDecl),
+    ) !void {
+        self.skipTrivia();
+        while (!self.eof() and !self.peekChar('}')) {
+            const member_start = self.pos;
+            const name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == '=') {
+                self.pos += 1;
+                self.skipTrivia();
+                if (std.mem.eql(u8, name, "base")) {
+                    if (maybe_base) |base| {
+                        if (base.*) |existing| self.allocator.free(existing);
+                        base.* = try self.parseIdentifier();
+                    } else {
+                        return self.fail(error.ExpectedIdentifier);
+                    }
+                } else if (std.mem.eql(u8, name, "implements")) {
+                    if (maybe_implements) |implements| {
+                        if (implements.*) |existing| self.allocator.free(existing);
+                        implements.* = try self.parseIdentifier();
+                    } else {
+                        return self.fail(error.ExpectedIdentifier);
+                    }
+                } else if (std.mem.eql(u8, name, "roles")) {
+                    try self.parseStringListInto(roles);
+                } else {
+                    return self.fail(error.ExpectedTypeAnnotation);
+                }
+                self.allocator.free(name);
+                try self.consumeStatementTerminator();
+                self.skipTrivia();
+                continue;
+            }
+            if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
+            self.pos += 1;
+            self.skipInlineSpaces();
+            const type_start = self.pos;
+            while (!self.eof() and self.source[self.pos] != '=' and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
+                if (self.lineCommentStart()) break;
+                self.pos += 1;
+            }
+            const type_text = trimRightSpaces(self.source[type_start..self.pos]);
+            if (type_text.len == 0) return self.fail(error.ExpectedTypeAnnotation);
+            var default_value: ?[]const u8 = null;
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == '=') {
+                self.pos += 1;
+                const default_start = self.pos;
+                while (!self.eof() and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
+                    if (self.lineCommentStart()) break;
+                    self.pos += 1;
+                }
+                const default_text = trimRightSpaces(trimLeftSpaces(self.source[default_start..self.pos]));
+                default_value = try self.allocator.dupe(u8, default_text);
+            }
+            try fields.append(self.allocator, .{
+                .name = name,
+                .value_type = try self.allocator.dupe(u8, type_text),
+                .default_value = default_value,
+                .span = .{ .start = member_start, .end = self.pos },
+            });
+            try self.consumeStatementTerminator();
+            self.skipTrivia();
+        }
+        try self.expectChar('}');
+        try self.consumeStatementTerminator();
+    }
+
+    fn parseStringListInto(self: *Parser, out: *std.ArrayList([]const u8)) !void {
+        self.skipTrivia();
+        try self.expectChar('[');
+        self.skipTrivia();
+        while (!self.eof() and !self.peekChar(']')) {
+            try out.append(self.allocator, try self.parseString());
+            self.skipTrivia();
+            if (!self.eof() and self.source[self.pos] == ',') {
+                self.pos += 1;
+                self.skipTrivia();
+                continue;
+            }
+            break;
+        }
+        try self.expectChar(']');
+    }
+
+    fn parseAnnotations(self: *Parser) !std.ArrayList(ast.Annotation) {
+        var annotations = std.ArrayList(ast.Annotation).empty;
+        errdefer {
+            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
+            annotations.deinit(self.allocator);
+        }
+        while (true) {
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != '@') break;
+            const start = self.pos;
+            self.pos += 1;
+            const name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            var args: ?[]const u8 = null;
+            if (!self.eof() and self.source[self.pos] == '(') {
+                args = try self.parseAnnotationArgs();
+            }
+            try annotations.append(self.allocator, .{
+                .name = name,
+                .args = args,
+                .span = .{ .start = start, .end = self.pos },
+            });
+        }
+        return annotations;
+    }
+
+    fn peekKeyword(self: *Parser, keyword: []const u8) !bool {
+        const saved = self.pos;
+        defer self.pos = saved;
+        return try self.consumeKeyword(keyword);
+    }
+
+    fn parseAnnotationArgs(self: *Parser) ![]const u8 {
+        try self.expectChar('(');
+        const start = self.pos;
+        var depth: usize = 1;
+        while (!self.eof()) {
+            const ch = self.source[self.pos];
+            if (ch == '"') {
+                const ignored = try self.parseString();
+                self.allocator.free(ignored);
+                continue;
+            }
+            self.pos += 1;
+            if (ch == '(') {
+                depth += 1;
+            } else if (ch == ')') {
+                depth -= 1;
+                if (depth == 0) {
+                    const raw = trimRightSpaces(self.source[start .. self.pos - 1]);
+                    return self.allocator.dupe(u8, raw);
+                }
+            }
+        }
+        return self.fail(error.ExpectedChar);
+    }
+
+    fn refinementFromAnnotations(self: *Parser, annotations: []const ast.Annotation) !?[]const u8 {
+        for (annotations) |annotation| {
+            if (!std.mem.eql(u8, annotation.name, "refine")) continue;
+            return try self.allocator.dupe(u8, annotation.args orelse "");
+        }
+        return null;
+    }
+
+    fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
+        const name = try self.parseIdentifier();
+        if (std.mem.eql(u8, name, "document")) return ast.Type.document;
+        if (std.mem.eql(u8, name, "page")) return ast.Type.page;
+        if (std.mem.eql(u8, name, "object")) return try self.parseObjectType(name);
+        if (std.mem.eql(u8, name, "anchor")) return ast.Type.anchor;
+        if (std.mem.eql(u8, name, "function")) return ast.Type.function;
+        if (std.mem.eql(u8, name, "style")) return ast.Type.style;
+        if (std.mem.eql(u8, name, "string")) return ast.Type.string;
+        if (std.mem.eql(u8, name, "number")) return ast.Type.number;
+        if (std.mem.eql(u8, name, "constraints")) return ast.Type.constraints;
+        if (std.mem.eql(u8, name, "selection")) return ast.Type.selectionType(try self.parseOptionalTypeParam());
+        if (std.mem.eql(u8, name, "fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
+        if (std.mem.eql(u8, name, "code")) return ast.Type.code(try self.parseRequiredTypeParam());
+        if (std.mem.eql(u8, name, "list")) return ast.Type.list(try self.parseRequiredTypeParam());
         return self.fail(error.InvalidSemanticSort);
+    }
+
+    fn parseObjectType(self: *Parser, object_name: []const u8) anyerror!ast.Type {
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != '<') return ast.Type.object;
+        try self.expectChar('<');
+        const class_name = try self.parseIdentifier();
+        try self.expectChar('>');
+        self.allocator.free(object_name);
+        return ast.Type.objectClass(class_name);
+    }
+
+    fn parseOptionalTypeParam(self: *Parser) anyerror!ast.Type {
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != '<') return ast.Type.any;
+        return try self.parseTypeParam();
+    }
+
+    fn parseRequiredTypeParam(self: *Parser) anyerror!ast.Type.Tag {
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != '<') return self.fail(error.ExpectedTypeAnnotation);
+        return (try self.parseTypeParam()).tag;
+    }
+
+    fn parseTypeParam(self: *Parser) anyerror!ast.Type {
+        try self.expectChar('<');
+        const inner = try self.parseTypeAnnotation();
+        try self.expectChar('>');
+        return inner;
+    }
+
+    fn runtimeSortForType(self: *Parser, ty: ast.Type) anyerror!core.SemanticSort {
+        return ty.toRuntimeSort() orelse self.fail(error.InvalidSemanticSort);
     }
 
     fn parsePage(self: *Parser) !PageDecl {
@@ -311,35 +626,7 @@ const Parser = struct {
             return self.fail(error.AssignmentRequiresLet);
         }
 
-        if (try self.parseLegacyStatement(start)) |stmt| return stmt;
         return try self.parseCallSugarStatement(start);
-    }
-
-    fn parseLegacyStatement(self: *Parser, start: usize) !?Statement {
-        const string_heads = [_]struct {
-            name: []const u8,
-            build: fn ([]const u8) Statement.Kind,
-        }{
-            .{ .name = "title", .build = legacyTitleKind },
-            .{ .name = "subtitle", .build = legacySubtitleKind },
-            .{ .name = "math", .build = legacyMathKind },
-            .{ .name = "mathtex", .build = legacyMathTexKind },
-            .{ .name = "figure", .build = legacyFigureKind },
-            .{ .name = "image", .build = legacyImageKind },
-            .{ .name = "pdf", .build = legacyPdfKind },
-            .{ .name = "code", .build = legacyCodeKind },
-            .{ .name = "highlight", .build = legacyHighlightKind },
-        };
-
-        inline for (string_heads) |entry| {
-            if (try self.consumeLegacyStringHead(entry.name)) {
-                const text = try self.parseTextArg();
-                try self.consumeStatementTerminator();
-                return .{ .span = .{ .start = start, .end = self.pos }, .kind = entry.build(text) };
-            }
-        }
-
-        return null;
     }
 
     fn parseCallSugarStatement(self: *Parser, start: usize) !Statement {
@@ -423,6 +710,9 @@ const Parser = struct {
             const expr = try self.parseExpr();
             try self.expectChar(')');
             return expr;
+        }
+        if (self.startsColorLiteral()) {
+            return .{ .string = try self.parseColorLiteralString() };
         }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .string = try self.parseString() };
@@ -752,6 +1042,20 @@ const Parser = struct {
         return self.fail(error.UnterminatedString);
     }
 
+    fn startsColorLiteral(self: *Parser) bool {
+        return self.pos + 1 < self.source.len and self.source[self.pos] == 'c' and self.source[self.pos + 1] == '"';
+    }
+
+    fn parseColorLiteralString(self: *Parser) ![]const u8 {
+        if (!self.startsColorLiteral()) return self.fail(error.ExpectedString);
+        self.pos += 1;
+        const raw = try self.parseString();
+        errdefer self.allocator.free(raw);
+        const normalized = (try color_utils.normalizeAlloc(self.allocator, raw)) orelse return self.fail(error.InvalidColorLiteral);
+        self.allocator.free(raw);
+        return normalized;
+    }
+
     fn parseIdentifier(self: *Parser) ![]const u8 {
         self.skipTrivia();
         if (self.eof()) return self.fail(error.ExpectedIdentifier);
@@ -778,27 +1082,6 @@ const Parser = struct {
         const end = self.pos + keyword.len;
         if (end < self.source.len and source_utils.isIdentifierContinue(self.source[end])) return false;
         self.pos = end;
-        return true;
-    }
-
-    fn consumeLegacyStringHead(self: *Parser, keyword: []const u8) !bool {
-        const checkpoint = self.pos;
-        if (!try self.consumeKeyword(keyword)) return false;
-        self.skipInlineSpaces();
-        if (!self.eof() and self.source[self.pos] == '(') {
-            self.pos = checkpoint;
-            return false;
-        }
-        return true;
-    }
-
-    fn consumeLegacyZeroHead(self: *Parser, keyword: []const u8) !bool {
-        const checkpoint = self.pos;
-        if (!try self.consumeKeyword(keyword)) return false;
-        if (!self.atStatementBoundary()) {
-            self.pos = checkpoint;
-            return false;
-        }
         return true;
     }
 
@@ -989,6 +1272,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.UnterminatedString => "closing string delimiter",
         error.UnterminatedEscape => "escape target",
         error.InvalidEscape => "valid escape sequence",
+        error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",
@@ -999,6 +1283,27 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.ExpectedEqualityOperator => "'=='",
         else => null,
     };
+}
+
+fn functionBodyReturns(statements: []const Statement) bool {
+    for (statements) |stmt| {
+        if (statementReturns(stmt)) return true;
+    }
+    return false;
+}
+
+fn statementReturns(stmt: Statement) bool {
+    return switch (stmt.kind) {
+        .return_expr => true,
+        else => false,
+    };
+}
+
+fn annotationsAllowBodyless(annotations: []const ast.Annotation) bool {
+    for (annotations) |annotation| {
+        if (std.mem.eql(u8, annotation.name, "host") or std.mem.eql(u8, annotation.name, "op")) return true;
+    }
+    return false;
 }
 
 fn foundToken(source: []const u8, pos: usize) []const u8 {
@@ -1013,42 +1318,6 @@ fn foundToken(source: []const u8, pos: usize) []const u8 {
             break :blk source[pos..@min(pos + len, source.len)];
         },
     };
-}
-
-fn legacyTitleKind(text: []const u8) Statement.Kind {
-    return .{ .title = text };
-}
-
-fn legacySubtitleKind(text: []const u8) Statement.Kind {
-    return .{ .subtitle = text };
-}
-
-fn legacyMathKind(text: []const u8) Statement.Kind {
-    return .{ .math = text };
-}
-
-fn legacyMathTexKind(text: []const u8) Statement.Kind {
-    return .{ .mathtex = text };
-}
-
-fn legacyFigureKind(text: []const u8) Statement.Kind {
-    return .{ .figure = text };
-}
-
-fn legacyImageKind(text: []const u8) Statement.Kind {
-    return .{ .image = text };
-}
-
-fn legacyPdfKind(text: []const u8) Statement.Kind {
-    return .{ .pdf_ref = text };
-}
-
-fn legacyCodeKind(text: []const u8) Statement.Kind {
-    return .{ .code = text };
-}
-
-fn legacyHighlightKind(text: []const u8) Statement.Kind {
-    return .{ .highlight = text };
 }
 
 fn scanIdentifier(source: []const u8, pos: *usize) bool {
@@ -1074,4 +1343,10 @@ fn trimRightSpaces(raw: []const u8) []const u8 {
     var end = raw.len;
     while (end > 0 and isInlineSpace(raw[end - 1])) end -= 1;
     return raw[0..end];
+}
+
+fn trimLeftSpaces(raw: []const u8) []const u8 {
+    var start: usize = 0;
+    while (start < raw.len and isInlineSpace(raw[start])) start += 1;
+    return raw[start..];
 }

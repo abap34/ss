@@ -1,10 +1,17 @@
 const std = @import("std");
+const class_fields = @import("class_fields.zig");
 
 const c = @cImport({
     @cInclude("md4c.h");
 });
 
 const Allocator = std.mem.Allocator;
+
+pub const ParseMode = enum {
+    none,
+    inline_text,
+    block,
+};
 
 pub const RunKind = enum {
     text,
@@ -166,39 +173,41 @@ const ImageState = struct {
     src: []const u8,
 };
 
-pub fn shouldParseInline(role: ?[]const u8, payload_kind_name: ?[]const u8) bool {
-    if (payload_kind_name) |name| {
-        if (std.mem.eql(u8, name, "code")) return false;
-        if (std.mem.eql(u8, name, "math_tex")) return false;
+pub fn parseModeForNode(ir: anytype, node: anytype) ParseMode {
+    if (class_fields.property(ir, node, "text_parse")) |mode| {
+        if (std.mem.eql(u8, mode, "none")) return .none;
+        if (std.mem.eql(u8, mode, "block")) return .block;
+        if (std.mem.eql(u8, mode, "inline")) return .inline_text;
     }
-    if (role) |r| {
-        if (std.mem.eql(u8, r, "code")) return false;
-        if (std.mem.eql(u8, r, "rule")) return false;
-        if (std.mem.eql(u8, r, "panel")) return false;
-    }
-    return true;
+    return .inline_text;
 }
 
-pub fn shouldParseBlocks(role: ?[]const u8, payload_kind_name: ?[]const u8) bool {
-    if (!shouldParseInline(role, payload_kind_name)) return false;
-    const r = role orelse return false;
-    return std.mem.eql(u8, r, "body") or
-        std.mem.eql(u8, r, "note") or
-        std.mem.eql(u8, r, "toc");
+pub fn shouldParseInlineNode(ir: anytype, node: anytype) bool {
+    return parseModeForNode(ir, node) != .none;
 }
 
-pub fn parseMarkdownDocument(
+pub fn shouldParseBlocksNode(ir: anytype, node: anytype) bool {
+    return parseModeForNode(ir, node) == .block;
+}
+
+pub fn parseMarkdownDocumentForNode(
     allocator: Allocator,
-    role: ?[]const u8,
-    payload_kind_name: ?[]const u8,
+    ir: anytype,
+    node: anytype,
+    content: []const u8,
+) !MarkdownDocument {
+    if (!shouldParseBlocksNode(ir, node)) {
+        return MarkdownDocument.init(allocator);
+    }
+    return parseMarkdownContent(allocator, content);
+}
+
+fn parseMarkdownContent(
+    allocator: Allocator,
     content: []const u8,
 ) !MarkdownDocument {
     var doc = MarkdownDocument.init(allocator);
     errdefer doc.deinit();
-
-    if (!shouldParseBlocks(role, payload_kind_name)) {
-        return doc;
-    }
 
     var state = ParserState{
         .temp_allocator = allocator,
@@ -228,16 +237,16 @@ pub fn parseMarkdownDocument(
     return doc;
 }
 
-pub fn parseTextLayout(
+pub fn parseTextLayoutForNode(
     allocator: Allocator,
-    role: ?[]const u8,
-    payload_kind_name: ?[]const u8,
+    ir: anytype,
+    node: anytype,
     content: []const u8,
 ) !TextLayout {
     var layout = TextLayout{};
     errdefer layout.deinit(allocator);
 
-    if (!shouldParseInline(role, payload_kind_name)) {
+    if (!shouldParseInlineNode(ir, node)) {
         return layout;
     }
 
