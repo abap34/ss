@@ -477,9 +477,10 @@ pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
         try collectDefinitionsFromProgram(allocator, module.source, module.program, module.id, module.path, false, &ir.definitions);
+        try collectProgramHints(allocator, &ir.hints, module.source, module.path, module.program, module.id, &ir.functions);
     }
     try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), ir.project_module_id, null, true, &ir.definitions);
-    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectProgram(), &ir.functions);
+    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectProgram(), ir.project_module_id, &ir.functions);
 }
 
 pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -493,7 +494,7 @@ pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void
         write_index += 1;
     }
     ir.hints.items.len = write_index;
-    try collectSolvedSizeHints(allocator, ir.projectSource(), ir, &ir.hints);
+    try collectSolvedSizeHints(allocator, ir, &ir.hints);
 }
 
 pub fn loadProgramIndex(
@@ -726,20 +727,22 @@ fn collectProgramHints(
     allocator: std.mem.Allocator,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
+    source_path: ?[]const u8,
     program: ast.Program,
+    module_id: core.SourceModuleId,
     functions: *const std.StringHashMap(ast.FunctionDecl),
 ) !void {
     for (program.functions.items) |func| {
         for (func.statements.items) |stmt| {
-            try collectStatementHints(allocator, hints, functions, source, stmt);
+            try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
         }
     }
     for (program.document_statements.items) |stmt| {
-        try collectStatementHints(allocator, hints, functions, source, stmt);
+        try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
     }
     for (program.pages.items) |page| {
         for (page.statements.items) |stmt| {
-            try collectStatementHints(allocator, hints, functions, source, stmt);
+            try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
         }
     }
 }
@@ -749,14 +752,16 @@ fn collectStatementHints(
     hints: *std.ArrayList(core.InlayHint),
     functions: *const std.StringHashMap(ast.FunctionDecl),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     stmt: ast.Statement,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try collectExprHints(allocator, hints, functions, source, stmt.span, binding.expr),
-        .bind_binding => |binding| try collectExprHints(allocator, hints, functions, source, stmt.span, binding.expr),
-        .return_expr => |expr| try collectExprHints(allocator, hints, functions, source, stmt.span, expr),
-        .property_set => |property_set| try collectExprHints(allocator, hints, functions, source, stmt.span, property_set.value),
-        .expr_stmt => |expr| try collectExprHints(allocator, hints, functions, source, stmt.span, expr),
+        .let_binding => |binding| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
+        .bind_binding => |binding| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
+        .return_expr => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
+        .property_set => |property_set| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, property_set.value),
+        .expr_stmt => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
         else => {},
     }
 }
@@ -766,13 +771,15 @@ fn collectExprHints(
     hints: *std.ArrayList(core.InlayHint),
     functions: *const std.StringHashMap(ast.FunctionDecl),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     span: ast.Span,
     expr: ast.Expr,
 ) !void {
     switch (expr) {
         .call => |call| {
-            try hintForCallExpr(allocator, hints, functions, source, span, call);
-            for (call.args.items) |arg| try collectExprHints(allocator, hints, functions, source, span, arg);
+            try hintForCallExpr(allocator, hints, functions, source, source_path, module_id, span, call);
+            for (call.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
         },
         else => {},
     }
@@ -783,6 +790,8 @@ fn hintForCallExpr(
     hints: *std.ArrayList(core.InlayHint),
     functions: *const std.StringHashMap(ast.FunctionDecl),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     span: ast.Span,
     call: ast.CallExpr,
 ) !void {
@@ -794,7 +803,7 @@ fn hintForCallExpr(
     for (0..hint_count) |index| {
         const param_name = callParamName(functions, call.name, index) orelse continue;
         const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
-        try appendInlayHint(allocator, hints, source, span.start + arg_starts[index], label, .parameter_names);
+        try appendInlayHint(allocator, hints, source, source_path, module_id, span.start + arg_starts[index], label, .parameter_names);
     }
 }
 
@@ -812,7 +821,6 @@ fn callParamName(functions: *const std.StringHashMap(ast.FunctionDecl), call_nam
 
 fn collectSolvedSizeHints(
     allocator: std.mem.Allocator,
-    source: []const u8,
     ir: *core.Ir,
     hints: *std.ArrayList(core.InlayHint),
 ) !void {
@@ -832,21 +840,33 @@ fn collectSolvedSizeHints(
 
     var iterator = best_by_origin.iterator();
     while (iterator.next()) |entry| {
-        const span = utils.err.parseByteOrigin(entry.key_ptr.*) orelse continue;
+        const origin = utils.err.parseLocatedOrigin(entry.key_ptr.*) orelse continue;
+        const module = moduleForHintOrigin(ir, origin.path);
         const node = ir.getNode(entry.value_ptr.*) orelse continue;
         const label = try std.fmt.allocPrint(
             allocator,
             " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
             .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height },
         );
-        try appendInlayHint(allocator, hints, source, trimHintByteIndexToLineEnd(source, span.end), label, .solved_frame);
+        try appendInlayHint(allocator, hints, module.source, module.file, module.id, trimHintByteIndexToLineEnd(module.source, origin.span.end), label, .solved_frame);
     }
+}
+
+fn moduleForHintOrigin(ir: *const core.Ir, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
+    if (file) |origin_path| {
+        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+            return .{ .id = module.id, .source = module.source, .file = module.path orelse origin_path };
+        }
+    }
+    return .{ .id = ir.project_module_id, .source = ir.projectSource(), .file = ir.projectPath() };
 }
 
 fn appendInlayHint(
     allocator: std.mem.Allocator,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
+    source_path: ?[]const u8,
+    module_id: core.SourceModuleId,
     byte_index: usize,
     label: []const u8,
     kind: core.InlayHintKind,
@@ -857,6 +877,8 @@ fn appendInlayHint(
         .column = loc.column,
         .label = label,
         .kind = kind,
+        .module_id = module_id,
+        .file = source_path,
     });
 }
 

@@ -656,6 +656,13 @@ function activate(context) {
     return modules.find((module) => String(module && module.spec ? module.spec : "") === moduleSpec) || null;
   }
 
+  function hintBelongsToDocument(document, item) {
+    if (!item || !item.file) {
+      return false;
+    }
+    return path.resolve(String(item.file)) === path.resolve(document.uri.fsPath);
+  }
+
   function stdlibPathFromSpec(moduleSpec) {
     const spec = String(moduleSpec || "");
     if (!spec.startsWith("std:")) {
@@ -1505,6 +1512,9 @@ function activate(context) {
 
         const hints = [];
         for (const item of payload.hints) {
+          if (!hintBelongsToDocument(document, item)) {
+            continue;
+          }
           const pos = new vscode.Position(
             Math.max(0, Number(item.line || 1) - 1),
             Math.max(0, Number(item.column || 1) - 1),
