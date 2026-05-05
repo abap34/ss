@@ -1,15 +1,17 @@
 import std:core/render
 
-fn page_number_object() -> object
-  let page_no = derive(pagectx(), "page_number")
+fn page_number_object() -> object @phase(after_pages)
+  let page_no = object("", "page_number", "text")
   text_preset(page_no, "Helvetica", "13", "16", "0.5,0.5,0.5", "0", "60", "24")
   set_prop(page_no, "wrap", "off")
   overflow_error(page_no)
+  right_inset(page_no, 24)
+  bottom_inset(page_no, 20)
   return page_no
 end
 
-fn toc_object() -> object
-  let toc = derive(docctx(), "toc")
+fn toc_object() -> object @phase(after_pages)
+  let toc = object("", "toc", "text")
   text_preset(toc, "Helvetica", "18", "24", "0,0,0.0353", "24", "96", "96")
   return toc
 end

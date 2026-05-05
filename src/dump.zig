@@ -178,6 +178,16 @@ fn writeDeclarationIndexField(root: *json.Object, allocator: std.mem.Allocator, 
     }
     try annotations.end();
 
+    var phases = try object.arrayField("phases");
+    for (index.phases.items) |phase| {
+        var item = try phases.objectItem();
+        try item.stringField("function", phase.function_name);
+        try item.optionalStringField("args", phase.args);
+        try item.intField("moduleId", phase.module_id);
+        try item.end();
+    }
+    try phases.end();
+
     var capabilities = try object.arrayField("capabilities");
     for (index.capabilities.items) |capability| {
         var item = try capabilities.objectItem();

@@ -639,26 +639,6 @@ fn evalDeriveCall(
     try validateArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity, current_origin);
     if (descriptor.input_sort) |expected| try typecheck.ensureValueSortWithCode(ir, null, base, expected, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
-        .page_number => {
-            return .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.pageNumber(), current_origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.pageNumber(), current_origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-        },
-        .toc => {
-            return .{ .object = switch (mode) {
-                .attached => try ir.deriveWithOrigin(page_id, base, core.Transform.toc(), current_origin),
-                .detached => |builder| blk: {
-                    const id = try ir.deriveDetachedWithOrigin(page_id, base, core.Transform.toc(), current_origin);
-                    try builder.trackNode(ir.allocator, id);
-                    break :blk id;
-                },
-            } };
-        },
         .rewrite_text => {
             const old = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 2);
             const new = try evalCallStringArg(ir, page_id, mode, env, functions, current_origin, call, 3);
