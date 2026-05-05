@@ -807,43 +807,7 @@ pub const Ir = struct {
                     origin,
                 );
             },
-            .page_number => blk: {
-                const id = try self.deriveObject(
-                    page_id,
-                    attached,
-                    base.page,
-                    "page-number",
-                    "page_number",
-                    .text,
-                    .text,
-                    "",
-                    origin,
-                );
-                if (attached) {
-                    try self.addAnchorConstraint(id, .right, .{ .page = .right }, -PageLayout.page_number_right_inset, origin);
-                    try self.addAnchorConstraint(id, .bottom, .{ .page = .bottom }, PageLayout.page_number_bottom_inset, origin);
-                }
-                break :blk id;
-            },
-            .toc => blk: {
-                break :blk try self.deriveToc(page_id, attached, base.document, origin);
-            },
         };
-    }
-
-    fn deriveToc(self: *Ir, page_id: NodeId, attached: bool, document_id: NodeId, origin: []const u8) !NodeId {
-        const owned = try self.buildTocText(document_id);
-        return self.deriveObject(
-            page_id,
-            attached,
-            document_id,
-            "toc",
-            "toc",
-            .text,
-            .text,
-            owned,
-            origin,
-        );
     }
 
     fn buildTocText(self: *Ir, document_id: NodeId) ![]const u8 {
