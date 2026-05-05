@@ -203,6 +203,8 @@ class Renderer:
         self.pdf.set_auto_page_break(auto=False)
         self.pdf.set_margins(0, 0, 0)
         self.pdf.c_margin = 0
+        self._internal_links: Dict[str, int] = {}
+        self._current_page_index = 0
         self._register_fonts()
 
     def _register_fonts(self) -> None:
@@ -330,6 +332,7 @@ class Renderer:
 
         for page_index, page_id in enumerate(doc["page_order"]):
             self.pdf.add_page()
+            self._current_page_index = page_index
             page_overlays: List[Overlay] = []
             for child_id in children_by_parent.get(page_id, []):
                 node = node_by_id.get(child_id)
@@ -348,6 +351,7 @@ class Renderer:
         width = float(node.get("width") or 0.0)
         height = float(node.get("height") or 0.0)
 
+        self._mark_internal_link_destination(node, y, height)
         self._draw_node_chrome(render, x, y, width, height)
         kind = render.get("kind")
         content = node.get("content") or ""
@@ -812,7 +816,29 @@ class Renderer:
                 # fpdf2 link rectangle uses top-left coords
                 rect_top = self.to_tl(baseline_bl + spec.font_size)
                 rect_h = spec.font_size * 1.2
-                self.pdf.link(x, rect_top, width, rect_h, link=url)
+                self.pdf.link(x, rect_top, width, rect_h, link=self._link_target(url))
+
+    def _mark_internal_link_destination(self, node: dict, y: float, height: float) -> None:
+        properties = node.get("properties")
+        if not isinstance(properties, dict):
+            return
+        link_id = properties.get("link_id")
+        if not isinstance(link_id, str) or not link_id:
+            return
+        target = self._internal_link(link_id)
+        self.pdf.set_link(target, y=self.to_tl(y + height), page=self._current_page_index + 1)
+
+    def _link_target(self, url: str):
+        if url.startswith("#") and len(url) > 1:
+            return self._internal_link(url[1:])
+        return url
+
+    def _internal_link(self, link_id: str) -> int:
+        target = self._internal_links.get(link_id)
+        if target is None:
+            target = self.pdf.add_link()
+            self._internal_links[link_id] = target
+        return target
 
     def _layout_atoms(self, line: List[dict], spec: TextPaintSpec) -> List[dict]:
         atoms: List[dict] = []

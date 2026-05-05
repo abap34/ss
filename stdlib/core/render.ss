@@ -15,6 +15,15 @@ fn with_prop(obj: object, key_name: string, value_name: string) -> object
   return obj
 end
 
+fn link_target(obj: object, id: string) -> object
+  set_prop(obj, "link_id", id)
+  return obj
+end
+
+fn markdown_link(label: string, href: string) -> string
+  return "[" ++ label ++ "](" ++ href ++ ")"
+end
+
 fn with_asset_scale(obj: object, scale: number) -> object
   set_prop(obj, "asset_scale", str(scale))
   return obj

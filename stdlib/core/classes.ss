@@ -25,6 +25,7 @@ type FlowObject = object {
   layout_right_inset: ScalarLike = "96"
   style: string = "default"
   fit: FitPolicy = "warn"
+  link_id: string = ""
 }
 
 type TextObject = object {

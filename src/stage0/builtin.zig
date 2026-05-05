@@ -212,6 +212,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const object_id = try ctx.evalObjectArg(call, 0);
             break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
         },
+        .rewrite_text => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            const old = try ctx.evalStringArg(call, 1);
+            const new = try ctx.evalStringArg(call, 2);
+            const current = ctx.nodeContent(object_id) orelse "";
+            const updated = try replaceAll(ctx.ir.allocator, current, old, new);
+            try ctx.setNodeContent(object_id, updated);
+            break :blk .{ .object = object_id };
+        },
         .set_content => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             const text = try ctx.evalStringArg(call, 1);
@@ -330,6 +339,21 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .object = object_id };
         },
     };
+}
+
+fn replaceAll(allocator: std.mem.Allocator, text: []const u8, old: []const u8, new: []const u8) ![]const u8 {
+    if (old.len == 0) return allocator.dupe(u8, text);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var index: usize = 0;
+    while (std.mem.indexOf(u8, text[index..], old)) |relative_match| {
+        const match_start = index + relative_match;
+        try out.appendSlice(allocator, text[index..match_start]);
+        try out.appendSlice(allocator, new);
+        index = match_start + old.len;
+    }
+    try out.appendSlice(allocator, text[index..]);
+    return try out.toOwnedSlice(allocator);
 }
 
 fn itemValue(sort: core.SelectionItemSort, id: core.NodeId) core.Value {
