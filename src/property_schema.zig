@@ -149,6 +149,7 @@ fn inferValueType(name: []const u8, body: []const u8) ?PropertyValueType {
     if (std.mem.indexOf(u8, body, "\"vector_math\"") != null) return .render_kind;
     if (std.mem.indexOf(u8, body, "\"on\"") != null and std.mem.indexOf(u8, body, "\"off\"") != null) return .wrap_mode;
     if (std.mem.indexOf(u8, body, "\"warn\"") != null) return .fit_policy;
+    if (std.mem.indexOfScalar(u8, body, '"') != null) return .string;
     return parseValueType(body);
 }
 
