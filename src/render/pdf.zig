@@ -8,6 +8,8 @@ const Allocator = std.mem.Allocator;
 const fs_utils = utils.fs;
 
 const embedded_runtime_version = "pdf-runtime-v2";
+const python_cache_version = "python-executable-cache-v1";
+const python_cache_path = ".ss-cache/render/python-executable.txt";
 
 const EmbeddedResource = struct {
     relative_path: []const u8,
@@ -88,9 +90,11 @@ fn cleanupStaleRenderTemps(allocator: Allocator, io: std.Io, cache_dir: []const 
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
+        const basename = std.fs.path.basename(entry.path);
         const is_render_artifact =
-            std.mem.endsWith(u8, entry.path, ".json") or
-            std.mem.endsWith(u8, entry.path, ".pdf");
+            std.mem.startsWith(u8, basename, "tmp-") and
+            (std.mem.endsWith(u8, basename, ".json") or
+                std.mem.endsWith(u8, basename, ".pdf"));
         if (!is_render_artifact) continue;
         dir.deleteFile(io, entry.path) catch {};
     }
@@ -127,7 +131,7 @@ fn findPythonExecutable(allocator: Allocator, io: std.Io) ![]const u8 {
     for (env_candidates) |name| {
         if (envOwned(allocator, name)) |exe| {
             if (exe.len == 0) continue;
-            if (try isUsablePython(allocator, io, exe)) return exe;
+            if (try usablePythonResolvedPath(allocator, io, exe)) |resolved| return resolved;
             std.debug.print(
                 "{s}={s} is not a usable Python for the PDF backend; it must import fpdf, pypdf, fontTools, and PIL.\n",
                 .{ name, exe },
@@ -135,6 +139,8 @@ fn findPythonExecutable(allocator: Allocator, io: std.Io) ![]const u8 {
             return error.PythonExecutableUnusable;
         }
     }
+
+    if (readCachedPythonExecutable(allocator, io)) |cached| return cached;
 
     const path_candidates = [_][]const u8{
         "python3",
@@ -144,7 +150,10 @@ fn findPythonExecutable(allocator: Allocator, io: std.Io) ![]const u8 {
         "/usr/bin/python3",
     };
     for (path_candidates) |exe| {
-        if (try isUsablePython(allocator, io, exe)) return exe;
+        if (try usablePythonResolvedPath(allocator, io, exe)) |resolved| {
+            writeCachedPythonExecutable(allocator, io, resolved) catch {};
+            return resolved;
+        }
     }
 
     std.debug.print(
@@ -159,17 +168,51 @@ fn envOwned(allocator: Allocator, name: [:0]const u8) ?[]u8 {
     return allocator.dupe(u8, std.mem.span(raw)) catch null;
 }
 
-fn isUsablePython(allocator: Allocator, io: std.Io, exe: []const u8) !bool {
+fn readCachedPythonExecutable(allocator: Allocator, io: std.Io) ?[]const u8 {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, python_cache_path, allocator, .limited(4096)) catch return null;
+    defer allocator.free(bytes);
+
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    const version = std.mem.trim(u8, lines.next() orelse "", "\r");
+    if (!std.mem.eql(u8, version, python_cache_version)) return null;
+
+    const path = std.mem.trim(u8, lines.next() orelse "", " \t\r");
+    if (path.len == 0 or !std.fs.path.isAbsolute(path)) return null;
+    if (!fs_utils.fileExists(allocator, path)) return null;
+    return allocator.dupe(u8, path) catch null;
+}
+
+fn writeCachedPythonExecutable(allocator: Allocator, io: std.Io, exe: []const u8) !void {
+    if (!std.fs.path.isAbsolute(exe)) return;
+    const data = try std.fmt.allocPrint(allocator, "{s}\n{s}\n", .{ python_cache_version, exe });
+    defer allocator.free(data);
+    try std.Io.Dir.cwd().createDirPath(io, ".ss-cache/render");
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = python_cache_path,
+        .data = data,
+        .flags = .{ .truncate = true },
+    });
+}
+
+fn usablePythonResolvedPath(allocator: Allocator, io: std.Io, exe: []const u8) !?[]const u8 {
     const result = std.process.run(allocator, io, .{
         .argv = &.{
             exe,
             "-c",
-            "import fpdf, pypdf, fontTools, PIL",
+            "import fpdf, pypdf, fontTools, PIL, sys; print(sys.executable)",
         },
-    }) catch return false;
+    }) catch return null;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
-    return switch (result.term) {
-        .exited => |code| code == 0,
-        else => false,
-    };
+    switch (result.term) {
+        .exited => |code| {
+            if (code != 0) return null;
+        },
+        else => return null,
+    }
+
+    const resolved = std.mem.trim(u8, result.stdout, " \t\r\n");
+    if (resolved.len == 0) return try allocator.dupe(u8, exe);
+    return try allocator.dupe(u8, resolved);
 }
