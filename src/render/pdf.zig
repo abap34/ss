@@ -88,9 +88,11 @@ fn cleanupStaleRenderTemps(allocator: Allocator, io: std.Io, cache_dir: []const 
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
+        const basename = std.fs.path.basename(entry.path);
         const is_render_artifact =
-            std.mem.endsWith(u8, entry.path, ".json") or
-            std.mem.endsWith(u8, entry.path, ".pdf");
+            std.mem.startsWith(u8, basename, "tmp-") and
+            (std.mem.endsWith(u8, basename, ".json") or
+                std.mem.endsWith(u8, basename, ".pdf"));
         if (!is_render_artifact) continue;
         dir.deleteFile(io, entry.path) catch {};
     }
