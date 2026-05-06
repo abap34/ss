@@ -111,6 +111,7 @@ fn applyGroupTargetConstraintSlice(
     used: *bool,
     last_constraint: *?Constraint,
     constraints: []const Constraint,
+    options: solver.SolveOptions,
 ) !void {
     for (constraints) |constraint| {
         if (constraint.target_node != group_id) continue;
@@ -120,12 +121,16 @@ fn applyGroupTargetConstraintSlice(
 
         if (solver.selfReferentialSize(constraint, workspace.axis)) |size| {
             if (size < -graph.ConstraintTolerance) {
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
+                if (options.record_diagnostics) {
+                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
+                }
                 continue;
             }
             _ = solver.setAxisSize(temp, size, constraint) catch |err| {
-                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
+                if (options.record_diagnostics) {
+                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
+                }
                 continue;
             };
             continue;
@@ -144,8 +149,10 @@ fn applyGroupTargetConstraintSlice(
         if (source_value == null) continue;
 
         _ = solver.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
-            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-            ir.noteConstraintFailure(workspace.graph.page_id, constraint, solver.axisAnchorSource(temp.*, constraint.target_anchor), kind);
+            if (options.record_diagnostics) {
+                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, solver.axisAnchorSource(temp.*, constraint.target_anchor), kind);
+            }
         };
     }
 }
@@ -167,6 +174,14 @@ pub fn applyTargetConstraints(
     ir: anytype,
     workspace: *graph.AxisWorkspace,
 ) !bool {
+    return applyTargetConstraintsWithOptions(ir, workspace, .{});
+}
+
+pub fn applyTargetConstraintsWithOptions(
+    ir: anytype,
+    workspace: *graph.AxisWorkspace,
+    options: solver.SolveOptions,
+) !bool {
     var changed = false;
     for (workspace.graph.child_ids, 0..) |group_id, group_index| {
         const group_node = ir.getNode(group_id) orelse return error.UnknownNode;
@@ -179,8 +194,8 @@ pub fn applyTargetConstraints(
         var temp = AxisState{};
         var used = false;
         var last_constraint: ?Constraint = null;
-        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, ir.constraints.items);
-        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints);
+        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, ir.constraints.items, options);
+        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints, options);
         if (!used) continue;
 
         if (temp.start == null and temp.end == null and temp.center == null and temp.size == null) {
@@ -195,9 +210,11 @@ pub fn applyTargetConstraints(
             }
         }
         _ = solver.reconcileAxisState(&temp) catch |err| {
-            if (last_constraint) |constraint| {
-                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, null, kind);
+            if (options.record_diagnostics) {
+                if (last_constraint) |constraint| {
+                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, null, kind);
+                }
             }
             continue;
         };

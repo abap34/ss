@@ -28,17 +28,95 @@ pub fn buildHorizontalConstraints(ir: anytype, workspace: *const graph.AxisWorks
 
     for (roots.items) |root| {
         if (components.isPageDependent(root)) continue;
-        const root_index = components.axisFallbackRootIndex(ir, root) orelse continue;
-        const root_id = workspace.nodeAt(root_index);
-        const root_node = ir.getNode(root_id) orelse return error.UnknownNode;
+        const placement_index = if (try computeHorizontalComponentUnit(ir, workspace, &components, root)) |unit|
+            unit.placement_index
+        else
+            components.axisFallbackRootIndex(ir, root) orelse continue;
+        const placement_id = workspace.nodeAt(placement_index);
+        const placement_node = ir.getNode(placement_id) orelse return error.UnknownNode;
         try constraints.append(ir.allocator, .{
-            .target_node = root_id,
+            .target_node = placement_id,
             .target_anchor = .left,
             .source = .{ .page = .left },
-            .offset = solver.styleForNode(ir, root_node).default_x,
+            .offset = solver.styleForNode(ir, placement_node).default_x,
         });
     }
     return constraints;
+}
+
+const HorizontalComponentUnit = struct {
+    placement_index: usize,
+};
+
+fn computeHorizontalComponentUnit(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+) !?HorizontalComponentUnit {
+    const seed_index = components.axisFallbackRootIndex(ir, component_root) orelse return null;
+
+    const temp = try ir.allocator.alloc(AxisState, workspace.states.len);
+    defer ir.allocator.free(temp);
+    @memcpy(temp, workspace.states);
+    _ = solver.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
+
+    var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, &.{});
+    try solver.runPageAxisPassWithOptions(ir, &temp_workspace, .{ .record_diagnostics = false });
+
+    var leftmost_index: ?usize = null;
+    var leftmost_start: f32 = 0;
+    for (workspace.graph.child_ids, 0..) |child_id, index| {
+        if (!components.contains(component_root, index)) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (groups.isGroupNode(node)) continue;
+        const start = temp[index].start orelse continue;
+        if (leftmost_index == null or start < leftmost_start) {
+            leftmost_index = index;
+            leftmost_start = start;
+        }
+    }
+
+    const placement_index = leftPredecessorGroupIndex(ir, workspace, components, component_root, leftmost_index orelse return null);
+    return .{ .placement_index = placement_index };
+}
+
+fn leftPredecessorGroupIndex(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    initial_index: usize,
+) usize {
+    var current = initial_index;
+    var pass: usize = 0;
+    while (pass < 8) : (pass += 1) {
+        var changed = false;
+        for (ir.constraints.items) |constraint| {
+            if (solver.anchorAxis(constraint.target_anchor) != .horizontal) continue;
+            if (constraint.target_anchor != .left) continue;
+            const target_index = workspace.indexOf(constraint.target_node) orelse continue;
+            if (target_index != current) continue;
+            if (!components.contains(component_root, target_index)) continue;
+
+            const source = switch (constraint.source) {
+                .page => continue,
+                .node => |node_source| node_source,
+            };
+            if (source.anchor != .right) continue;
+            if (constraint.offset < -graph.ConstraintTolerance) continue;
+            const source_index = workspace.indexOf(source.node_id) orelse continue;
+            if (!components.contains(component_root, source_index)) continue;
+
+            const source_node = ir.getNode(source.node_id) orelse continue;
+            if (!groups.isGroupNode(source_node)) continue;
+            current = source_index;
+            changed = true;
+            break;
+        }
+        if (!changed) break;
+    }
+    return current;
 }
 
 pub fn buildVerticalConstraints(ir: anytype, workspace: *const graph.AxisWorkspace) !std.ArrayList(Constraint) {

@@ -109,16 +109,14 @@ fn place_same_top_right(node: object, source: object, right: number, top_delta: 
   return node
 end
 
-fn two_columns_constraints(left: object, right: object, gap: number, right_inset_value: number) -> constraints
+fn two_columns_constraints(left: object, right: object, gap: number) -> constraints
   return constraints(
-    equal(anchor(right, "left"), anchor(left, "right"), gap),
-    left_inset(left, 96),
-    ;; right_inset(right, right_inset_value)
+    equal(anchor(right, "left"), anchor(left, "right"), gap)
   )
 end
 
 fn two_columns_gap(left: object, right: object, gap: number) -> object
-  two_columns_constraints(left, right, gap, 96)
+  two_columns_constraints(left, right, gap)
   return group(left, right)
 end
 

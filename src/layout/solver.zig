@@ -19,6 +19,10 @@ const PageLayout = model.PageLayout;
 const TextStyle = model.TextStyle;
 const ConstraintTolerance = graph.ConstraintTolerance;
 
+pub const SolveOptions = struct {
+    record_diagnostics: bool = true,
+};
+
 pub fn solveLayout(ir: anytype) !void {
     for (ir.nodes.items) |*node| {
         switch (node.kind) {
@@ -187,6 +191,10 @@ pub fn hasAxisTargetConstraint(ir: anytype, node_id: NodeId, axis: Axis) bool {
 }
 
 pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !void {
+    return runPageAxisPassWithOptions(ir, workspace, .{});
+}
+
+pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
     var pass: usize = 0;
     while (pass < 32) : (pass += 1) {
         var changed = false;
@@ -195,19 +203,19 @@ pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !void {
             var local_changed = false;
 
             for (workspace.states) |*state| {
-                local_changed = (try reconcileAxisStateLocalized(ir, workspace.graph.page_id, state)) or local_changed;
+                local_changed = (try reconcileAxisStateLocalized(ir, workspace.graph.page_id, state, options)) or local_changed;
             }
 
             for (ir.constraints.items) |constraint| {
                 if (groups.constraintTargetsGroup(ir, constraint)) continue;
                 if (groups.constraintUsesGroupSource(ir, constraint)) continue;
-                local_changed = (try applyAxisConstraint(ir, workspace, constraint, false)) or local_changed;
+                local_changed = (try applyAxisConstraint(ir, workspace, constraint, false, options)) or local_changed;
             }
 
             for (workspace.soft_constraints) |constraint| {
                 if (groups.constraintTargetsGroup(ir, constraint)) continue;
                 if (groups.constraintUsesGroupSource(ir, constraint)) continue;
-                local_changed = (try applyAxisConstraint(ir, workspace, constraint, true)) or local_changed;
+                local_changed = (try applyAxisConstraint(ir, workspace, constraint, true, options)) or local_changed;
             }
 
             changed = local_changed or changed;
@@ -215,30 +223,32 @@ pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !void {
         }
 
         changed = (try groups.updateAxisStates(ir, workspace)) or changed;
-        changed = (try groups.applyTargetConstraints(ir, workspace)) or changed;
+        changed = (try groups.applyTargetConstraintsWithOptions(ir, workspace, options)) or changed;
 
         for (ir.constraints.items) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            changed = (try applyAxisConstraint(ir, workspace, constraint, false)) or changed;
+            changed = (try applyAxisConstraint(ir, workspace, constraint, false, options)) or changed;
         }
 
         for (workspace.soft_constraints) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            changed = (try applyAxisConstraint(ir, workspace, constraint, true)) or changed;
+            changed = (try applyAxisConstraint(ir, workspace, constraint, true, options)) or changed;
         }
 
         if (!changed) break;
     }
 }
 
-fn reconcileAxisStateLocalized(ir: anytype, page_id: NodeId, state: *AxisState) !bool {
+fn reconcileAxisStateLocalized(ir: anytype, page_id: NodeId, state: *AxisState, options: SolveOptions) !bool {
     return reconcileAxisState(state) catch |err| switch (err) {
         error.ConstraintConflict, error.NegativeConstraintSize => blk: {
             const incoming = state.size_source orelse state.end_source orelse state.start_source orelse state.center_source;
             const existing = pickReconcileExistingSource(state, incoming);
-            if (incoming) |c| {
-                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(page_id, c, existing, kind);
+            if (options.record_diagnostics) {
+                if (incoming) |c| {
+                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                    ir.noteConstraintFailure(page_id, c, existing, kind);
+                }
             }
             break :blk false;
         },
@@ -273,7 +283,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
     };
 }
 
-fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool) !bool {
+fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool, options: SolveOptions) !bool {
     if (anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
     const target_page = ir.parentPageOf(constraint.target_node) orelse return error.MissingParentPage;
@@ -286,14 +296,18 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
     if (selfReferentialSize(constraint, workspace.axis)) |size| {
         if (size < -ConstraintTolerance) {
             if (is_soft) return false;
-            ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, .negative_size);
+            if (options.record_diagnostics) {
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, .negative_size);
+            }
             return false;
         }
         if (is_soft and workspace.states[target_index].size != null) return false;
         return setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
             if (is_soft) return false;
-            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-            ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, kind);
+            if (options.record_diagnostics) {
+                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, kind);
+            }
             return false;
         };
     }
@@ -304,13 +318,15 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
 
     const source_value = try constraintSourceValue(ir, workspace, constraint.source);
     if (source_value == null) {
-        return try applyReverseAxisConstraint(ir, workspace, constraint, is_soft, target_index);
+        return try applyReverseAxisConstraint(ir, workspace, constraint, is_soft, target_index, options);
     }
 
     return setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
         if (is_soft) return false;
-        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-        ir.noteConstraintFailure(workspace.graph.page_id, constraint, axisAnchorSource(workspace.states[target_index], constraint.target_anchor), kind);
+        if (options.record_diagnostics) {
+            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+            ir.noteConstraintFailure(workspace.graph.page_id, constraint, axisAnchorSource(workspace.states[target_index], constraint.target_anchor), kind);
+        }
         return false;
     };
 }
@@ -321,6 +337,7 @@ fn applyReverseAxisConstraint(
     constraint: Constraint,
     is_soft: bool,
     target_index: usize,
+    options: SolveOptions,
 ) !bool {
     if (is_soft) return false;
 
@@ -339,10 +356,15 @@ fn applyReverseAxisConstraint(
     const source_index = workspace.indexOf(node_source.node_id) orelse return false;
     if (axisAnchorValue(workspace.states[source_index], node_source.anchor) != null) return false;
 
-    const target_value = axisAnchorValue(workspace.states[target_index], constraint.target_anchor) orelse return false;
+    const target_state = workspace.states[target_index];
+    if (target_state.size_is_default and axisAnchorSource(target_state, constraint.target_anchor) == null) return false;
+
+    const target_value = axisAnchorValue(target_state, constraint.target_anchor) orelse return false;
     return setAxisAnchor(&workspace.states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
-        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-        ir.noteConstraintFailure(workspace.graph.page_id, constraint, axisAnchorSource(workspace.states[source_index], node_source.anchor), kind);
+        if (options.record_diagnostics) {
+            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+            ir.noteConstraintFailure(workspace.graph.page_id, constraint, axisAnchorSource(workspace.states[source_index], node_source.anchor), kind);
+        }
         return false;
     };
 }
