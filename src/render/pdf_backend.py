@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -38,6 +39,21 @@ FONT_DIR = REPO_ROOT / "third_party" / "fonts"
 MATH_RENDER_VERSION = "v3"
 HIGHLIGHT_RENDER_VERSION = "v1"
 FA_RENDER_VERSION = "v1"
+INCREMENTAL_RENDER_VERSION = "page-cache-v1"
+
+CACHE_ROOT = Path(".ss-cache")
+MATH_CACHE_DIRNAME = "math"
+HIGHLIGHT_CACHE_DIRNAME = "highlight"
+ICON_CACHE_DIRNAME = "icons"
+RENDER_CACHE_DIRNAME = "render"
+PAGE_CACHE_DIRNAME = "pages"
+MANIFEST_CACHE_DIRNAME = "manifests"
+
+TMP_FULL_BASE_LABEL = "full-base"
+TMP_PAGE_BASE_LABEL = "page-base"
+TMP_PAGE_FINAL_LABEL = "page-final"
+PDF_SUFFIX = ".pdf"
+INTERNAL_LINK_PREFIX = "#"
 
 # Canonical fpdf2 family + style for each render-policy font name.
 FONT_ALIAS: Dict[str, Tuple[str, str]] = {
@@ -67,6 +83,68 @@ class Overlay:
     y: float
     width: float
     height: float
+
+
+@dataclass(frozen=True)
+class RuntimeCaches:
+    math_dir: Path
+    highlight_dir: Path
+    icon_dir: Path
+    render_dir: Path
+    page_dir: Path
+    manifest_dir: Path
+
+    @classmethod
+    def create(cls) -> "RuntimeCaches":
+        render_dir = CACHE_ROOT / RENDER_CACHE_DIRNAME
+        caches = cls(
+            math_dir=CACHE_ROOT / MATH_CACHE_DIRNAME,
+            highlight_dir=CACHE_ROOT / HIGHLIGHT_CACHE_DIRNAME,
+            icon_dir=CACHE_ROOT / ICON_CACHE_DIRNAME,
+            render_dir=render_dir,
+            page_dir=render_dir / PAGE_CACHE_DIRNAME,
+            manifest_dir=render_dir / MANIFEST_CACHE_DIRNAME,
+        )
+        for path in (caches.math_dir, caches.highlight_dir, caches.icon_dir, caches.render_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        return caches
+
+    def ensure_page_cache(self) -> None:
+        self.page_dir.mkdir(parents=True, exist_ok=True)
+        self.manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    def temp_pdf(self, label: str, identity: str) -> Path:
+        pid = os.getpid()
+        nonce = hashlib.sha256(f"{label}:{identity}:{pid}".encode("utf-8")).hexdigest()[:12]
+        return self.render_dir / f"tmp-{label}-{pid}-{nonce}{PDF_SUFFIX}"
+
+
+@dataclass(frozen=True)
+class IncrementalRenderStats:
+    rendered: int
+    reused: int
+    total: int
+
+    def message(self) -> str:
+        return f"pdf backend: incremental render reused {self.reused}/{self.total} page(s), rendered {self.rendered}"
+
+
+@dataclass(frozen=True)
+class CachedPage:
+    index: int
+    page_id: int
+    name: Optional[str]
+    digest: str
+    pdf_path: Path
+
+    def manifest_entry(self) -> dict:
+        return {
+            "index": self.index,
+            "page_id": self.page_id,
+            "name": self.name,
+            "hash": self.digest,
+            "pdf": str(self.pdf_path),
+        }
 
 
 @dataclass(frozen=True)
@@ -150,19 +228,13 @@ def main(argv: List[str]) -> int:
     with open(input_json, "r", encoding="utf-8") as f:
         doc = json.load(f)
 
-    math_cache_dir = Path(".ss-cache") / "math"
-    math_cache_dir.mkdir(parents=True, exist_ok=True)
-    highlight_cache_dir = Path(".ss-cache") / "highlight"
-    highlight_cache_dir.mkdir(parents=True, exist_ok=True)
-    icon_cache_dir = Path(".ss-cache") / "icons"
-    icon_cache_dir.mkdir(parents=True, exist_ok=True)
-    temp_base = Path(".ss-cache") / "render"
-    temp_base.mkdir(parents=True, exist_ok=True)
-    base_pdf = temp_base / (Path(output_pdf).stem + ".base.pdf")
+    caches = RuntimeCaches.create()
 
-    renderer = Renderer(asset_base_dir, math_cache_dir, highlight_cache_dir, icon_cache_dir)
-    overlays_by_page = renderer.render(doc, str(base_pdf))
-    merge_overlays(str(base_pdf), output_pdf, overlays_by_page)
+    if supports_incremental_render(doc):
+        stats = IncrementalPageRenderer(doc, output_pdf, asset_base_dir, caches).render()
+        print(stats.message(), file=sys.stderr)
+    else:
+        render_full_document(doc, output_pdf, asset_base_dir, caches)
 
     if _glyph_warnings:
         unique = sorted(set(_glyph_warnings))
@@ -187,6 +259,16 @@ def ensure_fonts_present() -> None:
         return
     fetch_script = FONT_DIR / "fetch.py"
     subprocess.run([sys.executable, str(fetch_script)], check=True)
+
+
+def render_full_document(doc: dict, output_pdf: str, asset_base_dir: str, caches: RuntimeCaches) -> None:
+    base_pdf = caches.temp_pdf(TMP_FULL_BASE_LABEL, output_pdf)
+    try:
+        renderer = Renderer(asset_base_dir, caches.math_dir, caches.highlight_dir, caches.icon_dir)
+        overlays_by_page = renderer.render(doc, str(base_pdf))
+        merge_overlays(str(base_pdf), output_pdf, overlays_by_page)
+    finally:
+        base_pdf.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +425,20 @@ class Renderer:
 
         self.pdf.output(output_pdf)
         return overlays_by_page
+
+    def render_page(self, doc: dict, page_index: int, page_id: int, output_pdf: str) -> List[Overlay]:
+        node_by_id = {node["id"]: node for node in doc["nodes"]}
+        children_by_parent = {entry["parent"]: entry["children"] for entry in doc["contains"]}
+        self.pdf.add_page()
+        self._current_page_index = page_index
+        overlays: List[Overlay] = []
+        for child_id in children_by_parent.get(page_id, []):
+            node = node_by_id.get(child_id)
+            if node is None:
+                continue
+            overlays.extend(self._render_node(node))
+        self.pdf.output(output_pdf)
+        return overlays
 
     def _render_node(self, node: dict) -> List[Overlay]:
         render = node_render(node)
@@ -1061,6 +1157,226 @@ def merge_overlays(base_pdf: str, output_pdf: str, overlays_by_page: Dict[int, L
 
     with open(output_pdf, "wb") as f:
         writer.write(f)
+
+
+# ---------------------------------------------------------------------------
+# Incremental page rendering
+
+
+def supports_incremental_render(doc: dict) -> bool:
+    """Page PDFs are reusable only when the document has no intra-PDF links.
+
+    fpdf2 encodes internal link annotations against the full document it is
+    currently writing. Reusing a single cached page in a newly assembled PDF
+    would make those references ambiguous, so links conservatively force the
+    older full-document path.
+    """
+    for node in doc.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        properties = node.get("properties")
+        if isinstance(properties, dict) and properties.get("link_id"):
+            return False
+        if node_has_internal_link(node):
+            return False
+    return True
+
+
+def node_has_internal_link(node: dict) -> bool:
+    for line in node.get("inline_lines") or []:
+        if inline_line_has_internal_link(line):
+            return True
+    for block in node.get("blocks") or []:
+        if block_has_internal_link(block):
+            return True
+    return False
+
+
+def block_has_internal_link(block: dict) -> bool:
+    if not isinstance(block, dict):
+        return False
+    for line in block.get("lines") or []:
+        if inline_line_has_internal_link(line):
+            return True
+    for item in block.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        for child in item.get("blocks") or []:
+            if block_has_internal_link(child):
+                return True
+    return False
+
+
+def inline_line_has_internal_link(line: object) -> bool:
+    if not isinstance(line, list):
+        return False
+    for segment in line:
+        if not isinstance(segment, dict):
+            continue
+        url = segment.get("url")
+        if isinstance(url, str) and url.startswith(INTERNAL_LINK_PREFIX) and len(url) > len(INTERNAL_LINK_PREFIX):
+            return True
+    return False
+
+
+class IncrementalPageRenderer:
+    def __init__(self, doc: dict, output_pdf: str, asset_base_dir: str, caches: RuntimeCaches) -> None:
+        self.doc = doc
+        self.output_pdf = output_pdf
+        self.asset_base_dir = asset_base_dir
+        self.caches = caches
+        self.node_by_id = {node["id"]: node for node in doc["nodes"]}
+        self.children_by_parent = {entry["parent"]: entry["children"] for entry in doc["contains"]}
+
+    def render(self) -> IncrementalRenderStats:
+        self.caches.ensure_page_cache()
+
+        pages: List[CachedPage] = []
+        rendered = 0
+        reused = 0
+
+        for page_index, page_id in enumerate(self.doc["page_order"]):
+            page = self._cached_page(page_index, page_id)
+            if page.pdf_path.exists():
+                reused += 1
+            else:
+                rendered += 1
+                self._render_page(page)
+            pages.append(page)
+
+        self._assemble(pages)
+        self._write_manifest(pages, rendered, reused)
+        return IncrementalRenderStats(rendered=rendered, reused=reused, total=len(pages))
+
+    def _cached_page(self, page_index: int, page_id: int) -> CachedPage:
+        digest = self._page_digest(page_id)
+        page_node = self.node_by_id.get(page_id, {})
+        return CachedPage(
+            index=page_index,
+            page_id=page_id,
+            name=page_node.get("name"),
+            digest=digest,
+            pdf_path=self.caches.page_dir / f"{digest}{PDF_SUFFIX}",
+        )
+
+    def _render_page(self, page: CachedPage) -> None:
+        tmp_base_pdf = self.caches.temp_pdf(TMP_PAGE_BASE_LABEL, page.digest)
+        tmp_page_pdf = self.caches.temp_pdf(TMP_PAGE_FINAL_LABEL, page.digest)
+        try:
+            renderer = Renderer(self.asset_base_dir, self.caches.math_dir, self.caches.highlight_dir, self.caches.icon_dir)
+            overlays = renderer.render_page(self.doc, page.index, page.page_id, str(tmp_base_pdf))
+            merge_overlays(str(tmp_base_pdf), str(tmp_page_pdf), {0: overlays})
+            tmp_page_pdf.replace(page.pdf_path)
+        finally:
+            tmp_base_pdf.unlink(missing_ok=True)
+            tmp_page_pdf.unlink(missing_ok=True)
+
+    def _assemble(self, pages: List[CachedPage]) -> None:
+        writer = PdfWriter()
+        for page in pages:
+            reader = PdfReader(str(page.pdf_path))
+            writer.add_page(reader.pages[0])
+        with open(self.output_pdf, "wb") as f:
+            writer.write(f)
+
+    def _write_manifest(self, pages: List[CachedPage], rendered: int, reused: int) -> None:
+        manifest = {
+            "version": INCREMENTAL_RENDER_VERSION,
+            "renderer": renderer_fingerprint(),
+            "project_path": self.doc.get("project_path"),
+            "asset_base_dir": self.doc.get("asset_base_dir"),
+            "rendered": rendered,
+            "reused": reused,
+            "pages": [page.manifest_entry() for page in pages],
+        }
+        self._manifest_path().write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _manifest_path(self) -> Path:
+        identity = hashlib.sha256(
+            json.dumps(
+                {
+                    "project_path": self.doc.get("project_path"),
+                    "asset_base_dir": self.doc.get("asset_base_dir"),
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        return self.caches.manifest_dir / f"{identity}.json"
+
+    def _page_digest(self, page_id: int) -> str:
+        payload = {
+            "version": INCREMENTAL_RENDER_VERSION,
+            "renderer": renderer_fingerprint(),
+            "ir_version": self.doc.get("ir_version"),
+            "page": self._normalized_page_payload(page_id),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def _normalized_page_payload(self, page_id: int) -> dict:
+        page_node = self.node_by_id.get(page_id, {})
+        local_ids: Dict[int, int] = {}
+        ordered_ids: List[int] = []
+
+        def visit(node_id: int) -> None:
+            if node_id in local_ids:
+                return
+            local_ids[node_id] = len(local_ids) + 1
+            ordered_ids.append(node_id)
+            for child_id in self.children_by_parent.get(node_id, []):
+                visit(child_id)
+
+        visit(page_id)
+        return {
+            "name": page_node.get("name"),
+            "direct_children": [
+                local_ids[child]
+                for child in self.children_by_parent.get(page_id, [])
+                if child in local_ids
+            ],
+            "nodes": [self._normalized_node(self.node_by_id.get(node_id, {})) for node_id in ordered_ids],
+            "contains": [
+                {
+                    "parent": local_ids[parent],
+                    "children": [local_ids[child] for child in children if child in local_ids],
+                }
+                for parent, children in sorted(self.children_by_parent.items())
+                if parent in local_ids
+            ],
+        }
+
+    def _normalized_node(self, node: dict) -> dict:
+        normalized = {
+            key: value
+            for key, value in node.items()
+            if key not in {"id", "origin", "page_index"}
+        }
+        render = normalized.get("render")
+        kind = render.get("kind") if isinstance(render, dict) else None
+        if kind in {"vector_asset", "raster_asset"}:
+            content = normalized.get("content")
+            if isinstance(content, str) and content:
+                normalized["asset_fingerprint"] = file_fingerprint(resolve_asset_path(self.asset_base_dir, content))
+        return normalized
+
+
+def file_fingerprint(path_text: str) -> dict:
+    path = Path(path_text)
+    stat = path.stat()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {
+        "path": str(path),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": digest,
+    }
+
+
+def renderer_fingerprint() -> str:
+    chunks = [INCREMENTAL_RENDER_VERSION, MATH_RENDER_VERSION, HIGHLIGHT_RENDER_VERSION, FA_RENDER_VERSION]
+    chunks.append(hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    for spec in CODE_HIGHLIGHTERS.values():
+        chunks.append(hashlib.sha256(spec.script_path.read_bytes()).hexdigest())
+    return hashlib.sha256("\0".join(chunks).encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
