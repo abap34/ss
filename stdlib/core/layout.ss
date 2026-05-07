@@ -1,12 +1,14 @@
 import std:core/classes
 
-fn layout_v(policy: string) -> page
+fn layout_v(policy: string, center_offset: number = 0) -> page
   set_prop(pagectx(), "layout_v", policy)
+  set_prop(pagectx(), "layout_v_center_offset", center_offset)
   return pagectx()
 end
 
-fn layout_v_all(policy: string) -> document
+fn layout_v_all(policy: string, center_offset: number = 0) -> document
   set_prop(docctx(), "layout_v", policy)
+  set_prop(docctx(), "layout_v_center_offset", center_offset)
   return docctx()
 end
 

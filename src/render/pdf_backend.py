@@ -410,11 +410,14 @@ class Renderer:
     def render(self, doc: dict, output_pdf: str) -> Dict[int, List[Overlay]]:
         node_by_id = {node["id"]: node for node in doc["nodes"]}
         children_by_parent = {entry["parent"]: entry["children"] for entry in doc["contains"]}
+        document_node = node_by_id.get(doc.get("document_id"), {})
         overlays_by_page: Dict[int, List[Overlay]] = {}
 
         for page_index, page_id in enumerate(doc["page_order"]):
             self.pdf.add_page()
             self._current_page_index = page_index
+            page_node = node_by_id.get(page_id, {})
+            self._draw_page_background(page_node, document_node)
             page_overlays: List[Overlay] = []
             for child_id in children_by_parent.get(page_id, []):
                 node = node_by_id.get(child_id)
@@ -429,8 +432,11 @@ class Renderer:
     def render_page(self, doc: dict, page_index: int, page_id: int, output_pdf: str) -> List[Overlay]:
         node_by_id = {node["id"]: node for node in doc["nodes"]}
         children_by_parent = {entry["parent"]: entry["children"] for entry in doc["contains"]}
+        document_node = node_by_id.get(doc.get("document_id"), {})
         self.pdf.add_page()
         self._current_page_index = page_index
+        page_node = node_by_id.get(page_id, {})
+        self._draw_page_background(page_node, document_node)
         overlays: List[Overlay] = []
         for child_id in children_by_parent.get(page_id, []):
             node = node_by_id.get(child_id)
@@ -469,6 +475,14 @@ class Renderer:
         raise RuntimeError(f"unknown render kind: {kind}")
 
     # -- chrome --
+
+    def _draw_page_background(self, page_node: dict, document_node: dict) -> None:
+        fill = background_color_for_page(page_node, document_node)
+        if fill is None:
+            return
+        self._set_fill(fill)
+        self.pdf.set_line_width(0)
+        self.pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, style="F")
 
     def _draw_node_chrome(self, render: dict, x: float, y: float, width: float, height: float) -> None:
         rule = render_rule_section(render)
@@ -859,7 +873,7 @@ class Renderer:
         tex_body: str,
         max_width: float,
     ) -> Tuple[List[Overlay], float]:
-        pdf_path = render_inline_math_to_pdf(tex_body, self.math_cache_dir)
+        pdf_path = render_inline_math_to_pdf(tex_body, self.math_cache_dir, spec.color)
         src_w, src_h = pdf_page_size(pdf_path)
         target_h = spec.line_height
         target_w = src_w * (target_h / src_h) if src_h > 0 else max_width
@@ -942,7 +956,8 @@ class Renderer:
             kind = str(run.get("kind", "text"))
             segment = str(run.get("text", ""))
             if kind in ("math", "display_math"):
-                pdf_path = render_inline_math_to_pdf(segment, self.math_cache_dir)
+                color = parse_color_array(run.get("color")) if run.get("color") is not None else spec.color
+                pdf_path = render_inline_math_to_pdf(segment, self.math_cache_dir, color)
                 src_w, src_h = pdf_page_size(pdf_path)
                 target_h = spec.font_size * spec.inline_math_height_factor
                 scale = target_h / src_h if src_h > 0 else 1.0
@@ -1086,7 +1101,9 @@ class Renderer:
         height: float,
         content: str,
     ) -> List[Overlay]:
-        pdf_path = render_math_tex_to_pdf(content, self.math_cache_dir)
+        math = render.get("math") or {}
+        color = parse_color_array(math.get("color")) if math.get("color") is not None else (0.0, 0.0, 0.0)
+        pdf_path = render_math_tex_to_pdf(content, self.math_cache_dir, color)
         src_w, src_h = pdf_page_size(pdf_path)
         display_w, display_h = fit_math_block_size(render, src_w, src_h, width, height, content)
         return [Overlay(pdf_path, x, y + max(0.0, (height - display_h) / 2.0), display_w, display_h)]
@@ -1314,6 +1331,7 @@ class IncrementalPageRenderer:
 
     def _normalized_page_payload(self, page_id: int) -> dict:
         page_node = self.node_by_id.get(page_id, {})
+        document_node = self.node_by_id.get(self.doc.get("document_id"), {})
         local_ids: Dict[int, int] = {}
         ordered_ids: List[int] = []
 
@@ -1328,6 +1346,7 @@ class IncrementalPageRenderer:
         visit(page_id)
         return {
             "name": page_node.get("name"),
+            "document_background_fill": node_property(document_node, "background_fill"),
             "direct_children": [
                 local_ids[child]
                 for child in self.children_by_parent.get(page_id, [])
@@ -1383,8 +1402,9 @@ def renderer_fingerprint() -> str:
 # Math (LaTeX -> PDF)
 
 
-def render_math_tex_to_pdf(tex_body: str, cache_dir: Path) -> str:
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":block:" + tex_body).encode("utf-8")).hexdigest()[:16]
+def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None) -> str:
+    color_key = color_cache_key(color)
+    digest = hashlib.sha256((MATH_RENDER_VERSION + ":block:" + color_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
     work_dir = cache_dir / digest
     work_dir.mkdir(parents=True, exist_ok=True)
     tex_path = work_dir / "main.tex"
@@ -1395,7 +1415,10 @@ def render_math_tex_to_pdf(tex_body: str, cache_dir: Path) -> str:
     tex_path.write_text(
         "\\documentclass[border=0pt]{standalone}\n"
         "\\usepackage{amsmath,amssymb}\n"
+        "\\usepackage{graphicx}\n"
+        "\\usepackage{xcolor}\n"
         "\\begin{document}\n"
+        f"{color_command(color)}"
         "$\\displaystyle\n"
         "\\begin{array}{l}\n"
         f"{normalized}\n"
@@ -1407,8 +1430,9 @@ def render_math_tex_to_pdf(tex_body: str, cache_dir: Path) -> str:
     return str(pdf_path)
 
 
-def render_inline_math_to_pdf(tex_body: str, cache_dir: Path) -> str:
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":inline:" + tex_body).encode("utf-8")).hexdigest()[:16]
+def render_inline_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None) -> str:
+    color_key = color_cache_key(color)
+    digest = hashlib.sha256((MATH_RENDER_VERSION + ":inline:" + color_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
     work_dir = cache_dir / digest
     work_dir.mkdir(parents=True, exist_ok=True)
     tex_path = work_dir / "main.tex"
@@ -1418,13 +1442,28 @@ def render_inline_math_to_pdf(tex_body: str, cache_dir: Path) -> str:
     tex_path.write_text(
         "\\documentclass[border=0pt]{standalone}\n"
         "\\usepackage{amsmath,amssymb}\n"
+        "\\usepackage{graphicx}\n"
+        "\\usepackage{xcolor}\n"
         "\\begin{document}\n"
+        f"{color_command(color)}"
         f"$\\mathstrut {tex_body}$\n"
         "\\end{document}\n",
         encoding="utf-8",
     )
     run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(work_dir))
     return str(pdf_path)
+
+
+def color_cache_key(color: Optional[Color]) -> str:
+    if color is None:
+        return "default"
+    return ",".join(f"{max(0.0, min(1.0, component)):.6f}" for component in color)
+
+
+def color_command(color: Optional[Color]) -> str:
+    if color is None:
+        return ""
+    return "\\color[rgb]{" + color_cache_key(color) + "}\n"
 
 
 def render_inline_icon_to_pdf(icon_ref: str, cache_dir: Path) -> str:
@@ -1760,6 +1799,31 @@ def parse_optional_color_array(value: object) -> Optional[Color]:
     if value is None:
         return None
     return parse_color_array(value)
+
+
+def node_property(node: dict, key: str) -> Optional[str]:
+    properties = node.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    value = properties.get(key)
+    if not isinstance(value, str) or value == "":
+        return None
+    return value
+
+
+def background_color_for_page(page_node: dict, document_node: dict) -> Optional[Color]:
+    return parse_optional_color_property(
+        node_property(page_node, "background_fill") or node_property(document_node, "background_fill")
+    )
+
+
+def parse_optional_color_property(value: Optional[str]) -> Optional[Color]:
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 3:
+        raise RuntimeError(f"expected RGB color property, got {value!r}")
+    return (float(parts[0]), float(parts[1]), float(parts[2]))
 
 
 def parse_dash_array(value: object) -> Optional[Tuple[float, float]]:

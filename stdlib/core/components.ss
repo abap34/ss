@@ -27,16 +27,14 @@ fn panel(style_value: style) -> object
   return panel
 end
 
-fn page_background(fill_name: string) -> object
-  let bg = panel(style("custom"))
-  set_prop(bg, "chrome_fill", fill_name)
-  set_prop(bg, "chrome_line_width", "0")
-  set_prop(bg, "chrome_radius", "0")
-  left_inset(bg, 0)
-  right_inset(bg, 0)
-  top_inset(bg, 0)
-  bottom_inset(bg, 0)
-  return bg
+fn page_background(fill_name: string) -> page
+  set_prop(pagectx(), "background_fill", fill_name)
+  return pagectx()
+end
+
+fn document_background(fill_name: string) -> document
+  set_prop(docctx(), "background_fill", fill_name)
+  return docctx()
 end
 
 fn frame_with_style(inner: object, panel_style_name: string, pad_x: number, pad_y: number) -> object
@@ -140,8 +138,8 @@ fn citation(target: object, number: number, reference_text: string) -> object
   rewrite_text(target, marker, markdown_link(escaped_marker, "#" ++ id))
 
   let ref = link_target(citation_object(marker ++ " " ++ reference_text), id)
-  inset_x(ref, 90, 90)
-  top_inset(ref, add(632, mul(sub(number, 1), 16)))
+  inset_x(ref, 120, 90)
+  top_inset(ref, add(632, mul(sub(number, 1), 20)))
   return ref
 end
 
