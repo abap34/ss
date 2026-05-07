@@ -59,6 +59,7 @@ pub const MathPaint = struct {
     block_min_height: f32,
     block_vertical_padding: f32,
     scale: f32,
+    color: Color,
 };
 
 pub const CodePaint = struct {
@@ -114,6 +115,12 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
     };
 }
 
+pub fn resolvePageBackground(ir: anytype, page: *const Node) ?Color {
+    if (parseColorProperty(ir, page, "background_fill")) |color| return color;
+    const document = ir.getNode(ir.document_id) orelse return null;
+    return parseColorProperty(ir, document, "background_fill");
+}
+
 pub fn resolveKind(ir: anytype, node: *const Node) RenderKind {
     if (parseRenderKindProperty(ir, node)) |kind| return kind;
     return .text;
@@ -163,6 +170,7 @@ fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
         .block_min_height = parseFloatProperty(ir, node, "math_block_min_height") orelse 30,
         .block_vertical_padding = parseFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
         .scale = parseFloatProperty(ir, node, "math_scale") orelse 1,
+        .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
     };
 }
 

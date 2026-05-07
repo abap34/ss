@@ -224,7 +224,8 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
         if (index != units.items.len - 1) total_height += unit.spacing_after;
     }
 
-    var current_top = PageLayout.height / 2 + total_height / 2;
+    const center_offset = verticalCenterOffset(ir, workspace.graph.page_id);
+    var current_top = PageLayout.height / 2 - center_offset + total_height / 2;
     for (units.items) |unit| {
         try appendVerticalComponentPlacementConstraints(
             allocator,
@@ -294,6 +295,18 @@ fn findVerticalComponentUnit(units: []const VerticalComponentUnit, component_roo
         if (unit.component_root == component_root) return unit;
     }
     return null;
+}
+
+fn verticalCenterOffset(ir: anytype, page_id: NodeId) f32 {
+    const page = ir.getNode(page_id) orelse return 0;
+    if (parseNodeFloatProperty(page, "layout_v_center_offset")) |value| return value;
+    const document = ir.getNode(ir.document_id) orelse return 0;
+    return parseNodeFloatProperty(document, "layout_v_center_offset") orelse 0;
+}
+
+fn parseNodeFloatProperty(node: *const model.Node, key: []const u8) ?f32 {
+    const value = model.nodeProperty(node, key) orelse return null;
+    return std.fmt.parseFloat(f32, value) catch null;
 }
 
 fn computeVerticalComponentUnit(

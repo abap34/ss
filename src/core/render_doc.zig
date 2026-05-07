@@ -78,6 +78,13 @@ pub fn build(allocator: std.mem.Allocator, ir: anytype) !RenderDoc {
     var doc = RenderDoc.init();
     errdefer doc.deinit(allocator);
 
+    for (ir.page_order.items) |page_id| {
+        const page = ir.getNode(page_id) orelse continue;
+        if (render_policy.resolvePageBackground(ir, page)) |fill| {
+            try appendPageBackground(allocator, &doc, page, fill);
+        }
+    }
+
     for (ir.nodes.items) |*node| {
         if (node.kind != .object or !node.attached) continue;
         const resolved = render_policy.resolve(ir, node);
@@ -101,6 +108,15 @@ pub fn build(allocator: std.mem.Allocator, ir: anytype) !RenderDoc {
 
 fn hasChrome(chrome: render_policy.ChromePaint) bool {
     return chrome.fill != null or chrome.stroke != null or chrome.line_width != 1.0 or chrome.radius != 10.0;
+}
+
+fn appendPageBackground(allocator: std.mem.Allocator, doc: *RenderDoc, page: *const model.Node, fill: render_policy.Color) !void {
+    var op = Op.init(page, "draw_chrome");
+    errdefer op.deinit(allocator);
+    try op.putColor(allocator, "fill", fill);
+    try op.putFloat(allocator, "line_width", 0);
+    try op.putFloat(allocator, "radius", 0);
+    try doc.ops.append(allocator, op);
 }
 
 fn appendRule(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, rule: render_policy.RulePaint) !void {
@@ -158,6 +174,7 @@ fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
     try op.put(allocator, "capability", "compile_math");
     try op.put(allocator, "source", node.content orelse "");
     try op.putFloat(allocator, "scale", math.scale);
+    try op.putColor(allocator, "color", math.color);
     try op.putFloat(allocator, "block_line_height", math.block_line_height);
     try op.putFloat(allocator, "block_min_height", math.block_min_height);
     try op.putFloat(allocator, "block_vertical_padding", math.block_vertical_padding);

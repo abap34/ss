@@ -8,6 +8,8 @@ type ScalarLike = string | number
 
 type DocumentObject = object {
   layout_v: LayoutPolicy = "top_flow"
+  layout_v_center_offset: ScalarLike = "0"
+  background_fill: Color = ""
 }
 
 type PageObject = object {
@@ -145,14 +147,14 @@ type CitationObject = object {
   roles = ["citation"]
 
   text_parse: TextParseMode = "inline"
-  text_size: ScalarLike = "11"
-  text_line_height: ScalarLike = "14"
-  text_color: Color = c"0.22,0.22,0.22"
-  text_link_color: Color = c"0.1,0.25,0.75"
-  layout_font_size: ScalarLike = "11"
-  layout_line_height: ScalarLike = "14"
+  text_size: ScalarLike = "13"
+  text_line_height: ScalarLike = "17"
+  text_color: Color = c"0.58,0.58,0.58"
+  text_link_color: Color = c"0.58,0.58,0.58"
+  layout_font_size: ScalarLike = "13"
+  layout_line_height: ScalarLike = "17"
   layout_spacing_after: ScalarLike = "0"
-  layout_x: ScalarLike = "90"
+  layout_x: ScalarLike = "120"
   layout_right_inset: ScalarLike = "90"
   wrap: WrapMode = "off"
 }
