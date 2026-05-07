@@ -1331,7 +1331,6 @@ function activate(context) {
         output.appendLine("[preview] failed:");
         if (result.stderr.trim().length > 0) output.appendLine(result.stderr.trimEnd());
         if (result.stdout.trim().length > 0) output.appendLine(result.stdout.trimEnd());
-        vscode.window.showErrorMessage("ss preview failed. See the ss-slide output for details.");
         return;
       }
       await fs.promises.copyFile(tempPdf, pdf);
