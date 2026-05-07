@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -39,12 +40,14 @@ FONT_DIR = REPO_ROOT / "third_party" / "fonts"
 MATH_RENDER_VERSION = "v3"
 HIGHLIGHT_RENDER_VERSION = "v1"
 FA_RENDER_VERSION = "v1"
+SVG_ASSET_RENDER_VERSION = "v1"
 INCREMENTAL_RENDER_VERSION = "page-cache-v1"
 
 CACHE_ROOT = Path(".ss-cache")
 MATH_CACHE_DIRNAME = "math"
 HIGHLIGHT_CACHE_DIRNAME = "highlight"
 ICON_CACHE_DIRNAME = "icons"
+SVG_ASSET_CACHE_DIRNAME = "svg-assets"
 RENDER_CACHE_DIRNAME = "render"
 PAGE_CACHE_DIRNAME = "pages"
 MANIFEST_CACHE_DIRNAME = "manifests"
@@ -90,6 +93,7 @@ class RuntimeCaches:
     math_dir: Path
     highlight_dir: Path
     icon_dir: Path
+    svg_asset_dir: Path
     render_dir: Path
     page_dir: Path
     manifest_dir: Path
@@ -101,11 +105,12 @@ class RuntimeCaches:
             math_dir=CACHE_ROOT / MATH_CACHE_DIRNAME,
             highlight_dir=CACHE_ROOT / HIGHLIGHT_CACHE_DIRNAME,
             icon_dir=CACHE_ROOT / ICON_CACHE_DIRNAME,
+            svg_asset_dir=CACHE_ROOT / SVG_ASSET_CACHE_DIRNAME,
             render_dir=render_dir,
             page_dir=render_dir / PAGE_CACHE_DIRNAME,
             manifest_dir=render_dir / MANIFEST_CACHE_DIRNAME,
         )
-        for path in (caches.math_dir, caches.highlight_dir, caches.icon_dir, caches.render_dir):
+        for path in (caches.math_dir, caches.highlight_dir, caches.icon_dir, caches.svg_asset_dir, caches.render_dir):
             path.mkdir(parents=True, exist_ok=True)
         return caches
 
@@ -264,7 +269,7 @@ def ensure_fonts_present() -> None:
 def render_full_document(doc: dict, output_pdf: str, asset_base_dir: str, caches: RuntimeCaches) -> None:
     base_pdf = caches.temp_pdf(TMP_FULL_BASE_LABEL, output_pdf)
     try:
-        renderer = Renderer(asset_base_dir, caches.math_dir, caches.highlight_dir, caches.icon_dir)
+        renderer = Renderer(asset_base_dir, caches.math_dir, caches.highlight_dir, caches.icon_dir, caches.svg_asset_dir)
         overlays_by_page = renderer.render(doc, str(base_pdf))
         merge_overlays(str(base_pdf), output_pdf, overlays_by_page)
     finally:
@@ -276,11 +281,12 @@ def render_full_document(doc: dict, output_pdf: str, asset_base_dir: str, caches
 
 
 class Renderer:
-    def __init__(self, asset_base_dir: str, math_cache_dir: Path, highlight_cache_dir: Path, icon_cache_dir: Path) -> None:
+    def __init__(self, asset_base_dir: str, math_cache_dir: Path, highlight_cache_dir: Path, icon_cache_dir: Path, svg_asset_cache_dir: Path) -> None:
         self.asset_base_dir = asset_base_dir
         self.math_cache_dir = math_cache_dir
         self.highlight_cache_dir = highlight_cache_dir
         self.icon_cache_dir = icon_cache_dir
+        self.svg_asset_cache_dir = svg_asset_cache_dir
         self.pdf = FPDF(unit="pt", format=(PAGE_WIDTH, PAGE_HEIGHT))
         self.pdf.set_auto_page_break(auto=False)
         self.pdf.set_margins(0, 0, 0)
@@ -467,8 +473,7 @@ class Renderer:
         if kind == "vector_asset":
             return self._render_vector_asset(x, y, width, height, content)
         if kind == "raster_asset":
-            self._render_raster_asset(x, y, width, height, content)
-            return []
+            return self._render_raster_asset(x, y, width, height, content)
         if kind == "code":
             self._render_code_node(render, x, y, width, height, content)
             return []
@@ -1128,8 +1133,14 @@ class Renderer:
         width: float,
         height: float,
         content: str,
-    ) -> None:
+    ) -> List[Overlay]:
         source = resolve_asset_path(self.asset_base_dir, content)
+        if is_svg_asset(source):
+            pdf_path = render_svg_asset_to_pdf(source, self.svg_asset_cache_dir)
+            src_w, src_h = pdf_page_size(pdf_path)
+            display_w, display_h = fit_size(src_w, src_h, width, height)
+            return [Overlay(pdf_path, x, y + max(0.0, (height - display_h) / 2.0), display_w, display_h)]
+
         src_w, src_h = image_size(source)
         display_w, display_h = fit_size(src_w, src_h, width, height)
         top_y = self.to_tl(y + height)
@@ -1142,6 +1153,7 @@ class Renderer:
             h=display_h,
             keep_aspect_ratio=True,
         )
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -1280,7 +1292,7 @@ class IncrementalPageRenderer:
         tmp_base_pdf = self.caches.temp_pdf(TMP_PAGE_BASE_LABEL, page.digest)
         tmp_page_pdf = self.caches.temp_pdf(TMP_PAGE_FINAL_LABEL, page.digest)
         try:
-            renderer = Renderer(self.asset_base_dir, self.caches.math_dir, self.caches.highlight_dir, self.caches.icon_dir)
+            renderer = Renderer(self.asset_base_dir, self.caches.math_dir, self.caches.highlight_dir, self.caches.icon_dir, self.caches.svg_asset_dir)
             overlays = renderer.render_page(self.doc, page.index, page.page_id, str(tmp_base_pdf))
             merge_overlays(str(tmp_base_pdf), str(tmp_page_pdf), {0: overlays})
             tmp_page_pdf.replace(page.pdf_path)
@@ -1477,7 +1489,7 @@ def render_inline_icon_to_pdf(icon_ref: str, cache_dir: Path) -> str:
     svg_path.write_bytes(fetch_fontawesome_svg(icon_ref))
     run_checked(
         [
-            "/opt/homebrew/bin/rsvg-convert",
+            rsvg_convert_bin(),
             "-f",
             "pdf",
             "-o",
@@ -1486,6 +1498,47 @@ def render_inline_icon_to_pdf(icon_ref: str, cache_dir: Path) -> str:
         ]
     )
     return str(pdf_path)
+
+
+def render_svg_asset_to_pdf(source: str, cache_dir: Path) -> str:
+    source_path = Path(source)
+    digest = hashlib.sha256(
+        (SVG_ASSET_RENDER_VERSION + ":" + str(source_path.resolve()) + ":").encode("utf-8")
+        + source_path.read_bytes()
+    ).hexdigest()[:16]
+    work_dir = cache_dir / digest
+    work_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = work_dir / "asset.pdf"
+    if pdf_path.exists():
+        return str(pdf_path)
+    run_checked(
+        [
+            rsvg_convert_bin(),
+            "-f",
+            "pdf",
+            "-o",
+            str(pdf_path),
+            str(source_path),
+        ]
+    )
+    return str(pdf_path)
+
+
+def is_svg_asset(path: str) -> bool:
+    return Path(path).suffix.lower() == ".svg"
+
+
+def rsvg_convert_bin() -> str:
+    for candidate in (
+        "rsvg-convert",
+        "/opt/homebrew/bin/rsvg-convert",
+        "/usr/local/bin/rsvg-convert",
+        "/usr/bin/rsvg-convert",
+    ):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise RuntimeError("rsvg-convert is required to render SVG assets")
 
 
 # ---------------------------------------------------------------------------
