@@ -229,11 +229,34 @@ pub fn typecheckProgram(
 ) !void {
     defer clearDiagnosticOriginModule();
     try checkObjectDeclarations(allocator, ir);
+    try checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitions(allocator, ir, &ir.functions);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         setDiagnosticOriginModule(module);
         try checkPageStatements(allocator, ir, &ir.functions, module.program);
+    }
+}
+
+fn checkPageNamesUnique(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+) !void {
+    var pages = std.StringHashMap(void).init(allocator);
+    defer pages.deinit();
+
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        setDiagnosticOriginModule(module);
+        for (module.program.pages.items) |page| {
+            if (pages.contains(page.name)) {
+                const origin = try statementOrigin(allocator, page.span);
+                defer allocator.free(origin);
+                try addUserReport(ir, origin, "DuplicatePage: page '{s}' is already defined", .{page.name});
+                return error.DuplicatePage;
+            }
+            try pages.put(page.name, {});
+        }
     }
 }
 

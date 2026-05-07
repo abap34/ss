@@ -28,11 +28,17 @@ pub const ParseDiagnostic = struct {
 var last_diagnostic: ?ParseDiagnostic = null;
 
 pub fn parse(allocator: Allocator, source: []const u8) !Program {
+    return parseWithSourceName(allocator, source, "");
+}
+
+pub fn parseWithSourceName(allocator: Allocator, source: []const u8, source_name: []const u8) !Program {
     var parser = Parser{
         .allocator = allocator,
         .source = source,
+        .source_name = source_name,
         .pos = 0,
         .error_pos = 0,
+        .generated_page_count = 0,
     };
     last_diagnostic = null;
     return parser.parseProgram() catch |err| {
@@ -54,8 +60,10 @@ pub fn lastDiagnostic() ?ParseDiagnostic {
 const Parser = struct {
     allocator: Allocator,
     source: []const u8,
+    source_name: []const u8,
     pos: usize,
     error_pos: usize,
+    generated_page_count: usize,
 
     fn parseProgram(self: *Parser) !Program {
         var program = Program.init();
@@ -500,20 +508,25 @@ const Parser = struct {
     }
 
     fn parsePage(self: *Parser) !PageDecl {
+        const start = self.pos;
         try self.expectKeyword("page");
         const name = try self.parsePageName();
         const statements = try self.parseBodyStatements();
         return .{
             .name = name,
             .statements = statements,
+            .span = .{ .start = start, .end = self.pos },
         };
     }
 
     fn parsePageName(self: *Parser) ![]const u8 {
         self.skipInlineSpaces();
         if (!self.eof() and self.source[self.pos] == '"') {
-            return self.parseString();
+            const name_start = self.pos;
+            const name = try self.parseString();
+            return self.resolvePageName(name, name_start);
         }
+        if (!self.eof() and self.source[self.pos] == '#') return self.fail(error.ReservedPageNamePrefix);
 
         const start = self.pos;
         while (!self.eof()) {
@@ -525,7 +538,37 @@ const Parser = struct {
             self.pos += 1;
         }
         if (start == self.pos) return self.fail(error.ExpectedString);
-        return self.allocator.dupe(u8, self.source[start..self.pos]);
+        const name = try self.allocator.dupe(u8, self.source[start..self.pos]);
+        return self.resolvePageName(name, start);
+    }
+
+    fn resolvePageName(self: *Parser, name: []const u8, name_start: usize) ![]const u8 {
+        errdefer self.allocator.free(name);
+        if (std.mem.eql(u8, name, "_")) {
+            self.allocator.free(name);
+            return self.generatedPageName();
+        }
+        if (std.mem.startsWith(u8, name, "#")) return self.failAt(name_start, error.ReservedPageNamePrefix);
+        return name;
+    }
+
+    fn generatedPageName(self: *Parser) ![]const u8 {
+        self.generated_page_count += 1;
+        var label = std.ArrayList(u8).empty;
+        defer label.deinit(self.allocator);
+
+        const raw = if (self.source_name.len != 0) self.source_name else "source";
+        const base = std.fs.path.basename(raw);
+        for (base) |ch| {
+            if (std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-') {
+                try label.append(self.allocator, ch);
+            } else {
+                try label.append(self.allocator, '_');
+            }
+        }
+        if (label.items.len == 0) try label.appendSlice(self.allocator, "source");
+        const source_hash = std.hash.Wyhash.hash(0, raw);
+        return std.fmt.allocPrint(self.allocator, "#gen_{s}_{x}_{d}", .{ label.items, source_hash, self.generated_page_count });
     }
 
     fn parseImportSpec(self: *Parser) ![]const u8 {
@@ -1270,6 +1313,11 @@ const Parser = struct {
         self.error_pos = @min(self.pos, self.source.len);
         return err;
     }
+
+    fn failAt(self: *Parser, pos: usize, err: anyerror) anyerror {
+        self.error_pos = @min(pos, self.source.len);
+        return err;
+    }
 };
 
 fn parseExpected(err: anyerror) ?[]const u8 {
@@ -1293,6 +1341,7 @@ fn parseExpected(err: anyerror) ?[]const u8 {
         error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",
         error.ExpectedEqualityOperator => "'=='",
+        error.ReservedPageNamePrefix => "page name not starting with '#'",
         else => null,
     };
 }

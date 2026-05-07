@@ -160,9 +160,9 @@ const Builder = struct {
         const source = try self.allocator.dupe(u8, resolved.source);
         var owns_source = true;
         errdefer if (owns_source) self.allocator.free(source);
-        const program = syntax.parse(self.allocator, source) catch |err| {
-            const path = resolved.path orelse resolved.spec;
-            error_report.printParseError(path, source, err, syntax.lastDiagnostic());
+        const parse_path = resolved.path orelse resolved.spec;
+        const program = syntax.parseWithSourceName(self.allocator, source, parse_path) catch |err| {
+            error_report.printParseError(parse_path, source, err, syntax.lastDiagnostic());
             return err;
         };
         var owns_program = true;

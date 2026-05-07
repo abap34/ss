@@ -12,4 +12,5 @@ pub const Statement = ast.Statement;
 const syntax = @import("syntax/parse.zig");
 pub const ParseDiagnostic = syntax.ParseDiagnostic;
 pub const parse = syntax.parse;
+pub const parseWithSourceName = syntax.parseWithSourceName;
 pub const lastParseDiagnostic = syntax.lastDiagnostic;
