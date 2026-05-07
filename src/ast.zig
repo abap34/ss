@@ -32,6 +32,7 @@ pub const Program = struct {
         for (self.document_statements.items) |*stmt| stmt.deinit(allocator);
         self.document_statements.deinit(allocator);
         for (self.pages.items) |*page| {
+            allocator.free(page.name);
             for (page.statements.items) |*stmt| stmt.deinit(allocator);
             page.statements.deinit(allocator);
         }
@@ -107,6 +108,7 @@ pub const ObjectExtensionDecl = struct {
 pub const PageDecl = struct {
     name: []const u8,
     statements: std.ArrayList(Statement),
+    span: Span,
 };
 
 pub const FunctionDecl = struct {

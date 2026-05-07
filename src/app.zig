@@ -196,7 +196,7 @@ pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
 }
 
 fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {
-    return parser.parse(allocator, source) catch |err| {
+    return parser.parseWithSourceName(allocator, source, path) catch |err| {
         error_report.printParseError(path, source, err, parser.lastParseDiagnostic());
         return err;
     };
