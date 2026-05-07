@@ -90,10 +90,12 @@ const Parser = struct {
             if (try self.consumeKeyword("import")) {
                 const spec = try self.parseImportSpec();
                 try self.consumeStatementTerminator();
+                const import_index = program.imports.items.len;
                 try program.imports.append(self.allocator, .{
                     .spec = spec,
                     .span = .{ .start = item_start, .end = self.pos },
                 });
+                try program.top_level_items.append(self.allocator, .{ .import = import_index });
             } else if (try self.consumeKeyword("fn")) {
                 const func = try self.parseFunctionAfterKeyword(item_start, prefix_annotations);
                 has_prefix_annotations = false;
@@ -119,7 +121,9 @@ const Parser = struct {
                 statements.deinit(self.allocator);
             } else {
                 const page = try self.parsePage();
+                const page_index = program.pages.items.len;
                 try program.pages.append(self.allocator, page);
+                try program.top_level_items.append(self.allocator, .{ .page = page_index });
             }
             self.skipTrivia();
         }
