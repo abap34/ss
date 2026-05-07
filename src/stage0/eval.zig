@@ -12,6 +12,7 @@ const typecheck = @import("../analysis/typecheck.zig");
 
 const Program = ast.Program;
 const FunctionDecl = ast.FunctionDecl;
+const PageDecl = ast.PageDecl;
 const Statement = ast.Statement;
 const Expr = ast.Expr;
 const CallExpr = ast.CallExpr;
@@ -211,11 +212,51 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
     var document = try doc.Document.init(allocator, ir.asset_base_dir);
     errdefer document.deinit();
 
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        try executeProgram(module.program, module.source, module.path orelse module.spec, &document, &ir.functions);
-    }
+    diagnostic_reported = false;
+    var executed_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
+    defer executed_modules.deinit();
+    try executeModuleProgramInSourceOrder(ir, ir.projectModule(), &document, &ir.functions, &executed_modules);
     return document;
+}
+
+fn executeModuleProgramInSourceOrder(
+    core_ir: *const core.Ir,
+    module: *const core.SourceModule,
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    executed_modules: *std.AutoHashMap(core.SourceModuleId, void),
+) !void {
+    if (module.kind == .library) {
+        if (executed_modules.contains(module.id)) return;
+        try executed_modules.put(module.id, {});
+    }
+
+    setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
+    try executeDocumentStatements(module.program, ir, functions);
+
+    if (module.program.top_level_items.items.len == 0) {
+        for (module.program.pages.items) |page| {
+            setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
+            try executePage(page, ir, functions);
+        }
+        return;
+    }
+
+    for (module.program.top_level_items.items) |item| {
+        switch (item) {
+            .import => |import_index| {
+                if (import_index >= module.resolved_import_ids.items.len) continue;
+                const import_id = module.resolved_import_ids.items[import_index];
+                const imported = core_ir.moduleById(import_id) orelse continue;
+                try executeModuleProgramInSourceOrder(core_ir, imported, ir, functions, executed_modules);
+            },
+            .page => |page_index| {
+                if (page_index >= module.program.pages.items.len) continue;
+                setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
+                try executePage(module.program.pages.items[page_index], ir, functions);
+            },
+        }
+    }
 }
 
 pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *doc.Document, io: std.Io) !void {
@@ -250,10 +291,23 @@ pub fn executeProgram(
     ir: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
-    diagnostic_source = source;
-    diagnostic_path = path;
+    setLowerDiagnosticOrigin(source, path);
     diagnostic_reported = false;
 
+    try executeDocumentStatements(program, ir, functions);
+    for (program.pages.items) |page| try executePage(page, ir, functions);
+}
+
+fn setLowerDiagnosticOrigin(source: []const u8, path: []const u8) void {
+    diagnostic_source = source;
+    diagnostic_path = path;
+}
+
+fn executeDocumentStatements(
+    program: Program,
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+) !void {
     var document_env = std.StringHashMap(core.Value).init(ir.allocator);
     defer document_env.deinit();
     var document_last_code_like: ?core.NodeId = null;
@@ -272,27 +326,31 @@ pub fn executeProgram(
             },
         }
     }
+}
 
-    for (program.pages.items) |page| {
-        const page_id = try ir.addPage(page.name);
-        var last_code_like: ?core.NodeId = null;
-        var env = std.StringHashMap(core.Value).init(ir.allocator);
-        defer env.deinit();
+fn executePage(
+    page: PageDecl,
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+) !void {
+    const page_id = try ir.addPage(page.name);
+    var last_code_like: ?core.NodeId = null;
+    var env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer env.deinit();
 
-        for (page.statements.items) |stmt| {
-            const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
-                const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
-                if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
-                return err;
-            };
-            switch (flow) {
-                .none => {},
-                .returned => |value| {
-                    var owned = value;
-                    owned.deinit(ir.allocator);
-                    return error.ReturnOutsideFunction;
-                },
-            }
+    for (page.statements.items) |stmt| {
+        const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
+            const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
+            if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+            return err;
+        };
+        switch (flow) {
+            .none => {},
+            .returned => |value| {
+                var owned = value;
+                owned.deinit(ir.allocator);
+                return error.ReturnOutsideFunction;
+            },
         }
     }
 }

@@ -7,6 +7,7 @@ pub const Type = types.Type;
 
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
+    top_level_items: std.ArrayList(TopLevelItem),
     types: std.ArrayList(TypeDecl),
     objects: std.ArrayList(ObjectDecl),
     object_extensions: std.ArrayList(ObjectExtensionDecl),
@@ -15,12 +16,13 @@ pub const Program = struct {
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
         for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
         self.imports.deinit(allocator);
+        self.top_level_items.deinit(allocator);
         for (self.types.items) |type_decl| type_decl.deinit(allocator);
         self.types.deinit(allocator);
         for (self.objects.items) |*object| object.deinit(allocator);
@@ -38,6 +40,11 @@ pub const Program = struct {
         }
         self.pages.deinit(allocator);
     }
+};
+
+pub const TopLevelItem = union(enum) {
+    import: usize,
+    page: usize,
 };
 
 pub const ImportDecl = struct {
