@@ -1476,6 +1476,41 @@ function activate(context) {
     }
   }
 
+  function chevronBlockFoldingRanges(document) {
+    const ranges = [];
+    let startLine = null;
+    const beginPattern = /<<\s*$/;
+    const endPattern = /^\s*>>\s*(?:(?:;;|\/\/|#).*)?$/;
+
+    for (let line = 0; line < document.lineCount; line += 1) {
+      const text = document.lineAt(line).text;
+      if (startLine === null) {
+        if (beginPattern.test(text)) {
+          startLine = line;
+        }
+        continue;
+      }
+
+      if (endPattern.test(text)) {
+        if (line > startLine) {
+          ranges.push(new vscode.FoldingRange(startLine, line, vscode.FoldingRangeKind.Region));
+        }
+        startLine = null;
+      }
+    }
+
+    return ranges;
+  }
+
+  const foldingProvider = {
+    provideFoldingRanges(document) {
+      if (document.languageId !== "ss-slide") {
+        return [];
+      }
+      return chevronBlockFoldingRanges(document);
+    },
+  };
+
   const provider = {
     onDidChangeInlayHints: emitter.event,
     provideInlayHints(document, range, token) {
@@ -1708,6 +1743,9 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.languages.registerColorProvider({ language: "ss-slide" }, colorProvider),
+  );
+  context.subscriptions.push(
+    vscode.languages.registerFoldingRangeProvider({ language: "ss-slide" }, foldingProvider),
   );
 
   context.subscriptions.push(
