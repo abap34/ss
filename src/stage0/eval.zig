@@ -542,6 +542,10 @@ const BuiltinContext = struct {
         try self.ir.setNodeProperty(object_id, key, value);
     }
 
+    pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
+        try self.ir.extendRenderEnv(node_id, op, key, value);
+    }
+
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
         const func = self.functions.get(function.name) orelse {
             reportUnknownFunction(function.name, self.current_origin);

@@ -1365,6 +1365,7 @@ fn inferCallInfo(
         if (ir != null) {
             switch (descriptor.op) {
                 .set_prop => try validateSetPropCall(ir.?, call, env, functions, origin),
+                .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, functions, origin),
                 else => {},
             }
         }
@@ -1544,7 +1545,7 @@ fn primitiveResultTypeInfo(
         return target_info;
     }
 
-    if (descriptor.op == .set_prop) {
+    if (descriptor.op == .set_prop or descriptor.op == .extend_render_env) {
         if (call.args.items.len == 0) return infoFromSort(.object);
         const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
         return .{
@@ -1764,6 +1765,53 @@ fn validateSetPropCall(
 
     try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
     return error.InvalidSemanticSort;
+}
+
+fn validateExtendRenderEnvCall(
+    ir: *core.Ir,
+    call: ast.CallExpr,
+    env: *const TypeEnv,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    origin: []const u8,
+) !void {
+    if (call.args.items.len < 4) return;
+    const target_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
+    if (!isPropertyTarget(target_info)) {
+        try addUserReport(
+            ir,
+            origin,
+            "InvalidRenderEnv: extend_render_env target must be document, page, object, or selection<object>; got {s}",
+            .{@tagName(target_info.sort)},
+        );
+        return error.InvalidSemanticSort;
+    }
+
+    const op = resolveStringLiteral(env, call.args.items[1]);
+    const key = resolveStringLiteral(env, call.args.items[2]);
+    if (op) |literal| {
+        if (!std.mem.eql(u8, literal, core.render_env.OpAdd)) {
+            try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
+            return error.InvalidSemanticSort;
+        }
+    }
+    if (key) |literal| {
+        if (!std.mem.eql(u8, literal, core.render_env.KeyMathLatexPackages)) {
+            try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
+            return error.InvalidSemanticSort;
+        }
+    }
+    if (op != null and key != null and !core.render_env.isSupported(op.?, key.?)) {
+        try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
+        return error.InvalidSemanticSort;
+    }
+    if (key != null and std.mem.eql(u8, key.?, core.render_env.KeyMathLatexPackages)) {
+        if (resolveStringLiteral(env, call.args.items[3])) |package| {
+            if (!core.render_env.isValidLatexPackageName(package)) {
+                try addUserReport(ir, origin, "InvalidRenderEnv: invalid LaTeX package name: {s}", .{package});
+                return error.InvalidSemanticSort;
+            }
+        }
+    }
 }
 
 fn isPropertyTarget(info: TypeInfo) bool {

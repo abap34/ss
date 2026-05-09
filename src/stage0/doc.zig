@@ -31,6 +31,12 @@ pub const Term = union(enum) {
         key: []const u8,
         value: []const u8,
     },
+    extend_render_env: struct {
+        node: HandleId,
+        op: []const u8,
+        key: []const u8,
+        value: []const u8,
+    },
     set_content: struct {
         node: HandleId,
         value: []const u8,
@@ -101,6 +107,11 @@ pub const Document = struct {
             .set_property => |property| {
                 allocator.free(property.key);
                 allocator.free(property.value);
+            },
+            .extend_render_env => |entry| {
+                allocator.free(entry.op);
+                allocator.free(entry.key);
+                allocator.free(entry.value);
             },
             .set_content => |content| allocator.free(content.value),
             else => {},
@@ -233,6 +244,29 @@ pub const Document = struct {
             .value = try self.allocator.dupe(u8, value),
         });
         try self.appendSetPropertyTerm(node_id, key, value);
+    }
+
+    pub fn extendRenderEnv(self: *Document, node_id: HandleId, op: []const u8, key: []const u8, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.render_env.items) |entry| {
+            if (std.mem.eql(u8, entry.op, op) and
+                std.mem.eql(u8, entry.key, key) and
+                std.mem.eql(u8, entry.value, value))
+            {
+                return;
+            }
+        }
+        try node.render_env.append(self.allocator, .{
+            .op = try self.allocator.dupe(u8, op),
+            .key = try self.allocator.dupe(u8, key),
+            .value = try self.allocator.dupe(u8, value),
+        });
+        try self.terms.append(self.allocator, .{ .extend_render_env = .{
+            .node = node_id,
+            .op = try self.allocator.dupe(u8, op),
+            .key = try self.allocator.dupe(u8, key),
+            .value = try self.allocator.dupe(u8, value),
+        } });
     }
 
     fn appendSetPropertyTerm(self: *Document, node_id: HandleId, key: []const u8, value: []const u8) !void {

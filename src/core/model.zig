@@ -10,6 +10,12 @@ pub const Property = struct {
     value: []const u8,
 };
 
+pub const RenderEnvEntry = struct {
+    op: []const u8,
+    key: []const u8,
+    value: []const u8,
+};
+
 pub const NodeKind = enum {
     document,
     page,
@@ -123,6 +129,7 @@ pub const Node = struct {
     page_index: ?usize = null,
     origin: ?[]const u8 = null,
     properties: std.ArrayList(Property) = .empty,
+    render_env: std.ArrayList(RenderEnvEntry) = .empty,
     frame: Frame = .{},
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
@@ -131,6 +138,12 @@ pub const Node = struct {
             allocator.free(property.value);
         }
         self.properties.deinit(allocator);
+        for (self.render_env.items) |entry| {
+            allocator.free(entry.op);
+            allocator.free(entry.key);
+            allocator.free(entry.value);
+        }
+        self.render_env.deinit(allocator);
     }
 };
 

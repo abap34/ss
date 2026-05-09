@@ -568,6 +568,13 @@ fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
             try item.stringField("key", property.key);
             try item.stringField("value", property.value);
         },
+        .extend_render_env => |entry| {
+            try item.stringField("kind", "extend_render_env");
+            try item.intField("node", entry.node);
+            try item.stringField("op", entry.op);
+            try item.stringField("key", entry.key);
+            try item.stringField("value", entry.value);
+        },
         .set_content => |content| {
             try item.stringField("kind", "set_content");
             try item.intField("node", content.node);
@@ -773,6 +780,9 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, nod
         try item.nullField("inline_lines");
     }
     try writeProperties(&item, node.properties.items);
+    var render_env = try core.render_env.resolveForNode(allocator, ir, &node);
+    defer render_env.deinit(allocator);
+    try writeRenderEnv(&item, render_env);
     try item.optionalIntField("page_index", node.page_index);
     try item.optionalStringField("origin", node.origin);
     try item.floatField("x", node.frame.x, "{d:.1}");
@@ -789,6 +799,18 @@ fn writeProperties(object: *json.Object, properties: anytype) !void {
         try props.stringField(property.key, property.value);
     }
     try props.end();
+}
+
+fn writeRenderEnv(object: *json.Object, env: core.render_env.Resolved) !void {
+    var root = try object.objectField("render_env");
+    var math = try root.objectField("math");
+    var latex = try math.objectField("latex");
+    var packages = try latex.arrayField("packages");
+    for (env.math_latex_packages.items) |package| try packages.stringItem(package);
+    try packages.end();
+    try latex.end();
+    try math.end();
+    try root.end();
 }
 
 fn writeInlineLines(object: *json.Object, key: []const u8, lines: []const core.markdown.Line) !void {

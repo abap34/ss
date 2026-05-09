@@ -284,6 +284,46 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
             };
         },
+        .extend_render_env => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            const op = try ctx.evalStringArg(call, 1);
+            const key = try ctx.evalStringArg(call, 2);
+            const value = try ctx.evalStringArg(call, 3);
+            if (!core.render_env.isSupported(op, key)) {
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported v1 render environment operation is add math.latex.packages");
+                break :blk target;
+            }
+            if (!core.render_env.isValidLatexPackageName(value)) {
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: invalid LaTeX package name");
+                break :blk target;
+            }
+            break :blk switch (target) {
+                .document => |id| blk2: {
+                    try ctx.extendRenderEnv(id, op, key, value);
+                    break :blk2 .{ .document = id };
+                },
+                .page => |id| blk2: {
+                    try ctx.extendRenderEnv(id, op, key, value);
+                    break :blk2 .{ .page = id };
+                },
+                .object => |id| blk2: {
+                    try ctx.extendRenderEnv(id, op, key, value);
+                    break :blk2 .{ .object = id };
+                },
+                .selection => |sel| blk2: {
+                    if (sel.item_sort != .object) {
+                        target.deinit(ctx.ir.allocator);
+                        return error.InvalidSelectionSort;
+                    }
+                    for (sel.ids.items) |id| try ctx.extendRenderEnv(id, op, key, value);
+                    break :blk2 target;
+                },
+                else => {
+                    target.deinit(ctx.ir.allocator);
+                    return error.InvalidSemanticSort;
+                },
+            };
+        },
         .set_style => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             const style = try ctx.evalStyleArg(call, 1);
