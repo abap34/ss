@@ -96,7 +96,7 @@ pub fn build(allocator: std.mem.Allocator, ir: anytype) !RenderDoc {
                 if (resolved.text) |text| try appendText(allocator, &doc, node, text);
                 if (resolved.code) |code| try appendCode(allocator, &doc, node, code);
             },
-            .vector_math => if (resolved.math) |math| try appendMath(allocator, &doc, node, math),
+            .vector_math => if (resolved.math) |math| try appendMath(allocator, &doc, ir, node, math),
             .vector_asset => try appendAsset(allocator, &doc, node, "draw_vector_asset"),
             .raster_asset => try appendAsset(allocator, &doc, node, "draw_raster_asset"),
             .chrome_only => {},
@@ -168,11 +168,16 @@ fn appendCode(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
     try doc.ops.append(allocator, op);
 }
 
-fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, math: render_policy.MathPaint) !void {
+fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, ir: anytype, node: *const model.Node, math: render_policy.MathPaint) !void {
     var op = Op.init(node, "draw_vector_math");
     errdefer op.deinit(allocator);
+    var env = try @import("render_env.zig").resolveForNode(allocator, ir, node);
+    defer env.deinit(allocator);
+    const packages = try @import("render_env.zig").joinMathLatexPackages(allocator, env);
+    defer allocator.free(packages);
     try op.put(allocator, "capability", "compile_math");
     try op.put(allocator, "source", node.content orelse "");
+    try op.put(allocator, "math_latex_packages", packages);
     try op.putFloat(allocator, "scale", math.scale);
     try op.putColor(allocator, "color", math.color);
     try op.putFloat(allocator, "block_line_height", math.block_line_height);

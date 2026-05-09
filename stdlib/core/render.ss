@@ -15,6 +15,25 @@ fn with_prop(obj: object, key_name: string, value_name: string) -> object
   return obj
 end
 
+fn add_math_package(package_name: string) -> document
+  extend_render_env(docctx(), "add", "math.latex.packages", package_name)
+  return docctx()
+end
+
+fn use_math_package(package_name: string) -> document
+  return add_math_package(package_name)
+end
+
+fn add_page_math_package(package_name: string) -> page
+  extend_render_env(pagectx(), "add", "math.latex.packages", package_name)
+  return pagectx()
+end
+
+fn with_math_package(obj: object, package_name: string) -> object
+  extend_render_env(obj, "add", "math.latex.packages", package_name)
+  return obj
+end
+
 fn link_target(obj: object, id: string) -> object
   set_prop(obj, "link_id", id)
   return obj

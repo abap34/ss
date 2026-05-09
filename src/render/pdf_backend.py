@@ -38,6 +38,8 @@ PAGE_HEIGHT = 720.0
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FONT_DIR = REPO_ROOT / "third_party" / "fonts"
 MATH_RENDER_VERSION = "v3"
+LATEX_DEFAULT_FONT_SIZE_PT = 10.0
+DISPLAY_MATH_FONT_SCALE = 1.1
 HIGHLIGHT_RENDER_VERSION = "v1"
 FA_RENDER_VERSION = "v1"
 SVG_ASSET_RENDER_VERSION = "v1"
@@ -178,6 +180,7 @@ class TextPaintSpec:
     markdown_code_radius: float
     cjk_bold_passes: int
     cjk_bold_dx: float
+    math_latex_packages: List[str]
 
 
 @dataclass(frozen=True)
@@ -469,7 +472,7 @@ class Renderer:
         if kind == "text":
             return self._render_text_node(render, x, y, width, height, node)
         if kind == "vector_math":
-            return self._render_vector_math(render, x, y, width, height, content)
+            return self._render_vector_math(render, x, y, width, height, content, node)
         if kind == "vector_asset":
             return self._render_vector_asset(x, y, width, height, content)
         if kind == "raster_asset":
@@ -572,7 +575,7 @@ class Renderer:
         height: float,
         node: dict,
     ) -> List[Overlay]:
-        spec = text_spec(render)
+        spec = text_spec(render, node)
         baseline_bl = self.baseline_bl_for_box(y, height, spec.font_size)
         blocks = markdown_blocks_for_node(node)
         if blocks is not None:
@@ -878,18 +881,16 @@ class Renderer:
         tex_body: str,
         max_width: float,
     ) -> Tuple[List[Overlay], float]:
-        pdf_path = render_inline_math_to_pdf(tex_body, self.math_cache_dir, spec.color)
+        pdf_path = render_display_math_to_pdf(tex_body, self.math_cache_dir, spec.color, spec.math_latex_packages)
         src_w, src_h = pdf_page_size(pdf_path)
-        target_h = spec.line_height
-        target_w = src_w * (target_h / src_h) if src_h > 0 else max_width
-        if target_w > max_width and target_w > 0:
-            scale = max_width / target_w
-            target_w *= scale
-            target_h *= scale
+        scale = (spec.font_size / LATEX_DEFAULT_FONT_SIZE_PT) * DISPLAY_MATH_FONT_SCALE
+        target_w = src_w * scale
+        target_h = src_h * scale
+        overlay_x = x + (max_width - target_w) / 2.0
         return [
             Overlay(
                 pdf_path,
-                x,
+                overlay_x,
                 baseline_bl - target_h * 0.25,
                 target_w,
                 target_h,
@@ -962,7 +963,7 @@ class Renderer:
             segment = str(run.get("text", ""))
             if kind in ("math", "display_math"):
                 color = parse_color_array(run.get("color")) if run.get("color") is not None else spec.color
-                pdf_path = render_inline_math_to_pdf(segment, self.math_cache_dir, color)
+                pdf_path = render_inline_math_to_pdf(segment, self.math_cache_dir, color, spec.math_latex_packages)
                 src_w, src_h = pdf_page_size(pdf_path)
                 target_h = spec.font_size * spec.inline_math_height_factor
                 scale = target_h / src_h if src_h > 0 else 1.0
@@ -1105,10 +1106,11 @@ class Renderer:
         width: float,
         height: float,
         content: str,
+        node: dict,
     ) -> List[Overlay]:
         math = render.get("math") or {}
         color = parse_color_array(math.get("color")) if math.get("color") is not None else (0.0, 0.0, 0.0)
-        pdf_path = render_math_tex_to_pdf(content, self.math_cache_dir, color)
+        pdf_path = render_math_tex_to_pdf(content, self.math_cache_dir, color, math_packages_for_node(node))
         src_w, src_h = pdf_page_size(pdf_path)
         display_w, display_h = fit_math_block_size(render, src_w, src_h, width, height, content)
         return [Overlay(pdf_path, x, y + max(0.0, (height - display_h) / 2.0), display_w, display_h)]
@@ -1414,9 +1416,11 @@ def renderer_fingerprint() -> str:
 # Math (LaTeX -> PDF)
 
 
-def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None) -> str:
+def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
+    latex_packages = canonical_latex_packages(packages or [])
     color_key = color_cache_key(color)
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":block:" + color_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
+    package_key = "\0".join(latex_packages)
+    digest = hashlib.sha256((MATH_RENDER_VERSION + ":block:" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
     work_dir = cache_dir / digest
     work_dir.mkdir(parents=True, exist_ok=True)
     tex_path = work_dir / "main.tex"
@@ -1429,6 +1433,7 @@ def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color
         "\\usepackage{amsmath,amssymb}\n"
         "\\usepackage{graphicx}\n"
         "\\usepackage{xcolor}\n"
+        f"{latex_package_lines(latex_packages)}"
         "\\begin{document}\n"
         f"{color_command(color)}"
         "$\\displaystyle\n"
@@ -1442,9 +1447,11 @@ def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color
     return str(pdf_path)
 
 
-def render_inline_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None) -> str:
+def render_inline_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
+    latex_packages = canonical_latex_packages(packages or [])
     color_key = color_cache_key(color)
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":inline:" + color_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
+    package_key = "\0".join(latex_packages)
+    digest = hashlib.sha256((MATH_RENDER_VERSION + ":inline:" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
     work_dir = cache_dir / digest
     work_dir.mkdir(parents=True, exist_ok=True)
     tex_path = work_dir / "main.tex"
@@ -1456,6 +1463,7 @@ def render_inline_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Co
         "\\usepackage{amsmath,amssymb}\n"
         "\\usepackage{graphicx}\n"
         "\\usepackage{xcolor}\n"
+        f"{latex_package_lines(latex_packages)}"
         "\\begin{document}\n"
         f"{color_command(color)}"
         f"$\\mathstrut {tex_body}$\n"
@@ -1464,6 +1472,48 @@ def render_inline_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Co
     )
     run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(work_dir))
     return str(pdf_path)
+
+
+def render_display_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
+    latex_packages = canonical_latex_packages(packages or [])
+    color_key = color_cache_key(color)
+    package_key = "\0".join(latex_packages)
+    digest = hashlib.sha256((MATH_RENDER_VERSION + ":display:" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
+    work_dir = cache_dir / digest
+    work_dir.mkdir(parents=True, exist_ok=True)
+    tex_path = work_dir / "main.tex"
+    pdf_path = work_dir / "main.pdf"
+    if pdf_path.exists():
+        return str(pdf_path)
+    tex_path.write_text(
+        "\\documentclass[border=0pt]{standalone}\n"
+        "\\usepackage{amsmath,amssymb}\n"
+        "\\usepackage{graphicx}\n"
+        "\\usepackage{xcolor}\n"
+        f"{latex_package_lines(latex_packages)}"
+        "\\begin{document}\n"
+        f"{color_command(color)}"
+        f"$\\displaystyle\\mathstrut {tex_body}$\n"
+        "\\end{document}\n",
+        encoding="utf-8",
+    )
+    run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(work_dir))
+    return str(pdf_path)
+
+
+def canonical_latex_packages(packages: List[str]) -> List[str]:
+    canonical: List[str] = []
+    for raw in packages:
+        name = str(raw)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise RuntimeError(f"invalid LaTeX package name: {name}")
+        if name not in canonical:
+            canonical.append(name)
+    return canonical
+
+
+def latex_package_lines(packages: List[str]) -> str:
+    return "".join(f"\\usepackage{{{package}}}\n" for package in packages)
 
 
 def color_cache_key(color: Optional[Color]) -> str:
@@ -1713,7 +1763,7 @@ def code_highlighter_spec(render: dict) -> Optional[HighlighterSpec]:
 # Render policy access helpers (mirror the Zig core JSON shape)
 
 
-def text_spec(render: dict) -> TextPaintSpec:
+def text_spec(render: dict, node: Optional[dict] = None) -> TextPaintSpec:
     text = render_text_section(render)
     return TextPaintSpec(
         font_name=str(text["font"]),
@@ -1740,7 +1790,24 @@ def text_spec(render: dict) -> TextPaintSpec:
         markdown_code_radius=float(text["markdown_code_radius"]),
         cjk_bold_passes=int(text.get("cjk_bold_passes", 1)),
         cjk_bold_dx=float(text.get("cjk_bold_dx", 0.0)),
+        math_latex_packages=math_packages_for_node(node or {}),
     )
+
+
+def math_packages_for_node(node: dict) -> List[str]:
+    render_env = node.get("render_env")
+    if not isinstance(render_env, dict):
+        return []
+    math = render_env.get("math")
+    if not isinstance(math, dict):
+        return []
+    latex = math.get("latex")
+    if not isinstance(latex, dict):
+        return []
+    packages = latex.get("packages")
+    if not isinstance(packages, list):
+        return []
+    return canonical_latex_packages([str(package) for package in packages])
 
 
 def node_render(node: dict) -> dict:

@@ -363,6 +363,23 @@ pub const Ir = struct {
         });
     }
 
+    pub fn extendRenderEnv(self: *Ir, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.render_env.items) |entry| {
+            if (std.mem.eql(u8, entry.op, op) and
+                std.mem.eql(u8, entry.key, key) and
+                std.mem.eql(u8, entry.value, value))
+            {
+                return;
+            }
+        }
+        try node.render_env.append(self.allocator, .{
+            .op = try self.allocator.dupe(u8, op),
+            .key = try self.allocator.dupe(u8, key),
+            .value = try self.allocator.dupe(u8, value),
+        });
+    }
+
     pub fn getNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) ?[]const u8 {
         const node = self.getNode(node_id) orelse return null;
         return nodeProperty(node, key);
