@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const eval_functions = @import("../eval/functions.zig");
 const eval_value = @import("../eval/value.zig");
 const builtin = @import("../stage0/builtin.zig");
 const declarations = @import("../language/declarations.zig");
@@ -67,7 +68,7 @@ fn evalExpr(
                         .args = std.ArrayList(Expr).empty,
                     });
                 }
-                break :blk .{ .function = try contracts.functionRefFor(ir.allocator, func) };
+                break :blk .{ .function = try eval_functions.functionRefFor(ir.allocator, func) };
             }
             return error.UnknownIdentifier;
         },
@@ -97,7 +98,7 @@ fn evalCall(
     const sema = SemanticEnv.init(ir, null, functions);
     if (sema.function(call.name)) |func| {
         if (func.kind == .constant) return error.UnknownFunction;
-        if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+        try eval_functions.requireReturnsValue(func);
         return try invokeUserFunctionValue(ir, env, functions, func, current_origin, call);
     }
     if (sema.primitive(call.name)) |descriptor| {
@@ -342,7 +343,7 @@ fn bindUserFunctionCallArgs(
     current_origin: []const u8,
     call: CallExpr,
 ) !void {
-    if (call.args.items.len < contracts.requiredParamCount(func) or call.args.items.len > func.params.items.len) return error.InvalidArity;
+    try eval_functions.requireArity(call.args.items.len, func);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < call.args.items.len)
             try evalExpr(ir, caller_env, functions, current_origin, call.args.items[index])
@@ -361,7 +362,7 @@ fn bindUserFunctionValueArgs(
     current_origin: []const u8,
     args: []const core.Value,
 ) !void {
-    if (args.len < contracts.requiredParamCount(func) or args.len > func.params.items.len) return error.InvalidArity;
+    try eval_functions.requireArity(args.len, func);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
             args[index]
@@ -411,7 +412,7 @@ fn executeUserFunctionBody(
     func: FunctionDecl,
     current_origin: []const u8,
 ) anyerror!core.Value {
-    if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+    try eval_functions.requireReturnsValue(func);
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, env, functions, inner, current_origin);
         switch (flow) {

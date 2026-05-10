@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const builtin = @import("builtin.zig");
 const doc = @import("doc.zig");
+const eval_functions = @import("../eval/functions.zig");
 const eval_value = @import("../eval/value.zig");
 const utils = @import("utils");
 const error_report = utils.err;
@@ -379,7 +380,7 @@ fn evalExpr(
                         .args = std.ArrayList(Expr).empty,
                     });
                 }
-                break :blk .{ .function = try contracts.functionRefFor(ir.allocator, func) };
+                break :blk .{ .function = try eval_functions.functionRefFor(ir.allocator, func) };
             }
             reportUnknownIdentifier(name, current_origin);
             break :blk error.UnknownIdentifier;
@@ -420,7 +421,7 @@ fn evalCall(
             reportUnknownFunction(call.name, current_origin);
             return error.UnknownFunction;
         }
-        if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+        try eval_functions.requireReturnsValue(func);
         return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
     }
     if (sema.primitive(call.name)) |descriptor| {
@@ -766,13 +767,12 @@ fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void 
 }
 
 fn validateUserFunctionArity(actual: usize, func: FunctionDecl, origin: []const u8) !void {
-    const min = contracts.requiredParamCount(func);
-    const max = func.params.items.len;
-    if (actual < min or actual > max) {
+    const range = eval_functions.arity(func);
+    if (actual < range.min or actual > range.max) {
         reportLowerDiagnostic(.{
             .err = error.InvalidArity,
             .span = error_report.spanFromOrigin(origin),
-            .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
+            .data = .{ .invalid_arity = .{ .actual = actual, .min = range.min, .max = range.max } },
         });
         return error.InvalidArity;
     }
@@ -823,8 +823,7 @@ fn bindUserFunctionValueArgs(
     current_origin: []const u8,
     args: []const core.Value,
 ) !void {
-    const min = contracts.requiredParamCount(func);
-    if (args.len < min or args.len > func.params.items.len) return error.InvalidArity;
+    try eval_functions.requireArity(args.len, func);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
             args[index]
@@ -1269,7 +1268,7 @@ fn invokeUserFunctionValue(
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const func_ref = try contracts.functionRefFor(ir.allocator, func);
+    const func_ref = try eval_functions.functionRefFor(ir.allocator, func);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(call.args.items.len, func, current_origin);
 
@@ -1307,7 +1306,7 @@ fn invokeUserFunctionValues(
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
-    if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+    try eval_functions.requireReturnsValue(func);
 
     var local_env = std.StringHashMap(core.Value).init(ir.allocator);
     defer local_env.deinit();
