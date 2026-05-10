@@ -6,6 +6,11 @@ const declarations = @import("declarations.zig");
 const registry = @import("registry.zig");
 const value_domains = @import("value_domains.zig");
 
+pub const CallDescriptor = union(enum) {
+    function: ast.FunctionDecl,
+    primitive: registry.PrimitiveDescriptor,
+};
+
 pub const SemanticEnv = struct {
     ir: ?*const core.Ir,
     declarations: ?*const declarations.DeclarationIndex,
@@ -34,6 +39,12 @@ pub const SemanticEnv = struct {
     pub fn primitive(self: *const SemanticEnv, name: []const u8) ?registry.PrimitiveDescriptor {
         _ = self;
         return registry.lookupPrimitiveCall(name);
+    }
+
+    pub fn call(self: *const SemanticEnv, name: []const u8) ?CallDescriptor {
+        if (self.function(name)) |func| return .{ .function = func };
+        if (self.primitive(name)) |descriptor| return .{ .primitive = descriptor };
+        return null;
     }
 
     pub fn query(self: *const SemanticEnv, name: []const u8) ?registry.QueryDescriptor {
