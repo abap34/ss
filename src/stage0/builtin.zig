@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const registry = @import("../language/registry.zig");
+const eval_value = @import("../eval/value.zig");
 
 pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!core.Value {
     try ctx.checkArityRange(call.args.items.len, descriptor.min_arity, descriptor.max_arity);
@@ -256,7 +257,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .set_prop => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             const key = try ctx.evalStringArg(call, 1);
-            const value = try ctx.evalPropertyStringArg(call, 2);
+            var value_arg = try ctx.evalExprValue(call.args.items[2]);
+            defer value_arg.deinit(ctx.ir.allocator);
+            const value = try eval_value.propertyString(ctx.ir.allocator, value_arg);
+            defer if (eval_value.propertyStringNeedsFree(value_arg)) ctx.ir.allocator.free(value);
             break :blk switch (target) {
                 .document => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
