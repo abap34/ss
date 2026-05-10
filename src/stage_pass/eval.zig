@@ -48,8 +48,13 @@ pub fn runPassSlots(ir: *core.Ir, slots: []const PassSlot) !void {
             const func = pass.function;
             try validatePass(ir, sema.passes(), pass, func);
             try validatePassEffects(ir, &sema, pass, func);
-            if (!allowedEffects(slot).containsAll(pass.effects.?.withoutPure())) {
-                try addPassDiagnostic(ir, pass, "InvalidPassEffects: @{s}({s}) declares effects not allowed in this slot", .{ "pass", pass.slot_name });
+            const allowed = allowedEffects(slot);
+            const declared_effects = pass.effects.?.withoutPure();
+            if (!allowed.containsAll(declared_effects)) {
+                const disallowed = declared_effects.difference(allowed);
+                const disallowed_text = try disallowed.formatAlloc(ir.allocator);
+                defer ir.allocator.free(disallowed_text);
+                try addPassDiagnostic(ir, pass, "InvalidPassEffects: @pass({s}) declares effects not allowed in this slot: {s}", .{ pass.slot_name, disallowed_text });
                 return error.InvalidPassEffects;
             }
             if (slot != .augment and pass.effects.?.contains(.CreateNode)) {
@@ -177,8 +182,12 @@ fn validatePassEffects(ir: *core.Ir, sema: *const SemanticEnv, pass: PassDescrip
     defer visiting.deinit();
     const inferred = try inferFunctionEffects(ir, sema, pass, func, &visiting);
     const declared = pass.effects.?;
-    if (!declared.containsAll(inferred.withoutPure())) {
-        try addPassDiagnostic(ir, pass, "MissingEffects: @pass({s}) body uses effects not listed in its signature", .{pass.slot_name});
+    const required = inferred.withoutPure();
+    if (!declared.containsAll(required)) {
+        const missing = required.difference(declared);
+        const missing_text = try missing.formatAlloc(ir.allocator);
+        defer ir.allocator.free(missing_text);
+        try addPassDiagnostic(ir, pass, "MissingEffects: @pass({s}) body uses effects not listed in its signature: {s}", .{ pass.slot_name, missing_text });
         return error.MissingEffects;
     }
 }
