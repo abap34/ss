@@ -6,7 +6,7 @@ const builtin = @import("../stage0/builtin.zig");
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
 const names = @import("../language/names.zig");
-const typecheck = @import("../analysis/typecheck.zig");
+const contracts = @import("../analysis/contracts.zig");
 
 const FunctionDecl = ast.FunctionDecl;
 const Statement = ast.Statement;
@@ -33,7 +33,7 @@ pub fn runAfterPages(ir: *core.Ir) !void {
         const args = [_]core.Value{.{ .document = ir.document_id }};
         var result = try invokeUserFunctionValues(ir, &env, &ir.functions, func, try functionOrigin(ir, phase, func), &args);
         defer result.deinit(ir.allocator);
-        try typecheck.ensureValueSortWithCode(ir, null, result, .document, try functionOrigin(ir, phase, func), .UnmatchedReturnType);
+        try contracts.ensureValueSortWithCode(ir, null, result, .document, try functionOrigin(ir, phase, func), .UnmatchedReturnType);
     }
 }
 
@@ -67,7 +67,7 @@ fn evalExpr(
                         .args = std.ArrayList(Expr).empty,
                     });
                 }
-                break :blk .{ .function = try typecheck.functionRefFor(ir.allocator, func) };
+                break :blk .{ .function = try contracts.functionRefFor(ir.allocator, func) };
             }
             return error.UnknownIdentifier;
         },
@@ -97,7 +97,7 @@ fn evalCall(
     const sema = SemanticEnv.init(ir, null, functions);
     if (sema.function(call.name)) |func| {
         if (func.kind == .constant) return error.UnknownFunction;
-        if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+        if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
         return try invokeUserFunctionValue(ir, env, functions, func, current_origin, call);
     }
     if (sema.primitive(call.name)) |descriptor| {
@@ -342,13 +342,13 @@ fn bindUserFunctionCallArgs(
     current_origin: []const u8,
     call: CallExpr,
 ) !void {
-    if (call.args.items.len < typecheck.requiredParamCount(func) or call.args.items.len > func.params.items.len) return error.InvalidArity;
+    if (call.args.items.len < contracts.requiredParamCount(func) or call.args.items.len > func.params.items.len) return error.InvalidArity;
     for (func.params.items, 0..) |param, index| {
         const value = if (index < call.args.items.len)
             try evalExpr(ir, caller_env, functions, current_origin, call.args.items[index])
         else
             try evalExpr(ir, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try typecheck.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try contracts.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
 }
@@ -361,13 +361,13 @@ fn bindUserFunctionValueArgs(
     current_origin: []const u8,
     args: []const core.Value,
 ) !void {
-    if (args.len < typecheck.requiredParamCount(func) or args.len > func.params.items.len) return error.InvalidArity;
+    if (args.len < contracts.requiredParamCount(func) or args.len > func.params.items.len) return error.InvalidArity;
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
             args[index]
         else
             try evalExpr(ir, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try typecheck.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try contracts.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
 }
@@ -411,13 +411,13 @@ fn executeUserFunctionBody(
     func: FunctionDecl,
     current_origin: []const u8,
 ) anyerror!core.Value {
-    if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+    if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, env, functions, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try typecheck.ensureValueSortWithCode(ir, null, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueSortWithCode(ir, null, value, func.result_sort, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }

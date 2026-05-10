@@ -7,19 +7,13 @@ const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
 const calls = @import("calls.zig");
+const contracts = @import("contracts.zig");
 const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
 const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
-
-pub const FunctionContract = struct {
-    min_param_count: usize,
-    max_param_count: usize,
-    returns_value: bool,
-    result_sort: core.SemanticSort,
-};
 
 const TypeInfo = struct {
     ty: Type = Type.any,
@@ -72,65 +66,6 @@ fn findModuleById(modules: []const core.SourceModule, module_id: core.SourceModu
     return null;
 }
 
-pub fn valueSort(value: core.Value) core.SemanticSort {
-    return switch (value) {
-        .document => .document,
-        .page => .page,
-        .object => .object,
-        .selection => .selection,
-        .anchor => .anchor,
-        .function => .function,
-        .style => .style,
-        .string => .string,
-        .number => .number,
-        .constraints => .constraints,
-        .fragment => .fragment,
-    };
-}
-
-pub fn ensureValueSort(
-    ir: anytype,
-    page_id: ?core.NodeId,
-    value: core.Value,
-    expected: core.SemanticSort,
-    origin: []const u8,
-) !void {
-    return ensureValueSortWithCode(ir, page_id, value, expected, origin, .UnmatchedArgumentType);
-}
-
-pub fn ensureValueSortWithCode(
-    ir: anytype,
-    page_id: ?core.NodeId,
-    value: core.Value,
-    expected: core.SemanticSort,
-    origin: []const u8,
-    code: core.TypeMismatchCode,
-) !void {
-    const actual = valueSort(value);
-    if (actual != expected) {
-        try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
-            .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
-        });
-        return error.InvalidSemanticSort;
-    }
-}
-
-pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
-    const contract = functionContract(func);
-    const param_sorts = try allocator.alloc(core.SemanticSort, func.params.items.len);
-    for (func.params.items, 0..) |param, index| {
-        param_sorts[index] = param.sort;
-    }
-    return .{
-        .name = func.name,
-        .param_count = contract.max_param_count,
-        .param_sorts = param_sorts,
-        .returns_value = contract.returns_value,
-        .result_sort = contract.result_sort,
-        .effect = .unknown,
-    };
-}
-
 fn isConst(func: ast.FunctionDecl) bool {
     return func.kind == .constant;
 }
@@ -174,37 +109,6 @@ fn infoForSelectionItem(sort: core.SelectionItemSort) TypeInfo {
 
 fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
     return ty.formatAlloc(allocator);
-}
-
-pub fn functionContract(func: ast.FunctionDecl) FunctionContract {
-    return .{
-        .min_param_count = requiredParamCount(func),
-        .max_param_count = func.params.items.len,
-        .returns_value = functionReturnsValue(func),
-        .result_sort = func.result_sort,
-    };
-}
-
-pub fn requiredParamCount(func: ast.FunctionDecl) usize {
-    var required: usize = 0;
-    for (func.params.items) |param| {
-        if (param.default_value == null) required += 1;
-    }
-    return required;
-}
-
-pub fn functionReturnsValue(func: ast.FunctionDecl) bool {
-    return functionBodyReturns(func.statements.items);
-}
-
-pub fn functionBodyReturns(statements: []const ast.Statement) bool {
-    for (statements) |stmt| {
-        switch (stmt.kind) {
-            .return_expr => return true,
-            else => {},
-        }
-    }
-    return false;
 }
 
 pub fn checkFunctionDefinitions(
@@ -681,7 +585,7 @@ fn inferCallInfo(
             try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
             return error.UnknownFunction;
         }
-        const min_arity = requiredParamCount(func);
+        const min_arity = contracts.requiredParamCount(func);
         const max_arity = func.params.items.len;
         if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
             if (min_arity == max_arity) {
@@ -957,11 +861,11 @@ fn validateCallbackShape(
     };
     const extra_count = if (call.args.items.len > callback_index + 1) call.args.items.len - callback_index - 1 else 0;
     const expected_arg_count = fixed_prefix_count + extra_count;
-    if (expected_arg_count < requiredParamCount(callback) or expected_arg_count > callback.params.items.len) {
+    if (expected_arg_count < contracts.requiredParamCount(callback) or expected_arg_count > callback.params.items.len) {
         try addUserReport(ir, origin, "InvalidCallback: callback {s} receives {d} arguments here, but its contract is {d}..{d}", .{
             callback_name,
             expected_arg_count,
-            requiredParamCount(callback),
+            contracts.requiredParamCount(callback),
             callback.params.items.len,
         });
         return error.InvalidArity;
