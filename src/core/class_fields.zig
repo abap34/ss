@@ -8,9 +8,21 @@ pub fn property(ir: anytype, node: *const Node, key: []const u8) ?[]const u8 {
     return defaultProperty(ir, node, key);
 }
 
+pub fn propertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?[]const u8 {
+    if (model.nodeProperty(node, key)) |value| return value;
+    return defaultPropertyWithEnv(node, key, sema);
+}
+
 pub fn defaultProperty(ir: anytype, node: *const Node, key: []const u8) ?[]const u8 {
     const class_name = classNameForNode(ir, node) orelse return null;
     const value = fieldDefault(ir, class_name, key) orelse return null;
+    return unquoteDefault(value);
+}
+
+pub fn defaultPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?[]const u8 {
+    const class_name = classNameForNodeWithEnv(node, sema) orelse return null;
+    const field = sema.field(class_name, key) orelse return null;
+    const value = field.default_value orelse return null;
     return unquoteDefault(value);
 }
 
@@ -19,6 +31,14 @@ pub fn classNameForNode(ir: anytype, node: *const Node) ?[]const u8 {
         .document => "DocumentObject",
         .page => "PageObject",
         .object => if (node.role) |role| roleClass(ir, role) else null,
+    };
+}
+
+pub fn classNameForNodeWithEnv(node: *const Node, sema: anytype) ?[]const u8 {
+    return switch (node.kind) {
+        .document => "DocumentObject",
+        .page => "PageObject",
+        .object => if (node.role) |role| sema.roleClass(role) else null,
     };
 }
 

@@ -5,7 +5,11 @@ const stage0 = @import("stage0.zig");
 const typecheck = @import("analysis/typecheck.zig");
 const dump_calls = @import("dump/calls.zig");
 const dump_declarations = @import("dump/declarations.zig");
+const declarations = @import("language/declarations.zig");
+const semantic_env = @import("language/env.zig");
 const json = @import("utils").json;
+
+const SemanticEnv = semantic_env.SemanticEnv;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
@@ -121,16 +125,24 @@ fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !voi
 }
 
 fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+    var declaration_index = try declarations.build(allocator, ir);
+    defer declaration_index.deinit();
+    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
+
     var nodes = try root.arrayField("nodes");
     for (ir.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
-        try writeNode(allocator, &nodes, ir, node);
+        try writeNode(allocator, &nodes, ir, &sema, node);
     }
     try nodes.end();
 }
 
 fn writeRenderDocField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
-    var render_doc = try core.render_doc.build(allocator, ir);
+    var declaration_index = try declarations.build(allocator, ir);
+    defer declaration_index.deinit();
+    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
+
+    var render_doc = try core.render_doc.buildWithEnv(allocator, ir, &sema);
     defer render_doc.deinit(allocator);
 
     var object = try root.objectField("render_doc");
@@ -527,8 +539,8 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
     }
 }
 
-fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
-    const render = core.render_policy.resolve(ir, &node);
+fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sema: anytype, node: core.Node) !void {
+    const render = core.render_policy.resolveWithEnv(ir, &node, sema);
     const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and node.content != null;
     const should_parse_inline = core.markdown.shouldParseInlineNode(ir, &node) and node.content != null and !should_parse_blocks;
 

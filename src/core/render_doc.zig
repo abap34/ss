@@ -75,19 +75,34 @@ pub const RenderDoc = struct {
 };
 
 pub fn build(allocator: std.mem.Allocator, ir: anytype) !RenderDoc {
+    return buildWithPolicy(allocator, ir, false, {});
+}
+
+pub fn buildWithEnv(allocator: std.mem.Allocator, ir: anytype, sema: anytype) !RenderDoc {
+    return buildWithPolicy(allocator, ir, true, sema);
+}
+
+fn buildWithPolicy(allocator: std.mem.Allocator, ir: anytype, comptime use_env: bool, sema: anytype) !RenderDoc {
     var doc = RenderDoc.init();
     errdefer doc.deinit(allocator);
 
     for (ir.page_order.items) |page_id| {
         const page = ir.getNode(page_id) orelse continue;
-        if (render_policy.resolvePageBackground(ir, page)) |fill| {
-            try appendPageBackground(allocator, &doc, page, fill);
+        const fill = if (use_env)
+            render_policy.resolvePageBackgroundWithEnv(ir, page, sema)
+        else
+            render_policy.resolvePageBackground(ir, page);
+        if (fill) |color| {
+            try appendPageBackground(allocator, &doc, page, color);
         }
     }
 
     for (ir.nodes.items) |*node| {
         if (node.kind != .object or !node.attached) continue;
-        const resolved = render_policy.resolve(ir, node);
+        const resolved = if (use_env)
+            render_policy.resolveWithEnv(ir, node, sema)
+        else
+            render_policy.resolve(ir, node);
         if (resolved.rule.stroke != null) try appendRule(allocator, &doc, node, resolved.rule);
         if (hasChrome(resolved.chrome)) try appendChrome(allocator, &doc, node, resolved.chrome);
         switch (resolved.kind) {

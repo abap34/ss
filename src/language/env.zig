@@ -41,6 +41,21 @@ pub const SemanticEnv = struct {
         return registry.lookupQueryOp(name);
     }
 
+    pub fn phases(self: *const SemanticEnv) []const declarations.FunctionAnnotationDescriptor {
+        const index = self.declarations orelse return &.{};
+        return index.phases.items;
+    }
+
+    pub fn capabilities(self: *const SemanticEnv) []const declarations.CapabilityDescriptor {
+        const index = self.declarations orelse return &.{};
+        return index.capabilities.items;
+    }
+
+    pub fn renderOps(self: *const SemanticEnv) []const declarations.CapabilityDescriptor {
+        const index = self.declarations orelse return &.{};
+        return index.render_ops.items;
+    }
+
     pub fn class(self: *const SemanticEnv, name: []const u8) ?declarations.ClassDescriptor {
         if (self.declarations) |index| return index.classByName(name);
         if (self.ir) |ir| {
