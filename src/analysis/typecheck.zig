@@ -129,9 +129,13 @@ fn checkOrdinaryFunctionEffectContracts(
         var visiting = std.StringHashMap(void).init(allocator);
         defer visiting.deinit();
         const inferred = try inferFunctionEffects(sema, func, &visiting);
-        if (!declared.containsAll(inferred.withoutPure())) {
+        const required = inferred.withoutPure();
+        if (!declared.containsAll(required)) {
+            const missing = required.difference(declared);
+            const missing_text = try missing.formatAlloc(allocator);
+            defer allocator.free(missing_text);
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "MissingEffects: function body uses effects not listed in its signature") },
+                .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "MissingEffects: function body uses effects not listed in its signature: {s}", .{missing_text}) },
             });
             return error.MissingEffects;
         }

@@ -371,6 +371,10 @@ pub const EffectSet = struct {
         return (self.bits & other.bits) == other.bits;
     }
 
+    pub fn difference(self: EffectSet, other: EffectSet) EffectSet {
+        return .{ .bits = self.bits & ~other.bits };
+    }
+
     pub fn withoutPure(self: EffectSet) EffectSet {
         var copy = self;
         copy.remove(.Pure);
@@ -383,6 +387,20 @@ pub const EffectSet = struct {
 
     fn bit(effect: Effect) u32 {
         return @as(u32, 1) << @intFromEnum(effect);
+    }
+
+    pub fn formatAlloc(self: EffectSet, allocator: Allocator) ![]const u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(allocator);
+        var index: usize = 0;
+        while (index < @typeInfo(Effect).@"enum".fields.len) : (index += 1) {
+            const effect: Effect = @enumFromInt(index);
+            if (!self.contains(effect)) continue;
+            if (out.items.len != 0) try out.appendSlice(allocator, " | ");
+            try out.appendSlice(allocator, @tagName(effect));
+        }
+        if (out.items.len == 0) try out.appendSlice(allocator, "(none)");
+        return try out.toOwnedSlice(allocator);
     }
 };
 
