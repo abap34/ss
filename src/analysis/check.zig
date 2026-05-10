@@ -132,6 +132,20 @@ fn checkTopLevelStatement(
         .property_set => |property_set| {
             try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
         },
+        .if_stmt => |if_stmt| {
+            const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);
+            try ensureType(ir, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
+            var then_env = try env.clone();
+            defer then_env.deinit();
+            for (if_stmt.then_statements.items) |nested| {
+                try checkTopLevelStatement(allocator, ir, sema, origin_path, &then_env, nested);
+            }
+            var else_env = try env.clone();
+            defer else_env.deinit();
+            for (if_stmt.else_statements.items) |nested| {
+                try checkTopLevelStatement(allocator, ir, sema, origin_path, &else_env, nested);
+            }
+        },
         .expr_stmt => |expr| {
             _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
         },
@@ -169,6 +183,20 @@ fn checkStatement(
         },
         .property_set => |property_set| {
             try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
+        },
+        .if_stmt => |if_stmt| {
+            const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);
+            try ensureType(ir, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
+            var then_env = try env.clone();
+            defer then_env.deinit();
+            for (if_stmt.then_statements.items) |nested| {
+                try checkStatement(allocator, ir, sema, origin_path, &then_env, result_type, nested);
+            }
+            var else_env = try env.clone();
+            defer else_env.deinit();
+            for (if_stmt.else_statements.items) |nested| {
+                try checkStatement(allocator, ir, sema, origin_path, &else_env, result_type, nested);
+            }
         },
         .expr_stmt => |expr| {
             _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);

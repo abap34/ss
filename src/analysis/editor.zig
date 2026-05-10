@@ -102,6 +102,7 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
         .ident => |name| allocator.dupe(u8, name),
         .string => |text| std.fmt.allocPrint(allocator, "\"{s}\"", .{text}),
         .number => |value| std.fmt.allocPrint(allocator, "{d}", .{value}),
+        .boolean => |value| allocator.dupe(u8, if (value) "true" else "false"),
         .call => |call| blk: {
             var args = std.ArrayList(u8).empty;
             defer args.deinit(allocator);
@@ -164,6 +165,10 @@ fn collectDefinitionsFromStatement(
     switch (stmt.kind) {
         .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions),
         .bind_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "bind", binding.name, definitions),
+        .if_stmt => |if_stmt| {
+            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions);
+            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions);
+        },
         else => {},
     }
 }
@@ -249,6 +254,11 @@ fn collectStatementHints(
         .bind_binding => |binding| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
         .return_expr => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
         .property_set => |property_set| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, property_set.value),
+        .if_stmt => |if_stmt| {
+            try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
+            for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, hints, functions, source, source_path, module_id, nested);
+            for (if_stmt.else_statements.items) |nested| try collectStatementHints(allocator, hints, functions, source, source_path, module_id, nested);
+        },
         .expr_stmt => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
         else => {},
     }

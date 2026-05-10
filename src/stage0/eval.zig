@@ -388,6 +388,7 @@ fn evalExpr(
         },
         .string => |text| .{ .string = text },
         .number => |value| .{ .number = value },
+        .boolean => |value| .{ .boolean = value },
         .call => |call| try evalCall(ir, page_id, context, mode, env, functions, current_origin, call),
     };
 }
@@ -622,6 +623,17 @@ const BuiltinContext = struct {
     pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
         const node = self.ir.getNode(object_id) orelse return null;
         return node.content;
+    }
+
+    pub fn nodeProperty(self: *BuiltinContext, target: core.Value, key: []const u8) ?[]const u8 {
+        const node_id = switch (target) {
+            .document => |id| id,
+            .page => |id| id,
+            .object => |id| id,
+            else => return null,
+        };
+        const node = self.ir.getNode(node_id) orelse return null;
+        return core.nodeProperty(node, key);
     }
 
     pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
@@ -898,6 +910,7 @@ fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragm
         .style => |style| .{ .style = style },
         .string => |text| .{ .string = text },
         .number => |number| .{ .number = number },
+        .boolean => |boolean| .{ .boolean = boolean },
         .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
     };
 }
@@ -939,6 +952,10 @@ pub fn resolveValuePropertyString(allocator: std.mem.Allocator, value: core.Valu
 
 fn resolveValueNumber(value: core.Value) !f32 {
     return eval_value.number(value);
+}
+
+fn resolveValueBoolean(value: core.Value) !bool {
+    return eval_value.boolean(value);
 }
 
 fn resolveValueStyle(value: core.Value) !core.StyleRef {
@@ -1182,6 +1199,18 @@ fn executeStatement(
             defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
             try ir.setNodeProperty(object_id, property_set.property_name, text);
         },
+        .if_stmt => |if_stmt| {
+            const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, if_stmt.condition);
+            const condition = try resolveValueBoolean(value);
+            const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
+            for (branch) |nested| {
+                const flow = try executeStatement(ir, page_id, context, mode, env, functions, last_code_like, nested, null);
+                switch (flow) {
+                    .none => {},
+                    .returned => return flow,
+                }
+            }
+        },
         .constrain => |decl| {
             if (context != .page) return error.NoCurrentPage;
             const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
@@ -1280,6 +1309,7 @@ fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
         .style => |style| .{ .style = style },
         .string => |text| .{ .string = text },
         .number => |number| .{ .number = number },
+        .boolean => |boolean| .{ .boolean = boolean },
         .constraints => |constraints| .{ .constraints = constraints },
         .fragment => error.UnsupportedFragmentRoot,
     };

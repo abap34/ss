@@ -251,6 +251,10 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "number");
             try object.floatField("value", number, "{d:.4}");
         },
+        .boolean => |boolean| {
+            try object.stringField("exprKind", "boolean");
+            try object.boolField("value", boolean);
+        },
         .call => |call| {
             try object.stringField("exprKind", "call");
             try object.stringField("name", call.name);
@@ -303,6 +307,16 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             try item.stringField("property_name", property_set.property_name);
             try writeExpr(allocator, &item, "value", property_set.value);
         },
+        .if_stmt => |if_stmt| {
+            try item.stringField("kind", "if_stmt");
+            try writeExpr(allocator, &item, "condition", if_stmt.condition);
+            var then_items = try item.arrayField("then");
+            for (if_stmt.then_statements.items) |nested| try writeStatement(allocator, &then_items, nested);
+            try then_items.end();
+            var else_items = try item.arrayField("else");
+            for (if_stmt.else_statements.items) |nested| try writeStatement(allocator, &else_items, nested);
+            try else_items.end();
+        },
     }
     try item.end();
 }
@@ -340,6 +354,10 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
         .number => |value| {
             try item.stringField("kind", "number");
             try item.floatField("value", value, "{d:.4}");
+        },
+        .boolean => |value| {
+            try item.stringField("kind", "boolean");
+            try item.boolField("value", value);
         },
         .call => |call| {
             try item.stringField("kind", "call");

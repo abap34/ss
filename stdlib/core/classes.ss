@@ -10,6 +10,13 @@ type DocumentObject = object {
   layout_v: LayoutPolicy = "top_flow"
   layout_v_center_offset: ScalarLike = "0"
   background_fill: Color = ""
+  page_numbers_enabled: string = ""
+  page_numbers_format: string = ""
+  running_footer_text: string = ""
+  document_logo_path: string = ""
+  document_logo_scale: ScalarLike = "1"
+  watermark_text: string = ""
+  require_titles_enabled: string = ""
 }
 
 type PageObject = object {
@@ -277,6 +284,40 @@ type PageNumberObject = object {
   text_line_height: ScalarLike = "14"
   layout_font_size: ScalarLike = "11"
   layout_line_height: ScalarLike = "14"
+  layout_spacing_after: ScalarLike = "0"
+  wrap: WrapMode = "off"
+}
+
+type RunningFooterObject = object {
+  base = TextObject
+  roles = ["running_footer"]
+
+  text_size: ScalarLike = "12"
+  text_line_height: ScalarLike = "15"
+  text_color: Color = c"0.42,0.42,0.42"
+  layout_font_size: ScalarLike = "12"
+  layout_line_height: ScalarLike = "15"
+  layout_spacing_after: ScalarLike = "0"
+  wrap: WrapMode = "off"
+}
+
+type DocumentLogoObject = object {
+  base = ImageObject
+  roles = ["document_logo"]
+
+  asset_scale: ScalarLike = "1"
+  wrap: WrapMode = "off"
+}
+
+type WatermarkObject = object {
+  base = TextObject
+  roles = ["watermark"]
+
+  text_size: ScalarLike = "72"
+  text_line_height: ScalarLike = "80"
+  text_color: Color = c"0.85,0.85,0.85"
+  layout_font_size: ScalarLike = "72"
+  layout_line_height: ScalarLike = "80"
   layout_spacing_after: ScalarLike = "0"
   wrap: WrapMode = "off"
 }

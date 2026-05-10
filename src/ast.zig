@@ -226,6 +226,7 @@ pub const Expr = union(enum) {
     ident: []const u8,
     string: []const u8,
     number: f32,
+    boolean: bool,
     call: CallExpr,
 
     pub fn deinit(self: *Expr, allocator: Allocator) void {
@@ -275,6 +276,11 @@ pub const Statement = struct {
             property_name: []const u8,
             value: Expr,
         },
+        if_stmt: struct {
+            condition: Expr,
+            then_statements: std.ArrayList(Statement),
+            else_statements: std.ArrayList(Statement),
+        },
         expr_stmt: Expr,
     };
 
@@ -285,6 +291,13 @@ pub const Statement = struct {
             .return_expr => |*expr| expr.deinit(allocator),
             .constrain => |*decl| decl.deinit(allocator),
             .property_set => |*property_set| property_set.value.deinit(allocator),
+            .if_stmt => |*if_stmt| {
+                if_stmt.condition.deinit(allocator);
+                for (if_stmt.then_statements.items) |*stmt| stmt.deinit(allocator);
+                if_stmt.then_statements.deinit(allocator);
+                for (if_stmt.else_statements.items) |*stmt| stmt.deinit(allocator);
+                if_stmt.else_statements.deinit(allocator);
+            },
             .expr_stmt => |*expr| expr.deinit(allocator),
         }
     }

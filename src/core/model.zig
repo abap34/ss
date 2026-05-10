@@ -158,6 +158,7 @@ pub const SemanticSort = enum {
     style,
     string,
     number,
+    boolean,
     constraints,
     fragment,
 };
@@ -418,6 +419,7 @@ pub const FragmentRoot = union(enum) {
     style: StyleRef,
     string: []const u8,
     number: f32,
+    boolean: bool,
     constraints: ConstraintSet,
 
     pub fn deinit(self: *FragmentRoot, allocator: Allocator) void {
@@ -439,6 +441,7 @@ pub const FragmentRoot = union(enum) {
             .style => |style| .{ .style = style },
             .string => |text| .{ .string = text },
             .number => |number| .{ .number = number },
+            .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
         };
     }
@@ -449,7 +452,7 @@ pub const FragmentRoot = union(enum) {
             .page => |id| id,
             .object => |id| id,
             .selection => |selection| selection.first(),
-            .anchor, .function, .style, .string, .number, .constraints => null,
+            .anchor, .function, .style, .string, .number, .boolean, .constraints => null,
         };
     }
 };
@@ -492,6 +495,7 @@ pub const Value = union(SemanticSort) {
     style: StyleRef,
     string: []const u8,
     number: f32,
+    boolean: bool,
     constraints: ConstraintSet,
     fragment: *Fragment,
 
@@ -512,7 +516,7 @@ pub const Value = union(SemanticSort) {
             .object => |id| id,
             .selection => |selection| selection.first(),
             .fragment => |fragment| if (fragment.root) |root| root.firstId() else null,
-            .anchor, .function, .style, .string, .number, .constraints => null,
+            .anchor, .function, .style, .string, .number, .boolean, .constraints => null,
         };
     }
 };

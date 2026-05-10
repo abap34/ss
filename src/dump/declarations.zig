@@ -213,6 +213,10 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "number");
             try object.floatField("value", number, "{d:.4}");
         },
+        .boolean => |boolean| {
+            try object.stringField("exprKind", "boolean");
+            try object.boolField("value", boolean);
+        },
         .call => |call| {
             try object.stringField("exprKind", "call");
             try object.stringField("name", call.name);

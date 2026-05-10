@@ -173,6 +173,11 @@ fn inferStatementEffects(
             set.insert(.WriteProperty);
             set.unionWith(try inferExprEffects(sema, property.value, visiting));
         },
+        .if_stmt => |if_stmt| {
+            set.unionWith(try inferExprEffects(sema, if_stmt.condition, visiting));
+            for (if_stmt.then_statements.items) |nested| set.unionWith(try inferStatementEffects(sema, nested, visiting));
+            for (if_stmt.else_statements.items) |nested| set.unionWith(try inferStatementEffects(sema, nested, visiting));
+        },
         .expr_stmt => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
         .constrain => |decl| {
             set.insert(.WriteConstraint);
@@ -188,7 +193,7 @@ fn inferExprEffects(
     visiting: *std.StringHashMap(void),
 ) anyerror!core.EffectSet {
     return switch (expr) {
-        .ident, .string, .number => core.EffectSet.empty(),
+        .ident, .string, .number, .boolean => core.EffectSet.empty(),
         .call => |call| try inferCallEffects(sema, call, visiting),
     };
 }
@@ -516,6 +521,20 @@ fn collectVariableTypesFromStatement(
         },
         .property_set => |property_set| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
+        },
+        .if_stmt => |if_stmt| {
+            const condition = try inferExprInfo(allocator, diagnostic_ir, sema, env, if_stmt.condition, origin);
+            try semantic_types.ensureType(diagnostic_ir, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
+            var then_env = try env.clone();
+            defer then_env.deinit();
+            for (if_stmt.then_statements.items) |nested| {
+                try collectVariableTypesFromStatement(allocator, diagnostic_ir, &then_env, sema, nested, variables);
+            }
+            var else_env = try env.clone();
+            defer else_env.deinit();
+            for (if_stmt.else_statements.items) |nested| {
+                try collectVariableTypesFromStatement(allocator, diagnostic_ir, &else_env, sema, nested, variables);
+            }
         },
         .expr_stmt => |expr| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);

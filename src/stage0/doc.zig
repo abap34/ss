@@ -406,6 +406,7 @@ pub const Document = struct {
             .style => .style,
             .string => .string,
             .number => .number,
+            .boolean => .boolean,
             .constraints => .constraints,
             .fragment => .fragment,
         };

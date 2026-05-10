@@ -640,6 +640,7 @@ pub const Ir = struct {
             .style => .style,
             .string => .string,
             .number => .number,
+            .boolean => .boolean,
             .constraints => .constraints,
             .fragment => .fragment,
         };
@@ -778,6 +779,7 @@ pub const Ir = struct {
             .style => .style,
             .string => .string,
             .number => .number,
+            .boolean => .boolean,
             .constraints => .constraints,
         };
     }
