@@ -61,6 +61,7 @@ pub fn exprInfo(
             break :blk info;
         },
         .number => infoFromSort(.number),
+        .boolean => infoFromSort(.boolean),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
             if (sema.function(name)) |func| {
@@ -221,6 +222,25 @@ fn inferUserFunctionReturnInfoInner(
             },
             .property_set => |property_set| {
                 try validatePropertySetStatement(allocator, ir, sema, &env, property_set.object_name, property_set.property_name, property_set.value, "");
+            },
+            .if_stmt => |if_stmt| {
+                _ = try exprInfo(allocator, null, sema, &env, if_stmt.condition, "");
+                var then_env = try env.clone();
+                defer then_env.deinit();
+                for (if_stmt.then_statements.items) |nested| {
+                    switch (nested.kind) {
+                        .return_expr => |expr| result = mergeTypeInfo(result, try exprInfo(allocator, null, sema, &then_env, expr, "")),
+                        else => {},
+                    }
+                }
+                var else_env = try env.clone();
+                defer else_env.deinit();
+                for (if_stmt.else_statements.items) |nested| {
+                    switch (nested.kind) {
+                        .return_expr => |expr| result = mergeTypeInfo(result, try exprInfo(allocator, null, sema, &else_env, expr, "")),
+                        else => {},
+                    }
+                }
             },
             .expr_stmt => |expr| {
                 _ = try exprInfo(allocator, null, sema, &env, expr, "");
@@ -642,6 +662,7 @@ pub fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index:
         .style => .style,
         .string => .string,
         .number => .number,
+        .boolean => .boolean,
         .constraints => .constraints,
     };
 }

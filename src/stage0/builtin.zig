@@ -72,6 +72,12 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const right = try ctx.evalStringArg(call, 1);
             break :blk .{ .string = try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right }) };
         },
+        .replace => blk: {
+            const text = try ctx.evalStringArg(call, 0);
+            const old = try ctx.evalStringArg(call, 1);
+            const new = try ctx.evalStringArg(call, 2);
+            break :blk .{ .string = try replaceAll(ctx.ir.allocator, text, old, new) };
+        },
         .foreach => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             errdefer target.deinit(ctx.ir.allocator);
@@ -228,6 +234,40 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .content => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
+        },
+        .prop => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
+            const key = try ctx.evalStringArg(call, 1);
+            const default_value = try ctx.evalStringArg(call, 2);
+            break :blk .{ .string = ctx.nodeProperty(target, key) orelse default_value };
+        },
+        .has_prop => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
+            const key = try ctx.evalStringArg(call, 1);
+            break :blk .{ .boolean = ctx.nodeProperty(target, key) != null };
+        },
+        .prop_eq => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
+            const key = try ctx.evalStringArg(call, 1);
+            const expected = try ctx.evalStringArg(call, 2);
+            const actual = ctx.nodeProperty(target, key);
+            break :blk .{ .boolean = if (actual) |value| std.mem.eql(u8, value, expected) else false };
+        },
+        .selection_empty, .selection_count => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            defer target.deinit(ctx.ir.allocator);
+            const selection = switch (target) {
+                .selection => |sel| sel,
+                else => return error.ExpectedSelection,
+            };
+            break :blk switch (descriptor.op) {
+                .selection_empty => .{ .boolean = selection.ids.items.len == 0 },
+                .selection_count => .{ .number = @floatFromInt(selection.ids.items.len) },
+                else => unreachable,
+            };
         },
         .rewrite_text => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);

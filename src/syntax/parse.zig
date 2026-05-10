@@ -94,8 +94,8 @@ const Parser = struct {
                 });
                 try program.top_level_items.append(self.allocator, .{ .import = import_index });
             } else if (try self.consumeKeyword("fn")) {
-                const func = try self.parseFunctionAfterKeyword(item_start, prefix_annotations);
                 has_prefix_annotations = false;
+                const func = try self.parseFunctionAfterKeyword(item_start, prefix_annotations);
                 try program.functions.append(self.allocator, func);
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
@@ -559,6 +559,7 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "style")) return ast.Type.style;
         if (std.mem.eql(u8, name, "string")) return ast.Type.string;
         if (std.mem.eql(u8, name, "number")) return ast.Type.number;
+        if (std.mem.eql(u8, name, "bool") or std.mem.eql(u8, name, "boolean")) return ast.Type.boolean;
         if (std.mem.eql(u8, name, "constraints")) return ast.Type.constraints;
         if (std.mem.eql(u8, name, "selection")) return ast.Type.selectionType(try self.parseOptionalTypeParam());
         if (std.mem.eql(u8, name, "fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
@@ -707,10 +708,60 @@ const Parser = struct {
         return self.fail(error.ExpectedEnd);
     }
 
-    fn parseStatement(self: *Parser) !Statement {
+    const StatementTerminator = enum {
+        end,
+        @"else",
+    };
+
+    const StatementBlock = struct {
+        statements: std.ArrayList(Statement),
+        terminator: StatementTerminator,
+    };
+
+    fn parseStatementsUntilElseOrEnd(self: *Parser) anyerror!StatementBlock {
+        var statements = std.ArrayList(Statement).empty;
+        errdefer {
+            for (statements.items) |*stmt| stmt.deinit(self.allocator);
+            statements.deinit(self.allocator);
+        }
+
+        self.skipTrivia();
+        while (!self.eof()) {
+            if (self.peekStandaloneKeyword("else")) {
+                try self.consumeStandaloneKeyword("else");
+                return .{ .statements = statements, .terminator = .@"else" };
+            }
+            if (self.peekStandaloneKeyword("end")) {
+                try self.consumeStandaloneKeyword("end");
+                return .{ .statements = statements, .terminator = .end };
+            }
+            try statements.append(self.allocator, try self.parseStatement());
+            self.skipTrivia();
+        }
+        return self.fail(error.ExpectedEnd);
+    }
+
+    fn parseStatement(self: *Parser) anyerror!Statement {
         self.skipTrivia();
         const start = self.pos;
 
+        if (try self.consumeKeyword("if")) {
+            const condition = try self.parseExpr();
+            self.skipInlineSpaces();
+            try self.expectLineBreakAfterHeader();
+            const then_block = try self.parseStatementsUntilElseOrEnd();
+            var else_statements = std.ArrayList(Statement).empty;
+            if (then_block.terminator == .@"else") {
+                const else_block = try self.parseStatementsUntilElseOrEnd();
+                if (else_block.terminator == .@"else") return self.fail(error.ExpectedEnd);
+                else_statements = else_block.statements;
+            }
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .if_stmt = .{
+                .condition = condition,
+                .then_statements = then_block.statements,
+                .else_statements = else_statements,
+            } } };
+        }
         if (try self.consumeKeyword("return")) {
             const expr = try self.parseExpr();
             try self.consumeStatementTerminator();
@@ -804,7 +855,7 @@ const Parser = struct {
     fn parseConcatExpr(self: *Parser) anyerror!Expr {
         var left = try self.parseAddSubExpr();
         while (true) {
-            self.skipTrivia();
+            self.skipInlineSpaces();
             if (!self.startsWith("++")) return left;
             self.pos += 2;
             const right = try self.parseAddSubExpr();
@@ -815,7 +866,7 @@ const Parser = struct {
     fn parseAddSubExpr(self: *Parser) anyerror!Expr {
         var left = try self.parseMulDivExpr();
         while (true) {
-            self.skipTrivia();
+            self.skipInlineSpaces();
             if (self.eof()) return left;
             if (self.startsWith("++")) return left;
             const op = self.source[self.pos];
@@ -829,7 +880,7 @@ const Parser = struct {
     fn parseMulDivExpr(self: *Parser) anyerror!Expr {
         var left = try self.parseUnaryExpr();
         while (true) {
-            self.skipTrivia();
+            self.skipInlineSpaces();
             if (self.eof()) return left;
             const op = self.source[self.pos];
             if (op != '*' and op != '/') return left;
@@ -840,7 +891,7 @@ const Parser = struct {
     }
 
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
-        self.skipTrivia();
+        self.skipInlineSpaces();
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
             var args = std.ArrayList(Expr).empty;
@@ -852,7 +903,7 @@ const Parser = struct {
     }
 
     fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
-        self.skipTrivia();
+        self.skipInlineSpaces();
         if (!self.eof() and self.source[self.pos] == '(') {
             self.pos += 1;
             const expr = try self.parseExpr();
@@ -873,6 +924,13 @@ const Parser = struct {
         }
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
+        if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
+            if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
+                const value = std.mem.eql(u8, name, "true");
+                self.allocator.free(name);
+                return .{ .boolean = value };
+            }
+        }
         if (!self.eof() and self.source[self.pos] == '.') {
             return try self.parseAnchorMemberExprAfterObjectName(name);
         }
@@ -1391,6 +1449,7 @@ fn functionBodyReturns(statements: []const Statement) bool {
 fn statementReturns(stmt: Statement) bool {
     return switch (stmt.kind) {
         .return_expr => true,
+        .if_stmt => |if_stmt| functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items),
         else => false,
     };
 }

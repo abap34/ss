@@ -92,6 +92,11 @@ fn collectStatementCallees(
         .bind_binding => |binding| try collectExprCallees(allocator, sema, binding.expr, callees),
         .return_expr => |expr| try collectExprCallees(allocator, sema, expr, callees),
         .property_set => |property_set| try collectExprCallees(allocator, sema, property_set.value, callees),
+        .if_stmt => |if_stmt| {
+            try collectExprCallees(allocator, sema, if_stmt.condition, callees);
+            for (if_stmt.then_statements.items) |nested| try collectStatementCallees(allocator, sema, nested, callees);
+            for (if_stmt.else_statements.items) |nested| try collectStatementCallees(allocator, sema, nested, callees);
+        },
         .constrain => |decl| if (decl.offset) |expr| try collectExprCallees(allocator, sema, expr, callees),
         .expr_stmt => |expr| try collectExprCallees(allocator, sema, expr, callees),
     }

@@ -229,6 +229,11 @@ fn inferStatementEffects(
             set.insert(.WriteProperty);
             set.unionWith(try inferExprEffects(ir, sema, pass, property.value, visiting));
         },
+        .if_stmt => |if_stmt| {
+            set.unionWith(try inferExprEffects(ir, sema, pass, if_stmt.condition, visiting));
+            for (if_stmt.then_statements.items) |nested| set.unionWith(try inferStatementEffects(ir, sema, pass, nested, visiting));
+            for (if_stmt.else_statements.items) |nested| set.unionWith(try inferStatementEffects(ir, sema, pass, nested, visiting));
+        },
         .expr_stmt => |expr| set.unionWith(try inferExprEffects(ir, sema, pass, expr, visiting)),
         .constrain => |decl| {
             set.insert(.WriteConstraint);
@@ -246,7 +251,7 @@ fn inferExprEffects(
     visiting: *std.StringHashMap(void),
 ) anyerror!core.EffectSet {
     return switch (expr) {
-        .ident, .string, .number => core.EffectSet.empty(),
+        .ident, .string, .number, .boolean => core.EffectSet.empty(),
         .call => |call| try inferCallEffects(ir, sema, pass, call, visiting),
     };
 }
@@ -405,6 +410,7 @@ fn evalExpr(
         },
         .string => |text| .{ .string = text },
         .number => |value| .{ .number = value },
+        .boolean => |value| .{ .boolean = value },
         .call => |call| try evalCall(ir, env, functions, current_origin, call),
     };
 }
@@ -633,6 +639,17 @@ const BuiltinContext = struct {
         return node.content;
     }
 
+    pub fn nodeProperty(self: *BuiltinContext, target: core.Value, key: []const u8) ?[]const u8 {
+        const node_id = switch (target) {
+            .document => |id| id,
+            .page => |id| id,
+            .object => |id| id,
+            else => return null,
+        };
+        const node = self.ir.getNode(node_id) orelse return null;
+        return core.nodeProperty(node, key);
+    }
+
     pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
         try self.ir.setNodeContent(object_id, text);
     }
@@ -696,6 +713,18 @@ fn executeStatement(
             const text = try resolveValuePropertyString(ir.allocator, value);
             defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
             try ir.setNodeProperty(object_id, property_set.property_name, text);
+        },
+        .if_stmt => |if_stmt| {
+            const value = try evalExpr(ir, env, functions, origin, if_stmt.condition);
+            const condition = try resolveValueBoolean(value);
+            const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
+            for (branch) |nested| {
+                const flow = try executeStatement(ir, env, functions, nested, null);
+                switch (flow) {
+                    .none => {},
+                    .returned => return flow,
+                }
+            }
         },
         .expr_stmt => |expr| {
             var value = try evalExpr(ir, env, functions, origin, expr);
@@ -851,6 +880,10 @@ fn resolveValuePropertyString(allocator: std.mem.Allocator, value: core.Value) !
 
 fn resolveValueNumber(value: core.Value) !f32 {
     return eval_value.number(value);
+}
+
+fn resolveValueBoolean(value: core.Value) !bool {
+    return eval_value.boolean(value);
 }
 
 fn resolveValueObjectId(value: core.Value) !core.NodeId {

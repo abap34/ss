@@ -19,6 +19,7 @@ pub const Type = struct {
         style,
         string,
         number,
+        boolean,
         constraints,
         fragment,
         code,
@@ -34,6 +35,7 @@ pub const Type = struct {
     pub const style = Type{ .tag = .style };
     pub const string = Type{ .tag = .string };
     pub const number = Type{ .tag = .number };
+    pub const boolean = Type{ .tag = .boolean };
     pub const constraints = Type{ .tag = .constraints };
 
     pub fn objectClass(name: []const u8) Type {
@@ -80,6 +82,7 @@ pub const Type = struct {
             .style => .style,
             .string => .string,
             .number => .number,
+            .boolean => .boolean,
             .constraints => .constraints,
             .fragment => fragment(.any),
         };
@@ -96,6 +99,7 @@ pub const Type = struct {
             .style => .style,
             .string => .string,
             .number => .number,
+            .boolean => .boolean,
             .constraints => .constraints,
             .fragment => .fragment,
             .code => .code,
@@ -144,6 +148,7 @@ pub const Type = struct {
             .style => .style,
             .string => .string,
             .number => .number,
+            .boolean => .boolean,
             .constraints => .constraints,
             .fragment => .fragment,
             .code => .code,

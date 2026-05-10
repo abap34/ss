@@ -18,6 +18,7 @@ pub const PrimitiveCall = enum {
     max,
     str,
     concat,
+    replace,
     foreach,
     fold,
     join,
@@ -32,6 +33,11 @@ pub const PrimitiveCall = enum {
     frame_width,
     frame_height,
     content,
+    prop,
+    has_prop,
+    prop_eq,
+    selection_empty,
+    selection_count,
     rewrite_text,
     set_content,
     clear_content,
@@ -73,6 +79,7 @@ pub const ArgSort = enum {
     style,
     string,
     number,
+    boolean,
     constraints,
 };
 
@@ -116,6 +123,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .max, .name = "max", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_sorts = &.{ .number, .number }, .result_sort = .number, .summary = "Return the larger number" },
     .{ .op = .str, .name = "str", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_sorts = &.{.number}, .result_sort = .string, .summary = "Convert a number to string" },
     .{ .op = .concat, .name = "concat", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_sorts = &.{ .string, .string }, .result_sort = .string, .summary = "Concatenate two strings" },
+    .{ .op = .replace, .name = "replace", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "text", "old", "new" }, .arg_sorts = &.{ .string, .string, .string }, .result_sort = .string, .summary = "Replace all string occurrences" },
     .{ .op = .foreach, .name = "foreach", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "selection", "callback" }, .arg_sorts = &.{ .selection, .function, .any }, .result_sort = .selection, .summary = "Call a callback once for every item in a finite Selection snapshot" },
     .{ .op = .fold, .name = "fold", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "initial", "callback" }, .arg_sorts = &.{ .selection, .string, .function, .any }, .result_sort = .string, .summary = "Fold a finite Selection snapshot with a string accumulator" },
     .{ .op = .join, .name = "join", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "separator", "callback" }, .arg_sorts = &.{ .selection, .string, .function, .any }, .result_sort = .string, .summary = "Map a finite Selection snapshot to strings and join them" },
@@ -130,6 +138,11 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .frame_width, .name = "frame_width", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved width for an object" },
     .{ .op = .frame_height, .name = "frame_height", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved height for an object" },
     .{ .op = .content, .name = "content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .string, .summary = "Return an object's textual content" },
+    .{ .op = .prop, .name = "prop", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "default" }, .arg_sorts = &.{ .any, .string, .string }, .result_sort = .string, .summary = "Read a property from a document, page, or object, falling back to a default" },
+    .{ .op = .has_prop, .name = "has_prop", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "target", "key" }, .arg_sorts = &.{ .any, .string }, .result_sort = .boolean, .summary = "Return whether a document, page, or object has a property" },
+    .{ .op = .prop_eq, .name = "prop_eq", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "value" }, .arg_sorts = &.{ .any, .string, .string }, .result_sort = .boolean, .summary = "Return whether a property equals a string value" },
+    .{ .op = .selection_empty, .name = "selection_empty", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_sorts = &.{.selection}, .result_sort = .boolean, .summary = "Return whether a Selection has no members" },
+    .{ .op = .selection_count, .name = "selection_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_sorts = &.{.selection}, .result_sort = .number, .summary = "Return the number of members in a Selection" },
     .{ .op = .rewrite_text, .name = "rewrite_text", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "object", "old", "new" }, .arg_sorts = &.{ .object, .string, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Rewrite occurrences in an object's textual content" },
     .{ .op = .set_content, .name = "set_content", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "text" }, .arg_sorts = &.{ .object, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Replace an object's textual content" },
     .{ .op = .clear_content, .name = "clear_content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .object, .effect = .builds_graph, .summary = "Clear an object's textual content" },
@@ -194,6 +207,7 @@ pub fn argSortType(sort: ArgSort) ?types.Type {
         .style => types.Type.style,
         .string => types.Type.string,
         .number => types.Type.number,
+        .boolean => types.Type.boolean,
         .constraints => types.Type.constraints,
     };
 }
@@ -216,7 +230,7 @@ pub fn primitiveResultType(descriptor: PrimitiveDescriptor) ?types.Type {
 pub fn primitiveEffects(descriptor: PrimitiveDescriptor) core.EffectSet {
     var set = core.EffectSet.empty();
     switch (descriptor.op) {
-        .select, .page_index, .page_count, .content => set.insert(.ReadGraph),
+        .select, .page_index, .page_count, .content, .prop, .has_prop, .prop_eq => set.insert(.ReadGraph),
         .frame_x, .frame_y, .frame_width, .frame_height => set.insert(.ReadLayout),
         .rewrite_text, .set_content, .clear_content, .append_content => set.insert(.WriteContent),
         .object, .group => set.insert(.CreateNode),

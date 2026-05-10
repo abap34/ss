@@ -21,6 +21,7 @@ pub fn valueSort(value: core.Value) core.SemanticSort {
         .style => .style,
         .string => .string,
         .number => .number,
+        .boolean => .boolean,
         .constraints => .constraints,
         .fragment => .fragment,
     };
@@ -98,6 +99,9 @@ pub fn functionBodyReturns(statements: []const ast.Statement) bool {
     for (statements) |stmt| {
         switch (stmt.kind) {
             .return_expr => return true,
+            .if_stmt => |if_stmt| {
+                if (functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items)) return true;
+            },
             else => {},
         }
     }
