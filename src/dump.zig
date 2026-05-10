@@ -4,6 +4,7 @@ const stage0 = @import("stage0.zig");
 const dump_calls = @import("dump/calls.zig");
 const dump_declarations = @import("dump/declarations.zig");
 const dump_editor = @import("dump/editor.zig");
+const dump_layout = @import("dump/layout.zig");
 const dump_render_doc = @import("dump/render_doc.zig");
 const dump_source = @import("dump/source.zig");
 const dump_stage0 = @import("dump/stage0.zig");
@@ -39,22 +40,16 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try dump_editor.writeHintsField(&root, ir.hints.items);
 
     try root.intField("document_id", ir.document_id);
-    try writePageOrderField(&root, ir.page_order.items);
+    try dump_layout.writePageOrderField(&root, ir.page_order.items);
     try writeNodesField(allocator, &root, ir);
     try dump_render_doc.writeField(allocator, &root, ir);
-    try writeContainsField(&root, &ir.contains);
-    try writeConstraintsField(&root, ir.constraints.items);
+    try dump_layout.writeContainsField(&root, &ir.contains);
+    try dump_layout.writeConstraintsField(&root, ir.constraints.items);
     try writeDiagnosticsField(&root, ir.diagnostics.items);
 
     try root.end();
     try json.appendNewline(&buffer, allocator);
     return buffer.toOwnedSlice(allocator);
-}
-
-fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !void {
-    var array = try root.arrayField("page_order");
-    for (page_order) |page_id| try array.intItem(page_id);
-    try array.end();
 }
 
 fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
@@ -70,59 +65,10 @@ fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.I
     try nodes.end();
 }
 
-fn writeContainsField(root: *json.Object, contains_map: *std.AutoHashMap(core.NodeId, std.ArrayList(core.NodeId))) !void {
-    var contains = try root.arrayField("contains");
-    var contains_iterator = contains_map.iterator();
-    while (contains_iterator.next()) |entry| {
-        var item = try contains.objectItem();
-        try item.intField("parent", entry.key_ptr.*);
-        var children = try item.arrayField("children");
-        for (entry.value_ptr.items) |child_id| try children.intItem(child_id);
-        try children.end();
-        try item.end();
-    }
-    try contains.end();
-}
-
-fn writeConstraintsField(root: *json.Object, constraints: []const core.Constraint) !void {
-    var array = try root.arrayField("constraints");
-    for (constraints) |constraint| {
-        var item = try array.objectItem();
-        try writeConstraintFields(&item, constraint, "target_node", "source_node", "node");
-        try item.end();
-    }
-    try array.end();
-}
-
 fn writeDiagnosticsField(root: *json.Object, diagnostics: []const core.Diagnostic) !void {
     var array = try root.arrayField("diagnostics");
     for (diagnostics) |diagnostic| try writeDiagnostic(&array, diagnostic);
     try array.end();
-}
-
-fn writeConstraintFields(
-    item: *json.Object,
-    constraint: core.Constraint,
-    target_key: []const u8,
-    source_key: []const u8,
-    node_source_kind: []const u8,
-) !void {
-    try item.intField(target_key, constraint.target_node);
-    try item.enumTagField("target_anchor", constraint.target_anchor);
-    switch (constraint.source) {
-        .page => |anchor| {
-            try item.stringField("source_kind", "page");
-            try item.enumTagField("source_anchor", anchor);
-            try item.nullField(source_key);
-        },
-        .node => |source| {
-            try item.stringField("source_kind", node_source_kind);
-            try item.enumTagField("source_anchor", source.anchor);
-            try item.intField(source_key, source.node_id);
-        },
-    }
-    try item.floatField("offset", constraint.offset, "{d:.1}");
-    try item.optionalStringField("origin", constraint.origin);
 }
 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sema: anytype, node: core.Node) !void {
