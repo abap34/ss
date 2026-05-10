@@ -1,4 +1,5 @@
 const std = @import("std");
+const ast = @import("ast");
 const core = @import("core");
 
 const declarations = @import("../language/declarations.zig");
@@ -58,43 +59,163 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
         var item = try annotations.objectItem();
         try item.stringField("function", annotation.function_name);
         try item.stringField("annotation", annotation.annotation_name);
-        try item.optionalStringField("args", annotation.args);
+        try writeAnnotationArgs(&item, annotation.args);
         try item.intField("moduleId", annotation.module_id);
         try item.end();
     }
     try annotations.end();
 
-    var phases = try object.arrayField("phases");
-    for (index.phases.items) |phase| {
-        var item = try phases.objectItem();
-        try item.stringField("function", phase.function_name);
-        try item.optionalStringField("args", phase.args);
-        try item.intField("moduleId", phase.module_id);
+    var removed_annotations = try object.arrayField("removedAnnotations");
+    for (index.removed_annotations.items) |annotation| {
+        var item = try removed_annotations.objectItem();
+        try item.stringField("function", annotation.function_name);
+        try item.stringField("annotation", annotation.annotation_name);
+        try writeAnnotationArgs(&item, annotation.args);
+        try item.intField("moduleId", annotation.module_id);
         try item.end();
     }
-    try phases.end();
+    try removed_annotations.end();
 
-    var capabilities = try object.arrayField("capabilities");
-    for (index.capabilities.items) |capability| {
-        var item = try capabilities.objectItem();
+    var passes = try object.arrayField("passes");
+    for (index.passes.items) |pass| {
+        var item = try passes.objectItem();
+        try item.stringField("id", pass.id);
+        try item.stringField("function", pass.function_name);
+        try item.stringField("slot", pass.slot_name);
+        try item.optionalStringField("effects", pass.effects_text);
+        try writeStringArrayField(&item, "after", pass.after);
+        try writeStringArrayField(&item, "before", pass.before);
+        try item.intField("moduleId", pass.module_id);
+        try item.intField("sourceOrder", pass.source_order);
+        try item.end();
+    }
+    try passes.end();
+
+    var host_capabilities = try object.arrayField("hostCapabilities");
+    for (index.host_capabilities.items) |capability| {
+        var item = try host_capabilities.objectItem();
         try item.stringField("function", capability.function_name);
-        try item.optionalStringField("args", capability.args);
-        try item.optionalStringField("effects", capability.effects);
-        try item.optionalStringField("cache", capability.cache);
+        try writeAnnotationArgs(&item, capability.args);
+        try item.optionalStringField("effects", capability.effects_text);
+        if (capability.cache) |cache| try writeAnnotationValue(&item, "cache", cache);
         try item.intField("moduleId", capability.module_id);
         try item.end();
     }
-    try capabilities.end();
+    try host_capabilities.end();
 
     var render_ops = try object.arrayField("renderOps");
     for (index.render_ops.items) |op| {
         var item = try render_ops.objectItem();
         try item.stringField("function", op.function_name);
-        try item.optionalStringField("args", op.args);
+        try writeAnnotationArgs(&item, op.args);
+        try item.optionalStringField("effects", op.effects_text);
         try item.intField("moduleId", op.module_id);
         try item.end();
     }
     try render_ops.end();
 
     try object.end();
+}
+
+fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const []const u8) !void {
+    var array = try object.arrayField(name);
+    for (values) |value| try array.stringItem(value);
+    try array.end();
+}
+
+fn writeAnnotationArgs(object: *json.Object, args: []const ast.AnnotationArg) !void {
+    var array = try object.arrayField("args");
+    for (args) |arg| {
+        var item = try array.objectItem();
+        switch (arg) {
+            .positional => |value| {
+                try item.stringField("kind", "positional");
+                try writeAnnotationValue(&item, "value", value);
+            },
+            .named => |named| {
+                try item.stringField("kind", "named");
+                try item.stringField("name", named.name);
+                try writeAnnotationValue(&item, "value", named.value);
+            },
+        }
+        try item.end();
+    }
+    try array.end();
+}
+
+fn writeAnnotationValue(object: *json.Object, field_name: []const u8, value: ast.AnnotationValue) !void {
+    var value_object = try object.objectField(field_name);
+    switch (value) {
+        .ident => |text| {
+            try value_object.stringField("kind", "ident");
+            try value_object.stringField("value", text);
+        },
+        .string => |text| {
+            try value_object.stringField("kind", "string");
+            try value_object.stringField("value", text);
+        },
+        .expr => |expr| {
+            try value_object.stringField("kind", "expr");
+            try writeExprValue(&value_object, expr);
+        },
+        .list => |items| {
+            try value_object.stringField("kind", "list");
+            var array = try value_object.arrayField("items");
+            for (items.items) |item| {
+                var nested = try array.objectItem();
+                try writeAnnotationValueInline(&nested, item);
+                try nested.end();
+            }
+            try array.end();
+        },
+    }
+    try value_object.end();
+}
+
+fn writeAnnotationValueInline(object: *json.Object, value: ast.AnnotationValue) !void {
+    switch (value) {
+        .ident => |text| {
+            try object.stringField("kind", "ident");
+            try object.stringField("value", text);
+        },
+        .string => |text| {
+            try object.stringField("kind", "string");
+            try object.stringField("value", text);
+        },
+        .expr => |expr| {
+            try object.stringField("kind", "expr");
+            try writeExprValue(object, expr);
+        },
+        .list => |items| {
+            try object.stringField("kind", "list");
+            var array = try object.arrayField("items");
+            for (items.items) |item| {
+                var nested = try array.objectItem();
+                try writeAnnotationValueInline(&nested, item);
+                try nested.end();
+            }
+            try array.end();
+        },
+    }
+}
+
+fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
+    switch (expr) {
+        .ident => |name| {
+            try object.stringField("exprKind", "ident");
+            try object.stringField("value", name);
+        },
+        .string => |text| {
+            try object.stringField("exprKind", "string");
+            try object.stringField("value", text);
+        },
+        .number => |number| {
+            try object.stringField("exprKind", "number");
+            try object.floatField("value", number, "{d:.4}");
+        },
+        .call => |call| {
+            try object.stringField("exprKind", "call");
+            try object.stringField("name", call.name);
+        },
+    }
 }

@@ -9,6 +9,7 @@ const checker = @import("check.zig");
 const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
+const registry = @import("../language/registry.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
@@ -100,10 +101,196 @@ pub fn typecheckProgram(
     try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
+    try checkAnnotationContracts(allocator, ir, &declaration_index);
+    try checkOrdinaryFunctionEffectContracts(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
     }
+}
+
+fn checkOrdinaryFunctionEffectContracts(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+) !void {
+    var it = sema.functions.iterator();
+    while (it.next()) |entry| {
+        const func = entry.value_ptr.*;
+        if (func.effects == null) continue;
+        if (hasAnnotation(func, "pass") or hasAnnotation(func, "host") or hasAnnotation(func, "op")) continue;
+        const origin = try functionOriginForDecl(allocator, ir, func);
+        const declared = declarations.parseEffectSet(func.effects.?) catch {
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: function declares an unknown effect") },
+            });
+            return error.UnknownEffect;
+        };
+        var visiting = std.StringHashMap(void).init(allocator);
+        defer visiting.deinit();
+        const inferred = try inferFunctionEffects(sema, func, &visiting);
+        if (!declared.containsAll(inferred.withoutPure())) {
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "MissingEffects: function body uses effects not listed in its signature") },
+            });
+            return error.MissingEffects;
+        }
+    }
+}
+
+fn inferFunctionEffects(
+    sema: *const SemanticEnv,
+    func: ast.FunctionDecl,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    if (visiting.contains(func.name)) {
+        if (func.effects) |effects| return declarations.parseEffectSet(effects) catch core.EffectSet.empty();
+        return core.EffectSet.empty();
+    }
+    try visiting.put(func.name, {});
+    defer _ = visiting.remove(func.name);
+
+    var set = core.EffectSet.empty();
+    for (func.statements.items) |stmt| set.unionWith(try inferStatementEffects(sema, stmt, visiting));
+    return set;
+}
+
+fn inferStatementEffects(
+    sema: *const SemanticEnv,
+    stmt: ast.Statement,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    var set = core.EffectSet.empty();
+    switch (stmt.kind) {
+        .let_binding => |binding| set.unionWith(try inferExprEffects(sema, binding.expr, visiting)),
+        .bind_binding => |binding| set.unionWith(try inferExprEffects(sema, binding.expr, visiting)),
+        .return_expr => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
+        .property_set => |property| {
+            set.insert(.WriteProperty);
+            set.unionWith(try inferExprEffects(sema, property.value, visiting));
+        },
+        .expr_stmt => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
+        .constrain => |decl| {
+            set.insert(.WriteConstraint);
+            if (decl.offset) |expr| set.unionWith(try inferExprEffects(sema, expr, visiting));
+        },
+    }
+    return set;
+}
+
+fn inferExprEffects(
+    sema: *const SemanticEnv,
+    expr: ast.Expr,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    return switch (expr) {
+        .ident, .string, .number => core.EffectSet.empty(),
+        .call => |call| try inferCallEffects(sema, call, visiting),
+    };
+}
+
+fn inferCallEffects(
+    sema: *const SemanticEnv,
+    call: ast.CallExpr,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    var set = core.EffectSet.empty();
+    for (call.args.items) |arg| set.unionWith(try inferExprEffects(sema, arg, visiting));
+    const descriptor = sema.call(call.name) orelse return set;
+    switch (descriptor) {
+        .primitive => |primitive| {
+            set.unionWith(registry.primitiveEffects(primitive));
+            if ((primitive.op == .foreach or primitive.op == .fold or primitive.op == .join) and call.args.items.len >= 2) {
+                switch (call.args.items[1]) {
+                    .ident => |callback_name| if (sema.function(callback_name)) |callback| {
+                        set.unionWith(try inferFunctionEffects(sema, callback, visiting));
+                    },
+                    else => {},
+                }
+            }
+        },
+        .function => |callee| set.unionWith(try inferFunctionEffects(sema, callee, visiting)),
+    }
+    return set;
+}
+
+fn hasAnnotation(func: ast.FunctionDecl, name: []const u8) bool {
+    for (func.annotations.items) |annotation| {
+        if (std.mem.eql(u8, annotation.name, name)) return true;
+    }
+    return false;
+}
+
+fn functionOriginForDecl(
+    allocator: std.mem.Allocator,
+    ir: *const core.Ir,
+    func: ast.FunctionDecl,
+) ![]const u8 {
+    if (ir.function_metadata.get(func.name)) |metadata| {
+        return functionOrigin(allocator, ir, metadata.module_id, func.name);
+    }
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
+}
+
+fn checkAnnotationContracts(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    index: *const declarations.DeclarationIndex,
+) !void {
+    for (index.removed_annotations.items) |annotation| {
+        const origin = try functionOrigin(allocator, ir, annotation.module_id, annotation.function_name);
+        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try ir.allocator.dupe(u8, "@phase is removed; use @pass(augment), @pass(resolve), @pass(inspect_layout), or @pass(prepare_render)") },
+        });
+        return error.LegacyPhaseAnnotation;
+    }
+    for (index.host_capabilities.items) |capability| {
+        if (capability.effects != null) continue;
+        const origin = try functionOrigin(allocator, ir, capability.module_id, capability.function_name);
+        if (capability.effects_text != null) {
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: @host declares an unknown effect") },
+            });
+            return error.UnknownEffect;
+        }
+        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try ir.allocator.dupe(u8, "@host functions must declare effects with '! Effect | Effect'") },
+        });
+        return error.MissingEffects;
+    }
+    for (index.render_ops.items) |op| {
+        if (op.effects != null) continue;
+        const origin = try functionOrigin(allocator, ir, op.module_id, op.function_name);
+        if (op.effects_text != null) {
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: @op declares an unknown effect") },
+            });
+            return error.UnknownEffect;
+        }
+        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try ir.allocator.dupe(u8, "@op functions must declare effects with '! Effect | Effect'") },
+        });
+        return error.MissingEffects;
+    }
+}
+
+fn functionOrigin(
+    allocator: std.mem.Allocator,
+    ir: *const core.Ir,
+    module_id: core.SourceModuleId,
+    function_name: []const u8,
+) ![]const u8 {
+    const module = ir.moduleById(module_id);
+    const path = if (module) |m| m.path orelse m.spec else "";
+    if (module) |m| {
+        for (m.program.functions.items) |func| {
+            if (!std.mem.eql(u8, func.name, function_name)) continue;
+            if (path.len == 0) return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
+            return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, func.span.start, func.span.end });
+        }
+    }
+    if (path.len == 0) return std.fmt.allocPrint(allocator, "function:{s}", .{function_name});
+    return std.fmt.allocPrint(allocator, "path:{s}", .{path});
 }
 
 pub fn collectVariableTypesFromProgram(

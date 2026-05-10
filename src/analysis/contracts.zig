@@ -11,6 +11,7 @@ pub const FunctionContract = struct {
 
 pub fn valueSort(value: core.Value) core.SemanticSort {
     return switch (value) {
+        .code => .code,
         .document => .document,
         .page => .page,
         .object => .object,
@@ -44,6 +45,10 @@ pub fn ensureValueSortWithCode(
     code: core.TypeMismatchCode,
 ) !void {
     const actual = valueSort(value);
+    if (actual == .code) {
+        const code_value = value.code;
+        if (expected == .code or code_value.sort() == expected) return;
+    }
     if (actual != expected) {
         try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },

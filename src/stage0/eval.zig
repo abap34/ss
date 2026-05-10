@@ -194,6 +194,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
         error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
+        error.UnsupportedPassPrimitive => "UnsupportedPassPrimitive: this operation is only valid inside a compiler pass",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => @errorName(err),
     };
@@ -546,6 +547,30 @@ const BuiltinContext = struct {
         };
     }
 
+    pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
+        _ = self;
+        _ = title;
+        return error.UnsupportedPassPrimitive;
+    }
+
+    pub fn makeObjectOnPage(
+        self: *BuiltinContext,
+        page_id: core.NodeId,
+        role_name: []const u8,
+        role: core.Role,
+        object_kind: core.ObjectKind,
+        payload_kind: core.PayloadKind,
+        content: []const u8,
+    ) !core.NodeId {
+        _ = page_id;
+        return try self.makeObject(role_name, role, object_kind, payload_kind, content);
+    }
+
+    pub fn makeGroupOnPage(self: *BuiltinContext, page_id: core.NodeId, child_ids: []const core.NodeId) !core.NodeId {
+        _ = page_id;
+        return try self.makeGroup(child_ids);
+    }
+
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
         try self.ir.setNodeProperty(object_id, key, value);
     }
@@ -568,6 +593,30 @@ const BuiltinContext = struct {
 
     pub fn pageCount(self: *BuiltinContext) usize {
         return self.ir.pageCount();
+    }
+
+    pub fn frameX(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        _ = self;
+        _ = object_id;
+        return error.UnsupportedPassPrimitive;
+    }
+
+    pub fn frameY(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        _ = self;
+        _ = object_id;
+        return error.UnsupportedPassPrimitive;
+    }
+
+    pub fn frameWidth(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        _ = self;
+        _ = object_id;
+        return error.UnsupportedPassPrimitive;
+    }
+
+    pub fn frameHeight(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        _ = self;
+        _ = object_id;
+        return error.UnsupportedPassPrimitive;
     }
 
     pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
@@ -860,6 +909,12 @@ fn fragmentRootCloneFromFragment(allocator: std.mem.Allocator, fragment: *const 
 
 fn normalizeForUse(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.Value {
     return switch (value) {
+        .code => |code| switch (code.root) {
+            .document => |id| .{ .document = id },
+            .page => |id| .{ .page = id },
+            .object => |id| .{ .object = id },
+            .selection => |selection| .{ .selection = try selection.clone(ir.allocator) },
+        },
         .fragment => |fragment| switch (mode) {
             .attached => blk: {
                 try ir.materializeFragment(fragment);
@@ -1168,6 +1223,10 @@ fn executeStatement(
 fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
     switch (mode) {
         .attached => switch (value) {
+            .code => |code| switch (code.root) {
+                .object => |id| last_code_like.* = id,
+                else => {},
+            },
             .fragment => |fragment| {
                 try ir.materializeFragment(fragment);
                 if (fragment.root) |root| {
@@ -1183,6 +1242,13 @@ fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: 
             else => {},
         },
         .detached => |builder| switch (value) {
+            .code => |code| switch (code.root) {
+                .object => |id| {
+                    last_code_like.* = id;
+                    try builder.trackNode(ir.allocator, id);
+                },
+                else => {},
+            },
             .constraints => |constraints| try builder.appendConstraintSet(ir.allocator, constraints),
             .object => |id| {
                 last_code_like.* = id;
@@ -1204,6 +1270,7 @@ fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: 
 
 fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
     return switch (value) {
+        .code => |code| try fragmentRootFromCodeRoot(code.root),
         .document => |id| .{ .document = id },
         .page => |id| .{ .page = id },
         .object => |id| .{ .object = id },
@@ -1215,6 +1282,15 @@ fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
         .number => |number| .{ .number = number },
         .constraints => |constraints| .{ .constraints = constraints },
         .fragment => error.UnsupportedFragmentRoot,
+    };
+}
+
+fn fragmentRootFromCodeRoot(root: core.CodeRoot) !core.FragmentRoot {
+    return switch (root) {
+        .document => |id| .{ .document = id },
+        .page => |id| .{ .page = id },
+        .object => |id| .{ .object = id },
+        .selection => |selection| .{ .selection = selection },
     };
 }
 

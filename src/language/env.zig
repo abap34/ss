@@ -52,17 +52,22 @@ pub const SemanticEnv = struct {
         return registry.lookupQueryOp(name);
     }
 
-    pub fn phases(self: *const SemanticEnv) []const declarations.FunctionAnnotationDescriptor {
+    pub fn removedAnnotations(self: *const SemanticEnv) []const declarations.FunctionAnnotationDescriptor {
         const index = self.declarations orelse return &.{};
-        return index.phases.items;
+        return index.removed_annotations.items;
     }
 
-    pub fn capabilities(self: *const SemanticEnv) []const declarations.CapabilityDescriptor {
+    pub fn passes(self: *const SemanticEnv) []const declarations.PassDescriptor {
         const index = self.declarations orelse return &.{};
-        return index.capabilities.items;
+        return index.passes.items;
     }
 
-    pub fn renderOps(self: *const SemanticEnv) []const declarations.CapabilityDescriptor {
+    pub fn hostCapabilities(self: *const SemanticEnv) []const declarations.HostCapabilityDescriptor {
+        const index = self.declarations orelse return &.{};
+        return index.host_capabilities.items;
+    }
+
+    pub fn renderOps(self: *const SemanticEnv) []const declarations.RenderOpDescriptor {
         const index = self.declarations orelse return &.{};
         return index.render_ops.items;
     }

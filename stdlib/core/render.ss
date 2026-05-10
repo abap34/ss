@@ -1,14 +1,14 @@
 import std:core/objects
 
-fn compile_math(source: string) -> string @host(effects = [ExternalProcess, ReadTemp, WriteTemp], cache = math_hash(source))
+fn compile_math(source: string) -> string ! ExternalProcess | ReadTemp | WriteTemp @host(cache = math_hash(source))
 
-fn draw_text_op(self: object) -> object @op(draw_text)
-fn draw_code_highlight_op(self: object) -> object @op(draw_code_highlight)
-fn draw_vector_math_op(self: object) -> object @op(draw_vector_math)
-fn draw_vector_asset_op(self: object) -> object @op(draw_vector_asset)
-fn draw_raster_asset_op(self: object) -> object @op(draw_raster_asset)
-fn draw_chrome_op(self: object) -> object @op(draw_chrome)
-fn draw_rule_op(self: object) -> object @op(draw_rule)
+fn draw_text_op(self: object) -> object ! LowerRender @op(draw_text)
+fn draw_code_highlight_op(self: object) -> object ! LowerRender @op(draw_code_highlight)
+fn draw_vector_math_op(self: object) -> object ! LowerRender @op(draw_vector_math)
+fn draw_vector_asset_op(self: object) -> object ! LowerRender @op(draw_vector_asset)
+fn draw_raster_asset_op(self: object) -> object ! LowerRender @op(draw_raster_asset)
+fn draw_chrome_op(self: object) -> object ! LowerRender @op(draw_chrome)
+fn draw_rule_op(self: object) -> object ! LowerRender @op(draw_rule)
 
 fn with_prop(obj: object, key_name: string, value_name: string) -> object
   set_prop(obj, key_name, value_name)

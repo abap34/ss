@@ -148,6 +148,7 @@ pub const Node = struct {
 };
 
 pub const SemanticSort = enum {
+    code,
     document,
     page,
     object,
@@ -244,6 +245,147 @@ pub const FunctionEffect = enum {
     reports_diagnostics,
 };
 
+pub const CodeRoot = union(enum) {
+    document: NodeId,
+    page: NodeId,
+    object: NodeId,
+    selection: Selection,
+
+    pub fn sort(self: CodeRoot) SemanticSort {
+        return switch (self) {
+            .document => .document,
+            .page => .page,
+            .object => .object,
+            .selection => .selection,
+        };
+    }
+
+    pub fn firstId(self: CodeRoot) ?NodeId {
+        return switch (self) {
+            .document => |id| id,
+            .page => |id| id,
+            .object => |id| id,
+            .selection => |selection| selection.first(),
+        };
+    }
+
+    pub fn deinit(self: *CodeRoot, allocator: Allocator) void {
+        switch (self.*) {
+            .selection => |*selection| selection.deinit(allocator),
+            else => {},
+        }
+    }
+
+    pub fn clone(self: CodeRoot, allocator: Allocator) !CodeRoot {
+        return switch (self) {
+            .document => |id| .{ .document = id },
+            .page => |id| .{ .page = id },
+            .object => |id| .{ .object = id },
+            .selection => |selection| .{ .selection = try selection.clone(allocator) },
+        };
+    }
+};
+
+pub const CodeValue = struct {
+    root: CodeRoot,
+
+    pub fn sort(self: CodeValue) SemanticSort {
+        return self.root.sort();
+    }
+
+    pub fn firstId(self: CodeValue) ?NodeId {
+        return self.root.firstId();
+    }
+
+    pub fn deinit(self: *CodeValue, allocator: Allocator) void {
+        self.root.deinit(allocator);
+    }
+
+    pub fn clone(self: CodeValue, allocator: Allocator) !CodeValue {
+        return .{ .root = try self.root.clone(allocator) };
+    }
+
+    pub fn toRootValue(self: CodeValue) Value {
+        return switch (self.root) {
+            .document => |id| .{ .document = id },
+            .page => |id| .{ .page = id },
+            .object => |id| .{ .object = id },
+            .selection => |selection| .{ .selection = selection },
+        };
+    }
+};
+
+pub const Effect = enum(u5) {
+    Pure,
+    ReadGraph,
+    CreatePage,
+    CreateNode,
+    WriteContent,
+    WriteProperty,
+    WriteConstraint,
+    ReadLayout,
+    WriteRenderPolicy,
+    EmitDiagnostics,
+    ExternalProcess,
+    ReadTemp,
+    WriteTemp,
+    LowerRender,
+};
+
+pub const EffectSet = struct {
+    bits: u32 = 0,
+
+    pub fn empty() EffectSet {
+        return .{};
+    }
+
+    pub fn pure() EffectSet {
+        var set = EffectSet.empty();
+        set.insert(.Pure);
+        return set;
+    }
+
+    pub fn single(effect: Effect) EffectSet {
+        var set = EffectSet.empty();
+        set.insert(effect);
+        return set;
+    }
+
+    pub fn insert(self: *EffectSet, effect: Effect) void {
+        self.bits |= bit(effect);
+    }
+
+    pub fn remove(self: *EffectSet, effect: Effect) void {
+        self.bits &= ~bit(effect);
+    }
+
+    pub fn unionWith(self: *EffectSet, other: EffectSet) void {
+        self.bits |= other.bits;
+    }
+
+    pub fn contains(self: EffectSet, effect: Effect) bool {
+        return (self.bits & bit(effect)) != 0;
+    }
+
+    pub fn containsAll(self: EffectSet, other: EffectSet) bool {
+        return (self.bits & other.bits) == other.bits;
+    }
+
+    pub fn withoutPure(self: EffectSet) EffectSet {
+        var copy = self;
+        copy.remove(.Pure);
+        return copy;
+    }
+
+    pub fn isEmpty(self: EffectSet) bool {
+        return self.bits == 0;
+    }
+
+    fn bit(effect: Effect) u32 {
+        return @as(u32, 1) << @intFromEnum(effect);
+    }
+};
+
 pub const StyleRef = struct {
     name: []const u8,
 };
@@ -322,6 +464,7 @@ pub const Fragment = struct {
 };
 
 pub const Value = union(SemanticSort) {
+    code: CodeValue,
     document: NodeId,
     page: NodeId,
     object: NodeId,
@@ -336,6 +479,7 @@ pub const Value = union(SemanticSort) {
 
     pub fn deinit(self: *Value, allocator: Allocator) void {
         switch (self.*) {
+            .code => |*code| code.deinit(allocator),
             .selection => |*selection| selection.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
             else => {},
@@ -344,6 +488,7 @@ pub const Value = union(SemanticSort) {
 
     pub fn firstId(self: Value) ?NodeId {
         return switch (self) {
+            .code => |code| code.firstId(),
             .document => |id| id,
             .page => |id| id,
             .object => |id| id,

@@ -209,6 +209,22 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             _ = try evalDocumentArg(ctx, call, 0);
             break :blk .{ .number = @floatFromInt(ctx.pageCount()) };
         },
+        .frame_x => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            break :blk .{ .number = try ctx.frameX(object_id) };
+        },
+        .frame_y => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            break :blk .{ .number = try ctx.frameY(object_id) };
+        },
+        .frame_width => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            break :blk .{ .number = try ctx.frameWidth(object_id) };
+        },
+        .frame_height => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            break :blk .{ .number = try ctx.frameHeight(object_id) };
+        },
         .content => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
@@ -254,8 +270,33 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             }
             break :blk .{ .object = try ctx.makeGroup(child_ids.items) };
         },
+        .new_page => blk: {
+            _ = try evalDocumentArg(ctx, call, 0);
+            const title = try ctx.evalStringArg(call, 1);
+            break :blk .{ .page = try ctx.makePage(title) };
+        },
+        .new_object => blk: {
+            const page_id = try evalPageArg(ctx, call, 0);
+            const content = try ctx.evalStringArg(call, 1);
+            const role_name = try ctx.evalStringArg(call, 2);
+            const role = try ctx.evalRoleArg(call, 2);
+            const payload = try ctx.evalPayloadArg(call, 3);
+            break :blk .{ .object = try ctx.makeObjectOnPage(page_id, role_name, role, payload.object_kind, payload.payload_kind, content) };
+        },
+        .new_group => blk: {
+            const page_id = try evalPageArg(ctx, call, 0);
+            var value = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[1]));
+            defer value.deinit(ctx.ir.allocator);
+            const selection = switch (value) {
+                .selection => |sel| sel,
+                else => return error.ExpectedSelection,
+            };
+            if (selection.item_sort != .object) return error.InvalidSelectionSort;
+            break :blk .{ .object = try ctx.makeGroupOnPage(page_id, selection.ids.items) };
+        },
         .set_prop => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            const raw_target = try ctx.evalExprValue(call.args.items[0]);
+            var target = try ctx.materializeForUse(raw_target);
             const key = try ctx.evalStringArg(call, 1);
             var value_arg = try ctx.evalExprValue(call.args.items[2]);
             defer value_arg.deinit(ctx.ir.allocator);
@@ -264,15 +305,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk switch (target) {
                 .document => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
-                    break :blk2 .{ .document = id };
+                    break :blk2 mutationResult(raw_target, .{ .document = id });
                 },
                 .page => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
-                    break :blk2 .{ .page = id };
+                    break :blk2 mutationResult(raw_target, .{ .page = id });
                 },
                 .object => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
-                    break :blk2 .{ .object = id };
+                    break :blk2 mutationResult(raw_target, .{ .object = id });
                 },
                 .selection => |sel| blk2: {
                     if (sel.item_sort != .object) {
@@ -289,7 +330,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             };
         },
         .extend_render_env => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            const raw_target = try ctx.evalExprValue(call.args.items[0]);
+            var target = try ctx.materializeForUse(raw_target);
             const op = try ctx.evalStringArg(call, 1);
             const key = try ctx.evalStringArg(call, 2);
             const value = try ctx.evalStringArg(call, 3);
@@ -304,15 +346,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk switch (target) {
                 .document => |id| blk2: {
                     try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 .{ .document = id };
+                    break :blk2 mutationResult(raw_target, .{ .document = id });
                 },
                 .page => |id| blk2: {
                     try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 .{ .page = id };
+                    break :blk2 mutationResult(raw_target, .{ .page = id });
                 },
                 .object => |id| blk2: {
                     try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 .{ .object = id };
+                    break :blk2 mutationResult(raw_target, .{ .object = id });
                 },
                 .selection => |sel| blk2: {
                     if (sel.item_sort != .object) {
@@ -407,6 +449,13 @@ fn itemValue(sort: core.SelectionItemSort, id: core.NodeId) core.Value {
     };
 }
 
+fn mutationResult(raw_target: core.Value, fallback: core.Value) core.Value {
+    return switch (raw_target) {
+        .code => raw_target,
+        else => fallback,
+    };
+}
+
 fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.FunctionRef {
     var value = try ctx.evalExprValue(call.args.items[index]);
     defer value.deinit(ctx.ir.allocator);
@@ -421,6 +470,10 @@ fn evalPageArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId {
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .page => |id| id,
+        .code => |code| switch (code.root) {
+            .page => |id| id,
+            else => error.InvalidSemanticSort,
+        },
         else => error.InvalidSemanticSort,
     };
 }
@@ -430,6 +483,10 @@ fn evalDocumentArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId 
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .document => |id| id,
+        .code => |code| switch (code.root) {
+            .document => |id| id,
+            else => error.InvalidSemanticSort,
+        },
         else => error.InvalidSemanticSort,
     };
 }

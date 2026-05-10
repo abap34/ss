@@ -7,6 +7,7 @@ const builtin = @import("../stage0/builtin.zig");
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
 const names = @import("../language/names.zig");
+const registry = @import("../language/registry.zig");
 const contracts = @import("../analysis/contracts.zig");
 
 const FunctionDecl = ast.FunctionDecl;
@@ -14,41 +15,362 @@ const Statement = ast.Statement;
 const Expr = ast.Expr;
 const CallExpr = ast.CallExpr;
 const SemanticEnv = semantic_env.SemanticEnv;
+const PassDescriptor = declarations.PassDescriptor;
+const PassSlot = declarations.PassSlot;
 
 const ExecFlow = union(enum) {
     none,
     returned: core.Value,
 };
 
-pub fn runAfterPages(ir: *core.Ir) !void {
+pub fn runPreLayoutPasses(ir: *core.Ir) !void {
+    try runPassSlots(ir, &.{ .augment, .resolve });
+}
+
+pub fn runPostLayoutPasses(ir: *core.Ir) !void {
+    try runPassSlots(ir, &.{ .inspect_layout, .prepare_render });
+}
+
+pub fn runPassSlots(ir: *core.Ir, slots: []const PassSlot) !void {
     var index = try declarations.build(ir.allocator, ir);
     defer index.deinit();
     const sema = SemanticEnv.init(ir, &index, &ir.functions);
 
-    for (sema.phases()) |phase| {
-        if (!isAfterPages(phase.args)) continue;
-        const func = ir.functions.get(phase.function_name) orelse return error.UnknownFunction;
-        try validateAfterPagesSignature(ir, phase, func);
-        var env = std.StringHashMap(core.Value).init(ir.allocator);
-        defer env.deinit();
-        const args = [_]core.Value{.{ .document = ir.document_id }};
-        var result = try invokeUserFunctionValues(ir, &env, &ir.functions, func, try functionOrigin(ir, phase, func), &args);
-        defer result.deinit(ir.allocator);
-        try contracts.ensureValueSortWithCode(ir, null, result, .document, try functionOrigin(ir, phase, func), .UnmatchedReturnType);
+    try rejectRemovedAnnotations(ir, &sema);
+    for (sema.passes()) |pass| {
+        try validatePass(ir, sema.passes(), pass, pass.function);
+    }
+    for (slots) |slot| {
+        const schedule = try schedulePasses(ir, sema.passes(), slot);
+        defer ir.allocator.free(schedule);
+        for (schedule) |pass_index| {
+            const pass = sema.passes()[pass_index];
+            const func = pass.function;
+            try validatePass(ir, sema.passes(), pass, func);
+            try validatePassEffects(ir, &sema, pass, func);
+            if (!allowedEffects(slot).containsAll(pass.effects.?.withoutPure())) {
+                try addPassDiagnostic(ir, pass, "InvalidPassEffects: @{s}({s}) declares effects not allowed in this slot", .{ "pass", pass.slot_name });
+                return error.InvalidPassEffects;
+            }
+            if (slot != .augment and pass.effects.?.contains(.CreateNode)) {
+                try addPassDiagnostic(ir, pass, "InvalidPassEffects: CreateNode is only allowed in @pass(augment)", .{});
+                return error.InvalidPassEffects;
+            }
+            if (slot != .augment and pass.effects.?.contains(.CreatePage)) {
+                try addPassDiagnostic(ir, pass, "InvalidPassEffects: CreatePage is only allowed in @pass(augment)", .{});
+                return error.InvalidPassEffects;
+            }
+            try executePass(ir, pass, func);
+        }
     }
 }
 
-fn isAfterPages(args: ?[]const u8) bool {
-    const text = std.mem.trim(u8, args orelse "", " \t\r\n");
-    return std.mem.eql(u8, text, "after_pages");
+fn executePass(ir: *core.Ir, pass: PassDescriptor, func: FunctionDecl) !void {
+    var env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer env.deinit();
+    const args = [_]core.Value{.{ .code = .{ .root = .{ .document = ir.document_id } } }};
+    const origin = try functionOrigin(ir, pass, func);
+    var result = try invokeUserFunctionValues(ir, &env, &ir.functions, func, origin, &args);
+    defer result.deinit(ir.allocator);
+    try ensureReturnedDocumentCode(ir, result, origin);
 }
 
-fn validateAfterPagesSignature(ir: *core.Ir, phase: declarations.FunctionAnnotationDescriptor, func: FunctionDecl) !void {
-    if (func.params.items.len == 1 and func.params.items[0].sort == .document and func.result_sort == .document and func.statements.items.len > 0) return;
-    try ir.addValidationDiagnostic(.@"error", null, null, try functionOrigin(ir, phase, func), .{
-        .user_report = .{ .message = try ir.allocator.dupe(u8, "@phase(after_pages) functions must have signature fn f(doc: document) -> document and a body") },
+fn ensureReturnedDocumentCode(ir: *core.Ir, result: core.Value, origin: []const u8) !void {
+    switch (result) {
+        .code => |code| switch (code.root) {
+            .document => |id| {
+                if (id == ir.document_id) return;
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidPassReturn: pass returned a different document root") },
+                });
+                return error.InvalidSemanticSort;
+            },
+            else => {
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidPassReturn: @pass must return code<document>") },
+                });
+                return error.InvalidSemanticSort;
+            },
+        },
+        else => {
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .type_mismatch = .{ .code = .UnmatchedReturnType, .expected = .code, .actual = contracts.valueSort(result) },
+            });
+            return error.InvalidSemanticSort;
+        },
+    }
+}
+
+fn rejectRemovedAnnotations(ir: *core.Ir, sema: *const SemanticEnv) !void {
+    for (sema.removedAnnotations()) |annotation| {
+        const origin = try annotationOrigin(ir, annotation.module_id, annotation.function_name);
+        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try ir.allocator.dupe(u8, "@phase is removed; use @pass(augment), @pass(resolve), @pass(inspect_layout), or @pass(prepare_render)") },
+        });
+        return error.LegacyPhaseAnnotation;
+    }
+}
+
+fn validatePass(ir: *core.Ir, passes: []const PassDescriptor, pass: PassDescriptor, func: FunctionDecl) !void {
+    if (pass.slot == null) {
+        try addPassDiagnostic(ir, pass, "UnknownPassSlot: unknown pass slot '{s}'", .{pass.slot_name});
+        return error.UnknownPassSlot;
+    }
+    if (pass.effects_parse_failed) {
+        try addPassDiagnostic(ir, pass, "UnknownEffect: @pass({s}) declares an unknown effect", .{pass.slot_name});
+        return error.UnknownEffect;
+    }
+    if (pass.effects == null) {
+        try addPassDiagnostic(ir, pass, "MissingEffects: @pass functions must declare effects with '! Effect | Effect'", .{});
+        return error.MissingEffects;
+    }
+    if (func.params.items.len != 1 or
+        func.params.items[0].ty.tag != .code or
+        func.params.items[0].ty.param != .document or
+        func.result_type.tag != .code or
+        func.result_type.param != .document or
+        func.statements.items.len == 0)
+    {
+        try addPassDiagnostic(ir, pass, "@pass functions must have signature fn f(doc: code<document>) -> code<document> and a body", .{});
+        return error.InvalidSemanticSort;
+    }
+    for (pass.after) |dependency| _ = try resolvePassDependency(ir, passes, dependency, pass);
+    for (pass.before) |dependency| _ = try resolvePassDependency(ir, passes, dependency, pass);
+}
+
+fn allowedEffects(slot: PassSlot) core.EffectSet {
+    var set = core.EffectSet.empty();
+    switch (slot) {
+        .augment => {
+            set.insert(.ReadGraph);
+            set.insert(.CreatePage);
+            set.insert(.CreateNode);
+            set.insert(.WriteContent);
+            set.insert(.WriteProperty);
+            set.insert(.WriteConstraint);
+            set.insert(.EmitDiagnostics);
+        },
+        .resolve => {
+            set.insert(.ReadGraph);
+            set.insert(.WriteContent);
+            set.insert(.WriteProperty);
+            set.insert(.WriteConstraint);
+            set.insert(.EmitDiagnostics);
+        },
+        .inspect_layout => {
+            set.insert(.ReadGraph);
+            set.insert(.ReadLayout);
+            set.insert(.EmitDiagnostics);
+        },
+        .prepare_render => {
+            set.insert(.ReadGraph);
+            set.insert(.ReadLayout);
+            set.insert(.WriteRenderPolicy);
+            set.insert(.EmitDiagnostics);
+        },
+    }
+    return set;
+}
+
+fn validatePassEffects(ir: *core.Ir, sema: *const SemanticEnv, pass: PassDescriptor, func: FunctionDecl) !void {
+    var visiting = std.StringHashMap(void).init(ir.allocator);
+    defer visiting.deinit();
+    const inferred = try inferFunctionEffects(ir, sema, pass, func, &visiting);
+    const declared = pass.effects.?;
+    if (!declared.containsAll(inferred.withoutPure())) {
+        try addPassDiagnostic(ir, pass, "MissingEffects: @pass({s}) body uses effects not listed in its signature", .{pass.slot_name});
+        return error.MissingEffects;
+    }
+}
+
+fn inferFunctionEffects(
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    pass: PassDescriptor,
+    func: FunctionDecl,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    if (visiting.contains(func.name)) {
+        if (func.effects) |effects| return declarations.parseEffectSet(effects);
+        return core.EffectSet.empty();
+    }
+    try visiting.put(func.name, {});
+    defer _ = visiting.remove(func.name);
+
+    var set = core.EffectSet.empty();
+    for (func.statements.items) |stmt| {
+        set.unionWith(try inferStatementEffects(ir, sema, pass, stmt, visiting));
+    }
+    return set;
+}
+
+fn inferStatementEffects(
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    pass: PassDescriptor,
+    stmt: Statement,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    var set = core.EffectSet.empty();
+    switch (stmt.kind) {
+        .let_binding => |binding| set.unionWith(try inferExprEffects(ir, sema, pass, binding.expr, visiting)),
+        .bind_binding => |binding| set.unionWith(try inferExprEffects(ir, sema, pass, binding.expr, visiting)),
+        .return_expr => |expr| set.unionWith(try inferExprEffects(ir, sema, pass, expr, visiting)),
+        .property_set => |property| {
+            set.insert(.WriteProperty);
+            set.unionWith(try inferExprEffects(ir, sema, pass, property.value, visiting));
+        },
+        .expr_stmt => |expr| set.unionWith(try inferExprEffects(ir, sema, pass, expr, visiting)),
+        .constrain => |decl| {
+            set.insert(.WriteConstraint);
+            if (decl.offset) |expr| set.unionWith(try inferExprEffects(ir, sema, pass, expr, visiting));
+        },
+    }
+    return set;
+}
+
+fn inferExprEffects(
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    pass: PassDescriptor,
+    expr: Expr,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    return switch (expr) {
+        .ident, .string, .number => core.EffectSet.empty(),
+        .call => |call| try inferCallEffects(ir, sema, pass, call, visiting),
+    };
+}
+
+fn inferCallEffects(
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    pass: PassDescriptor,
+    call: CallExpr,
+    visiting: *std.StringHashMap(void),
+) anyerror!core.EffectSet {
+    var set = core.EffectSet.empty();
+    for (call.args.items) |arg| set.unionWith(try inferExprEffects(ir, sema, pass, arg, visiting));
+    const descriptor = sema.call(call.name) orelse return set;
+    switch (descriptor) {
+        .primitive => |primitive| {
+            if (primitive.op == .object or primitive.op == .group) {
+                try addPassDiagnostic(ir, pass, "UnsupportedPassPrimitive: @pass bodies must use new_object(page, ...) or new_group(page, ...) instead of {s}()", .{primitive.name});
+                return error.UnsupportedPassPrimitive;
+            }
+            set.unionWith(registry.primitiveEffects(primitive));
+            if ((primitive.op == .foreach or primitive.op == .fold or primitive.op == .join) and call.args.items.len >= 2) {
+                switch (call.args.items[1]) {
+                    .ident => |callback_name| if (sema.function(callback_name)) |callback| {
+                        set.unionWith(try inferFunctionEffects(ir, sema, pass, callback, visiting));
+                    },
+                    else => {},
+                }
+            }
+        },
+        .function => |callee| set.unionWith(try inferFunctionEffects(ir, sema, pass, callee, visiting)),
+    }
+    return set;
+}
+
+fn schedulePasses(ir: *core.Ir, passes: []const PassDescriptor, slot: PassSlot) ![]usize {
+    var candidates = std.ArrayList(usize).empty;
+    errdefer candidates.deinit(ir.allocator);
+    for (passes, 0..) |pass, index| {
+        if (pass.slot != null and pass.slot.? == slot) try candidates.append(ir.allocator, index);
+    }
+
+    var deps = try ir.allocator.alloc(std.ArrayList(usize), candidates.items.len);
+    errdefer ir.allocator.free(deps);
+    for (deps) |*list| list.* = .empty;
+    errdefer for (deps) |*list| list.deinit(ir.allocator);
+
+    for (candidates.items, 0..) |global_index, local_index| {
+        const pass = passes[global_index];
+        for (pass.after) |dependency| {
+            const dep_global = try resolvePassDependency(ir, passes, dependency, pass);
+            const dep_local = candidateLocalIndex(candidates.items, dep_global) orelse {
+                try addPassDiagnostic(ir, pass, "PassDependencySlotMismatch: dependency '{s}' is not in the same pass slot", .{dependency});
+                return error.PassDependencySlotMismatch;
+            };
+            try deps[local_index].append(ir.allocator, dep_local);
+        }
+        for (pass.before) |dependency| {
+            const dep_global = try resolvePassDependency(ir, passes, dependency, pass);
+            const dep_local = candidateLocalIndex(candidates.items, dep_global) orelse {
+                try addPassDiagnostic(ir, pass, "PassDependencySlotMismatch: dependency '{s}' is not in the same pass slot", .{dependency});
+                return error.PassDependencySlotMismatch;
+            };
+            try deps[dep_local].append(ir.allocator, local_index);
+        }
+    }
+
+    var scheduled = try ir.allocator.alloc(bool, candidates.items.len);
+    defer ir.allocator.free(scheduled);
+    @memset(scheduled, false);
+    var order = std.ArrayList(usize).empty;
+    errdefer order.deinit(ir.allocator);
+
+    while (order.items.len < candidates.items.len) {
+        var progressed = false;
+        for (candidates.items, 0..) |global_index, local_index| {
+            if (scheduled[local_index]) continue;
+            if (!dependenciesScheduled(deps[local_index].items, scheduled)) continue;
+            try order.append(ir.allocator, global_index);
+            scheduled[local_index] = true;
+            progressed = true;
+        }
+        if (!progressed) {
+            if (candidates.items.len > 0) try addPassDiagnostic(ir, passes[candidates.items[0]], "PassDependencyCycle: pass dependencies contain a cycle in slot '{s}'", .{@tagName(slot)});
+            return error.PassDependencyCycle;
+        }
+    }
+
+    for (deps) |*list| list.deinit(ir.allocator);
+    ir.allocator.free(deps);
+    candidates.deinit(ir.allocator);
+    return try order.toOwnedSlice(ir.allocator);
+}
+
+fn dependenciesScheduled(deps: []const usize, scheduled: []const bool) bool {
+    for (deps) |dep| {
+        if (!scheduled[dep]) return false;
+    }
+    return true;
+}
+
+fn candidateLocalIndex(candidates: []const usize, global_index: usize) ?usize {
+    for (candidates, 0..) |candidate, index| {
+        if (candidate == global_index) return index;
+    }
+    return null;
+}
+
+fn resolvePassDependency(ir: *core.Ir, passes: []const PassDescriptor, name: []const u8, owner: PassDescriptor) !usize {
+    var match_index: ?usize = null;
+    var matches: usize = 0;
+    for (passes, 0..) |pass, index| {
+        if (std.mem.eql(u8, pass.id, name) or std.mem.eql(u8, pass.function_name, name)) {
+            match_index = index;
+            matches += 1;
+        }
+    }
+    if (matches == 0) {
+        try addPassDiagnostic(ir, owner, "UnknownPassDependency: unknown pass dependency '{s}'", .{name});
+        return error.UnknownPassDependency;
+    }
+    if (matches > 1) {
+        try addPassDiagnostic(ir, owner, "AmbiguousPassDependency: dependency '{s}' matches multiple passes; use a fully qualified pass id", .{name});
+        return error.AmbiguousPassDependency;
+    }
+    return match_index.?;
+}
+
+fn addPassDiagnostic(ir: *core.Ir, pass: PassDescriptor, comptime fmt: []const u8, args: anytype) !void {
+    const origin = try functionOrigin(ir, pass, pass.function);
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, fmt, args) },
     });
-    return error.InvalidSemanticSort;
 }
 
 fn evalExpr(
@@ -136,7 +458,7 @@ const BuiltinContext = struct {
     }
 
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        const base = try self.evalExprValue(call.args.items[0]);
+        const base = try self.materializeForUse(try self.evalExprValue(call.args.items[0]));
         const op_name = try self.evalStringArg(call, 1);
         const sema = SemanticEnv.init(self.ir, null, self.functions);
         const descriptor = sema.query(op_name) orelse return error.UnknownQuery;
@@ -161,7 +483,7 @@ const BuiltinContext = struct {
     pub fn runDeriveCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
         _ = self;
         _ = call;
-        return error.UnsupportedPhasePrimitive;
+        return error.UnsupportedPassPrimitive;
     }
 
     pub fn evalExprValue(self: *BuiltinContext, expr: Expr) anyerror!core.Value {
@@ -181,10 +503,7 @@ const BuiltinContext = struct {
     }
 
     pub fn evalObjectArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.NodeId {
-        return switch (try self.evalExprValue(call.args.items[index])) {
-            .object => |id| id,
-            else => error.ExpectedObject,
-        };
+        return try resolveValueObjectId(try self.evalExprValue(call.args.items[index]));
     }
 
     pub fn evalAnchorArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.AnchorValue {
@@ -212,8 +531,7 @@ const BuiltinContext = struct {
     }
 
     pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
-        _ = self;
-        return value;
+        return try materializeCodeRoot(self.ir.allocator, value);
     }
 
     pub fn anchorValueForObject(self: *BuiltinContext, node_id: core.NodeId, anchor_name: []const u8) !core.Value {
@@ -235,13 +553,33 @@ const BuiltinContext = struct {
         _ = object_kind;
         _ = payload_kind;
         _ = content;
-        return error.UnsupportedPhasePrimitive;
+        return error.UnsupportedPassPrimitive;
     }
 
     pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
         _ = self;
         _ = child_ids;
-        return error.UnsupportedPhasePrimitive;
+        return error.UnsupportedPassPrimitive;
+    }
+
+    pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
+        return try self.ir.addPage(title);
+    }
+
+    pub fn makeObjectOnPage(
+        self: *BuiltinContext,
+        page_id: core.NodeId,
+        role_name: []const u8,
+        role: core.Role,
+        object_kind: core.ObjectKind,
+        payload_kind: core.PayloadKind,
+        content: []const u8,
+    ) !core.NodeId {
+        return try self.ir.makeObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
+    }
+
+    pub fn makeGroupOnPage(self: *BuiltinContext, page_id: core.NodeId, child_ids: []const core.NodeId) !core.NodeId {
+        return try self.ir.makeGroupWithOrigin(page_id, true, child_ids, self.current_origin);
     }
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
@@ -265,6 +603,22 @@ const BuiltinContext = struct {
         return self.ir.pageCount();
     }
 
+    pub fn frameX(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        return (self.ir.getNode(object_id) orelse return error.UnknownNode).frame.x;
+    }
+
+    pub fn frameY(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        return (self.ir.getNode(object_id) orelse return error.UnknownNode).frame.y;
+    }
+
+    pub fn frameWidth(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        return (self.ir.getNode(object_id) orelse return error.UnknownNode).frame.width;
+    }
+
+    pub fn frameHeight(self: *BuiltinContext, object_id: core.NodeId) !f32 {
+        return (self.ir.getNode(object_id) orelse return error.UnknownNode).frame.height;
+    }
+
     pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
         const node = self.ir.getNode(object_id) orelse return null;
         return node.content;
@@ -279,11 +633,21 @@ const BuiltinContext = struct {
     }
 
     pub fn equalAnchorConstraintSet(self: *BuiltinContext, target: core.AnchorValue, source: core.AnchorValue, offset: f32) !core.ConstraintSet {
-        _ = self;
-        _ = target;
-        _ = source;
-        _ = offset;
-        return error.UnsupportedPhasePrimitive;
+        return switch (target) {
+            .page => error.PageCannotBeConstraintTarget,
+            .node => |node| blk: {
+                var bundle = core.ConstraintSet.init();
+                errdefer bundle.deinit(self.ir.allocator);
+                try bundle.items.append(self.ir.allocator, .{
+                    .target_node = node.node_id,
+                    .target_anchor = node.anchor,
+                    .source = source.toConstraintSource(),
+                    .offset = offset,
+                    .origin = self.current_origin,
+                });
+                break :blk bundle;
+            },
+        };
     }
 
     pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
@@ -295,7 +659,7 @@ const BuiltinContext = struct {
     pub fn checkAssetExists(self: *BuiltinContext, object_id: core.NodeId) !void {
         _ = self;
         _ = object_id;
-        return error.UnsupportedPhasePrimitive;
+        return error.UnsupportedPassPrimitive;
     }
 };
 
@@ -312,16 +676,13 @@ fn executeStatement(
             const value = try evalExpr(ir, env, functions, origin, binding.expr);
             try env.put(binding.name, value);
         },
-        .bind_binding => return error.UnsupportedPhasePrimitive,
+        .bind_binding => return error.UnsupportedPassPrimitive,
         .return_expr => |expr| {
             return .{ .returned = try evalExpr(ir, env, functions, origin, expr) };
         },
         .property_set => |property_set| {
             const base = env.get(property_set.object_name) orelse return error.UnknownIdentifier;
-            const object_id = switch (base) {
-                .object => |id| id,
-                else => return error.ExpectedObject,
-            };
+            const object_id = try resolveValueObjectId(base);
             const value = try evalExpr(ir, env, functions, origin, property_set.value);
             const text = try resolveValuePropertyString(ir.allocator, value);
             defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
@@ -330,10 +691,53 @@ fn executeStatement(
         .expr_stmt => |expr| {
             var value = try evalExpr(ir, env, functions, origin, expr);
             defer value.deinit(ir.allocator);
+            switch (value) {
+                .constraints => |constraints| try ir.constraints.appendSlice(ir.allocator, constraints.items.items),
+                else => {},
+            }
         },
-        .constrain => return error.UnsupportedPhasePrimitive,
+        .constrain => |decl| {
+            const target = try resolveAnchorRef(ir, env, origin, decl.target, true);
+            const source = try resolveAnchorRef(ir, env, origin, decl.source, false);
+            const offset: f32 = if (decl.offset) |expr| try resolveValueNumber(try evalExpr(ir, env, functions, origin, expr)) else 0;
+            try ir.constraints.append(ir.allocator, .{
+                .target_node = target.node_id,
+                .target_anchor = target.anchor,
+                .source = source,
+                .offset = offset,
+                .origin = origin,
+            });
+        },
     }
     return .none;
+}
+
+const ResolvedTarget = struct {
+    node_id: core.NodeId,
+    anchor: core.Anchor,
+};
+
+fn resolveAnchorRef(
+    ir: *core.Ir,
+    env: *std.StringHashMap(core.Value),
+    origin: []const u8,
+    anchor_ref: ast.AnchorRef,
+    comptime is_target: bool,
+) !if (is_target) ResolvedTarget else core.ConstraintSource {
+    _ = ir;
+    _ = origin;
+    switch (anchor_ref.kind) {
+        .page => {
+            if (is_target) return error.PageCannotBeConstraintTarget;
+            return .{ .page = anchor_ref.anchor };
+        },
+        .node => {
+            const value = env.get(anchor_ref.node_name.?) orelse return error.UnknownIdentifier;
+            const node_id = try resolveValueObjectId(value);
+            if (is_target) return .{ .node_id = node_id, .anchor = anchor_ref.anchor };
+            return .{ .node = .{ .node_id = node_id, .anchor = anchor_ref.anchor } };
+        },
+    }
 }
 
 fn bindUserFunctionCallArgs(
@@ -440,11 +844,48 @@ fn resolveValueNumber(value: core.Value) !f32 {
     return eval_value.number(value);
 }
 
-fn functionOrigin(ir: *const core.Ir, phase: declarations.FunctionAnnotationDescriptor, func: FunctionDecl) ![]const u8 {
-    const module = ir.moduleById(phase.module_id);
+fn resolveValueObjectId(value: core.Value) !core.NodeId {
+    return switch (value) {
+        .object => |id| id,
+        .code => |code| switch (code.root) {
+            .object => |id| id,
+            else => error.ExpectedObject,
+        },
+        else => error.ExpectedObject,
+    };
+}
+
+fn materializeCodeRoot(allocator: std.mem.Allocator, value: core.Value) !core.Value {
+    return switch (value) {
+        .code => |code| switch (code.root) {
+            .document => |id| .{ .document = id },
+            .page => |id| .{ .page = id },
+            .object => |id| .{ .object = id },
+            .selection => |selection| .{ .selection = try selection.clone(allocator) },
+        },
+        else => value,
+    };
+}
+
+fn functionOrigin(ir: *const core.Ir, pass: PassDescriptor, func: FunctionDecl) ![]const u8 {
+    const module = ir.moduleById(pass.module_id);
     const path = if (module) |m| m.path orelse m.spec else "";
     if (path.len == 0) return std.fmt.allocPrint(ir.allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
     return std.fmt.allocPrint(ir.allocator, "path:{s}:bytes:{d}-{d}", .{ path, func.span.start, func.span.end });
+}
+
+fn annotationOrigin(ir: *const core.Ir, module_id: core.SourceModuleId, function_name: []const u8) ![]const u8 {
+    const module = ir.moduleById(module_id);
+    const path = if (module) |m| m.path orelse m.spec else "";
+    if (module) |m| {
+        for (m.program.functions.items) |func| {
+            if (!std.mem.eql(u8, func.name, function_name)) continue;
+            if (path.len == 0) return std.fmt.allocPrint(ir.allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
+            return std.fmt.allocPrint(ir.allocator, "path:{s}:bytes:{d}-{d}", .{ path, func.span.start, func.span.end });
+        }
+    }
+    if (path.len == 0) return std.fmt.allocPrint(ir.allocator, "function:{s}", .{function_name});
+    return std.fmt.allocPrint(ir.allocator, "path:{s}", .{path});
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
