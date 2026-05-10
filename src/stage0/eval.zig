@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const builtin = @import("builtin.zig");
 const doc = @import("doc.zig");
+const eval_value = @import("../eval/value.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 const fs_utils = utils.fs;
@@ -872,25 +873,15 @@ fn normalizeForUse(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.V
 }
 
 fn resolveValueString(value: core.Value) ![]const u8 {
-    return switch (value) {
-        .string => |text| text,
-        else => return error.ExpectedStringArgument,
-    };
+    return eval_value.string(value);
 }
 
 pub fn resolveValuePropertyString(allocator: std.mem.Allocator, value: core.Value) ![]const u8 {
-    return switch (value) {
-        .string => |text| text,
-        .number => |number| std.fmt.allocPrint(allocator, "{d}", .{number}),
-        else => error.ExpectedStringArgument,
-    };
+    return eval_value.propertyString(allocator, value);
 }
 
 fn resolveValueNumber(value: core.Value) !f32 {
-    return switch (value) {
-        .number => |number| number,
-        else => return error.ExpectedNumberArgument,
-    };
+    return eval_value.number(value);
 }
 
 fn resolveValueStyle(value: core.Value) !core.StyleRef {
@@ -1131,10 +1122,7 @@ fn executeStatement(
                 owned.deinit(ir.allocator);
             }
             const text = try resolveValuePropertyString(ir.allocator, value);
-            defer switch (value) {
-                .number => ir.allocator.free(text),
-                else => {},
-            };
+            defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
             try ir.setNodeProperty(object_id, property_set.property_name, text);
         },
         .constrain => |decl| {
