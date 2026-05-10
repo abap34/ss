@@ -10,20 +10,25 @@ const calls = @import("calls.zig");
 const contracts = @import("contracts.zig");
 const editor = @import("editor.zig");
 const fields = @import("fields.zig");
+const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
 const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
 
-const TypeInfo = struct {
-    ty: Type = Type.any,
-    sort: core.SemanticSort,
-    object_class: ?[]const u8 = null,
-    string_literal: ?[]const u8 = null,
-};
-
-const TypeEnv = std.StringHashMap(TypeInfo);
-pub const VariableInfo = TypeInfo;
+const TypeInfo = semantic_types.TypeInfo;
+const TypeEnv = semantic_types.TypeEnv;
+pub const VariableInfo = semantic_types.TypeInfo;
+const ensureSort = semantic_types.ensureSort;
+const ensureType = semantic_types.ensureType;
+const infoFromSort = semantic_types.infoFromSort;
+const infoFromType = semantic_types.infoFromType;
+const isPropertyTarget = semantic_types.isPropertyTarget;
+const mergeObjectClass = semantic_types.mergeObjectClass;
+const mergeTypeInfo = semantic_types.mergeTypeInfo;
+const resolveStringLiteral = semantic_types.resolveStringLiteral;
+const targetClassForInfo = semantic_types.targetClassForInfo;
+const typeLabelAlloc = semantic_types.typeLabelAlloc;
 
 var diagnostic_origin_path: []const u8 = "";
 pub const FunctionMetadata = core.FunctionMetadata;
@@ -89,26 +94,6 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     try sink.addValidationDiagnostic(.@"error", null, null, diagnostic_origin, .{
         .user_report = .{ .message = message },
     });
-}
-
-fn infoFromSort(sort: core.SemanticSort) TypeInfo {
-    return .{ .ty = Type.fromSort(sort), .sort = sort };
-}
-
-fn infoFromType(ty: Type) TypeInfo {
-    return .{
-        .ty = ty,
-        .sort = ty.toRuntimeSort() orelse .fragment,
-        .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
-    };
-}
-
-fn infoForSelectionItem(sort: core.SelectionItemSort) TypeInfo {
-    return infoFromType(Type.fromSelectionItemSort(sort));
-}
-
-fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
-    return ty.formatAlloc(allocator);
 }
 
 pub fn checkFunctionDefinitions(
@@ -712,29 +697,6 @@ fn inferUserFunctionReturnInfoInner(
     return result;
 }
 
-fn mergeTypeInfo(a: TypeInfo, b: TypeInfo) TypeInfo {
-    return .{
-        .ty = a.ty,
-        .sort = a.sort,
-        .object_class = mergeObjectClass(a.object_class, b.object_class),
-        .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
-    };
-}
-
-fn mergeObjectClass(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
-    if (a == null) return b;
-    if (b == null) return a;
-    if (std.mem.eql(u8, a.?, b.?)) return a;
-    return null;
-}
-
-fn mergeStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
-    if (a == null) return b;
-    if (b == null) return a;
-    if (std.mem.eql(u8, a.?, b.?)) return a;
-    return null;
-}
-
 fn primitiveResultTypeInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
@@ -1066,14 +1028,6 @@ fn validateExtendRenderEnvCall(
     }
 }
 
-fn isPropertyTarget(info: TypeInfo) bool {
-    return switch (info.ty.tag) {
-        .document, .page, .object => true,
-        .selection => info.ty.param == .object or info.ty.param == .any,
-        else => false,
-    };
-}
-
 fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
     if (targetClassForInfo(target_info)) |class_name| {
         return sema.field(class_name, key);
@@ -1082,16 +1036,6 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
         return sema.fieldByName(key);
     }
     return null;
-}
-
-fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
-    return switch (info.ty.tag) {
-        .document => "DocumentObject",
-        .page => "PageObject",
-        .object => info.object_class,
-        .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
-        else => null,
-    };
 }
 
 fn validateFieldValue(
@@ -1139,14 +1083,6 @@ fn validatePropertySetStatement(
     }
 }
 
-fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
-    return switch (expr) {
-        .string => |text| text,
-        .ident => |name| if (env.get(name)) |info| info.string_literal else null,
-        else => null,
-    };
-}
-
 pub fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index: usize) ?core.SemanticSort {
     const arg_sort = if (descriptor.arg_sorts.len == 0)
         return null
@@ -1168,44 +1104,6 @@ pub fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index:
         .number => .number,
         .constraints => .constraints,
     };
-}
-
-fn ensureSort(
-    ir: ?*core.Ir,
-    actual: core.SemanticSort,
-    expected: core.SemanticSort,
-    origin: []const u8,
-    code: core.TypeMismatchCode,
-) !void {
-    if (actual != expected) {
-        if (ir) |sink| {
-            try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
-            });
-        }
-        return error.InvalidSemanticSort;
-    }
-}
-
-fn ensureType(
-    ir: ?*core.Ir,
-    allocator: std.mem.Allocator,
-    actual: TypeInfo,
-    expected: Type,
-    origin: []const u8,
-    code: core.TypeMismatchCode,
-) !void {
-    if (Type.accepts(expected, actual.ty)) return;
-    const expected_sort = expected.toRuntimeSort() orelse actual.sort;
-    if (expected_sort != actual.sort) return ensureSort(ir, actual.sort, expected_sort, origin, code);
-    if (ir) |_| {
-        const actual_label = try typeLabelAlloc(allocator, actual.ty);
-        defer allocator.free(actual_label);
-        const expected_label = try typeLabelAlloc(allocator, expected);
-        defer allocator.free(expected_label);
-        try addUserReport(ir, origin, "TypeMismatch: expected {s}, got {s}", .{ expected_label, actual_label });
-    }
-    return error.InvalidSemanticSort;
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
