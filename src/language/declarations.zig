@@ -96,6 +96,50 @@ pub const DeclarationIndex = struct {
         const index = self.role_by_name.get(name) orelse return null;
         return self.roles.items[index];
     }
+
+    pub fn classExists(self: *const DeclarationIndex, name: []const u8) bool {
+        return self.class_by_name.contains(name);
+    }
+
+    pub fn classBase(self: *const DeclarationIndex, name: []const u8) ?[]const u8 {
+        const class = self.classByName(name) orelse return null;
+        return class.base;
+    }
+
+    pub fn roleClass(self: *const DeclarationIndex, name: []const u8) ?[]const u8 {
+        const role = self.roleByName(name) orelse return null;
+        return role.class_name;
+    }
+
+    pub fn field(self: *const DeclarationIndex, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+        var current: ?[]const u8 = class_name;
+        while (current) |name| {
+            if (self.fieldInClass(name, field_name)) |descriptor| return descriptor;
+            current = self.classBase(name);
+        }
+        return null;
+    }
+
+    pub fn fieldByName(self: *const DeclarationIndex, field_name: []const u8) ?FieldDescriptor {
+        var index = self.fields.items.len;
+        while (index > 0) {
+            index -= 1;
+            const descriptor = self.fields.items[index];
+            if (std.mem.eql(u8, descriptor.name, field_name)) return descriptor;
+        }
+        return null;
+    }
+
+    fn fieldInClass(self: *const DeclarationIndex, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+        var index = self.fields.items.len;
+        while (index > 0) {
+            index -= 1;
+            const descriptor = self.fields.items[index];
+            if (!std.mem.eql(u8, descriptor.class_name, class_name)) continue;
+            if (std.mem.eql(u8, descriptor.name, field_name)) return descriptor;
+        }
+        return null;
+    }
 };
 
 pub fn build(allocator: std.mem.Allocator, ir: *const core.Ir) !DeclarationIndex {
@@ -309,7 +353,7 @@ fn appendRoles(index: *DeclarationIndex, module_id: core.SourceModuleId, class_n
             .class_name = class_name,
             .module_id = module_id,
         });
-        if (!index.role_by_name.contains(role)) try index.role_by_name.put(role, role_index);
+        try index.role_by_name.put(role, role_index);
     }
 }
 

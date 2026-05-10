@@ -34,7 +34,7 @@ fn resolveInModule(ir: *const core.Ir, module_id: core.SourceModuleId, name: []c
 fn resolveInProgram(program: anytype, name: []const u8) ?ValueType {
     for (program.types.items) |decl| {
         if (!std.mem.eql(u8, decl.name, name)) continue;
-        return infer(decl.name, decl.body);
+        return resolveDeclaration(decl.name, decl.body);
     }
     return null;
 }
@@ -44,6 +44,10 @@ pub fn parse(name: []const u8) ?ValueType {
         if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
     }
     return null;
+}
+
+pub fn resolveDeclaration(name: []const u8, body: []const u8) ?ValueType {
+    return infer(name, body);
 }
 
 fn infer(name: []const u8, body: []const u8) ?ValueType {

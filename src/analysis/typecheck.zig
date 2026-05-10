@@ -3,13 +3,14 @@ const core = @import("core");
 const ast = @import("ast");
 const names = @import("../language/names.zig");
 const declarations = @import("../language/declarations.zig");
+const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
-const value_domains = @import("../language/value_domains.zig");
 const module_loader = @import("../modules/loader.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
 const Type = ast.Type;
+const SemanticEnv = semantic_env.SemanticEnv;
 
 pub const FunctionContract = struct {
     min_param_count: usize,
@@ -209,17 +210,26 @@ pub fn checkFunctionDefinitions(
     ir: *core.Ir,
     functions: *const std.StringHashMap(ast.FunctionDecl),
 ) !void {
-    defer clearDiagnosticOriginModule();
-    try checkFunctionCallGraph(allocator, ir, functions);
+    const sema = SemanticEnv.init(ir, null, functions);
+    try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
+}
 
-    var it = functions.iterator();
+fn checkFunctionDefinitionsWithEnv(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+) !void {
+    defer clearDiagnosticOriginModule();
+    try checkFunctionCallGraph(allocator, ir, sema.functions);
+
+    var it = sema.functions.iterator();
     while (it.next()) |entry| {
         if (ir.function_metadata.get(entry.key_ptr.*)) |metadata| {
             if (ir.moduleById(metadata.module_id)) |module| setDiagnosticOriginModule(module);
         } else {
             clearDiagnosticOriginModule();
         }
-        try checkFunction(allocator, ir, functions, entry.value_ptr.*);
+        try checkFunction(allocator, ir, sema, entry.value_ptr.*);
     }
 }
 
@@ -228,13 +238,17 @@ pub fn typecheckProgram(
     ir: *core.Ir,
 ) !void {
     defer clearDiagnosticOriginModule();
-    try checkObjectDeclarations(allocator, ir);
+    var declaration_index = try declarations.build(allocator, ir);
+    defer declaration_index.deinit();
+    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
+
+    try checkObjectDeclarations(allocator, ir, &sema);
     try checkPageNamesUnique(allocator, ir);
-    try checkFunctionDefinitions(allocator, ir, &ir.functions);
+    try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         setDiagnosticOriginModule(module);
-        try checkPageStatements(allocator, ir, &ir.functions, module.program);
+        try checkPageStatements(allocator, ir, &sema, module.program);
     }
 }
 
@@ -260,7 +274,7 @@ fn checkPageNamesUnique(
     }
 }
 
-fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema: *const SemanticEnv) !void {
     var roles = std.StringHashMap([]const u8).init(allocator);
     defer roles.deinit();
     defer clearDiagnosticOriginModule();
@@ -269,11 +283,11 @@ fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
         const module = ir.moduleById(module_id) orelse continue;
         setDiagnosticOriginModule(module);
         for (module.program.objects.items) |object_decl| {
-            try checkObjectDeclaration(allocator, ir, module.id, object_decl);
+            try checkObjectDeclaration(allocator, ir, sema, module.id, object_decl);
             try checkRolesUnique(allocator, ir, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
         for (module.program.object_extensions.items) |extension| {
-            try checkObjectExtension(allocator, ir, module.id, extension);
+            try checkObjectExtension(allocator, ir, sema, module.id, extension);
             try checkRolesUnique(allocator, ir, &roles, extension.target, extension.roles.items, extension.span);
         }
     }
@@ -282,49 +296,52 @@ fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
 fn checkObjectDeclaration(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
+    sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     object_decl: ast.ObjectDecl,
 ) !void {
     const origin = try statementOrigin(allocator, object_decl.span);
     defer allocator.free(origin);
     if (object_decl.base) |base| {
-        if (!declarations.classExists(ir, base)) {
+        if (!sema.classExists(base)) {
             try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
             return error.InvalidSemanticSort;
         }
     }
-    try checkObjectFields(allocator, ir, module_id, object_decl.fields.items);
+    try checkObjectFields(allocator, ir, sema, module_id, object_decl.fields.items);
 }
 
 fn checkObjectExtension(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
+    sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     extension: ast.ObjectExtensionDecl,
 ) !void {
     const origin = try statementOrigin(allocator, extension.span);
     defer allocator.free(origin);
-    if (!declarations.classExists(ir, extension.target)) {
+    if (!sema.classExists(extension.target)) {
         try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
         return error.InvalidSemanticSort;
     }
     if (extension.implements) |implements| {
-        if (!declarations.classExists(ir, implements)) {
+        if (!sema.classExists(implements)) {
             try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
             return error.InvalidSemanticSort;
         }
     }
-    try checkObjectFields(allocator, ir, module_id, extension.fields.items);
+    try checkObjectFields(allocator, ir, sema, module_id, extension.fields.items);
 }
 
 fn checkObjectFields(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
+    sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     fields: []const ast.ObjectFieldDecl,
 ) !void {
     for (fields) |field| {
-        if (value_domains.resolve(ir, module_id, field.value_type) != null) continue;
+        if (sema.valueDomain(module_id, field.value_type) != null) continue;
         const origin = try statementOrigin(allocator, field.span);
         defer allocator.free(origin);
         try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
@@ -378,6 +395,7 @@ pub fn collectVariableInfoFromProgram(
     program: ast.Program,
     diagnostic_ir: ?*core.Ir,
 ) !std.StringHashMap(VariableInfo) {
+    const sema = SemanticEnv.init(diagnostic_ir, null, functions);
     var variables = std.StringHashMap(VariableInfo).init(allocator);
     errdefer variables.deinit();
 
@@ -389,7 +407,7 @@ pub fn collectVariableInfoFromProgram(
             if (param.default_value) |default_value| {
                 const origin = try statementOrigin(allocator, func.span);
                 defer allocator.free(origin);
-                const info = try inferExprInfo(allocator, diagnostic_ir, functions, &env, default_value.*, origin);
+                const info = try inferExprInfo(allocator, diagnostic_ir, &sema, &env, default_value.*, origin);
                 try ensureType(diagnostic_ir, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
             try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
@@ -397,7 +415,7 @@ pub fn collectVariableInfoFromProgram(
         }
 
         for (func.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, functions, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables);
         }
     }
 
@@ -405,7 +423,7 @@ pub fn collectVariableInfoFromProgram(
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         for (program.document_statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, functions, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables);
         }
     }
 
@@ -414,7 +432,7 @@ pub fn collectVariableInfoFromProgram(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, functions, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables);
         }
     }
 
@@ -823,23 +841,12 @@ fn hintForCallExpr(
     const arg_starts = try findCallArgStartOffsets(allocator, slice, call.name, call.args.items.len);
     defer allocator.free(arg_starts);
     const hint_count = @min(call.args.items.len, arg_starts.len);
+    const sema = SemanticEnv.init(null, null, functions);
     for (0..hint_count) |index| {
-        const param_name = callParamName(functions, call.name, index) orelse continue;
+        const param_name = sema.callParamName(call.name, index) orelse continue;
         const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
         try appendInlayHint(allocator, hints, source, source_path, module_id, span.start + arg_starts[index], label, .parameter_names);
     }
-}
-
-fn callParamName(functions: *const std.StringHashMap(ast.FunctionDecl), call_name: []const u8, index: usize) ?[]const u8 {
-    if (functions.get(call_name)) |func| {
-        if (index < func.params.items.len) return func.params.items[index].name;
-        return null;
-    }
-    if (registry.lookupPrimitiveCall(call_name)) |descriptor| {
-        if (descriptor.arg_names.len == 0) return null;
-        return if (index < descriptor.arg_names.len) descriptor.arg_names[index] else descriptor.arg_names[descriptor.arg_names.len - 1];
-    }
-    return null;
 }
 
 fn collectSolvedSizeHints(
@@ -990,7 +997,7 @@ fn collectVariableTypesFromStatement(
     allocator: std.mem.Allocator,
     diagnostic_ir: ?*core.Ir,
     env: *TypeEnv,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     stmt: ast.Statement,
     variables: *std.StringHashMap(VariableInfo),
 ) !void {
@@ -998,27 +1005,27 @@ fn collectVariableTypesFromStatement(
     defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, diagnostic_ir, functions, env, binding.expr, origin);
+            const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
         },
         .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, binding.expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
             try env.put(binding.name, infoFromSort(.fragment));
             try variables.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
         },
         .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, property_set.value, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, diagnostic_ir, functions, env, expr, origin);
+                _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
             }
         },
     }
@@ -1120,22 +1127,23 @@ fn collectExprCallees(
     expr: ast.Expr,
     callees: *std.ArrayList([]const u8),
 ) !void {
+    const sema = SemanticEnv.init(null, null, functions);
     switch (expr) {
         .ident => |name| {
-            if (functions.get(name)) |func| {
+            if (sema.function(name)) |func| {
                 if (isConst(func)) try appendUniqueCallee(allocator, callees, name);
             }
         },
         .call => |call| {
-            if (functions.get(call.name)) |func| {
+            if (sema.function(call.name)) |func| {
                 if (!isConst(func)) try appendUniqueCallee(allocator, callees, call.name);
             }
-            if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+            if (sema.primitive(call.name)) |descriptor| {
                 if (descriptor.op == .foreach or descriptor.op == .fold or descriptor.op == .join) {
                     const callback_index: usize = if (descriptor.op == .foreach) 1 else 2;
                     if (call.args.items.len > callback_index) {
                         switch (call.args.items[callback_index]) {
-                            .ident => |name| if (functions.contains(name)) try appendUniqueCallee(allocator, callees, name),
+                            .ident => |name| if (sema.hasFunction(name)) try appendUniqueCallee(allocator, callees, name),
                             else => {},
                         }
                     }
@@ -1157,7 +1165,7 @@ fn appendUniqueCallee(allocator: std.mem.Allocator, callees: *std.ArrayList([]co
 fn checkFunction(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     func: ast.FunctionDecl,
 ) !void {
     var env = TypeEnv.init(allocator);
@@ -1167,7 +1175,7 @@ fn checkFunction(
     defer allocator.free(func_origin);
     for (func.params.items) |param| {
         if (param.default_value) |default_value| {
-            const info = try inferExprInfo(allocator, ir, functions, &env, default_value.*, func_origin);
+            const info = try inferExprInfo(allocator, ir, sema, &env, default_value.*, func_origin);
             try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
         var param_info = infoFromType(param.ty);
@@ -1176,21 +1184,21 @@ fn checkFunction(
     }
 
     for (func.statements.items) |stmt| {
-        try checkStatement(allocator, ir, functions, &env, func.result_type, stmt);
+        try checkStatement(allocator, ir, sema, &env, func.result_type, stmt);
     }
 }
 
 fn checkPageStatements(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     program: ast.Program,
 ) !void {
     {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         for (program.document_statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, functions, &env, stmt);
+            try checkTopLevelStatement(allocator, ir, sema, &env, stmt);
         }
     }
     for (program.pages.items) |page| {
@@ -1198,7 +1206,7 @@ fn checkPageStatements(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, functions, &env, stmt);
+            try checkTopLevelStatement(allocator, ir, sema, &env, stmt);
         }
     }
 }
@@ -1206,18 +1214,18 @@ fn checkPageStatements(
 fn checkTopLevelStatement(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *TypeEnv,
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, stmt.span);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
+            const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
         },
         .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
+            _ = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => {
@@ -1225,14 +1233,14 @@ fn checkTopLevelStatement(
             return error.ReturnOutsideFunction;
         },
         .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, functions, env, property_set.object_name, property_set.property_name, property_set.value, origin);
+            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, ir, functions, env, expr, origin);
+            _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
+                const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
                 try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
@@ -1242,7 +1250,7 @@ fn checkTopLevelStatement(
 fn checkStatement(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *TypeEnv,
     result_type: Type,
     stmt: ast.Statement,
@@ -1250,26 +1258,26 @@ fn checkStatement(
     const origin = try statementOrigin(allocator, stmt.span);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
+            const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
         },
         .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, ir, functions, env, binding.expr, origin);
+            _ = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
-            const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
+            const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
             try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
         .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, functions, env, property_set.object_name, property_set.property_name, property_set.value, origin);
+            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, ir, functions, env, expr, origin);
+            _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                const actual = try inferExprInfo(allocator, ir, functions, env, expr, origin);
+                const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
                 try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
@@ -1279,18 +1287,18 @@ fn checkStatement(
 fn inferExprSort(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
     origin: []const u8,
 ) anyerror!core.SemanticSort {
-    return (try inferExprInfo(allocator, ir, functions, env, expr, origin)).sort;
+    return (try inferExprInfo(allocator, ir, sema, env, expr, origin)).sort;
 }
 
 fn inferExprInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
     origin: []const u8,
@@ -1304,26 +1312,26 @@ fn inferExprInfo(
         .number => infoFromSort(.number),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
-            if (functions.get(name)) |func| {
+            if (sema.function(name)) |func| {
                 if (isConst(func)) break :blk infoFromType(func.result_type);
                 break :blk infoFromSort(.function);
             }
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
-        .call => |call| try inferCallInfo(allocator, ir, functions, env, call, origin),
+        .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin),
     };
 }
 
 fn inferCallInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
 ) anyerror!TypeInfo {
-    if (functions.get(call.name)) |func| {
+    if (sema.function(call.name)) |func| {
         if (isConst(func)) {
             try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
             return error.UnknownFunction;
@@ -1340,13 +1348,13 @@ fn inferCallInfo(
         }
         for (call.args.items, 0..) |arg, index| {
             const param = func.params.items[index];
-            const actual = try inferExprInfo(allocator, ir, functions, env, arg, origin);
+            const actual = try inferExprInfo(allocator, ir, sema, env, arg, origin);
             try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
         }
-        return try inferUserFunctionReturnInfo(allocator, ir, functions, env, func, call, origin);
+        return try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, call, origin);
     }
 
-    if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+    if (sema.primitive(call.name)) |descriptor| {
         if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
             if (descriptor.min_arity == descriptor.max_arity) {
                 try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
@@ -1356,16 +1364,16 @@ fn inferCallInfo(
             return error.InvalidArity;
         }
         for (call.args.items, 0..) |arg, index| {
-            const actual = try inferExprInfo(allocator, ir, functions, env, arg, origin);
+            const actual = try inferExprInfo(allocator, ir, sema, env, arg, origin);
             if (registry.primitiveArgType(descriptor, index)) |expected| {
                 try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
             }
         }
-        const info = try primitiveResultTypeInfo(allocator, ir, functions, env, call, descriptor, origin);
+        const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin);
         if (ir != null) {
             switch (descriptor.op) {
-                .set_prop => try validateSetPropCall(ir.?, call, env, functions, origin),
-                .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, functions, origin),
+                .set_prop => try validateSetPropCall(ir.?, call, env, sema, origin),
+                .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, sema, origin),
                 else => {},
             }
         }
@@ -1379,7 +1387,7 @@ fn inferCallInfo(
 fn inferUserFunctionReturnInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
     call: ast.CallExpr,
@@ -1387,13 +1395,13 @@ fn inferUserFunctionReturnInfo(
 ) !TypeInfo {
     var visiting = std.StringHashMap(void).init(allocator);
     defer visiting.deinit();
-    return inferUserFunctionReturnInfoInner(allocator, ir, functions, caller_env, func, call, origin, &visiting);
+    return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, &visiting);
 }
 
 fn inferUserFunctionReturnInfoInner(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
     call: ast.CallExpr,
@@ -1412,9 +1420,9 @@ fn inferUserFunctionReturnInfoInner(
     defer env.deinit();
     for (func.params.items, 0..) |param, index| {
         const info: TypeInfo = if (index < call.args.items.len)
-            try inferExprInfo(allocator, ir, functions, caller_env, call.args.items[index], origin)
+            try inferExprInfo(allocator, ir, sema, caller_env, call.args.items[index], origin)
         else if (param.default_value) |default_value|
-            try inferExprInfo(allocator, ir, functions, &env, default_value.*, origin)
+            try inferExprInfo(allocator, ir, sema, &env, default_value.*, origin)
         else blk: {
             var param_info = infoFromType(param.ty);
             param_info.sort = param.sort;
@@ -1427,25 +1435,25 @@ fn inferUserFunctionReturnInfoInner(
     for (func.statements.items) |stmt| {
         switch (stmt.kind) {
             .let_binding => |binding| {
-                const info = try inferExprInfo(allocator, null, functions, &env, binding.expr, "");
+                const info = try inferExprInfo(allocator, null, sema, &env, binding.expr, "");
                 try env.put(binding.name, info);
             },
             .bind_binding => |binding| {
-                _ = try inferExprInfo(allocator, null, functions, &env, binding.expr, "");
+                _ = try inferExprInfo(allocator, null, sema, &env, binding.expr, "");
                 try env.put(binding.name, infoFromSort(.fragment));
             },
             .return_expr => |expr| {
-                const info = try inferExprInfo(allocator, null, functions, &env, expr, "");
+                const info = try inferExprInfo(allocator, null, sema, &env, expr, "");
                 result = mergeTypeInfo(result, info);
             },
             .property_set => |property_set| {
-                try validatePropertySetStatement(allocator, ir, functions, &env, property_set.object_name, property_set.property_name, property_set.value, "");
+                try validatePropertySetStatement(allocator, ir, sema, &env, property_set.object_name, property_set.property_name, property_set.value, "");
             },
             .expr_stmt => |expr| {
-                _ = try inferExprInfo(allocator, null, functions, &env, expr, "");
+                _ = try inferExprInfo(allocator, null, sema, &env, expr, "");
             },
             .constrain => |decl| {
-                if (decl.offset) |expr| _ = try inferExprInfo(allocator, null, functions, &env, expr, "");
+                if (decl.offset) |expr| _ = try inferExprInfo(allocator, null, sema, &env, expr, "");
             },
         }
     }
@@ -1481,7 +1489,7 @@ fn mergeStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
 fn primitiveResultTypeInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
     descriptor: registry.PrimitiveDescriptor,
@@ -1489,7 +1497,7 @@ fn primitiveResultTypeInfo(
 ) !TypeInfo {
     if (descriptor.op == .first) {
         if (call.args.items.len == 0) return infoFromSort(.object);
-        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        const selection_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
         var info = switch (selection_info.ty.param) {
             .page => infoFromSort(.page),
             .object, .any, .none => infoFromSort(.object),
@@ -1504,41 +1512,41 @@ fn primitiveResultTypeInfo(
 
     if (descriptor.op == .foreach) {
         if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
-        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-        try validateCallbackShape(allocator, ir, functions, env, call, origin, 1, selection_info, 1, null);
+        const selection_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, sema, env, call, origin, 1, selection_info, 1, null);
         return selection_info;
     }
 
     if (descriptor.op == .fold) {
         if (call.args.items.len < 3) return infoFromSort(.string);
-        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-        try validateCallbackShape(allocator, ir, functions, env, call, origin, 2, selection_info, 2, .string);
+        const selection_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, sema, env, call, origin, 2, selection_info, 2, .string);
         return infoFromSort(.string);
     }
 
     if (descriptor.op == .join) {
         if (call.args.items.len < 3) return infoFromSort(.string);
-        const selection_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-        try validateCallbackShape(allocator, ir, functions, env, call, origin, 2, selection_info, 1, .string);
+        const selection_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+        try validateCallbackShape(allocator, ir, sema, env, call, origin, 2, selection_info, 1, .string);
         return infoFromSort(.string);
     }
 
     if (descriptor.op == .rewrite_text or descriptor.op == .set_content or descriptor.op == .clear_content or descriptor.op == .append_content) {
         if (call.args.items.len == 0) return infoFromSort(.object);
-        return try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        return try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
     }
 
     if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
-        return try inferSelectionAlgebraInfo(allocator, ir, functions, env, call, origin);
+        return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin);
     }
 
     if (descriptor.op == .select) {
-        return try inferSelectCallInfo(allocator, ir, functions, env, call, origin);
+        return try inferSelectCallInfo(allocator, ir, sema, env, call, origin);
     }
 
     if (descriptor.op == .set_style) {
         if (call.args.items.len == 0) return infoFromSort(.object);
-        const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        const target_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
         if (!(target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any)))) {
             try ensureType(ir, allocator, target_info, Type.object, origin, .UnmatchedArgumentType);
         }
@@ -1547,7 +1555,7 @@ fn primitiveResultTypeInfo(
 
     if (descriptor.op == .set_prop or descriptor.op == .extend_render_env) {
         if (call.args.items.len == 0) return infoFromSort(.object);
-        const target_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+        const target_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
         return .{
             .ty = switch (target_info.ty.tag) {
                 .document, .page, .object, .selection => target_info.ty,
@@ -1568,10 +1576,10 @@ fn primitiveResultTypeInfo(
     info.object_class = switch (descriptor.op) {
         .group => "GroupObject",
         .set_style => blk: {
-            const object_info = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+            const object_info = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
             break :blk object_info.object_class;
         },
-        .object => inferObjectConstructorClass(ir, env, call),
+        .object => inferObjectConstructorClass(sema, env, call),
         else => null,
     };
     if (info.object_class) |class_name| info.ty.class_name = class_name;
@@ -1581,7 +1589,7 @@ fn primitiveResultTypeInfo(
 fn validateCallbackShape(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
@@ -1598,7 +1606,7 @@ fn validateCallbackShape(
             return error.InvalidSemanticSort;
         },
     };
-    const callback = functions.get(callback_name) orelse {
+    const callback = sema.function(callback_name) orelse {
         try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function: {s}", .{callback_name});
         return error.UnknownFunction;
     };
@@ -1626,7 +1634,7 @@ fn validateCallbackShape(
     }
     var extra_index: usize = 0;
     while (extra_index < extra_count) : (extra_index += 1) {
-        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[callback_index + 1 + extra_index], origin);
+        const actual = try inferExprInfo(allocator, ir, sema, env, call.args.items[callback_index + 1 + extra_index], origin);
         const param_index = fixed_prefix_count + extra_index;
         try ensureType(ir, allocator, actual, callback.params.items[param_index].ty, origin, .UnmatchedArgumentType);
     }
@@ -1638,14 +1646,14 @@ fn validateCallbackShape(
 fn inferSelectionAlgebraInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
 ) !TypeInfo {
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
-    const left = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
-    const right = try inferExprInfo(allocator, ir, functions, env, call.args.items[1], origin);
+    const left = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+    const right = try inferExprInfo(allocator, ir, sema, env, call.args.items[1], origin);
     try ensureType(ir, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
     try ensureType(ir, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
 
@@ -1673,14 +1681,14 @@ fn inferSelectionAlgebraInfo(
 fn inferSelectCallInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
 ) !TypeInfo {
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
     const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
-    const query = registry.lookupQueryOp(query_name) orelse {
+    const query = sema.query(query_name) orelse {
         try addUserReport(ir, origin, "UnknownQuery: unknown query: {s}", .{query_name});
         return error.UnknownQuery;
     };
@@ -1688,24 +1696,24 @@ fn inferSelectCallInfo(
         try addUserReport(ir, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
         return error.InvalidArity;
     }
-    const base = try inferExprInfo(allocator, ir, functions, env, call.args.items[0], origin);
+    const base = try inferExprInfo(allocator, ir, sema, env, call.args.items[0], origin);
     try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
     for (query.extra_arg_sorts, 0..) |_, extra_index| {
         const arg_index = 2 + extra_index;
         if (arg_index >= call.args.items.len) break;
-        const actual = try inferExprInfo(allocator, ir, functions, env, call.args.items[arg_index], origin);
+        const actual = try inferExprInfo(allocator, ir, sema, env, call.args.items[arg_index], origin);
         if (registry.argSortType(query.extra_arg_sorts[extra_index])) |expected| {
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
     var info = infoFromType(registry.queryOutputType(query));
-    info.object_class = inferQueryOutputClass(ir, env, query, call, base);
+    info.object_class = inferQueryOutputClass(sema, env, query, call, base);
     if (info.ty.tag == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
     return info;
 }
 
 fn inferQueryOutputClass(
-    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     query: registry.QueryDescriptor,
     call: ast.CallExpr,
@@ -1716,29 +1724,24 @@ fn inferQueryOutputClass(
         .page_objects_by_role, .document_objects_by_role => blk: {
             if (call.args.items.len < 3) break :blk null;
             const role_name = resolveStringLiteral(env, call.args.items[2]) orelse break :blk null;
-            if (ir) |sink| {
-                if (declarations.findRoleClass(sink, role_name)) |class_name| break :blk class_name;
-            }
+            if (sema.roleClass(role_name)) |class_name| break :blk class_name;
             break :blk null;
         },
         .children, .descendants, .document_pages, .previous_page, .parent_page => null,
     };
 }
 
-fn inferObjectConstructorClass(ir: ?*core.Ir, env: *const TypeEnv, call: ast.CallExpr) ?[]const u8 {
+fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr) ?[]const u8 {
     if (call.args.items.len < 3) return null;
     const role_name = resolveStringLiteral(env, call.args.items[1]) orelse return null;
-    if (ir) |sink| {
-        if (declarations.findRoleClass(sink, role_name)) |class_name| return class_name;
-    }
-    return null;
+    return sema.roleClass(role_name);
 }
 
 fn validateSetPropCall(
     ir: *core.Ir,
     call: ast.CallExpr,
     env: *const TypeEnv,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     origin: []const u8,
 ) !void {
     if (call.args.items.len < 3) return;
@@ -1746,7 +1749,7 @@ fn validateSetPropCall(
         .string => |text| text,
         else => return,
     };
-    const target_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
+    const target_info = try inferExprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
     if (!isPropertyTarget(target_info)) {
         try addUserReport(
             ir,
@@ -1757,9 +1760,9 @@ fn validateSetPropCall(
         return error.InvalidSemanticSort;
     }
 
-    const value_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[2], origin);
-    if (lookupFieldForTarget(ir, target_info, key)) |field| {
-        try validateFieldValue(ir, field, key, value_info, origin);
+    const value_info = try inferExprInfo(ir.allocator, ir, sema, env, call.args.items[2], origin);
+    if (lookupFieldForTarget(sema, target_info, key)) |field| {
+        try validateFieldValue(ir, sema, field, key, value_info, origin);
         return;
     }
 
@@ -1771,11 +1774,11 @@ fn validateExtendRenderEnvCall(
     ir: *core.Ir,
     call: ast.CallExpr,
     env: *const TypeEnv,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     origin: []const u8,
 ) !void {
     if (call.args.items.len < 4) return;
-    const target_info = try inferExprInfo(ir.allocator, ir, functions, env, call.args.items[0], origin);
+    const target_info = try inferExprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
     if (!isPropertyTarget(target_info)) {
         try addUserReport(
             ir,
@@ -1822,12 +1825,12 @@ fn isPropertyTarget(info: TypeInfo) bool {
     };
 }
 
-fn lookupFieldForTarget(ir: *core.Ir, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
+fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []const u8) ?declarations.FieldDescriptor {
     if (targetClassForInfo(target_info)) |class_name| {
-        return declarations.findField(ir, class_name, key);
+        return sema.field(class_name, key);
     }
     if (target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {
-        return declarations.findFieldByName(ir, key);
+        return sema.fieldByName(key);
     }
     return null;
 }
@@ -1844,17 +1847,18 @@ fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
 
 fn validateFieldValue(
     ir: *core.Ir,
+    sema: *const SemanticEnv,
     field: declarations.FieldDescriptor,
     key: []const u8,
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    if (!value_domains.nameMatches(ir, field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
+    if (!sema.valueMatches(field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
         try addUserReport(
             ir,
             origin,
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
-            .{ key, value_domains.nameLabel(ir, field.module_id, field.value_type), @tagName(value_info.sort) },
+            .{ key, sema.valueLabel(field.module_id, field.value_type), @tagName(value_info.sort) },
         );
         return error.InvalidSemanticSort;
     }
@@ -1863,7 +1867,7 @@ fn validateFieldValue(
 fn validatePropertySetStatement(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    sema: *const SemanticEnv,
     env: *const TypeEnv,
     object_name: []const u8,
     property_name: []const u8,
@@ -1875,10 +1879,10 @@ fn validatePropertySetStatement(
         return error.UnknownIdentifier;
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
-    const value_info = try inferExprInfo(allocator, ir, functions, env, value, origin);
+    const value_info = try inferExprInfo(allocator, ir, sema, env, value, origin);
     if (ir) |sink| {
-        if (lookupFieldForTarget(sink, object_info, property_name)) |field| {
-            try validateFieldValue(sink, field, property_name, value_info, origin);
+        if (lookupFieldForTarget(sema, object_info, property_name)) |field| {
+            try validateFieldValue(sink, sema, field, property_name, value_info, origin);
             return;
         }
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
