@@ -7,6 +7,7 @@ const error_report = utils.err;
 const fs_utils = utils.fs;
 const ast = @import("ast");
 const names = @import("../language/names.zig");
+const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const typecheck = @import("../analysis/typecheck.zig");
 
@@ -17,6 +18,7 @@ const Statement = ast.Statement;
 const Expr = ast.Expr;
 const CallExpr = ast.CallExpr;
 const AnchorRef = ast.AnchorRef;
+const SemanticEnv = semantic_env.SemanticEnv;
 
 const ExecFlow = union(enum) {
     none,
@@ -410,7 +412,8 @@ fn evalCall(
             else => {},
         }
     }
-    if (functions.get(call.name)) |func| {
+    const sema = SemanticEnv.init(null, null, functions);
+    if (sema.function(call.name)) |func| {
         if (func.kind == .constant) {
             reportUnknownFunction(call.name, current_origin);
             return error.UnknownFunction;
@@ -418,7 +421,7 @@ fn evalCall(
         if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
         return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
     }
-    if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+    if (sema.primitive(call.name)) |descriptor| {
         return try evalPrimitiveCall(ir, page_id, context, mode, env, functions, current_origin, call, descriptor);
     }
     reportUnknownFunction(call.name, current_origin);
@@ -712,7 +715,8 @@ fn evalSelectCall(
 ) anyerror!core.Value {
     const base = try normalizeForUse(ir, mode, try evalExpr(ir, page_id, context, mode, env, functions, current_origin, call.args.items[0]));
     const op_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, current_origin, call, 1);
-    const descriptor = registry.lookupQueryOp(op_name) orelse {
+    const sema = SemanticEnv.init(null, null, functions);
+    const descriptor = sema.query(op_name) orelse {
         reportUnknownQuery(op_name, current_origin);
         return error.UnknownQuery;
     };
@@ -1127,7 +1131,10 @@ fn executeStatement(
                 owned.deinit(ir.allocator);
             }
             const text = try resolveValuePropertyString(ir.allocator, value);
-            defer ir.allocator.free(text);
+            defer switch (value) {
+                .number => ir.allocator.free(text),
+                else => {},
+            };
             try ir.setNodeProperty(object_id, property_set.property_name, text);
         },
         .constrain => |decl| {
