@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const eval_value = @import("../eval/value.zig");
 const builtin = @import("../stage0/builtin.zig");
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
@@ -319,6 +320,7 @@ fn executeStatement(
             };
             const value = try evalExpr(ir, env, functions, origin, property_set.value);
             const text = try resolveValuePropertyString(ir.allocator, value);
+            defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
             try ir.setNodeProperty(object_id, property_set.property_name, text);
         },
         .expr_stmt => |expr| {
@@ -423,25 +425,15 @@ fn executeUserFunctionBody(
 }
 
 fn resolveValueString(value: core.Value) ![]const u8 {
-    return switch (value) {
-        .string => |text| text,
-        else => error.ExpectedStringArgument,
-    };
+    return eval_value.string(value);
 }
 
 fn resolveValuePropertyString(allocator: std.mem.Allocator, value: core.Value) ![]const u8 {
-    return switch (value) {
-        .string => |text| text,
-        .number => |number| std.fmt.allocPrint(allocator, "{d}", .{number}),
-        else => error.ExpectedStringArgument,
-    };
+    return eval_value.propertyString(allocator, value);
 }
 
 fn resolveValueNumber(value: core.Value) !f32 {
-    return switch (value) {
-        .number => |number| number,
-        else => error.ExpectedNumberArgument,
-    };
+    return eval_value.number(value);
 }
 
 fn functionOrigin(ir: *const core.Ir, phase: declarations.FunctionAnnotationDescriptor, func: FunctionDecl) ![]const u8 {
