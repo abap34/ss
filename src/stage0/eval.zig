@@ -10,6 +10,7 @@ const ast = @import("ast");
 const names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
+const contracts = @import("../analysis/contracts.zig");
 const typecheck = @import("../analysis/typecheck.zig");
 
 const Program = ast.Program;
@@ -378,7 +379,7 @@ fn evalExpr(
                         .args = std.ArrayList(Expr).empty,
                     });
                 }
-                break :blk .{ .function = try typecheck.functionRefFor(ir.allocator, func) };
+                break :blk .{ .function = try contracts.functionRefFor(ir.allocator, func) };
             }
             reportUnknownIdentifier(name, current_origin);
             break :blk error.UnknownIdentifier;
@@ -419,7 +420,7 @@ fn evalCall(
             reportUnknownFunction(call.name, current_origin);
             return error.UnknownFunction;
         }
-        if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+        if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
         return try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, func, current_origin, call);
     }
     if (sema.primitive(call.name)) |descriptor| {
@@ -722,7 +723,7 @@ fn evalSelectCall(
         return error.UnknownQuery;
     };
     try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
-    try typecheck.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
+    try contracts.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {
             return try ir.select(ir.allocator, base, core.Query.selfObject());
@@ -765,7 +766,7 @@ fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void 
 }
 
 fn validateUserFunctionArity(actual: usize, func: FunctionDecl, origin: []const u8) !void {
-    const min = typecheck.requiredParamCount(func);
+    const min = contracts.requiredParamCount(func);
     const max = func.params.items.len;
     if (actual < min or actual > max) {
         reportLowerDiagnostic(.{
@@ -805,7 +806,7 @@ fn bindUserFunctionArgs(
             try evalExpr(ir, page_id, context, mode, caller_env, functions, current_origin, call.args.items[index])
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
 }
@@ -822,14 +823,14 @@ fn bindUserFunctionValueArgs(
     current_origin: []const u8,
     args: []const core.Value,
 ) !void {
-    const min = typecheck.requiredParamCount(func);
+    const min = contracts.requiredParamCount(func);
     if (args.len < min or args.len > func.params.items.len) return error.InvalidArity;
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
             args[index]
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try typecheck.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
+        try contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
         try local_env.put(param.name, value);
     }
     _ = caller_env;
@@ -1249,7 +1250,7 @@ fn executeCallStatement(
                     var owned = value;
                     owned.deinit(ir.allocator);
                 }
-                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
                 try materializeStatementValue(ir, mode, last_code_like, value);
                 return;
             },
@@ -1268,7 +1269,7 @@ fn invokeUserFunctionValue(
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const func_ref = try typecheck.functionRefFor(ir.allocator, func);
+    const func_ref = try contracts.functionRefFor(ir.allocator, func);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(call.args.items.len, func, current_origin);
 
@@ -1286,7 +1287,7 @@ fn invokeUserFunctionValue(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
@@ -1306,7 +1307,7 @@ fn invokeUserFunctionValues(
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
-    if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
+    if (!contracts.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
 
     var local_env = std.StringHashMap(core.Value).init(ir.allocator);
     defer local_env.deinit();
@@ -1322,7 +1323,7 @@ fn invokeUserFunctionValues(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try typecheck.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
