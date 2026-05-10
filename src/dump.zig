@@ -2,9 +2,10 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const stage0 = @import("stage0.zig");
-const typecheck = @import("analysis/typecheck.zig");
 const dump_calls = @import("dump/calls.zig");
 const dump_declarations = @import("dump/declarations.zig");
+const dump_editor = @import("dump/editor.zig");
+const dump_render_doc = @import("dump/render_doc.zig");
 const declarations = @import("language/declarations.zig");
 const semantic_env = @import("language/env.zig");
 const json = @import("utils").json;
@@ -30,16 +31,16 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try writeDocTermsField(&root, document_code.terms.items);
 
     try dump_calls.writeFunctionsField(allocator, &root, ir);
-    try writeVariablesField(allocator, &root, ir);
+    try dump_editor.writeVariablesField(allocator, &root, ir);
     try dump_declarations.writeField(&root, allocator, ir);
     try dump_calls.writeQueryContractsField(allocator, &root);
-    try writeDefinitionsField(&root, ir);
-    try writeHintsField(&root, ir.hints.items);
+    try dump_editor.writeDefinitionsField(&root, ir);
+    try dump_editor.writeHintsField(&root, ir.hints.items);
 
     try root.intField("document_id", ir.document_id);
     try writePageOrderField(&root, ir.page_order.items);
     try writeNodesField(allocator, &root, ir);
-    try writeRenderDocField(allocator, &root, ir);
+    try dump_render_doc.writeField(allocator, &root, ir);
     try writeContainsField(&root, &ir.contains);
     try writeConstraintsField(&root, ir.constraints.items);
     try writeDiagnosticsField(&root, ir.diagnostics.items);
@@ -61,63 +62,6 @@ fn writeDocTermsField(root: *json.Object, terms: []const stage0.Term) !void {
     try array.end();
 }
 
-fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
-    var variables = try root.arrayField("variables");
-    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), null);
-    defer variable_infos.deinit();
-    var variable_iterator = variable_infos.iterator();
-    while (variable_iterator.next()) |entry| {
-        var item = try variables.objectItem();
-        try item.stringField("name", entry.key_ptr.*);
-        const type_label = try entry.value_ptr.ty.formatAlloc(allocator);
-        defer allocator.free(type_label);
-        try item.stringField("type", type_label);
-        try item.enumTagField("runtimeSort", entry.value_ptr.sort);
-        try item.optionalStringField("objectClass", entry.value_ptr.object_class);
-        try item.end();
-    }
-    try variables.end();
-}
-
-fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
-    var definitions = try root.arrayField("definitions");
-    var definition_iterator = ir.definitions.iterator();
-    while (definition_iterator.next()) |entry| {
-        var item = try definitions.objectItem();
-        try item.stringField("name", entry.key_ptr.*);
-        try item.enumTagField("kind", entry.value_ptr.kind);
-        try item.intField("line", entry.value_ptr.line);
-        try item.intField("column", entry.value_ptr.column);
-        try item.intField("length", entry.value_ptr.length);
-        try item.intField("moduleId", entry.value_ptr.module_id);
-        if (ir.moduleById(entry.value_ptr.module_id)) |module| {
-            try item.stringField("moduleSpec", module.spec);
-            try item.enumTagField("moduleKind", module.kind);
-        } else {
-            try item.nullField("moduleSpec");
-            try item.stringField("moduleKind", "unknown");
-        }
-        try item.optionalStringField("file", entry.value_ptr.file);
-        try item.end();
-    }
-    try definitions.end();
-}
-
-fn writeHintsField(root: *json.Object, hints: []const core.InlayHint) !void {
-    var array = try root.arrayField("hints");
-    for (hints) |hint| {
-        var item = try array.objectItem();
-        try item.intField("line", hint.line);
-        try item.intField("column", hint.column);
-        try item.stringField("label", hint.label);
-        try item.enumTagField("kind", hint.kind);
-        try item.intField("moduleId", hint.module_id);
-        try item.optionalStringField("file", hint.file);
-        try item.end();
-    }
-    try array.end();
-}
-
 fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !void {
     var array = try root.arrayField("page_order");
     for (page_order) |page_id| try array.intItem(page_id);
@@ -135,39 +79,6 @@ fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.I
         try writeNode(allocator, &nodes, ir, &sema, node);
     }
     try nodes.end();
-}
-
-fn writeRenderDocField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
-    var declaration_index = try declarations.build(allocator, ir);
-    defer declaration_index.deinit();
-    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
-
-    var render_doc = try core.render_doc.buildWithEnv(allocator, ir, &sema);
-    defer render_doc.deinit(allocator);
-
-    var object = try root.objectField("render_doc");
-    var ops = try object.arrayField("ops");
-    for (render_doc.ops.items) |op| {
-        var item = try ops.objectItem();
-        try item.intField("nodeId", op.node_id);
-        try item.stringField("op", op.op);
-        try writeFrame(&item, op.frame);
-        var args = try item.objectField("args");
-        for (op.args.items) |arg| try args.stringField(arg.key, arg.value);
-        try args.end();
-        try item.end();
-    }
-    try ops.end();
-    try object.end();
-}
-
-fn writeFrame(object: *json.Object, frame: core.Frame) !void {
-    var frame_object = try object.objectField("frame");
-    try frame_object.floatField("x", frame.x, "{d:.1}");
-    try frame_object.floatField("y", frame.y, "{d:.1}");
-    try frame_object.floatField("width", frame.width, "{d:.1}");
-    try frame_object.floatField("height", frame.height, "{d:.1}");
-    try frame_object.end();
 }
 
 fn writeContainsField(root: *json.Object, contains_map: *std.AutoHashMap(core.NodeId, std.ArrayList(core.NodeId))) !void {
