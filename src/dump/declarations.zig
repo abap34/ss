@@ -1,0 +1,100 @@
+const std = @import("std");
+const core = @import("core");
+
+const declarations = @import("../language/declarations.zig");
+const json = @import("utils").json;
+
+pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    var index = try declarations.build(allocator, ir);
+    defer index.deinit();
+
+    var object = try root.objectField("declarations");
+
+    var value_domains = try object.arrayField("valueDomains");
+    for (index.value_domains.items) |domain| {
+        var item = try value_domains.objectItem();
+        try item.stringField("name", domain.name);
+        try item.stringField("body", domain.body);
+        try item.optionalStringField("refinement", domain.refinement);
+        try item.intField("moduleId", domain.module_id);
+        try item.end();
+    }
+    try value_domains.end();
+
+    var classes = try object.arrayField("classes");
+    for (index.classes.items) |class| {
+        var item = try classes.objectItem();
+        try item.stringField("name", class.name);
+        try item.optionalStringField("base", class.base);
+        try item.intField("moduleId", class.module_id);
+        try item.end();
+    }
+    try classes.end();
+
+    var roles = try object.arrayField("roles");
+    for (index.roles.items) |role| {
+        var item = try roles.objectItem();
+        try item.stringField("name", role.name);
+        try item.stringField("class", role.class_name);
+        try item.intField("moduleId", role.module_id);
+        try item.end();
+    }
+    try roles.end();
+
+    var fields = try object.arrayField("fields");
+    for (index.fields.items) |field| {
+        var item = try fields.objectItem();
+        try item.stringField("name", field.name);
+        try item.stringField("class", field.class_name);
+        try item.stringField("type", field.value_type);
+        try item.optionalStringField("default", field.default_value);
+        try item.intField("moduleId", field.module_id);
+        try item.end();
+    }
+    try fields.end();
+
+    var annotations = try object.arrayField("functionAnnotations");
+    for (index.function_annotations.items) |annotation| {
+        var item = try annotations.objectItem();
+        try item.stringField("function", annotation.function_name);
+        try item.stringField("annotation", annotation.annotation_name);
+        try item.optionalStringField("args", annotation.args);
+        try item.intField("moduleId", annotation.module_id);
+        try item.end();
+    }
+    try annotations.end();
+
+    var phases = try object.arrayField("phases");
+    for (index.phases.items) |phase| {
+        var item = try phases.objectItem();
+        try item.stringField("function", phase.function_name);
+        try item.optionalStringField("args", phase.args);
+        try item.intField("moduleId", phase.module_id);
+        try item.end();
+    }
+    try phases.end();
+
+    var capabilities = try object.arrayField("capabilities");
+    for (index.capabilities.items) |capability| {
+        var item = try capabilities.objectItem();
+        try item.stringField("function", capability.function_name);
+        try item.optionalStringField("args", capability.args);
+        try item.optionalStringField("effects", capability.effects);
+        try item.optionalStringField("cache", capability.cache);
+        try item.intField("moduleId", capability.module_id);
+        try item.end();
+    }
+    try capabilities.end();
+
+    var render_ops = try object.arrayField("renderOps");
+    for (index.render_ops.items) |op| {
+        var item = try render_ops.objectItem();
+        try item.stringField("function", op.function_name);
+        try item.optionalStringField("args", op.args);
+        try item.intField("moduleId", op.module_id);
+        try item.end();
+    }
+    try render_ops.end();
+
+    try object.end();
+}

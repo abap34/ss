@@ -1,11 +1,10 @@
 const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
-const declarations = @import("language/declarations.zig");
-const registry = @import("language/registry.zig");
 const stage0 = @import("stage0.zig");
 const typecheck = @import("analysis/typecheck.zig");
-const editor = @import("analysis/editor.zig");
+const dump_calls = @import("dump/calls.zig");
+const dump_declarations = @import("dump/declarations.zig");
 const json = @import("utils").json;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
@@ -26,10 +25,10 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try root.intField("stage0_document_handle", document_code.document_id);
     try writeDocTermsField(&root, document_code.terms.items);
 
-    try writeFunctionsField(allocator, &root, ir);
+    try dump_calls.writeFunctionsField(allocator, &root, ir);
     try writeVariablesField(allocator, &root, ir);
-    try writeDeclarationIndexField(&root, allocator, ir);
-    try writeQueryContractsField(allocator, &root);
+    try dump_declarations.writeField(&root, allocator, ir);
+    try dump_calls.writeQueryContractsField(allocator, &root);
     try writeDefinitionsField(&root, ir);
     try writeHintsField(&root, ir.hints.items);
 
@@ -58,20 +57,6 @@ fn writeDocTermsField(root: *json.Object, terms: []const stage0.Term) !void {
     try array.end();
 }
 
-fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
-    var functions = try root.arrayField("functions");
-    for (registry.primitiveDescriptors()) |descriptor| {
-        if (ir.functions.contains(descriptor.name)) continue;
-        try writePrimitiveFunction(allocator, &functions, descriptor);
-    }
-    var function_iterator = ir.functions.iterator();
-    while (function_iterator.next()) |entry| {
-        const metadata = ir.function_metadata.get(entry.key_ptr.*) orelse core.FunctionMetadata{ .module_id = ir.project_module_id };
-        try writeUserFunction(allocator, &functions, ir, entry.key_ptr.*, entry.value_ptr.*, metadata);
-    }
-    try functions.end();
-}
-
 fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var variables = try root.arrayField("variables");
     var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), null);
@@ -88,133 +73,6 @@ fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
         try item.end();
     }
     try variables.end();
-}
-
-fn writeDeclarationIndexField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    var index = try declarations.build(allocator, ir);
-    defer index.deinit();
-
-    var object = try root.objectField("declarations");
-
-    var value_domains = try object.arrayField("valueDomains");
-    for (index.value_domains.items) |domain| {
-        var item = try value_domains.objectItem();
-        try item.stringField("name", domain.name);
-        try item.stringField("body", domain.body);
-        try item.optionalStringField("refinement", domain.refinement);
-        try item.intField("moduleId", domain.module_id);
-        try item.end();
-    }
-    try value_domains.end();
-
-    var classes = try object.arrayField("classes");
-    for (index.classes.items) |class| {
-        var item = try classes.objectItem();
-        try item.stringField("name", class.name);
-        try item.optionalStringField("base", class.base);
-        try item.intField("moduleId", class.module_id);
-        try item.end();
-    }
-    try classes.end();
-
-    var roles = try object.arrayField("roles");
-    for (index.roles.items) |role| {
-        var item = try roles.objectItem();
-        try item.stringField("name", role.name);
-        try item.stringField("class", role.class_name);
-        try item.intField("moduleId", role.module_id);
-        try item.end();
-    }
-    try roles.end();
-
-    var fields = try object.arrayField("fields");
-    for (index.fields.items) |field| {
-        var item = try fields.objectItem();
-        try item.stringField("name", field.name);
-        try item.stringField("class", field.class_name);
-        try item.stringField("type", field.value_type);
-        try item.optionalStringField("default", field.default_value);
-        try item.intField("moduleId", field.module_id);
-        try item.end();
-    }
-    try fields.end();
-
-    var annotations = try object.arrayField("functionAnnotations");
-    for (index.function_annotations.items) |annotation| {
-        var item = try annotations.objectItem();
-        try item.stringField("function", annotation.function_name);
-        try item.stringField("annotation", annotation.annotation_name);
-        try item.optionalStringField("args", annotation.args);
-        try item.intField("moduleId", annotation.module_id);
-        try item.end();
-    }
-    try annotations.end();
-
-    var phases = try object.arrayField("phases");
-    for (index.phases.items) |phase| {
-        var item = try phases.objectItem();
-        try item.stringField("function", phase.function_name);
-        try item.optionalStringField("args", phase.args);
-        try item.intField("moduleId", phase.module_id);
-        try item.end();
-    }
-    try phases.end();
-
-    var capabilities = try object.arrayField("capabilities");
-    for (index.capabilities.items) |capability| {
-        var item = try capabilities.objectItem();
-        try item.stringField("function", capability.function_name);
-        try item.optionalStringField("args", capability.args);
-        try item.optionalStringField("effects", capability.effects);
-        try item.optionalStringField("cache", capability.cache);
-        try item.intField("moduleId", capability.module_id);
-        try item.end();
-    }
-    try capabilities.end();
-
-    var render_ops = try object.arrayField("renderOps");
-    for (index.render_ops.items) |op| {
-        var item = try render_ops.objectItem();
-        try item.stringField("function", op.function_name);
-        try item.optionalStringField("args", op.args);
-        try item.intField("moduleId", op.module_id);
-        try item.end();
-    }
-    try render_ops.end();
-
-    try object.end();
-}
-
-fn writeQueryContractsField(allocator: std.mem.Allocator, root: *json.Object) !void {
-    var queries = try root.arrayField("query_contracts");
-    for (registry.queryDescriptors()) |descriptor| {
-        var item = try queries.objectItem();
-        try item.stringField("name", descriptor.name);
-        try item.stringField("summary", descriptor.summary);
-        try item.stringField("inputName", descriptor.input_name);
-        const input_label = try registry.queryInputType(descriptor).formatAlloc(allocator);
-        defer allocator.free(input_label);
-        try item.stringField("inputType", input_label);
-        const output_label = try registry.queryOutputType(descriptor).formatAlloc(allocator);
-        defer allocator.free(output_label);
-        try item.stringField("outputType", output_label);
-        var args = try item.arrayField("extraArgs");
-        for (descriptor.extra_arg_names, 0..) |name, index| {
-            var arg = try args.objectItem();
-            try arg.stringField("name", name);
-            if (registry.argSortType(descriptor.extra_arg_sorts[index])) |ty| {
-                const label = try ty.formatAlloc(allocator);
-                defer allocator.free(label);
-                try arg.stringField("type", label);
-            } else {
-                try arg.stringField("type", "any");
-            }
-            try arg.end();
-        }
-        try args.end();
-        try item.end();
-    }
-    try queries.end();
 }
 
 fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
@@ -667,73 +525,6 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             try args.end();
         },
     }
-}
-
-fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, descriptor: registry.PrimitiveDescriptor) !void {
-    const signature = try editor.formatPrimitiveSignature(allocator, descriptor);
-    defer allocator.free(signature);
-
-    var item = try functions.objectItem();
-    try item.stringField("name", descriptor.name);
-    try item.stringField("signature", signature);
-    if (registry.primitiveResultType(descriptor)) |result_type| {
-        const result_label = try result_type.formatAlloc(allocator);
-        defer allocator.free(result_label);
-        try item.stringField("resultType", result_label);
-    } else {
-        try item.stringField("resultType", "dependent");
-    }
-    try item.stringField("resultSort", editor.resultText(descriptor.result_sort));
-    try item.stringField("source", "primitive");
-    try item.stringField("summary", descriptor.summary);
-    var params = try item.arrayField("params");
-    for (descriptor.arg_names, 0..) |_, index| {
-        const label = try editor.formatPrimitiveParam(allocator, descriptor, index);
-        defer allocator.free(label);
-        try params.stringItem(label);
-    }
-    try params.end();
-    try item.end();
-}
-
-fn writeUserFunction(
-    allocator: std.mem.Allocator,
-    functions: *json.Array,
-    ir: *core.Ir,
-    name: []const u8,
-    func: ast.FunctionDecl,
-    metadata: core.FunctionMetadata,
-) !void {
-    const signature = try editor.formatUserSignature(allocator, name, func);
-    defer allocator.free(signature);
-
-    var item = try functions.objectItem();
-    try item.stringField("name", name);
-    try item.enumTagField("kind", func.kind);
-    try item.stringField("signature", signature);
-    const result_label = try func.result_type.formatAlloc(allocator);
-    defer allocator.free(result_label);
-    try item.stringField("resultType", result_label);
-    try item.enumTagField("resultSort", func.result_sort);
-    if (ir.moduleById(metadata.module_id)) |module| {
-        try item.enumTagField("source", module.kind);
-        try item.intField("moduleId", module.id);
-        try item.stringField("moduleSpec", module.spec);
-        try item.optionalStringField("file", module.path);
-    } else {
-        try item.stringField("source", "unknown");
-        try item.intField("moduleId", metadata.module_id);
-        try item.nullField("file");
-    }
-    try item.stringField("summary", "");
-    var params = try item.arrayField("params");
-    for (func.params.items) |param| {
-        const label = try editor.formatUserParam(allocator, param);
-        defer allocator.free(label);
-        try params.stringItem(label);
-    }
-    try params.end();
-    try item.end();
 }
 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
