@@ -7,6 +7,7 @@ const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
 const editor = @import("editor.zig");
+const fields = @import("fields.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
 const Type = ast.Type;
@@ -242,7 +243,7 @@ pub fn typecheckProgram(
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
-    try checkObjectDeclarations(allocator, ir, &sema);
+    try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
@@ -271,105 +272,6 @@ fn checkPageNamesUnique(
             }
             try pages.put(page.name, {});
         }
-    }
-}
-
-fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema: *const SemanticEnv) !void {
-    var roles = std.StringHashMap([]const u8).init(allocator);
-    defer roles.deinit();
-    defer clearDiagnosticOriginModule();
-
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        setDiagnosticOriginModule(module);
-        for (module.program.objects.items) |object_decl| {
-            try checkObjectDeclaration(allocator, ir, sema, module.id, object_decl);
-            try checkRolesUnique(allocator, ir, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
-        }
-        for (module.program.object_extensions.items) |extension| {
-            try checkObjectExtension(allocator, ir, sema, module.id, extension);
-            try checkRolesUnique(allocator, ir, &roles, extension.target, extension.roles.items, extension.span);
-        }
-    }
-}
-
-fn checkObjectDeclaration(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
-    object_decl: ast.ObjectDecl,
-) !void {
-    const origin = try statementOrigin(allocator, object_decl.span);
-    defer allocator.free(origin);
-    if (object_decl.base) |base| {
-        if (!sema.classExists(base)) {
-            try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
-            return error.InvalidSemanticSort;
-        }
-    }
-    try checkObjectFields(allocator, ir, sema, module_id, object_decl.fields.items);
-}
-
-fn checkObjectExtension(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
-    extension: ast.ObjectExtensionDecl,
-) !void {
-    const origin = try statementOrigin(allocator, extension.span);
-    defer allocator.free(origin);
-    if (!sema.classExists(extension.target)) {
-        try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
-        return error.InvalidSemanticSort;
-    }
-    if (extension.implements) |implements| {
-        if (!sema.classExists(implements)) {
-            try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
-            return error.InvalidSemanticSort;
-        }
-    }
-    try checkObjectFields(allocator, ir, sema, module_id, extension.fields.items);
-}
-
-fn checkObjectFields(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
-    fields: []const ast.ObjectFieldDecl,
-) !void {
-    for (fields) |field| {
-        if (sema.valueDomain(module_id, field.value_type) != null) continue;
-        const origin = try statementOrigin(allocator, field.span);
-        defer allocator.free(origin);
-        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidSemanticSort;
-    }
-}
-
-fn checkRolesUnique(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    roles: *std.StringHashMap([]const u8),
-    class_name: []const u8,
-    role_names: []const []const u8,
-    span: ast.Span,
-) !void {
-    for (role_names) |role_name| {
-        if (roles.get(role_name)) |existing_class| {
-            const origin = try statementOrigin(allocator, span);
-            defer allocator.free(origin);
-            try addUserReport(
-                ir,
-                origin,
-                "DuplicateRole: role '{s}' is already provided by {s}",
-                .{ role_name, existing_class },
-            );
-            return error.InvalidSemanticSort;
-        }
-        try roles.put(role_name, class_name);
     }
 }
 
