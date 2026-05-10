@@ -630,6 +630,7 @@ pub const Ir = struct {
     fn ensureSort(self: *Ir, value: Value, expected: SemanticSort, context: []const u8) !void {
         _ = self;
         const actual: SemanticSort = switch (value) {
+            .code => |code| code.sort(),
             .document => .document,
             .page => .page,
             .object => .object,

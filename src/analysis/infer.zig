@@ -306,6 +306,7 @@ fn primitiveResultTypeInfo(
     if (descriptor.op == .set_prop or descriptor.op == .extend_render_env) {
         if (call.args.items.len == 0) return infoFromSort(.object);
         const target_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+        if (target_info.ty.tag == .code) return target_info;
         return .{
             .ty = switch (target_info.ty.tag) {
                 .document, .page, .object, .selection => target_info.ty,

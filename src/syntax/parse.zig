@@ -180,10 +180,12 @@ const Parser = struct {
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
         const result_sort = try self.runtimeSortForType(result_type);
+        const effects = try self.parseOptionalEffectClause();
         var annotations = prefix_annotations;
         errdefer {
             for (annotations.items) |*annotation| annotation.deinit(self.allocator);
             annotations.deinit(self.allocator);
+            if (effects) |text| self.allocator.free(text);
         }
         var suffix_annotations = try self.parseAnnotations();
         defer suffix_annotations.deinit(self.allocator);
@@ -197,7 +199,7 @@ const Parser = struct {
             statements = try self.parseBodyStatements();
             if (!functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         }
-        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_sort = result_sort, .annotations = annotations, .statements = statements };
+        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_sort = result_sort, .effects = effects, .annotations = annotations, .statements = statements };
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
@@ -405,7 +407,7 @@ const Parser = struct {
             self.pos += 1;
             const name = try self.parseIdentifier();
             self.skipInlineSpaces();
-            var args: ?[]const u8 = null;
+            var args = std.ArrayList(ast.AnnotationArg).empty;
             if (!self.eof() and self.source[self.pos] == '(') {
                 args = try self.parseAnnotationArgs();
             }
@@ -424,37 +426,127 @@ const Parser = struct {
         return try self.consumeKeyword(keyword);
     }
 
-    fn parseAnnotationArgs(self: *Parser) ![]const u8 {
+    fn parseAnnotationArgs(self: *Parser) !std.ArrayList(ast.AnnotationArg) {
         try self.expectChar('(');
-        const start = self.pos;
-        var depth: usize = 1;
-        while (!self.eof()) {
-            const ch = self.source[self.pos];
-            if (ch == '"') {
-                const ignored = try self.parseString();
-                self.allocator.free(ignored);
+        var args = std.ArrayList(ast.AnnotationArg).empty;
+        errdefer {
+            for (args.items) |*arg| arg.deinit(self.allocator);
+            args.deinit(self.allocator);
+        }
+        while (true) {
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == ')') {
+                self.pos += 1;
+                return args;
+            }
+            try args.append(self.allocator, try self.parseAnnotationArg());
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == ',') {
+                self.pos += 1;
                 continue;
             }
+            if (!self.eof() and self.source[self.pos] == ')') {
+                self.pos += 1;
+                return args;
+            }
+            return self.fail(error.ExpectedChar);
+        }
+    }
+
+    fn parseAnnotationArg(self: *Parser) !ast.AnnotationArg {
+        const saved = self.pos;
+        if (!self.eof() and source_utils.isIdentifierStart(self.source[self.pos])) {
+            const name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == '=') {
+                self.pos += 1;
+                self.skipInlineSpaces();
+                return .{ .named = .{ .name = name, .value = try self.parseAnnotationValue() } };
+            }
+            self.allocator.free(name);
+            self.pos = saved;
+        }
+        return .{ .positional = try self.parseAnnotationValue() };
+    }
+
+    fn parseAnnotationValue(self: *Parser) !ast.AnnotationValue {
+        self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '[') {
             self.pos += 1;
-            if (ch == '(') {
-                depth += 1;
-            } else if (ch == ')') {
-                depth -= 1;
-                if (depth == 0) {
-                    const raw = trimRightSpaces(self.source[start .. self.pos - 1]);
-                    return self.allocator.dupe(u8, raw);
+            var items = std.ArrayList(ast.AnnotationValue).empty;
+            errdefer {
+                for (items.items) |*item| item.deinit(self.allocator);
+                items.deinit(self.allocator);
+            }
+            while (true) {
+                self.skipInlineSpaces();
+                if (!self.eof() and self.source[self.pos] == ']') {
+                    self.pos += 1;
+                    return .{ .list = items };
                 }
+                try items.append(self.allocator, try self.parseAnnotationValue());
+                self.skipInlineSpaces();
+                if (!self.eof() and self.source[self.pos] == ',') {
+                    self.pos += 1;
+                    continue;
+                }
+                if (!self.eof() and self.source[self.pos] == ']') {
+                    self.pos += 1;
+                    return .{ .list = items };
+                }
+                return self.fail(error.ExpectedChar);
             }
         }
-        return self.fail(error.ExpectedChar);
+        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+            return .{ .string = try self.parseString() };
+        }
+        const expr = try self.parseExpr();
+        return switch (expr) {
+            .ident => |name| .{ .ident = name },
+            .string => |text| .{ .string = text },
+            else => .{ .expr = expr },
+        };
+    }
+
+    fn parseOptionalEffectClause(self: *Parser) !?[]const u8 {
+        const saved = self.pos;
+        var probe = self.pos;
+        scanner.skipTrivia(self.source, &probe);
+        if (probe >= self.source.len or self.source[probe] != '!') {
+            self.pos = saved;
+            return null;
+        }
+        self.pos = probe + 1;
+        const start = self.pos;
+        while (!self.eof()) {
+            const ch = self.source[self.pos];
+            if (ch == '@' or ch == '\n') break;
+            self.pos += 1;
+        }
+        const raw = trimRightSpaces(trimLeftSpaces(self.source[start..self.pos]));
+        if (raw.len == 0) return self.fail(error.ExpectedIdentifier);
+        return try self.allocator.dupe(u8, raw);
     }
 
     fn refinementFromAnnotations(self: *Parser, annotations: []const ast.Annotation) !?[]const u8 {
         for (annotations) |annotation| {
             if (!std.mem.eql(u8, annotation.name, "refine")) continue;
-            return try self.allocator.dupe(u8, annotation.args orelse "");
+            if (annotation.args.items.len == 0) return try self.allocator.dupe(u8, "");
+            return try self.annotationValueText(annotation.args.items[0]);
         }
         return null;
+    }
+
+    fn annotationValueText(self: *Parser, arg: ast.AnnotationArg) ![]const u8 {
+        const value = switch (arg) {
+            .positional => |value| value,
+            .named => |named| named.value,
+        };
+        return switch (value) {
+            .ident, .string => |text| try self.allocator.dupe(u8, text),
+            .expr => try self.allocator.dupe(u8, ""),
+            .list => try self.allocator.dupe(u8, ""),
+        };
     }
 
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {

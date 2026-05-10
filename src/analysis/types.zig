@@ -68,6 +68,10 @@ pub fn isPropertyTarget(info: TypeInfo) bool {
     return switch (info.ty.tag) {
         .document, .page, .object => true,
         .selection => info.ty.param == .object or info.ty.param == .any,
+        .code => switch (info.ty.param) {
+            .document, .page, .object => true,
+            else => false,
+        },
         else => false,
     };
 }
@@ -78,6 +82,12 @@ pub fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
         .page => "PageObject",
         .object => info.object_class,
         .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
+        .code => switch (info.ty.param) {
+            .document => "DocumentObject",
+            .page => "PageObject",
+            .object => info.object_class,
+            else => null,
+        },
         else => null,
     };
 }

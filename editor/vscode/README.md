@@ -128,7 +128,7 @@ The extension reads declaration metadata from `ss dump`, including:
 - `type Name = object { ... }`
 - `extend Name { ... }`
 - value-domain aliases such as `type RenderKind = "..."`
-- prefix function annotations such as `@render`, `@phase`, `@host`, and `@op`
+- prefix function annotations such as `@render`, `@pass`, `@host`, and `@op`
 
 Field completions are class-aware. For an object variable with a known class, `obj.` and `set_prop(obj, "...")` complete inherited fields from that object class.
 

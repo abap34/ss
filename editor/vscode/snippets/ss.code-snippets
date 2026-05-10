@@ -37,15 +37,15 @@
     ],
     "description": "Create an annotated function declaration"
   },
-  "phase function": {
-    "prefix": "ss-phase",
+  "pass function": {
+    "prefix": "ss-pass",
     "body": [
-      "@phase(${1:after_pages})",
-      "fn ${2:refresh_document}(doc: document) -> document",
-      "${3:  return doc}",
+      "@pass(${1:resolve})",
+      "fn ${2:refresh_document}(doc: code<document>) -> code<document> ! ${3:ReadGraph}",
+      "${4:  return doc}",
       "end"
     ],
-    "description": "Create a staged document phase function"
+    "description": "Create a staged document pass function"
   },
   "constant": {
     "prefix": "ss-const",

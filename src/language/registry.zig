@@ -27,6 +27,10 @@ pub const PrimitiveCall = enum {
     selection_difference,
     page_index,
     page_count,
+    frame_x,
+    frame_y,
+    frame_width,
+    frame_height,
     content,
     rewrite_text,
     set_content,
@@ -34,6 +38,9 @@ pub const PrimitiveCall = enum {
     append_content,
     object,
     group,
+    new_page,
+    new_object,
+    new_group,
     set_prop,
     extend_render_env,
     style,
@@ -118,6 +125,10 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .selection_difference, .name = "selection_difference", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_sorts = &.{ .selection, .selection }, .result_sort = .selection, .summary = "Return the left Selection without members from the right Selection" },
     .{ .op = .page_index, .name = "page_index", .min_arity = 1, .max_arity = 1, .arg_names = &.{"page"}, .arg_sorts = &.{.page}, .result_sort = .number, .summary = "Return a page's one-based document index" },
     .{ .op = .page_count, .name = "page_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"document"}, .arg_sorts = &.{.document}, .result_sort = .number, .summary = "Return the number of pages in a document" },
+    .{ .op = .frame_x, .name = "frame_x", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved x coordinate for an object" },
+    .{ .op = .frame_y, .name = "frame_y", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved y coordinate for an object" },
+    .{ .op = .frame_width, .name = "frame_width", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved width for an object" },
+    .{ .op = .frame_height, .name = "frame_height", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved height for an object" },
     .{ .op = .content, .name = "content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .string, .summary = "Return an object's textual content" },
     .{ .op = .rewrite_text, .name = "rewrite_text", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "object", "old", "new" }, .arg_sorts = &.{ .object, .string, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Rewrite occurrences in an object's textual content" },
     .{ .op = .set_content, .name = "set_content", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "text" }, .arg_sorts = &.{ .object, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Replace an object's textual content" },
@@ -125,6 +136,9 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .append_content, .name = "append_content", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "text" }, .arg_sorts = &.{ .object, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Append text to an object's textual content" },
     .{ .op = .object, .name = "object", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "content", "role_name", "payload_name" }, .arg_sorts = &.{ .string, .string, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Low-level object constructor" },
     .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_sorts = &.{.object}, .result_sort = .object, .effect = .builds_graph, .summary = "Create a bbox group from multiple objects" },
+    .{ .op = .new_page, .name = "new_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "title" }, .arg_sorts = &.{ .document, .string }, .result_sort = .page, .effect = .builds_graph, .summary = "Create a page during an augment pass" },
+    .{ .op = .new_object, .name = "new_object", .min_arity = 4, .max_arity = 4, .arg_names = &.{ "page", "content", "role_name", "payload_name" }, .arg_sorts = &.{ .page, .string, .string, .string }, .result_sort = .object, .effect = .builds_graph, .summary = "Create an object on an explicit page during an augment pass" },
+    .{ .op = .new_group, .name = "new_group", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "children" }, .arg_sorts = &.{ .page, .selection }, .result_sort = .object, .effect = .builds_graph, .summary = "Create a group on an explicit page during an augment pass" },
     .{ .op = .set_prop, .name = "set_prop", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "value" }, .arg_sorts = &.{ .any, .string, .any }, .result_sort = null, .summary = "Attach a property to a document, page, or object" },
     .{ .op = .extend_render_env, .name = "extend_render_env", .min_arity = 4, .max_arity = 4, .arg_names = &.{ "target", "op", "key", "value" }, .arg_sorts = &.{ .any, .string, .string, .string }, .result_sort = null, .summary = "Extend a scoped render environment" },
     .{ .op = .style, .name = "style", .min_arity = 1, .max_arity = 1, .arg_names = &.{"style_name"}, .arg_sorts = &.{.string}, .result_sort = .style, .summary = "Create a style value" },
@@ -197,6 +211,28 @@ pub fn primitiveArgType(descriptor: PrimitiveDescriptor, index: usize) ?types.Ty
 pub fn primitiveResultType(descriptor: PrimitiveDescriptor) ?types.Type {
     if (descriptor.result_sort) |sort| return types.Type.fromSort(sort);
     return null;
+}
+
+pub fn primitiveEffects(descriptor: PrimitiveDescriptor) core.EffectSet {
+    var set = core.EffectSet.empty();
+    switch (descriptor.op) {
+        .select, .page_index, .page_count, .content => set.insert(.ReadGraph),
+        .frame_x, .frame_y, .frame_width, .frame_height => set.insert(.ReadLayout),
+        .rewrite_text, .set_content, .clear_content, .append_content => set.insert(.WriteContent),
+        .object, .group => set.insert(.CreateNode),
+        .new_page => set.insert(.CreatePage),
+        .new_object => {
+            set.insert(.CreateNode);
+            set.insert(.WriteContent);
+        },
+        .new_group => set.insert(.CreateNode),
+        .set_prop, .set_style => set.insert(.WriteProperty),
+        .extend_render_env => set.insert(.WriteRenderPolicy),
+        .equal, .constraints => set.insert(.WriteConstraint),
+        .report_error, .report_warning, .require_asset_exists => set.insert(.EmitDiagnostics),
+        else => set.insert(.Pure),
+    }
+    return set;
 }
 
 pub fn queryInputType(descriptor: QueryDescriptor) types.Type {

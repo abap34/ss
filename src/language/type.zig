@@ -70,6 +70,7 @@ pub const Type = struct {
 
     pub fn fromSort(sort: model.SemanticSort) Type {
         return switch (sort) {
+            .code => code(.any),
             .document => .document,
             .page => .page,
             .object => .object,
@@ -97,7 +98,8 @@ pub const Type = struct {
             .number => .number,
             .constraints => .constraints,
             .fragment => .fragment,
-            .none, .any, .code, .list => null,
+            .code => .code,
+            .none, .any, .list => null,
         };
     }
 
@@ -110,6 +112,7 @@ pub const Type = struct {
 
     pub fn accepts(expected: Type, actual: Type) bool {
         if (expected.tag == .any or actual.tag == .any) return true;
+        if (actual.tag == .code and expected.tag == normalizeParam(actual.param)) return true;
         if (expected.tag != actual.tag) return false;
         if (expected.tag == .object and expected.class_name != null and actual.class_name != null) {
             if (!std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
@@ -143,6 +146,7 @@ pub const Type = struct {
             .number => .number,
             .constraints => .constraints,
             .fragment => .fragment,
+            .code => .code,
         };
     }
 

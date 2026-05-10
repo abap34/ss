@@ -41,8 +41,9 @@ pub fn lowerToIr(ir: *core.Ir) !void {
     defer code.deinit();
 
     try normalizeDocumentCode(ir, &code);
-    try stage_pass.runAfterPages(ir);
+    try stage_pass.runPreLayoutPasses(ir);
     try ir.finalize();
+    try stage_pass.runPostLayoutPasses(ir);
     try editor.refreshSolvedFrameHints(ir.allocator, ir);
 }
 

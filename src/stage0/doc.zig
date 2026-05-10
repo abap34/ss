@@ -396,6 +396,7 @@ pub const Document = struct {
 
     fn valueSort(value: core.Value) core.SemanticSort {
         return switch (value) {
+            .code => .code,
             .document => .document,
             .page => .page,
             .object => .object,

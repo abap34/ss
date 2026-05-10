@@ -11,13 +11,13 @@ fn page_number_object() -> object
   return page_no
 end
 
-@phase(after_pages)
-fn refresh_page_numbers(doc: document) -> document
+@pass(resolve)
+fn refresh_page_numbers(doc: code<document>) -> code<document> ! ReadGraph | WriteContent
   foreach(objects_in_document(doc, "page_number"), refresh_page_number, doc)
   return doc
 end
 
-fn refresh_page_number(page_no: object, doc: document) -> object
+fn refresh_page_number(page_no: object, doc: code<document>) -> object
   let page = parent_page(page_no)
   let text = concat(str(page_index(page)), concat("/", str(page_count(doc))))
   set_content(page_no, text)
@@ -34,13 +34,13 @@ fn toc_list_object() -> object
   return toc_object()
 end
 
-@phase(after_pages)
-fn refresh_tocs(doc: document) -> document
+@pass(resolve)
+fn refresh_tocs(doc: code<document>) -> code<document> ! ReadGraph | WriteContent
   foreach(objects_in_document(doc, "toc"), refresh_toc, doc)
   return doc
 end
 
-fn refresh_toc(toc: object, doc: document) -> object
+fn refresh_toc(toc: object, doc: code<document>) -> object
   clear_content(toc)
   append_content(toc, "Table of Contents\n")
   foreach(pages(doc), append_toc_page, toc)

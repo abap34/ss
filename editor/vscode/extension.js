@@ -273,7 +273,7 @@ function activate(context) {
     const decl = declarations(payload);
     const staticKeywords = ["import", "const", "document", "page", "fn", "let", "bind", "return", "end", "constrain", "type", "extend"];
     const builtinTypes = ["document", "page", "object", "selection", "anchor", "style", "string", "number", "constraints", "fragment", "code", "list"];
-    const annotations = ["@render", "@phase", "@host", "@op", "@measure", "@layout", "@refine"];
+    const annotations = ["@render", "@pass", "@host", "@op", "@measure", "@layout", "@refine"];
 
     for (const keyword of staticKeywords) {
       if (prefix && !keyword.startsWith(prefix)) {
