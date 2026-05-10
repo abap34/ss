@@ -3,7 +3,7 @@ const core = @import("core");
 const stage0 = @import("../stage0/eval.zig");
 const doc = @import("../stage0/doc.zig");
 const stage_pass = @import("../stage_pass.zig");
-const typecheck = @import("../analysis/typecheck.zig");
+const editor = @import("../analysis/editor.zig");
 
 const NormalizeContext = struct {
     allocator: std.mem.Allocator,
@@ -43,7 +43,7 @@ pub fn lowerToIr(ir: *core.Ir) !void {
     try normalizeDocumentCode(ir, &code);
     try stage_pass.runAfterPages(ir);
     try ir.finalize();
-    try typecheck.refreshSolvedFrameHints(ir.allocator, ir);
+    try editor.refreshSolvedFrameHints(ir.allocator, ir);
 }
 
 pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
