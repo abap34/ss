@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const diagnostics = @import("diagnostics.zig");
+const scanner = @import("scanner.zig");
 const names = @import("../language/names.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
@@ -531,7 +532,7 @@ const Parser = struct {
         const start = self.pos;
         while (!self.eof()) {
             const ch = self.source[self.pos];
-            if (isInlineSpace(ch) or ch == '\n') break;
+            if (scanner.isInlineSpace(ch) or ch == '\n') break;
             if (ch == '#') break;
             if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
@@ -579,7 +580,7 @@ const Parser = struct {
         const start = self.pos;
         while (!self.eof()) {
             const ch = self.source[self.pos];
-            if (isInlineSpace(ch) or ch == '\n') break;
+            if (scanner.isInlineSpace(ch) or ch == '\n') break;
             if (ch == '#') break;
             if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
@@ -992,11 +993,11 @@ const Parser = struct {
         var line_start = self.pos;
         while (line_start > 0 and self.source[line_start - 1] != '\n') line_start -= 1;
         var probe = line_start;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         if (probe + 2 > self.source.len) return false;
         if (!std.mem.eql(u8, self.source[probe .. probe + 2], ">>")) return false;
         probe += 2;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         if (probe + 1 < self.source.len and std.mem.eql(u8, self.source[probe .. probe + 2], ";;")) {
             return true;
         }
@@ -1133,11 +1134,7 @@ const Parser = struct {
     }
 
     fn consumeKeywordNoTrivia(self: *Parser, keyword: []const u8) bool {
-        if (!self.startsWith(keyword)) return false;
-        const end = self.pos + keyword.len;
-        if (end < self.source.len and source_utils.isIdentifierContinue(self.source[end])) return false;
-        self.pos = end;
-        return true;
+        return scanner.consumeKeywordNoTrivia(self.source, &self.pos, keyword);
     }
 
     fn expectChar(self: *Parser, ch: u8) !void {
@@ -1181,40 +1178,37 @@ const Parser = struct {
     }
 
     fn atStatementBoundary(self: *Parser) bool {
-        var probe = self.pos;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
-        if (probe >= self.source.len) return true;
-        return self.source[probe] == '\n';
+        return scanner.atStatementBoundary(self.source, self.pos);
     }
 
     fn peekAnchorAssignment(self: *Parser) bool {
         var probe = self.pos;
         source_utils.skipTriviaFrom(self.source, &probe);
-        if (!scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        if (!scanner.scanIdentifier(self.source, &probe)) return false;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '.') return false;
         probe += 1;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         const member_start = probe;
-        if (!scanIdentifier(self.source, &probe)) return false;
+        if (!scanner.scanIdentifier(self.source, &probe)) return false;
         const member_name = self.source[member_start..probe];
         if (names.parseAnchorName(member_name) == null and
             !std.mem.eql(u8, member_name, "width") and
             !std.mem.eql(u8, member_name, "height")) return false;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         return probe < self.source.len and self.source[probe] == '=';
     }
 
     fn peekPropertyAssignment(self: *Parser) bool {
         var probe = self.pos;
         source_utils.skipTriviaFrom(self.source, &probe);
-        if (!scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        if (!scanner.scanIdentifier(self.source, &probe)) return false;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '.') return false;
         probe += 1;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         const member_start = probe;
-        if (!scanIdentifier(self.source, &probe)) return false;
+        if (!scanner.scanIdentifier(self.source, &probe)) return false;
         const member_name = self.source[member_start..probe];
         if (names.parseAnchorName(member_name) != null or
             std.mem.eql(u8, member_name, "width") or
@@ -1228,8 +1222,8 @@ const Parser = struct {
     fn peekSimpleAssignment(self: *Parser) bool {
         var probe = self.pos;
         source_utils.skipTriviaFrom(self.source, &probe);
-        if (!scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        if (!scanner.scanIdentifier(self.source, &probe)) return false;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '=') return false;
         if (probe + 1 < self.source.len and self.source[probe + 1] == '=') return false;
         return true;
@@ -1243,7 +1237,7 @@ const Parser = struct {
         const end = probe + keyword.len;
         if (end < self.source.len and source_utils.isIdentifierContinue(self.source[end])) return false;
         probe = end;
-        while (probe < self.source.len and isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
         return probe == self.source.len or self.source[probe] == '\n';
     }
 
@@ -1256,48 +1250,23 @@ const Parser = struct {
     }
 
     fn skipInlineSpaces(self: *Parser) void {
-        while (!self.eof() and isInlineSpace(self.source[self.pos])) self.pos += 1;
+        scanner.skipInlineSpaces(self.source, &self.pos);
     }
 
     fn lineCommentStart(self: *Parser) bool {
-        if (self.eof()) return false;
-        if (self.startsWith("//")) return true;
-        if (self.startsWith(";;")) return true;
-        return self.source[self.pos] == '#';
+        return scanner.lineCommentStart(self.source, self.pos);
     }
 
     fn skipLineComment(self: *Parser) void {
-        while (!self.eof() and self.source[self.pos] != '\n') self.pos += 1;
+        scanner.skipLineComment(self.source, &self.pos);
     }
 
     fn skipTrivia(self: *Parser) void {
-        while (!self.eof()) {
-            const ch = self.source[self.pos];
-            if (std.ascii.isWhitespace(ch)) {
-                self.pos += 1;
-                continue;
-            }
-            if (self.startsWith("//")) {
-                self.pos += 2;
-                while (!self.eof() and self.source[self.pos] != '\n') self.pos += 1;
-                continue;
-            }
-            if (self.startsWith(";;")) {
-                self.pos += 2;
-                while (!self.eof() and self.source[self.pos] != '\n') self.pos += 1;
-                continue;
-            }
-            if (ch == '#') {
-                while (!self.eof() and self.source[self.pos] != '\n') self.pos += 1;
-                continue;
-            }
-            break;
-        }
+        scanner.skipTrivia(self.source, &self.pos);
     }
 
     fn startsWith(self: *Parser, text: []const u8) bool {
-        if (self.pos + text.len > self.source.len) return false;
-        return std.mem.eql(u8, self.source[self.pos .. self.pos + text.len], text);
+        return scanner.startsWith(self.source, self.pos, text);
     }
 
     fn peekChar(self: *Parser, ch: u8) bool {
@@ -1341,17 +1310,6 @@ fn annotationsAllowBodyless(annotations: []const ast.Annotation) bool {
     return false;
 }
 
-fn scanIdentifier(source: []const u8, pos: *usize) bool {
-    if (pos.* >= source.len or !source_utils.isIdentifierStart(source[pos.*])) return false;
-    pos.* += 1;
-    while (pos.* < source.len and source_utils.isIdentifierContinue(source[pos.*])) pos.* += 1;
-    return true;
-}
-
-fn isInlineSpace(ch: u8) bool {
-    return ch == ' ' or ch == '\t' or ch == '\r';
-}
-
 fn normalizeBlockString(raw: []const u8) []const u8 {
     var start: usize = 0;
     var end: usize = raw.len;
@@ -1362,12 +1320,12 @@ fn normalizeBlockString(raw: []const u8) []const u8 {
 
 fn trimRightSpaces(raw: []const u8) []const u8 {
     var end = raw.len;
-    while (end > 0 and isInlineSpace(raw[end - 1])) end -= 1;
+    while (end > 0 and scanner.isInlineSpace(raw[end - 1])) end -= 1;
     return raw[0..end];
 }
 
 fn trimLeftSpaces(raw: []const u8) []const u8 {
     var start: usize = 0;
-    while (start < raw.len and isInlineSpace(raw[start])) start += 1;
+    while (start < raw.len and scanner.isInlineSpace(raw[start])) start += 1;
     return raw[start..];
 }
