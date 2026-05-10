@@ -115,14 +115,38 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
     };
 }
 
+pub fn resolveWithEnv(ir: anytype, node: *const Node, sema: anytype) ResolvedRender {
+    const kind = resolveKindWithEnv(node, sema);
+    return .{
+        .kind = kind,
+        .text = resolveTextWithEnv(ir, node, kind, sema),
+        .math = resolveMathWithEnv(node, kind, sema),
+        .code = resolveCodeWithEnv(node, kind, sema),
+        .chrome = resolveChromeWithEnv(node, sema),
+        .underline = resolveUnderlineWithEnv(node, sema),
+        .rule = resolveRuleWithEnv(node, sema),
+    };
+}
+
 pub fn resolvePageBackground(ir: anytype, page: *const Node) ?Color {
     if (parseColorProperty(ir, page, "background_fill")) |color| return color;
     const document = ir.getNode(ir.document_id) orelse return null;
     return parseColorProperty(ir, document, "background_fill");
 }
 
+pub fn resolvePageBackgroundWithEnv(ir: anytype, page: *const Node, sema: anytype) ?Color {
+    if (parseColorPropertyWithEnv(page, "background_fill", sema)) |color| return color;
+    const document = ir.getNode(ir.document_id) orelse return null;
+    return parseColorPropertyWithEnv(document, "background_fill", sema);
+}
+
 pub fn resolveKind(ir: anytype, node: *const Node) RenderKind {
     if (parseRenderKindProperty(ir, node)) |kind| return kind;
+    return .text;
+}
+
+pub fn resolveKindWithEnv(node: *const Node, sema: anytype) RenderKind {
+    if (parseRenderKindPropertyWithEnv(node, sema)) |kind| return kind;
     return .text;
 }
 
@@ -186,6 +210,91 @@ fn resolveCode(ir: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     };
 }
 
+fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?TextPaint {
+    switch (kind) {
+        .text, .code => {},
+        else => return null,
+    }
+
+    const layout_style = layout.styleForNode(ir, node);
+    const font = stringPropertyWithEnv(node, "text_font", "Helvetica", sema);
+    return .{
+        .font = font,
+        .bold_font = stringPropertyWithEnv(node, "text_bold_font", font, sema),
+        .italic_font = stringPropertyWithEnv(node, "text_italic_font", font, sema),
+        .code_font = stringPropertyWithEnv(node, "text_code_font", "Courier", sema),
+        .font_size = parseFloatPropertyWithEnv(node, "text_size", sema) orelse layout_style.font_size,
+        .line_height = parseFloatPropertyWithEnv(node, "text_line_height", sema) orelse layout_style.line_height,
+        .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
+        .link_color = parseColorPropertyWithEnv(node, "text_link_color", sema) orelse FALLBACK_LINK_COLOR,
+        .link_underline_width = parseFloatPropertyWithEnv(node, "text_link_underline_width", sema) orelse 0,
+        .link_underline_offset = parseFloatPropertyWithEnv(node, "text_link_underline_offset", sema) orelse 0,
+        .inline_math_height_factor = parseFloatPropertyWithEnv(node, "text_inline_math_height_factor", sema) orelse 1,
+        .inline_math_spacing = parseFloatPropertyWithEnv(node, "text_inline_math_spacing", sema) orelse 0,
+        .markdown_block_gap = parseFloatPropertyWithEnv(node, "text_markdown_block_gap", sema) orelse 0,
+        .markdown_list_indent = parseFloatPropertyWithEnv(node, "text_markdown_list_indent", sema) orelse 0,
+        .markdown_code_font_size = parseFloatPropertyWithEnv(node, "text_markdown_code_font_size", sema) orelse layout_style.font_size,
+        .markdown_code_line_height = parseFloatPropertyWithEnv(node, "text_markdown_code_line_height", sema) orelse layout_style.line_height,
+        .markdown_code_pad_x = parseFloatPropertyWithEnv(node, "text_markdown_code_pad_x", sema) orelse 0,
+        .markdown_code_pad_y = parseFloatPropertyWithEnv(node, "text_markdown_code_pad_y", sema) orelse 0,
+        .markdown_code_fill = parseColorPropertyWithEnv(node, "text_markdown_code_fill", sema),
+        .markdown_code_stroke = parseColorPropertyWithEnv(node, "text_markdown_code_stroke", sema),
+        .markdown_code_line_width = parseFloatPropertyWithEnv(node, "text_markdown_code_line_width", sema) orelse 0,
+        .markdown_code_radius = parseFloatPropertyWithEnv(node, "text_markdown_code_radius", sema) orelse 0,
+        .cjk_bold_passes = parseIntPropertyWithEnv(node, "text_cjk_bold_passes", sema) orelse 1,
+        .cjk_bold_dx = parseFloatPropertyWithEnv(node, "text_cjk_bold_dx", sema) orelse 0,
+        .wrap = layout.shouldWrapNode(ir, node),
+    };
+}
+
+fn resolveMathWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?MathPaint {
+    if (kind != .vector_math) return null;
+    return .{
+        .block_line_height = parseFloatPropertyWithEnv(node, "math_block_line_height", sema) orelse 22,
+        .block_min_height = parseFloatPropertyWithEnv(node, "math_block_min_height", sema) orelse 30,
+        .block_vertical_padding = parseFloatPropertyWithEnv(node, "math_block_vertical_padding", sema) orelse 2,
+        .scale = parseFloatPropertyWithEnv(node, "math_scale", sema) orelse 1,
+        .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
+    };
+}
+
+fn resolveCodeWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?CodePaint {
+    if (kind != .code) return null;
+    const plain = parseColorPropertyWithEnv(node, "code_plain_color", sema) orelse parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR;
+    return .{
+        .language = class_fields.propertyWithEnv(node, "language", sema),
+        .plain = plain,
+        .keyword = parseColorPropertyWithEnv(node, "code_keyword_color", sema) orelse plain,
+        .comment = parseColorPropertyWithEnv(node, "code_comment_color", sema) orelse plain,
+        .string = parseColorPropertyWithEnv(node, "code_string_color", sema) orelse plain,
+    };
+}
+
+fn resolveChromeWithEnv(node: *const Node, sema: anytype) ChromePaint {
+    return .{
+        .fill = parseColorPropertyWithEnv(node, "chrome_fill", sema),
+        .stroke = parseColorPropertyWithEnv(node, "chrome_stroke", sema),
+        .line_width = parseFloatPropertyWithEnv(node, "chrome_line_width", sema) orelse 0,
+        .radius = parseFloatPropertyWithEnv(node, "chrome_radius", sema) orelse 0,
+    };
+}
+
+fn resolveUnderlineWithEnv(node: *const Node, sema: anytype) UnderlinePaint {
+    return .{
+        .color = parseColorPropertyWithEnv(node, "underline_color", sema),
+        .width = parseFloatPropertyWithEnv(node, "underline_width", sema) orelse 0,
+        .offset = parseFloatPropertyWithEnv(node, "underline_offset", sema) orelse 0,
+    };
+}
+
+fn resolveRuleWithEnv(node: *const Node, sema: anytype) RulePaint {
+    return .{
+        .stroke = parseColorPropertyWithEnv(node, "rule_stroke", sema),
+        .line_width = parseFloatPropertyWithEnv(node, "rule_line_width", sema) orelse 0,
+        .dash = parseDashPropertyWithEnv(node, "rule_dash", sema),
+    };
+}
+
 fn resolveChrome(ir: anytype, node: *const Node) ChromePaint {
     return .{
         .fill = parseColorProperty(ir, node, "chrome_fill"),
@@ -222,12 +331,36 @@ fn parseRenderKindProperty(ir: anytype, node: *const Node) ?RenderKind {
     return null;
 }
 
+fn parseRenderKindPropertyWithEnv(node: *const Node, sema: anytype) ?RenderKind {
+    const value = class_fields.propertyWithEnv(node, "render_kind", sema) orelse return null;
+    return parseRenderKind(value);
+}
+
+fn parseRenderKind(value: []const u8) ?RenderKind {
+    if (std.mem.eql(u8, value, "text")) return .text;
+    if (std.mem.eql(u8, value, "code")) return .code;
+    if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
+    if (std.mem.eql(u8, value, "vector_asset")) return .vector_asset;
+    if (std.mem.eql(u8, value, "raster_asset")) return .raster_asset;
+    if (std.mem.eql(u8, value, "chrome") or std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
+    return null;
+}
+
 fn stringProperty(ir: anytype, node: *const Node, key: []const u8, fallback: []const u8) []const u8 {
     return class_fields.property(ir, node, key) orelse fallback;
 }
 
+fn stringPropertyWithEnv(node: *const Node, key: []const u8, fallback: []const u8, sema: anytype) []const u8 {
+    return class_fields.propertyWithEnv(node, key, sema) orelse fallback;
+}
+
 fn parseFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
     const value = class_fields.property(ir, node, key) orelse return null;
+    return std.fmt.parseFloat(f32, value) catch null;
+}
+
+fn parseFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
+    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
     return std.fmt.parseFloat(f32, value) catch null;
 }
 
@@ -236,8 +369,18 @@ fn parseIntProperty(ir: anytype, node: *const Node, key: []const u8) ?u32 {
     return std.fmt.parseInt(u32, raw, 10) catch null;
 }
 
+fn parseIntPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?u32 {
+    const raw = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    return std.fmt.parseInt(u32, raw, 10) catch null;
+}
+
 fn parseColorProperty(ir: anytype, node: *const Node, key: []const u8) ?Color {
     const value = class_fields.property(ir, node, key) orelse return null;
+    return parseColor(value);
+}
+
+fn parseColorPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?Color {
+    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
     return parseColor(value);
 }
 
@@ -248,6 +391,15 @@ fn parseColor(value: []const u8) ?Color {
 
 fn parseDashProperty(ir: anytype, node: *const Node, key: []const u8) ?Dash {
     const value = class_fields.property(ir, node, key) orelse return null;
+    return parseDash(value);
+}
+
+fn parseDashPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?Dash {
+    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    return parseDash(value);
+}
+
+fn parseDash(value: []const u8) ?Dash {
     var parts = std.mem.splitScalar(u8, value, ',');
     const on_text = parts.next() orelse return null;
     const off_text = parts.next() orelse return null;

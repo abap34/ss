@@ -22,8 +22,9 @@ const ExecFlow = union(enum) {
 pub fn runAfterPages(ir: *core.Ir) !void {
     var index = try declarations.build(ir.allocator, ir);
     defer index.deinit();
+    const sema = SemanticEnv.init(ir, &index, &ir.functions);
 
-    for (index.phases.items) |phase| {
+    for (sema.phases()) |phase| {
         if (!isAfterPages(phase.args)) continue;
         const func = ir.functions.get(phase.function_name) orelse return error.UnknownFunction;
         try validateAfterPagesSignature(ir, phase, func);
