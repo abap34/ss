@@ -5,6 +5,7 @@ const declarations = @import("language/declarations.zig");
 const registry = @import("language/registry.zig");
 const stage0 = @import("stage0.zig");
 const typecheck = @import("analysis/typecheck.zig");
+const editor = @import("analysis/editor.zig");
 const json = @import("utils").json;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
@@ -669,7 +670,7 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
 }
 
 fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, descriptor: registry.PrimitiveDescriptor) !void {
-    const signature = try typecheck.formatPrimitiveSignature(allocator, descriptor);
+    const signature = try editor.formatPrimitiveSignature(allocator, descriptor);
     defer allocator.free(signature);
 
     var item = try functions.objectItem();
@@ -682,12 +683,12 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
     } else {
         try item.stringField("resultType", "dependent");
     }
-    try item.stringField("resultSort", typecheck.resultText(descriptor.result_sort));
+    try item.stringField("resultSort", editor.resultText(descriptor.result_sort));
     try item.stringField("source", "primitive");
     try item.stringField("summary", descriptor.summary);
     var params = try item.arrayField("params");
     for (descriptor.arg_names, 0..) |_, index| {
-        const label = try typecheck.formatPrimitiveParam(allocator, descriptor, index);
+        const label = try editor.formatPrimitiveParam(allocator, descriptor, index);
         defer allocator.free(label);
         try params.stringItem(label);
     }
@@ -703,7 +704,7 @@ fn writeUserFunction(
     func: ast.FunctionDecl,
     metadata: core.FunctionMetadata,
 ) !void {
-    const signature = try typecheck.formatUserSignature(allocator, name, func);
+    const signature = try editor.formatUserSignature(allocator, name, func);
     defer allocator.free(signature);
 
     var item = try functions.objectItem();
@@ -727,7 +728,7 @@ fn writeUserFunction(
     try item.stringField("summary", "");
     var params = try item.arrayField("params");
     for (func.params.items) |param| {
-        const label = try typecheck.formatUserParam(allocator, param);
+        const label = try editor.formatUserParam(allocator, param);
         defer allocator.free(label);
         try params.stringItem(label);
     }
