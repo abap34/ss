@@ -96,21 +96,23 @@ fn evalCall(
         }
     }
     const sema = SemanticEnv.init(ir, null, functions);
-    if (sema.function(call.name)) |func| {
-        if (func.kind == .constant) return error.UnknownFunction;
-        try eval_functions.requireReturnsValue(func);
-        return try invokeUserFunctionValue(ir, env, functions, func, current_origin, call);
-    }
-    if (sema.primitive(call.name)) |descriptor| {
-        var ctx = BuiltinContext{
-            .ir = ir,
-            .env = env,
-            .functions = functions,
-            .current_origin = current_origin,
-        };
-        return try builtin.evalCall(&ctx, call, descriptor);
-    }
-    return error.UnknownFunction;
+    const descriptor = sema.call(call.name) orelse return error.UnknownFunction;
+    return switch (descriptor) {
+        .function => |func| blk: {
+            if (func.kind == .constant) return error.UnknownFunction;
+            try eval_functions.requireReturnsValue(func);
+            break :blk try invokeUserFunctionValue(ir, env, functions, func, current_origin, call);
+        },
+        .primitive => |primitive| blk: {
+            var ctx = BuiltinContext{
+                .ir = ir,
+                .env = env,
+                .functions = functions,
+                .current_origin = current_origin,
+            };
+            break :blk try builtin.evalCall(&ctx, call, primitive);
+        },
+    };
 }
 
 const BuiltinContext = struct {

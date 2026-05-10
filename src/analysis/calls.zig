@@ -110,18 +110,22 @@ fn collectExprCallees(
             }
         },
         .call => |call| {
-            if (sema.function(call.name)) |func| {
-                if (!isConst(func)) try appendUniqueCallee(allocator, callees, call.name);
-            }
-            if (sema.primitive(call.name)) |descriptor| {
-                if (descriptor.op == .foreach or descriptor.op == .fold or descriptor.op == .join) {
-                    const callback_index: usize = if (descriptor.op == .foreach) 1 else 2;
-                    if (call.args.items.len > callback_index) {
-                        switch (call.args.items[callback_index]) {
-                            .ident => |name| if (sema.hasFunction(name)) try appendUniqueCallee(allocator, callees, name),
-                            else => {},
+            if (sema.call(call.name)) |descriptor| {
+                switch (descriptor) {
+                    .function => |func| {
+                        if (!isConst(func)) try appendUniqueCallee(allocator, callees, call.name);
+                    },
+                    .primitive => |primitive| {
+                        if (primitive.op == .foreach or primitive.op == .fold or primitive.op == .join) {
+                            const callback_index: usize = if (primitive.op == .foreach) 1 else 2;
+                            if (call.args.items.len > callback_index) {
+                                switch (call.args.items[callback_index]) {
+                                    .ident => |name| if (sema.hasFunction(name)) try appendUniqueCallee(allocator, callees, name),
+                                    else => {},
+                                }
+                            }
                         }
-                    }
+                    },
                 }
             }
             for (call.args.items) |arg| try collectExprCallees(allocator, sema, arg, callees);

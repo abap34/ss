@@ -82,57 +82,79 @@ fn inferCallInfo(
     call: ast.CallExpr,
     origin: []const u8,
 ) anyerror!TypeInfo {
-    if (sema.function(call.name)) |func| {
-        if (isConst(func)) {
-            try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
-            return error.UnknownFunction;
-        }
-        const min_arity = contracts.requiredParamCount(func);
-        const max_arity = func.params.items.len;
-        if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
-            if (min_arity == max_arity) {
-                try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
-            } else {
-                try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
-            }
-            return error.InvalidArity;
-        }
-        for (call.args.items, 0..) |arg, index| {
-            const param = func.params.items[index];
-            const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
-            try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
-        }
-        return try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, call, origin);
-    }
+    const descriptor = sema.call(call.name) orelse {
+        try addUserReport(ir, origin, "UnknownFunction: unknown function: {s}", .{call.name});
+        return error.UnknownFunction;
+    };
+    return switch (descriptor) {
+        .function => |func| try inferUserCallInfo(allocator, ir, sema, env, call, origin, func),
+        .primitive => |primitive| try inferPrimitiveCallInfo(allocator, ir, sema, env, call, origin, primitive),
+    };
+}
 
-    if (sema.primitive(call.name)) |descriptor| {
-        if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
-            if (descriptor.min_arity == descriptor.max_arity) {
-                try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
-            } else {
-                try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
-            }
-            return error.InvalidArity;
-        }
-        for (call.args.items, 0..) |arg, index| {
-            const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
-            if (registry.primitiveArgType(descriptor, index)) |expected| {
-                try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
-            }
-        }
-        const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin);
-        if (ir != null) {
-            switch (descriptor.op) {
-                .set_prop => try validateSetPropCall(ir.?, call, env, sema, origin),
-                .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, sema, origin),
-                else => {},
-            }
-        }
-        return info;
+fn inferUserCallInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+    func: ast.FunctionDecl,
+) !TypeInfo {
+    if (isConst(func)) {
+        try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
+        return error.UnknownFunction;
     }
+    const min_arity = contracts.requiredParamCount(func);
+    const max_arity = func.params.items.len;
+    if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
+        if (min_arity == max_arity) {
+            try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
+        } else {
+            try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
+        }
+        return error.InvalidArity;
+    }
+    for (call.args.items, 0..) |arg, index| {
+        const param = func.params.items[index];
+        const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
+        try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
+    }
+    return try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, call, origin);
+}
 
-    try addUserReport(ir, origin, "UnknownFunction: unknown function: {s}", .{call.name});
-    return error.UnknownFunction;
+fn inferPrimitiveCallInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    call: ast.CallExpr,
+    origin: []const u8,
+    descriptor: registry.PrimitiveDescriptor,
+) !TypeInfo {
+    if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
+        if (descriptor.min_arity == descriptor.max_arity) {
+            try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
+        } else {
+            try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
+        }
+        return error.InvalidArity;
+    }
+    for (call.args.items, 0..) |arg, index| {
+        const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
+        if (registry.primitiveArgType(descriptor, index)) |expected| {
+            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        }
+    }
+    const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin);
+    if (ir != null) {
+        switch (descriptor.op) {
+            .set_prop => try validateSetPropCall(ir.?, call, env, sema, origin),
+            .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, sema, origin),
+            else => {},
+        }
+    }
+    return info;
 }
 
 fn inferUserFunctionReturnInfo(
