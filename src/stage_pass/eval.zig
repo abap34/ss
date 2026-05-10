@@ -3,14 +3,15 @@ const ast = @import("ast");
 const core = @import("core");
 const builtin = @import("../stage0/builtin.zig");
 const declarations = @import("../language/declarations.zig");
+const semantic_env = @import("../language/env.zig");
 const names = @import("../language/names.zig");
-const registry = @import("../language/registry.zig");
 const typecheck = @import("../analysis/typecheck.zig");
 
 const FunctionDecl = ast.FunctionDecl;
 const Statement = ast.Statement;
 const Expr = ast.Expr;
 const CallExpr = ast.CallExpr;
+const SemanticEnv = semantic_env.SemanticEnv;
 
 const ExecFlow = union(enum) {
     none,
@@ -91,12 +92,13 @@ fn evalCall(
             else => {},
         }
     }
-    if (functions.get(call.name)) |func| {
+    const sema = SemanticEnv.init(ir, null, functions);
+    if (sema.function(call.name)) |func| {
         if (func.kind == .constant) return error.UnknownFunction;
         if (!typecheck.functionContract(func).returns_value) return error.FunctionDoesNotReturnValue;
         return try invokeUserFunctionValue(ir, env, functions, func, current_origin, call);
     }
-    if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+    if (sema.primitive(call.name)) |descriptor| {
         var ctx = BuiltinContext{
             .ir = ir,
             .env = env,
@@ -131,7 +133,8 @@ const BuiltinContext = struct {
     pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
         const base = try self.evalExprValue(call.args.items[0]);
         const op_name = try self.evalStringArg(call, 1);
-        const descriptor = registry.lookupQueryOp(op_name) orelse return error.UnknownQuery;
+        const sema = SemanticEnv.init(self.ir, null, self.functions);
+        const descriptor = sema.query(op_name) orelse return error.UnknownQuery;
         switch (descriptor.op) {
             .self_object => return try self.ir.select(self.ir.allocator, base, core.Query.selfObject()),
             .previous_page => return try self.ir.select(self.ir.allocator, base, core.Query.previousPage()),
