@@ -34,38 +34,14 @@ fn slide_subtitle(subtitle_text: string) -> object
   return subtitle
 end
 
-fn text(text_value: string) -> object
-  return body_object(text_value)
-end
-
 fn tex(text_value: string, scale: number = 1) -> object
   let obj = framed_object(text_value, "math", "math_tex", "102", "102", 8, 8, "1,1,1", "0.9,0.92,0.96", "0.8", "10")
   set_prop(obj, "math_scale", str(scale))
   return obj
 end
 
-fn figure(text_value: string) -> object
-  return flow_inset(figure_text_object(text_value), "102", "102")
-end
-
-fn image(path_value: string, scale: number = 1) -> object
-  let obj = with_asset_scale(flow_inset(image_object(path_value), "102", "102"), scale)
-  require_asset_exists(obj)
-  return obj
-end
-
-fn pdf(path_value: string, scale: number = 1) -> object
-  let obj = with_asset_scale(flow_inset(pdf_object(path_value), "102", "102"), scale)
-  require_asset_exists(obj)
-  return obj
-end
-
 fn code(text_value: string, language_name: string = "python") -> object
   return framed_code_with_language(text_value, language_name, "102", "102", 12, 10, "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "10")
-end
-
-fn note(text_value: string) -> object
-  return flow_inset(note_object(text_value), "120", "120")
 end
 
 fn toc_page(title_text: string) -> object
