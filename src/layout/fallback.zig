@@ -3,6 +3,7 @@ const model = @import("model");
 const graph = @import("graph.zig");
 const groups = @import("groups.zig");
 const solver = @import("solver.zig");
+const style_defaults = @import("style.zig");
 
 const NodeId = model.NodeId;
 const Axis = model.Axis;
@@ -38,7 +39,7 @@ pub fn buildHorizontalConstraints(ir: anytype, workspace: *const graph.AxisWorks
             .target_node = placement_id,
             .target_anchor = .left,
             .source = .{ .page = .left },
-            .offset = solver.styleForNode(ir, placement_node).default_x,
+            .offset = style_defaults.styleForNode(ir, placement_node).default_x,
         });
     }
     return constraints;
@@ -59,7 +60,7 @@ fn computeHorizontalComponentUnit(
     const temp = try ir.allocator.alloc(AxisState, workspace.states.len);
     defer ir.allocator.free(temp);
     @memcpy(temp, workspace.states);
-    _ = solver.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
+    _ = graph.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
 
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, &.{});
     try solver.runPageAxisPassWithOptions(ir, &temp_workspace, .{ .record_diagnostics = false });
@@ -93,7 +94,7 @@ fn leftPredecessorGroupIndex(
     while (pass < 8) : (pass += 1) {
         var changed = false;
         for (ir.constraints.items) |constraint| {
-            if (solver.anchorAxis(constraint.target_anchor) != .horizontal) continue;
+            if (graph.anchorAxis(constraint.target_anchor) != .horizontal) continue;
             if (constraint.target_anchor != .left) continue;
             const target_index = workspace.indexOf(constraint.target_node) orelse continue;
             if (target_index != current) continue;
@@ -166,7 +167,7 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
 
         const root = components.findConst(index);
         if (components.isPageDependent(root)) {
-            const spacing = solver.styleForNode(ir, node).spacing_after;
+            const spacing = style_defaults.styleForNode(ir, node).spacing_after;
             if (state.start) |bottom| {
                 const next_top = bottom - spacing;
                 if (next_top < current_top_value) {
@@ -299,14 +300,9 @@ fn findVerticalComponentUnit(units: []const VerticalComponentUnit, component_roo
 
 fn verticalCenterOffset(ir: anytype, page_id: NodeId) f32 {
     const page = ir.getNode(page_id) orelse return 0;
-    if (parseNodeFloatProperty(page, "layout_v_center_offset")) |value| return value;
+    if (style_defaults.parseNodeFloatProperty(ir, page, "layout_v_center_offset")) |value| return value;
     const document = ir.getNode(ir.document_id) orelse return 0;
-    return parseNodeFloatProperty(document, "layout_v_center_offset") orelse 0;
-}
-
-fn parseNodeFloatProperty(node: *const model.Node, key: []const u8) ?f32 {
-    const value = model.nodeProperty(node, key) orelse return null;
-    return std.fmt.parseFloat(f32, value) catch null;
+    return style_defaults.parseNodeFloatProperty(ir, document, "layout_v_center_offset") orelse 0;
 }
 
 fn computeVerticalComponentUnit(
@@ -322,7 +318,7 @@ fn computeVerticalComponentUnit(
     const temp = try ir.allocator.alloc(AxisState, workspace.states.len);
     defer ir.allocator.free(temp);
     @memcpy(temp, workspace.states);
-    _ = solver.setAxisAnchor(&temp[root_index], .top, 0, null) catch return null;
+    _ = graph.setAxisAnchor(&temp[root_index], .top, 0, null) catch return null;
 
     var local_fallback = try buildComponentLocalTopFlowConstraints(ir, workspace, components, component_root, root_index);
     defer local_fallback.deinit(ir.allocator);
@@ -360,7 +356,7 @@ fn computeVerticalComponentUnit(
         .bottom_index = spacing_source_index,
         .local_top = local_top.?,
         .height = local_top.? - local_bottom.?,
-        .spacing_after = solver.styleForNode(ir, spacing_source).spacing_after,
+        .spacing_after = style_defaults.styleForNode(ir, spacing_source).spacing_after,
     };
 }
 
@@ -497,7 +493,7 @@ fn appendLocalTopFlowForChildren(
 
         const spacing_node = ir.getNode(workspace.nodeAt(spacing_index)) orelse return error.UnknownNode;
         current_source = .{ .node = .{ .node_id = workspace.nodeAt(spacing_index), .anchor = .bottom } };
-        current_offset = -solver.styleForNode(ir, spacing_node).spacing_after;
+        current_offset = -style_defaults.styleForNode(ir, spacing_node).spacing_after;
     }
 }
 
@@ -598,12 +594,12 @@ fn hasHorizontalRelationToUnit(ir: anytype, workspace: *const graph.AxisWorkspac
 
 fn hasHorizontalRelation(ir: anytype, a: NodeId, b: NodeId) bool {
     for (ir.constraints.items) |constraint| {
-        if (solver.anchorAxis(constraint.target_anchor) != .horizontal) continue;
+        if (graph.anchorAxis(constraint.target_anchor) != .horizontal) continue;
         const source = switch (constraint.source) {
             .page => continue,
             .node => |source| source,
         };
-        if (solver.anchorAxis(source.anchor) != .horizontal) continue;
+        if (graph.anchorAxis(source.anchor) != .horizontal) continue;
         if (constraint.target_node == a and source.node_id == b) return true;
         if (constraint.target_node == b and source.node_id == a) return true;
     }

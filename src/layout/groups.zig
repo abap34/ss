@@ -1,14 +1,12 @@
 const model = @import("model");
 const graph = @import("graph.zig");
-const solver = @import("solver.zig");
+const metrics = @import("metrics.zig");
 
 const NodeId = model.NodeId;
 const Node = model.Node;
-const Axis = model.Axis;
 const AxisState = model.AxisState;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
-const Frame = model.Frame;
 const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
 
@@ -17,27 +15,13 @@ pub fn constraintTargetsGroup(ir: anytype, constraint: Constraint) bool {
     return isGroupNode(target_node);
 }
 
-pub fn hasTargetConstraint(ir: anytype, group_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
-    for (ir.constraints.items) |constraint| {
-        if (constraint.target_node != group_id) continue;
-        if (solver.anchorAxis(constraint.target_anchor) != axis) continue;
-        return true;
-    }
-    for (extra_constraints) |constraint| {
-        if (constraint.target_node != group_id) continue;
-        if (solver.anchorAxis(constraint.target_anchor) != axis) continue;
-        return true;
-    }
-    return false;
-}
-
 fn propagateWidthCapToSubtree(ir: anytype, node_id: NodeId, max_right: f32) !void {
     const node = ir.getNode(node_id) orelse return error.UnknownNode;
-    if (node.frame.x_set and solver.shouldWrapNode(ir, node)) {
+    if (node.frame.x_set and metrics.shouldWrapNode(ir, node)) {
         const available = @max(@as(f32, 1.0), max_right - node.frame.x);
         if (available < node.frame.width - graph.ConstraintTolerance) {
             node.frame.width = available;
-            node.frame.height = solver.intrinsicHeight(ir, node);
+            node.frame.height = metrics.intrinsicHeight(ir, node);
         }
     }
     if (isGroupNode(node)) {
@@ -111,22 +95,22 @@ fn applyGroupTargetConstraintSlice(
     used: *bool,
     last_constraint: *?Constraint,
     constraints: []const Constraint,
-    options: solver.SolveOptions,
+    options: graph.SolveOptions,
 ) !void {
     for (constraints) |constraint| {
         if (constraint.target_node != group_id) continue;
-        if (solver.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
+        if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) continue;
         used.* = true;
         last_constraint.* = constraint;
 
-        if (solver.selfReferentialSize(constraint, workspace.axis)) |size| {
+        if (graph.selfReferentialSize(constraint, workspace.axis)) |size| {
             if (size < -graph.ConstraintTolerance) {
                 if (options.record_diagnostics) {
                     ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
                 }
                 continue;
             }
-            _ = solver.setAxisSize(temp, size, constraint) catch |err| {
+            _ = graph.setAxisSize(temp, size, constraint) catch |err| {
                 if (options.record_diagnostics) {
                     const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
                     ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
@@ -137,21 +121,21 @@ fn applyGroupTargetConstraintSlice(
         }
 
         const source_value = switch (constraint.source) {
-            .page => try solver.constraintSourceValue(ir, workspace, constraint.source),
+            .page => try graph.constraintSourceValue(ir, workspace, constraint.source),
             .node => |node_source| blk: {
                 if (node_source.node_id == group_id) {
-                    const current = solver.axisAnchorValue(temp.*, node_source.anchor);
-                    break :blk if (current != null) current else solver.axisAnchorValue(base, node_source.anchor);
+                    const current = graph.axisAnchorValue(temp.*, node_source.anchor);
+                    break :blk if (current != null) current else graph.axisAnchorValue(base, node_source.anchor);
                 }
-                break :blk try solver.constraintSourceValue(ir, workspace, constraint.source);
+                break :blk try graph.constraintSourceValue(ir, workspace, constraint.source);
             },
         };
         if (source_value == null) continue;
 
-        _ = solver.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
+        _ = graph.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
             if (options.record_diagnostics) {
                 const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, solver.axisAnchorSource(temp.*, constraint.target_anchor), kind);
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(temp.*, constraint.target_anchor), kind);
             }
         };
     }
@@ -180,7 +164,7 @@ pub fn applyTargetConstraints(
 pub fn applyTargetConstraintsWithOptions(
     ir: anytype,
     workspace: *graph.AxisWorkspace,
-    options: solver.SolveOptions,
+    options: graph.SolveOptions,
 ) !bool {
     var changed = false;
     for (workspace.graph.child_ids, 0..) |group_id, group_index| {
@@ -209,7 +193,7 @@ pub fn applyTargetConstraintsWithOptions(
                 temp.start = base.start;
             }
         }
-        _ = solver.reconcileAxisState(&temp) catch |err| {
+        _ = graph.reconcileAxisState(&temp) catch |err| {
             if (options.record_diagnostics) {
                 if (last_constraint) |constraint| {
                     const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
@@ -270,17 +254,17 @@ fn axisStatesEq(a: AxisState, b: AxisState) bool {
 fn optionalFloatEq(a: ?f32, b: ?f32) bool {
     if (a == null and b == null) return true;
     if (a == null or b == null) return false;
-    return solver.approxEq(a.?, b.?);
+    return graph.approxEq(a.?, b.?);
 }
 
 fn groupChildAxisBounds(ir: anytype, workspace: *const graph.AxisWorkspace, child_id: NodeId) !struct { ?f32, ?f32 } {
     if (workspace.indexOf(child_id)) |index| {
         return .{
-            solver.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
+            graph.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
                 .horizontal => .left,
                 .vertical => .bottom,
             }),
-            solver.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
+            graph.axisAnchorValue(workspace.states[index], switch (workspace.axis) {
                 .horizontal => .right,
                 .vertical => .top,
             }),
@@ -296,8 +280,8 @@ fn groupChildAxisBounds(ir: anytype, workspace: *const graph.AxisWorkspace, chil
         .horizontal => .right,
         .vertical => .top,
     };
-    if (!solver.anchorKnown(child.frame, start_anchor) or !solver.anchorKnown(child.frame, end_anchor)) return .{ null, null };
-    return .{ solver.anchorValue(child.frame, start_anchor), solver.anchorValue(child.frame, end_anchor) };
+    if (!graph.anchorKnown(child.frame, start_anchor) or !graph.anchorKnown(child.frame, end_anchor)) return .{ null, null };
+    return .{ graph.anchorValue(child.frame, start_anchor), graph.anchorValue(child.frame, end_anchor) };
 }
 
 pub fn isGroupNode(node: *const Node) bool {
