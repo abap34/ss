@@ -8,7 +8,7 @@ const Role = model.Role;
 const PageLayout = model.PageLayout;
 const TextStyle = model.TextStyle;
 
-pub fn styleForNode(ir: anytype, node: *const Node) TextStyle {
+fn styleForNode(ir: anytype, node: *const Node) TextStyle {
     return style_defaults.styleForNode(ir, node);
 }
 

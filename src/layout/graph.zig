@@ -8,6 +8,7 @@ const AxisState = model.AxisState;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
+const Frame = model.Frame;
 const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
 
@@ -26,6 +27,10 @@ pub const ConstraintClass = enum {
 pub const ComponentPolicy = struct {
     include_containment: bool = false,
     skip_group_targets: bool = false,
+};
+
+pub const SolveOptions = struct {
+    record_diagnostics: bool = true,
 };
 
 pub const PageLayoutGraph = struct {
@@ -477,6 +482,194 @@ pub fn selfReferentialSize(constraint: Constraint, axis: Axis) ?f32 {
     if (anchorAxis(node_source.anchor) != axis) return null;
     if (anchorAxis(constraint.target_anchor) != axis) return null;
     return sizeFromAnchorPair(constraint.target_anchor, node_source.anchor, constraint.offset);
+}
+
+pub fn constraintSourceValue(ir: anytype, workspace: *const AxisWorkspace, source: ConstraintSource) !?f32 {
+    return switch (source) {
+        .page => |anchor| blk: {
+            if (anchorAxis(anchor) != workspace.axis) return error.ConstraintAxisMismatch;
+            const page = ir.getNode(workspace.graph.page_id) orelse return error.UnknownNode;
+            break :blk anchorValue(page.frame, anchor);
+        },
+        .node => |node_source| blk: {
+            if (anchorAxis(node_source.anchor) != workspace.axis) return error.ConstraintAxisMismatch;
+            if (workspace.indexOf(node_source.node_id)) |index| {
+                break :blk axisAnchorValue(workspace.states[index], node_source.anchor);
+            }
+
+            const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
+            if (!anchorKnown(source_node.frame, node_source.anchor)) break :blk null;
+            break :blk anchorValue(source_node.frame, node_source.anchor);
+        },
+    };
+}
+
+pub fn axisAnchorValue(state: AxisState, anchor: Anchor) ?f32 {
+    return switch (anchor) {
+        .left, .bottom => state.start,
+        .right, .top => state.end,
+        .center_x, .center_y => state.center,
+    };
+}
+
+pub fn axisAnchorSource(state: AxisState, anchor: Anchor) ?Constraint {
+    return switch (anchor) {
+        .left, .bottom => state.start_source,
+        .right, .top => state.end_source,
+        .center_x, .center_y => state.center_source,
+    };
+}
+
+pub fn setAxisAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
+    if (try overrideDefaultDerivedAnchor(state, anchor, value, source)) return true;
+    return switch (anchor) {
+        .left, .bottom => try setOptionalFloat(&state.start, &state.start_source, value, source),
+        .right, .top => try setOptionalFloat(&state.end, &state.end_source, value, source),
+        .center_x, .center_y => try setOptionalFloat(&state.center, &state.center_source, value, source),
+    };
+}
+
+fn overrideDefaultDerivedAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
+    if (!state.size_is_default) return false;
+
+    return switch (anchor) {
+        .left, .bottom => blk: {
+            if (state.start) |current| {
+                if (approxEq(current, value)) break :blk false;
+                if (state.end != null) {
+                    state.start = value;
+                    state.start_source = source;
+                    state.size = null;
+                    state.size_source = null;
+                    state.size_is_default = false;
+                    state.center = null;
+                    state.center_source = null;
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .right, .top => blk: {
+            if (state.end) |current| {
+                if (approxEq(current, value)) break :blk false;
+                if (state.start != null) {
+                    state.end = value;
+                    state.end_source = source;
+                    state.size = null;
+                    state.size_source = null;
+                    state.size_is_default = false;
+                    state.center = null;
+                    state.center_source = null;
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .center_x, .center_y => false,
+    };
+}
+
+pub fn reconcileAxisState(state: *AxisState) !bool {
+    var changed = false;
+    var progress = true;
+
+    while (progress) {
+        progress = false;
+
+        if (state.start != null and state.end != null) {
+            const size = state.end.? - state.start.?;
+            try ensureNonNegativeSize(size);
+            progress = (try setAxisSize(state, size, null)) or progress;
+            progress = (try setOptionalFloat(&state.center, &state.center_source, state.start.? + size / 2, null)) or progress;
+        }
+
+        if (state.start != null and state.size != null) {
+            progress = (try setOptionalFloat(&state.end, &state.end_source, state.start.? + state.size.?, null)) or progress;
+            progress = (try setOptionalFloat(&state.center, &state.center_source, state.start.? + state.size.? / 2, null)) or progress;
+        }
+
+        if (state.end != null and state.size != null) {
+            progress = (try setOptionalFloat(&state.start, &state.start_source, state.end.? - state.size.?, null)) or progress;
+            progress = (try setOptionalFloat(&state.center, &state.center_source, state.start.? + state.size.? / 2, null)) or progress;
+        }
+
+        if (state.center != null and state.size != null) {
+            progress = (try setOptionalFloat(&state.start, &state.start_source, state.center.? - state.size.? / 2, null)) or progress;
+            progress = (try setOptionalFloat(&state.end, &state.end_source, state.center.? + state.size.? / 2, null)) or progress;
+        }
+
+        if (state.start != null and state.center != null) {
+            const half = state.center.? - state.start.?;
+            const size = half * 2;
+            try ensureNonNegativeSize(size);
+            progress = (try setAxisSize(state, size, null)) or progress;
+            progress = (try setOptionalFloat(&state.end, &state.end_source, state.start.? + size, null)) or progress;
+        }
+
+        if (state.end != null and state.center != null) {
+            const half = state.end.? - state.center.?;
+            const size = half * 2;
+            try ensureNonNegativeSize(size);
+            progress = (try setAxisSize(state, size, null)) or progress;
+            progress = (try setOptionalFloat(&state.start, &state.start_source, state.end.? - size, null)) or progress;
+        }
+
+        changed = progress or changed;
+    }
+
+    return changed;
+}
+
+fn ensureNonNegativeSize(size: f32) !void {
+    if (size < -ConstraintTolerance) return error.NegativeConstraintSize;
+}
+
+fn setOptionalFloat(slot: *?f32, source_slot: *?Constraint, value: f32, source: ?Constraint) !bool {
+    if (slot.*) |current| {
+        if (approxEq(current, value)) return false;
+        return error.ConstraintConflict;
+    }
+    slot.* = value;
+    source_slot.* = source;
+    return true;
+}
+
+pub fn setAxisSize(state: *AxisState, value: f32, source: ?Constraint) !bool {
+    if (state.size) |current| {
+        if (approxEq(current, value)) {
+            return false;
+        }
+        if (state.size_is_default) {
+            state.size = value;
+            state.size_source = source;
+            state.size_is_default = false;
+            return true;
+        }
+        return error.ConstraintConflict;
+    }
+
+    state.size = value;
+    state.size_source = source;
+    state.size_is_default = false;
+    return true;
+}
+
+pub fn anchorKnown(frame: Frame, anchor: Anchor) bool {
+    return switch (anchor) {
+        .left, .right, .center_x => frame.x_set,
+        .top, .bottom, .center_y => frame.y_set,
+    };
+}
+
+pub fn anchorValue(frame: Frame, anchor: Anchor) f32 {
+    return switch (anchor) {
+        .left => frame.x,
+        .right => frame.x + frame.width,
+        .top => frame.y + frame.height,
+        .bottom => frame.y,
+        .center_x => frame.x + frame.width / 2,
+        .center_y => frame.y + frame.height / 2,
+    };
 }
 
 const AnchorRole = enum { start, end, center };

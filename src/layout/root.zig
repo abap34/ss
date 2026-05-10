@@ -7,7 +7,7 @@ pub const graph = @import("graph.zig");
 pub const diagnostics = @import("diagnostics.zig");
 
 pub const solveLayout = solver.solveLayout;
-pub const styleForNode = solver.styleForNode;
+pub const styleForNode = style.styleForNode;
 pub const intrinsicWidth = metrics.intrinsicWidth;
 pub const intrinsicHeight = metrics.intrinsicHeight;
 pub const shouldWrapNode = metrics.shouldWrapNode;
