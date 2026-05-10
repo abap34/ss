@@ -5,25 +5,22 @@ const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
 const module_loader = @import("../modules/loader.zig");
 const calls = @import("calls.zig");
+const checker = @import("check.zig");
 const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
-const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
 
 const TypeEnv = semantic_types.TypeEnv;
 pub const VariableInfo = semantic_types.TypeInfo;
 const ensureType = semantic_types.ensureType;
 const infoFromSort = semantic_types.infoFromSort;
-const infoFromType = semantic_types.infoFromType;
 const inferExprInfo = infer.exprInfo;
-const validatePropertySetStatement = infer.validatePropertySetStatement;
 pub const expectedPrimitiveArgSort = infer.expectedPrimitiveArgSort;
 
-var diagnostic_origin_path: []const u8 = "";
 pub const FunctionMetadata = core.FunctionMetadata;
 
 pub const ProgramIndex = struct {
@@ -64,27 +61,6 @@ fn findModuleById(modules: []const core.SourceModule, module_id: core.SourceModu
     return null;
 }
 
-fn originPathForModule(module: *const core.SourceModule) []const u8 {
-    return module.path orelse module.spec;
-}
-
-fn setDiagnosticOriginModule(module: *const core.SourceModule) void {
-    diagnostic_origin_path = originPathForModule(module);
-}
-
-fn clearDiagnosticOriginModule() void {
-    diagnostic_origin_path = "";
-}
-
-fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const sink = ir orelse return;
-    const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
-    const diagnostic_origin = try sink.allocator.dupe(u8, origin);
-    try sink.addValidationDiagnostic(.@"error", null, null, diagnostic_origin, .{
-        .user_report = .{ .message = message },
-    });
-}
-
 pub fn checkFunctionDefinitions(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
@@ -99,17 +75,17 @@ fn checkFunctionDefinitionsWithEnv(
     ir: *core.Ir,
     sema: *const SemanticEnv,
 ) !void {
-    defer clearDiagnosticOriginModule();
     try calls.checkFunctionCallGraph(allocator, ir, sema);
 
     var it = sema.functions.iterator();
     while (it.next()) |entry| {
-        if (ir.function_metadata.get(entry.key_ptr.*)) |metadata| {
-            if (ir.moduleById(metadata.module_id)) |module| setDiagnosticOriginModule(module);
-        } else {
-            clearDiagnosticOriginModule();
-        }
-        try checkFunction(allocator, ir, sema, entry.value_ptr.*);
+        const origin_path = blk: {
+            if (ir.function_metadata.get(entry.key_ptr.*)) |metadata| {
+                if (ir.moduleById(metadata.module_id)) |module| break :blk checker.originPathForModule(module);
+            }
+            break :blk "";
+        };
+        try checker.checkFunction(allocator, ir, sema, origin_path, entry.value_ptr.*);
     }
 }
 
@@ -117,40 +93,16 @@ pub fn typecheckProgram(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {
-    defer clearDiagnosticOriginModule();
     var declaration_index = try declarations.build(allocator, ir);
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
     try fields.checkObjectDeclarations(allocator, ir, &sema);
-    try checkPageNamesUnique(allocator, ir);
+    try checker.checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
-        setDiagnosticOriginModule(module);
-        try checkPageStatements(allocator, ir, &sema, module.program);
-    }
-}
-
-fn checkPageNamesUnique(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-) !void {
-    var pages = std.StringHashMap(void).init(allocator);
-    defer pages.deinit();
-
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        setDiagnosticOriginModule(module);
-        for (module.program.pages.items) |page| {
-            if (pages.contains(page.name)) {
-                const origin = try statementOrigin(allocator, page.span);
-                defer allocator.free(origin);
-                try addUserReport(ir, origin, "DuplicatePage: page '{s}' is already defined", .{page.name});
-                return error.DuplicatePage;
-            }
-            try pages.put(page.name, {});
-        }
+        try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
     }
 }
 
@@ -385,131 +337,6 @@ fn collectVariableTypesFromStatement(
     }
 }
 
-fn checkFunction(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    func: ast.FunctionDecl,
-) !void {
-    var env = TypeEnv.init(allocator);
-    defer env.deinit();
-
-    const func_origin = try statementOrigin(allocator, func.span);
-    defer allocator.free(func_origin);
-    for (func.params.items) |param| {
-        if (param.default_value) |default_value| {
-            const info = try inferExprInfo(allocator, ir, sema, &env, default_value.*, func_origin);
-            try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
-        }
-        var param_info = infoFromType(param.ty);
-        param_info.sort = param.sort;
-        try env.put(param.name, param_info);
-    }
-
-    for (func.statements.items) |stmt| {
-        try checkStatement(allocator, ir, sema, &env, func.result_type, stmt);
-    }
-}
-
-fn checkPageStatements(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    program: ast.Program,
-) !void {
-    {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-        for (program.document_statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, &env, stmt);
-        }
-    }
-    for (program.pages.items) |page| {
-        var env = TypeEnv.init(allocator);
-        defer env.deinit();
-
-        for (page.statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, &env, stmt);
-        }
-    }
-}
-
-fn checkTopLevelStatement(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    env: *TypeEnv,
-    stmt: ast.Statement,
-) !void {
-    const origin = try statementOrigin(allocator, stmt.span);
-    switch (stmt.kind) {
-        .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, info);
-        },
-        .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, infoFromSort(.fragment));
-        },
-        .return_expr => {
-            try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
-            return error.ReturnOutsideFunction;
-        },
-        .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
-        },
-        .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-        },
-        .constrain => |decl| {
-            if (decl.offset) |expr| {
-                const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
-            }
-        },
-    }
-}
-
-fn checkStatement(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-    env: *TypeEnv,
-    result_type: Type,
-    stmt: ast.Statement,
-) !void {
-    const origin = try statementOrigin(allocator, stmt.span);
-    switch (stmt.kind) {
-        .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, info);
-        },
-        .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, infoFromSort(.fragment));
-        },
-        .return_expr => |expr| {
-            const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-            try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
-        },
-        .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
-        },
-        .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-        },
-        .constrain => |decl| {
-            if (decl.offset) |expr| {
-                const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
-                try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
-            }
-        },
-    }
-}
-
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
-    if (diagnostic_origin_path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_origin_path, span.start, span.end });
-    }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
