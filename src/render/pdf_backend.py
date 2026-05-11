@@ -56,6 +56,10 @@ PAGE_CACHE_DIRNAME = "pages"
 DOCUMENT_CACHE_DIRNAME = "documents"
 MANIFEST_CACHE_DIRNAME = "manifests"
 
+DEFAULT_CACHE_MAX_BYTES = 256 * 1024 * 1024
+CACHE_MAX_BYTES_ENV = "SS_CACHE_MAX_BYTES"
+CACHE_PRUNE_TARGET_RATIO = 0.80
+
 TMP_FULL_BASE_LABEL = "full-base"
 TMP_PAGE_BASE_LABEL = "page-base"
 TMP_PAGE_FINAL_LABEL = "page-final"
@@ -125,6 +129,20 @@ class RuntimeCaches:
             path.mkdir(parents=True, exist_ok=True)
         return caches
 
+    def prune(self) -> None:
+        max_bytes = configured_cache_max_bytes()
+        if max_bytes is None:
+            return
+        prune_cache_entries(self.managed_entry_paths(), max_bytes)
+
+    def managed_entry_paths(self) -> List[Path]:
+        entries: List[Path] = []
+        for directory in (self.math_dir, self.icon_dir, self.svg_asset_dir):
+            entries.extend(cache_dir_children(directory))
+        for directory in (self.highlight_dir, self.page_dir, self.document_dir, self.manifest_dir):
+            entries.extend(cache_file_children(directory))
+        return entries
+
     def ensure_page_cache(self) -> None:
         self.page_dir.mkdir(parents=True, exist_ok=True)
         self.document_dir.mkdir(parents=True, exist_ok=True)
@@ -162,6 +180,114 @@ class CachedPage:
             "hash": self.digest,
             "pdf": str(self.pdf_path),
         }
+
+
+@dataclass(frozen=True)
+class CacheEntry:
+    path: Path
+    size: int
+    mtime: float
+
+
+def configured_cache_max_bytes() -> Optional[int]:
+    raw = os.environ.get(CACHE_MAX_BYTES_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_CACHE_MAX_BYTES
+
+    value = raw.strip().lower()
+    if value in ("off", "none", "false", "no", "unlimited"):
+        return None
+
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kmgt]?i?b?|b)?", value)
+    if match is None:
+        print(
+            f"pdf backend: ignoring invalid {CACHE_MAX_BYTES_ENV}={raw!r}; using {DEFAULT_CACHE_MAX_BYTES} bytes",
+            file=sys.stderr,
+        )
+        return DEFAULT_CACHE_MAX_BYTES
+
+    number = float(match.group(1))
+    suffix = (match.group(2) or "b").lower()
+    scale = 1
+    if suffix.startswith("k"):
+        scale = 1024
+    elif suffix.startswith("m"):
+        scale = 1024 * 1024
+    elif suffix.startswith("g"):
+        scale = 1024 * 1024 * 1024
+    elif suffix.startswith("t"):
+        scale = 1024 * 1024 * 1024 * 1024
+    return max(0, int(number * scale))
+
+
+def cache_dir_children(directory: Path) -> List[Path]:
+    try:
+        return [path for path in directory.iterdir() if path.is_dir()]
+    except OSError:
+        return []
+
+
+def cache_file_children(directory: Path) -> List[Path]:
+    try:
+        return [path for path in directory.iterdir() if path.is_file() and not path.name.startswith("tmp-")]
+    except OSError:
+        return []
+
+
+def cache_entry(path: Path) -> Optional[CacheEntry]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+
+    if path.is_file():
+        return CacheEntry(path=path, size=stat.st_size, mtime=stat.st_mtime)
+
+    size = 0
+    mtime = stat.st_mtime
+    for root, _dirs, files in os.walk(path):
+        root_path = Path(root)
+        try:
+            root_stat = root_path.stat()
+            mtime = max(mtime, root_stat.st_mtime)
+        except OSError:
+            pass
+        for name in files:
+            child = root_path / name
+            try:
+                child_stat = child.stat()
+            except OSError:
+                continue
+            size += child_stat.st_size
+            mtime = max(mtime, child_stat.st_mtime)
+    return CacheEntry(path=path, size=size, mtime=mtime)
+
+
+def touch_cache_entry(path: Path) -> None:
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def prune_cache_entries(paths: List[Path], max_bytes: int) -> None:
+    entries = [entry for path in paths if (entry := cache_entry(path)) is not None]
+    total = sum(entry.size for entry in entries)
+    if total <= max_bytes:
+        return
+
+    target = int(max_bytes * CACHE_PRUNE_TARGET_RATIO)
+    for entry in sorted(entries, key=lambda item: (item.mtime, str(item.path))):
+        if total <= target:
+            break
+        try:
+            if entry.path.is_dir():
+                shutil.rmtree(entry.path)
+            else:
+                entry.path.unlink()
+        except OSError:
+            continue
+        total -= entry.size
 
 
 @dataclass(frozen=True)
@@ -261,12 +387,14 @@ def main(argv: List[str]) -> int:
         doc = json.load(f)
 
     caches = RuntimeCaches.create()
+    caches.prune()
 
     if supports_incremental_render(doc):
         stats = IncrementalPageRenderer(doc, output_pdf, asset_base_dir, caches).render()
         print(stats.message(), file=sys.stderr)
     else:
         render_full_document(doc, output_pdf, asset_base_dir, caches)
+    caches.prune()
 
     if _glyph_warnings:
         unique = sorted(set(_glyph_warnings))
@@ -1323,6 +1451,9 @@ class IncrementalPageRenderer:
         for page_index, page_id in enumerate(self.doc["page_order"]):
             pages.append(self._cached_page(page_index, page_id))
 
+        for page in pages:
+            if page.pdf_path.exists():
+                touch_cache_entry(page.pdf_path)
         missing = [page for page in pages if not page.pdf_path.exists()]
         rendered = len(missing)
         reused = len(pages) - rendered
@@ -1331,6 +1462,7 @@ class IncrementalPageRenderer:
         previous_document_pdf = self._previous_document_pdf(previous_manifest)
 
         if not missing and document_pdf.exists():
+            touch_cache_entry(document_pdf)
             self._copy_cached_document(document_pdf)
             self._write_manifest(pages, rendered, reused)
             return IncrementalRenderStats(rendered=rendered, reused=reused, total=len(pages))
@@ -1387,6 +1519,7 @@ class IncrementalPageRenderer:
     def _assemble(self, pages: List[CachedPage]) -> None:
         writer = PdfWriter()
         for page in pages:
+            touch_cache_entry(page.pdf_path)
             reader = PdfReader(str(page.pdf_path))
             writer.add_page(reader.pages[0])
         with open(self.output_pdf, "wb") as f:
@@ -1522,6 +1655,7 @@ class IncrementalPageRenderer:
         output_path = Path(self.output_pdf)
         if output_path.resolve() == document_pdf.resolve():
             return
+        touch_cache_entry(document_pdf)
         shutil.copyfile(document_pdf, output_path)
 
     def _manifest_path(self) -> Path:
@@ -1803,6 +1937,8 @@ def make_math_job(
 
 def ensure_math_pdf(job: MathRenderJob) -> str:
     if job.pdf_path.exists():
+        touch_cache_entry(job.work_dir)
+        touch_cache_entry(job.pdf_path)
         return str(job.pdf_path)
     job.work_dir.mkdir(parents=True, exist_ok=True)
     job.tex_path.write_text(single_math_document_source(job), encoding="utf-8")
@@ -1886,6 +2022,8 @@ def render_inline_icon_to_pdf(icon_ref: str, cache_dir: Path) -> str:
     svg_path = work_dir / "icon.svg"
     pdf_path = work_dir / "icon.pdf"
     if pdf_path.exists():
+        touch_cache_entry(work_dir)
+        touch_cache_entry(pdf_path)
         return str(pdf_path)
     svg_path.write_bytes(fetch_fontawesome_svg(icon_ref))
     run_checked(
@@ -1911,6 +2049,8 @@ def render_svg_asset_to_pdf(source: str, cache_dir: Path) -> str:
     work_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = work_dir / "asset.pdf"
     if pdf_path.exists():
+        touch_cache_entry(work_dir)
+        touch_cache_entry(pdf_path)
         return str(pdf_path)
     run_checked(
         [
@@ -2035,6 +2175,7 @@ def load_highlighted_code_lines(spec: HighlighterSpec, text: str, cache_dir: Pat
     ).hexdigest()[:20]
     cache_path = cache_dir / f"{digest}.json"
     if cache_path.exists():
+        touch_cache_entry(cache_path)
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
         return payload.get("lines", [])
 
