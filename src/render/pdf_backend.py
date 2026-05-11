@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from fpdf import FPDF
+from fpdf.image_parsing import SETTINGS as FPDF_IMAGE_SETTINGS
 from PIL import Image
 from pypdf import PdfReader, PdfWriter, Transformation
 
@@ -60,20 +61,25 @@ TMP_PAGE_FINAL_LABEL = "page-final"
 PDF_SUFFIX = ".pdf"
 INTERNAL_LINK_PREFIX = "#"
 
+# fpdf2 recompresses PNG image streams when embedding them. Lowering the zlib
+# level keeps the compression lossless while making iterative renders much
+# cheaper on image-heavy decks.
+FPDF_IMAGE_SETTINGS.compression_level = 1
+
 # Canonical fpdf2 family + style for each render-policy font name.
 FONT_ALIAS: Dict[str, Tuple[str, str]] = {
     "Helvetica": ("body", ""),
     "Helvetica-Bold": ("body", "B"),
-    "Helvetica-Oblique": ("body", "I"),
-    "Helvetica-BoldOblique": ("body", "BI"),
+    "Helvetica-Oblique": ("body", ""),
+    "Helvetica-BoldOblique": ("body", "B"),
     "Times-Roman": ("body", ""),
     "Times-Bold": ("body", "B"),
-    "Times-Italic": ("body", "I"),
-    "Times-BoldItalic": ("body", "BI"),
+    "Times-Italic": ("body", ""),
+    "Times-BoldItalic": ("body", "B"),
     "Courier": ("mono", ""),
     "Courier-Bold": ("mono", "B"),
-    "Courier-Oblique": ("mono", "I"),
-    "Courier-BoldOblique": ("mono", "BI"),
+    "Courier-Oblique": ("mono", ""),
+    "Courier-BoldOblique": ("mono", "B"),
 }
 
 Color = Tuple[float, float, float]
@@ -308,18 +314,9 @@ class Renderer:
         registrations: List[Tuple[str, str, str]] = [
             ("body", "", str(body_reg)),
             ("body", "B", str(body_bold)),
-            # NotoSansJP has no italic axis: reuse the matching weight so the
-            # style switch at least picks the right weight.
-            ("body", "I", str(body_reg)),
-            ("body", "BI", str(body_bold)),
             ("mono", "", str(mono_reg)),
             ("mono", "B", str(mono_bold)),
-            ("mono", "I", str(mono_reg)),
-            ("mono", "BI", str(mono_bold)),
             ("emoji", "", str(emoji)),
-            ("emoji", "B", str(emoji)),
-            ("emoji", "I", str(emoji)),
-            ("emoji", "BI", str(emoji)),
         ]
         # fontkey -> (family, style) so fallback resolution can map fpdf2's
         # internal id back to the family/style we passed to add_font.
@@ -1165,16 +1162,22 @@ class Renderer:
 def merge_overlays(base_pdf: str, output_pdf: str, overlays_by_page: Dict[int, List[Overlay]]) -> None:
     reader = PdfReader(base_pdf)
     writer = PdfWriter()
+    overlay_cache: Dict[str, Tuple[PdfReader, object, float, float, float, float]] = {}
 
     for index, page in enumerate(reader.pages):
         overlays = overlays_by_page.get(index, [])
         for overlay in overlays:
-            src_reader = PdfReader(overlay.pdf_path)
-            src_page = src_reader.pages[0]
-            left = float(src_page.mediabox.left)
-            bottom = float(src_page.mediabox.bottom)
-            width = float(src_page.mediabox.width)
-            height = float(src_page.mediabox.height)
+            cached = overlay_cache.get(overlay.pdf_path)
+            if cached is None:
+                src_reader = PdfReader(overlay.pdf_path)
+                src_page = src_reader.pages[0]
+                left = float(src_page.mediabox.left)
+                bottom = float(src_page.mediabox.bottom)
+                width = float(src_page.mediabox.width)
+                height = float(src_page.mediabox.height)
+                cached = (src_reader, src_page, left, bottom, width, height)
+                overlay_cache[overlay.pdf_path] = cached
+            _src_reader, src_page, left, bottom, width, height = cached
             sx = overlay.width / width
             sy = overlay.height / height
             transform = (
