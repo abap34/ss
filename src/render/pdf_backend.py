@@ -657,7 +657,13 @@ class Renderer:
         line_width = float(chrome.get("line_width", 1.0))
         radius = float(chrome.get("radius", 10.0))
         if fill is not None or stroke is not None:
-            top_y = self.to_tl(y + height)
+            pad_x = float(chrome.get("pad_x", 0.0))
+            pad_y = float(chrome.get("pad_y", 0.0))
+            chrome_x = x - pad_x
+            chrome_y = y - pad_y
+            chrome_width = width + pad_x * 2.0
+            chrome_height = height + pad_y * 2.0
+            top_y = self.to_tl(chrome_y + chrome_height)
             self._set_fill(fill if fill is not None else (1.0, 1.0, 1.0))
             self._set_stroke(stroke if stroke is not None else (0.0, 0.0, 0.0))
             self.pdf.set_line_width(line_width)
@@ -667,10 +673,10 @@ class Renderer:
             if stroke is not None:
                 style += "D"
             self.pdf.rect(
-                x,
+                chrome_x,
                 top_y,
-                width,
-                height,
+                chrome_width,
+                chrome_height,
                 style=style or "D",
                 round_corners=radius > 0,
                 corner_radius=radius,
