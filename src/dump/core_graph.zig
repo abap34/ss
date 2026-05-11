@@ -230,6 +230,8 @@ fn writeChromePaint(object: *json.Object, chrome_spec: core.render_policy.Chrome
     try writeOptionalColor(&chrome, "stroke", chrome_spec.stroke);
     try chrome.floatField("line_width", chrome_spec.line_width, "{d:.1}");
     try chrome.floatField("radius", chrome_spec.radius, "{d:.1}");
+    try chrome.floatField("pad_x", chrome_spec.pad_x, "{d:.1}");
+    try chrome.floatField("pad_y", chrome_spec.pad_y, "{d:.1}");
     try chrome.end();
 }
 

@@ -75,6 +75,8 @@ pub const ChromePaint = struct {
     stroke: ?Color,
     line_width: f32,
     radius: f32,
+    pad_x: f32,
+    pad_y: f32,
 };
 
 pub const UnderlinePaint = struct {
@@ -276,6 +278,8 @@ fn resolveChromeWithEnv(node: *const Node, sema: anytype) ChromePaint {
         .stroke = parseColorPropertyWithEnv(node, "chrome_stroke", sema),
         .line_width = parseFloatPropertyWithEnv(node, "chrome_line_width", sema) orelse 0,
         .radius = parseFloatPropertyWithEnv(node, "chrome_radius", sema) orelse 0,
+        .pad_x = parseFloatPropertyWithEnv(node, "chrome_pad_x", sema) orelse 0,
+        .pad_y = parseFloatPropertyWithEnv(node, "chrome_pad_y", sema) orelse 0,
     };
 }
 
@@ -301,6 +305,8 @@ fn resolveChrome(ir: anytype, node: *const Node) ChromePaint {
         .stroke = parseColorProperty(ir, node, "chrome_stroke"),
         .line_width = parseFloatProperty(ir, node, "chrome_line_width") orelse 0,
         .radius = parseFloatProperty(ir, node, "chrome_radius") orelse 0,
+        .pad_x = parseFloatProperty(ir, node, "chrome_pad_x") orelse 0,
+        .pad_y = parseFloatProperty(ir, node, "chrome_pad_y") orelse 0,
     };
 }
 

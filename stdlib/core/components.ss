@@ -57,6 +57,21 @@ fn surround_object(panel_style_name: string, inner: object, pad_x: number, pad_y
   return inner
 end
 
+fn border_with_paint(inner: object, pad_x: number, pad_y: number, fill_name: string, stroke_name: string, line_width: number, radius: number) -> object
+  chrome_paint(inner, fill_name, stroke_name, str(line_width), str(radius))
+  set_prop(inner, "chrome_pad_x", str(pad_x))
+  set_prop(inner, "chrome_pad_y", str(pad_y))
+  return inner
+end
+
+fn border(inner: object, pad_x: number = 12, pad_y: number = 8, stroke_name: string = "0.36,0.40,0.48", line_width: number = 1, radius: number = 8) -> object
+  return border_with_paint(inner, pad_x, pad_y, "", stroke_name, line_width, radius)
+end
+
+fn outline_group(inner: object, stroke_name: string = "0.36,0.40,0.48", line_width: number = 1, radius: number = 8) -> object
+  return border(inner, 12, 8, stroke_name, line_width, radius)
+end
+
 fn panel_block(text_value: string, role_name: string, payload_name: string, panel_style_name: string, left: string, right: string, pad_x: number, pad_y: number) -> object
   let inner = payload_object(text_value, role_name, payload_name)
   flow_inset(inner, left, right)
