@@ -53,6 +53,7 @@ ICON_CACHE_DIRNAME = "icons"
 SVG_ASSET_CACHE_DIRNAME = "svg-assets"
 RENDER_CACHE_DIRNAME = "render"
 PAGE_CACHE_DIRNAME = "pages"
+DOCUMENT_CACHE_DIRNAME = "documents"
 MANIFEST_CACHE_DIRNAME = "manifests"
 
 TMP_FULL_BASE_LABEL = "full-base"
@@ -104,6 +105,7 @@ class RuntimeCaches:
     svg_asset_dir: Path
     render_dir: Path
     page_dir: Path
+    document_dir: Path
     manifest_dir: Path
 
     @classmethod
@@ -116,6 +118,7 @@ class RuntimeCaches:
             svg_asset_dir=CACHE_ROOT / SVG_ASSET_CACHE_DIRNAME,
             render_dir=render_dir,
             page_dir=render_dir / PAGE_CACHE_DIRNAME,
+            document_dir=render_dir / DOCUMENT_CACHE_DIRNAME,
             manifest_dir=render_dir / MANIFEST_CACHE_DIRNAME,
         )
         for path in (caches.math_dir, caches.highlight_dir, caches.icon_dir, caches.svg_asset_dir, caches.render_dir):
@@ -124,6 +127,7 @@ class RuntimeCaches:
 
     def ensure_page_cache(self) -> None:
         self.page_dir.mkdir(parents=True, exist_ok=True)
+        self.document_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_dir.mkdir(parents=True, exist_ok=True)
 
     def temp_pdf(self, label: str, identity: str) -> Path:
@@ -198,6 +202,18 @@ class HighlighterSpec:
         return [sys.executable, str(self.script_path), "--language", self.language]
 
 
+@dataclass(frozen=True)
+class MathRenderJob:
+    kind: str
+    tex_body: str
+    color: Optional[Color]
+    packages: Tuple[str, ...]
+    digest: str
+    work_dir: Path
+    tex_path: Path
+    pdf_path: Path
+
+
 CODE_HIGHLIGHTERS: Dict[str, HighlighterSpec] = {
     "python": HighlighterSpec(
         language="python",
@@ -214,6 +230,7 @@ DEFAULT_CODE_STRING = (178.0 / 255.0, 65.0 / 255.0, 55.0 / 255.0)
 # Surface them once at the end of a run so a missing emoji or rare CJK glyph is
 # still visible without drowning the console.
 _glyph_warnings: List[str] = []
+_renderer_fingerprint_cache: Optional[str] = None
 
 
 class _GlyphWarningFilter(logging.Filter):
@@ -278,6 +295,7 @@ def ensure_fonts_present() -> None:
 def render_full_document(doc: dict, output_pdf: str, asset_base_dir: str, caches: RuntimeCaches) -> None:
     base_pdf = caches.temp_pdf(TMP_FULL_BASE_LABEL, output_pdf)
     try:
+        prewarm_math_cache_for_doc(doc, caches.math_dir)
         renderer = Renderer(asset_base_dir, caches.math_dir, caches.highlight_dir, caches.icon_dir, caches.svg_asset_dir)
         overlays_by_page = renderer.render(doc, str(base_pdf))
         merge_overlays(str(base_pdf), output_pdf, overlays_by_page)
@@ -302,30 +320,32 @@ class Renderer:
         self.pdf.c_margin = 0
         self._internal_links: Dict[str, int] = {}
         self._current_page_index = 0
-        self._register_fonts()
+        self._fontkey_to_family_style: Dict[str, Tuple[str, str]] = {}
+        self._ensure_font("body", "")
+        self.pdf.set_fallback_fonts(["body"], exact_match=False)
 
-    def _register_fonts(self) -> None:
+    def _ensure_font(self, family: str, style: str) -> None:
+        key = self._font_key(family, style)
+        if key in self.pdf.fonts:
+            return
+        self.pdf.add_font(family, style, str(self._font_path(family, style)))
+        self._fontkey_to_family_style[key] = (family, style)
+        if family == "emoji":
+            self.pdf.set_fallback_fonts(["body", "emoji"], exact_match=False)
+
+    def _font_path(self, family: str, style: str) -> Path:
         body_reg = FONT_DIR / "NotoSansJP-Regular.ttf"
         body_bold = FONT_DIR / "NotoSansJP-Bold.ttf"
         mono_reg = FONT_DIR / "NotoSansMono-Regular.ttf"
         mono_bold = FONT_DIR / "NotoSansMono-Bold.ttf"
         emoji = FONT_DIR / "NotoEmoji-Regular.ttf"
-
-        registrations: List[Tuple[str, str, str]] = [
-            ("body", "", str(body_reg)),
-            ("body", "B", str(body_bold)),
-            ("mono", "", str(mono_reg)),
-            ("mono", "B", str(mono_bold)),
-            ("emoji", "", str(emoji)),
-        ]
-        # fontkey -> (family, style) so fallback resolution can map fpdf2's
-        # internal id back to the family/style we passed to add_font.
-        self._fontkey_to_family_style: Dict[str, Tuple[str, str]] = {}
-        for family, style, fname in registrations:
-            self.pdf.add_font(family, style, fname)
-            self._fontkey_to_family_style[family + style] = (family, style)
-
-        self.pdf.set_fallback_fonts(["body", "emoji"], exact_match=False)
+        if family == "body":
+            return body_bold if "B" in style else body_reg
+        if family == "mono":
+            return mono_bold if "B" in style else mono_reg
+        if family == "emoji":
+            return emoji
+        raise RuntimeError(f"unknown font family: {family}")
 
     # -- font run resolution (fpdf2's pdf.text() does not honour set_fallback_fonts;
     #    only cell()/write() do. We split each run into per-font segments so we can
@@ -333,10 +353,12 @@ class Renderer:
     #    emoji coverage from the registered fallback chain.) --
 
     def _resolve_font_for_char(self, char: str, family: str, style: str) -> Tuple[str, str]:
+        self._ensure_font(family, style)
         primary_key = self._font_key(family, style)
         primary = self.pdf.fonts.get(primary_key)
         if primary is not None and ord(char) in primary.cmap:
             return family, style
+        self._ensure_font("emoji", "")
         fallback_id = self.pdf.get_fallback_font(char, style)
         if fallback_id is not None:
             return self._family_style_of(fallback_id)
@@ -383,6 +405,7 @@ class Renderer:
         advance (sum of run widths)."""
         cursor = x
         for run_family, run_style, segment in self._split_runs(text, family, style):
+            self._ensure_font(run_family, run_style)
             self.pdf.set_font(run_family, run_style, size)
             self.pdf.text(cursor, baseline_tl, segment)
             if should_synthesize_cjk_bold(segment, run_family, run_style, cjk_bold_passes):
@@ -397,6 +420,7 @@ class Renderer:
             return 0.0
         total = 0.0
         for run_family, run_style, segment in self._split_runs(text, family, style):
+            self._ensure_font(run_family, run_style)
             self.pdf.set_font(run_family, run_style, size)
             total += self.pdf.get_string_width(segment)
         return total
@@ -440,7 +464,7 @@ class Renderer:
         children_by_parent = {entry["parent"]: entry["children"] for entry in doc["contains"]}
         document_node = node_by_id.get(doc.get("document_id"), {})
         self.pdf.add_page()
-        self._current_page_index = page_index
+        self._current_page_index = 0
         page_node = node_by_id.get(page_id, {})
         self._draw_page_background(page_node, document_node)
         overlays: List[Overlay] = []
@@ -1198,59 +1222,84 @@ def merge_overlays(base_pdf: str, output_pdf: str, overlays_by_page: Dict[int, L
 
 
 def supports_incremental_render(doc: dict) -> bool:
-    """Page PDFs are reusable only when the document has no intra-PDF links.
+    """Page PDFs are reusable when internal links do not cross page boundaries."""
+    node_by_id = {node["id"]: node for node in doc.get("nodes", []) if isinstance(node, dict) and "id" in node}
+    children_by_parent = {
+        entry["parent"]: entry["children"]
+        for entry in doc.get("contains", [])
+        if isinstance(entry, dict) and "parent" in entry and isinstance(entry.get("children"), list)
+    }
 
-    fpdf2 encodes internal link annotations against the full document it is
-    currently writing. Reusing a single cached page in a newly assembled PDF
-    would make those references ambiguous, so links conservatively force the
-    older full-document path.
-    """
-    for node in doc.get("nodes", []):
-        if not isinstance(node, dict):
-            continue
+    page_by_node: Dict[int, int] = {}
+
+    def visit(node_id: int, page_id: int) -> None:
+        if node_id in page_by_node:
+            return
+        page_by_node[node_id] = page_id
+        for child_id in children_by_parent.get(node_id, []):
+            visit(child_id, page_id)
+
+    for page_id in doc.get("page_order", []):
+        if page_id in node_by_id:
+            visit(page_id, page_id)
+
+    target_pages: Dict[str, int] = {}
+    for node in node_by_id.values():
         properties = node.get("properties")
-        if isinstance(properties, dict) and properties.get("link_id"):
+        link_id = properties.get("link_id") if isinstance(properties, dict) else None
+        if not isinstance(link_id, str) or not link_id:
+            continue
+        page_id = page_by_node.get(node["id"])
+        if page_id is None:
             return False
-        if node_has_internal_link(node):
+        existing = target_pages.get(link_id)
+        if existing is not None and existing != page_id:
             return False
+        target_pages[link_id] = page_id
+
+    for node in node_by_id.values():
+        source_page = page_by_node.get(node["id"])
+        for link_id in internal_link_ids_for_node(node):
+            target_page = target_pages.get(link_id)
+            if source_page is None or target_page is None or source_page != target_page:
+                return False
     return True
 
 
-def node_has_internal_link(node: dict) -> bool:
+def internal_link_ids_for_node(node: dict) -> List[str]:
+    link_ids: List[str] = []
     for line in node.get("inline_lines") or []:
-        if inline_line_has_internal_link(line):
-            return True
+        link_ids.extend(internal_link_ids_for_line(line))
     for block in node.get("blocks") or []:
-        if block_has_internal_link(block):
-            return True
-    return False
+        link_ids.extend(internal_link_ids_for_block(block))
+    return link_ids
 
 
-def block_has_internal_link(block: dict) -> bool:
+def internal_link_ids_for_block(block: dict) -> List[str]:
+    link_ids: List[str] = []
     if not isinstance(block, dict):
-        return False
+        return link_ids
     for line in block.get("lines") or []:
-        if inline_line_has_internal_link(line):
-            return True
+        link_ids.extend(internal_link_ids_for_line(line))
     for item in block.get("items") or []:
         if not isinstance(item, dict):
             continue
         for child in item.get("blocks") or []:
-            if block_has_internal_link(child):
-                return True
-    return False
+            link_ids.extend(internal_link_ids_for_block(child))
+    return link_ids
 
 
-def inline_line_has_internal_link(line: object) -> bool:
+def internal_link_ids_for_line(line: object) -> List[str]:
+    link_ids: List[str] = []
     if not isinstance(line, list):
-        return False
+        return link_ids
     for segment in line:
         if not isinstance(segment, dict):
             continue
         url = segment.get("url")
         if isinstance(url, str) and url.startswith(INTERNAL_LINK_PREFIX) and len(url) > len(INTERNAL_LINK_PREFIX):
-            return True
-    return False
+            link_ids.append(url[len(INTERNAL_LINK_PREFIX) :])
+    return link_ids
 
 
 class IncrementalPageRenderer:
@@ -1265,20 +1314,43 @@ class IncrementalPageRenderer:
     def render(self) -> IncrementalRenderStats:
         self.caches.ensure_page_cache()
 
+        previous_manifest = self._read_manifest()
         pages: List[CachedPage] = []
-        rendered = 0
-        reused = 0
-
         for page_index, page_id in enumerate(self.doc["page_order"]):
-            page = self._cached_page(page_index, page_id)
-            if page.pdf_path.exists():
-                reused += 1
-            else:
-                rendered += 1
-                self._render_page(page)
-            pages.append(page)
+            pages.append(self._cached_page(page_index, page_id))
 
-        self._assemble(pages)
+        missing = [page for page in pages if not page.pdf_path.exists()]
+        rendered = len(missing)
+        reused = len(pages) - rendered
+        document_pdf = self._document_pdf_path(pages)
+        changed_indexes = self._changed_indexes(previous_manifest, pages)
+        previous_document_pdf = self._previous_document_pdf(previous_manifest)
+
+        if not missing and document_pdf.exists():
+            self._copy_cached_document(document_pdf)
+            self._write_manifest(pages, rendered, reused)
+            return IncrementalRenderStats(rendered=rendered, reused=reused, total=len(pages))
+
+        if rendered == len(pages) and pages:
+            render_full_document(self.doc, self.output_pdf, self.asset_base_dir, self.caches)
+            self._cache_pages_from_output(pages)
+            self._cache_document_output(document_pdf)
+            self._write_manifest(pages, rendered, reused)
+            return IncrementalRenderStats(rendered=rendered, reused=reused, total=len(pages))
+
+        prewarm_math_cache_for_pages(self.doc, missing_page_ids=[page.page_id for page in missing], cache_dir=self.caches.math_dir)
+        for page in missing:
+            self._render_page(page)
+
+        if (
+            len(changed_indexes) == 1
+            and previous_document_pdf is not None
+            and self._assemble_by_replacing_page(previous_document_pdf, pages[changed_indexes[0]])
+        ):
+            pass
+        else:
+            self._assemble(pages)
+        self._cache_document_output(document_pdf)
         self._write_manifest(pages, rendered, reused)
         return IncrementalRenderStats(rendered=rendered, reused=reused, total=len(pages))
 
@@ -1299,8 +1371,11 @@ class IncrementalPageRenderer:
         try:
             renderer = Renderer(self.asset_base_dir, self.caches.math_dir, self.caches.highlight_dir, self.caches.icon_dir, self.caches.svg_asset_dir)
             overlays = renderer.render_page(self.doc, page.index, page.page_id, str(tmp_base_pdf))
-            merge_overlays(str(tmp_base_pdf), str(tmp_page_pdf), {0: overlays})
-            tmp_page_pdf.replace(page.pdf_path)
+            if overlays:
+                merge_overlays(str(tmp_base_pdf), str(tmp_page_pdf), {0: overlays})
+                tmp_page_pdf.replace(page.pdf_path)
+            else:
+                tmp_base_pdf.replace(page.pdf_path)
         finally:
             tmp_base_pdf.unlink(missing_ok=True)
             tmp_page_pdf.unlink(missing_ok=True)
@@ -1313,6 +1388,44 @@ class IncrementalPageRenderer:
         with open(self.output_pdf, "wb") as f:
             writer.write(f)
 
+    def _assemble_by_replacing_page(self, previous_document_pdf: Path, page: CachedPage) -> bool:
+        qpdf = shutil.which("qpdf")
+        if qpdf is None:
+            return False
+
+        total_pages = len(self.doc["page_order"])
+        argv = [qpdf, "--empty", "--pages"]
+        if page.index > 0:
+            argv.extend([str(previous_document_pdf), f"1-{page.index}"])
+        argv.extend([str(page.pdf_path), "1"])
+        if page.index + 1 < total_pages:
+            argv.extend([str(previous_document_pdf), f"{page.index + 2}-z"])
+        argv.extend(["--", self.output_pdf])
+
+        try:
+            subprocess.run(argv, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (OSError, subprocess.CalledProcessError) as err:
+            if isinstance(err, subprocess.CalledProcessError):
+                stderr = err.stderr.decode("utf-8", errors="replace") if err.stderr else ""
+                print(f"pdf backend: qpdf page replacement failed, falling back to pypdf assemble: {stderr}", file=sys.stderr)
+            return False
+        return True
+
+    def _cache_pages_from_output(self, pages: List[CachedPage]) -> None:
+        reader = PdfReader(self.output_pdf)
+        if len(reader.pages) != len(pages):
+            raise RuntimeError(f"expected {len(pages)} rendered pages, got {len(reader.pages)}")
+        for page in pages:
+            tmp_page_pdf = self.caches.temp_pdf(TMP_PAGE_FINAL_LABEL, page.digest)
+            try:
+                writer = PdfWriter()
+                writer.add_page(reader.pages[page.index])
+                with open(tmp_page_pdf, "wb") as f:
+                    writer.write(f)
+                tmp_page_pdf.replace(page.pdf_path)
+            finally:
+                tmp_page_pdf.unlink(missing_ok=True)
+
     def _write_manifest(self, pages: List[CachedPage], rendered: int, reused: int) -> None:
         manifest = {
             "version": INCREMENTAL_RENDER_VERSION,
@@ -1324,6 +1437,88 @@ class IncrementalPageRenderer:
             "pages": [page.manifest_entry() for page in pages],
         }
         self._manifest_path().write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _read_manifest(self) -> Optional[dict]:
+        path = self._manifest_path()
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if manifest.get("version") != INCREMENTAL_RENDER_VERSION:
+            return None
+        if manifest.get("renderer") != renderer_fingerprint():
+            return None
+        if manifest.get("project_path") != self.doc.get("project_path"):
+            return None
+        if manifest.get("asset_base_dir") != self.doc.get("asset_base_dir"):
+            return None
+        if not isinstance(manifest.get("pages"), list):
+            return None
+        return manifest
+
+    def _changed_indexes(self, previous_manifest: Optional[dict], pages: List[CachedPage]) -> List[int]:
+        if previous_manifest is None:
+            return []
+        previous_pages = previous_manifest.get("pages")
+        if not isinstance(previous_pages, list) or len(previous_pages) != len(pages):
+            return []
+        changed: List[int] = []
+        for index, (previous_page, page) in enumerate(zip(previous_pages, pages)):
+            previous_digest = previous_page.get("hash") if isinstance(previous_page, dict) else None
+            if previous_digest != page.digest:
+                changed.append(index)
+        return changed
+
+    def _previous_document_pdf(self, previous_manifest: Optional[dict]) -> Optional[Path]:
+        if previous_manifest is None:
+            return None
+        previous_pages = previous_manifest.get("pages")
+        if not isinstance(previous_pages, list):
+            return None
+        digests: List[str] = []
+        for page in previous_pages:
+            digest = page.get("hash") if isinstance(page, dict) else None
+            if not isinstance(digest, str) or not digest:
+                return None
+            digests.append(digest)
+        document_pdf = self._document_pdf_path_for_digests(digests)
+        return document_pdf if document_pdf.exists() else None
+
+    def _document_pdf_path(self, pages: List[CachedPage]) -> Path:
+        return self._document_pdf_path_for_digests([page.digest for page in pages])
+
+    def _document_pdf_path_for_digests(self, page_digests: List[str]) -> Path:
+        identity = hashlib.sha256(
+            json.dumps(
+                {
+                    "version": INCREMENTAL_RENDER_VERSION,
+                    "renderer": renderer_fingerprint(),
+                    "project_path": self.doc.get("project_path"),
+                    "asset_base_dir": self.doc.get("asset_base_dir"),
+                    "pages": page_digests,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return self.caches.document_dir / f"{identity}{PDF_SUFFIX}"
+
+    def _cache_document_output(self, document_pdf: Path) -> None:
+        output_path = Path(self.output_pdf)
+        if output_path.resolve() == document_pdf.resolve():
+            return
+        tmp_pdf = self.caches.temp_pdf("document-cache", document_pdf.stem)
+        try:
+            shutil.copyfile(self.output_pdf, tmp_pdf)
+            tmp_pdf.replace(document_pdf)
+        finally:
+            tmp_pdf.unlink(missing_ok=True)
+
+    def _copy_cached_document(self, document_pdf: Path) -> None:
+        output_path = Path(self.output_pdf)
+        if output_path.resolve() == document_pdf.resolve():
+            return
+        shutil.copyfile(document_pdf, output_path)
 
     def _manifest_path(self) -> Path:
         identity = hashlib.sha256(
@@ -1408,100 +1603,249 @@ def file_fingerprint(path_text: str) -> dict:
 
 
 def renderer_fingerprint() -> str:
+    global _renderer_fingerprint_cache
+    if _renderer_fingerprint_cache is not None:
+        return _renderer_fingerprint_cache
     chunks = [INCREMENTAL_RENDER_VERSION, MATH_RENDER_VERSION, HIGHLIGHT_RENDER_VERSION, FA_RENDER_VERSION]
     chunks.append(hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     for spec in CODE_HIGHLIGHTERS.values():
         chunks.append(hashlib.sha256(spec.script_path.read_bytes()).hexdigest())
-    return hashlib.sha256("\0".join(chunks).encode("utf-8")).hexdigest()
+    _renderer_fingerprint_cache = hashlib.sha256("\0".join(chunks).encode("utf-8")).hexdigest()
+    return _renderer_fingerprint_cache
 
 
 # ---------------------------------------------------------------------------
 # Math (LaTeX -> PDF)
 
 
-def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
-    latex_packages = canonical_latex_packages(packages or [])
+def prewarm_math_cache_for_doc(doc: dict, cache_dir: Path) -> None:
+    page_ids = [page_id for page_id in doc.get("page_order", []) if isinstance(page_id, int)]
+    prewarm_math_cache_for_pages(doc, page_ids, cache_dir)
+
+
+def prewarm_math_cache_for_pages(doc: dict, missing_page_ids: List[int], cache_dir: Path) -> None:
+    if not missing_page_ids:
+        return
+    node_by_id = {node["id"]: node for node in doc.get("nodes", []) if isinstance(node, dict) and "id" in node}
+    children_by_parent = {
+        entry["parent"]: entry["children"]
+        for entry in doc.get("contains", [])
+        if isinstance(entry, dict) and "parent" in entry and isinstance(entry.get("children"), list)
+    }
+    jobs_by_digest: Dict[str, MathRenderJob] = {}
+
+    def add_job(job: MathRenderJob) -> None:
+        if job.pdf_path.exists():
+            return
+        jobs_by_digest[job.digest] = job
+
+    def visit(node_id: int) -> None:
+        node = node_by_id.get(node_id)
+        if node is None:
+            return
+        collect_math_jobs_for_node(node, cache_dir, add_job)
+        for child_id in children_by_parent.get(node_id, []):
+            visit(child_id)
+
+    for page_id in missing_page_ids:
+        visit(page_id)
+
+    compile_missing_math_jobs(list(jobs_by_digest.values()), cache_dir)
+
+
+def collect_math_jobs_for_node(node: dict, cache_dir: Path, add_job) -> None:
+    if node.get("kind") != "object":
+        return
+    render = node_render(node)
+    kind = render.get("kind")
+    if kind == "vector_math":
+        math = render.get("math") or {}
+        color = parse_color_array(math.get("color")) if math.get("color") is not None else (0.0, 0.0, 0.0)
+        add_job(make_math_job("block", str(node.get("content") or ""), cache_dir, color, math_packages_for_node(node)))
+        return
+    if kind != "text":
+        return
+
+    spec = text_spec(render, node)
+    blocks = markdown_blocks_for_node(node)
+    if blocks is not None:
+        collect_math_jobs_for_blocks(blocks, spec, cache_dir, add_job)
+    else:
+        collect_math_jobs_for_inline_lines(inline_lines_for_node(node), spec, cache_dir, add_job)
+
+
+def collect_math_jobs_for_blocks(blocks: List[dict], spec: TextPaintSpec, cache_dir: Path, add_job) -> None:
+    for block in blocks:
+        kind = str(block.get("kind", "paragraph"))
+        if kind == "paragraph":
+            lines = inline_lines_from_lines_field(block)
+            display_math = display_math_text_from_lines(lines)
+            if display_math is not None:
+                add_job(make_math_job("display", display_math, cache_dir, spec.color, spec.math_latex_packages))
+            else:
+                collect_math_jobs_for_inline_lines(lines, spec, cache_dir, add_job)
+        elif kind in ("bullet_list", "ordered_list"):
+            items = block.get("items", []) if isinstance(block.get("items"), list) else []
+            for item in items:
+                item_blocks = item.get("blocks", []) if isinstance(item, dict) else []
+                collect_math_jobs_for_blocks(
+                    [child for child in item_blocks if isinstance(child, dict)],
+                    spec,
+                    cache_dir,
+                    add_job,
+                )
+
+
+def collect_math_jobs_for_inline_lines(lines: List[List[dict]], spec: TextPaintSpec, cache_dir: Path, add_job) -> None:
+    for line in lines:
+        for run in line:
+            kind = str(run.get("kind", "text"))
+            if kind not in ("math", "display_math"):
+                continue
+            color = parse_color_array(run.get("color")) if run.get("color") is not None else spec.color
+            add_job(make_math_job("inline", str(run.get("text", "")), cache_dir, color, spec.math_latex_packages))
+
+
+def compile_missing_math_jobs(jobs: List[MathRenderJob], cache_dir: Path) -> None:
+    pending = [job for job in jobs if not job.pdf_path.exists()]
+    if not pending:
+        return
+
+    groups: Dict[Tuple[str, ...], List[MathRenderJob]] = {}
+    for job in pending:
+        groups.setdefault(job.packages, []).append(job)
+
+    for group_jobs in groups.values():
+        if len(group_jobs) == 1:
+            ensure_math_pdf(group_jobs[0])
+            continue
+        try:
+            compile_math_batch(group_jobs, cache_dir)
+        except Exception:
+            for job in group_jobs:
+                ensure_math_pdf(job)
+
+
+def compile_math_batch(jobs: List[MathRenderJob], cache_dir: Path) -> None:
+    batch_key = hashlib.sha256("\0".join(job.digest for job in jobs).encode("utf-8")).hexdigest()[:16]
+    batch_dir = cache_dir / f"batch-{batch_key}"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    batch_tex = batch_dir / "main.tex"
+    batch_pdf = batch_dir / "main.pdf"
+    packages = list(jobs[0].packages)
+    batch_tex.write_text(batch_math_document_source(packages, jobs), encoding="utf-8")
+    run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(batch_dir))
+
+    reader = PdfReader(str(batch_pdf))
+    if len(reader.pages) != len(jobs):
+        raise RuntimeError(f"batch math produced {len(reader.pages)} page(s), expected {len(jobs)}")
+
+    for index, job in enumerate(jobs):
+        job.work_dir.mkdir(parents=True, exist_ok=True)
+        job.tex_path.write_text(single_math_document_source(job), encoding="utf-8")
+        tmp_pdf = job.work_dir / "main.batch-tmp.pdf"
+        try:
+            writer = PdfWriter()
+            writer.add_page(reader.pages[index])
+            with open(tmp_pdf, "wb") as f:
+                writer.write(f)
+            tmp_pdf.replace(job.pdf_path)
+        finally:
+            tmp_pdf.unlink(missing_ok=True)
+    shutil.rmtree(batch_dir, ignore_errors=True)
+
+
+def batch_math_document_source(packages: List[str], jobs: List[MathRenderJob]) -> str:
+    chunks = [
+        "\\documentclass[multi=ssmath,border=0pt]{standalone}\n",
+        "\\usepackage{amsmath,amssymb}\n",
+        "\\usepackage{graphicx}\n",
+        "\\usepackage{xcolor}\n",
+        latex_package_lines(packages),
+        "\\begin{document}\n",
+    ]
+    for job in jobs:
+        chunks.append("\\begin{ssmath}\n")
+        chunks.append(color_command(job.color))
+        chunks.append(math_tex_fragment(job))
+        chunks.append("\\end{ssmath}\n")
+    chunks.append("\\end{document}\n")
+    return "".join(chunks)
+
+
+def make_math_job(
+    kind: str,
+    tex_body: str,
+    cache_dir: Path,
+    color: Optional[Color] = None,
+    packages: Optional[List[str]] = None,
+) -> MathRenderJob:
+    latex_packages = tuple(canonical_latex_packages(packages or []))
     color_key = color_cache_key(color)
     package_key = "\0".join(latex_packages)
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":block:" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256((MATH_RENDER_VERSION + ":" + kind + ":" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
     work_dir = cache_dir / digest
-    work_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = work_dir / "main.tex"
-    pdf_path = work_dir / "main.pdf"
-    if pdf_path.exists():
-        return str(pdf_path)
-    normalized = "\n".join(line.strip() for line in tex_body.splitlines() if line.strip())
-    tex_path.write_text(
+    return MathRenderJob(
+        kind=kind,
+        tex_body=tex_body,
+        color=color,
+        packages=latex_packages,
+        digest=digest,
+        work_dir=work_dir,
+        tex_path=work_dir / "main.tex",
+        pdf_path=work_dir / "main.pdf",
+    )
+
+
+def ensure_math_pdf(job: MathRenderJob) -> str:
+    if job.pdf_path.exists():
+        return str(job.pdf_path)
+    job.work_dir.mkdir(parents=True, exist_ok=True)
+    job.tex_path.write_text(single_math_document_source(job), encoding="utf-8")
+    run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(job.work_dir))
+    return str(job.pdf_path)
+
+
+def single_math_document_source(job: MathRenderJob) -> str:
+    return (
         "\\documentclass[border=0pt]{standalone}\n"
         "\\usepackage{amsmath,amssymb}\n"
         "\\usepackage{graphicx}\n"
         "\\usepackage{xcolor}\n"
-        f"{latex_package_lines(latex_packages)}"
+        f"{latex_package_lines(list(job.packages))}"
         "\\begin{document}\n"
-        f"{color_command(color)}"
-        "$\\displaystyle\n"
-        "\\begin{array}{l}\n"
-        f"{normalized}\n"
-        "\\end{array}$\n"
-        "\\end{document}\n",
-        encoding="utf-8",
+        f"{color_command(job.color)}"
+        f"{math_tex_fragment(job)}"
+        "\\end{document}\n"
     )
-    run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(work_dir))
-    return str(pdf_path)
+
+
+def math_tex_fragment(job: MathRenderJob) -> str:
+    if job.kind == "block":
+        normalized = "\n".join(line.strip() for line in job.tex_body.splitlines() if line.strip())
+        return (
+            "$\\displaystyle\n"
+            "\\begin{array}{l}\n"
+            f"{normalized}\n"
+            "\\end{array}$\n"
+        )
+    if job.kind == "inline":
+        return f"$\\mathstrut {job.tex_body}$\n"
+    if job.kind == "display":
+        return f"$\\displaystyle\\mathstrut {job.tex_body}$\n"
+    raise RuntimeError(f"unknown math render kind: {job.kind}")
+
+
+def render_math_tex_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
+    return ensure_math_pdf(make_math_job("block", tex_body, cache_dir, color, packages))
 
 
 def render_inline_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
-    latex_packages = canonical_latex_packages(packages or [])
-    color_key = color_cache_key(color)
-    package_key = "\0".join(latex_packages)
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":inline:" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
-    work_dir = cache_dir / digest
-    work_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = work_dir / "main.tex"
-    pdf_path = work_dir / "main.pdf"
-    if pdf_path.exists():
-        return str(pdf_path)
-    tex_path.write_text(
-        "\\documentclass[border=0pt]{standalone}\n"
-        "\\usepackage{amsmath,amssymb}\n"
-        "\\usepackage{graphicx}\n"
-        "\\usepackage{xcolor}\n"
-        f"{latex_package_lines(latex_packages)}"
-        "\\begin{document}\n"
-        f"{color_command(color)}"
-        f"$\\mathstrut {tex_body}$\n"
-        "\\end{document}\n",
-        encoding="utf-8",
-    )
-    run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(work_dir))
-    return str(pdf_path)
+    return ensure_math_pdf(make_math_job("inline", tex_body, cache_dir, color, packages))
 
 
 def render_display_math_to_pdf(tex_body: str, cache_dir: Path, color: Optional[Color] = None, packages: Optional[List[str]] = None) -> str:
-    latex_packages = canonical_latex_packages(packages or [])
-    color_key = color_cache_key(color)
-    package_key = "\0".join(latex_packages)
-    digest = hashlib.sha256((MATH_RENDER_VERSION + ":display:" + color_key + ":" + package_key + ":" + tex_body).encode("utf-8")).hexdigest()[:16]
-    work_dir = cache_dir / digest
-    work_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = work_dir / "main.tex"
-    pdf_path = work_dir / "main.pdf"
-    if pdf_path.exists():
-        return str(pdf_path)
-    tex_path.write_text(
-        "\\documentclass[border=0pt]{standalone}\n"
-        "\\usepackage{amsmath,amssymb}\n"
-        "\\usepackage{graphicx}\n"
-        "\\usepackage{xcolor}\n"
-        f"{latex_package_lines(latex_packages)}"
-        "\\begin{document}\n"
-        f"{color_command(color)}"
-        f"$\\displaystyle\\mathstrut {tex_body}$\n"
-        "\\end{document}\n",
-        encoding="utf-8",
-    )
-    run_checked(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"], cwd=str(work_dir))
-    return str(pdf_path)
+    return ensure_math_pdf(make_math_job("display", tex_body, cache_dir, color, packages))
 
 
 def canonical_latex_packages(packages: List[str]) -> List[str]:
