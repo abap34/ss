@@ -114,6 +114,10 @@ fn markdownListIndent(ir: anytype, node: *const Node, style: TextStyle) f32 {
     return parseNodeFloatProperty(ir, node, "text_markdown_list_indent") orelse style.font_size * 1.3;
 }
 
+fn markdownListInset(ir: anytype, node: *const Node, style: TextStyle) f32 {
+    return @max(@as(f32, 0), parseNodeFloatProperty(ir, node, "text_markdown_list_inset") orelse style.font_size * 0.4);
+}
+
 fn markdownCodeLineHeight(ir: anytype, node: *const Node) f32 {
     return parseNodeFloatProperty(ir, node, "text_markdown_code_line_height") orelse 20.0;
 }
@@ -140,7 +144,10 @@ fn markdownBlockHeight(ir: anytype, node: *const Node, style: TextStyle, block: 
             const lines = markdownCodeBlockLineCount(block);
             break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(ir, node) + 2.0 * markdownCodePadY(ir, node);
         },
-        .bullet_list, .ordered_list => markdownListHeight(ir, node, style, block, max_width, list_depth),
+        .bullet_list, .ordered_list => blk: {
+            const list_inset = if (list_depth == 0) markdownListInset(ir, node, style) else 0;
+            break :blk markdownListHeight(ir, node, style, block, @max(@as(f32, 1.0), max_width - list_inset), list_depth);
+        },
     };
 }
 

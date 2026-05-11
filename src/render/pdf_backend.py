@@ -179,6 +179,7 @@ class TextPaintSpec:
     inline_math_height_factor: float
     inline_math_spacing: float
     markdown_block_gap: float
+    markdown_list_inset: float
     markdown_list_indent: float
     markdown_code_font_size: float
     markdown_code_line_height: float
@@ -641,15 +642,18 @@ class Renderer:
             elif kind in ("bullet_list", "ordered_list"):
                 start = int(block.get("start", 1))
                 items = block.get("items", []) if isinstance(block.get("items"), list) else []
+                list_inset = max(0.0, spec.markdown_list_inset) if list_depth == 0 else 0.0
+                item_x = x + list_inset
+                item_width = max(1.0, max_width - list_inset)
                 for item_index, item in enumerate(items):
                     item_blocks = item.get("blocks", []) if isinstance(item, dict) else []
                     marker = self._list_marker(kind, list_depth, start + item_index)
                     item_overlays, cursor_bl = self._draw_list_item(
                         spec,
-                        x,
+                        item_x,
                         cursor_bl,
                         item_blocks,
-                        max_width,
+                        item_width,
                         marker,
                         list_depth,
                     )
@@ -2126,6 +2130,7 @@ def text_spec(render: dict, node: Optional[dict] = None) -> TextPaintSpec:
         inline_math_height_factor=float(text["inline_math_height_factor"]),
         inline_math_spacing=float(text["inline_math_spacing"]),
         markdown_block_gap=float(text["markdown_block_gap"]),
+        markdown_list_inset=float(text.get("markdown_list_inset", 0.0)),
         markdown_list_indent=float(text["markdown_list_indent"]),
         markdown_code_font_size=float(text["markdown_code_font_size"]),
         markdown_code_line_height=float(text["markdown_code_line_height"]),

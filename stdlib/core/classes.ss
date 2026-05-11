@@ -54,6 +54,7 @@ type TextObject = object {
   text_inline_math_height_factor: ScalarLike = "1.02"
   text_inline_math_spacing: ScalarLike = "0.08"
   text_markdown_block_gap: ScalarLike = "4"
+  text_markdown_list_inset: ScalarLike = "8"
   text_markdown_list_indent: ScalarLike = "26"
   text_markdown_code_font_size: ScalarLike = "15"
   text_markdown_code_line_height: ScalarLike = "20"
