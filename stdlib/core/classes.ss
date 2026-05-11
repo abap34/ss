@@ -265,6 +265,8 @@ type PanelObject = object {
   chrome_stroke: Color = ""
   chrome_line_width: ScalarLike = "1"
   chrome_radius: ScalarLike = "10"
+  chrome_pad_x: ScalarLike = "0"
+  chrome_pad_y: ScalarLike = "0"
 }
 
 type RuleObject = object {

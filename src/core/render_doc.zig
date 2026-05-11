@@ -149,6 +149,10 @@ fn appendRule(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
 fn appendChrome(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, chrome: render_policy.ChromePaint) !void {
     var op = Op.init(node, "draw_chrome");
     errdefer op.deinit(allocator);
+    op.frame.x -= chrome.pad_x;
+    op.frame.y -= chrome.pad_y;
+    op.frame.width += chrome.pad_x * 2;
+    op.frame.height += chrome.pad_y * 2;
     try op.putOptionalColor(allocator, "fill", chrome.fill);
     try op.putOptionalColor(allocator, "stroke", chrome.stroke);
     try op.putFloat(allocator, "line_width", chrome.line_width);
