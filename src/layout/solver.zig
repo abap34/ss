@@ -248,10 +248,7 @@ fn constraintsSame(a: Constraint, b: Constraint) bool {
 fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint: Constraint, is_soft: bool, options: SolveOptions) !bool {
     if (graph.anchorAxis(constraint.target_anchor) != workspace.axis) return false;
 
-    const target_page = ir.parentPageOf(constraint.target_node) orelse return error.MissingParentPage;
-    if (target_page != workspace.graph.page_id) return false;
-
-    const target_index = workspace.indexOf(constraint.target_node) orelse return error.UnknownNode;
+    const target_index = workspace.indexOf(constraint.target_node) orelse return false;
     const target_node = ir.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (groups.isGroupNode(target_node)) return false;
 
@@ -311,9 +308,6 @@ fn applyReverseAxisConstraint(
 
     const source_node = ir.getNode(node_source.node_id) orelse return error.UnknownNode;
     if (groups.isGroupNode(source_node)) return false;
-
-    const source_page = ir.parentPageOf(node_source.node_id) orelse return error.MissingParentPage;
-    if (source_page != workspace.graph.page_id) return false;
 
     const source_index = workspace.indexOf(node_source.node_id) orelse return false;
     if (graph.axisAnchorValue(workspace.states[source_index], node_source.anchor) != null) return false;
