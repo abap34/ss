@@ -42,3 +42,10 @@ Python runtime requirements:
 
 You can override the Python interpreter with the `SS_PYTHON` env var.
 
+Render cache:
+
+  ss keeps PDF render artifacts under `.ss-cache/` so repeated renders can
+  reuse pages, documents, math, syntax highlights, icons, and converted SVGs.
+  Managed render caches are pruned automatically to 256 MiB per working
+  directory by default. Override the budget with `SS_CACHE_MAX_BYTES`, for
+  example `SS_CACHE_MAX_BYTES=512M`, or set it to `off` for an unbounded cache.
