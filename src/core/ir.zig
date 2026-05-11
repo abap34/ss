@@ -585,6 +585,12 @@ pub const Ir = struct {
     }
 
     pub fn getNode(self: *Ir, id: NodeId) ?*Node {
+        if (id != 0) {
+            const index: usize = @intCast(id - 1);
+            if (index < self.nodes.items.len and self.nodes.items[index].id == id) {
+                return &self.nodes.items[index];
+            }
+        }
         for (self.nodes.items) |*node| {
             if (node.id == id) return node;
         }

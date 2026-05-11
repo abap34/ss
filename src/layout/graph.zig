@@ -38,6 +38,8 @@ pub const PageLayoutGraph = struct {
     page_id: NodeId,
     child_ids: []const NodeId,
     index_by_node: std.AutoHashMap(NodeId, usize),
+    has_horizontal_target_constraint: []bool,
+    has_vertical_target_constraint: []bool,
 
     pub fn init(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId) !PageLayoutGraph {
         const children = ir.contains.get(page_id) orelse return .{
@@ -45,6 +47,8 @@ pub const PageLayoutGraph = struct {
             .page_id = page_id,
             .child_ids = &.{},
             .index_by_node = std.AutoHashMap(NodeId, usize).init(allocator),
+            .has_horizontal_target_constraint = &.{},
+            .has_vertical_target_constraint = &.{},
         };
 
         var index_by_node = std.AutoHashMap(NodeId, usize).init(allocator);
@@ -53,17 +57,34 @@ pub const PageLayoutGraph = struct {
         for (children.items, 0..) |node_id, index| {
             index_by_node.putAssumeCapacity(node_id, index);
         }
+        const has_horizontal_target_constraint = try allocator.alloc(bool, children.items.len);
+        errdefer allocator.free(has_horizontal_target_constraint);
+        const has_vertical_target_constraint = try allocator.alloc(bool, children.items.len);
+        errdefer allocator.free(has_vertical_target_constraint);
+        @memset(has_horizontal_target_constraint, false);
+        @memset(has_vertical_target_constraint, false);
+        for (ir.constraints.items) |constraint| {
+            const target_index = index_by_node.get(constraint.target_node) orelse continue;
+            switch (anchorAxis(constraint.target_anchor)) {
+                .horizontal => has_horizontal_target_constraint[target_index] = true,
+                .vertical => has_vertical_target_constraint[target_index] = true,
+            }
+        }
 
         return .{
             .allocator = allocator,
             .page_id = page_id,
             .child_ids = children.items,
             .index_by_node = index_by_node,
+            .has_horizontal_target_constraint = has_horizontal_target_constraint,
+            .has_vertical_target_constraint = has_vertical_target_constraint,
         };
     }
 
     pub fn deinit(self: *PageLayoutGraph) void {
         self.index_by_node.deinit();
+        self.allocator.free(self.has_horizontal_target_constraint);
+        self.allocator.free(self.has_vertical_target_constraint);
     }
 
     pub fn len(self: *const PageLayoutGraph) usize {
@@ -96,15 +117,17 @@ pub const PageLayoutGraph = struct {
     }
 
     pub fn hasTargetConstraint(self: *const PageLayoutGraph, ir: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) bool {
-        for (ir.constraints.items) |constraint| {
-            if (constraint.target_node != node_id) continue;
-            if (anchorAxis(constraint.target_anchor) == axis) return true;
+        _ = ir;
+        if (self.indexOf(node_id)) |index| {
+            switch (axis) {
+                .horizontal => if (self.has_horizontal_target_constraint[index]) return true,
+                .vertical => if (self.has_vertical_target_constraint[index]) return true,
+            }
         }
         for (extra_constraints) |constraint| {
             if (constraint.target_node != node_id) continue;
             if (anchorAxis(constraint.target_anchor) == axis) return true;
         }
-        _ = self;
         return false;
     }
 
