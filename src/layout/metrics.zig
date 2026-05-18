@@ -148,6 +148,7 @@ fn markdownBlockHeight(ir: anytype, node: *const Node, style: TextStyle, block: 
             const list_inset = if (list_depth == 0) markdownListInset(ir, node, style) else 0;
             break :blk markdownListHeight(ir, node, style, block, @max(@as(f32, 1.0), max_width - list_inset), list_depth);
         },
+        .table => markdownTableHeight(ir, node, style, block, max_width),
     };
 }
 
@@ -214,6 +215,48 @@ fn markdownListItemHeight(ir: anytype, node: *const Node, style: TextStyle, kind
     return total;
 }
 
+fn markdownTableCellPadX(ir: anytype, node: *const Node, style: TextStyle) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), style.font_size * 0.55);
+}
+
+fn markdownTableCellPadY(ir: anytype, node: *const Node, style: TextStyle) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), style.font_size * 0.32);
+}
+
+fn markdownTableLineWidth(ir: anytype, node: *const Node) f32 {
+    return parseNodeFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8;
+}
+
+fn markdownTableHeight(ir: anytype, node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32) f32 {
+    const table = block.table.?;
+    if (table.rows.items.len == 0) return style.line_height;
+
+    const columns = markdownTableColumnCount(table);
+    const pad_x = markdownTableCellPadX(ir, node, style);
+    const pad_y = markdownTableCellPadY(ir, node, style);
+    const line_width = markdownTableLineWidth(ir, node);
+    const cell_width = @max(@as(f32, 1.0), max_width / @as(f32, @floatFromInt(columns)));
+    const content_width = @max(@as(f32, 1.0), cell_width - 2.0 * pad_x);
+
+    var total: f32 = line_width;
+    for (table.rows.items) |row| {
+        var row_content_height = style.line_height;
+        for (row.cells.items) |cell| {
+            row_content_height = @max(row_content_height, markdownLinesHeight(style, cell.lines.items, content_width));
+        }
+        total += row_content_height + 2.0 * pad_y + line_width;
+    }
+    return total;
+}
+
+fn markdownTableColumnCount(table: markdown.TableData) usize {
+    var columns = table.columns;
+    for (table.rows.items) |row| {
+        columns = @max(columns, row.cells.items.len);
+    }
+    return @max(@as(usize, 1), columns);
+}
+
 fn markdownLinesHeight(style: TextStyle, lines: []const markdown.Line, max_width: f32) f32 {
     const count = markdownWrappedLineCount(style, lines, max_width);
     return @as(f32, @floatFromInt(count)) * style.line_height;
@@ -268,7 +311,7 @@ fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) b
     if (doc.blocks.items.len > 1) return true;
     for (doc.blocks.items) |block| {
         switch (block.kind) {
-            .bullet_list, .ordered_list, .code_block => return true,
+            .bullet_list, .ordered_list, .code_block, .table => return true,
             else => {},
         }
     }

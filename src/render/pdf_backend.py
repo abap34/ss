@@ -315,9 +315,25 @@ class TextPaintSpec:
     markdown_code_stroke: Optional[Color]
     markdown_code_line_width: float
     markdown_code_radius: float
+    markdown_table_cell_pad_x: float
+    markdown_table_cell_pad_y: float
+    markdown_table_border: Optional[Color]
+    markdown_table_line_width: float
+    markdown_table_header_fill: Optional[Color]
+    markdown_table_alt_row_fill: Optional[Color]
     cjk_bold_passes: int
     cjk_bold_dx: float
     math_latex_packages: List[str]
+
+
+@dataclass(frozen=True)
+class TableStyle:
+    pad_x: float
+    pad_y: float
+    line_width: float
+    border: Optional[Color]
+    header_fill: Optional[Color]
+    alt_row_fill: Optional[Color]
 
 
 @dataclass(frozen=True)
@@ -735,7 +751,7 @@ class Renderer:
         baseline_bl = self.baseline_bl_for_box(y, height, spec.font_size)
         blocks = markdown_blocks_for_node(node)
         if blocks is not None:
-            overlays, _ = self._draw_markdown_blocks(spec, x, baseline_bl, blocks, width)
+            overlays, _ = self._draw_markdown_blocks(spec, x, baseline_bl, blocks, width, node)
             return overlays
         wrap = bool(render_text_section(render).get("wrap", True))
         overlays, _ = self._draw_inline_lines(spec, x, baseline_bl, inline_lines_for_node(node), width, wrap)
@@ -748,12 +764,13 @@ class Renderer:
         baseline_bl: float,
         blocks: List[dict],
         max_width: float,
+        node: dict,
         list_depth: int = 0,
     ) -> Tuple[List[Overlay], float]:
         overlays: List[Overlay] = []
         cursor_bl = baseline_bl
         if blocks:
-            cursor_bl = baseline_bl + spec.font_size - self._markdown_block_ascent(spec, blocks[0])
+            cursor_bl = baseline_bl + spec.font_size - self._markdown_block_ascent(spec, blocks[0], node)
         for index, block in enumerate(blocks):
             kind = str(block.get("kind", "paragraph"))
             if kind == "paragraph":
@@ -789,15 +806,26 @@ class Renderer:
                         item_blocks,
                         item_width,
                         marker,
+                        node,
                         list_depth,
                     )
                     overlays.extend(item_overlays)
                     if item_index != len(items) - 1:
                         cursor_bl -= spec.markdown_block_gap
+            elif kind == "table":
+                block_overlays, cursor_bl = self._draw_markdown_table(
+                    spec,
+                    x,
+                    cursor_bl,
+                    block,
+                    max_width,
+                    node,
+                )
+                overlays.extend(block_overlays)
             if index != len(blocks) - 1:
                 bottom_bl = self._markdown_block_bottom(spec, block, cursor_bl)
                 gap = self._markdown_gap_between_blocks(spec, block, blocks[index + 1])
-                cursor_bl = bottom_bl - gap - self._markdown_block_ascent(spec, blocks[index + 1])
+                cursor_bl = bottom_bl - gap - self._markdown_block_ascent(spec, blocks[index + 1], node)
         return overlays, cursor_bl
 
     def _draw_list_item(
@@ -808,6 +836,7 @@ class Renderer:
         blocks: List[dict],
         max_width: float,
         marker: str,
+        node: dict,
         list_depth: int,
     ) -> Tuple[List[Overlay], float]:
         overlays: List[Overlay] = []
@@ -833,7 +862,7 @@ class Renderer:
         if not blocks:
             return overlays, baseline_bl - spec.line_height
 
-        cursor_bl = baseline_bl + spec.font_size - self._markdown_block_ascent(spec, blocks[0])
+        cursor_bl = baseline_bl + spec.font_size - self._markdown_block_ascent(spec, blocks[0], node)
         for block_index, block in enumerate(blocks):
             kind = str(block.get("kind", "paragraph"))
             if kind == "paragraph":
@@ -881,34 +910,47 @@ class Renderer:
                         item_blocks,
                         nested_width,
                         nested_marker,
+                        node,
                         list_depth + 1,
                     )
                     overlays.extend(item_overlays)
                     if item_index != len(items) - 1:
                         cursor_bl -= spec.markdown_block_gap
+            elif kind == "table":
+                block_overlays, cursor_bl = self._draw_markdown_table(
+                    spec,
+                    content_x,
+                    cursor_bl,
+                    block,
+                    content_width,
+                    node,
+                )
+                overlays.extend(block_overlays)
             if block_index != len(blocks) - 1:
                 bottom_bl = self._markdown_block_bottom(spec, block, cursor_bl)
                 gap = self._markdown_gap_between_blocks(spec, block, blocks[block_index + 1])
-                cursor_bl = bottom_bl - gap - self._markdown_block_ascent(spec, blocks[block_index + 1])
+                cursor_bl = bottom_bl - gap - self._markdown_block_ascent(spec, blocks[block_index + 1], node)
 
         return overlays, cursor_bl
 
-    def _markdown_block_ascent(self, spec: TextPaintSpec, block: dict) -> float:
+    def _markdown_block_ascent(self, spec: TextPaintSpec, block: dict, node: dict) -> float:
         kind = str(block.get("kind", "paragraph"))
         if kind == "code_block":
             return spec.markdown_code_font_size + spec.markdown_code_pad_y
+        if kind == "table":
+            return spec.font_size + table_style_for_node(node, spec).pad_y
         return spec.font_size
 
     def _markdown_block_bottom(self, spec: TextPaintSpec, block: dict, cursor_bl: float) -> float:
         kind = str(block.get("kind", "paragraph"))
-        if kind == "code_block":
+        if kind in ("code_block", "table"):
             return cursor_bl
         return cursor_bl + spec.font_size
 
     def _markdown_gap_between_blocks(self, spec: TextPaintSpec, current: dict, next_block: dict) -> float:
         current_kind = str(current.get("kind", "paragraph"))
         next_kind = str(next_block.get("kind", "paragraph"))
-        if current_kind == "code_block" or next_kind == "code_block":
+        if current_kind in ("code_block", "table") or next_kind in ("code_block", "table"):
             return max(spec.markdown_block_gap, spec.line_height)
         return spec.markdown_block_gap
 
@@ -975,6 +1017,107 @@ class Renderer:
         )
         return overlays, box_bottom
 
+    def _draw_markdown_table(
+        self,
+        spec: TextPaintSpec,
+        x: float,
+        baseline_bl: float,
+        block: dict,
+        max_width: float,
+        node: dict,
+    ) -> Tuple[List[Overlay], float]:
+        overlays: List[Overlay] = []
+        rows = table_rows(block)
+        if not rows:
+            return overlays, baseline_bl - spec.line_height
+
+        table_style = table_style_for_node(node, spec)
+        columns = table_column_count(block)
+        column_width = max(1.0, max_width / float(columns))
+        content_width = max(1.0, column_width - 2.0 * table_style.pad_x)
+        cursor_bl = baseline_bl
+        body_row_index = 0
+        bottom_bl = baseline_bl - spec.line_height
+
+        for row in rows:
+            cells = table_cells(row)
+            is_header = bool(row.get("header"))
+            cell_layouts: List[Tuple[dict, List[List[dict]]]] = []
+            row_content_height = spec.line_height
+
+            for column_index in range(columns):
+                cell = cells[column_index] if column_index < len(cells) else {}
+                wrapped_lines = self._layout_table_cell(cell, spec, content_width, is_header)
+                cell_layouts.append((cell, wrapped_lines))
+                row_content_height = max(row_content_height, float(max(1, len(wrapped_lines))) * spec.line_height)
+
+            row_height = row_content_height + 2.0 * table_style.pad_y
+            row_top_bl = cursor_bl + spec.font_size + table_style.pad_y
+            row_bottom_bl = row_top_bl - row_height
+            fill = table_row_fill(table_style, is_header, body_row_index)
+            if not is_header:
+                body_row_index += 1
+
+            for column_index in range(columns):
+                cell_x = x + float(column_index) * column_width
+                self._draw_table_cell_box(cell_x, row_bottom_bl, column_width, row_height, table_style, fill)
+
+            for column_index, (cell, wrapped_lines) in enumerate(cell_layouts):
+                cell_x = x + float(column_index) * column_width
+                line_baseline = row_top_bl - table_style.pad_y - spec.font_size
+                align = str(cell.get("align", "default"))
+                for atoms_on_line in wrapped_lines:
+                    line_width = atoms_line_width(atoms_on_line, spec)
+                    offset = table_alignment_offset(align, content_width, line_width)
+                    cursor_x = cell_x + table_style.pad_x + offset
+                    overlays.extend(self._draw_atom_sequence(atoms_on_line, spec, cursor_x, line_baseline))
+                    line_baseline -= spec.line_height
+
+            bottom_bl = row_bottom_bl
+            cursor_bl = row_bottom_bl - table_style.pad_y - spec.font_size
+
+        return overlays, bottom_bl
+
+    def _layout_table_cell(
+        self,
+        cell: dict,
+        spec: TextPaintSpec,
+        content_width: float,
+        is_header: bool,
+    ) -> List[List[dict]]:
+        wrapped_lines: List[List[dict]] = []
+        for line in inline_lines_from_lines_field(cell):
+            atoms = self._layout_atoms(line, spec)
+            if is_header:
+                atoms = promote_table_header_atoms(atoms, spec)
+            wrapped = wrap_atoms(atoms, content_width)
+            wrapped_lines.extend(wrapped or [[]])
+        return wrapped_lines or [[]]
+
+    def _draw_table_cell_box(
+        self,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        table_style: TableStyle,
+        fill: Optional[Color],
+    ) -> None:
+        if fill is None and table_style.border is None:
+            return
+        top_y = self.to_tl(y + height)
+        if fill is not None:
+            self._set_fill(fill)
+        if table_style.border is not None:
+            self._set_stroke(table_style.border)
+            self.pdf.set_line_width(table_style.line_width)
+        style = ""
+        if fill is not None:
+            style += "F"
+        if table_style.border is not None and table_style.line_width > 0:
+            style += "D"
+        self.pdf.rect(x, top_y, width, height, style=style or "D")
+
     def _list_marker(self, kind: str, list_depth: int, ordinal: int) -> str:
         if kind == "ordered_list":
             return f"{ordinal}."
@@ -1031,6 +1174,48 @@ class Renderer:
                     cursor_x += atom["width"]
                 cursor_bl -= spec.line_height
         return overlays, cursor_bl
+
+    def _draw_atom_sequence(
+        self,
+        atoms_on_line: List[dict],
+        spec: TextPaintSpec,
+        x: float,
+        baseline_bl: float,
+    ) -> List[Overlay]:
+        overlays: List[Overlay] = []
+        cursor_x = x
+        for atom in atoms_on_line:
+            if atom["kind"] == "math":
+                target_w = atom["width"]
+                target_h = atom["height"]
+                overlays.append(
+                    Overlay(
+                        atom["pdf_path"],
+                        cursor_x,
+                        baseline_bl - target_h * 0.25,
+                        target_w,
+                        target_h,
+                    )
+                )
+                cursor_x += target_w + spec.font_size * spec.inline_math_spacing
+                continue
+            if atom["kind"] == "icon":
+                target_w = atom["width"]
+                target_h = atom["height"]
+                overlays.append(
+                    Overlay(
+                        atom["pdf_path"],
+                        cursor_x,
+                        baseline_bl - target_h * 0.22,
+                        target_w,
+                        target_h,
+                    )
+                )
+                cursor_x += target_w
+                continue
+            self._draw_text_atom(atom, spec, cursor_x, baseline_bl)
+            cursor_x += atom["width"]
+        return overlays
 
     def _draw_display_math_block(
         self,
@@ -1424,6 +1609,10 @@ def internal_link_ids_for_block(block: dict) -> List[str]:
             continue
         for child in item.get("blocks") or []:
             link_ids.extend(internal_link_ids_for_block(child))
+    for row in table_rows(block):
+        for cell in table_cells(row):
+            for line in cell.get("lines") or []:
+                link_ids.extend(internal_link_ids_for_line(line))
     return link_ids
 
 
@@ -1838,6 +2027,10 @@ def collect_math_jobs_for_blocks(blocks: List[dict], spec: TextPaintSpec, cache_
                     cache_dir,
                     add_job,
                 )
+        elif kind == "table":
+            for row in table_rows(block):
+                for cell in table_cells(row):
+                    collect_math_jobs_for_inline_lines(inline_lines_from_lines_field(cell), spec, cache_dir, add_job)
 
 
 def collect_math_jobs_for_inline_lines(lines: List[List[dict]], spec: TextPaintSpec, cache_dir: Path, add_job) -> None:
@@ -2142,6 +2335,66 @@ def trim_trailing_space_atoms(atoms: List[dict]) -> List[dict]:
     return trimmed
 
 
+def atoms_line_width(atoms: List[dict], spec: TextPaintSpec) -> float:
+    width = 0.0
+    for atom in atoms:
+        width += float(atom.get("width", 0.0))
+        if atom.get("kind") == "math":
+            width += spec.font_size * spec.inline_math_spacing
+    return width
+
+
+def promote_table_header_atoms(atoms: List[dict], spec: TextPaintSpec) -> List[dict]:
+    bold_family, bold_style = resolve_alias(spec.bold_font_name)
+    promoted: List[dict] = []
+    for atom in atoms:
+        updated = dict(atom)
+        if str(updated.get("kind", "text")) in ("text", "bold", "italic", "link"):
+            updated["family"] = bold_family
+            updated["style"] = bold_style
+        promoted.append(updated)
+    return promoted
+
+
+def table_alignment_offset(align: str, content_width: float, line_width: float) -> float:
+    spare = max(0.0, content_width - line_width)
+    if align == "right":
+        return spare
+    if align == "center":
+        return spare / 2.0
+    return 0.0
+
+
+def table_rows(block: dict) -> List[dict]:
+    rows = block.get("rows")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def table_cells(row: dict) -> List[dict]:
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return []
+    return [cell for cell in cells if isinstance(cell, dict)]
+
+
+def table_column_count(block: dict) -> int:
+    raw_columns = block.get("columns")
+    columns = int(raw_columns) if isinstance(raw_columns, int) and raw_columns > 0 else 0
+    for row in table_rows(block):
+        columns = max(columns, len(table_cells(row)))
+    return max(1, columns)
+
+
+def table_row_fill(table_style: TableStyle, is_header: bool, body_row_index: int) -> Optional[Color]:
+    if is_header:
+        return table_style.header_fill
+    if table_style.alt_row_fill is not None and body_row_index % 2 == 1:
+        return table_style.alt_row_fill
+    return None
+
+
 def prefix_first_paragraph(blocks: List[dict], prefix: str) -> List[dict]:
     if not blocks:
         return [{"kind": "paragraph", "lines": [[{"kind": "text", "text": prefix}]]}]
@@ -2287,6 +2540,12 @@ def text_spec(render: dict, node: Optional[dict] = None) -> TextPaintSpec:
         markdown_code_stroke=parse_optional_color_array(text.get("markdown_code_stroke")),
         markdown_code_line_width=float(text["markdown_code_line_width"]),
         markdown_code_radius=float(text["markdown_code_radius"]),
+        markdown_table_cell_pad_x=float(text.get("markdown_table_cell_pad_x", max(6.0, float(text["font_size"]) * 0.55))),
+        markdown_table_cell_pad_y=float(text.get("markdown_table_cell_pad_y", max(4.0, float(text["font_size"]) * 0.32))),
+        markdown_table_border=parse_optional_color_array(text.get("markdown_table_border")),
+        markdown_table_line_width=float(text.get("markdown_table_line_width", 0.8)),
+        markdown_table_header_fill=parse_optional_color_array(text.get("markdown_table_header_fill")),
+        markdown_table_alt_row_fill=parse_optional_color_array(text.get("markdown_table_alt_row_fill")),
         cjk_bold_passes=int(text.get("cjk_bold_passes", 1)),
         cjk_bold_dx=float(text.get("cjk_bold_dx", 0.0)),
         math_latex_packages=math_packages_for_node(node or {}),
@@ -2428,6 +2687,18 @@ def node_property(node: dict, key: str) -> Optional[str]:
     if not isinstance(value, str) or value == "":
         return None
     return value
+
+
+def table_style_for_node(node: dict, spec: TextPaintSpec) -> TableStyle:
+    _ = node
+    return TableStyle(
+        pad_x=spec.markdown_table_cell_pad_x,
+        pad_y=spec.markdown_table_cell_pad_y,
+        line_width=spec.markdown_table_line_width,
+        border=spec.markdown_table_border,
+        header_fill=spec.markdown_table_header_fill,
+        alt_row_fill=spec.markdown_table_alt_row_fill,
+    )
 
 
 def background_color_for_page(page_node: dict, document_node: dict) -> Optional[Color]:

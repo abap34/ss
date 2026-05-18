@@ -144,6 +144,24 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
             }
             try items.end();
         },
+        .table => {
+            try item.intField("columns", block.table.?.columns);
+            var rows = try item.arrayField("rows");
+            for (block.table.?.rows.items) |row| {
+                var row_json = try rows.objectItem();
+                try row_json.boolField("header", row.header);
+                var cells = try row_json.arrayField("cells");
+                for (row.cells.items) |cell| {
+                    var cell_json = try cells.objectItem();
+                    try cell_json.enumTagField("align", cell.alignment);
+                    try writeInlineLines(&cell_json, "lines", cell.lines.items);
+                    try cell_json.end();
+                }
+                try cells.end();
+                try row_json.end();
+            }
+            try rows.end();
+        },
     }
     try item.end();
 }
@@ -190,6 +208,12 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try writeOptionalColor(&text, "markdown_code_stroke", text_spec.markdown_code_stroke);
     try text.floatField("markdown_code_line_width", text_spec.markdown_code_line_width, "{d:.1}");
     try text.floatField("markdown_code_radius", text_spec.markdown_code_radius, "{d:.1}");
+    try text.floatField("markdown_table_cell_pad_x", text_spec.markdown_table_cell_pad_x, "{d:.1}");
+    try text.floatField("markdown_table_cell_pad_y", text_spec.markdown_table_cell_pad_y, "{d:.1}");
+    try writeOptionalColor(&text, "markdown_table_border", text_spec.markdown_table_border);
+    try text.floatField("markdown_table_line_width", text_spec.markdown_table_line_width, "{d:.1}");
+    try writeOptionalColor(&text, "markdown_table_header_fill", text_spec.markdown_table_header_fill);
+    try writeOptionalColor(&text, "markdown_table_alt_row_fill", text_spec.markdown_table_alt_row_fill);
     try text.intField("cjk_bold_passes", text_spec.cjk_bold_passes);
     try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
     try text.boolField("wrap", text_spec.wrap);
