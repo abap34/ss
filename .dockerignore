@@ -1,0 +1,14 @@
+.git
+.github
+.ss-cache
+.zig-cache
+zig-out
+
+.DS_Store
+**/.DS_Store
+
+third_party/md4c
+third_party/fonts/_variable
+third_party/fonts/*.ttf
+
+stdlib/core/.ss-cache

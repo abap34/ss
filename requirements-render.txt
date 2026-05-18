@@ -1,0 +1,4 @@
+fpdf2
+pypdf
+fonttools
+pillow
