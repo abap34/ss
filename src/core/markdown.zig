@@ -51,6 +51,7 @@ pub const BlockKind = enum {
     code_block,
     bullet_list,
     ordered_list,
+    table,
 };
 
 pub const Paragraph = struct {
@@ -66,10 +67,33 @@ pub const ListData = struct {
     items: std.ArrayList(*ListItem) = .empty,
 };
 
+pub const Align = enum {
+    default,
+    left,
+    center,
+    right,
+};
+
+pub const TableCell = struct {
+    alignment: Align = .default,
+    lines: std.ArrayList(Line) = .empty,
+};
+
+pub const TableRow = struct {
+    header: bool = false,
+    cells: std.ArrayList(*TableCell) = .empty,
+};
+
+pub const TableData = struct {
+    columns: usize = 0,
+    rows: std.ArrayList(*TableRow) = .empty,
+};
+
 pub const Block = struct {
     kind: BlockKind,
     paragraph: ?Paragraph = null,
     list: ?ListData = null,
+    table: ?TableData = null,
     language: ?[]const u8 = null,
 };
 
@@ -100,6 +124,10 @@ const ParserState = struct {
     containers: std.ArrayList(*std.ArrayList(*Block)),
     lists: std.ArrayList(*ListData),
     current_paragraph: ?*Paragraph = null,
+    current_table: ?*TableData = null,
+    current_row: ?*TableRow = null,
+    current_cell: ?*TableCell = null,
+    current_table_header: bool = false,
     current_line: Line = .{},
     strong_depth: usize = 0,
     italic_depth: usize = 0,
@@ -130,6 +158,7 @@ const ParserState = struct {
             .code_block => block.paragraph = .{},
             .bullet_list => block.list = .{ .start = 1 },
             .ordered_list => block.list = .{ .start = 1 },
+            .table => block.table = .{},
         }
         return block;
     }
@@ -139,6 +168,20 @@ const ParserState = struct {
         const item = try arena.create(ListItem);
         item.* = .{};
         return item;
+    }
+
+    fn newTableRow(self: *ParserState, header: bool) !*TableRow {
+        const arena = self.arenaAllocator();
+        const row = try arena.create(TableRow);
+        row.* = .{ .header = header };
+        return row;
+    }
+
+    fn newTableCell(self: *ParserState, alignment: Align) !*TableCell {
+        const arena = self.arenaAllocator();
+        const cell = try arena.create(TableCell);
+        cell.* = .{ .alignment = alignment };
+        return cell;
     }
 
     fn startParagraph(self: *ParserState) !void {
@@ -166,6 +209,21 @@ const ParserState = struct {
         if (self.current_paragraph == null) return;
         try self.flushCurrentLine(true);
         self.current_paragraph = null;
+    }
+
+    fn flushCurrentTableLine(self: *ParserState, force_empty: bool) !void {
+        const cell = self.current_cell orelse return;
+        const has_runs = self.current_line.runs.items.len > 0;
+        const should_append = has_runs or force_empty or cell.lines.items.len == 0;
+        if (!should_append) return;
+        try cell.lines.append(self.arenaAllocator(), self.current_line);
+        self.current_line = .{};
+    }
+
+    fn endTableCell(self: *ParserState) !void {
+        if (self.current_cell == null) return;
+        try self.flushCurrentTableLine(true);
+        self.current_cell = null;
     }
 };
 
@@ -321,6 +379,9 @@ fn enterBlock(
     userdata: ?*anyopaque,
 ) callconv(.c) c_int {
     const state = getState(userdata) orelse return 1;
+    if (state.current_cell != null and (block_type == c.MD_BLOCK_P or block_type == c.MD_BLOCK_H)) {
+        return 0;
+    }
     switch (block_type) {
         c.MD_BLOCK_P, c.MD_BLOCK_H => state.startParagraph() catch return 1,
         c.MD_BLOCK_CODE => {
@@ -363,6 +424,36 @@ fn enterBlock(
             list.items.append(state.arenaAllocator(), item) catch return 1;
             state.containers.append(state.temp_allocator, &item.blocks) catch return 1;
         },
+        c.MD_BLOCK_TABLE => {
+            state.endParagraph() catch return 1;
+            const block = state.newBlock(.table) catch return 1;
+            if (detail) |ptr| {
+                const table_detail: *const c.MD_BLOCK_TABLE_DETAIL = @ptrCast(@alignCast(ptr));
+                block.table.?.columns = @intCast(table_detail.col_count);
+            }
+            state.appendBlock(block) catch return 1;
+            state.current_table = &block.table.?;
+            state.current_table_header = false;
+        },
+        c.MD_BLOCK_THEAD => {
+            state.current_table_header = true;
+        },
+        c.MD_BLOCK_TBODY => {
+            state.current_table_header = false;
+        },
+        c.MD_BLOCK_TR => {
+            const table = state.current_table orelse return 1;
+            const row = state.newTableRow(state.current_table_header) catch return 1;
+            table.rows.append(state.arenaAllocator(), row) catch return 1;
+            state.current_row = row;
+        },
+        c.MD_BLOCK_TH, c.MD_BLOCK_TD => {
+            const row = state.current_row orelse return 1;
+            const cell = state.newTableCell(tableCellAlign(detail)) catch return 1;
+            row.cells.append(state.arenaAllocator(), cell) catch return 1;
+            state.current_cell = cell;
+            state.current_line = .{};
+        },
         else => {},
     }
     return 0;
@@ -375,6 +466,9 @@ fn leaveBlock(
 ) callconv(.c) c_int {
     _ = detail;
     const state = getState(userdata) orelse return 1;
+    if (state.current_cell != null and (block_type == c.MD_BLOCK_P or block_type == c.MD_BLOCK_H)) {
+        return 0;
+    }
     switch (block_type) {
         c.MD_BLOCK_P, c.MD_BLOCK_H, c.MD_BLOCK_CODE => state.endParagraph() catch return 1,
         c.MD_BLOCK_UL, c.MD_BLOCK_OL => {
@@ -383,6 +477,20 @@ fn leaveBlock(
         c.MD_BLOCK_LI => {
             state.endParagraph() catch return 1;
             if (state.containers.items.len > 1) _ = state.containers.pop();
+        },
+        c.MD_BLOCK_TH, c.MD_BLOCK_TD => state.endTableCell() catch return 1,
+        c.MD_BLOCK_TR => {
+            state.endTableCell() catch return 1;
+            state.current_row = null;
+        },
+        c.MD_BLOCK_THEAD, c.MD_BLOCK_TBODY => {
+            state.current_table_header = false;
+        },
+        c.MD_BLOCK_TABLE => {
+            state.current_cell = null;
+            state.current_row = null;
+            state.current_table = null;
+            state.current_table_header = false;
         },
         else => {},
     }
@@ -520,6 +628,14 @@ fn textCallback(
     userdata: ?*anyopaque,
 ) callconv(.c) c_int {
     const state = getState(userdata) orelse return 1;
+    if (state.current_cell != null) {
+        if (text_type == c.MD_TEXT_BR) {
+            state.flushCurrentTableLine(false) catch return 1;
+            return 0;
+        }
+        appendTextRun(ParserState, state, &state.current_line.runs, text_type, text_ptr, size) catch return 1;
+        return 0;
+    }
     switch (text_type) {
         c.MD_TEXT_BR => {
             state.ensureParagraph() catch return 1;
@@ -580,7 +696,7 @@ fn appendIconRun(comptime T: type, state: *T, runs: *std.ArrayList(Run), src: []
 
 fn ensureParagraphForState(comptime T: type, state: *T) !void {
     if (T == ParserState) {
-        try state.ensureParagraph();
+        if (state.current_cell == null) try state.ensureParagraph();
     }
 }
 
@@ -618,4 +734,36 @@ fn duplicateAttribute(allocator: Allocator, attr: c.MD_ATTRIBUTE) ![]const u8 {
 fn trySetTightProperty(block: *Block, detail: ?*anyopaque) void {
     _ = block;
     _ = detail;
+}
+
+fn tableCellAlign(detail: ?*anyopaque) Align {
+    const ptr = detail orelse return .default;
+    const cell_detail: *const c.MD_BLOCK_TD_DETAIL = @ptrCast(@alignCast(ptr));
+    return switch (cell_detail.@"align") {
+        c.MD_ALIGN_LEFT => .left,
+        c.MD_ALIGN_CENTER => .center,
+        c.MD_ALIGN_RIGHT => .right,
+        else => .default,
+    };
+}
+
+test "parse markdown table block" {
+    const allocator = std.testing.allocator;
+    var doc = try parseMarkdownContent(allocator,
+        \\| Name | Score |
+        \\| :--- | ---: |
+        \\| Ada | **10** |
+        \\| Ken | 8 |
+    );
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.items.len);
+    const block = doc.blocks.items[0];
+    try std.testing.expectEqual(BlockKind.table, block.kind);
+    try std.testing.expectEqual(@as(usize, 2), block.table.?.columns);
+    try std.testing.expectEqual(@as(usize, 3), block.table.?.rows.items.len);
+    try std.testing.expect(block.table.?.rows.items[0].header);
+    try std.testing.expectEqual(Align.left, block.table.?.rows.items[0].cells.items[0].alignment);
+    try std.testing.expectEqual(Align.right, block.table.?.rows.items[0].cells.items[1].alignment);
+    try std.testing.expectEqual(RunKind.bold, block.table.?.rows.items[1].cells.items[1].lines.items[0].runs.items[0].kind);
 }

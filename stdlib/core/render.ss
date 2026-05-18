@@ -84,6 +84,16 @@ fn markdown_code_paint(obj: object, font_size_name: string, line_height_name: st
   return obj
 end
 
+fn markdown_table_paint(obj: object, pad_x_name: string, pad_y_name: string, border_name: string, line_width_name: string, header_fill_name: string, alt_row_fill_name: string = "") -> object
+  set_prop(obj, "text_markdown_table_cell_pad_x", pad_x_name)
+  set_prop(obj, "text_markdown_table_cell_pad_y", pad_y_name)
+  set_prop(obj, "text_markdown_table_border", border_name)
+  set_prop(obj, "text_markdown_table_line_width", line_width_name)
+  set_prop(obj, "text_markdown_table_header_fill", header_fill_name)
+  set_prop(obj, "text_markdown_table_alt_row_fill", alt_row_fill_name)
+  return obj
+end
+
 fn chrome_paint(obj: object, fill_name: string, stroke_name: string, line_width_name: string, radius_name: string) -> object
   set_prop(obj, "chrome_fill", fill_name)
   set_prop(obj, "chrome_stroke", stroke_name)
