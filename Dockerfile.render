@@ -1,0 +1,96 @@
+ARG DEBIAN_VERSION=bookworm
+ARG ZIG_VERSION=0.16.0
+
+FROM debian:${DEBIAN_VERSION}-slim AS builder
+
+ARG ZIG_VERSION
+ARG TARGETARCH
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        python3 \
+        python3-pip \
+        python3-venv \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/build-python \
+    && /opt/build-python/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/build-python/bin/python -m pip install --no-cache-dir fonttools
+
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) zig_arch="x86_64-linux" ;; \
+        arm64) zig_arch="aarch64-linux" ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
+        "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" \
+        -o /tmp/zig.tar.xz; \
+    mkdir -p /opt/zig; \
+    tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
+    rm /tmp/zig.tar.xz
+
+ENV PATH="/opt/build-python/bin:/opt/zig:${PATH}"
+
+WORKDIR /src
+COPY build.zig ./build.zig
+COPY src ./src
+COPY stdlib ./stdlib
+COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh
+COPY third_party/fonts/fetch.py ./third_party/fonts/fetch.py
+
+RUN python3 third_party/fonts/fetch.py \
+    && scripts/setup-md4c.sh \
+    && zig build -Doptimize=ReleaseSafe
+
+FROM debian:${DEBIAN_VERSION}-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        librsvg2-bin \
+        python3 \
+        python3-pip \
+        python3-venv \
+        qpdf \
+        texlive-fonts-recommended \
+        texlive-latex-base \
+        texlive-latex-extra \
+        texlive-latex-recommended \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-render.txt /tmp/requirements-render.txt
+
+RUN python3 -m venv /opt/ss-python \
+    && /opt/ss-python/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/ss-python/bin/python -m pip install --no-cache-dir -r /tmp/requirements-render.txt \
+    && rm /tmp/requirements-render.txt
+
+COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
+COPY --from=builder /src/src/render/pdf_backend.py /opt/ss-runtime/src/render/pdf_backend.py
+COPY --from=builder /src/stdlib/highlighters/python_keywords.py /opt/ss-runtime/stdlib/highlighters/python_keywords.py
+COPY --from=builder /src/third_party/fonts/fetch.py /opt/ss-runtime/third_party/fonts/fetch.py
+COPY --from=builder /src/third_party/fonts/NotoSansJP-Regular.ttf /opt/ss-runtime/third_party/fonts/NotoSansJP-Regular.ttf
+COPY --from=builder /src/third_party/fonts/NotoSansJP-Bold.ttf /opt/ss-runtime/third_party/fonts/NotoSansJP-Bold.ttf
+COPY --from=builder /src/third_party/fonts/NotoSansJP-Black.ttf /opt/ss-runtime/third_party/fonts/NotoSansJP-Black.ttf
+COPY --from=builder /src/third_party/fonts/NotoSansMono-Regular.ttf /opt/ss-runtime/third_party/fonts/NotoSansMono-Regular.ttf
+COPY --from=builder /src/third_party/fonts/NotoSansMono-Bold.ttf /opt/ss-runtime/third_party/fonts/NotoSansMono-Bold.ttf
+COPY --from=builder /src/third_party/fonts/NotoEmoji-Regular.ttf /opt/ss-runtime/third_party/fonts/NotoEmoji-Regular.ttf
+COPY scripts/ss-render-pages.sh /usr/local/bin/ss-render-pages
+
+ENV PATH="/opt/ss-python/bin:${PATH}"
+ENV SS_PYTHON="/opt/ss-python/bin/python"
+ENV SS_PDF_BACKEND="/opt/ss-runtime/src/render/pdf_backend.py"
+ENV SS_CACHE_MAX_BYTES="512M"
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/ss-render-pages"]
