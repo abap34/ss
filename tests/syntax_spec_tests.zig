@@ -1,0 +1,305 @@
+const std = @import("std");
+const syntax = @import("syntax");
+const ast = @import("ast");
+const Type = @import("language_type").Type;
+
+const testing = std.testing;
+
+const ParsedProgram = struct {
+    arena: std.heap.ArenaAllocator,
+    program: syntax.Program,
+
+    fn deinit(self: *ParsedProgram) void {
+        self.program.deinit(self.arena.allocator());
+        self.arena.deinit();
+    }
+};
+
+fn parse(source: []const u8) !ParsedProgram {
+    return try parseWithSourceName(source, "unit-test.ss");
+}
+
+fn parseWithSourceName(source: []const u8, source_name: []const u8) !ParsedProgram {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    errdefer arena.deinit();
+    const program = try syntax.parseWithSourceName(arena.allocator(), source, source_name);
+    return .{ .arena = arena, .program = program };
+}
+
+fn expectParseError(expected: anyerror, source: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var program = syntax.parseWithSourceName(arena.allocator(), source, "unit-test.ss") catch |err| {
+        try testing.expectEqual(expected, err);
+        const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
+        try testing.expectEqual(expected, diagnostic.err);
+        return;
+    };
+    defer program.deinit(arena.allocator());
+    return error.ExpectedParseError;
+}
+
+fn expectCall(expr: ast.Expr, name: []const u8, arity: usize) !ast.CallExpr {
+    switch (expr) {
+        .call => |call| {
+            try testing.expectEqualStrings(name, call.name);
+            try testing.expectEqual(arity, call.args.items.len);
+            return call;
+        },
+        else => return error.ExpectedCallExpr,
+    }
+}
+
+fn expectNumber(expr: ast.Expr, expected: f32) !void {
+    switch (expr) {
+        .number => |actual| try testing.expectApproxEqAbs(expected, actual, 0.0001),
+        else => return error.ExpectedNumberExpr,
+    }
+}
+
+fn expectString(expr: ast.Expr, expected: []const u8) !void {
+    switch (expr) {
+        .string => |actual| try testing.expectEqualStrings(expected, actual),
+        else => return error.ExpectedStringExpr,
+    }
+}
+
+test "syntax spec: imports and pages preserve source order" {
+    var parsed = try parse(
+        \\// Leading trivia is not part of the AST.
+        \\import core
+        \\
+        \\page Intro
+        \\  title Hello
+        \\end
+        \\
+        \\import "themes/default"; // comments may follow terminators
+        \\
+        \\page "Two Words"
+        \\  title("Done");
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+    const program = &parsed.program;
+
+    try testing.expectEqual(@as(usize, 2), program.imports.items.len);
+    try testing.expectEqualStrings("core", program.imports.items[0].spec);
+    try testing.expectEqualStrings("themes/default", program.imports.items[1].spec);
+    try testing.expectEqual(@as(usize, 2), program.pages.items.len);
+    try testing.expectEqualStrings("Intro", program.pages.items[0].name);
+    try testing.expectEqualStrings("Two Words", program.pages.items[1].name);
+
+    try testing.expectEqual(@as(usize, 4), program.top_level_items.items.len);
+    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[0].import);
+    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[1].page);
+    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[2].import);
+    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[3].page);
+}
+
+test "syntax spec: page name underscore generates an internal reserved name" {
+    var first = try parseWithSourceName(
+        \\page _
+        \\  title First
+        \\end
+        \\
+    , "first.ss");
+    defer first.deinit();
+
+    var second = try parseWithSourceName(
+        \\page _
+        \\  title Second
+        \\end
+        \\
+    , "second.ss");
+    defer second.deinit();
+
+    try testing.expect(std.mem.startsWith(u8, first.program.pages.items[0].name, "#gen_"));
+    try testing.expect(std.mem.startsWith(u8, second.program.pages.items[0].name, "#gen_"));
+    try testing.expect(!std.mem.eql(u8, first.program.pages.items[0].name, second.program.pages.items[0].name));
+}
+
+test "syntax spec: explicit reserved page names are rejected" {
+    try expectParseError(error.ReservedPageNamePrefix,
+        \\page #generated
+        \\  title Bad
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: function signatures enforce semantic result sorts and trailing defaults" {
+    var parsed = try parse(
+        \\@host fn external_width(value: number) -> number
+        \\
+        \\fn choose(flag: bool, fallback: string = "no") -> string
+        \\  if flag
+        \\    return "yes"
+        \\  else
+        \\    return fallback
+        \\  end
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+    const program = &parsed.program;
+
+    try testing.expectEqual(@as(usize, 2), program.functions.items.len);
+    try testing.expectEqual(ast.FunctionDecl.Kind.function, program.functions.items[0].kind);
+    try testing.expectEqualStrings("external_width", program.functions.items[0].name);
+    try testing.expectEqual(@as(usize, 1), program.functions.items[0].annotations.items.len);
+    try testing.expectEqualStrings("host", program.functions.items[0].annotations.items[0].name);
+    try testing.expectEqual(@as(usize, 0), program.functions.items[0].statements.items.len);
+
+    const choose = program.functions.items[1];
+    try testing.expectEqualStrings("choose", choose.name);
+    try testing.expectEqual(@as(usize, 2), choose.params.items.len);
+    try testing.expectEqual(Type.boolean.tag, choose.params.items[0].ty.tag);
+    try testing.expectEqual(Type.string.tag, choose.params.items[1].ty.tag);
+    try testing.expect(choose.params.items[1].default_value != null);
+}
+
+test "syntax spec: non-host functions must return on at least one complete path" {
+    try expectParseError(error.ExpectedReturn,
+        \\fn bad() -> number
+        \\  let x = 1
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: required parameters cannot follow defaulted parameters" {
+    try expectParseError(error.RequiredParameterAfterDefault,
+        \\fn bad(a: number = 1, b: number) -> number
+        \\  return a
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: list is a type constructor but not a runtime semantic result sort" {
+    try expectParseError(error.InvalidSemanticSort,
+        \\fn bad() -> list<number>
+        \\  return 1
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: expression parsing lowers operators to named primitive calls" {
+    var parsed = try parse(
+        \\page Expr
+        \\  let value = 1 + 2 * -3
+        \\  let text = "a" ++ "b" ++ "c"
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+    const program = &parsed.program;
+
+    const numeric = program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    const add = try expectCall(numeric, "add", 2);
+    try expectNumber(add.args.items[0], 1);
+    const mul = try expectCall(add.args.items[1], "mul", 2);
+    try expectNumber(mul.args.items[0], 2);
+    const neg = try expectCall(mul.args.items[1], "neg", 1);
+    try expectNumber(neg.args.items[0], 3);
+
+    const text = program.pages.items[0].statements.items[1].kind.let_binding.expr;
+    const outer_concat = try expectCall(text, "concat", 2);
+    const inner_concat = try expectCall(outer_concat.args.items[0], "concat", 2);
+    try expectString(inner_concat.args.items[0], "a");
+    try expectString(inner_concat.args.items[1], "b");
+    try expectString(outer_concat.args.items[1], "c");
+}
+
+test "syntax spec: call sugar is explicit about text-bearing and zero-argument calls" {
+    var parsed = try parse(
+        \\page Text
+        \\  title Plain text with spaces
+        \\  code <<
+        \\first
+        \\second
+        \\>>
+        \\  quote """
+        \\hello
+        \\"""
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+    const program = &parsed.program;
+
+    const statements = program.pages.items[0].statements.items;
+    const title = try expectCall(statements[0].kind.expr_stmt, "title", 1);
+    try expectString(title.args.items[0], "Plain text with spaces");
+    const code = try expectCall(statements[1].kind.expr_stmt, "code", 1);
+    try expectString(code.args.items[0], "first\nsecond");
+    const quote = try expectCall(statements[2].kind.expr_stmt, "quote", 1);
+    try expectString(quote.args.items[0], "hello");
+
+    try expectParseError(error.ZeroArgCallRequiresParens,
+        \\page Bad
+        \\  title
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: assignment syntax separates bindings, properties, and constraints" {
+    var parsed = try parse(
+        \\page Layout
+        \\  let local = 42
+        \\  box.width == 100
+        \\  box.left == page.left + 10
+        \\  constrain right(box) == right(page) - 20
+        \\  box.fill = "red"
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+    const program = &parsed.program;
+
+    const statements = program.pages.items[0].statements.items;
+    try testing.expectEqualStrings("local", statements[0].kind.let_binding.name);
+
+    const width = statements[1].kind.constrain;
+    try testing.expectEqual(.node, width.target.kind);
+    try testing.expectEqualStrings("box", width.target.node_name.?);
+    try testing.expectEqual(.right, width.target.anchor);
+    try testing.expectEqual(.left, width.source.anchor);
+    try expectNumber(width.offset.?, 100);
+
+    const left = statements[2].kind.constrain;
+    try testing.expectEqual(.left, left.target.anchor);
+    try testing.expectEqual(.page, left.source.kind);
+    try testing.expectEqual(.left, left.source.anchor);
+    try expectNumber(left.offset.?, 10);
+
+    const right = statements[3].kind.constrain;
+    try testing.expectEqual(.right, right.target.anchor);
+    try testing.expectEqual(.page, right.source.kind);
+    const neg = try expectCall(right.offset.?, "neg", 1);
+    try expectNumber(neg.args.items[0], 20);
+
+    const property = statements[4].kind.property_set;
+    try testing.expectEqualStrings("box", property.object_name);
+    try testing.expectEqualStrings("fill", property.property_name);
+    try expectString(property.value, "red");
+}
+
+test "syntax spec: bare assignment must say let and page dimensions are not targets" {
+    try expectParseError(error.AssignmentRequiresLet,
+        \\page Bad
+        \\  local = 1
+        \\end
+        \\
+    );
+
+    try expectParseError(error.PageCannotBeConstraintTarget,
+        \\page Bad
+        \\  page.width == 100
+        \\end
+        \\
+    );
+}
