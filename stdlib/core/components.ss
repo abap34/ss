@@ -69,7 +69,7 @@ fn border(inner: object, pad_x: number = 12, pad_y: number = 8, stroke_name: str
 end
 
 fn outline_group(inner: object, stroke_name: string = "0.36,0.40,0.48", line_width: number = 1, radius: number = 8) -> object
-  return border(inner, 12, 8, stroke_name, line_width, radius)
+  return border(inner, 24, 16, stroke_name, line_width, radius)
 end
 
 fn panel_block(text_value: string, role_name: string, payload_name: string, panel_style_name: string, left: string, right: string, pad_x: number, pad_y: number) -> object
