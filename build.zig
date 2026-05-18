@@ -118,8 +118,88 @@ pub fn build(b: *std.Build) void {
         .root_module = main_tests_mod,
     });
 
+    const syntax_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/syntax_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    syntax_spec_tests_mod.addImport("core", core_mod);
+    syntax_spec_tests_mod.addImport("utils", utils_mod);
+    syntax_spec_tests_mod.addImport("ast", ast_mod);
+    syntax_spec_tests_mod.addImport("model", model_mod);
+    syntax_spec_tests_mod.addImport("language_type", language_type_mod);
+    syntax_spec_tests_mod.addImport("syntax", parser_tests_mod);
+    const syntax_spec_tests = b.addTest(.{
+        .root_module = syntax_spec_tests_mod,
+    });
+
+    const language_type_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/language_type_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    language_type_spec_tests_mod.addImport("model", model_mod);
+    language_type_spec_tests_mod.addImport("language_type", language_type_mod);
+    const language_type_spec_tests = b.addTest(.{
+        .root_module = language_type_spec_tests_mod,
+    });
+
+    const core_ir_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/core_ir_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    core_ir_spec_tests_mod.addImport("core", core_mod);
+    core_ir_spec_tests_mod.addImport("utils", utils_mod);
+    core_ir_spec_tests_mod.addImport("ast", ast_mod);
+    core_ir_spec_tests_mod.addImport("model", model_mod);
+    core_ir_spec_tests_mod.addImport("language_type", language_type_mod);
+    const core_ir_spec_tests = b.addTest(.{
+        .root_module = core_ir_spec_tests_mod,
+    });
+
+    const layout_graph_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/layout_graph_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    layout_graph_spec_tests_mod.addImport("core", core_mod);
+    layout_graph_spec_tests_mod.addImport("utils", utils_mod);
+    layout_graph_spec_tests_mod.addImport("ast", ast_mod);
+    layout_graph_spec_tests_mod.addImport("model", model_mod);
+    layout_graph_spec_tests_mod.addImport("language_type", language_type_mod);
+    const layout_graph_spec_tests = b.addTest(.{
+        .root_module = layout_graph_spec_tests_mod,
+    });
+
+    const smoke_check_files = [_][]const u8{
+        "stdlib/core/classes.ss",
+        "stdlib/core/components.ss",
+        "stdlib/core/generated.ss",
+        "stdlib/core/layout.ss",
+        "stdlib/core/objects.ss",
+        "stdlib/core/render.ss",
+        "stdlib/core/selectors.ss",
+        "stdlib/themes/academic.ss",
+        "stdlib/themes/base.ss",
+        "stdlib/themes/default.ss",
+        "stdlib/themes/pop.ss",
+    };
+
     const test_step = b.step("test", "Run ss test targets");
     test_step.dependOn(&b.addRunArtifact(core_tests).step);
     test_step.dependOn(&b.addRunArtifact(parser_tests).step);
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
+    test_step.dependOn(&b.addRunArtifact(syntax_spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(language_type_spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(core_ir_spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(layout_graph_spec_tests).step);
+    for (smoke_check_files) |path| {
+        const smoke_check = b.addRunArtifact(exe);
+        smoke_check.addArgs(&.{ "check", path });
+        test_step.dependOn(&smoke_check.step);
+    }
 }
