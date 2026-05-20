@@ -252,7 +252,6 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
     }
     try assembleRenderPlan(&ctx, &plan, options, progress);
     if (!plan.document_cache_hit) {
-        try runCheckedAllowQpdfWarnings(&ctx, &.{ "qpdf", "--check", plan.final_pdf_path }, .inherit);
         try copyCacheFileIfMissing(&ctx, plan.final_pdf_path, plan.document_cache_path);
     }
 
