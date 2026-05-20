@@ -32,6 +32,7 @@ const NativePdfError = error{
 
 const raster_cache_scale: f32 = 3.0;
 const page_pdf_cache_version = "ss-native-page-pdf-v1";
+const qpdf_cache_version = "ss-native-qpdf-v1";
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
@@ -129,6 +130,8 @@ const RenderPlan = struct {
     run_dir: []const u8,
     pages_dir: []const u8,
     final_pdf_path: []const u8,
+    document_cache_path: []const u8,
+    document_cache_hit: bool,
 
     fn deinit(self: *RenderPlan) void {
         for (self.pages) |*page| page.deinit(self.allocator);
@@ -139,6 +142,7 @@ const RenderPlan = struct {
         self.allocator.free(self.run_dir);
         self.allocator.free(self.pages_dir);
         self.allocator.free(self.final_pdf_path);
+        self.allocator.free(self.document_cache_path);
     }
 };
 
@@ -238,11 +242,22 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
         plan.deinit();
     }
 
-    try executeRenderDag(&ctx, &plan, options, progress);
+    if (plan.document_cache_hit) {
+        if (progress) |p| {
+            p.artifactCompleted(p.context, plan.artifact_tasks.len, plan.artifact_tasks.len);
+            p.pageCompleted(p.context, plan.pages.len, plan.pages.len);
+        }
+    } else {
+        try executeRenderDag(&ctx, &plan, options, progress);
+    }
     try assembleRenderPlan(&ctx, &plan, options, progress);
-    try runCheckedAllowQpdfWarnings(&ctx, &.{ "qpdf", "--check", plan.final_pdf_path }, .inherit);
+    if (!plan.document_cache_hit) {
+        try runCheckedAllowQpdfWarnings(&ctx, &.{ "qpdf", "--check", plan.final_pdf_path }, .inherit);
+        try copyCacheFileIfMissing(&ctx, plan.final_pdf_path, plan.document_cache_path);
+    }
 
-    return try std.Io.Dir.cwd().readFileAlloc(io, plan.final_pdf_path, allocator, .unlimited);
+    const result_pdf_path = if (plan.document_cache_hit) plan.document_cache_path else plan.final_pdf_path;
+    return try std.Io.Dir.cwd().readFileAlloc(io, result_pdf_path, allocator, .unlimited);
 }
 
 fn validateRenderCapabilities(sema: *const semantic_env.SemanticEnv) !void {
@@ -291,10 +306,13 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     errdefer ctx.allocator.free(pages_dir);
     const page_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "pages" });
     defer ctx.allocator.free(page_cache_dir);
+    const document_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "documents" });
+    defer ctx.allocator.free(document_cache_dir);
     const final_pdf_path = try std.fs.path.join(ctx.allocator, &.{ run_dir, "document.pdf" });
     errdefer ctx.allocator.free(final_pdf_path);
     try std.Io.Dir.cwd().createDirPath(ctx.io, pages_dir);
     try std.Io.Dir.cwd().createDirPath(ctx.io, page_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io, document_cache_dir);
 
     var pages = std.ArrayList(RenderPage).empty;
     errdefer {
@@ -398,6 +416,9 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     const page_cache_hit_count = countPageCacheHits(page_slice);
     const artifact_cache = try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
     errdefer ctx.allocator.free(artifact_cache.cached);
+    const document_cache_path = try documentPdfCachePath(ctx.allocator, document_cache_dir, page_slice);
+    errdefer ctx.allocator.free(document_cache_path);
+    const document_cache_hit = fileExists(document_cache_path);
 
     return .{
         .allocator = ctx.allocator,
@@ -409,6 +430,8 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         .run_dir = run_dir,
         .pages_dir = pages_dir,
         .final_pdf_path = final_pdf_path,
+        .document_cache_path = document_cache_path,
+        .document_cache_hit = document_cache_hit,
     };
 }
 
@@ -422,6 +445,29 @@ fn countPageCacheHits(pages: []const RenderPage) usize {
 
 fn pagePdfCachePath(allocator: Allocator, page_cache_dir: []const u8, page_hash: u64) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}/page-{x}.pdf", .{ page_cache_dir, page_hash });
+}
+
+fn documentPdfCachePath(allocator: Allocator, document_cache_dir: []const u8, pages: []const RenderPage) ![]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, qpdf_cache_version);
+    hashString(&hasher, "document");
+    hashUsize(&hasher, pages.len);
+    for (pages) |page| hashString(&hasher, page.cache_path);
+    return qpdfCachePath(allocator, document_cache_dir, "document", hasher.final());
+}
+
+fn qpdfInputCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, inputs: []const []const u8, single_page_inputs: bool) ![]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, qpdf_cache_version);
+    hashString(&hasher, prefix);
+    hashBool(&hasher, single_page_inputs);
+    hashUsize(&hasher, inputs.len);
+    for (inputs) |input| hashString(&hasher, input);
+    return qpdfCachePath(allocator, cache_dir, prefix, hasher.final());
+}
+
+fn qpdfCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, hash: u64) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/{s}-{x}.pdf", .{ cache_dir, prefix, hash });
 }
 
 fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), background: ?Color, ops: []const RenderOp) !u64 {
@@ -1944,12 +1990,18 @@ fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
     try drawPngFit(ctx, frame, png_path);
 }
 
-const merge_chunk_size: usize = 128;
+const merge_chunk_size: usize = 16;
 
 fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
     const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
     defer ctx.allocator.free(page_paths);
     for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
+
+    if (plan.document_cache_hit) {
+        if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
+        if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
+        return;
+    }
 
     if (page_paths.len <= merge_chunk_size) {
         if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
@@ -1958,9 +2010,11 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
         return;
     }
 
+    const chunk_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "chunks" });
+    defer ctx.allocator.free(chunk_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io, chunk_cache_dir);
+
     const chunk_count = std.math.divCeil(usize, page_paths.len, merge_chunk_size) catch unreachable;
-    const total_steps = chunk_count + 1;
-    if (progress) |p| p.assemblyCompleted(p.context, 0, total_steps);
 
     const chunks = try ctx.allocator.alloc(MergeChunk, chunk_count);
     defer {
@@ -1968,17 +2022,26 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
         ctx.allocator.free(chunks);
     }
 
+    var missing_chunks = std.ArrayList(MergeChunk).empty;
+    defer missing_chunks.deinit(ctx.allocator);
+
     for (chunks, 0..) |*chunk, chunk_index| {
         const start = chunk_index * merge_chunk_size;
         const end = @min(page_paths.len, start + merge_chunk_size);
+        const output = try qpdfInputCachePath(ctx.allocator, chunk_cache_dir, "chunk", page_paths[start..end], true);
+        errdefer ctx.allocator.free(output);
+        const cache_hit = fileExists(output);
         chunk.* = .{
             .inputs = page_paths[start..end],
-            .output = try std.fmt.allocPrint(ctx.allocator, "{s}/chunk-{d:0>4}.pdf", .{ plan.run_dir, chunk_index + 1 }),
+            .output = output,
             .single_page_inputs = true,
         };
+        if (!cache_hit) try missing_chunks.append(ctx.allocator, chunk.*);
     }
 
-    try runMergeChunks(ctx, chunks, options, progress, 0, total_steps);
+    const total_steps = missing_chunks.items.len + 1;
+    if (progress) |p| p.assemblyCompleted(p.context, 0, total_steps);
+    try runMergeChunks(ctx, missing_chunks.items, options, progress, 0, total_steps);
 
     const chunk_paths = try ctx.allocator.alloc([]const u8, chunk_count);
     defer ctx.allocator.free(chunk_paths);
@@ -1999,7 +2062,7 @@ fn runMergeChunks(
     const worker_count = mergeWorkerCount(chunks.len, options);
     if (worker_count <= 1) {
         for (chunks, 0..) |chunk, index| {
-            try mergePdfInputs(ctx, chunk.inputs, chunk.single_page_inputs, chunk.output);
+            try mergePdfInputsToCache(ctx, chunk.inputs, chunk.single_page_inputs, chunk.output);
             if (progress) |p| p.assemblyCompleted(p.context, progress_offset + index + 1, progress_total);
         }
         return;
@@ -2062,7 +2125,7 @@ fn mergeWorker(work: *MergeWork) void {
             .cache_dir = work.cache_dir,
         };
         const chunk = work.chunks[index];
-        mergePdfInputs(&ctx, chunk.inputs, chunk.single_page_inputs, chunk.output) catch |err| {
+        mergePdfInputsToCache(&ctx, chunk.inputs, chunk.single_page_inputs, chunk.output) catch |err| {
             work.failed.store(true, .seq_cst);
             std.debug.print("native pdf: qpdf merge failed ({s})\n", .{@errorName(err)});
             break;
@@ -2086,6 +2149,15 @@ fn mergePdfInputs(ctx: *DrawContext, inputs: []const []const u8, single_page_inp
     try argv.append(ctx.allocator, "--");
     try argv.append(ctx.allocator, output);
     try runCheckedAllowQpdfWarnings(ctx, argv.items, .inherit);
+}
+
+fn mergePdfInputsToCache(ctx: *DrawContext, inputs: []const []const u8, single_page_inputs: bool, output: []const u8) !void {
+    if (fileExists(output)) return;
+    const tmp = try tempCachePath(ctx, output, "pdf");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    try mergePdfInputs(ctx, inputs, single_page_inputs, tmp);
+    try publishCacheFile(ctx, tmp, output);
 }
 
 fn drawRawText(
@@ -2569,6 +2641,16 @@ fn publishCacheFile(ctx: *DrawContext, tmp_path: []const u8, final_path: []const
         }
         return err;
     };
+}
+
+fn copyCacheFileIfMissing(ctx: *DrawContext, source_path: []const u8, dest_path: []const u8) !void {
+    if (fileExists(dest_path)) return;
+    const tmp = try tempCachePath(ctx, dest_path, "pdf");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    const cwd = std.Io.Dir.cwd();
+    try cwd.copyFile(source_path, cwd, tmp, ctx.io, .{ .make_path = true, .replace = true });
+    try publishCacheFile(ctx, tmp, dest_path);
 }
 
 fn deleteFileIfExists(ctx: *DrawContext, path: []const u8) void {
