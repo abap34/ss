@@ -13,6 +13,10 @@ Included:
 The extension does not bundle an `ss` binary in v1. Set `ss.cli.path` when `ss`
 is not on `PATH`.
 
+Install the CLI from the project GitHub Release, from source with
+`zig build -Doptimize=ReleaseSafe install --prefix ~/.local`, or through the
+planned Homebrew tap once it is published.
+
 ## Project Files
 
 Editor features use the same project discovery as the CLI. Put `ss.toml` at the
@@ -100,5 +104,6 @@ the operating system's PDF application:
 npm run package
 ```
 
-The Marketplace publisher is `abap34`. Release CI publishes with `VSCE_PAT` when
-that secret is present and always uploads the VSIX to the GitHub Release.
+The Marketplace publisher is `abap34`. Release CI checks version metadata,
+publishes with `VSCE_PAT` when that secret is present, and always uploads the
+VSIX to the GitHub Release.

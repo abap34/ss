@@ -37,6 +37,7 @@ ENV PATH="/opt/zig:${PATH}"
 
 WORKDIR /src
 COPY build.zig ./build.zig
+COPY VERSION ./VERSION
 COPY src ./src
 COPY stdlib ./stdlib
 COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh

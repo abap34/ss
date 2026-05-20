@@ -101,6 +101,9 @@ jobs:
           pkg-config --modversion librsvg-2.0
           git -C third_party/md4c rev-parse HEAD
 
+      - name: Check release metadata
+        run: scripts/release-preflight.sh
+
       - name: Run tests
         run: zig build test
 

@@ -66,6 +66,9 @@ jobs:
       - name: Set up MD4C
         run: scripts/setup-md4c.sh
 
+      - name: Check release metadata
+        run: scripts/release-preflight.sh "$GITHUB_REF_NAME"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -77,8 +80,9 @@ jobs:
 
       - name: Validate Zig and LSP
         run: |
+          release_version="${GITHUB_REF_NAME#v}"
           zig build test
-          zig build -Doptimize=ReleaseSafe -Dversion="$GITHUB_REF_NAME" -Dcommit="$GITHUB_SHA"
+          zig build -Doptimize=ReleaseSafe -Dversion="$release_version" -Dcommit="$GITHUB_SHA"
           zig-out/bin/ss --version
           scripts/project-smoke.sh
           node scripts/lsp-smoke.mjs
@@ -120,7 +124,8 @@ jobs:
           VSIX: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
         run: |
           set -euo pipefail
+          scripts/changelog-section.py "$TAG_NAME" > release-notes.md
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes "Released from commit ${GITHUB_SHA}."
+            gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes-file release-notes.md
           fi
           gh release upload "$TAG_NAME" "$VSIX" --clobber

@@ -63,6 +63,18 @@ You can verify:
 
   ss --help
 
+Distribution:
+
+  GitHub Releases are the canonical release artifact location. The VS Code
+  extension does not bundle an ss binary in v1, so install the CLI first and
+  keep `ss` on PATH or set `ss.cli.path`.
+
+  For macOS, the preferred package-manager route is a dedicated Homebrew tap
+  backed by the GitHub Release artifacts:
+
+    brew tap abap34/ss
+    brew install ss
+
 Watch mode:
 
   # Re-run checks while the deck or related project files change

@@ -6,6 +6,7 @@ on:
     tags: ["v*.*.*"]
     paths:
       - Dockerfile.render
+      - VERSION
       - scripts/render-smoke.sh
       - scripts/ss-render-pages.sh
       - scripts/setup-md4c.sh
@@ -103,6 +104,9 @@ jobs:
       - name: Set up MD4C
         run: scripts/setup-md4c.sh
 
+      - name: Check release metadata
+        run: scripts/release-preflight.sh "$GITHUB_REF_NAME"
+
       - name: Show tool versions
         run: |
           zig version
@@ -113,8 +117,13 @@ jobs:
 
       - name: Run release validation
         run: |
+          if [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
+            ss_version="${GITHUB_REF_NAME#v}"
+          else
+            ss_version="$(tr -d '[:space:]' < VERSION)-dev"
+          fi
           zig build test
-          zig build -Doptimize=ReleaseSafe -Dversion="$GITHUB_REF_NAME" -Dcommit="$GITHUB_SHA"
+          zig build -Doptimize=ReleaseSafe -Dversion="$ss_version" -Dcommit="$GITHUB_SHA"
           zig-out/bin/ss --version
           scripts/render-smoke.sh
 
@@ -127,6 +136,16 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Resolve ss version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
+            ss_version="${GITHUB_REF_NAME#v}"
+          else
+            ss_version="$(tr -d '[:space:]' < VERSION)-dev"
+          fi
+          echo "ss_version=$ss_version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -161,7 +180,7 @@ jobs:
           file: Dockerfile.render
           platforms: linux/amd64
           build-args: |
-            SS_VERSION=${{ github.ref_name }}
+            SS_VERSION=${{ steps.version.outputs.ss_version }}
             SS_COMMIT=${{ github.sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -183,7 +202,9 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
-          cat > release-notes.md <<EOF
+          scripts/changelog-section.py "$TAG_NAME" > release-notes.md
+          cat >> release-notes.md <<EOF
+
           Released from commit ${GITHUB_SHA}.
 
           Container images:
