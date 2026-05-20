@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast");
+const build_options = @import("build_options");
 const core = @import("core");
 const syntax = @import("syntax.zig");
 const stage1 = @import("stage1.zig");
@@ -355,7 +356,9 @@ fn handleMessage(server: *Server, body: []const u8) !void {
     const params = root.get("params");
 
     if (std.mem.eql(u8, method, "initialize")) {
-        try respond(server.allocator, id, initializeResult);
+        const result = try initializeResult(server.allocator);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
         return;
     }
     if (std.mem.eql(u8, method, "shutdown")) {
@@ -453,9 +456,18 @@ fn handleMessage(server: *Server, body: []const u8) !void {
     if (id != null) try respondError(server.allocator, id, -32601, "method not found");
 }
 
-const initializeResult =
-    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@"]},"hoverProvider":true,"definitionProvider":true,"inlayHintProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":"0.1.0"}}
+const initializeResultPrefix =
+    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@"]},"hoverProvider":true,"definitionProvider":true,"inlayHintProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
 ;
+
+fn initializeResult(allocator: std.mem.Allocator) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, initializeResultPrefix);
+    try appendJsonString(allocator, &out, build_options.version);
+    try out.appendSlice(allocator, "}}");
+    return out.toOwnedSlice(allocator);
+}
 
 fn completionResult(server: *Server) ![]const u8 {
     var out = std.ArrayList(u8).empty;

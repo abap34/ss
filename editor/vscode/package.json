@@ -2,9 +2,18 @@
   "name": "ss-language-support",
   "displayName": "ss Language Support",
   "description": "Language server powered editor support for ss slide source files.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "abap34",
   "license": "Apache-2.0",
+  "homepage": "https://github.com/abap34/ss#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abap34/ss.git",
+    "directory": "editor/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/abap34/ss/issues"
+  },
   "main": "./out/extension.js",
   "engines": {
     "vscode": "^1.85.0"
@@ -24,12 +33,29 @@
     "Programming Languages",
     "Snippets"
   ],
+  "keywords": [
+    "ss",
+    "slides",
+    "presentation",
+    "pdf",
+    "lsp",
+    "language server"
+  ],
+  "galleryBanner": {
+    "color": "#1f2937",
+    "theme": "dark"
+  },
   "contributes": {
     "languages": [
       {
         "id": "ss-slide",
-        "aliases": ["ss", "ss-slide"],
-        "extensions": [".ss"],
+        "aliases": [
+          "ss",
+          "ss-slide"
+        ],
+        "extensions": [
+          ".ss"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -95,7 +121,10 @@
         "ss.livePreview.openMode": {
           "type": "string",
           "default": "vscode",
-          "enum": ["vscode", "external"],
+          "enum": [
+            "vscode",
+            "external"
+          ],
           "enumDescriptions": [
             "Open the generated PDF through VS Code's normal document opening command.",
             "Open the generated PDF with the operating system's external PDF application."
@@ -105,7 +134,11 @@
         "ss.lsp.trace.server": {
           "type": "string",
           "default": "off",
-          "enum": ["off", "messages", "verbose"],
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
           "description": "Trace communication with the ss language server."
         }
       }

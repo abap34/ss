@@ -1,6 +1,6 @@
 {
   "name": "tree-sitter-ss",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Tree-sitter grammar for the ss slide language.",
   "main": "grammar.js",
   "scripts": {
@@ -9,8 +9,19 @@
   },
   "keywords": [
     "tree-sitter",
-    "ss"
+    "ss",
+    "slides",
+    "presentation"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abap34/ss.git",
+    "directory": "tree-sitter-ss"
+  },
+  "bugs": {
+    "url": "https://github.com/abap34/ss/issues"
+  },
+  "homepage": "https://github.com/abap34/ss/tree/main/tree-sitter-ss",
   "license": "Apache-2.0",
   "devDependencies": {
     "tree-sitter-cli": "^0.25.10"
@@ -18,7 +29,9 @@
   "tree-sitter": [
     {
       "scope": "source.ss",
-      "file-types": ["ss"],
+      "file-types": [
+        "ss"
+      ],
       "highlights": "queries/highlights.scm",
       "locals": "queries/locals.scm",
       "folds": "queries/folds.scm"
