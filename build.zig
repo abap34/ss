@@ -208,8 +208,17 @@ pub fn build(b: *std.Build) void {
 
 fn addNativePdfBackend(b: *std.Build, module: *std.Build.Module) void {
     module.addIncludePath(b.path("src/render"));
+    addLinuxPangoIncludePaths(module);
     module.addCSourceFile(.{ .file = b.path("src/render/pdf_native_c.c") });
     module.linkSystemLibrary("librsvg-2.0", .{ .use_pkg_config = .force });
     module.linkSystemLibrary("pangocairo-1.0", .{ .use_pkg_config = .no });
     module.linkSystemLibrary("pango-1.0", .{ .use_pkg_config = .no });
+}
+
+fn addLinuxPangoIncludePaths(module: *std.Build.Module) void {
+    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/pango-1.0" });
+    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
+    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fribidi" });
+    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/libthai" });
+    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/libdatrie" });
 }

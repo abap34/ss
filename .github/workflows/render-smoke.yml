@@ -74,16 +74,6 @@ jobs:
           sudo rm -rf "$APT_ARCHIVE_CACHE/partial" "$APT_ARCHIVE_CACHE/lock"
           sudo chown -R "$USER:$(id -gn)" "$APT_ARCHIVE_CACHE"
 
-      - name: Export native PDF include paths
-        run: |
-          paths=""
-          for flag in $(pkg-config --cflags-only-I pangocairo); do
-            case "$flag" in
-              -I*) paths="${paths:+$paths:}${flag#-I}" ;;
-            esac
-          done
-          echo "C_INCLUDE_PATH=$paths${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}" >> "$GITHUB_ENV"
-
       - name: Restore Zig compiler cache
         uses: actions/cache@v4
         with:

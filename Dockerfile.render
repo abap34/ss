@@ -66,6 +66,7 @@ RUN apt-get update \
         texlive-latex-base \
         texlive-latex-extra \
         texlive-latex-recommended \
+        texlive-science \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
