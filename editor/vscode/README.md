@@ -1,24 +1,39 @@
 # VS Code support for `ss`
 
-This directory contains a minimal VS Code language package for `ss`.
+This extension is a thin VS Code language client for `ss`.
 
 Included:
 
-- syntax highlighting
-- comment configuration for `;;`
-- snippets
-- editor diagnostics for errors and warnings from `ss check`
-- a live PDF preview command
+- TextMate syntax highlighting
+- snippets and comment configuration
+- compiler-backed diagnostics, completion, hover, definition, inlay hints, document symbols, folding ranges, semantic tokens, and color decorators through `ss lsp`
+- live PDF preview owned by the extension
 - a sample task that runs `ss check`
-- inlay hints for argument names and solved width/height
-- completion and hover support for functions, variables, object classes, roles, value domains, and class fields
-- color decorators and color editing for `c"..."` literals
 
-## If `.ss` opens as Scheme
+The extension does not bundle an `ss` binary in v1. Set `ss.cli.path` when `ss`
+is not on `PATH`.
+
+## Project Files
+
+Editor features use the same project discovery as the CLI. Put `ss.toml` at the
+workspace or deck root:
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+`entry` is required. `asset_base_dir` defaults to the entry file's parent
+directory when omitted.
+
+The old `;; !root` marker is no longer used.
+
+## If `.ss` Opens As Scheme
 
 Some VS Code setups already associate `.ss` with Scheme.
 
-Copy [settings.sample.json](/Users/yuchi/Desktop/ss/editor/vscode/settings.sample.json) to your workspace as `.vscode/settings.json`, or add:
+Copy `settings.sample.json` to your workspace as `.vscode/settings.json`, or add:
 
 ```json
 {
@@ -28,55 +43,50 @@ Copy [settings.sample.json](/Users/yuchi/Desktop/ss/editor/vscode/settings.sampl
 }
 ```
 
-## Local install
-
-1. Open this folder in VS Code.
-2. Run `Developer: Install Extension from Location...`
-3. Choose this `editor/vscode` directory.
-
-## Diagnostics
-
-The extension runs:
+## Local Install
 
 ```sh
-ss check path/to/file.ss
+cd editor/vscode
+npm ci
+npm run compile
 ```
 
-and publishes both `ERROR:` and `WARNING:` output as VS Code diagnostics.
+Then run `Developer: Install Extension from Location...` and choose this
+`editor/vscode` directory.
 
-When a `.ss` file in the current directory or a parent directory starts with
-`;; !root`, that file is treated as the VS Code project root. The extension
-searches upward from the active file's directory until the workspace folder
-boundary. In each directory, `.ss` files are checked in filename order, with the
-active file preferred when it is in that directory. The first marker found is
-the root; if no marker is found, the active file is the entrypoint.
+## Language Server
 
-Diagnostics, definition lookup, metadata dumps, and live preview are run
-against that root file even when the active editor is an imported chapter file.
-Relative imports still resolve from the file that wrote the import; the root
-only chooses the entrypoint and asset base directory. Inlay hints are filtered
-by the source file path attached to each hint, so hints produced for the root
-file are not displayed in imported chapter files.
-
-For diagnostics and preview, the extension writes a temporary snapshot tree
-under `.ss-cache/vscode-projects/` so unsaved edits in open project files are
-included without requiring a project config file. Snapshot directories are keyed
-by the root entrypoint and cleaned before each new project snapshot; old roots
-are pruned to keep the cache bounded.
-
-Use `ss: Check Current File` from the command palette to force a check.
-
-## Live preview
-
-Run `ss: Open Live Preview` from the command palette or the editor title button. The preview renders the current buffer with:
+When an `ss` file opens, the extension starts:
 
 ```sh
-ss render path/to/file.ss .ss-cache/vscode-preview/<file>.pdf
+ss lsp
 ```
 
-It refreshes the generated PDF after edits with a short debounce. The extension opens the preview PDF once, then updates that same file on later renders. By default the extension opens that PDF through VS Code's normal `vscode.open` command, so rendering is handled by the user's installed PDF support instead of a custom webview.
+The LSP server owns diagnostics and semantic editor features. Configure tracing
+with:
 
-Set `ss.livePreview.openMode` to `external` to open the generated PDF in the operating system's PDF application instead:
+```json
+{
+  "ss.lsp.trace.server": "messages"
+}
+```
+
+Use `ss: Check Current File` from the command palette to save the active file
+and force the language client to refresh.
+
+## Live Preview
+
+Run `ss: Open Live Preview` from the command palette or the editor title button.
+The preview asks the language server for `ss/projectInfo`, writes a snapshot of
+open `.ss` buffers under `.ss-cache/vscode-projects/`, and refreshes a PDF with:
+
+```sh
+ss render <snapshot-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base>
+```
+
+The extension opens the preview PDF once, then updates that same file on later
+renders. Set `ss.livePreview.openMode` to `external` to open the generated PDF in
+the operating system's PDF application:
 
 ```json
 {
@@ -84,78 +94,11 @@ Set `ss.livePreview.openMode` to `external` to open the generated PDF in the ope
 }
 ```
 
-## Diagnostics task
-
-Copy `tasks.sample.json` to `.vscode/tasks.json` in your workspace if you want a simple save/check task.
-
-The task expects this command to work:
+## Packaging
 
 ```sh
-ss check path/to/file.ss
+npm run package
 ```
 
-The current CLI emits diagnostics in:
-
-```text
-ERROR: /abs/path/file.ss:12:3: unknown function: foo
-WARNING: /abs/path/file.ss:13:3: custom warning
-```
-
-so the task can attach them to the current file.
-
-## Inlay hints
-
-The extension asks the local CLI for IR JSON with:
-
-```sh
-ss dump path/to/file.ss
-```
-
-If a `;; !root` file is found, the dump target is the root file, not necessarily
-the active editor file.
-
-This currently shows:
-
-- parameter-name style hints
-- solved `width×height` hints
-
-The hints refresh while editing with a short debounce, and also refresh immediately on save.
-
-## Object classes and fields
-
-The extension reads declaration metadata from `ss dump`, including:
-
-- `type Name = object { ... }`
-- `extend Name { ... }`
-- value-domain aliases such as `type RenderKind = "..."`
-- prefix function annotations such as `@render`, `@pass`, `@host`, and `@op`
-
-Field completions are class-aware. For an object variable with a known class, `obj.` and `set_prop(obj, "...")` complete inherited fields from that object class.
-
-## Color literals
-
-Color literals use `c"..."` and are shown through VS Code's color decorator:
-
-```ss
-set_prop(title, "text_color", c"red")
-set_prop(panel, "chrome_fill", c"#eeee")
-set_prop(body, "text_link_color", c"0.1,0.25,0.75")
-```
-
-The extension recognizes named colors, RGB float triples, and short or long hex forms.
-
-If `ss` is not on your `PATH`, set `ss.cli.path` to the full executable path.
-
-## Debugging
-
-If hints do not appear, open `View: Output` and select `ss-slide` in the output-channel picker.
-
-The extension logs:
-
-- the `ss dump ...` command
-- the `ss check ...` command
-- the `ss render ...` command
-- the working directory
-- stderr from the CLI
-- JSON parse failures
-- the final hint count
+The Marketplace publisher is `abap34`. Release CI publishes with `VSCE_PAT` when
+that secret is present and always uploads the VSIX to the GitHub Release.

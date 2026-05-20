@@ -1,12 +1,19 @@
 {
   "name": "ss-language-support",
   "displayName": "ss Language Support",
-  "description": "Minimal editor support for ss slide source files.",
+  "description": "Language server powered editor support for ss slide source files.",
   "version": "0.0.1",
-  "publisher": "local",
-  "main": "./extension.js",
+  "publisher": "abap34",
+  "license": "Apache-2.0",
+  "main": "./out/extension.js",
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "vsce package",
+    "test": "npm run compile"
   },
   "activationEvents": [
     "onLanguage:ss-slide",
@@ -72,12 +79,12 @@
         "ss.cli.path": {
           "type": "string",
           "default": "ss",
-          "description": "Path to the ss executable used for dump, check, and render commands."
+          "description": "Path to the ss executable used to launch `ss lsp` and render live previews."
         },
         "ss.diagnostics.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Run ss check and publish diagnostics while editing."
+          "description": "Enable diagnostics from the ss language server."
         },
         "ss.livePreview.debounceMs": {
           "type": "number",
@@ -95,13 +102,22 @@
           ],
           "description": "How ss live preview opens the generated PDF."
         },
-        "ss.inlayHints.idleMs": {
-          "type": "number",
-          "default": 300,
-          "minimum": 0,
-          "description": "Idle time after the last edit before inlay hints are shown again. Hints are withdrawn while the document is dirty and stay hidden until this delay elapses on a clean buffer."
+        "ss.lsp.trace.server": {
+          "type": "string",
+          "default": "off",
+          "enum": ["off", "messages", "verbose"],
+          "description": "Trace communication with the ss language server."
         }
       }
     }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.25",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.9.3"
   }
 }

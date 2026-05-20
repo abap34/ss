@@ -2,3 +2,6 @@
 /.ss-cache
 /third_party/md4c
 /zig-out
+/editor/vscode/node_modules
+/editor/vscode/out
+/tree-sitter-ss/node_modules
