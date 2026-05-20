@@ -16,12 +16,12 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/abap34/ss.git",
-    "directory": "tree-sitter-ss"
+    "directory": "editor/tree-sitter-ss"
   },
   "bugs": {
     "url": "https://github.com/abap34/ss/issues"
   },
-  "homepage": "https://github.com/abap34/ss/tree/main/tree-sitter-ss",
+  "homepage": "https://github.com/abap34/ss/tree/main/editor/tree-sitter-ss",
   "license": "Apache-2.0",
   "devDependencies": {
     "tree-sitter-cli": "^0.25.10"

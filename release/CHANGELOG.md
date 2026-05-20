@@ -18,7 +18,7 @@ All notable changes to `ss` are recorded here.
 ### Changed
 
 - Replaced `;; !root` editor discovery with `ss.toml`.
-- Centralized release version metadata in `VERSION`.
+- Centralized release version metadata in `release/VERSION`.
 
 ### Known Limitations
 

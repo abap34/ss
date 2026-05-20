@@ -5,10 +5,10 @@ on:
     branches: [main]
     tags: ["v*.*.*"]
     paths:
-      - Dockerfile.render
-      - VERSION
+      - release/docker/render/Dockerfile
+      - release/VERSION
       - tests/smoke/render.sh
-      - tools/render-image/ss-render-pages.sh
+      - release/docker/render/entrypoint.sh
       - scripts/setup-md4c.sh
       - src/**
       - stdlib/**
@@ -105,7 +105,7 @@ jobs:
         run: scripts/setup-md4c.sh
 
       - name: Check release metadata
-        run: tools/release/preflight.py "$GITHUB_REF_NAME"
+        run: release/tools/preflight.py "$GITHUB_REF_NAME"
 
       - name: Show tool versions
         run: |
@@ -120,7 +120,7 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
             ss_version="${GITHUB_REF_NAME#v}"
           else
-            ss_version="$(tr -d '[:space:]' < VERSION)-dev"
+            ss_version="$(tr -d '[:space:]' < release/VERSION)-dev"
           fi
           zig build test
           zig build -Doptimize=ReleaseSafe -Dversion="$ss_version" -Dcommit="$GITHUB_SHA"
@@ -143,7 +143,7 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == v*.*.* ]]; then
             ss_version="${GITHUB_REF_NAME#v}"
           else
-            ss_version="$(tr -d '[:space:]' < VERSION)-dev"
+            ss_version="$(tr -d '[:space:]' < release/VERSION)-dev"
           fi
           echo "ss_version=$ss_version" >> "$GITHUB_OUTPUT"
 
@@ -177,7 +177,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile.render
+          file: release/docker/render/Dockerfile
           platforms: linux/amd64
           build-args: |
             SS_VERSION=${{ steps.version.outputs.ss_version }}
@@ -195,6 +195,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
       - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -202,7 +205,7 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
-          tools/release/changelog-section.py "$TAG_NAME" > release-notes.md
+          release/tools/changelog-section.py "$TAG_NAME" > release-notes.md
           cat >> release-notes.md <<EOF
 
           Released from commit ${GITHUB_SHA}.
@@ -216,7 +219,7 @@ jobs:
           - zig build test
           - zig build -Doptimize=ReleaseSafe
           - tests/smoke/render.sh
-          - Dockerfile.render build and embedded smoke test
+          - release/docker/render/Dockerfile build and embedded smoke test
           EOF
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then

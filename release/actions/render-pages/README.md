@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: yuchi/ss/actions/render-pages@v0
+      - uses: yuchi/ss/release/actions/render-pages@v0
         with:
           input: "slides/**/*.ss"
           title: "Slides"

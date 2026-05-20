@@ -14,19 +14,19 @@ if version.startswith("v"):
     version = version[1:]
 
 root = pathlib.Path(__file__).resolve().parents[2]
-changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+changelog = (root / "release" / "CHANGELOG.md").read_text(encoding="utf-8")
 pattern = re.compile(
     rf"^## \[{re.escape(version)}\][^\n]*\n(?P<body>.*?)(?=^## \[|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 match = pattern.search(changelog)
 if not match:
-    print(f"CHANGELOG.md has no section for {version}", file=sys.stderr)
+    print(f"release/CHANGELOG.md has no section for {version}", file=sys.stderr)
     sys.exit(1)
 
 body = match.group("body").strip()
 if not body:
-    print(f"CHANGELOG.md section for {version} is empty", file=sys.stderr)
+    print(f"release/CHANGELOG.md section for {version} is empty", file=sys.stderr)
     sys.exit(1)
 
 print(body)

@@ -2,27 +2,27 @@
 
 ## Versioning
 
-`VERSION` is the release version source. Keep these files in sync before tagging:
+`release/VERSION` is the release version source. Keep these files in sync before tagging:
 
-- `VERSION`
+- `release/VERSION`
 - `editor/vscode/package.json`
 - `editor/vscode/package-lock.json`
-- `tree-sitter-ss/package.json`
-- `tree-sitter-ss/package-lock.json`
-- `tree-sitter-ss/tree-sitter.json`
-- `CHANGELOG.md`
+- `editor/tree-sitter-ss/package.json`
+- `editor/tree-sitter-ss/package-lock.json`
+- `editor/tree-sitter-ss/tree-sitter.json`
+- `release/CHANGELOG.md`
 
 Run:
 
 ```sh
-tools/release/preflight.py v0.1.0
+release/tools/preflight.py v0.1.0
 ```
 
 ## CLI Distribution
 
 For v1, use GitHub Releases as the canonical artifact location. The Homebrew
 workflow attaches a source archive named `ss-<version>.tar.gz` and renders a tap
-formula from `packaging/homebrew/ss.rb.in`.
+formula from `release/homebrew/ss.rb.in`.
 
 Release binaries can also be attached manually when needed. Build them with:
 
@@ -55,5 +55,5 @@ uploads the VSIX to the GitHub Release.
 
 ## Changelog
 
-`tools/release/changelog-section.py v0.1.0` extracts the matching changelog section for
+`release/tools/changelog-section.py v0.1.0` extracts the matching changelog section for
 GitHub Release notes.

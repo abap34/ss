@@ -67,7 +67,7 @@ jobs:
         run: scripts/setup-md4c.sh
 
       - name: Check release metadata
-        run: tools/release/preflight.py "$GITHUB_REF_NAME"
+        run: release/tools/preflight.py "$GITHUB_REF_NAME"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -76,7 +76,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             editor/vscode/package-lock.json
-            tree-sitter-ss/package-lock.json
+            editor/tree-sitter-ss/package-lock.json
 
       - name: Validate Zig and LSP
         run: |
@@ -88,7 +88,7 @@ jobs:
           node tests/smoke/lsp.mjs
 
       - name: Test tree-sitter grammar
-        working-directory: tree-sitter-ss
+        working-directory: editor/tree-sitter-ss
         run: |
           npm ci
           npm test
@@ -124,7 +124,7 @@ jobs:
           VSIX: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
         run: |
           set -euo pipefail
-          tools/release/changelog-section.py "$TAG_NAME" > release-notes.md
+          release/tools/changelog-section.py "$TAG_NAME" > release-notes.md
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes-file release-notes.md
           fi

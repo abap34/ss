@@ -68,6 +68,8 @@ Distribution:
   GitHub Releases are the canonical release artifact location. The VS Code
   extension does not bundle an ss binary in v1, so install the CLI first and
   keep `ss` on PATH or set `ss.cli.path`.
+  Release metadata, the changelog, Docker packaging, the Homebrew template, and
+  release-oriented GitHub Action sources live under `release/`.
 
   For macOS, the preferred package-manager route is a dedicated Homebrew tap
   backed by the GitHub Release artifacts:

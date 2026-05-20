@@ -17,4 +17,4 @@ auto-format = false
 
 [[grammar]]
 name = "ss"
-source = { path = "../../tree-sitter-ss" }
+source = { path = "../tree-sitter-ss" }

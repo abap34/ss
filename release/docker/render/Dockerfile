@@ -37,7 +37,7 @@ ENV PATH="/opt/zig:${PATH}"
 
 WORKDIR /src
 COPY build.zig ./build.zig
-COPY VERSION ./VERSION
+COPY release/VERSION ./release/VERSION
 COPY src ./src
 COPY stdlib ./stdlib
 COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh
@@ -74,7 +74,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
-COPY tools/render-image/ss-render-pages.sh /usr/local/bin/ss-render-pages
+COPY release/docker/render/entrypoint.sh /usr/local/bin/ss-render-pages
 COPY tests/smoke/render.sh /usr/local/bin/ss-render-smoke
 
 RUN cd /tmp \

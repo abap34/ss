@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/render-smoke.yml"
-      - "Dockerfile.render"
+      - "release/docker/render/Dockerfile"
       - "build.zig"
       - "tests/smoke/render.sh"
       - "scripts/setup-md4c.sh"
@@ -14,7 +14,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/render-smoke.yml"
-      - "Dockerfile.render"
+      - "release/docker/render/Dockerfile"
       - "build.zig"
       - "tests/smoke/render.sh"
       - "scripts/setup-md4c.sh"

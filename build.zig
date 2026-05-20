@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const release_version = readReleaseVersion(b) catch @panic("VERSION must contain the release version.");
+    const release_version = readReleaseVersion(b) catch @panic("release/VERSION must contain the release version.");
     const default_version = b.fmt("{s}-dev", .{release_version});
     const version = b.option([]const u8, "version", "Version string reported by `ss --version`") orelse default_version;
     const commit = b.option([]const u8, "commit", "Source commit reported by `ss --version`") orelse "unknown";
@@ -253,7 +253,7 @@ fn addLinuxPangoIncludePaths(module: *std.Build.Module) void {
 }
 
 fn readReleaseVersion(b: *std.Build) ![]const u8 {
-    const raw = try b.build_root.handle.readFileAlloc(b.graph.io, "VERSION", b.allocator, .limited(64));
+    const raw = try b.build_root.handle.readFileAlloc(b.graph.io, "release/VERSION", b.allocator, .limited(64));
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     if (trimmed.len == 0) return error.EmptyVersion;
     return trimmed;

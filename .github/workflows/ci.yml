@@ -90,7 +90,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             editor/vscode/package-lock.json
-            tree-sitter-ss/package-lock.json
+            editor/tree-sitter-ss/package-lock.json
 
       - name: Show tool versions
         run: |
@@ -102,7 +102,7 @@ jobs:
           git -C third_party/md4c rev-parse HEAD
 
       - name: Check release metadata
-        run: tools/release/preflight.py
+        run: release/tools/preflight.py
 
       - name: Run tests
         run: zig build test
@@ -116,7 +116,7 @@ jobs:
           node tests/smoke/lsp.mjs
 
       - name: Test tree-sitter grammar
-        working-directory: tree-sitter-ss
+        working-directory: editor/tree-sitter-ss
         run: |
           npm ci
           npm test

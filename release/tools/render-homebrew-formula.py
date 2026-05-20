@@ -25,7 +25,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = pathlib.Path(__file__).resolve().parents[2]
-    template = (root / "packaging" / "homebrew" / "ss.rb.in").read_text(encoding="utf-8")
+    template = (root / "release" / "homebrew" / "ss.rb.in").read_text(encoding="utf-8")
     replacements = {
         "@SOURCE_URL@": args.source_url,
         "@SOURCE_SHA256@": args.source_sha256,

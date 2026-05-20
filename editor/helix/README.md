@@ -5,7 +5,7 @@ This directory contains the Helix integration for `ss`.
 It configures:
 
 - `.ss` file detection as language `ss`
-- tree-sitter highlighting/folding/locals from `tree-sitter-ss`
+- tree-sitter highlighting/folding/locals from `editor/tree-sitter-ss`
 - Helix indent, textobject, tags, and rainbow queries
 - compiler-backed LSP through `ss lsp`
 
