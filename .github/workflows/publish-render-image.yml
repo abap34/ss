@@ -24,8 +24,105 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/ss-render
 
 jobs:
-  publish:
+  validate:
+    name: Validate release inputs
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Restore apt package cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-archives
+          key: ${{ runner.os }}-${{ runner.arch }}-apt-release-v1-${{ hashFiles('.github/workflows/publish-render-image.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-apt-release-v1-
+
+      - name: Install system dependencies
+        run: |
+          APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
+          mkdir -p "$APT_ARCHIVE_CACHE/partial"
+          sudo apt-get update
+          sudo apt-get \
+            -o Dir::Cache::archives="$APT_ARCHIVE_CACHE" \
+            -o Binary::apt-get::APT::Keep-Downloaded-Packages=true \
+            install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            imagemagick \
+            libcairo2-dev \
+            librsvg2-bin \
+            librsvg2-dev \
+            libpango1.0-dev \
+            pkg-config \
+            poppler-utils \
+            qpdf \
+            texlive-fonts-recommended \
+            texlive-latex-base \
+            texlive-latex-extra \
+            texlive-latex-recommended \
+            texlive-science \
+            xz-utils
+          sudo rm -rf "$APT_ARCHIVE_CACHE/partial" "$APT_ARCHIVE_CACHE/lock"
+          sudo chown -R "$USER:$(id -gn)" "$APT_ARCHIVE_CACHE"
+
+      - name: Restore Zig compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/zig
+          key: ${{ runner.os }}-${{ runner.arch }}-zig-${{ env.ZIG_VERSION }}
+
+      - name: Install Zig
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) zig_arch="x86_64-linux" ;;
+            aarch64|arm64) zig_arch="aarch64-linux" ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          mkdir -p "$HOME/.local/zig"
+          if [ ! -x "$HOME/.local/zig/zig" ]; then
+            curl --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 300 -fsSL \
+              "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-${ZIG_VERSION}.tar.xz" \
+              -o /tmp/zig.tar.xz
+            tar -xJf /tmp/zig.tar.xz -C "$HOME/.local/zig" --strip-components=1
+          fi
+          echo "$HOME/.local/zig" >> "$GITHUB_PATH"
+
+      - name: Restore MD4C cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/md4c
+          key: ${{ runner.os }}-md4c-${{ hashFiles('scripts/setup-md4c.sh') }}
+
+      - name: Set up MD4C
+        run: scripts/setup-md4c.sh
+
+      - name: Show tool versions
+        run: |
+          zig version
+          pkg-config --modversion pangocairo
+          pkg-config --modversion librsvg-2.0
+          pdflatex --version | head -n 1
+          qpdf --version | head -n 1
+
+      - name: Run release validation
+        run: |
+          zig build test
+          zig build -Doptimize=ReleaseSafe -Dversion="$GITHUB_REF_NAME" -Dcommit="$GITHUB_SHA"
+          zig-out/bin/ss --version
+          scripts/render-smoke.sh
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -48,6 +145,9 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=tag
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern=v{{major}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -59,6 +159,46 @@ jobs:
           context: .
           file: Dockerfile.render
           platforms: linux/amd64
+          build-args: |
+            SS_VERSION=${{ github.ref_name }}
+            SS_COMMIT=${{ github.sha }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  release:
+    name: Create GitHub release
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Released from commit ${GITHUB_SHA}.
+
+          Container images:
+          - ${IMAGE}:${TAG_NAME}
+          - ${IMAGE}:${TAG_NAME%.*}
+          - ${IMAGE}:${TAG_NAME%%.*}
+
+          Validation:
+          - zig build test
+          - zig build -Doptimize=ReleaseSafe
+          - scripts/render-smoke.sh
+          - Dockerfile.render build and embedded smoke test
+          EOF
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "ss ${TAG_NAME}" --notes-file release-notes.md
+          else
+            gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes-file release-notes.md
+          fi
