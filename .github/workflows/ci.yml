@@ -27,8 +27,18 @@ jobs:
             ca-certificates \
             curl \
             git \
-            python3 \
-            python3-venv \
+            imagemagick \
+            libcairo2-dev \
+            librsvg2-dev \
+            librsvg2-bin \
+            libpango1.0-dev \
+            poppler-utils \
+            pkg-config \
+            qpdf \
+            texlive-fonts-recommended \
+            texlive-latex-base \
+            texlive-latex-extra \
+            texlive-latex-recommended \
             xz-utils
 
       - name: Install Zig
@@ -50,17 +60,17 @@ jobs:
       - name: Set up MD4C
         run: scripts/setup-md4c.sh
 
-      - name: Generate embedded fonts
-        run: |
-          python3 -m venv .ss-cache/font-build-venv
-          .ss-cache/font-build-venv/bin/python -m pip install --upgrade pip
-          .ss-cache/font-build-venv/bin/python -m pip install fonttools
-          .ss-cache/font-build-venv/bin/python third_party/fonts/fetch.py
-
       - name: Show tool versions
         run: |
           zig version
+          pkg-config --modversion pangocairo
+          pkg-config --modversion librsvg-2.0
           git -C third_party/md4c rev-parse HEAD
 
       - name: Run tests
         run: zig build test
+
+      - name: Render smoke test
+        run: |
+          zig build
+          scripts/render-smoke.sh

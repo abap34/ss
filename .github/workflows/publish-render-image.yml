@@ -6,12 +6,11 @@ on:
     tags: ["v*.*.*"]
     paths:
       - Dockerfile.render
-      - requirements-render.txt
+      - scripts/render-smoke.sh
       - scripts/ss-render-pages.sh
       - scripts/setup-md4c.sh
       - src/**
       - stdlib/**
-      - third_party/fonts/fetch.py
       - build.zig
       - .github/workflows/publish-render-image.yml
   workflow_dispatch:
