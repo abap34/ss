@@ -3,6 +3,12 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const version = b.option([]const u8, "version", "Version string reported by `ss --version`") orelse "0.1.0-dev";
+    const commit = b.option([]const u8, "commit", "Source commit reported by `ss --version`") orelse "unknown";
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", version);
+    build_options.addOption([]const u8, "commit", commit);
+
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
@@ -69,6 +75,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("model", model_mod);
     exe_mod.addImport("language_type", language_type_mod);
     exe_mod.addImport("stdlib_assets", stdlib_assets_mod);
+    exe_mod.addOptions("build_options", build_options);
     addNativePdfBackend(b, exe_mod);
 
     const exe = b.addExecutable(.{
@@ -115,6 +122,7 @@ pub fn build(b: *std.Build) void {
     main_tests_mod.addImport("model", model_mod);
     main_tests_mod.addImport("language_type", language_type_mod);
     main_tests_mod.addImport("stdlib_assets", stdlib_assets_mod);
+    main_tests_mod.addOptions("build_options", build_options);
     addNativePdfBackend(b, main_tests_mod);
     const main_tests = b.addTest(.{
         .root_module = main_tests_mod,

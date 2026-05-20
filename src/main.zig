@@ -1,5 +1,6 @@
 const std = @import("std");
 const app = @import("app.zig");
+const build_options = @import("build_options");
 const utils = @import("utils");
 const error_report = utils.err;
 
@@ -21,6 +22,8 @@ fn usage() void {
         \\Flags:
         \\  --help, -h
         \\    Show this help message
+        \\  --version, -V
+        \\    Show the ss version and source commit
         \\  --asset-base-dir DIR
         \\    Resolve relative assets/themes from DIR instead of the input file directory
         \\  --jobs N
@@ -37,6 +40,10 @@ fn usage() void {
         \\  zig build run -- render demo/ss.ss out.pdf
         \\
     , .{});
+}
+
+fn version() void {
+    std.debug.print("ss {s} ({s})\n", .{ build_options.version, build_options.commit });
 }
 
 const CommandOptions = struct {
@@ -89,6 +96,10 @@ fn run(init: std.process.Init) !void {
     const cmd = args[1];
     if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
         usage();
+        return;
+    }
+    if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V") or std.mem.eql(u8, cmd, "version")) {
+        version();
         return;
     }
 

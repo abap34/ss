@@ -41,8 +41,11 @@ COPY src ./src
 COPY stdlib ./stdlib
 COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh
 
+ARG SS_VERSION=0.1.0-dev
+ARG SS_COMMIT=unknown
+
 RUN scripts/setup-md4c.sh \
-    && zig build -Doptimize=ReleaseSafe
+    && zig build -Doptimize=ReleaseSafe -Dversion="${SS_VERSION}" -Dcommit="${SS_COMMIT}"
 
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
