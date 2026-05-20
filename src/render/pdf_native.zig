@@ -414,11 +414,14 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     const artifact_slice = try tasks.toOwnedSlice(ctx.allocator);
     errdefer freePreloadTasks(ctx.allocator, artifact_slice);
     const page_cache_hit_count = countPageCacheHits(page_slice);
-    const artifact_cache = try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
-    errdefer ctx.allocator.free(artifact_cache.cached);
     const document_cache_path = try documentPdfCachePath(ctx.allocator, document_cache_dir, page_slice);
     errdefer ctx.allocator.free(document_cache_path);
     const document_cache_hit = fileExists(document_cache_path);
+    const artifact_cache = if (document_cache_hit)
+        try buildAllCachedPreloadState(ctx, artifact_slice.len)
+    else
+        try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
+    errdefer ctx.allocator.free(artifact_cache.cached);
 
     return .{
         .allocator = ctx.allocator,
@@ -1286,6 +1289,15 @@ fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask,
     };
 }
 
+fn buildAllCachedPreloadState(ctx: *DrawContext, task_count: usize) !PreloadCacheState {
+    const cached = try ctx.allocator.alloc(bool, task_count);
+    for (cached) |*value| value.* = true;
+    return .{
+        .cached = cached,
+        .miss_count = 0,
+    };
+}
+
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
@@ -1990,20 +2002,21 @@ fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
     try drawPngFit(ctx, frame, png_path);
 }
 
+const direct_merge_page_limit: usize = 96;
 const merge_chunk_size: usize = 16;
 
 fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
-    const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
-    defer ctx.allocator.free(page_paths);
-    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
-
     if (plan.document_cache_hit) {
         if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
         if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
         return;
     }
 
-    if (page_paths.len <= merge_chunk_size) {
+    const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
+    defer ctx.allocator.free(page_paths);
+    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
+
+    if (page_paths.len <= direct_merge_page_limit) {
         if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
         try mergePdfInputs(ctx, page_paths, true, plan.final_pdf_path);
         if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
