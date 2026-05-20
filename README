@@ -44,6 +44,11 @@ You can verify:
 
   ss --help
 
+License:
+
+  Apache-2.0
+  Copyright 2026 Yuchi Yamaguchi
+
 VS Code extension:
 
 1. Run `Developer: Install Extension from Location...`
