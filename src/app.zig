@@ -303,8 +303,14 @@ fn printProgressDetail(current: usize, total: usize, label: []const u8, detail_c
 fn progressCallback(progress: *Progress) pdf.RenderProgress {
     return .{
         .context = progress,
+        .cachePrepared = onRenderCache,
         .pageRendered = onRenderPage,
     };
+}
+
+fn onRenderCache(context: *anyopaque, completed: usize, total: usize) void {
+    const progress: *Progress = @ptrCast(@alignCast(context));
+    progress.detail("Cache", completed, total);
 }
 
 fn onRenderPage(context: *anyopaque, page_index: usize, page_count: usize) void {

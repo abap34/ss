@@ -80,6 +80,7 @@ const RasterPreload = struct {
 const PreloadWork = struct {
     tasks: []const PreloadTask,
     next_index: std.atomic.Value(usize) = .init(0),
+    completed: std.atomic.Value(usize) = .init(0),
     failed: std.atomic.Value(bool) = .init(false),
     io: std.Io,
     pdf: *c.SsPdf,
@@ -89,6 +90,7 @@ const PreloadWork = struct {
 
 pub const RenderProgress = struct {
     context: *anyopaque,
+    cachePrepared: *const fn (context: *anyopaque, completed: usize, total: usize) void,
     pageRendered: *const fn (context: *anyopaque, page_index: usize, page_count: usize) void,
 };
 
@@ -127,7 +129,7 @@ pub fn renderDocumentToPdfWithProgress(allocator: Allocator, io: std.Io, ir: *co
     defer declaration_index.deinit();
     const sema = semantic_env.SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
-    try preloadRenderCache(&ctx, ir, &sema);
+    try preloadRenderCache(&ctx, ir, &sema, progress);
 
     const page_count = ir.page_order.items.len;
     for (ir.page_order.items, 0..) |page_id, page_index| {
@@ -168,9 +170,10 @@ fn drawPage(ctx: *DrawContext, ir: *core.Ir, sema: anytype, page: *const core.No
     }
 }
 
-fn preloadRenderCache(ctx: *DrawContext, ir: *core.Ir, sema: anytype) !void {
+fn preloadRenderCache(ctx: *DrawContext, ir: *core.Ir, sema: anytype, progress: ?RenderProgress) !void {
     var tasks = std.ArrayList(PreloadTask).empty;
     defer tasks.deinit(ctx.allocator);
+    defer freePreloadTasks(ctx.allocator, tasks.items);
 
     var seen = std.StringHashMap(void).init(ctx.allocator);
     defer {
@@ -192,7 +195,7 @@ fn preloadRenderCache(ctx: *DrawContext, ir: *core.Ir, sema: anytype) !void {
         }
     }
 
-    try runPreloadTasks(ctx, tasks.items);
+    try runPreloadTasks(ctx, tasks.items, progress);
 }
 
 fn collectNodePreloads(
@@ -209,7 +212,7 @@ fn collectNodePreloads(
             var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
             defer env.deinit(ctx.allocator);
             try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
-                .source = node.content orelse "",
+                .source = try ctx.allocator.dupe(u8, node.content orelse ""),
                 .packages = try clonePackageSlice(ctx.allocator, env.math_latex_packages.items),
                 .kind = .block,
             } });
@@ -301,7 +304,7 @@ fn collectLinePreloads(
         for (line.runs.items) |run| {
             switch (run.kind) {
                 .math, .display_math => try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
-                    .source = run.text,
+                    .source = try ctx.allocator.dupe(u8, run.text),
                     .packages = try clonePackageSlice(ctx.allocator, packages),
                     .kind = .inline_math,
                 } }),
@@ -324,13 +327,32 @@ fn registerPreloadTask(
     task: PreloadTask,
 ) !void {
     const key = try preloadTaskKey(ctx, task);
-    errdefer ctx.allocator.free(key);
+    errdefer {
+        ctx.allocator.free(key);
+        freePreloadTask(ctx.allocator, task);
+    }
     if (seen.contains(key)) {
         ctx.allocator.free(key);
+        freePreloadTask(ctx.allocator, task);
         return;
     }
     try seen.put(key, {});
     try tasks.append(ctx.allocator, task);
+}
+
+fn freePreloadTasks(allocator: Allocator, tasks: []const PreloadTask) void {
+    for (tasks) |task| freePreloadTask(allocator, task);
+}
+
+fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
+    switch (task) {
+        .math => |math| {
+            allocator.free(math.source);
+            allocator.free(math.packages);
+        },
+        .vector_pdf => |source| allocator.free(source),
+        .raster => |raster| allocator.free(raster.source),
+    }
 }
 
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
@@ -341,10 +363,10 @@ fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     };
 }
 
-fn runPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask) !void {
+fn runPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask, progress: ?RenderProgress) !void {
     if (tasks.len == 0) return;
     const worker_count = renderWorkerCount(tasks.len);
-    if (worker_count <= 1) return runPreloadTasksSequential(ctx, tasks);
+    if (worker_count <= 1) return runPreloadTasksSequential(ctx, tasks, progress);
 
     var work = PreloadWork{
         .tasks = tasks,
@@ -353,6 +375,8 @@ fn runPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask) !void {
         .asset_base_dir = ctx.asset_base_dir,
         .cache_dir = ctx.cache_dir,
     };
+
+    if (progress) |p| p.cachePrepared(p.context, 0, tasks.len);
 
     var threads = try ctx.allocator.alloc(std.Thread, worker_count);
     defer ctx.allocator.free(threads);
@@ -366,13 +390,36 @@ fn runPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask) !void {
     while (started < worker_count) : (started += 1) {
         threads[started] = try std.Thread.spawn(.{}, preloadWorker, .{&work});
     }
+
+    var last_reported: usize = 0;
+    while (true) {
+        const completed = work.completed.load(.acquire);
+        if (progress) |p| {
+            if (completed != last_reported) {
+                p.cachePrepared(p.context, completed, tasks.len);
+                last_reported = completed;
+            }
+        }
+        if (completed >= tasks.len or work.failed.load(.seq_cst)) break;
+        std.Io.sleep(ctx.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
+    }
+
     for (threads[0..started]) |thread| thread.join();
+
+    const completed = work.completed.load(.acquire);
+    if (progress) |p| {
+        if (completed != last_reported) p.cachePrepared(p.context, completed, tasks.len);
+    }
 
     if (work.failed.load(.seq_cst)) return NativePdfError.AssetConversionFailed;
 }
 
-fn runPreloadTasksSequential(ctx: *DrawContext, tasks: []const PreloadTask) !void {
-    for (tasks) |task| try preloadOne(ctx, task);
+fn runPreloadTasksSequential(ctx: *DrawContext, tasks: []const PreloadTask, progress: ?RenderProgress) !void {
+    if (progress) |p| p.cachePrepared(p.context, 0, tasks.len);
+    for (tasks, 0..) |task, index| {
+        try preloadOne(ctx, task);
+        if (progress) |p| p.cachePrepared(p.context, index + 1, tasks.len);
+    }
 }
 
 fn preloadWorker(work: *PreloadWork) void {
@@ -393,6 +440,7 @@ fn preloadWorker(work: *PreloadWork) void {
             std.debug.print("native pdf: preload failed ({s})\n", .{@errorName(err)});
             break;
         };
+        _ = work.completed.fetchAdd(1, .release);
         _ = arena.reset(.retain_capacity);
     }
 }
