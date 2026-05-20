@@ -1,4 +1,4 @@
-yet another silde description language & system
+yet another slide description language & system
 
 No more babysitting slides because of component dependencies.
 The language is stupidly extensible, so you can finally stop living in cmd + c / cmd + v.
@@ -44,20 +44,11 @@ You can verify:
 
   ss --help
 
-Renderer smoke test:
-
-  zig build
-  scripts/render-smoke.sh
-
-This generates `.ss-cache/render-smoke/smoke.pdf` and checks native text,
-emoji/font fallback, LaTeX math, SVG assets, PDF assets, and `qpdf`
-validation.
-
 VS Code extension:
 
 1. Run `Developer: Install Extension from Location...`
 2. Choose `editor/vscode/`
-3. If `.ss` don't opens as ss-lang, copy `editor/vscode/settings.sample.json` to
+3. If `.ss` files do not open as ss-lang, copy `editor/vscode/settings.sample.json` to
    `.vscode/settings.json`
 
 Render cache:
