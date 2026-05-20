@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("model", model_mod);
     exe_mod.addImport("language_type", language_type_mod);
     exe_mod.addImport("stdlib_assets", stdlib_assets_mod);
+    addNativePdfBackend(b, exe_mod);
 
     const exe = b.addExecutable(.{
         .name = "ss",
@@ -114,6 +115,7 @@ pub fn build(b: *std.Build) void {
     main_tests_mod.addImport("model", model_mod);
     main_tests_mod.addImport("language_type", language_type_mod);
     main_tests_mod.addImport("stdlib_assets", stdlib_assets_mod);
+    addNativePdfBackend(b, main_tests_mod);
     const main_tests = b.addTest(.{
         .root_module = main_tests_mod,
     });
@@ -202,4 +204,12 @@ pub fn build(b: *std.Build) void {
         smoke_check.addArgs(&.{ "check", path });
         test_step.dependOn(&smoke_check.step);
     }
+}
+
+fn addNativePdfBackend(b: *std.Build, module: *std.Build.Module) void {
+    module.addIncludePath(b.path("src/render"));
+    module.addCSourceFile(.{ .file = b.path("src/render/pdf_native_c.c") });
+    module.linkSystemLibrary("librsvg-2.0", .{ .use_pkg_config = .force });
+    module.linkSystemLibrary("pangocairo-1.0", .{ .use_pkg_config = .no });
+    module.linkSystemLibrary("pango-1.0", .{ .use_pkg_config = .no });
 }
