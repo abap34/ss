@@ -1,9 +1,26 @@
-name: CI
+name: Render smoke
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/render-smoke.yml"
+      - "Dockerfile.render"
+      - "build.zig"
+      - "scripts/render-smoke.sh"
+      - "scripts/setup-md4c.sh"
+      - "src/**"
+      - "stdlib/**"
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/render-smoke.yml"
+      - "Dockerfile.render"
+      - "build.zig"
+      - "scripts/render-smoke.sh"
+      - "scripts/setup-md4c.sh"
+      - "src/**"
+      - "stdlib/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,8 +29,8 @@ env:
   ZIG_VERSION: 0.16.0
 
 jobs:
-  test:
-    name: Zig build test
+  render-smoke:
+    name: Render smoke
     runs-on: ubuntu-latest
 
     steps:
@@ -24,31 +41,38 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/apt-archives
-          key: ${{ runner.os }}-${{ runner.arch }}-apt-ci-v1-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-apt-render-v1-${{ hashFiles('.github/workflows/render-smoke.yml') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-apt-ci-v1-
+            ${{ runner.os }}-${{ runner.arch }}-apt-render-v1-
 
       - name: Install system dependencies
         run: |
-          if command -v pkg-config >/dev/null && pkg-config --exists cairo pangocairo librsvg-2.0; then
-            echo "system dependencies already installed"
-          else
-            APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
-            mkdir -p "$APT_ARCHIVE_CACHE/partial"
-            sudo apt-get update
-            sudo apt-get \
-              -o Dir::Cache::archives="$APT_ARCHIVE_CACHE" \
-              -o Binary::apt-get::APT::Keep-Downloaded-Packages=true \
-              install -y --no-install-recommends \
-              libcairo2-dev \
-              librsvg2-dev \
-              libpango1.0-dev \
-              pkg-config
-          fi
-          if [ -d "$RUNNER_TEMP/apt-archives" ]; then
-            sudo rm -rf "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-archives/lock"
-            sudo chown -R "$USER:$(id -gn)" "$RUNNER_TEMP/apt-archives"
-          fi
+          APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
+          mkdir -p "$APT_ARCHIVE_CACHE/partial"
+          sudo apt-get update
+          sudo apt-get \
+            -o Dir::Cache::archives="$APT_ARCHIVE_CACHE" \
+            -o Binary::apt-get::APT::Keep-Downloaded-Packages=true \
+            install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            imagemagick \
+            libcairo2-dev \
+            librsvg2-bin \
+            librsvg2-dev \
+            libpango1.0-dev \
+            pkg-config \
+            poppler-utils \
+            qpdf \
+            texlive-fonts-recommended \
+            texlive-latex-base \
+            texlive-latex-extra \
+            texlive-latex-recommended \
+            texlive-science \
+            xz-utils
+          sudo rm -rf "$APT_ARCHIVE_CACHE/partial" "$APT_ARCHIVE_CACHE/lock"
+          sudo chown -R "$USER:$(id -gn)" "$APT_ARCHIVE_CACHE"
 
       - name: Export native PDF include paths
         run: |
@@ -98,7 +122,10 @@ jobs:
           zig version
           pkg-config --modversion pangocairo
           pkg-config --modversion librsvg-2.0
-          git -C third_party/md4c rev-parse HEAD
+          pdflatex --version | head -n 1
+          qpdf --version | head -n 1
 
-      - name: Run tests
-        run: zig build test
+      - name: Render smoke test
+        run: |
+          zig build
+          scripts/render-smoke.sh
