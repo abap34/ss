@@ -11,6 +11,7 @@ const utils = @import("utils");
 const error_report = utils.err;
 
 pub const render_cache_path = ".ss-cache/render";
+pub const RenderOptions = pdf.RenderOptions;
 
 pub const Progress = struct {
     total: usize,
@@ -206,9 +207,13 @@ pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
 }
 
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
+    return writePdfForFileWithOptions(io, allocator, input_path, output_path, .{}, progress);
+}
+
+pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdfWithProgress(allocator, io, &ir, progressCallback(progress));
+    const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
     defer allocator.free(pdf_data);
     progress.step("Render PDF");
     try utils.fs.writeFile(io, output_path, pdf_data);
@@ -216,9 +221,13 @@ pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []c
 }
 
 pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
+    return writePdfForFileWithAssetBaseAndOptions(io, allocator, input_path, asset_base_dir, output_path, .{}, progress);
+}
+
+pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdfWithProgress(allocator, io, &ir, progressCallback(progress));
+    const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
     defer allocator.free(pdf_data);
     progress.step("Render PDF");
     try utils.fs.writeFile(io, output_path, pdf_data);
@@ -303,19 +312,25 @@ fn printProgressDetail(current: usize, total: usize, label: []const u8, detail_c
 fn progressCallback(progress: *Progress) pdf.RenderProgress {
     return .{
         .context = progress,
-        .cachePrepared = onRenderCache,
-        .pageRendered = onRenderPage,
+        .artifactCompleted = onRenderArtifact,
+        .pageCompleted = onRenderPage,
+        .assemblyCompleted = onRenderAssembly,
     };
 }
 
-fn onRenderCache(context: *anyopaque, completed: usize, total: usize) void {
+fn onRenderArtifact(context: *anyopaque, completed: usize, total: usize) void {
     const progress: *Progress = @ptrCast(@alignCast(context));
-    progress.detail("Cache", completed, total);
+    progress.detail("Artifacts", completed, total);
 }
 
-fn onRenderPage(context: *anyopaque, page_index: usize, page_count: usize) void {
+fn onRenderPage(context: *anyopaque, completed: usize, total: usize) void {
     const progress: *Progress = @ptrCast(@alignCast(context));
-    progress.detail("Render PDF", page_index, page_count);
+    progress.detail("Pages", completed, total);
+}
+
+fn onRenderAssembly(context: *anyopaque, completed: usize, total: usize) void {
+    const progress: *Progress = @ptrCast(@alignCast(context));
+    progress.detail("Assemble", completed, total);
 }
 
 fn formatDurationMsText(value: i64, buf: []u8) ![]const u8 {

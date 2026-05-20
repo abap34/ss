@@ -6,7 +6,7 @@ const error_report = utils.err;
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\ss <command> [arguments] [--asset-base-dir DIR]
+        \\ss <command> [arguments] [--asset-base-dir DIR] [--jobs N]
         \\
         \\Commands:
         \\  check [input.ss]
@@ -23,6 +23,8 @@ fn usage() void {
         \\    Show this help message
         \\  --asset-base-dir DIR
         \\    Resolve relative assets/themes from DIR instead of the input file directory
+        \\  --jobs N
+        \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
         \\
         \\Examples:
         \\  ss --help
@@ -41,6 +43,7 @@ const CommandOptions = struct {
     input_path: ?[]const u8 = null,
     output_path: ?[]const u8 = null,
     asset_base_dir: ?[]const u8 = null,
+    jobs: ?usize = null,
 };
 
 fn parseCommandOptions(args: []const []const u8) !CommandOptions {
@@ -52,6 +55,13 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         if (std.mem.eql(u8, arg, "--asset-base-dir")) {
             if (i + 1 >= args.len) return error.MissingAssetBaseDirValue;
             options.asset_base_dir = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--jobs")) {
+            if (i + 1 >= args.len) return error.MissingJobsValue;
+            options.jobs = try std.fmt.parseUnsigned(usize, args[i + 1], 10);
+            if (options.jobs.? == 0) return error.InvalidJobsValue;
             i += 1;
             continue;
         }
@@ -119,10 +129,11 @@ fn run(init: std.process.Init) !void {
         const input_path = options.input_path orelse "demo/ss.ss";
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, input_path, "pdf");
         var progress = app.Progress.init(7);
+        const render_options = app.RenderOptions{ .jobs = options.jobs };
         if (options.asset_base_dir) |asset_base_dir| {
-            try app.writePdfForFileWithAssetBase(io, allocator, input_path, asset_base_dir, output_path, &progress);
+            try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, input_path, asset_base_dir, output_path, render_options, &progress);
         } else {
-            try app.writePdfForFile(io, allocator, input_path, output_path, &progress);
+            try app.writePdfForFileWithOptions(io, allocator, input_path, output_path, render_options, &progress);
         }
         return;
     }

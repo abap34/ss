@@ -260,7 +260,7 @@ pub fn parseMarkdownDocumentForNode(
     return parseMarkdownContent(allocator, content);
 }
 
-fn parseMarkdownContent(
+pub fn parseMarkdownContent(
     allocator: Allocator,
     content: []const u8,
 ) !MarkdownDocument {
@@ -308,6 +308,16 @@ pub fn parseTextLayoutForNode(
         return layout;
     }
 
+    try parsePlainLines(allocator, &layout, content);
+    return layout;
+}
+
+pub fn parseTextLayoutContent(
+    allocator: Allocator,
+    content: []const u8,
+) !TextLayout {
+    var layout = TextLayout{};
+    errdefer layout.deinit(allocator);
     try parsePlainLines(allocator, &layout, content);
     return layout;
 }
