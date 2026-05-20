@@ -8,6 +8,45 @@ const error_report = utils.err;
 
 const max_module_bytes = 256 * 1024;
 
+pub const SourceOverlay = struct {
+    allocator: std.mem.Allocator,
+    by_path: std.StringHashMap([]const u8),
+
+    pub fn init(allocator: std.mem.Allocator) SourceOverlay {
+        return .{
+            .allocator = allocator,
+            .by_path = std.StringHashMap([]const u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *SourceOverlay) void {
+        var iterator = self.by_path.iterator();
+        while (iterator.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.by_path.deinit();
+    }
+
+    pub fn put(self: *SourceOverlay, path: []const u8, source: []const u8) !void {
+        const absolute = try std.fs.path.resolve(self.allocator, &.{path});
+        errdefer self.allocator.free(absolute);
+        const text = try self.allocator.dupe(u8, source);
+        errdefer self.allocator.free(text);
+        if (self.by_path.fetchRemove(absolute)) |entry| {
+            self.allocator.free(entry.key);
+            self.allocator.free(entry.value);
+        }
+        try self.by_path.put(absolute, text);
+    }
+
+    pub fn get(self: *const SourceOverlay, path: []const u8) ?[]const u8 {
+        const absolute = std.fs.path.resolve(self.allocator, &.{path}) catch return null;
+        defer self.allocator.free(absolute);
+        return self.by_path.get(absolute);
+    }
+};
+
 const EmbeddedModule = struct {
     spec: []const u8,
     source: []const u8,
@@ -47,9 +86,20 @@ pub fn loadGraph(
     project_dir: []const u8,
     project_program: ast.Program,
 ) !Graph {
+    return loadGraphWithOverlay(allocator, io, project_dir, project_program, null);
+}
+
+pub fn loadGraphWithOverlay(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    project_dir: []const u8,
+    project_program: ast.Program,
+    overlay: ?*const SourceOverlay,
+) !Graph {
     var builder = Builder{
         .allocator = allocator,
         .io = io,
+        .overlay = overlay,
         .modules = std.ArrayList(core.SourceModule).empty,
         .by_key = std.StringHashMap(core.SourceModuleId).init(allocator),
         .state_by_id = std.AutoHashMap(core.SourceModuleId, VisitState).init(allocator),
@@ -123,6 +173,7 @@ const ResolvedModule = struct {
 const Builder = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
+    overlay: ?*const SourceOverlay,
     modules: std.ArrayList(core.SourceModule),
     by_key: std.StringHashMap(core.SourceModuleId),
     state_by_id: std.AutoHashMap(core.SourceModuleId, VisitState),
@@ -144,7 +195,7 @@ const Builder = struct {
     }
 
     fn loadImport(self: *Builder, importer_dir: []const u8, import_spec: []const u8) anyerror!core.SourceModuleId {
-        const resolved = try resolveImport(self.allocator, self.io, importer_dir, import_spec);
+        const resolved = try resolveImport(self.allocator, self.io, importer_dir, import_spec, self.overlay);
         defer freeResolvedModule(self.allocator, resolved);
         return try self.loadResolved(.library, resolved);
     }
@@ -262,6 +313,7 @@ fn resolveImport(
     io: std.Io,
     importer_dir: []const u8,
     import_spec: []const u8,
+    overlay: ?*const SourceOverlay,
 ) !ResolvedModule {
     if (std.mem.startsWith(u8, import_spec, "std:")) {
         return resolveStdModule(allocator, import_spec) orelse error.UnknownImport;
@@ -270,10 +322,19 @@ fn resolveImport(
 
     const path = try resolveExplicitPath(allocator, importer_dir, import_spec);
     errdefer allocator.free(path);
-    const source = readModuleFile(allocator, io, path) catch |err| switch (err) {
-        error.FileNotFound => return error.UnknownImport,
-        else => return err,
-    };
+    const source = if (overlay) |source_overlay|
+        if (source_overlay.get(path)) |text|
+            try allocator.dupe(u8, text)
+        else
+            readModuleFile(allocator, io, path) catch |err| switch (err) {
+                error.FileNotFound => return error.UnknownImport,
+                else => return err,
+            }
+    else
+        readModuleFile(allocator, io, path) catch |err| switch (err) {
+            error.FileNotFound => return error.UnknownImport,
+            else => return err,
+        };
     return .{
         .key = try allocator.dupe(u8, path),
         .path = path,
@@ -315,7 +376,7 @@ fn resolveExplicitPath(
     spec: []const u8,
 ) ![]u8 {
     if (std.fs.path.isAbsolute(spec)) return allocator.dupe(u8, spec);
-    return std.fs.path.join(allocator, &.{ base_dir, spec });
+    return std.fs.path.resolve(allocator, &.{ base_dir, spec });
 }
 
 fn readModuleFile(

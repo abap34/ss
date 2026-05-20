@@ -80,7 +80,24 @@ pub fn buildFileWithAssetBase(
     asset_base_dir: []const u8,
     progress: ?*Progress,
 ) !core.Ir {
-    var source = try utils.fs.readFileAlloc(io, allocator, path);
+    return buildFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, null);
+}
+
+pub fn buildFileWithAssetBaseAndOverlay(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    asset_base_dir: []const u8,
+    progress: ?*Progress,
+    overlay: ?*const module_loader.SourceOverlay,
+) !core.Ir {
+    var source = if (overlay) |source_overlay|
+        if (source_overlay.get(path)) |text|
+            try allocator.dupe(u8, text)
+        else
+            try utils.fs.readFileAlloc(io, allocator, path)
+    else
+        try utils.fs.readFileAlloc(io, allocator, path);
     errdefer allocator.free(source);
     if (progress) |p| p.step("Read source");
 
@@ -88,7 +105,7 @@ pub fn buildFileWithAssetBase(
     errdefer program.deinit(allocator);
     if (progress) |p| p.step("Parse");
 
-    var index = typecheck.loadProgramIndex(allocator, io, asset_base_dir, program) catch |err| {
+    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
         if (err == error.UnknownImport and program.imports.items.len != 0) {
             const message = try module_loader.formatUnknownImportMessage(allocator, asset_base_dir, program.imports.items[0].spec);
             defer allocator.free(message);

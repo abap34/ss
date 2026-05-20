@@ -3,12 +3,14 @@ const app = @import("app.zig");
 const build_options = @import("build_options");
 const utils = @import("utils");
 const watcher = @import("watch.zig");
+const project = @import("project.zig");
+const lsp = @import("lsp.zig");
 const error_report = utils.err;
 
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\ss <command> [arguments] [--asset-base-dir DIR] [--jobs N]
+        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--jobs N]
         \\
         \\Commands:
         \\  check [input.ss]
@@ -17,6 +19,8 @@ fn usage() void {
         \\    Print IR JSON, or write it when output path is given
         \\  render [input.ss] [output.pdf]
         \\    Render PDF to the specified path
+        \\  lsp
+        \\    Run the ss language server over stdio
         \\  watch check [input.ss]
         \\    Re-run check when the project changes
         \\  watch render [input.ss] [output.pdf]
@@ -31,6 +35,10 @@ fn usage() void {
         \\    Show the ss version and source commit
         \\  --asset-base-dir DIR
         \\    Resolve relative assets/themes from DIR instead of the input file directory
+        \\  --project FILE_OR_DIR
+        \\    Resolve the entrypoint and asset base from ss.toml
+        \\  --output FILE
+        \\    Write dump/render output to FILE when the input comes from ss.toml
         \\  --jobs N
         \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
         \\  --interval-ms N
@@ -41,7 +49,9 @@ fn usage() void {
         \\  ss check slide.ss
         \\  ss dump slide.ss
         \\  ss dump slide.ss out.json
+        \\  ss dump --project . --output .ss-cache/dump.json
         \\  ss render slide.ss out.pdf
+        \\  ss render --project . --output .ss-cache/render.pdf
         \\  ss watch check slide.ss
         \\  ss watch render slide.ss out.pdf
         \\  ss cache clear
@@ -59,6 +69,7 @@ const CommandOptions = struct {
     input_path: ?[]const u8 = null,
     output_path: ?[]const u8 = null,
     asset_base_dir: ?[]const u8 = null,
+    project_path: ?[]const u8 = null,
     jobs: ?usize = null,
     interval_ms: u64 = 500,
 };
@@ -72,6 +83,19 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         if (std.mem.eql(u8, arg, "--asset-base-dir")) {
             if (i + 1 >= args.len) return error.MissingAssetBaseDirValue;
             options.asset_base_dir = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--project")) {
+            if (i + 1 >= args.len) return error.MissingProjectValue;
+            options.project_path = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--output")) {
+            if (i + 1 >= args.len) return error.MissingOutputValue;
+            if (options.output_path != null) return error.DuplicateOutputPath;
+            options.output_path = args[i + 1];
             i += 1;
             continue;
         }
@@ -92,7 +116,10 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         if (std.mem.startsWith(u8, arg, "--")) return error.UnknownFlag;
         switch (positional_index) {
             0 => options.input_path = arg,
-            1 => options.output_path = arg,
+            1 => {
+                if (options.output_path != null) return error.DuplicateOutputPath;
+                options.output_path = arg;
+            },
             else => return error.TooManyArguments,
         }
         positional_index += 1;
@@ -122,47 +149,39 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "check")) {
         const options = try parseCommandOptions(args[2..]);
-        const input_path = options.input_path orelse "demo/01-language-tour.ss";
-        if (options.asset_base_dir) |asset_base_dir| {
-            try app.checkFileWithAssetBase(io, allocator, input_path, asset_base_dir);
-        } else {
-            try app.checkFile(io, allocator, input_path);
-        }
+        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        defer resolved.deinit(allocator);
+        try app.checkFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "dump")) {
         const options = try parseCommandOptions(args[2..]);
-        const input_path = options.input_path orelse "demo/01-language-tour.ss";
+        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
             var progress = app.Progress.init(7);
-            if (options.asset_base_dir) |asset_base_dir| {
-                try app.writeIrJsonFileWithAssetBase(io, allocator, input_path, asset_base_dir, output_path, &progress);
-            } else {
-                try app.writeIrJsonFile(io, allocator, input_path, output_path, &progress);
-            }
+            try app.writeIrJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
         } else {
             var progress = app.Progress.init(7);
-            if (options.asset_base_dir) |asset_base_dir| {
-                try app.printIrJsonForFileWithAssetBase(io, allocator, input_path, asset_base_dir, &progress);
-            } else {
-                try app.printIrJsonForFile(io, allocator, input_path, &progress);
-            }
+            try app.printIrJsonForFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, &progress);
         }
         return;
     }
 
     if (std.mem.eql(u8, cmd, "render")) {
         const options = try parseCommandOptions(args[2..]);
-        const input_path = options.input_path orelse "demo/01-language-tour.ss";
-        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, input_path, "pdf");
+        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        defer resolved.deinit(allocator);
+        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         var progress = app.Progress.init(7);
         const render_options = app.RenderOptions{ .jobs = options.jobs };
-        if (options.asset_base_dir) |asset_base_dir| {
-            try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, input_path, asset_base_dir, output_path, render_options, &progress);
-        } else {
-            try app.writePdfForFileWithOptions(io, allocator, input_path, output_path, render_options, &progress);
-        }
+        try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "lsp")) {
+        try lsp.run(io, allocator);
         return;
     }
 

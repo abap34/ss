@@ -375,7 +375,7 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
     };
 }
 
-fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
+pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
     return switch (diagnostic.data) {
         .user_report => |data| allocator.dupe(u8, data.message),
         .asset_not_found => |data| std.fmt.allocPrint(

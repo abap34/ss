@@ -42,6 +42,10 @@ pub const ProgramIndex = struct {
     }
 };
 
+pub const BuildIrOptions = struct {
+    allow_diagnostics: bool = false,
+};
+
 pub fn collectFunctionsFromPrograms(
     allocator: std.mem.Allocator,
     programs: []const *const ast.Program,
@@ -388,6 +392,18 @@ pub fn buildIr(
     project_program: *ast.Program,
     index: *ProgramIndex,
 ) !core.Ir {
+    return buildIrWithOptions(allocator, input_path, asset_base_path, project_source, project_program, index, .{});
+}
+
+pub fn buildIrWithOptions(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    asset_base_path: []const u8,
+    project_source: *[]u8,
+    project_program: *ast.Program,
+    index: *ProgramIndex,
+    options: BuildIrOptions,
+) !core.Ir {
     const asset_base_dir = try allocator.dupe(u8, asset_base_path);
     errdefer allocator.free(asset_base_dir);
     const project_path = try allocator.dupe(u8, input_path);
@@ -410,9 +426,12 @@ pub fn buildIr(
     if (ir.module_order.items.len == 0 or ir.module_order.items[ir.module_order.items.len - 1] != ir.project_module_id) {
         try ir.module_order.append(allocator, ir.project_module_id);
     }
-    ir.variable_types = collectVariableTypesFromProgramWithDiagnostics(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| {
-        printIrDiagnosticsOrFallback(&ir, err);
-        return error.DiagnosticsFailed;
+    ir.variable_types = collectVariableTypesFromProgramWithDiagnostics(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {
+        if (!options.allow_diagnostics) {
+            printIrDiagnosticsOrFallback(&ir, err);
+            return error.DiagnosticsFailed;
+        }
+        break :blk std.StringHashMap(core.SemanticSort).init(allocator);
     };
     try editor.populateIrAnalysis(allocator, &ir);
     return ir;
@@ -449,7 +468,17 @@ pub fn loadProgramIndex(
     base_dir: []const u8,
     project_program: ast.Program,
 ) !ProgramIndex {
-    var graph = try module_loader.loadGraph(allocator, io, base_dir, project_program);
+    return loadProgramIndexWithOverlay(allocator, io, base_dir, project_program, null);
+}
+
+pub fn loadProgramIndexWithOverlay(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    project_program: ast.Program,
+    overlay: ?*const module_loader.SourceOverlay,
+) !ProgramIndex {
+    var graph = try module_loader.loadGraphWithOverlay(allocator, io, base_dir, project_program, overlay);
     errdefer graph.deinit();
 
     var index = ProgramIndex{
