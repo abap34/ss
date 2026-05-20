@@ -13,7 +13,7 @@ if version.startswith("refs/tags/"):
 if version.startswith("v"):
     version = version[1:]
 
-root = pathlib.Path(__file__).resolve().parents[1]
+root = pathlib.Path(__file__).resolve().parents[2]
 changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
 pattern = re.compile(
     rf"^## \[{re.escape(version)}\][^\n]*\n(?P<body>.*?)(?=^## \[|\Z)",

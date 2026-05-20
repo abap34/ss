@@ -30,7 +30,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Check release metadata
-        run: scripts/release-preflight.sh "$RELEASE_TAG"
+        run: tools/release/preflight.py "$RELEASE_TAG"
 
       - name: Create release source archive
         id: source
@@ -51,7 +51,7 @@ jobs:
           source_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}/${archive}"
 
           if ! gh release view "$release_tag" >/dev/null 2>&1; then
-            scripts/changelog-section.py "$release_tag" > release-notes.md
+            tools/release/changelog-section.py "$release_tag" > release-notes.md
             gh release create "$release_tag" --verify-tag --title "ss ${release_tag}" --notes-file release-notes.md
           fi
           gh release upload "$release_tag" "$archive" --clobber
@@ -63,7 +63,7 @@ jobs:
 
       - name: Render Homebrew formula
         run: |
-          scripts/render-homebrew-formula.py \
+          tools/release/render-homebrew-formula.py \
             --version "${{ steps.source.outputs.version }}" \
             --source-url "${{ steps.source.outputs.source_url }}" \
             --source-sha256 "${{ steps.source.outputs.source_sha256 }}" \

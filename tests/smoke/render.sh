@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ss_bin="${SS_BIN:-"$repo_root/zig-out/bin/ss"}"
 work_dir="${SS_RENDER_SMOKE_DIR:-"$repo_root/.ss-cache/render-smoke"}"
 
@@ -12,7 +12,7 @@ if [[ ! -x "$ss_bin" ]]; then
 fi
 
 rm -rf "$work_dir"
-rm -rf .ss-cache/render
+rm -rf "$repo_root/.ss-cache/render"
 mkdir -p "$work_dir/assets"
 
 cat > "$work_dir/assets/vector.svg" <<'SVG'

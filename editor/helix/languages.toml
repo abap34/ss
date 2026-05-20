@@ -1,6 +1,5 @@
 # ss Helix language snippet.
-# `scripts/install-helix.sh` writes this shape into ~/.config/helix/languages.toml
-# with absolute local paths.
+# Copy this shape into ~/.config/helix/languages.toml and adjust local paths.
 
 [language-server.ss]
 command = "ss"

@@ -15,7 +15,7 @@
 Run:
 
 ```sh
-scripts/release-preflight.sh v0.1.0
+tools/release/preflight.py v0.1.0
 ```
 
 ## CLI Distribution
@@ -55,5 +55,5 @@ uploads the VSIX to the GitHub Release.
 
 ## Changelog
 
-`scripts/changelog-section.py v0.1.0` extracts the matching changelog section for
+`tools/release/changelog-section.py v0.1.0` extracts the matching changelog section for
 GitHub Release notes.

@@ -9,21 +9,17 @@ It configures:
 - Helix indent, textobject, tags, and rainbow queries
 - compiler-backed LSP through `ss lsp`
 
-Install or refresh the local Helix config from the repository root:
+Copy the language entry from `languages.toml` into your Helix
+`languages.toml`, then copy the query files into:
 
-```sh
-scripts/install-helix.sh
+```text
+~/.config/helix/runtime/queries/ss/
 ```
 
-The installer writes a managed block into `~/.config/helix/languages.toml`,
-copies query files into `~/.config/helix/runtime/queries/ss/`, and runs:
+After changing the tree-sitter grammar or query files, run:
 
 ```sh
 hx --grammar build ss
 ```
 
-It does not overwrite the rest of your Helix config. Re-run it after changing
-the tree-sitter grammar or query files.
-
-Use `SS_BIN=/path/to/ss scripts/install-helix.sh` when the desired `ss` binary is
-not the one found on `PATH`.
+Set `[language-server.ss].command` to the `ss` binary you want Helix to use.

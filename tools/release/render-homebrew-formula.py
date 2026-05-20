@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    root = pathlib.Path(__file__).resolve().parents[1]
+    root = pathlib.Path(__file__).resolve().parents[2]
     template = (root / "packaging" / "homebrew" / "ss.rb.in").read_text(encoding="utf-8")
     replacements = {
         "@SOURCE_URL@": args.source_url,

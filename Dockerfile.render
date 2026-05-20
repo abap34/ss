@@ -74,8 +74,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
-COPY scripts/ss-render-pages.sh /usr/local/bin/ss-render-pages
-COPY scripts/render-smoke.sh /usr/local/bin/ss-render-smoke
+COPY tools/render-image/ss-render-pages.sh /usr/local/bin/ss-render-pages
+COPY tests/smoke/render.sh /usr/local/bin/ss-render-smoke
 
 RUN cd /tmp \
     && SS_BIN=/usr/local/bin/ss SS_RENDER_SMOKE_DIR=/tmp/ss-render-smoke /usr/local/bin/ss-render-smoke \

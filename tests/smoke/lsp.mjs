@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ssBin = process.env.SS_BIN ?? path.join(root, "zig-out", "bin", "ss");
 const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
 const uri = pathToFileURL(fixture).toString();

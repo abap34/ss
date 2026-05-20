@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-ROOT="$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(CDPATH= cd "$(dirname "$0")/../.." && pwd)"
 SS_BIN="${SS_BIN:-$ROOT/zig-out/bin/ss}"
 FIXTURE="$ROOT/tests/fixtures/project-basic"
 CACHE="$ROOT/.ss-cache/project-smoke"

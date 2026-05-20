@@ -111,10 +111,8 @@ with `editor/vscode/`. If `.ss` files do not open as ss-lang, copy
 
 Helix:
 
-  scripts/install-helix.sh
-
-This installs the local Helix language entry, query files, tree-sitter grammar,
-and `ss lsp` wiring without overwriting the rest of `~/.config/helix`.
+  Helix integration snippets and query files live under `editor/helix/`.
+  Copy them into your Helix config when you want local Helix support.
 
 Render cache:
 

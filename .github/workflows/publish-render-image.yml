@@ -7,8 +7,8 @@ on:
     paths:
       - Dockerfile.render
       - VERSION
-      - scripts/render-smoke.sh
-      - scripts/ss-render-pages.sh
+      - tests/smoke/render.sh
+      - tools/render-image/ss-render-pages.sh
       - scripts/setup-md4c.sh
       - src/**
       - stdlib/**
@@ -105,7 +105,7 @@ jobs:
         run: scripts/setup-md4c.sh
 
       - name: Check release metadata
-        run: scripts/release-preflight.sh "$GITHUB_REF_NAME"
+        run: tools/release/preflight.py "$GITHUB_REF_NAME"
 
       - name: Show tool versions
         run: |
@@ -125,7 +125,7 @@ jobs:
           zig build test
           zig build -Doptimize=ReleaseSafe -Dversion="$ss_version" -Dcommit="$GITHUB_SHA"
           zig-out/bin/ss --version
-          scripts/render-smoke.sh
+          tests/smoke/render.sh
 
   publish:
     needs: validate
@@ -202,7 +202,7 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
-          scripts/changelog-section.py "$TAG_NAME" > release-notes.md
+          tools/release/changelog-section.py "$TAG_NAME" > release-notes.md
           cat >> release-notes.md <<EOF
 
           Released from commit ${GITHUB_SHA}.
@@ -215,7 +215,7 @@ jobs:
           Validation:
           - zig build test
           - zig build -Doptimize=ReleaseSafe
-          - scripts/render-smoke.sh
+          - tests/smoke/render.sh
           - Dockerfile.render build and embedded smoke test
           EOF
 

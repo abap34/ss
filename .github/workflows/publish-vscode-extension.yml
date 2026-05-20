@@ -67,7 +67,7 @@ jobs:
         run: scripts/setup-md4c.sh
 
       - name: Check release metadata
-        run: scripts/release-preflight.sh "$GITHUB_REF_NAME"
+        run: tools/release/preflight.py "$GITHUB_REF_NAME"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -84,8 +84,8 @@ jobs:
           zig build test
           zig build -Doptimize=ReleaseSafe -Dversion="$release_version" -Dcommit="$GITHUB_SHA"
           zig-out/bin/ss --version
-          scripts/project-smoke.sh
-          node scripts/lsp-smoke.mjs
+          tests/smoke/project.sh
+          node tests/smoke/lsp.mjs
 
       - name: Test tree-sitter grammar
         working-directory: tree-sitter-ss
@@ -124,7 +124,7 @@ jobs:
           VSIX: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
         run: |
           set -euo pipefail
-          scripts/changelog-section.py "$TAG_NAME" > release-notes.md
+          tools/release/changelog-section.py "$TAG_NAME" > release-notes.md
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes-file release-notes.md
           fi

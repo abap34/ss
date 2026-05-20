@@ -6,7 +6,7 @@ on:
       - ".github/workflows/render-smoke.yml"
       - "Dockerfile.render"
       - "build.zig"
-      - "scripts/render-smoke.sh"
+      - "tests/smoke/render.sh"
       - "scripts/setup-md4c.sh"
       - "src/**"
       - "stdlib/**"
@@ -16,7 +16,7 @@ on:
       - ".github/workflows/render-smoke.yml"
       - "Dockerfile.render"
       - "build.zig"
-      - "scripts/render-smoke.sh"
+      - "tests/smoke/render.sh"
       - "scripts/setup-md4c.sh"
       - "src/**"
       - "stdlib/**"
@@ -118,4 +118,4 @@ jobs:
       - name: Render smoke test
         run: |
           zig build
-          scripts/render-smoke.sh
+          tests/smoke/render.sh
