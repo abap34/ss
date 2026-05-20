@@ -1,0 +1,25 @@
+{
+  "grammars": [
+    {
+      "name": "ss",
+      "camelcase": "Ss",
+      "scope": "source.ss",
+      "file-types": ["ss"],
+      "injection-regex": "^ss$",
+      "class-name": "TreeSitterSs"
+    }
+  ],
+  "metadata": {
+    "version": "0.0.1",
+    "license": "Apache-2.0",
+    "description": "Tree-sitter grammar for the ss slide language.",
+    "authors": [
+      {
+        "name": "Yuchi Yamaguchi"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/abap34/ss"
+    }
+  }
+}

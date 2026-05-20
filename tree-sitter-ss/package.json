@@ -1,0 +1,27 @@
+{
+  "name": "tree-sitter-ss",
+  "version": "0.0.1",
+  "description": "Tree-sitter grammar for the ss slide language.",
+  "main": "grammar.js",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter generate && tree-sitter test && tree-sitter query queries/highlights.scm test/highlight.ss --quiet && tree-sitter query queries/locals.scm test/highlight.ss --quiet && tree-sitter query queries/folds.scm test/highlight.ss --quiet"
+  },
+  "keywords": [
+    "tree-sitter",
+    "ss"
+  ],
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.10"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.ss",
+      "file-types": ["ss"],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "folds": "queries/folds.scm"
+    }
+  ]
+}

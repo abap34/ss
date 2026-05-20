@@ -1,0 +1,21 @@
+# ss Helix language snippet.
+# `scripts/install-helix.sh` writes this shape into ~/.config/helix/languages.toml
+# with absolute local paths.
+
+[language-server.ss]
+command = "ss"
+args = ["lsp"]
+
+[[language]]
+name = "ss"
+scope = "source.ss"
+file-types = ["ss"]
+roots = ["ss.toml", ".git"]
+comment-token = ";;"
+language-servers = ["ss"]
+indent = { tab-width = 2, unit = "  " }
+auto-format = false
+
+[[grammar]]
+name = "ss"
+source = { path = "../../tree-sitter-ss" }

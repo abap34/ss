@@ -1,0 +1,84 @@
+================================================================================
+Declarations and a page
+================================================================================
+
+import "std:core/components"
+
+const gap: number = 24
+
+@render("text")
+fn h1(text: string) -> object
+  return object(text, "title", "text")
+end
+
+type Hero = object {
+  title: string = "Intro"
+}
+
+extend Hero {
+  subtitle: string = ""
+}
+
+page "Intro"
+  let title = h1("Hello")
+  text <<
+Markdown body
+>>
+  constrain title.left == page.left + gap
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    spec: (string))
+  (const_declaration
+    name: (identifier)
+    type: (type)
+    value: (number))
+  (function_declaration
+    (annotation name: (identifier) (string))
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)
+        type: (type)))
+    result: (type)
+    (return_statement
+      value: (call_expression
+        function: (identifier)
+        (identifier)
+        (string)
+        (string))))
+  (type_declaration
+    name: (type_identifier)
+    (object_type
+      (object_field
+        name: (identifier)
+        type: (type)
+        (string))))
+  (object_extension
+    target: (type_identifier)
+    (object_field
+      name: (identifier)
+      type: (type)
+      (string)))
+  (page_declaration
+    name: (string)
+    (let_statement
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (string)))
+    (block_call_statement
+      function: (identifier)
+      text: (block_text))
+    (constrain_statement
+      left: (member_expression
+        object: (identifier)
+        member: (identifier))
+      right: (binary_expression
+        (member_expression
+          object: (page)
+          member: (identifier))
+        (identifier)))))

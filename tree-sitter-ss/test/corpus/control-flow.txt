@@ -1,0 +1,53 @@
+================================================================================
+Document block, control flow, and properties
+================================================================================
+
+document
+  page_no_all()
+end
+
+page "Control"
+  let title = text("Control")
+  bind items = list("a", "b")
+  for item, index in items
+    if index then
+      property title "data-kind" item
+    else
+      set_prop(title, "fallback", c"#fff")
+    end
+  end
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (document_block
+    (line_call_statement
+      function: (identifier)
+      text: (line_text)))
+  (page_declaration
+    name: (string)
+    (let_statement
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (string)))
+    (bind_statement
+      name: (identifier)
+      value: (call_expression
+        function: (identifier)
+        (string)
+        (string)))
+    (for_statement
+      item: (identifier)
+      index: (identifier)
+      source: (identifier)
+      (if_statement
+        condition: (identifier)
+        (property_statement
+          target: (identifier)
+          key: (string)
+          value: (identifier))
+        (line_call_statement
+          function: (identifier)
+          text: (line_text))))))
