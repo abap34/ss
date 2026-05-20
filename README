@@ -16,6 +16,25 @@ Setup:
 This fetches the pinned MD4C revision into ignored `third_party/md4c/` sources
 used by the Zig build.
 
+Project config:
+
+  [project]
+  entry = "slide.ss"
+  asset_base_dir = "."
+
+`entry` is required. `asset_base_dir` defaults to the entry file's parent
+directory when omitted. `ss check`, `ss dump`, `ss render`, and `ss lsp` use the
+same discovery rule: explicit input paths remain entrypoints, otherwise the CLI
+searches upward from the current directory for the nearest `ss.toml`.
+
+Examples:
+
+  ss check slide.ss
+  ss check --project .
+  ss dump --project . --output .ss-cache/deck.json
+  ss render --project . --output .ss-cache/deck.pdf
+  ss lsp
+
 Native PDF system dependencies:
 
   pkg-config cairo pango pangocairo librsvg-2.0 qpdf
@@ -59,10 +78,27 @@ License:
 
 VS Code extension:
 
-1. Run `Developer: Install Extension from Location...`
-2. Choose `editor/vscode/`
-3. If `.ss` files do not open as ss-lang, copy `editor/vscode/settings.sample.json` to
-   `.vscode/settings.json`
+The VS Code extension in `editor/vscode/` is a TypeScript language client for
+`ss lsp`. It delegates diagnostics, completion, hover, definition, inlay hints,
+symbols, folding, semantic tokens, and colors to the compiler-backed language
+server. Live PDF preview remains extension-owned and renders snapshot trees
+under `.ss-cache/vscode-projects/`.
+
+  cd editor/vscode
+  npm ci
+  npm run compile
+  npm run package
+
+Install the generated VSIX or use `Developer: Install Extension from Location...`
+with `editor/vscode/`. If `.ss` files do not open as ss-lang, copy
+`editor/vscode/settings.sample.json` to `.vscode/settings.json`.
+
+Helix:
+
+  scripts/install-helix.sh
+
+This installs the local Helix language entry, query files, tree-sitter grammar,
+and `ss lsp` wiring without overwriting the rest of `~/.config/helix`.
 
 Render cache:
 

@@ -1,54 +1,37 @@
-name: CI
+name: Publish VS Code extension
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ZIG_VERSION: 0.16.0
 
 jobs:
-  test:
-    name: Zig build test
+  publish-vscode:
+    name: Validate, package, and publish VSIX
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Restore apt package cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/apt-archives
-          key: ${{ runner.os }}-${{ runner.arch }}-apt-ci-v1-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-apt-ci-v1-
-
       - name: Install system dependencies
         run: |
-          if command -v pkg-config >/dev/null && pkg-config --exists cairo pangocairo librsvg-2.0; then
-            echo "system dependencies already installed"
-          else
-            APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
-            mkdir -p "$APT_ARCHIVE_CACHE/partial"
-            sudo apt-get update
-            sudo apt-get \
-              -o Dir::Cache::archives="$APT_ARCHIVE_CACHE" \
-              -o Binary::apt-get::APT::Keep-Downloaded-Packages=true \
-              install -y --no-install-recommends \
-              libcairo2-dev \
-              librsvg2-dev \
-              libpango1.0-dev \
-              pkg-config
-          fi
-          if [ -d "$RUNNER_TEMP/apt-archives" ]; then
-            sudo rm -rf "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-archives/lock"
-            sudo chown -R "$USER:$(id -gn)" "$RUNNER_TEMP/apt-archives"
-          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            libcairo2-dev \
+            librsvg2-dev \
+            libpango1.0-dev \
+            pkg-config \
+            xz-utils
 
       - name: Restore Zig compiler cache
         uses: actions/cache@v4
@@ -92,23 +75,11 @@ jobs:
             editor/vscode/package-lock.json
             tree-sitter-ss/package-lock.json
 
-      - name: Show tool versions
+      - name: Validate Zig and LSP
         run: |
-          zig version
-          node --version
-          npm --version
-          pkg-config --modversion pangocairo
-          pkg-config --modversion librsvg-2.0
-          git -C third_party/md4c rev-parse HEAD
-
-      - name: Run tests
-        run: zig build test
-
-      - name: Build ss binary
-        run: zig build
-
-      - name: Run project and LSP smoke tests
-        run: |
+          zig build test
+          zig build -Doptimize=ReleaseSafe -Dversion="$GITHUB_REF_NAME" -Dcommit="$GITHUB_SHA"
+          zig-out/bin/ss --version
           scripts/project-smoke.sh
           node scripts/lsp-smoke.mjs
 
@@ -118,8 +89,38 @@ jobs:
           npm ci
           npm test
 
-      - name: Compile VS Code extension
+      - name: Package VS Code extension
         working-directory: editor/vscode
         run: |
           npm ci
           npm run compile
+          npm run package -- --out "ss-language-support-${GITHUB_REF_NAME}.vsix" --allow-missing-repository --skip-license
+
+      - name: Publish to Marketplace
+        working-directory: editor/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -n "${VSCE_PAT:-}" ]; then
+            npx vsce publish --packagePath "ss-language-support-${GITHUB_REF_NAME}.vsix" -p "$VSCE_PAT" --allow-missing-repository --skip-license
+          else
+            echo "VSCE_PAT is not configured; skipping Marketplace publish."
+          fi
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ss-language-support-vsix
+          path: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
+
+      - name: Attach VSIX to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          VSIX: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes "Released from commit ${GITHUB_SHA}."
+          fi
+          gh release upload "$TAG_NAME" "$VSIX" --clobber
