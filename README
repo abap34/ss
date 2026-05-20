@@ -64,6 +64,10 @@ Render cache:
 
   ss keeps PDF render artifacts under `.ss-cache/` so repeated renders can
   reuse generated documents, math images, and converted assets.
+  Cold renders prebuild independent math and asset cache entries in parallel.
+  The default worker count is capped at 8; override it with `SS_RENDER_JOBS`,
+  for example `SS_RENDER_JOBS=4`, or use `SS_RENDER_JOBS=off` for sequential
+  cache generation.
   To clear the managed render cache without deleting generated PDFs or smoke
   test outputs elsewhere under `.ss-cache/`, run:
 

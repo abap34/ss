@@ -59,6 +59,34 @@ const SvgAsset = struct {
     height: f32,
 };
 
+const PreloadTask = union(enum) {
+    math: MathPreload,
+    vector_pdf: []const u8,
+    raster: RasterPreload,
+};
+
+const MathPreload = struct {
+    source: []const u8,
+    packages: []const []const u8,
+    kind: MathKind,
+};
+
+const RasterPreload = struct {
+    source: []const u8,
+    target_width: f32,
+    target_height: f32,
+};
+
+const PreloadWork = struct {
+    tasks: []const PreloadTask,
+    next_index: std.atomic.Value(usize) = .init(0),
+    failed: std.atomic.Value(bool) = .init(false),
+    io: std.Io,
+    pdf: *c.SsPdf,
+    asset_base_dir: []const u8,
+    cache_dir: []const u8,
+};
+
 pub const RenderProgress = struct {
     context: *anyopaque,
     pageRendered: *const fn (context: *anyopaque, page_index: usize, page_count: usize) void,
@@ -99,6 +127,8 @@ pub fn renderDocumentToPdfWithProgress(allocator: Allocator, io: std.Io, ir: *co
     defer declaration_index.deinit();
     const sema = semantic_env.SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
+    try preloadRenderCache(&ctx, ir, &sema);
+
     const page_count = ir.page_order.items.len;
     for (ir.page_order.items, 0..) |page_id, page_index| {
         const page = ir.getNode(page_id) orelse continue;
@@ -136,6 +166,266 @@ fn drawPage(ctx: *DrawContext, ir: *core.Ir, sema: anytype, page: *const core.No
             if (render.kind != .chrome_only) try drawObjectResolved(ctx, ir, node, render);
         }
     }
+}
+
+fn preloadRenderCache(ctx: *DrawContext, ir: *core.Ir, sema: anytype) !void {
+    var tasks = std.ArrayList(PreloadTask).empty;
+    defer tasks.deinit(ctx.allocator);
+
+    var seen = std.StringHashMap(void).init(ctx.allocator);
+    defer {
+        var key_it = seen.keyIterator();
+        while (key_it.next()) |key| ctx.allocator.free(key.*);
+        seen.deinit();
+    }
+
+    const page_count = ir.page_order.items.len;
+    for (ir.page_order.items[0..page_count]) |page_id| {
+        const page = ir.getNode(page_id) orelse continue;
+        if (ir.contains.get(page.id)) |children| {
+            for (children.items) |child_id| {
+                const node = ir.getNode(child_id) orelse continue;
+                if (node.kind != .object or !node.attached) continue;
+                const render = core.render_policy.resolveWithEnv(ir, node, sema);
+                try collectNodePreloads(ctx, ir, node, render, &tasks, &seen);
+            }
+        }
+    }
+
+    try runPreloadTasks(ctx, tasks.items);
+}
+
+fn collectNodePreloads(
+    ctx: *DrawContext,
+    ir: *core.Ir,
+    node: *const core.Node,
+    render: ResolvedRender,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(void),
+) !void {
+    switch (render.kind) {
+        .text => if (render.text) |text| try collectTextPreloads(ctx, ir, node, text, tasks, seen),
+        .vector_math => {
+            var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
+            defer env.deinit(ctx.allocator);
+            try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
+                .source = node.content orelse "",
+                .packages = try clonePackageSlice(ctx.allocator, env.math_latex_packages.items),
+                .kind = .block,
+            } });
+        },
+        .vector_asset => {
+            const source = try resolveAssetPath(ctx, node.content orelse "");
+            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".pdf")) {
+                try registerPreloadTask(ctx, tasks, seen, .{ .vector_pdf = source });
+            } else {
+                ctx.allocator.free(source);
+            }
+        },
+        .raster_asset => {
+            const source = try resolveAssetPath(ctx, node.content orelse "");
+            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
+                ctx.allocator.free(source);
+            } else {
+                try registerPreloadTask(ctx, tasks, seen, .{ .raster = .{
+                    .source = source,
+                    .target_width = node.frame.width * raster_cache_scale,
+                    .target_height = node.frame.height * raster_cache_scale,
+                } });
+            }
+        },
+        .code, .chrome_only => {},
+    }
+}
+
+fn collectTextPreloads(
+    ctx: *DrawContext,
+    ir: *core.Ir,
+    node: *const core.Node,
+    text: TextPaint,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(void),
+) !void {
+    _ = text;
+    const content = node.content orelse "";
+    var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
+    defer env.deinit(ctx.allocator);
+    if (core.markdown.shouldParseBlocksNode(ir, node)) {
+        var doc = try core.markdown.parseMarkdownDocumentForNode(ctx.allocator, ir, node, content);
+        defer doc.deinit();
+        try collectMarkdownBlockPreloads(ctx, doc.blocks.items, env.math_latex_packages.items, tasks, seen);
+        return;
+    }
+
+    var layout = try core.markdown.parseTextLayoutForNode(ctx.allocator, ir, node, content);
+    defer layout.deinit(ctx.allocator);
+    try collectLinePreloads(ctx, layout.lines.items, env.math_latex_packages.items, tasks, seen);
+}
+
+fn collectMarkdownBlockPreloads(
+    ctx: *DrawContext,
+    blocks: []const *Block,
+    packages: []const []const u8,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(void),
+) !void {
+    for (blocks) |block| {
+        switch (block.kind) {
+            .paragraph, .code_block => if (block.paragraph) |paragraph| {
+                try collectLinePreloads(ctx, paragraph.lines.items, packages, tasks, seen);
+            },
+            .bullet_list, .ordered_list => if (block.list) |list| {
+                for (list.items.items) |item| {
+                    try collectMarkdownBlockPreloads(ctx, item.blocks.items, packages, tasks, seen);
+                }
+            },
+            .table => if (block.table) |table| {
+                for (table.rows.items) |row| {
+                    for (row.cells.items) |cell| {
+                        try collectLinePreloads(ctx, cell.lines.items, packages, tasks, seen);
+                    }
+                }
+            },
+        }
+    }
+}
+
+fn collectLinePreloads(
+    ctx: *DrawContext,
+    lines: []const Line,
+    packages: []const []const u8,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(void),
+) !void {
+    for (lines) |line| {
+        for (line.runs.items) |run| {
+            switch (run.kind) {
+                .math, .display_math => try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
+                    .source = run.text,
+                    .packages = try clonePackageSlice(ctx.allocator, packages),
+                    .kind = .inline_math,
+                } }),
+                else => {},
+            }
+        }
+    }
+}
+
+fn clonePackageSlice(allocator: Allocator, packages: []const []const u8) ![]const []const u8 {
+    const cloned = try allocator.alloc([]const u8, packages.len);
+    @memcpy(cloned, packages);
+    return cloned;
+}
+
+fn registerPreloadTask(
+    ctx: *DrawContext,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(void),
+    task: PreloadTask,
+) !void {
+    const key = try preloadTaskKey(ctx, task);
+    errdefer ctx.allocator.free(key);
+    if (seen.contains(key)) {
+        ctx.allocator.free(key);
+        return;
+    }
+    try seen.put(key, {});
+    try tasks.append(ctx.allocator, task);
+}
+
+fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
+    return switch (task) {
+        .math => |math| cachedMathPath(ctx, math.source, math.packages, math.kind, "svg"),
+        .vector_pdf => |source| cachedAssetPath(ctx, "pdf", source, "svg"),
+        .raster => |raster| cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png"),
+    };
+}
+
+fn runPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask) !void {
+    if (tasks.len == 0) return;
+    const worker_count = renderWorkerCount(tasks.len);
+    if (worker_count <= 1) return runPreloadTasksSequential(ctx, tasks);
+
+    var work = PreloadWork{
+        .tasks = tasks,
+        .io = ctx.io,
+        .pdf = ctx.pdf,
+        .asset_base_dir = ctx.asset_base_dir,
+        .cache_dir = ctx.cache_dir,
+    };
+
+    var threads = try ctx.allocator.alloc(std.Thread, worker_count);
+    defer ctx.allocator.free(threads);
+
+    var started: usize = 0;
+    errdefer {
+        work.failed.store(true, .seq_cst);
+        for (threads[0..started]) |thread| thread.join();
+    }
+
+    while (started < worker_count) : (started += 1) {
+        threads[started] = try std.Thread.spawn(.{}, preloadWorker, .{&work});
+    }
+    for (threads[0..started]) |thread| thread.join();
+
+    if (work.failed.load(.seq_cst)) return NativePdfError.AssetConversionFailed;
+}
+
+fn runPreloadTasksSequential(ctx: *DrawContext, tasks: []const PreloadTask) !void {
+    for (tasks) |task| try preloadOne(ctx, task);
+}
+
+fn preloadWorker(work: *PreloadWork) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    while (!work.failed.load(.monotonic)) {
+        const index = work.next_index.fetchAdd(1, .monotonic);
+        if (index >= work.tasks.len) break;
+        var ctx = DrawContext{
+            .allocator = arena.allocator(),
+            .io = work.io,
+            .pdf = work.pdf,
+            .asset_base_dir = work.asset_base_dir,
+            .cache_dir = work.cache_dir,
+        };
+        preloadOne(&ctx, work.tasks[index]) catch |err| {
+            work.failed.store(true, .seq_cst);
+            std.debug.print("native pdf: preload failed ({s})\n", .{@errorName(err)});
+            break;
+        };
+        _ = arena.reset(.retain_capacity);
+    }
+}
+
+fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
+    switch (task) {
+        .math => |math| {
+            const svg = try renderMathToSvg(ctx, math.source, math.packages, math.kind);
+            ctx.allocator.free(svg.path);
+        },
+        .vector_pdf => |source| {
+            const svg_path = try pdfToSvg(ctx, source);
+            ctx.allocator.free(svg_path);
+        },
+        .raster => |raster| {
+            const png_path = try rasterToSizedPng(ctx, raster.source, raster.target_width, raster.target_height);
+            ctx.allocator.free(png_path);
+        },
+    }
+}
+
+fn renderWorkerCount(task_count: usize) usize {
+    var desired = std.Thread.getCpuCount() catch 1;
+    if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
+        const text = std.mem.span(raw);
+        if (std.ascii.eqlIgnoreCase(text, "off")) return 1;
+        if (std.fmt.parseUnsigned(usize, text, 10)) |value| {
+            return @min(@max(@as(usize, 1), value), task_count);
+        } else |_| {}
+    }
+    desired = @max(@as(usize, 1), desired);
+    desired = @min(desired, 8);
+    return @min(desired, task_count);
 }
 
 fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, render: ResolvedRender) !void {
