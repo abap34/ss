@@ -312,6 +312,38 @@ pub fn parseTextLayoutForNode(
     return layout;
 }
 
+pub fn codeBlockPhysicalLineCount(block: *const Block) usize {
+    const paragraph = block.paragraph orelse return 1;
+    var total: usize = 0;
+    for (paragraph.lines.items) |line| {
+        if (line.runs.items.len == 0) {
+            total += 1;
+            continue;
+        }
+
+        var newlines: usize = 0;
+        var ends_with_newline = false;
+        var saw_text = false;
+        for (line.runs.items) |run| {
+            if (run.text.len == 0) continue;
+            saw_text = true;
+            for (run.text) |ch| {
+                if (ch == '\n') newlines += 1;
+            }
+            ends_with_newline = run.text[run.text.len - 1] == '\n';
+        }
+        if (!saw_text) {
+            total += 1;
+            continue;
+        }
+
+        var count = newlines + 1;
+        if (ends_with_newline and count > 1) count -= 1;
+        total += @max(@as(usize, 1), count);
+    }
+    return @max(@as(usize, 1), total);
+}
+
 fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u8) !void {
     var it = std.mem.splitScalar(u8, content, '\n');
     var saw_any = false;
@@ -766,4 +798,43 @@ test "parse markdown table block" {
     try std.testing.expectEqual(Align.left, block.table.?.rows.items[0].cells.items[0].alignment);
     try std.testing.expectEqual(Align.right, block.table.?.rows.items[0].cells.items[1].alignment);
     try std.testing.expectEqual(RunKind.bold, block.table.?.rows.items[1].cells.items[1].lines.items[0].runs.items[0].kind);
+}
+
+test "fenced code block counts embedded physical lines" {
+    const allocator = std.testing.allocator;
+    var doc = try parseMarkdownContent(allocator,
+        \\before
+        \\
+        \\```shape
+        \\program ::= init <polygon> ; <command>
+        \\command ::= <op> | <command> ; <command>
+        \\           | while <cond> do <command> end
+        \\```
+        \\
+        \\after
+    );
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), doc.blocks.items.len);
+    const block = doc.blocks.items[1];
+    try std.testing.expectEqual(BlockKind.code_block, block.kind);
+    try std.testing.expectEqualStrings("shape", block.language.?);
+    try std.testing.expectEqual(@as(usize, 3), codeBlockPhysicalLineCount(block));
+}
+
+test "fenced code block preserves blank physical lines without trailing phantom line" {
+    const allocator = std.testing.allocator;
+    var doc = try parseMarkdownContent(allocator,
+        \\```
+        \\alpha
+        \\
+        \\beta
+        \\```
+    );
+    defer doc.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), doc.blocks.items.len);
+    const block = doc.blocks.items[0];
+    try std.testing.expectEqual(BlockKind.code_block, block.kind);
+    try std.testing.expectEqual(@as(usize, 3), codeBlockPhysicalLineCount(block));
 }

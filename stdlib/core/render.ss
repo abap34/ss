@@ -56,6 +56,22 @@ fn text_paint(obj: object, font_name: string, font_size_name: string, line_heigh
   return obj
 end
 
+fn font_family(obj: object, family_name: string) -> object
+  set_prop(obj, "text_font", family_name)
+  set_prop(obj, "text_bold_font", family_name ++ " Bold")
+  set_prop(obj, "text_italic_font", family_name ++ " Italic")
+  return obj
+end
+
+fn font_stack(obj: object, family_stack: string) -> object
+  return font_family(obj, family_stack)
+end
+
+fn code_font_family(obj: object, family_name: string) -> object
+  set_prop(obj, "text_code_font", family_name)
+  return obj
+end
+
 fn text_layout(obj: object, font_size_name: string, line_height_name: string, spacing_after_name: string, left_name: string, right_name: string) -> object
   set_prop(obj, "layout_font_size", font_size_name)
   set_prop(obj, "layout_line_height", line_height_name)

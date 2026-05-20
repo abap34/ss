@@ -15,6 +15,8 @@ fn usage() void {
         \\    Print IR JSON, or write it when output path is given
         \\  render [input.ss] [output.pdf]
         \\    Render PDF to the specified path
+        \\  cache clear
+        \\    Clear the managed render cache under .ss-cache/render
         \\
         \\Flags:
         \\  --help, -h
@@ -28,6 +30,7 @@ fn usage() void {
         \\  ss dump demo/ss.ss
         \\  ss dump demo/ss.ss out.json
         \\  ss render demo/ss.ss out.pdf
+        \\  ss cache clear
         \\  zig build run -- check demo/ss.ss
         \\  zig build run -- render demo/ss.ss out.pdf
         \\
@@ -121,6 +124,16 @@ fn run(init: std.process.Init) !void {
         } else {
             try app.writePdfForFile(io, allocator, input_path, output_path, &progress);
         }
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "cache")) {
+        if (args.len == 3 and std.mem.eql(u8, args[2], "clear")) {
+            try app.clearRenderCache(io);
+            std.debug.print("cleared render cache: {s}\n", .{app.render_cache_path});
+            return;
+        }
+        usage();
         return;
     }
 

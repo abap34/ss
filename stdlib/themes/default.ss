@@ -36,6 +36,8 @@ end
 
 fn tex(text_value: string, scale: number = 1) -> object
   let obj = framed_object(text_value, "math", "math_tex", "102", "102", 8, 8, "1,1,1", "0.9,0.92,0.96", "0.8", "10")
+  set_prop(obj, "render_kind", "vector_math")
+  set_prop(obj, "text_parse", "none")
   set_prop(obj, "math_scale", str(scale))
   return obj
 end

@@ -10,11 +10,14 @@ const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 
+pub const render_cache_path = ".ss-cache/render";
+
 pub const Progress = struct {
     total: usize,
     current: usize = 0,
     started_at_ns: i128,
     last_step_at_ns: i128,
+    detail_active: bool = false,
 
     pub fn init(total: usize) Progress {
         const now = monotonicNowNs();
@@ -31,10 +34,33 @@ pub const Progress = struct {
         const total_elapsed_ns = now - self.started_at_ns;
         self.current += 1;
         self.last_step_at_ns = now;
+        const replace_detail = self.detail_active;
+        if (replace_detail) {
+            self.detail_active = false;
+            std.debug.print("\r", .{});
+        }
         printProgress(
             self.current,
             self.total,
             label,
+            @intCast(@divTrunc(stage_elapsed_ns, std.time.ns_per_ms)),
+            @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms)),
+            replace_detail,
+        );
+    }
+
+    pub fn detail(self: *Progress, label: []const u8, detail_current: usize, detail_total: usize) void {
+        const now = monotonicNowNs();
+        const stage_elapsed_ns = now - self.last_step_at_ns;
+        const total_elapsed_ns = now - self.started_at_ns;
+        self.detail_active = true;
+        std.debug.print("\r", .{});
+        printProgressDetail(
+            @min(self.current + 1, self.total),
+            self.total,
+            label,
+            detail_current,
+            detail_total,
             @intCast(@divTrunc(stage_elapsed_ns, std.time.ns_per_ms)),
             @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms)),
         );
@@ -135,6 +161,10 @@ pub fn checkFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []
     std.debug.print("ok {s}\n", .{path});
 }
 
+pub fn clearRenderCache(io: std.Io) !void {
+    try std.Io.Dir.cwd().deleteTree(io, render_cache_path);
+}
+
 pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, path, progress);
     defer ir.deinit();
@@ -178,7 +208,7 @@ pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &ir);
+    const pdf_data = try pdf.renderDocumentToPdfWithProgress(allocator, io, &ir, progressCallback(progress));
     defer allocator.free(pdf_data);
     progress.step("Render PDF");
     try utils.fs.writeFile(io, output_path, pdf_data);
@@ -188,7 +218,7 @@ pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []c
 pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdf(allocator, io, &ir);
+    const pdf_data = try pdf.renderDocumentToPdfWithProgress(allocator, io, &ir, progressCallback(progress));
     defer allocator.free(pdf_data);
     progress.step("Render PDF");
     try utils.fs.writeFile(io, output_path, pdf_data);
@@ -208,7 +238,7 @@ fn monotonicNowNs() i128 {
     return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
 }
 
-fn printProgress(current: usize, total: usize, label: []const u8, stage_elapsed_ms: i64, total_elapsed_ms: i64) void {
+fn printProgress(current: usize, total: usize, label: []const u8, stage_elapsed_ms: i64, total_elapsed_ms: i64, clear_eol: bool) void {
     const width: usize = 18;
     const filled = if (total == 0) width else @min(width, (current * width) / total);
     var stage_buf: [32]u8 = undefined;
@@ -228,13 +258,64 @@ fn printProgress(current: usize, total: usize, label: []const u8, stage_elapsed_
             std.debug.print(" ", .{});
         }
     }
-    std.debug.print("] {d}/{d} {s:<19}  ({s:>8}, total {s:>8})\n", .{
+    std.debug.print("] {d}/{d} {s:<19}  ({s:>8}, total {s:>8})", .{
         current,
         total,
         label,
         stage_text,
         total_text,
     });
+    if (clear_eol) std.debug.print("\x1b[K", .{});
+    std.debug.print("\n", .{});
+}
+
+fn printProgressDetail(current: usize, total: usize, label: []const u8, detail_current: usize, detail_total: usize, stage_elapsed_ms: i64, total_elapsed_ms: i64) void {
+    const width: usize = 18;
+    const filled = if (total == 0) width else @min(width, (current * width) / total);
+    var stage_buf: [32]u8 = undefined;
+    var total_buf: [32]u8 = undefined;
+    const stage_text = formatDurationMsText(stage_elapsed_ms, &stage_buf) catch "<?>";
+    const total_text = formatDurationMsText(total_elapsed_ms, &total_buf) catch "<?>";
+    std.debug.print("[", .{});
+    var i: usize = 0;
+    while (i < width) : (i += 1) {
+        if (i < filled) {
+            if (i + 1 == filled and filled < width) {
+                std.debug.print(">", .{});
+            } else {
+                std.debug.print("=", .{});
+            }
+        } else {
+            std.debug.print(" ", .{});
+        }
+    }
+    std.debug.print("] {d}/{d} {s:<11} {d}/{d:<5}  ({s:>8}, total {s:>8})\x1b[K", .{
+        current,
+        total,
+        label,
+        detail_current,
+        detail_total,
+        stage_text,
+        total_text,
+    });
+}
+
+fn progressCallback(progress: *Progress) pdf.RenderProgress {
+    return .{
+        .context = progress,
+        .cachePrepared = onRenderCache,
+        .pageRendered = onRenderPage,
+    };
+}
+
+fn onRenderCache(context: *anyopaque, completed: usize, total: usize) void {
+    const progress: *Progress = @ptrCast(@alignCast(context));
+    progress.detail("Cache", completed, total);
+}
+
+fn onRenderPage(context: *anyopaque, page_index: usize, page_count: usize) void {
+    const progress: *Progress = @ptrCast(@alignCast(context));
+    progress.detail("Render PDF", page_index, page_count);
 }
 
 fn formatDurationMsText(value: i64, buf: []u8) ![]const u8 {
