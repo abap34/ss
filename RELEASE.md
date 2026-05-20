@@ -20,8 +20,11 @@ scripts/release-preflight.sh v0.1.0
 
 ## CLI Distribution
 
-For v1, use GitHub Releases as the canonical artifact location. Attach release
-binaries built with:
+For v1, use GitHub Releases as the canonical artifact location. The Homebrew
+workflow attaches a source archive named `ss-<version>.tar.gz` and renders a tap
+formula from `packaging/homebrew/ss.rb.in`.
+
+Release binaries can also be attached manually when needed. Build them with:
 
 ```sh
 zig build -Doptimize=ReleaseSafe -Dversion=0.1.0 -Dcommit=<commit>
@@ -34,10 +37,15 @@ brew tap abap34/ss
 brew install ss
 ```
 
-Keep the tap formula pointed at the GitHub Release source tarball or binary
-archive and update its `sha256` for each tag. This keeps VS Code binary
-distribution simple: the extension can continue to launch the configured
-`ss.cli.path` without bundling platform-specific executables.
+Set `HOMEBREW_TAP_TOKEN` with write access to `abap34/homebrew-ss` to let
+`.github/workflows/publish-homebrew-tap.yml` update `Formula/ss.rb`
+automatically. If the secret is absent, the workflow still uploads the rendered
+formula as an artifact.
+
+The formula builds from source with Zig and stages MD4C as a pinned Homebrew
+resource. This keeps VS Code binary distribution simple: the extension can
+continue to launch the configured `ss.cli.path` without bundling
+platform-specific executables.
 
 ## Editor Release
 

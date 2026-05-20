@@ -1,0 +1,103 @@
+name: Publish Homebrew tap
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  HOMEBREW_TAP_REPO: abap34/homebrew-ss
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  publish-homebrew:
+    name: Build source archive and update tap
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Check release metadata
+        run: scripts/release-preflight.sh "$RELEASE_TAG"
+
+      - name: Create release source archive
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_tag="$RELEASE_TAG"
+          if [[ "$release_tag" != v*.*.* ]]; then
+            echo "release tag must look like v0.1.0, got $release_tag" >&2
+            exit 1
+          fi
+          version="${release_tag#v}"
+          archive="ss-${version}.tar.gz"
+          commit="$(git rev-parse HEAD)"
+          git archive --format=tar --prefix="ss-${version}/" "$commit" | gzip -n > "$archive"
+          sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          source_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}/${archive}"
+
+          if ! gh release view "$release_tag" >/dev/null 2>&1; then
+            scripts/changelog-section.py "$release_tag" > release-notes.md
+            gh release create "$release_tag" --verify-tag --title "ss ${release_tag}" --notes-file release-notes.md
+          fi
+          gh release upload "$release_tag" "$archive" --clobber
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "source_url=$source_url" >> "$GITHUB_OUTPUT"
+          echo "source_sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Render Homebrew formula
+        run: |
+          scripts/render-homebrew-formula.py \
+            --version "${{ steps.source.outputs.version }}" \
+            --source-url "${{ steps.source.outputs.source_url }}" \
+            --source-sha256 "${{ steps.source.outputs.source_sha256 }}" \
+            --output .ss-cache/homebrew/ss.rb
+          ruby -c .ss-cache/homebrew/ss.rb
+
+      - name: Upload formula artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula
+          path: .ss-cache/homebrew/ss.rb
+
+      - name: Update tap repository
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not configured; skipping tap update."
+            exit 0
+          fi
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp .ss-cache/homebrew/ss.rb tap/Formula/ss.rb
+
+          cd tap
+          if git diff --quiet -- Formula/ss.rb; then
+            echo "Formula/ss.rb is already up to date."
+            exit 0
+          fi
+          git add Formula/ss.rb
+          git commit -m "ss ${RELEASE_TAG}"
+          git push
