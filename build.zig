@@ -47,6 +47,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const project_mod = b.createModule(.{
+        .root_source_file = b.path("src/project.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    project_mod.addImport("utils", utils_mod);
+
     const core_mod = b.createModule(.{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
@@ -185,6 +193,16 @@ pub fn build(b: *std.Build) void {
         .root_module = layout_graph_spec_tests_mod,
     });
 
+    const project_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/project_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    project_spec_tests_mod.addImport("project", project_mod);
+    const project_spec_tests = b.addTest(.{
+        .root_module = project_spec_tests_mod,
+    });
+
     const smoke_check_files = [_][]const u8{
         "stdlib/core/classes.ss",
         "stdlib/core/components.ss",
@@ -207,6 +225,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(language_type_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(core_ir_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(layout_graph_spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(project_spec_tests).step);
     for (smoke_check_files) |path| {
         const smoke_check = b.addRunArtifact(exe);
         smoke_check.addArgs(&.{ "check", path });

@@ -13,6 +13,16 @@ They intentionally assert:
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
 
+CLI/editor integration smoke tests live under `scripts/`:
+
+- `scripts/project-smoke.sh` exercises explicit input, `--project`, discovered
+  `ss.toml`, `--output`, and dump equivalence against
+  `tests/fixtures/project-basic`. Pass `--render` for the heavier PDF render
+  path, which is kept out of default CI.
+- `scripts/lsp-smoke.mjs` spawns `ss lsp` and checks initialize, diagnostics,
+  completion, hover, definition, inlay hints, document symbols, semantic
+  tokens, and `ss/projectInfo`.
+
 They intentionally avoid asserting behavior that is still an implementation
 detail or underspecified:
 
@@ -23,4 +33,3 @@ detail or underspecified:
   source-sensitive uniqueness;
 - ordering of diagnostics or metadata unless that order is part of the user
   surface.
-
