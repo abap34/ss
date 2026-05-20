@@ -31,6 +31,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
+const page_pdf_cache_version = "ss-native-page-pdf-v1";
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
@@ -105,13 +106,16 @@ const RenderPage = struct {
     background: ?Color,
     ops: []RenderOp,
     artifact_deps: []usize,
-    pdf_path: []const u8,
+    render_path: []const u8,
+    cache_path: []const u8,
+    cache_hit: bool,
 
     fn deinit(self: *RenderPage, allocator: Allocator) void {
         for (self.ops) |*op| op.deinit(allocator);
         allocator.free(self.ops);
         allocator.free(self.artifact_deps);
-        allocator.free(self.pdf_path);
+        allocator.free(self.render_path);
+        allocator.free(self.cache_path);
     }
 };
 
@@ -121,6 +125,7 @@ const RenderPlan = struct {
     artifact_tasks: []PreloadTask,
     artifact_cached: []bool,
     artifact_miss_count: usize,
+    page_cache_hit_count: usize,
     run_dir: []const u8,
     pages_dir: []const u8,
     final_pdf_path: []const u8,
@@ -140,6 +145,11 @@ const RenderPlan = struct {
 const PreloadCacheState = struct {
     cached: []bool,
     miss_count: usize,
+};
+
+const FileFingerprint = struct {
+    present: bool,
+    digest: u64,
 };
 
 const PreloadWork = struct {
@@ -279,9 +289,12 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     errdefer ctx.allocator.free(run_dir);
     const pages_dir = try std.fs.path.join(ctx.allocator, &.{ run_dir, "pages" });
     errdefer ctx.allocator.free(pages_dir);
+    const page_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "pages" });
+    defer ctx.allocator.free(page_cache_dir);
     const final_pdf_path = try std.fs.path.join(ctx.allocator, &.{ run_dir, "document.pdf" });
     errdefer ctx.allocator.free(final_pdf_path);
     try std.Io.Dir.cwd().createDirPath(ctx.io, pages_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io, page_cache_dir);
 
     var pages = std.ArrayList(RenderPage).empty;
     errdefer {
@@ -300,6 +313,13 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         var key_it = seen.keyIterator();
         while (key_it.next()) |key| ctx.allocator.free(key.*);
         seen.deinit();
+    }
+
+    var asset_fingerprints = std.StringHashMap(FileFingerprint).init(ctx.allocator);
+    defer {
+        var key_it = asset_fingerprints.keyIterator();
+        while (key_it.next()) |key| ctx.allocator.free(key.*);
+        asset_fingerprints.deinit();
     }
 
     for (ir.page_order.items, 0..) |page_id, page_index| {
@@ -332,16 +352,40 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
             }
         }
 
-        const pdf_path = try std.fmt.allocPrint(ctx.allocator, "{s}/page-{d:0>4}.pdf", .{ pages_dir, page_index + 1 });
-        errdefer ctx.allocator.free(pdf_path);
+        const page_background = core.render_policy.resolvePageBackgroundWithEnv(ir, page, sema);
+        const op_slice = try ops.toOwnedSlice(ctx.allocator);
+        var op_slice_transferred = false;
+        errdefer {
+            if (!op_slice_transferred) {
+                for (op_slice) |*op| op.deinit(ctx.allocator);
+                ctx.allocator.free(op_slice);
+            }
+        }
+        const dep_slice = try deps.toOwnedSlice(ctx.allocator);
+        var dep_slice_transferred = false;
+        errdefer if (!dep_slice_transferred) ctx.allocator.free(dep_slice);
+        const page_hash = try renderPageHash(ctx, &asset_fingerprints, page_background, op_slice);
+        const cache_path = try pagePdfCachePath(ctx.allocator, page_cache_dir, page_hash);
+        var cache_path_transferred = false;
+        errdefer if (!cache_path_transferred) ctx.allocator.free(cache_path);
+        const render_path = try std.fmt.allocPrint(ctx.allocator, "{s}/page-{d:0>4}.pdf", .{ pages_dir, page_index + 1 });
+        var render_path_transferred = false;
+        errdefer if (!render_path_transferred) ctx.allocator.free(render_path);
+        const cache_hit = fileExists(cache_path);
         try pages.append(ctx.allocator, .{
             .page_id = page.id,
             .index = page_index,
-            .background = core.render_policy.resolvePageBackgroundWithEnv(ir, page, sema),
-            .ops = try ops.toOwnedSlice(ctx.allocator),
-            .artifact_deps = try deps.toOwnedSlice(ctx.allocator),
-            .pdf_path = pdf_path,
+            .background = page_background,
+            .ops = op_slice,
+            .artifact_deps = dep_slice,
+            .render_path = render_path,
+            .cache_path = cache_path,
+            .cache_hit = cache_hit,
         });
+        op_slice_transferred = true;
+        dep_slice_transferred = true;
+        cache_path_transferred = true;
+        render_path_transferred = true;
     }
 
     const page_slice = try pages.toOwnedSlice(ctx.allocator);
@@ -351,7 +395,8 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     }
     const artifact_slice = try tasks.toOwnedSlice(ctx.allocator);
     errdefer freePreloadTasks(ctx.allocator, artifact_slice);
-    const artifact_cache = try buildPreloadCacheState(ctx, artifact_slice);
+    const page_cache_hit_count = countPageCacheHits(page_slice);
+    const artifact_cache = try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
     errdefer ctx.allocator.free(artifact_cache.cached);
 
     return .{
@@ -360,10 +405,217 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         .artifact_tasks = artifact_slice,
         .artifact_cached = artifact_cache.cached,
         .artifact_miss_count = artifact_cache.miss_count,
+        .page_cache_hit_count = page_cache_hit_count,
         .run_dir = run_dir,
         .pages_dir = pages_dir,
         .final_pdf_path = final_pdf_path,
     };
+}
+
+fn countPageCacheHits(pages: []const RenderPage) usize {
+    var count: usize = 0;
+    for (pages) |page| {
+        if (page.cache_hit) count += 1;
+    }
+    return count;
+}
+
+fn pagePdfCachePath(allocator: Allocator, page_cache_dir: []const u8, page_hash: u64) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/page-{x}.pdf", .{ page_cache_dir, page_hash });
+}
+
+fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), background: ?Color, ops: []const RenderOp) !u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, page_pdf_cache_version);
+    hashF32(&hasher, PageLayout.width);
+    hashF32(&hasher, PageLayout.height);
+    hashF32(&hasher, raster_cache_scale);
+    hashOptionalColor(&hasher, background);
+    hashUsize(&hasher, ops.len);
+    for (ops) |*op| try hashRenderOp(ctx, asset_fingerprints, &hasher, op);
+    return hasher.final();
+}
+
+fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, op: *const RenderOp) !void {
+    hashFrame(hasher, op.frame);
+    hashString(hasher, op.content);
+    hashString(hasher, @tagName(op.parse_mode));
+    hashUsize(hasher, op.math_packages.len);
+    for (op.math_packages) |package| hashString(hasher, package);
+    hashResolvedRender(hasher, op);
+    switch (op.render.kind) {
+        .vector_asset, .raster_asset => {
+            const source = try resolveAssetPath(ctx, op.content);
+            defer ctx.allocator.free(source);
+            try hashAssetFile(ctx, asset_fingerprints, hasher, source);
+        },
+        else => {},
+    }
+}
+
+fn hashResolvedRender(hasher: *std.hash.Wyhash, op: *const RenderOp) void {
+    const render = op.render;
+    hashString(hasher, @tagName(render.kind));
+    hashOptionalTextPaint(hasher, render.text);
+    hashOptionalMathPaint(hasher, render.math);
+    hashOptionalCodePaint(hasher, render.code);
+    hashChromePaint(hasher, render.chrome);
+    hashUnderlinePaint(hasher, render.underline);
+    hashRulePaint(hasher, render.rule);
+}
+
+fn hashAssetFile(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, source: []const u8) !void {
+    hashString(hasher, source);
+    const fingerprint = try assetFileFingerprint(ctx, asset_fingerprints, source);
+    hashBool(hasher, fingerprint.present);
+    hashU64(hasher, fingerprint.digest);
+}
+
+fn assetFileFingerprint(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), source: []const u8) !FileFingerprint {
+    if (asset_fingerprints.get(source)) |fingerprint| return fingerprint;
+    const maybe_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io, source, ctx.allocator, .limited(64 * 1024 * 1024)) catch null;
+    defer if (maybe_bytes) |bytes| ctx.allocator.free(bytes);
+    var digest_hasher = std.hash.Wyhash.init(0);
+    if (maybe_bytes) |bytes| digest_hasher.update(bytes);
+    const fingerprint = FileFingerprint{
+        .present = maybe_bytes != null,
+        .digest = digest_hasher.final(),
+    };
+    const owned_source = try ctx.allocator.dupe(u8, source);
+    errdefer ctx.allocator.free(owned_source);
+    try asset_fingerprints.put(owned_source, fingerprint);
+    return fingerprint;
+}
+
+fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |text| {
+        hashString(hasher, text.font);
+        hashString(hasher, text.bold_font);
+        hashString(hasher, text.italic_font);
+        hashString(hasher, text.code_font);
+        hashF32(hasher, text.font_size);
+        hashF32(hasher, text.line_height);
+        hashColor(hasher, text.color);
+        hashColor(hasher, text.link_color);
+        hashF32(hasher, text.link_underline_width);
+        hashF32(hasher, text.link_underline_offset);
+        hashF32(hasher, text.inline_math_height_factor);
+        hashF32(hasher, text.inline_math_spacing);
+        hashF32(hasher, text.markdown_block_gap);
+        hashF32(hasher, text.markdown_list_inset);
+        hashF32(hasher, text.markdown_list_indent);
+        hashF32(hasher, text.markdown_code_font_size);
+        hashF32(hasher, text.markdown_code_line_height);
+        hashF32(hasher, text.markdown_code_pad_x);
+        hashF32(hasher, text.markdown_code_pad_y);
+        hashOptionalColor(hasher, text.markdown_code_fill);
+        hashOptionalColor(hasher, text.markdown_code_stroke);
+        hashF32(hasher, text.markdown_code_line_width);
+        hashF32(hasher, text.markdown_code_radius);
+        hashF32(hasher, text.markdown_table_cell_pad_x);
+        hashF32(hasher, text.markdown_table_cell_pad_y);
+        hashOptionalColor(hasher, text.markdown_table_border);
+        hashF32(hasher, text.markdown_table_line_width);
+        hashOptionalColor(hasher, text.markdown_table_header_fill);
+        hashOptionalColor(hasher, text.markdown_table_alt_row_fill);
+        hashU32(hasher, text.cjk_bold_passes);
+        hashF32(hasher, text.cjk_bold_dx);
+        hashBool(hasher, text.wrap);
+    }
+}
+
+fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |math| {
+        hashF32(hasher, math.block_line_height);
+        hashF32(hasher, math.block_min_height);
+        hashF32(hasher, math.block_vertical_padding);
+        hashF32(hasher, math.scale);
+        hashColor(hasher, math.color);
+    }
+}
+
+fn hashOptionalCodePaint(hasher: *std.hash.Wyhash, maybe: ?CodePaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |code| {
+        hashBool(hasher, code.language != null);
+        if (code.language) |language| hashString(hasher, language);
+        hashColor(hasher, code.plain);
+        hashColor(hasher, code.keyword);
+        hashColor(hasher, code.comment);
+        hashColor(hasher, code.string);
+    }
+}
+
+fn hashChromePaint(hasher: *std.hash.Wyhash, chrome: core.render_policy.ChromePaint) void {
+    hashOptionalColor(hasher, chrome.fill);
+    hashOptionalColor(hasher, chrome.stroke);
+    hashF32(hasher, chrome.line_width);
+    hashF32(hasher, chrome.radius);
+    hashF32(hasher, chrome.pad_x);
+    hashF32(hasher, chrome.pad_y);
+}
+
+fn hashUnderlinePaint(hasher: *std.hash.Wyhash, underline: core.render_policy.UnderlinePaint) void {
+    hashOptionalColor(hasher, underline.color);
+    hashF32(hasher, underline.width);
+    hashF32(hasher, underline.offset);
+}
+
+fn hashRulePaint(hasher: *std.hash.Wyhash, rule: core.render_policy.RulePaint) void {
+    hashOptionalColor(hasher, rule.stroke);
+    hashF32(hasher, rule.line_width);
+    hashBool(hasher, rule.dash != null);
+    if (rule.dash) |dash| {
+        hashF32(hasher, dash.on);
+        hashF32(hasher, dash.off);
+    }
+}
+
+fn hashFrame(hasher: *std.hash.Wyhash, frame: Frame) void {
+    hashF32(hasher, frame.x);
+    hashF32(hasher, frame.y);
+    hashF32(hasher, frame.width);
+    hashF32(hasher, frame.height);
+}
+
+fn hashOptionalColor(hasher: *std.hash.Wyhash, maybe: ?Color) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |color| hashColor(hasher, color);
+}
+
+fn hashColor(hasher: *std.hash.Wyhash, color: Color) void {
+    hashF32(hasher, color.r);
+    hashF32(hasher, color.g);
+    hashF32(hasher, color.b);
+}
+
+fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
+    hashUsize(hasher, value.len);
+    hasher.update(value);
+}
+
+fn hashBool(hasher: *std.hash.Wyhash, value: bool) void {
+    const byte: u8 = if (value) 1 else 0;
+    hasher.update(&.{byte});
+}
+
+fn hashUsize(hasher: *std.hash.Wyhash, value: usize) void {
+    const normalized: u64 = @intCast(value);
+    hashU64(hasher, normalized);
+}
+
+fn hashU64(hasher: *std.hash.Wyhash, value: u64) void {
+    hasher.update(std.mem.asBytes(&value));
+}
+
+fn hashU32(hasher: *std.hash.Wyhash, value: u32) void {
+    hasher.update(std.mem.asBytes(&value));
+}
+
+fn hashF32(hasher: *std.hash.Wyhash, value: f32) void {
+    hasher.update(std.mem.asBytes(&value));
 }
 
 fn collectOpPreloads(
@@ -512,11 +764,12 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
 
 fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
     const initial_artifacts_done = plan.artifact_tasks.len - plan.artifact_miss_count;
+    const initial_pages_done = plan.page_cache_hit_count;
     if (progress) |p| {
         p.artifactCompleted(p.context, initial_artifacts_done, plan.artifact_tasks.len);
-        p.pageCompleted(p.context, 0, plan.pages.len);
+        p.pageCompleted(p.context, initial_pages_done, plan.pages.len);
     }
-    const work_count = plan.artifact_tasks.len + plan.pages.len;
+    const work_count = plan.artifact_miss_count + (plan.pages.len - plan.page_cache_hit_count);
     if (work_count == 0) return;
     const worker_count = renderDagWorkerCount(plan, options);
     if (worker_count <= 1) return executeRenderDagSequential(ctx, plan, progress);
@@ -531,11 +784,12 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
 
     const page_done = try ctx.allocator.alloc(std.atomic.Value(bool), plan.pages.len);
     defer ctx.allocator.free(page_done);
-    for (page_done) |*flag| flag.* = .init(false);
+    for (page_done, 0..) |*flag, index| flag.* = .init(plan.pages[index].cache_hit);
 
     var work = RenderDag{
         .plan = plan,
         .completed_artifacts = .init(initial_artifacts_done),
+        .completed_pages = .init(initial_pages_done),
         .artifact_done = artifact_done,
         .page_claimed = page_claimed,
         .page_done = page_done,
@@ -559,7 +813,7 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     }
 
     var last_artifacts: usize = initial_artifacts_done;
-    var last_pages: usize = 0;
+    var last_pages: usize = initial_pages_done;
     while (!work.failed.load(.seq_cst) and work.completed_pages.load(.acquire) < plan.pages.len) {
         const artifacts_done = work.completed_artifacts.load(.acquire);
         const pages_done = work.completed_pages.load(.acquire);
@@ -596,9 +850,12 @@ fn executeRenderDagSequential(ctx: *DrawContext, plan: *const RenderPlan, progre
         artifacts_done += 1;
         if (progress) |p| p.artifactCompleted(p.context, artifacts_done, plan.artifact_tasks.len);
     }
-    for (plan.pages, 0..) |*page, index| {
+    var pages_done = plan.page_cache_hit_count;
+    for (plan.pages) |*page| {
+        if (page.cache_hit) continue;
         try renderOnePage(ctx, page);
-        if (progress) |p| p.pageCompleted(p.context, index + 1, plan.pages.len);
+        pages_done += 1;
+        if (progress) |p| p.pageCompleted(p.context, pages_done, plan.pages.len);
     }
 }
 
@@ -671,7 +928,8 @@ fn pageArtifactsReady(work: *RenderDag, page: RenderPage) bool {
 }
 
 fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
-    const pdf_path_z = try parent_ctx.allocator.dupeZ(u8, page.pdf_path);
+    if (page.cache_hit) return;
+    const pdf_path_z = try parent_ctx.allocator.dupeZ(u8, page.render_path);
     defer parent_ctx.allocator.free(pdf_path_z);
     const pdf = c.ss_pdf_create(pdf_path_z.ptr, PageLayout.width, PageLayout.height) orelse return NativePdfError.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
@@ -689,6 +947,7 @@ fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
     try drawRenderPage(&ctx, page);
     c.ss_pdf_end_page(pdf);
     if (c.ss_pdf_finish(pdf) != 0) return NativePdfError.CairoFailed;
+    try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
 }
 
 fn drawRenderPage(ctx: *DrawContext, page: *const RenderPage) !void {
@@ -955,6 +1214,32 @@ fn buildPreloadCacheState(ctx: *DrawContext, tasks: []const PreloadTask) !Preloa
     };
 }
 
+fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask, pages: []const RenderPage) !PreloadCacheState {
+    const cached = try ctx.allocator.alloc(bool, tasks.len);
+    errdefer ctx.allocator.free(cached);
+    for (cached) |*value| value.* = true;
+
+    const visited = try ctx.allocator.alloc(bool, tasks.len);
+    defer ctx.allocator.free(visited);
+    for (visited) |*value| value.* = false;
+
+    var miss_count: usize = 0;
+    for (pages) |page| {
+        if (page.cache_hit) continue;
+        for (page.artifact_deps) |dep| {
+            if (dep >= tasks.len or visited[dep]) continue;
+            visited[dep] = true;
+            cached[dep] = try preloadTaskPresent(ctx, tasks[dep]);
+            if (!cached[dep]) miss_count += 1;
+        }
+    }
+
+    return .{
+        .cached = cached,
+        .miss_count = miss_count,
+    };
+}
+
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
@@ -1109,7 +1394,7 @@ fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
 }
 
 fn renderDagWorkerCount(plan: *const RenderPlan, options: RenderOptions) usize {
-    const task_count = plan.artifact_tasks.len + plan.pages.len;
+    const task_count = plan.artifact_miss_count + (plan.pages.len - plan.page_cache_hit_count);
     if (configuredWorkerCount(task_count, options)) |count| return count;
     return preloadWorkerCount(task_count, plan.artifact_miss_count, options);
 }
@@ -1664,7 +1949,7 @@ const merge_chunk_size: usize = 128;
 fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
     const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
     defer ctx.allocator.free(page_paths);
-    for (plan.pages, 0..) |page, index| page_paths[index] = page.pdf_path;
+    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
 
     if (page_paths.len <= merge_chunk_size) {
         if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
