@@ -2,6 +2,7 @@ const std = @import("std");
 const app = @import("app.zig");
 const build_options = @import("build_options");
 const utils = @import("utils");
+const watcher = @import("watch.zig");
 const error_report = utils.err;
 
 fn usage() void {
@@ -16,6 +17,10 @@ fn usage() void {
         \\    Print IR JSON, or write it when output path is given
         \\  render [input.ss] [output.pdf]
         \\    Render PDF to the specified path
+        \\  watch check [input.ss]
+        \\    Re-run check when the project changes
+        \\  watch render [input.ss] [output.pdf]
+        \\    Re-render PDF when the project changes
         \\  cache clear
         \\    Clear the managed render cache under .ss-cache/render
         \\
@@ -28,16 +33,20 @@ fn usage() void {
         \\    Resolve relative assets/themes from DIR instead of the input file directory
         \\  --jobs N
         \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
+        \\  --interval-ms N
+        \\    Poll interval for watch commands
         \\
         \\Examples:
         \\  ss --help
-        \\  ss check demo/ss.ss
-        \\  ss dump demo/ss.ss
-        \\  ss dump demo/ss.ss out.json
-        \\  ss render demo/ss.ss out.pdf
+        \\  ss check slide.ss
+        \\  ss dump slide.ss
+        \\  ss dump slide.ss out.json
+        \\  ss render slide.ss out.pdf
+        \\  ss watch check slide.ss
+        \\  ss watch render slide.ss out.pdf
         \\  ss cache clear
-        \\  zig build run -- check demo/ss.ss
-        \\  zig build run -- render demo/ss.ss out.pdf
+        \\  zig build run -- check slide.ss
+        \\  zig build run -- render slide.ss out.pdf
         \\
     , .{});
 }
@@ -51,6 +60,7 @@ const CommandOptions = struct {
     output_path: ?[]const u8 = null,
     asset_base_dir: ?[]const u8 = null,
     jobs: ?usize = null,
+    interval_ms: u64 = 500,
 };
 
 fn parseCommandOptions(args: []const []const u8) !CommandOptions {
@@ -69,6 +79,13 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             if (i + 1 >= args.len) return error.MissingJobsValue;
             options.jobs = try std.fmt.parseUnsigned(usize, args[i + 1], 10);
             if (options.jobs.? == 0) return error.InvalidJobsValue;
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--interval-ms")) {
+            if (i + 1 >= args.len) return error.MissingIntervalValue;
+            options.interval_ms = try std.fmt.parseUnsigned(u64, args[i + 1], 10);
+            if (options.interval_ms == 0) return error.InvalidIntervalValue;
             i += 1;
             continue;
         }
@@ -105,7 +122,7 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "check")) {
         const options = try parseCommandOptions(args[2..]);
-        const input_path = options.input_path orelse "demo/ss.ss";
+        const input_path = options.input_path orelse "demo/01-language-tour.ss";
         if (options.asset_base_dir) |asset_base_dir| {
             try app.checkFileWithAssetBase(io, allocator, input_path, asset_base_dir);
         } else {
@@ -116,7 +133,7 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "dump")) {
         const options = try parseCommandOptions(args[2..]);
-        const input_path = options.input_path orelse "demo/ss.ss";
+        const input_path = options.input_path orelse "demo/01-language-tour.ss";
         if (options.output_path) |output_path| {
             var progress = app.Progress.init(7);
             if (options.asset_base_dir) |asset_base_dir| {
@@ -137,7 +154,7 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "render")) {
         const options = try parseCommandOptions(args[2..]);
-        const input_path = options.input_path orelse "demo/ss.ss";
+        const input_path = options.input_path orelse "demo/01-language-tour.ss";
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, input_path, "pdf");
         var progress = app.Progress.init(7);
         const render_options = app.RenderOptions{ .jobs = options.jobs };
@@ -146,6 +163,36 @@ fn run(init: std.process.Init) !void {
         } else {
             try app.writePdfForFileWithOptions(io, allocator, input_path, output_path, render_options, &progress);
         }
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "watch")) {
+        if (args.len < 3) {
+            usage();
+            return;
+        }
+        const mode: watcher.Mode = if (std.mem.eql(u8, args[2], "check"))
+            .check
+        else if (std.mem.eql(u8, args[2], "render"))
+            .render
+        else {
+            usage();
+            return;
+        };
+        const options = try parseCommandOptions(args[3..]);
+        const input_path = options.input_path orelse "demo/01-language-tour.ss";
+        const asset_base_dir = options.asset_base_dir orelse std.fs.path.dirname(input_path) orelse ".";
+        const output_path = if (mode == .render)
+            options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, input_path, "pdf")
+        else
+            options.output_path;
+        try watcher.run(io, allocator, mode, .{
+            .input_path = input_path,
+            .output_path = output_path,
+            .asset_base_dir = asset_base_dir,
+            .jobs = options.jobs,
+            .interval_ms = options.interval_ms,
+        });
         return;
     }
 

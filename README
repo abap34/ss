@@ -44,6 +44,14 @@ You can verify:
 
   ss --help
 
+Watch mode:
+
+  # Re-run checks while the deck or related project files change
+  ss watch check slide.ss
+
+  # Re-render while files change
+  ss watch render slide.ss out.pdf
+
 License:
 
   Apache-2.0
