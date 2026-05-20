@@ -12,6 +12,7 @@ if [[ ! -x "$ss_bin" ]]; then
 fi
 
 rm -rf "$work_dir"
+rm -rf .ss-cache/render
 mkdir -p "$work_dir/assets"
 
 cat > "$work_dir/assets/vector.svg" <<'SVG'
@@ -76,10 +77,14 @@ end
 SS
 
 "$ss_bin" check "$work_dir/smoke.ss"
-"$ss_bin" render "$work_dir/smoke.ss" "$work_dir/smoke.pdf"
-qpdf --check "$work_dir/smoke.pdf" >/dev/null
-pdftoppm -png -f 1 -singlefile "$work_dir/smoke.pdf" "$work_dir/smoke-page1" >/dev/null
-test -s "$work_dir/smoke.pdf"
+"$ss_bin" render "$work_dir/smoke.ss" "$work_dir/smoke-cold.pdf"
+qpdf --check "$work_dir/smoke-cold.pdf" >/dev/null
+pdftoppm -png -f 1 -singlefile "$work_dir/smoke-cold.pdf" "$work_dir/smoke-page1" >/dev/null
+test -s "$work_dir/smoke-cold.pdf"
 test -s "$work_dir/smoke-page1.png"
 
-echo "render-smoke: ok $work_dir/smoke.pdf"
+"$ss_bin" render "$work_dir/smoke.ss" "$work_dir/smoke-warm.pdf"
+qpdf --check "$work_dir/smoke-warm.pdf" >/dev/null
+test -s "$work_dir/smoke-warm.pdf"
+
+echo "render-smoke: ok $work_dir/smoke-cold.pdf $work_dir/smoke-warm.pdf"
