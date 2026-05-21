@@ -25,6 +25,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.InvalidSemanticSort => "semantic sort",
         error.ExpectedTypeAnnotation => "type annotation",
         error.AssignmentRequiresLet => "'let name = expr' for variable bindings",
+        error.BindRemoved => "'let name = expr' for lexical bindings; 'bind' was removed",
         error.ZeroArgCallRequiresParens => "'name()' for zero-argument calls",
         error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",

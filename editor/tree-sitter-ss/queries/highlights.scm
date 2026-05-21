@@ -5,7 +5,6 @@
   "page"
   "fn"
   "let"
-  "bind"
   "return"
   "end"
   "constrain"
@@ -33,7 +32,6 @@
 (block_call_statement function: (identifier) @function.call)
 (parameter name: (identifier) @variable.parameter)
 (let_statement name: (identifier) @variable)
-(bind_statement name: (identifier) @variable)
 (object_field name: (identifier) @property)
 (member_expression member: (identifier) @property)
 (annotation name: (identifier) @attribute)

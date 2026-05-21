@@ -278,11 +278,6 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             try item.stringField("name", binding.name);
             try writeExpr(allocator, &item, "expr", binding.expr);
         },
-        .bind_binding => |binding| {
-            try item.stringField("kind", "bind_binding");
-            try item.stringField("name", binding.name);
-            try writeExpr(allocator, &item, "expr", binding.expr);
-        },
         .return_expr => |expr| {
             try item.stringField("kind", "return_expr");
             try writeExpr(allocator, &item, "expr", expr);

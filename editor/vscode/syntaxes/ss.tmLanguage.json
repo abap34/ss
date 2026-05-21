@@ -62,7 +62,7 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\b(?:import|const|document|page|fn|let|bind|return|end|constrain|type|extend|property)\\b"
+          "match": "\\b(?:import|const|document|page|fn|letreturn|end|constrain|type|extend|property)\\b"
         },
         {
           "name": "storage.type.ss",

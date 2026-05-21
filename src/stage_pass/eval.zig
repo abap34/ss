@@ -223,7 +223,6 @@ fn inferStatementEffects(
     var set = core.EffectSet.empty();
     switch (stmt.kind) {
         .let_binding => |binding| set.unionWith(try inferExprEffects(ir, sema, pass, binding.expr, visiting)),
-        .bind_binding => |binding| set.unionWith(try inferExprEffects(ir, sema, pass, binding.expr, visiting)),
         .return_expr => |expr| set.unionWith(try inferExprEffects(ir, sema, pass, expr, visiting)),
         .property_set => |property| {
             set.insert(.WriteProperty);
@@ -702,7 +701,6 @@ fn executeStatement(
             const value = try evalExpr(ir, env, functions, origin, binding.expr);
             try env.put(binding.name, value);
         },
-        .bind_binding => return error.UnsupportedPassPrimitive,
         .return_expr => |expr| {
             return .{ .returned = try evalExpr(ir, env, functions, origin, expr) };
         },

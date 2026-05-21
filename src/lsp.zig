@@ -474,7 +474,7 @@ fn completionResult(server: *Server) ![]const u8 {
     const allocator = server.allocator;
     try out.appendSlice(allocator, "{\"isIncomplete\":false,\"items\":[");
     var first = true;
-    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "bind", "return", "end", "constrain", "type", "extend", "if", "then", "else" };
+    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "constrain", "type", "extend", "if", "then", "else" };
     for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
         try appendDumpCompletions(allocator, &out, &first, json_text);
@@ -810,14 +810,14 @@ fn semanticTokenType(word: []const u8, previous_word: ?[]const u8, next: ?u8, pr
     if (previous == '.') return 6;
     if (previous_word) |prev| {
         if (std.mem.eql(u8, prev, "fn")) return 1;
-        if (std.mem.eql(u8, prev, "let") or std.mem.eql(u8, prev, "bind") or std.mem.eql(u8, prev, "const")) return 2;
+        if (std.mem.eql(u8, prev, "let") or std.mem.eql(u8, prev, "const")) return 2;
     }
     if (next == '(') return 1;
     return null;
 }
 
 fn isKeyword(word: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "bind", "return", "end", "constrain", "type", "extend", "if", "then", "else", "for", "in", "property" };
+    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "constrain", "type", "extend", "if", "then", "else", "for", "in", "property" };
     for (keywords) |keyword| if (std.mem.eql(u8, word, keyword)) return true;
     return false;
 }

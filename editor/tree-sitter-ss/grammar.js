@@ -93,7 +93,6 @@ module.exports = grammar({
 
     _statement: $ => choice(
       $.let_statement,
-      $.bind_statement,
       $.return_statement,
       $.constrain_statement,
       $.property_statement,
@@ -105,7 +104,6 @@ module.exports = grammar({
     ),
 
     let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
-    bind_statement: $ => seq("bind", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
     return_statement: $ => seq("return", field("value", $._expression), $._terminator),
     constrain_statement: $ => seq(optional("constrain"), field("left", $._expression), "==", field("right", $._expression), optional(seq(choice("+", "-"), $._expression)), $._terminator),
     property_statement: $ => seq("property", field("target", $.identifier), field("key", $.string), field("value", $._expression), $._terminator),

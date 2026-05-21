@@ -776,12 +776,7 @@ const Parser = struct {
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .let_binding = .{ .name = name, .expr = expr } } };
         }
         if (try self.consumeKeyword("bind")) {
-            const name = try self.parseIdentifier();
-            self.skipTrivia();
-            try self.expectChar('=');
-            const expr = try self.parseExpr();
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .bind_binding = .{ .name = name, .expr = expr } } };
+            return self.failAt(start, error.BindRemoved);
         }
         if (try self.consumeKeyword("constrain")) {
             const decl = try self.parseConstraintDecl();
