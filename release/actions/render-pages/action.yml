@@ -5,7 +5,7 @@ inputs:
   image:
     description: Prebuilt ss render image to run.
     required: false
-    default: ghcr.io/yuchi/ss-render:v0
+    default: ghcr.io/abap34/ss-render:v0
   input:
     description: Newline- or comma-separated glob patterns for .ss files.
     required: false
