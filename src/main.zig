@@ -21,6 +21,8 @@ fn usage() void {
         \\    Render PDF to the specified path
         \\  init [dir]
         \\    Create a new ss.toml and starter slide deck
+        \\  doctor
+        \\    Check project discovery and render tool availability
         \\  lsp
         \\    Run the ss language server over stdio
         \\  watch check [input.ss]
@@ -51,6 +53,8 @@ fn usage() void {
         \\    Entry file to create with ss init
         \\  --force
         \\    Allow ss init to overwrite generated files
+        \\  --strict
+        \\    Make ss doctor exit non-zero when it finds issues
         \\
         \\Examples:
         \\  ss --help
@@ -61,6 +65,7 @@ fn usage() void {
         \\  ss render slide.ss out.pdf
         \\  ss render --project . --output .ss-cache/render.pdf
         \\  ss init slides
+        \\  ss doctor --project slides
         \\  ss watch check slide.ss
         \\  ss watch render slide.ss out.pdf
         \\  ss cache clear
@@ -119,6 +124,13 @@ const InitOptions = struct {
     dir: []const u8 = ".",
     entry: []const u8 = "slide.ss",
     force: bool = false,
+};
+
+const DoctorOptions = struct {
+    input_path: ?[]const u8 = null,
+    asset_base_dir: ?[]const u8 = null,
+    project_path: ?[]const u8 = null,
+    strict: bool = false,
 };
 
 fn parseCommandOptions(args: []const []const u8) !CommandOptions {
@@ -194,6 +206,38 @@ fn parseInitOptions(args: []const []const u8) !InitOptions {
         if (saw_dir) return error.TooManyArguments;
         options.dir = arg;
         saw_dir = true;
+    }
+    return options;
+}
+
+fn parseDoctorOptions(args: []const []const u8) !DoctorOptions {
+    var options = DoctorOptions{};
+    var positional_index: usize = 0;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--asset-base-dir")) {
+            if (i + 1 >= args.len) return error.MissingAssetBaseDirValue;
+            options.asset_base_dir = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--project")) {
+            if (i + 1 >= args.len) return error.MissingProjectValue;
+            options.project_path = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--strict")) {
+            options.strict = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) return error.UnknownFlag;
+        switch (positional_index) {
+            0 => options.input_path = arg,
+            else => return error.TooManyArguments,
+        }
+        positional_index += 1;
     }
     return options;
 }
@@ -274,9 +318,149 @@ fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !
     std.debug.print("\nnext:\n  ss render --project {s} --output deck.pdf\n", .{options.dir});
 }
 
+const DoctorTool = struct {
+    name: []const u8,
+    purpose: []const u8,
+    required: bool = false,
+};
+
+const doctor_tools = [_]DoctorTool{
+    .{ .name = "qpdf", .purpose = "PDF assembly and normalization", .required = true },
+    .{ .name = "magick", .purpose = "raster image conversion and resizing" },
+    .{ .name = "rsvg-convert", .purpose = "SVG asset conversion" },
+    .{ .name = "pdftocairo", .purpose = "PDF/vector asset conversion" },
+    .{ .name = "pdflatex", .purpose = "LaTeX math rendering" },
+};
+
+fn runDoctor(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    environ: std.process.Environ,
+    options: DoctorOptions,
+) !void {
+    std.debug.print("ss doctor\n", .{});
+    std.debug.print("version: {s} ({s})\n\n", .{ build_options.version, build_options.commit });
+
+    var issues: usize = 0;
+    issues += try doctorProject(io, allocator, options);
+    issues += try doctorTools(allocator, environ);
+
+    if (issues == 0) {
+        std.debug.print("\ndoctor: ok\n", .{});
+        return;
+    }
+
+    std.debug.print("\ndoctor: {d} issue(s) found", .{issues});
+    if (!options.strict) std.debug.print(" (use --strict to fail on issues)", .{});
+    std.debug.print("\n", .{});
+    if (options.strict) return error.DoctorIssues;
+}
+
+fn doctorProject(io: std.Io, allocator: std.mem.Allocator, options: DoctorOptions) !usize {
+    std.debug.print("project:\n", .{});
+    if (options.input_path == null and options.project_path == null and options.asset_base_dir == null) {
+        var discovered = project.discover(allocator, io, ".") catch |err| {
+            std.debug.print("  fail ss.toml: {s}\n", .{@errorName(err)});
+            return 1;
+        };
+        if (discovered) |*cfg| {
+            defer cfg.deinit(allocator);
+            return doctorResolvedProject(allocator, cfg.path, cfg.entry, cfg.asset_base_dir);
+        }
+        std.debug.print("  warn ss.toml: not found from current directory\n", .{});
+        return 1;
+    }
+
+    var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
+        std.debug.print("  fail resolve: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+    defer resolved.deinit(allocator);
+    return doctorResolvedProject(
+        allocator,
+        resolved.project_file orelse "(explicit input)",
+        resolved.entry_path,
+        resolved.asset_base_dir,
+    );
+}
+
+fn doctorResolvedProject(
+    allocator: std.mem.Allocator,
+    project_file: []const u8,
+    entry_path: []const u8,
+    asset_base_dir: []const u8,
+) usize {
+    var issues: usize = 0;
+    if (std.mem.eql(u8, project_file, "(explicit input)")) {
+        std.debug.print("  ok project: explicit input\n", .{});
+    } else {
+        std.debug.print("  ok ss.toml: {s}\n", .{project_file});
+    }
+    if (utils.fs.fileExists(allocator, entry_path)) {
+        std.debug.print("  ok entry: {s}\n", .{entry_path});
+    } else {
+        std.debug.print("  fail entry: {s} not found\n", .{entry_path});
+        issues += 1;
+    }
+    if (utils.fs.fileExists(allocator, asset_base_dir)) {
+        std.debug.print("  ok asset base: {s}\n", .{asset_base_dir});
+    } else {
+        std.debug.print("  fail asset base: {s} not found\n", .{asset_base_dir});
+        issues += 1;
+    }
+    return issues;
+}
+
+fn doctorTools(allocator: std.mem.Allocator, environ: std.process.Environ) !usize {
+    std.debug.print("\nrender tools:\n", .{});
+    var issues: usize = 0;
+    for (doctor_tools) |tool| {
+        const found = try findOnPath(allocator, environ, tool.name);
+        if (found) |path| {
+            defer allocator.free(path);
+            std.debug.print("  ok {s}: {s}\n", .{ tool.name, path });
+        } else if (tool.required) {
+            std.debug.print("  fail {s}: not found ({s})\n", .{ tool.name, tool.purpose });
+            issues += 1;
+        } else {
+            std.debug.print("  warn {s}: not found ({s})\n", .{ tool.name, tool.purpose });
+            issues += 1;
+        }
+    }
+    return issues;
+}
+
+fn findOnPath(allocator: std.mem.Allocator, environ: std.process.Environ, name: []const u8) !?[]u8 {
+    if (std.mem.indexOfAny(u8, name, "/\\")) |_| {
+        return if (isExecutable(allocator, name)) try allocator.dupe(u8, name) else null;
+    }
+
+    const path_env = std.process.Environ.getAlloc(environ, allocator, "PATH") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return null,
+        else => |e| return e,
+    };
+    defer allocator.free(path_env);
+
+    var it = std.mem.splitScalar(u8, path_env, std.fs.path.delimiter);
+    while (it.next()) |dir| {
+        if (dir.len == 0) continue;
+        const candidate = try std.fs.path.join(allocator, &.{ dir, name });
+        if (isExecutable(allocator, candidate)) return candidate;
+        allocator.free(candidate);
+    }
+    return null;
+}
+
+fn isExecutable(allocator: std.mem.Allocator, path: []const u8) bool {
+    const zpath = allocator.dupeZ(u8, path) catch return false;
+    defer allocator.free(zpath);
+    return std.c.access(zpath.ptr, std.c.X_OK) == 0;
+}
+
 fn run(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
+    const environ = init.minimal.environ;
     const args = try init.minimal.args.toSlice(allocator);
 
     if (args.len < 2) {
@@ -330,6 +514,12 @@ fn run(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "init")) {
         const options = try parseInitOptions(args[2..]);
         try initProject(io, allocator, options);
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "doctor")) {
+        const options = try parseDoctorOptions(args[2..]);
+        try runDoctor(io, allocator, environ, options);
         return;
     }
 

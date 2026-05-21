@@ -18,6 +18,10 @@ mkdir -p "$CACHE"
 "$SS_BIN" check --project "$FIXTURE/ss.toml"
 
 (cd "$FIXTURE" && "$SS_BIN" check)
+doctor="$("$SS_BIN" doctor --project "$FIXTURE" 2>&1)"
+printf '%s\n' "$doctor" | grep -F "ss doctor" >/dev/null
+printf '%s\n' "$doctor" | grep -F "project:" >/dev/null
+printf '%s\n' "$doctor" | grep -F "render tools:" >/dev/null
 
 INIT_FIXTURE="$ROOT/.ss-cache/init-smoke"
 rm -rf "$INIT_FIXTURE"
