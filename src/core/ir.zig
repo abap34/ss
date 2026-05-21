@@ -387,13 +387,20 @@ pub const Ir = struct {
 
     pub fn setNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
-        node.content = try self.allocator.dupe(u8, value);
+        const owned_value = try self.allocator.dupe(u8, value);
+        if (node.content_owned) {
+            if (node.content) |content| self.allocator.free(content);
+        }
+        node.content = owned_value;
+        node.content_owned = true;
     }
 
     pub fn appendNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         const current = node.content orelse "";
         node.content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
+        if (node.content_owned) self.allocator.free(current);
+        node.content_owned = true;
     }
 
     fn makeNodeWithOrigin(

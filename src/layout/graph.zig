@@ -544,12 +544,72 @@ pub fn axisAnchorSource(state: AxisState, anchor: Anchor) ?Constraint {
 }
 
 pub fn setAxisAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
+    if (updateSourcedAxisAnchor(state, anchor, value, source)) |changed| return changed;
     if (try overrideDefaultDerivedAnchor(state, anchor, value, source)) return true;
     return switch (anchor) {
         .left, .bottom => try setOptionalFloat(&state.start, &state.start_source, value, source),
         .right, .top => try setOptionalFloat(&state.end, &state.end_source, value, source),
         .center_x, .center_y => try setOptionalFloat(&state.center, &state.center_source, value, source),
     };
+}
+
+fn updateSourcedAxisAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) ?bool {
+    if (source == null) return null;
+    const source_value = source.?;
+    const current = switch (anchor) {
+        .left, .bottom => state.start,
+        .right, .top => state.end,
+        .center_x, .center_y => state.center,
+    } orelse return null;
+    if (approxEq(current, value)) return false;
+
+    const current_source = switch (anchor) {
+        .left, .bottom => state.start_source,
+        .right, .top => state.end_source,
+        .center_x, .center_y => state.center_source,
+    } orelse return null;
+    if (!constraintsEquivalent(current_source, source_value)) return null;
+
+    switch (anchor) {
+        .left, .bottom => {
+            state.start = value;
+            state.start_source = source;
+        },
+        .right, .top => {
+            state.end = value;
+            state.end_source = source;
+        },
+        .center_x, .center_y => {
+            state.center = value;
+            state.center_source = source;
+        },
+    }
+    clearDerivedAnchorsAfterSourcedUpdate(state, anchor);
+    return true;
+}
+
+fn clearDerivedAnchorsAfterSourcedUpdate(state: *AxisState, changed_anchor: Anchor) void {
+    const preserve_size = state.size_is_default or state.size_source != null;
+    if (!preserve_size) {
+        if (state.size_source == null) state.size = null;
+        if (state.center_source == null) state.center = null;
+        return;
+    }
+
+    switch (changed_anchor) {
+        .left, .bottom => {
+            if (state.end_source == null) state.end = null;
+            if (state.center_source == null) state.center = null;
+        },
+        .right, .top => {
+            if (state.start_source == null) state.start = null;
+            if (state.center_source == null) state.center = null;
+        },
+        .center_x, .center_y => {
+            if (state.start_source == null) state.start = null;
+            if (state.end_source == null) state.end = null;
+        },
+    }
 }
 
 fn overrideDefaultDerivedAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
@@ -655,6 +715,26 @@ fn setOptionalFloat(slot: *?f32, source_slot: *?Constraint, value: f32, source: 
     slot.* = value;
     source_slot.* = source;
     return true;
+}
+
+fn constraintsEquivalent(a: Constraint, b: Constraint) bool {
+    if (a.target_node != b.target_node) return false;
+    if (a.target_anchor != b.target_anchor) return false;
+    if (!approxEq(a.offset, b.offset)) return false;
+    return constraintSourcesEquivalent(a.source, b.source);
+}
+
+fn constraintSourcesEquivalent(a: ConstraintSource, b: ConstraintSource) bool {
+    return switch (a) {
+        .page => |a_anchor| switch (b) {
+            .page => |b_anchor| a_anchor == b_anchor,
+            .node => false,
+        },
+        .node => |a_node| switch (b) {
+            .page => false,
+            .node => |b_node| a_node.node_id == b_node.node_id and a_node.anchor == b_node.anchor,
+        },
+    };
 }
 
 pub fn setAxisSize(state: *AxisState, value: f32, source: ?Constraint) !bool {

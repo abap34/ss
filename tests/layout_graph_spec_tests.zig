@@ -4,6 +4,8 @@ const core = @import("core");
 const model = @import("model");
 
 const graph = core.layout.graph;
+const metrics = core.layout.metrics;
+const solver = core.layout.solver;
 
 const testing = std.testing;
 
@@ -102,6 +104,59 @@ test "layout graph spec: shifting an axis moves anchors without changing size" {
     try expectFloat(25, state.center.?);
     try expectFloat(20, state.size.?);
     try testing.expect(!graph.shiftAxisState(&state, graph.ConstraintTolerance / 2));
+}
+
+test "layout graph spec: sourced anchor updates preserve default size" {
+    const constraint = model.Constraint{
+        .target_node = 2,
+        .target_anchor = .left,
+        .source = .{ .node = .{ .node_id = 1, .anchor = .right } },
+        .offset = 20,
+    };
+
+    var state = model.AxisState{
+        .start = 220,
+        .end = 260,
+        .center = 240,
+        .size = 40,
+        .start_source = constraint,
+        .size_is_default = true,
+    };
+
+    try testing.expect(try graph.setAxisAnchor(&state, .left, 120, constraint));
+    try expectFloat(120, state.start.?);
+    try expectFloat(40, state.size.?);
+    try testing.expect(state.end == null);
+    try testing.expect(state.center == null);
+
+    try testing.expect(try graph.reconcileAxisState(&state));
+    try expectFloat(160, state.end.?);
+    try expectFloat(140, state.center.?);
+
+    const explicit_size = model.Constraint{
+        .target_node = 2,
+        .target_anchor = .right,
+        .source = .{ .node = .{ .node_id = 2, .anchor = .left } },
+        .offset = 40,
+    };
+    var explicit = model.AxisState{
+        .start = 220,
+        .end = 260,
+        .center = 240,
+        .size = 40,
+        .start_source = constraint,
+        .size_source = explicit_size,
+    };
+
+    try testing.expect(try graph.setAxisAnchor(&explicit, .left, 120, constraint));
+    try expectFloat(120, explicit.start.?);
+    try expectFloat(40, explicit.size.?);
+    try testing.expect(explicit.end == null);
+    try testing.expect(explicit.center == null);
+
+    try testing.expect(try graph.reconcileAxisState(&explicit));
+    try expectFloat(160, explicit.end.?);
+    try expectFloat(140, explicit.center.?);
 }
 
 test "layout graph spec: page graph indexes direct page children and filters axis constraints" {
@@ -231,4 +286,58 @@ test "layout graph spec: axis workspaces seed known frames only without target c
     try testing.expect(fixed_state.end == null);
     try testing.expect(fixed_state.center == null);
     try testing.expect(fixed_state.size == null);
+}
+
+test "layout solver: wrapped width cap propagates through dependent anchors" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const wrapped = try ir.makeObject(
+        page,
+        "wrapped",
+        null,
+        .text,
+        .text,
+        "this is intentionally long enough to produce a wide intrinsic text box",
+    );
+    const follower = try ir.makeObject(page, "follower", null, .text, .text, "B");
+    try ir.setNodeProperty(wrapped, "wrap", "on");
+
+    try ir.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
+    try ir.addAnchorConstraint(follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, "follower-left");
+
+    try solver.solveLayout(&ir);
+
+    const wrapped_node = ir.getNode(wrapped).?;
+    const follower_node = ir.getNode(follower).?;
+    const style = core.layout.styleForNode(&ir, wrapped_node);
+    const expected_width = model.PageLayout.width - style.default_right_inset - 1100;
+    try expectFloat(expected_width, wrapped_node.frame.width);
+    try expectFloat(wrapped_node.frame.x + wrapped_node.frame.width + 20, follower_node.frame.x);
+}
+
+test "layout solver: vertical axis observes width-dependent wrapped height" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const wrapped = try ir.makeObject(
+        page,
+        "wrapped",
+        null,
+        .text,
+        .text,
+        "this sentence should wrap into multiple lines once the horizontal solver caps its width",
+    );
+    try ir.setNodeProperty(wrapped, "wrap", "on");
+    try ir.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
+    try ir.addAnchorConstraint(wrapped, .bottom, .{ .page = .bottom }, 40, "wrapped-bottom");
+
+    try solver.solveLayout(&ir);
+
+    const wrapped_node = ir.getNode(wrapped).?;
+    const expected_height = metrics.intrinsicHeight(&ir, wrapped_node);
+    try testing.expect(expected_height > 28);
+    try expectFloat(expected_height, wrapped_node.frame.height);
 }

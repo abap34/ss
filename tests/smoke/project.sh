@@ -178,6 +178,36 @@ printf '%s\n' "$stats" | grep -F "directories: 0" >/dev/null
 printf '%s\n' "$stats" | grep -F "size: 0 B" >/dev/null
 (cd "$CACHE_STATS" && "$SS_BIN" cache clear >/dev/null 2>&1)
 
+CYCLE_FIXTURE="$ROOT/.ss-cache/import-cycle-smoke"
+rm -rf "$CYCLE_FIXTURE"
+mkdir -p "$CYCLE_FIXTURE"
+cat > "$CYCLE_FIXTURE/a.ss" <<'SS'
+import "./b.ss"
+
+fn a() -> string
+  return "a"
+end
+SS
+cat > "$CYCLE_FIXTURE/b.ss" <<'SS'
+import "./a.ss"
+
+fn b() -> string
+  return "b"
+end
+SS
+cat > "$CYCLE_FIXTURE/main.ss" <<'SS'
+import std:themes/default
+import "./a.ss"
+
+page ok
+end
+SS
+if "$SS_BIN" check "$CYCLE_FIXTURE/main.ss" >"$CACHE/import-cycle.out" 2>"$CACHE/import-cycle.err"; then
+  echo "import cycle unexpectedly passed" >&2
+  exit 1
+fi
+grep -F "ImportCycle" "$CACHE/import-cycle.err" >/dev/null
+
 if [ "$RUN_RENDER" = "1" ]; then
   "$SS_BIN" render "$FIXTURE/slide.ss" "$CACHE/explicit.pdf"
   "$SS_BIN" render --project "$FIXTURE" --output "$CACHE/project-dir.pdf"
