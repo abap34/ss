@@ -19,6 +19,19 @@ mkdir -p "$CACHE"
 
 (cd "$FIXTURE" && "$SS_BIN" check)
 
+INIT_FIXTURE="$ROOT/.ss-cache/init-smoke"
+rm -rf "$INIT_FIXTURE"
+"$SS_BIN" init "$INIT_FIXTURE"
+test -f "$INIT_FIXTURE/ss.toml"
+test -f "$INIT_FIXTURE/slide.ss"
+grep -F 'entry = "slide.ss"' "$INIT_FIXTURE/ss.toml" >/dev/null
+"$SS_BIN" check --project "$INIT_FIXTURE"
+if "$SS_BIN" init "$INIT_FIXTURE" >/dev/null 2>&1; then
+  echo "ss init unexpectedly overwrote an existing project" >&2
+  exit 1
+fi
+"$SS_BIN" init "$INIT_FIXTURE" --force >/dev/null
+
 "$SS_BIN" dump "$FIXTURE/slide.ss" "$CACHE/explicit.json"
 "$SS_BIN" dump --project "$FIXTURE" --output "$CACHE/project-dir.json"
 "$SS_BIN" dump --project "$FIXTURE/ss.toml" --output "$CACHE/project-file.json"

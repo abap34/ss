@@ -336,6 +336,8 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.ConstraintConflict,
         error.NegativeConstraintSize,
         error.DiagnosticsFailed,
+        error.InitEntryMustBeRelative,
+        error.InitTargetExists,
         => true,
         else => false,
     };
