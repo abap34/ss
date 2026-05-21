@@ -94,10 +94,10 @@ jobs:
           cp .ss-cache/homebrew/ss.rb tap/Formula/ss.rb
 
           cd tap
-          if git diff --quiet -- Formula/ss.rb; then
+          git add Formula/ss.rb
+          if git diff --cached --quiet -- Formula/ss.rb; then
             echo "Formula/ss.rb is already up to date."
             exit 0
           fi
-          git add Formula/ss.rb
           git commit -m "ss ${RELEASE_TAG}"
-          git push
+          git push origin HEAD:main
