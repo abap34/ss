@@ -51,8 +51,6 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
 
     var horizontal = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .horizontal);
     defer horizontal.deinit();
-    var vertical = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .vertical);
-    defer vertical.deinit();
 
     try solvePageAxis(ir, &horizontal);
 
@@ -60,9 +58,12 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
     defer horizontal_fallback.deinit(ir.allocator);
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(ir, &horizontal);
-    try finalizeHorizontalGroupStates(ir, &horizontal);
+    try settleHorizontalAxis(ir, &horizontal);
     applySolvedHorizontalFrames(ir, &horizontal) catch return error.UnknownNode;
     try groups.propagateTargetedWidths(ir, &horizontal);
+
+    var vertical = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .vertical);
+    defer vertical.deinit();
 
     try solvePageAxis(ir, &vertical);
     var vertical_fallback = try fallback.buildVerticalConstraints(ir, &vertical);
@@ -95,6 +96,14 @@ fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspac
             node.frame.x = x;
             node.frame.x_set = true;
         }
+    }
+}
+
+fn settleHorizontalAxis(ir: anytype, workspace: *graph.AxisWorkspace) !void {
+    var pass: usize = 0;
+    while (pass < 8) : (pass += 1) {
+        try finalizeHorizontalGroupStates(ir, workspace);
+        try runPageAxisPass(ir, workspace);
     }
 }
 

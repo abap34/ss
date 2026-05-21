@@ -126,6 +126,7 @@ pub const Node = struct {
     object_kind: ?ObjectKind = null,
     payload_kind: ?PayloadKind = null,
     content: ?[]const u8 = null,
+    content_owned: bool = false,
     page_index: ?usize = null,
     origin: ?[]const u8 = null,
     properties: std.ArrayList(Property) = .empty,
@@ -144,6 +145,9 @@ pub const Node = struct {
             allocator.free(entry.value);
         }
         self.render_env.deinit(allocator);
+        if (self.content_owned) {
+            if (self.content) |content| allocator.free(content);
+        }
     }
 };
 

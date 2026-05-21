@@ -87,4 +87,23 @@ test -s "$work_dir/smoke-page1.png"
 qpdf --check "$work_dir/smoke-warm.pdf" >/dev/null
 test -s "$work_dir/smoke-warm.pdf"
 
-echo "render-smoke: ok $work_dir/smoke-cold.pdf $work_dir/smoke-warm.pdf"
+page_cache="$(find "$repo_root/.ss-cache/render/pages" -name 'page-*.pdf' | head -n 1)"
+document_cache="$(find "$repo_root/.ss-cache/render/documents" -name 'document-*.pdf' | head -n 1)"
+test -n "$page_cache"
+test -n "$document_cache"
+printf 'not a pdf\n' > "$page_cache"
+printf 'not a pdf\n' > "$document_cache"
+
+"$ss_bin" render "$work_dir/smoke.ss" "$work_dir/smoke-recovered.pdf"
+qpdf --check "$work_dir/smoke-recovered.pdf" >/dev/null
+test -s "$work_dir/smoke-recovered.pdf"
+
+SS_CACHE_MAX_BYTES=1 "$ss_bin" render "$work_dir/smoke.ss" "$work_dir/smoke-pruned.pdf"
+qpdf --check "$work_dir/smoke-pruned.pdf" >/dev/null
+test -s "$work_dir/smoke-pruned.pdf"
+if find "$repo_root/.ss-cache/render" -type f | grep . >/dev/null; then
+  echo "render cache prune left files over a 1-byte budget" >&2
+  exit 1
+fi
+
+echo "render-smoke: ok $work_dir/smoke-cold.pdf $work_dir/smoke-warm.pdf $work_dir/smoke-recovered.pdf $work_dir/smoke-pruned.pdf"

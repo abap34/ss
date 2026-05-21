@@ -275,6 +275,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const new = try ctx.evalStringArg(call, 2);
             const current = ctx.nodeContent(object_id) orelse "";
             const updated = try replaceAll(ctx.ir.allocator, current, old, new);
+            defer ctx.ir.allocator.free(updated);
             try ctx.setNodeContent(object_id, updated);
             break :blk .{ .object = object_id };
         },

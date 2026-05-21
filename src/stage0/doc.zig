@@ -284,7 +284,12 @@ pub const Document = struct {
 
     pub fn setNodeContent(self: *Document, node_id: HandleId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
-        node.content = try self.allocator.dupe(u8, value);
+        const owned_value = try self.allocator.dupe(u8, value);
+        if (node.content_owned) {
+            if (node.content) |content| self.allocator.free(content);
+        }
+        node.content = owned_value;
+        node.content_owned = true;
         try self.terms.append(self.allocator, .{ .set_content = .{
             .node = node_id,
             .value = try self.allocator.dupe(u8, value),
@@ -295,6 +300,7 @@ pub const Document = struct {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         const current = node.content orelse "";
         const updated = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
+        defer self.allocator.free(updated);
         try self.setNodeContent(node_id, updated);
     }
 
