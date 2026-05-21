@@ -66,6 +66,43 @@ const Server = struct {
         try self.documents.put(path, source);
     }
 
+    fn applyDocumentChange(self: *Server, uri: []const u8, change: *const JsonObject) !void {
+        const text = stringField(change, "text") orelse "";
+        const range = objectFieldObject(change, "range") orelse {
+            try self.replaceDocument(uri, text);
+            return;
+        };
+        const start = objectFieldObject(range, "start") orelse {
+            try self.replaceDocument(uri, text);
+            return;
+        };
+        const end = objectFieldObject(range, "end") orelse {
+            try self.replaceDocument(uri, text);
+            return;
+        };
+
+        const path = try pathFromUri(self.allocator, uri);
+        errdefer self.allocator.free(path);
+        const old_source = self.documents.get(path) orelse "";
+        const start_offset = positionOffset(old_source, lspLine(start), lspCharacter(start));
+        const end_offset = positionOffset(old_source, lspLine(end), lspCharacter(end));
+        if (end_offset < start_offset) return error.InvalidLspRange;
+
+        var next = std.ArrayList(u8).empty;
+        errdefer next.deinit(self.allocator);
+        try next.appendSlice(self.allocator, old_source[0..start_offset]);
+        try next.appendSlice(self.allocator, text);
+        try next.appendSlice(self.allocator, old_source[end_offset..]);
+        const source = try next.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(source);
+
+        if (self.documents.fetchRemove(path)) |entry| {
+            self.allocator.free(entry.key);
+            self.allocator.free(entry.value);
+        }
+        try self.documents.put(path, source);
+    }
+
     fn removeDocument(self: *Server, uri: []const u8) void {
         const path = pathFromUri(self.allocator, uri) catch return;
         defer self.allocator.free(path);
@@ -386,8 +423,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         if (params) |p| if (objectField(p, "textDocument")) |doc| {
             if (stringField(doc, "uri")) |uri| {
                 if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0 and changes.items[changes.items.len - 1] == .object) {
-                    const text = stringField(&changes.items[changes.items.len - 1].object, "text") orelse "";
-                    try server.replaceDocument(uri, text);
+                    try server.applyDocumentChange(uri, &changes.items[changes.items.len - 1].object);
                     const path = try pathFromUri(server.allocator, uri);
                     defer server.allocator.free(path);
                     try server.rebuild(path);
@@ -1061,6 +1097,41 @@ fn intField(object: *const JsonObject, key: []const u8) ?i64 {
         .float => |v| @intFromFloat(v),
         else => null,
     };
+}
+
+fn lspLine(object: *const JsonObject) usize {
+    return @intCast(@max(0, intField(object, "line") orelse 0));
+}
+
+fn lspCharacter(object: *const JsonObject) usize {
+    return @intCast(@max(0, intField(object, "character") orelse 0));
+}
+
+fn positionOffset(source: []const u8, target_line: usize, target_character: usize) usize {
+    var line: usize = 0;
+    var line_start: usize = 0;
+    var index: usize = 0;
+    while (index < source.len and line < target_line) : (index += 1) {
+        if (source[index] == '\n') {
+            line += 1;
+            line_start = index + 1;
+        }
+    }
+    if (line < target_line) return source.len;
+
+    var character: usize = 0;
+    index = line_start;
+    while (index < source.len and source[index] != '\n') {
+        if (character >= target_character) return index;
+        const len = std.unicode.utf8ByteSequenceLength(source[index]) catch 1;
+        const end = @min(index + len, source.len);
+        const cp = std.unicode.utf8Decode(source[index..end]) catch source[index];
+        const width: usize = if (cp >= 0x10000) 2 else 1;
+        if (character + width > target_character) return index;
+        character += width;
+        index = end;
+    }
+    return index;
 }
 
 fn numberField(object: *const JsonObject, key: []const u8) ?f64 {

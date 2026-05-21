@@ -38,8 +38,10 @@ pub fn resolve(
 ) !Resolved {
     var config: ?Config = if (project_arg) |arg|
         try loadProjectArgument(allocator, io, arg)
+    else if (input_path == null)
+        try discover(allocator, io, ".")
     else
-        try discover(allocator, io, ".");
+        null;
     defer if (config) |*cfg| cfg.deinit(allocator);
 
     const entry_path = if (input_path) |input|

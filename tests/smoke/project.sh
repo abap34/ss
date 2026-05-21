@@ -40,10 +40,56 @@ fi
 "$SS_BIN" dump --project "$FIXTURE" --output "$CACHE/project-dir.json"
 "$SS_BIN" dump --project "$FIXTURE/ss.toml" --output "$CACHE/project-file.json"
 (cd "$FIXTURE" && "$SS_BIN" dump --output "$CACHE/discovered.json")
+"$SS_BIN" dump "$FIXTURE/slide.ss" >"$CACHE/stdout.json" 2>"$CACHE/stdout.err"
 
 cmp "$CACHE/explicit.json" "$CACHE/project-dir.json"
 cmp "$CACHE/explicit.json" "$CACHE/project-file.json"
 cmp "$CACHE/explicit.json" "$CACHE/discovered.json"
+cmp "$CACHE/explicit.json" "$CACHE/stdout.json"
+test -s "$CACHE/stdout.err"
+
+RESOLVER_FIXTURE="$ROOT/.ss-cache/resolver-smoke"
+rm -rf "$RESOLVER_FIXTURE"
+mkdir -p "$RESOLVER_FIXTURE/current" "$RESOLVER_FIXTURE/outside"
+cat > "$RESOLVER_FIXTURE/current/ss.toml" <<'SS'
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+SS
+cat > "$RESOLVER_FIXTURE/current/slide.ss" <<'SS'
+import std:themes/default
+import "./parts.ss"
+
+page current
+  current_fn()
+end
+SS
+cat > "$RESOLVER_FIXTURE/current/parts.ss" <<'SS'
+fn current_fn() -> object
+  return text("current")
+end
+SS
+cat > "$RESOLVER_FIXTURE/outside/slide.ss" <<'SS'
+import std:themes/default
+import "./parts.ss"
+
+page outside
+  outside_fn()
+end
+SS
+cat > "$RESOLVER_FIXTURE/outside/parts.ss" <<'SS'
+fn outside_fn() -> object
+  return text("outside")
+end
+SS
+(cd "$RESOLVER_FIXTURE/current" && "$SS_BIN" check "$RESOLVER_FIXTURE/outside/slide.ss")
+
+"$SS_BIN" watch check --project "$FIXTURE" --interval-ms 100 >"$CACHE/watch.out" 2>"$CACHE/watch.err" &
+watch_pid=$!
+sleep 0.4
+kill "$watch_pid" 2>/dev/null || true
+wait "$watch_pid" 2>/dev/null || true
+grep -F "watch: check $FIXTURE/slide.ss every 100ms" "$CACHE/watch.err" >/dev/null
 
 CACHE_STATS="$ROOT/.ss-cache/cache-stats-smoke"
 rm -rf "$CACHE_STATS"

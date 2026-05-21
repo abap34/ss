@@ -83,7 +83,9 @@ fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
 }
 
 fn version() void {
-    std.debug.print("ss {s} ({s})\n", .{ build_options.version, build_options.commit });
+    var buffer: [128]u8 = undefined;
+    const text = std.fmt.bufPrint(&buffer, "ss {s} ({s})\n", .{ build_options.version, build_options.commit }) catch return;
+    stdoutWriteAll(text) catch {};
 }
 
 fn printCacheStats(stats: app.CacheStats) void {
@@ -546,16 +548,16 @@ fn run(init: std.process.Init) !void {
             return failUsage("unknown watch mode: {s}", .{args[2]});
         };
         const options = try parseCommandOptions(args[3..]);
-        const input_path = options.input_path orelse "demo/01-language-tour.ss";
-        const asset_base_dir = options.asset_base_dir orelse std.fs.path.dirname(input_path) orelse ".";
+        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        defer resolved.deinit(allocator);
         const output_path = if (mode == .render)
-            options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, input_path, "pdf")
+            options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
         else
             options.output_path;
         try watcher.run(io, allocator, mode, .{
-            .input_path = input_path,
+            .input_path = resolved.entry_path,
             .output_path = output_path,
-            .asset_base_dir = asset_base_dir,
+            .asset_base_dir = resolved.asset_base_dir,
             .jobs = options.jobs,
             .interval_ms = options.interval_ms,
         });
@@ -578,6 +580,15 @@ fn run(init: std.process.Init) !void {
     }
 
     return failUsage("unknown command: {s}", .{cmd});
+}
+
+fn stdoutWriteAll(bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const n = std.c.write(1, bytes[offset..].ptr, bytes.len - offset);
+        if (n <= 0) return error.WriteFailed;
+        offset += @intCast(n);
+    }
 }
 
 pub fn main(init: std.process.Init) void {
