@@ -560,7 +560,7 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "lsp")) {
-        try lsp.run(io, allocator);
+        try lsp.run(io, std.heap.smp_allocator);
         return;
     }
 
@@ -586,6 +586,7 @@ fn run(init: std.process.Init) !void {
             .input_path = resolved.entry_path,
             .output_path = output_path,
             .asset_base_dir = resolved.asset_base_dir,
+            .project_file = resolved.project_file,
             .jobs = options.jobs,
             .interval_ms = options.interval_ms,
         });

@@ -637,6 +637,7 @@ fn isKeyword(token: []const u8) bool {
 }
 
 fn printAnsi(code: []const u8) void {
+    if (!useColor()) return;
     std.debug.print("\x1b[{s}m", .{code});
 }
 
@@ -646,8 +647,8 @@ fn printDim() void {
 
 fn printSeverityPrefix(severity: Severity) void {
     switch (severity) {
-        .@"error" => std.debug.print("\x1b[1;31mERROR:\x1b[0m ", .{}),
-        .warning => std.debug.print("\x1b[1;38;5;208mWARNING:\x1b[0m ", .{}),
+        .@"error" => if (useColor()) std.debug.print("\x1b[1;31mERROR:\x1b[0m ", .{}) else std.debug.print("ERROR: ", .{}),
+        .warning => if (useColor()) std.debug.print("\x1b[1;38;5;208mWARNING:\x1b[0m ", .{}) else std.debug.print("WARNING: ", .{}),
         .note => {},
     }
 }
@@ -737,6 +738,7 @@ fn isWideCodepoint(cp: u21) bool {
 }
 
 fn printColor(severity: Severity) void {
+    if (!useColor()) return;
     switch (severity) {
         .@"error" => std.debug.print("\x1b[31m", .{}),
         .warning => std.debug.print("\x1b[33m", .{}),
@@ -745,5 +747,15 @@ fn printColor(severity: Severity) void {
 }
 
 fn printReset() void {
+    if (!useColor()) return;
     std.debug.print("\x1b[0m", .{});
+}
+
+fn useColor() bool {
+    return std.c.getenv("NO_COLOR") == null and !envEquals("CLICOLOR", "0");
+}
+
+fn envEquals(name: [:0]const u8, expected: []const u8) bool {
+    const value = std.c.getenv(name) orelse return false;
+    return std.mem.eql(u8, std.mem.span(value), expected);
 }

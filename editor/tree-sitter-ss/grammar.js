@@ -29,7 +29,7 @@ module.exports = grammar({
       $.page_declaration,
     ),
 
-    import_declaration: $ => seq("import", field("spec", choice($.string, $.identifier)), $._terminator),
+    import_declaration: $ => seq("import", field("spec", choice($.string, $.import_spec, $.identifier)), $._terminator),
 
     const_declaration: $ => seq(
       "const",
@@ -55,7 +55,7 @@ module.exports = grammar({
 
     parameters: $ => seq("(", optional(commaSep($.parameter)), ")"),
     parameter: $ => seq(field("name", $.identifier), ":", field("type", $.type), optional(seq("=", $._expression))),
-    effect_clause: $ => seq("!", $.identifier),
+    effect_clause: $ => seq("!", $.identifier, repeat(seq("|", $.identifier))),
 
     type_declaration: $ => seq(
       "type",
@@ -99,8 +99,8 @@ module.exports = grammar({
       $.if_statement,
       $.for_statement,
       $.block_call_statement,
-      $.line_call_statement,
       $.expression_statement,
+      $.line_call_statement,
     ),
 
     let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
@@ -111,7 +111,7 @@ module.exports = grammar({
     if_statement: $ => seq(
       "if",
       field("condition", $._expression),
-      "then",
+      optional("then"),
       $._terminator,
       repeat($._statement),
       optional(seq("else", $._terminator, repeat($._statement))),
@@ -156,7 +156,14 @@ module.exports = grammar({
     ),
 
     unary_expression: $ => prec(PREC.unary, seq("-", $._expression)),
-    call_expression: $ => prec(PREC.call, seq(field("function", $.identifier), "(", optional(commaSep($._expression)), ")")),
+    call_expression: $ => prec(PREC.call, seq(
+      field("function", $.identifier),
+      "(",
+      repeat($._terminator),
+      optional(commaSepNewline($, $._expression)),
+      repeat($._terminator),
+      ")",
+    )),
     member_expression: $ => prec(PREC.call, seq(field("object", choice($.identifier, $.page)), ".", field("member", $.identifier))),
     if_expression: $ => seq("if", field("condition", $._expression), "then", field("then", $._expression), "else", field("else", $._expression), "end"),
 
@@ -182,12 +189,13 @@ module.exports = grammar({
     ),
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
+    import_spec: _ => /[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_./-]+/,
     type_identifier: _ => /[A-Z][A-Za-z0-9_]*/,
     page: _ => "page",
     string: _ => /"([^"\\]|\\.)*"/,
     color_string: _ => /c"([^"\\]|\\.)*"/,
     block_text: _ => token(seq("<<", /([^>]|>[^>])*/, ">>")),
-    line_text: _ => /[^\n]+/,
+    line_text: _ => token.immediate(/[ \t][^\n]+/),
     number: _ => /\d+(\.\d+)?/,
     boolean: _ => choice("true", "false"),
     comment: _ => token(choice(/;;[^\n]*/, /\/\/[^\n]*/, /#[^\n]*/)),
@@ -197,4 +205,12 @@ module.exports = grammar({
 
 function commaSep(rule) {
   return seq(rule, repeat(seq(",", rule)), optional(","));
+}
+
+function commaSepNewline($, rule) {
+  return seq(
+    rule,
+    repeat(seq(repeat($._terminator), ",", repeat($._terminator), rule)),
+    optional(seq(repeat($._terminator), ",")),
+  );
 }

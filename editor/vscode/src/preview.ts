@@ -239,7 +239,7 @@ async function copyDirectory(source: string, target: string): Promise<void> {
   const entries = await fs.promises.readdir(source, { withFileTypes: true }).catch(() => []);
   await fs.promises.mkdir(target, { recursive: true });
   for (const entry of entries) {
-    if (entry.name === ".ss-cache" || entry.name === ".git" || entry.name === "node_modules") {
+    if (skipSnapshotEntry(entry.name)) {
       continue;
     }
     const sourcePath = path.join(source, entry.name);
@@ -251,6 +251,17 @@ async function copyDirectory(source: string, target: string): Promise<void> {
       await fs.promises.copyFile(sourcePath, targetPath);
     }
   }
+}
+
+function skipSnapshotEntry(name: string): boolean {
+  return name === ".ss-cache" ||
+    name === ".git" ||
+    name === ".zig-cache" ||
+    name === "zig-out" ||
+    name === "node_modules" ||
+    name === "dist" ||
+    name === "build" ||
+    name === "coverage";
 }
 
 function run(command: string, args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {

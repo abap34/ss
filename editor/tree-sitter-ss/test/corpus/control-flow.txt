@@ -22,9 +22,9 @@ end
 
 (source_file
   (document_block
-    (line_call_statement
-      function: (identifier)
-      text: (line_text)))
+    (expression_statement
+      (call_expression
+        function: (identifier))))
   (page_declaration
     name: (string)
     (let_statement
@@ -48,6 +48,9 @@ end
           target: (identifier)
           key: (string)
           value: (identifier))
-        (line_call_statement
-          function: (identifier)
-          text: (line_text))))))
+        (expression_statement
+          (call_expression
+            function: (identifier)
+            (identifier)
+            (string)
+            (color_string)))))))

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -191,6 +191,31 @@ const projectInfo = await request("ss/projectInfo", {
 assert(projectInfo.entryPath === fixture, "projectInfo entryPath did not resolve from ss.toml");
 assert(projectInfo.assetBaseDir === path.dirname(fixture), "projectInfo assetBaseDir did not resolve from ss.toml");
 assert(projectInfo.localModules?.includes(partsFixture), "projectInfo did not report imported local modules");
+
+const otherDir = path.join(root, ".ss-cache", "lsp-other-project");
+const otherSlide = path.join(otherDir, "slide.ss");
+const otherUri = pathToFileURL(otherSlide).toString();
+await mkdir(otherDir, { recursive: true });
+await writeFile(path.join(otherDir, "ss.toml"), '[project]\nentry = "slide.ss"\nasset_base_dir = "."\n', "utf8");
+const otherSource = 'import std:themes/default\n\npage other\nend\n';
+await writeFile(otherSlide, otherSource, "utf8");
+const otherDiagnosticsPromise = waitForNotification(
+  (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === otherUri,
+);
+notify("textDocument/didOpen", {
+  textDocument: {
+    uri: otherUri,
+    languageId: "ss-slide",
+    version: 1,
+    text: otherSource,
+  },
+});
+const otherDiagnostics = await otherDiagnosticsPromise;
+assert(otherDiagnostics.params.diagnostics.length === 0, "second project opened with diagnostics");
+const firstProjectInfoAfterSecondOpen = await request("ss/projectInfo", {
+  textDocument: { uri },
+});
+assert(firstProjectInfoAfterSecondOpen.entryPath === fixture, "projectInfo used the latest global snapshot instead of the requested document");
 
 const rangedBrokenDiagnosticsPromise = waitForNotification(
   (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,

@@ -47,7 +47,7 @@ fn toc_page(title_text: string) -> object
   return toc
 end
 
-fn title_page(title_text: string, subtitle_text: string, author_name: string, date: string) -> object
+fn title_page(title_text: string, subtitle_text: string, author_name: string, date: string = "") -> object
   let title = place_top_left(title_object(title_text), 72, 240)
   let subtitle = subtitle_object(subtitle_text)
   let author = byline_object(author_name)

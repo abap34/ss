@@ -525,7 +525,7 @@
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
         {
@@ -1092,6 +1092,10 @@
         "types": [
           {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "import_spec",
             "named": true
           },
           {
@@ -1969,6 +1973,10 @@
     "named": false
   },
   {
+    "type": "import_spec",
+    "named": true
+  },
+  {
     "type": "in",
     "named": false
   },
@@ -2018,11 +2026,11 @@
   },
   {
     "type": "string",
-    "named": false
+    "named": true
   },
   {
     "type": "string",
-    "named": true
+    "named": false
   },
   {
     "type": "style",
@@ -2046,6 +2054,10 @@
   },
   {
     "type": "{",
+    "named": false
+  },
+  {
+    "type": "|",
     "named": false
   },
   {

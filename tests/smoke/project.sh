@@ -38,6 +38,21 @@ if "$SS_BIN" cache nope >/dev/null 2>"$CACHE/unknown-cache.err"; then
   echo "unknown cache subcommand unexpectedly passed" >&2
   exit 1
 fi
+cat > "$CACHE/no-color.ss" <<'SS'
+import std:themes/default
+
+page bad
+  let x =
+end
+SS
+if NO_COLOR=1 "$SS_BIN" check "$CACHE/no-color.ss" >/dev/null 2>"$CACHE/no-color.err"; then
+  echo "invalid no-color fixture unexpectedly passed" >&2
+  exit 1
+fi
+if LC_ALL=C grep "$(printf '\033')" "$CACHE/no-color.err" >/dev/null; then
+  echo "NO_COLOR diagnostics still contained ANSI escapes" >&2
+  exit 1
+fi
 
 doctor="$("$SS_BIN" doctor --project "$FIXTURE" 2>&1)"
 printf '%s\n' "$doctor" | grep -F "ss doctor" >/dev/null
@@ -77,6 +92,18 @@ entry = "slide#1.ss"
 asset_base_dir = "." # normal comments still work
 SS
 "$SS_BIN" check --project "$HASH_FIXTURE"
+
+for theme in default pop academic; do
+  THEME_FIXTURE="$ROOT/.ss-cache/theme-$theme-smoke.ss"
+  cat > "$THEME_FIXTURE" <<SS
+import std:themes/$theme
+
+page title
+  title_page("Title", "Subtitle", "Author")
+end
+SS
+  "$SS_BIN" check "$THEME_FIXTURE" >/dev/null
+done
 
 "$SS_BIN" dump "$FIXTURE/slide.ss" "$CACHE/explicit.json"
 "$SS_BIN" dump --project "$FIXTURE" --output "$CACHE/project-dir.json"
