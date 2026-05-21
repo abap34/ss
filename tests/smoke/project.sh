@@ -160,6 +160,40 @@ kill "$watch_pid" 2>/dev/null || true
 wait "$watch_pid" 2>/dev/null || true
 grep -F "watch: check $FIXTURE/slide.ss every 100ms" "$CACHE/watch.err" >/dev/null
 
+WATCH_DEPS="$ROOT/.ss-cache/watch-deps-smoke"
+rm -rf "$WATCH_DEPS"
+mkdir -p "$WATCH_DEPS/project" "$WATCH_DEPS/shared"
+cat > "$WATCH_DEPS/project/ss.toml" <<'SS'
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+SS
+cat > "$WATCH_DEPS/project/slide.ss" <<'SS'
+import std:themes/default
+import "../shared/parts.ss"
+
+page watched
+  external_label()
+end
+SS
+cat > "$WATCH_DEPS/shared/parts.ss" <<'SS'
+fn external_label() -> object
+  return text("before")
+end
+SS
+"$SS_BIN" watch check --project "$WATCH_DEPS/project" --interval-ms 100 >"$CACHE/watch-deps.out" 2>"$CACHE/watch-deps.err" &
+watch_pid=$!
+sleep 0.3
+cat > "$WATCH_DEPS/shared/parts.ss" <<'SS'
+fn external_label() -> object
+  return text("after")
+end
+SS
+sleep 0.5
+kill "$watch_pid" 2>/dev/null || true
+wait "$watch_pid" 2>/dev/null || true
+grep -F "watch: change detected" "$CACHE/watch-deps.err" >/dev/null
+
 CACHE_STATS="$ROOT/.ss-cache/cache-stats-smoke"
 rm -rf "$CACHE_STATS"
 mkdir -p "$CACHE_STATS/.ss-cache/render/math" "$CACHE_STATS/.ss-cache/render/assets"

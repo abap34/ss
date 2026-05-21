@@ -128,28 +128,28 @@ fn collectDefinitionsFromProgram(
     module_id: core.SourceModuleId,
     file: ?[]const u8,
     include_variables: bool,
-    definitions: *std.StringHashMap(core.Definition),
+    definitions: *std.ArrayList(core.Definition),
 ) !void {
     for (program.functions.items) |func| {
         const keyword = if (isConst(func)) "const" else "fn";
         const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
         if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.length, kind, module_id, file);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, kind, module_id, file, .module, null);
         }
         if (include_variables) {
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .function, func.name);
             }
         }
     }
     if (include_variables) {
         for (program.document_statements.items) |stmt| {
-            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .document, null);
         }
         for (program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .page, page.name);
             }
         }
     }
@@ -160,13 +160,15 @@ fn collectDefinitionsFromStatement(
     source: []const u8,
     module_id: core.SourceModuleId,
     stmt: ast.Statement,
-    definitions: *std.StringHashMap(core.Definition),
+    definitions: *std.ArrayList(core.Definition),
+    scope_kind: core.DefinitionScopeKind,
+    scope_name: ?[]const u8,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions),
+        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name),
         .if_stmt => |if_stmt| {
-            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions);
-            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions);
+            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name);
+            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name);
         },
         else => {},
     }
@@ -179,40 +181,43 @@ fn putStatementDefinition(
     stmt: ast.Statement,
     keyword: []const u8,
     name: []const u8,
-    definitions: *std.StringHashMap(core.Definition),
+    definitions: *std.ArrayList(core.Definition),
+    scope_kind: core.DefinitionScopeKind,
+    scope_name: ?[]const u8,
 ) !void {
     if (findIdentifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
         const loc = utils.err.computeLineColumn(source, location.offset);
-        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.length, .variable, module_id, null);
+        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.offset, location.length, .variable, module_id, null, scope_kind, scope_name);
     }
 }
 
 fn putDefinition(
     allocator: std.mem.Allocator,
-    definitions: *std.StringHashMap(core.Definition),
+    definitions: *std.ArrayList(core.Definition),
     name: []const u8,
     line: usize,
     column: usize,
+    span_start: usize,
     length: usize,
     kind: core.DefinitionKind,
     module_id: core.SourceModuleId,
     file: ?[]const u8,
+    scope_kind: core.DefinitionScopeKind,
+    scope_name: ?[]const u8,
 ) !void {
-    if (definitions.fetchRemove(name)) |entry| {
-        allocator.free(entry.key);
-        if (entry.value.file) |old_file| allocator.free(old_file);
-    }
-    try definitions.put(
-        try allocator.dupe(u8, name),
-        .{
-            .line = line,
-            .column = column,
-            .length = length,
-            .kind = kind,
-            .module_id = module_id,
-            .file = if (file) |path| try allocator.dupe(u8, path) else null,
-        },
-    );
+    try definitions.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .line = line,
+        .column = column,
+        .length = length,
+        .span_start = span_start,
+        .span_end = span_start + length,
+        .kind = kind,
+        .module_id = module_id,
+        .file = if (file) |path| try allocator.dupe(u8, path) else null,
+        .scope_kind = scope_kind,
+        .scope_name = if (scope_name) |scope| try allocator.dupe(u8, scope) else null,
+    });
 }
 
 fn collectProgramHints(

@@ -23,6 +23,32 @@ const ExecFlow = union(enum) {
     returned: core.Value,
 };
 
+fn deinitValueEnv(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value)) void {
+    var iterator = env.valueIterator();
+    while (iterator.next()) |value| value.deinit(allocator);
+    env.deinit();
+}
+
+fn cloneValueEnv(allocator: std.mem.Allocator, source: *const std.StringHashMap(core.Value)) !std.StringHashMap(core.Value) {
+    var out = std.StringHashMap(core.Value).init(allocator);
+    errdefer deinitValueEnv(allocator, &out);
+    var iterator = source.iterator();
+    while (iterator.next()) |entry| {
+        try out.put(entry.key_ptr.*, try entry.value_ptr.clone(allocator));
+    }
+    return out;
+}
+
+fn putEnvValue(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value), name: []const u8, value: core.Value) !void {
+    var owned = value;
+    errdefer owned.deinit(allocator);
+    const gop = try env.getOrPut(name);
+    if (gop.found_existing) {
+        gop.value_ptr.deinit(allocator);
+    }
+    gop.value_ptr.* = owned;
+}
+
 pub fn runPreLayoutPasses(ir: *core.Ir) !void {
     try runPassSlots(ir, &.{ .augment, .resolve });
 }
@@ -72,9 +98,10 @@ pub fn runPassSlots(ir: *core.Ir, slots: []const PassSlot) !void {
 
 fn executePass(ir: *core.Ir, pass: PassDescriptor, func: FunctionDecl) !void {
     var env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer env.deinit();
+    defer deinitValueEnv(ir.allocator, &env);
     const args = [_]core.Value{.{ .code = .{ .root = .{ .document = ir.document_id } } }};
     const origin = try functionOrigin(ir, pass, func);
+    defer ir.allocator.free(origin);
     var result = try invokeUserFunctionValues(ir, &env, &ir.functions, func, origin, &args);
     defer result.deinit(ir.allocator);
     try ensureReturnedDocumentCode(ir, result, origin);
@@ -109,6 +136,7 @@ fn ensureReturnedDocumentCode(ir: *core.Ir, result: core.Value, origin: []const 
 fn rejectRemovedAnnotations(ir: *core.Ir, sema: *const SemanticEnv) !void {
     for (sema.removedAnnotations()) |annotation| {
         const origin = try annotationOrigin(ir, annotation.module_id, annotation.function_name);
+        defer ir.allocator.free(origin);
         try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .message = try ir.allocator.dupe(u8, "@phase is removed; use @pass(augment), @pass(resolve), @pass(inspect_layout), or @pass(prepare_render)") },
         });
@@ -387,6 +415,7 @@ fn resolvePassDependency(ir: *core.Ir, passes: []const PassDescriptor, name: []c
 
 fn addPassDiagnostic(ir: *core.Ir, pass: PassDescriptor, comptime fmt: []const u8, args: anytype) !void {
     const origin = try functionOrigin(ir, pass, pass.function);
+    defer ir.allocator.free(origin);
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, fmt, args) },
     });
@@ -550,6 +579,10 @@ const BuiltinContext = struct {
         };
     }
 
+    pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
+        return try self.ir.ownString(text);
+    }
+
     pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
         return try materializeCodeRoot(self.ir.allocator, value);
     }
@@ -705,7 +738,7 @@ fn executeStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const value = try evalExpr(ir, env, functions, origin, binding.expr);
-            try env.put(binding.name, value);
+            try putEnvValue(ir.allocator, env, binding.name, value);
         },
         .return_expr => |expr| {
             return .{ .returned = try evalExpr(ir, env, functions, origin, expr) };
@@ -722,12 +755,8 @@ fn executeStatement(
             const value = try evalExpr(ir, env, functions, origin, if_stmt.condition);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
-            var branch_env = std.StringHashMap(core.Value).init(ir.allocator);
-            defer branch_env.deinit();
-            var it = env.iterator();
-            while (it.next()) |entry| {
-                try branch_env.put(entry.key_ptr.*, entry.value_ptr.*);
-            }
+            var branch_env = try cloneValueEnv(ir.allocator, env);
+            defer deinitValueEnv(ir.allocator, &branch_env);
             for (branch) |nested| {
                 const flow = try executeStatement(ir, &branch_env, functions, nested, null);
                 switch (flow) {
@@ -803,8 +832,12 @@ fn bindUserFunctionCallArgs(
             try evalExpr(ir, caller_env, functions, current_origin, call.args.items[index])
         else
             try evalExpr(ir, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try contracts.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType);
-        try local_env.put(param.name, value);
+        contracts.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+            var owned = value;
+            owned.deinit(ir.allocator);
+            return err;
+        };
+        try putEnvValue(ir.allocator, local_env, param.name, value);
     }
 }
 
@@ -819,11 +852,15 @@ fn bindUserFunctionValueArgs(
     try eval_functions.requireArity(args.len, func);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
-            args[index]
+            try args[index].clone(ir.allocator)
         else
             try evalExpr(ir, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try contracts.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType);
-        try local_env.put(param.name, value);
+        contracts.ensureValueSortWithCode(ir, null, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+            var owned = value;
+            owned.deinit(ir.allocator);
+            return err;
+        };
+        try putEnvValue(ir.allocator, local_env, param.name, value);
     }
 }
 
@@ -835,10 +872,8 @@ fn invokeUserFunctionValue(
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer local_env.deinit();
-    var it = env.iterator();
-    while (it.next()) |entry| try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
+    var local_env = try cloneValueEnv(ir.allocator, env);
+    defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionCallArgs(ir, env, &local_env, functions, func, current_origin, call);
     return try executeUserFunctionBody(ir, &local_env, functions, func, current_origin);
 }
@@ -851,10 +886,8 @@ fn invokeUserFunctionValues(
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
-    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer local_env.deinit();
-    var it = env.iterator();
-    while (it.next()) |entry| try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
+    var local_env = try cloneValueEnv(ir.allocator, env);
+    defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionValueArgs(ir, &local_env, functions, func, current_origin, args);
     return try executeUserFunctionBody(ir, &local_env, functions, func, current_origin);
 }

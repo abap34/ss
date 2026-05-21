@@ -65,23 +65,24 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         },
         .str => blk: {
             const value = try ctx.evalNumberArg(call, 0);
-            break :blk .{ .string = try std.fmt.allocPrint(ctx.ir.allocator, "{d}", .{value}) };
+            break :blk .{ .string = try ctx.ownString(try std.fmt.allocPrint(ctx.ir.allocator, "{d}", .{value})) };
         },
         .concat => blk: {
             const left = try ctx.evalStringArg(call, 0);
             const right = try ctx.evalStringArg(call, 1);
-            break :blk .{ .string = try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right }) };
+            break :blk .{ .string = try ctx.ownString(try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right })) };
         },
         .replace => blk: {
             const text = try ctx.evalStringArg(call, 0);
             const old = try ctx.evalStringArg(call, 1);
             const new = try ctx.evalStringArg(call, 2);
-            break :blk .{ .string = try replaceAll(ctx.ir.allocator, text, old, new) };
+            break :blk .{ .string = try ctx.ownString(try replaceAll(ctx.ir.allocator, text, old, new)) };
         },
         .foreach => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             errdefer target.deinit(ctx.ir.allocator);
-            const callback = try evalFunctionArg(ctx, call, 1);
+            var callback = try evalFunctionArg(ctx, call, 1);
+            defer callback.deinit(ctx.ir.allocator);
             var extras = try evalExtraArgs(ctx, call, 2);
             defer extras.deinit(ctx.ir.allocator);
             defer deinitValues(ctx.ir.allocator, extras.items);
@@ -105,7 +106,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             defer target.deinit(ctx.ir.allocator);
             var accumulator = try ctx.evalStringArg(call, 1);
-            const callback = try evalFunctionArg(ctx, call, 2);
+            var callback = try evalFunctionArg(ctx, call, 2);
+            defer callback.deinit(ctx.ir.allocator);
             var extras = try evalExtraArgs(ctx, call, 3);
             defer extras.deinit(ctx.ir.allocator);
             defer deinitValues(ctx.ir.allocator, extras.items);
@@ -134,7 +136,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             defer target.deinit(ctx.ir.allocator);
             const separator = try ctx.evalStringArg(call, 1);
-            const callback = try evalFunctionArg(ctx, call, 2);
+            var callback = try evalFunctionArg(ctx, call, 2);
+            defer callback.deinit(ctx.ir.allocator);
             var extras = try evalExtraArgs(ctx, call, 3);
             defer extras.deinit(ctx.ir.allocator);
             defer deinitValues(ctx.ir.allocator, extras.items);
@@ -160,7 +163,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 if (index > 0) try out.appendSlice(ctx.ir.allocator, separator);
                 try out.appendSlice(ctx.ir.allocator, text);
             }
-            break :blk .{ .string = try out.toOwnedSlice(ctx.ir.allocator) };
+            break :blk .{ .string = try ctx.ownString(try out.toOwnedSlice(ctx.ir.allocator)) };
         },
         .first => blk: {
             const selection = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
@@ -468,7 +471,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
     };
 }
 
-fn replaceAll(allocator: std.mem.Allocator, text: []const u8, old: []const u8, new: []const u8) ![]const u8 {
+fn replaceAll(allocator: std.mem.Allocator, text: []const u8, old: []const u8, new: []const u8) ![]u8 {
     if (old.len == 0) return allocator.dupe(u8, text);
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -501,7 +504,7 @@ fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.Functio
     var value = try ctx.evalExprValue(call.args.items[index]);
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
-        .function => |function| function,
+        .function => |function| try function.clone(ctx.ir.allocator),
         else => error.InvalidSemanticSort,
     };
 }

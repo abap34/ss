@@ -130,8 +130,7 @@ fn checkRolesUnique(
 
 fn addUserReport(ir: *core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const message = try std.fmt.allocPrint(ir.allocator, fmt, args);
-    const diagnostic_origin = try ir.allocator.dupe(u8, origin);
-    try ir.addValidationDiagnostic(.@"error", null, null, diagnostic_origin, .{
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
 }

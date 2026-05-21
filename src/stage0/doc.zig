@@ -57,6 +57,7 @@ pub const Document = struct {
     diagnostics: std.ArrayList(core.Diagnostic),
     fragments: std.ArrayList(*core.Fragment),
     terms: std.ArrayList(Term),
+    runtime_strings: std.ArrayList([]u8),
 
     pub fn init(allocator: Allocator, asset_base_dir: []const u8) !Document {
         const document_id: HandleId = 1;
@@ -72,6 +73,7 @@ pub const Document = struct {
             .diagnostics = .empty,
             .fragments = .empty,
             .terms = .empty,
+            .runtime_strings = .empty,
         };
         errdefer doc.deinit();
         try doc.nodes.append(allocator, .{
@@ -86,6 +88,8 @@ pub const Document = struct {
     pub fn deinit(self: *Document) void {
         for (self.terms.items) |*term| deinitTerm(term, self.allocator);
         self.terms.deinit(self.allocator);
+        for (self.runtime_strings.items) |text| self.allocator.free(text);
+        self.runtime_strings.deinit(self.allocator);
         for (self.fragments.items) |fragment| {
             fragment.deinit(self.allocator);
             self.allocator.destroy(fragment);
@@ -100,6 +104,12 @@ pub const Document = struct {
         self.page_order.deinit(self.allocator);
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
+    }
+
+    pub fn ownString(self: *Document, text: []u8) ![]const u8 {
+        errdefer self.allocator.free(text);
+        try self.runtime_strings.append(self.allocator, text);
+        return text;
     }
 
     fn deinitTerm(term: *Term, allocator: Allocator) void {
@@ -338,14 +348,16 @@ pub const Document = struct {
         origin: ?[]const u8,
         data: core.Diagnostic.Data,
     ) !void {
-        try self.diagnostics.append(self.allocator, .{
+        var diagnostic = core.Diagnostic{
             .phase = .validation,
             .severity = severity,
             .page_id = page_id,
             .node_id = node_id,
-            .origin = origin,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
             .data = data,
-        });
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.diagnostics.append(self.allocator, diagnostic);
     }
 
     pub fn getNode(self: *Document, id: HandleId) ?*core.Node {

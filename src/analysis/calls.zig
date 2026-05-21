@@ -60,7 +60,9 @@ fn visitFunction(
 }
 
 fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Ir, func: ast.FunctionDecl) !void {
-    try ir.addValidationDiagnostic(.@"error", null, null, try functionOrigin(allocator, ir, func), .{
+    const origin = try functionOrigin(allocator, ir, func);
+    defer allocator.free(origin);
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .recursive_function = .{ .function_name = func.name },
     });
 }

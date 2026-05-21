@@ -24,23 +24,26 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir:
 
 pub fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
     var definitions = try root.arrayField("definitions");
-    var definition_iterator = ir.definitions.iterator();
-    while (definition_iterator.next()) |entry| {
+    for (ir.definitions.items) |definition| {
         var item = try definitions.objectItem();
-        try item.stringField("name", entry.key_ptr.*);
-        try item.enumTagField("kind", entry.value_ptr.kind);
-        try item.intField("line", entry.value_ptr.line);
-        try item.intField("column", entry.value_ptr.column);
-        try item.intField("length", entry.value_ptr.length);
-        try item.intField("moduleId", entry.value_ptr.module_id);
-        if (ir.moduleById(entry.value_ptr.module_id)) |module| {
+        try item.stringField("name", definition.name);
+        try item.enumTagField("kind", definition.kind);
+        try item.intField("line", definition.line);
+        try item.intField("column", definition.column);
+        try item.intField("length", definition.length);
+        try item.intField("spanStart", definition.span_start);
+        try item.intField("spanEnd", definition.span_end);
+        try item.intField("moduleId", definition.module_id);
+        if (ir.moduleById(definition.module_id)) |module| {
             try item.stringField("moduleSpec", module.spec);
             try item.enumTagField("moduleKind", module.kind);
         } else {
             try item.nullField("moduleSpec");
             try item.stringField("moduleKind", "unknown");
         }
-        try item.optionalStringField("file", entry.value_ptr.file);
+        try item.optionalStringField("file", definition.file);
+        try item.enumTagField("scopeKind", definition.scope_kind);
+        try item.optionalStringField("scopeName", definition.scope_name);
         try item.end();
     }
     try definitions.end();

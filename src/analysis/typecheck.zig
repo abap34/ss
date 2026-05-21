@@ -126,6 +126,7 @@ fn checkDuplicateFunctionDeclarations(
         for (module.program.functions.items) |func| {
             if (names.contains(func.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, func.span);
+                defer allocator.free(origin);
                 try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
                     .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateFunction: function '{s}' is already defined in this module", .{func.name}) },
                 });
@@ -154,6 +155,7 @@ fn checkOrdinaryFunctionEffectContracts(
         if (func.effects == null) continue;
         if (hasAnnotation(func, "pass") or hasAnnotation(func, "host") or hasAnnotation(func, "op")) continue;
         const origin = try functionOriginForDecl(allocator, ir, func);
+        defer allocator.free(origin);
         const declared = declarations.parseEffectSet(func.effects.?) catch {
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
                 .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: function declares an unknown effect") },
@@ -287,6 +289,7 @@ fn checkAnnotationContracts(
 ) !void {
     for (index.removed_annotations.items) |annotation| {
         const origin = try functionOrigin(allocator, ir, annotation.module_id, annotation.function_name);
+        defer allocator.free(origin);
         try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .message = try ir.allocator.dupe(u8, "@phase is removed; use @pass(augment), @pass(resolve), @pass(inspect_layout), or @pass(prepare_render)") },
         });
@@ -295,6 +298,7 @@ fn checkAnnotationContracts(
     for (index.host_capabilities.items) |capability| {
         if (capability.effects != null) continue;
         const origin = try functionOrigin(allocator, ir, capability.module_id, capability.function_name);
+        defer allocator.free(origin);
         if (capability.effects_text != null) {
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
                 .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: @host declares an unknown effect") },
@@ -309,6 +313,7 @@ fn checkAnnotationContracts(
     for (index.render_ops.items) |op| {
         if (op.effects != null) continue;
         const origin = try functionOrigin(allocator, ir, op.module_id, op.function_name);
+        defer allocator.free(origin);
         if (op.effects_text != null) {
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
                 .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: @op declares an unknown effect") },

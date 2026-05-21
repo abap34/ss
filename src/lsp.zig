@@ -619,6 +619,10 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return "null";
         defer parsed.deinit();
         const root = parsed.value.object;
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(server.allocator);
+        try out.append(server.allocator, '[');
+        var first = true;
         if (arrayFieldObject(&root, "definitions")) |defs| for (defs.items) |item| if (item == .object) {
             if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
             const path = definitionPath(server.allocator, &root, &item.object) catch null;
@@ -628,8 +632,13 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
             const line: usize = @intCast(@max(0, (intField(&item.object, "line") orelse 1) - 1));
             const column: usize = @intCast(@max(0, (intField(&item.object, "column") orelse 1) - 1));
             const length: usize = @intCast(@max(1, intField(&item.object, "length") orelse @as(i64, @intCast(target.len))));
-            return try locationJson(server.allocator, uri, line, column, line, column + length);
+            if (!first) try out.append(server.allocator, ',');
+            first = false;
+            try appendLocationObject(server.allocator, &out, uri, line, column, line, column + length);
         };
+        if (first) return "null";
+        try out.append(server.allocator, ']');
+        return out.toOwnedSlice(server.allocator);
     };
     return "null";
 }
@@ -1319,18 +1328,22 @@ fn appendRange(allocator: std.mem.Allocator, out: *std.ArrayList(u8), range: Lsp
 
 fn locationJson(allocator: std.mem.Allocator, uri: []const u8, sl: usize, sc: usize, el: usize, ec: usize) ![]u8 {
     var out = std.ArrayList(u8).empty;
-    try out.appendSlice(allocator, "{\"uri\":");
-    try appendJsonString(allocator, &out, uri);
-    try out.appendSlice(allocator, ",\"range\":{\"start\":{\"line\":");
-    try appendInt(allocator, &out, sl);
-    try out.appendSlice(allocator, ",\"character\":");
-    try appendInt(allocator, &out, sc);
-    try out.appendSlice(allocator, "},\"end\":{\"line\":");
-    try appendInt(allocator, &out, el);
-    try out.appendSlice(allocator, ",\"character\":");
-    try appendInt(allocator, &out, ec);
-    try out.appendSlice(allocator, "}}}");
+    try appendLocationObject(allocator, &out, uri, sl, sc, el, ec);
     return out.toOwnedSlice(allocator);
+}
+
+fn appendLocationObject(allocator: std.mem.Allocator, out: *std.ArrayList(u8), uri: []const u8, sl: usize, sc: usize, el: usize, ec: usize) !void {
+    try out.appendSlice(allocator, "{\"uri\":");
+    try appendJsonString(allocator, out, uri);
+    try out.appendSlice(allocator, ",\"range\":{\"start\":{\"line\":");
+    try appendInt(allocator, out, sl);
+    try out.appendSlice(allocator, ",\"character\":");
+    try appendInt(allocator, out, sc);
+    try out.appendSlice(allocator, "},\"end\":{\"line\":");
+    try appendInt(allocator, out, el);
+    try out.appendSlice(allocator, ",\"character\":");
+    try appendInt(allocator, out, ec);
+    try out.appendSlice(allocator, "}}}");
 }
 
 fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {

@@ -66,13 +66,25 @@ pub const DefinitionKind = enum {
     variable,
 };
 
+pub const DefinitionScopeKind = enum {
+    module,
+    function,
+    document,
+    page,
+};
+
 pub const Definition = struct {
+    name: []const u8,
     line: usize,
     column: usize,
     length: usize,
+    span_start: usize,
+    span_end: usize,
     kind: DefinitionKind,
     module_id: SourceModuleId,
     file: ?[]const u8 = null,
+    scope_kind: DefinitionScopeKind = .module,
+    scope_name: ?[]const u8 = null,
 };
 
 pub const InlayHintKind = enum {
@@ -98,7 +110,7 @@ pub const Ir = struct {
     functions: std.StringHashMap(ast.FunctionDecl),
     function_metadata: std.StringHashMap(FunctionMetadata),
     variable_types: std.StringHashMap(SemanticSort),
-    definitions: std.StringHashMap(Definition),
+    definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
     page_order: std.ArrayList(NodeId),
@@ -108,6 +120,7 @@ pub const Ir = struct {
     last_constraint_failure: ?ConstraintFailure,
     constraint_failures: std.ArrayList(ConstraintFailure),
     fragments: std.ArrayList(*Fragment),
+    runtime_strings: std.ArrayList([]u8),
     next_id: NodeId,
     document_id: NodeId,
 
@@ -127,7 +140,7 @@ pub const Ir = struct {
             .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
             .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
             .variable_types = std.StringHashMap(SemanticSort).init(allocator),
-            .definitions = std.StringHashMap(Definition).init(allocator),
+            .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
             .page_order = .empty,
@@ -137,6 +150,7 @@ pub const Ir = struct {
             .last_constraint_failure = null,
             .constraint_failures = .empty,
             .fragments = .empty,
+            .runtime_strings = .empty,
             .next_id = 1,
             .document_id = 0,
         };
@@ -170,12 +184,12 @@ pub const Ir = struct {
         self.functions.deinit();
         self.function_metadata.deinit();
         self.variable_types.deinit();
-        var definition_iterator = self.definitions.iterator();
-        while (definition_iterator.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            if (entry.value_ptr.file) |file| self.allocator.free(file);
+        for (self.definitions.items) |definition| {
+            self.allocator.free(definition.name);
+            if (definition.file) |file| self.allocator.free(file);
+            if (definition.scope_name) |scope_name| self.allocator.free(scope_name);
         }
-        self.definitions.deinit();
+        self.definitions.deinit(self.allocator);
         for (self.hints.items) |hint| self.allocator.free(hint.label);
         self.hints.deinit(self.allocator);
         self.allocator.free(self.asset_base_dir);
@@ -198,6 +212,14 @@ pub const Ir = struct {
             self.allocator.destroy(fragment);
         }
         self.fragments.deinit(self.allocator);
+        for (self.runtime_strings.items) |text| self.allocator.free(text);
+        self.runtime_strings.deinit(self.allocator);
+    }
+
+    pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
+        errdefer self.allocator.free(text);
+        try self.runtime_strings.append(self.allocator, text);
+        return text;
     }
 
     pub fn projectPath(self: *const Ir) []const u8 {
@@ -581,14 +603,16 @@ pub const Ir = struct {
         origin: ?[]const u8,
         data: Diagnostic.Data,
     ) !void {
-        try self.addDiagnostic(.{
+        var diagnostic = Diagnostic{
             .phase = .validation,
             .severity = severity,
             .page_id = page_id,
             .node_id = node_id,
-            .origin = origin,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
             .data = data,
-        });
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.addDiagnostic(diagnostic);
     }
 
     pub fn getNode(self: *Ir, id: NodeId) ?*Node {

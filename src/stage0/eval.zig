@@ -38,6 +38,32 @@ const EvalContext = enum {
     page,
 };
 
+fn deinitValueEnv(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value)) void {
+    var iterator = env.valueIterator();
+    while (iterator.next()) |value| value.deinit(allocator);
+    env.deinit();
+}
+
+fn cloneValueEnv(allocator: std.mem.Allocator, source: *const std.StringHashMap(core.Value)) !std.StringHashMap(core.Value) {
+    var out = std.StringHashMap(core.Value).init(allocator);
+    errdefer deinitValueEnv(allocator, &out);
+    var iterator = source.iterator();
+    while (iterator.next()) |entry| {
+        try out.put(entry.key_ptr.*, try entry.value_ptr.clone(allocator));
+    }
+    return out;
+}
+
+fn putEnvValue(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value), name: []const u8, value: core.Value) !void {
+    var owned = value;
+    errdefer owned.deinit(allocator);
+    const gop = try env.getOrPut(name);
+    if (gop.found_existing) {
+        gop.value_ptr.deinit(allocator);
+    }
+    gop.value_ptr.* = owned;
+}
+
 const DetachedBuilder = struct {
     page_id: core.NodeId,
     node_ids: std.ArrayList(core.NodeId),
@@ -315,7 +341,7 @@ fn executeDocumentStatements(
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
     var document_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer document_env.deinit();
+    defer deinitValueEnv(ir.allocator, &document_env);
     var document_last_code_like: ?core.NodeId = null;
     for (program.document_statements.items) |stmt| {
         const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, &document_last_code_like, stmt, null) catch |err| {
@@ -342,7 +368,7 @@ fn executePage(
     const page_id = try ir.addPage(page.name);
     var last_code_like: ?core.NodeId = null;
     var env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer env.deinit();
+    defer deinitValueEnv(ir.allocator, &env);
 
     for (page.statements.items) |stmt| {
         const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, &last_code_like, stmt, null) catch |err| {
@@ -495,6 +521,10 @@ const BuiltinContext = struct {
 
     pub fn evalStyleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.StyleRef {
         return try evalCallStyleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.current_origin, call, index);
+    }
+
+    pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
+        return try self.ir.ownString(text);
     }
 
     pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
@@ -869,8 +899,12 @@ fn bindUserFunctionArgs(
             try evalExpr(ir, page_id, context, mode, caller_env, functions, current_origin, call.args.items[index])
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
-        try local_env.put(param.name, value);
+        contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+            var owned = value;
+            owned.deinit(ir.allocator);
+            return err;
+        };
+        try putEnvValue(ir.allocator, local_env, param.name, value);
     }
 }
 
@@ -889,11 +923,15 @@ fn bindUserFunctionValueArgs(
     try eval_functions.requireArity(args.len, func);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
-            args[index]
+            try args[index].clone(ir.allocator)
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        try contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType);
-        try local_env.put(param.name, value);
+        contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+            var owned = value;
+            owned.deinit(ir.allocator);
+            return err;
+        };
+        try putEnvValue(ir.allocator, local_env, param.name, value);
     }
     _ = caller_env;
 }
@@ -906,7 +944,7 @@ fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragm
         .object => |id| .{ .object = id },
         .selection => |selection| .{ .selection = try selection.clone(allocator) },
         .anchor => |anchor| .{ .anchor = anchor },
-        .function => |function| .{ .function = function },
+        .function => |function| .{ .function = try function.clone(allocator) },
         .style => |style| .{ .style = style },
         .string => |text| .{ .string = text },
         .number => |number| .{ .number = number },
@@ -1145,7 +1183,7 @@ fn executeStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
-            try env.put(binding.name, value);
+            try putEnvValue(ir.allocator, env, binding.name, value);
         },
         .return_expr => |expr| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
@@ -1167,12 +1205,8 @@ fn executeStatement(
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, if_stmt.condition);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
-            var branch_env = std.StringHashMap(core.Value).init(ir.allocator);
-            defer branch_env.deinit();
-            var it = env.iterator();
-            while (it.next()) |entry| {
-                try branch_env.put(entry.key_ptr.*, entry.value_ptr.*);
-            }
+            var branch_env = try cloneValueEnv(ir.allocator, env);
+            defer deinitValueEnv(ir.allocator, &branch_env);
             for (branch) |nested| {
                 const flow = try executeStatement(ir, page_id, context, mode, &branch_env, functions, last_code_like, nested, null);
                 switch (flow) {
@@ -1267,20 +1301,20 @@ fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: 
     }
 }
 
-fn fragmentRootFromValue(value: core.Value) !core.FragmentRoot {
+fn fragmentRootFromValue(allocator: std.mem.Allocator, value: core.Value) !core.FragmentRoot {
     return switch (value) {
         .code => |code| try fragmentRootFromCodeRoot(code.root),
         .document => |id| .{ .document = id },
         .page => |id| .{ .page = id },
         .object => |id| .{ .object = id },
-        .selection => |selection| .{ .selection = selection },
+        .selection => |selection| .{ .selection = try selection.clone(allocator) },
         .anchor => |anchor| .{ .anchor = anchor },
-        .function => |function| .{ .function = function },
+        .function => |function| .{ .function = try function.clone(allocator) },
         .style => |style| .{ .style = style },
         .string => |text| .{ .string = text },
         .number => |number| .{ .number = number },
         .boolean => |boolean| .{ .boolean = boolean },
-        .constraints => |constraints| .{ .constraints = constraints },
+        .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
         .fragment => error.UnsupportedFragmentRoot,
     };
 }
@@ -1311,12 +1345,8 @@ fn executeCallStatement(
     };
     try validateUserFunctionArity(call.args.items.len, func, current_origin);
 
-    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer local_env.deinit();
-    var it = env.iterator();
-    while (it.next()) |entry| {
-        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
+    var local_env = try cloneValueEnv(ir.allocator, env);
+    defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, call);
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, last_code_like, inner, current_origin);
@@ -1346,16 +1376,13 @@ fn invokeUserFunctionValue(
     current_origin: []const u8,
     call: CallExpr,
 ) anyerror!core.Value {
-    const func_ref = try eval_functions.functionRefFor(ir.allocator, func);
+    var func_ref = try eval_functions.functionRefFor(ir.allocator, func);
+    defer func_ref.deinit(ir.allocator);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(call.args.items.len, func, current_origin);
 
-    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer local_env.deinit();
-    var it = env.iterator();
-    while (it.next()) |entry| {
-        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
+    var local_env = try cloneValueEnv(ir.allocator, env);
+    defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
@@ -1386,12 +1413,8 @@ fn invokeUserFunctionValues(
 ) anyerror!core.Value {
     try eval_functions.requireReturnsValue(func);
 
-    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer local_env.deinit();
-    var it = env.iterator();
-    while (it.next()) |entry| {
-        try local_env.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
+    var local_env = try cloneValueEnv(ir.allocator, env);
+    defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionValueArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, args);
 
     var last_code_like: ?core.NodeId = null;
