@@ -159,6 +159,11 @@ fn inferFunctionEffects(
     defer _ = visiting.remove(func.name);
 
     var set = core.EffectSet.empty();
+    for (func.params.items) |param| {
+        if (param.default_value) |default_expr| {
+            set.unionWith(try inferExprEffects(sema, default_expr.*, visiting));
+        }
+    }
     for (func.statements.items) |stmt| set.unionWith(try inferStatementEffects(sema, stmt, visiting));
     return set;
 }
@@ -212,13 +217,14 @@ fn inferCallEffects(
     switch (descriptor) {
         .primitive => |primitive| {
             set.unionWith(registry.primitiveEffects(primitive));
-            if ((primitive.op == .foreach or primitive.op == .fold or primitive.op == .join) and call.args.items.len >= 2) {
-                switch (call.args.items[1]) {
+            if (primitive.callback_arg_index) |raw_index| {
+                const callback_index: usize = raw_index;
+                if (call.args.items.len > callback_index) switch (call.args.items[callback_index]) {
                     .ident => |callback_name| if (sema.function(callback_name)) |callback| {
                         set.unionWith(try inferFunctionEffects(sema, callback, visiting));
                     },
                     else => {},
-                }
+                };
             }
         },
         .function => |callee| set.unionWith(try inferFunctionEffects(sema, callee, visiting)),

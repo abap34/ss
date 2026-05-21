@@ -207,6 +207,11 @@ fn inferFunctionEffects(
     defer _ = visiting.remove(func.name);
 
     var set = core.EffectSet.empty();
+    for (func.params.items) |param| {
+        if (param.default_value) |default_expr| {
+            set.unionWith(try inferExprEffects(ir, sema, pass, default_expr.*, visiting));
+        }
+    }
     for (func.statements.items) |stmt| {
         set.unionWith(try inferStatementEffects(ir, sema, pass, stmt, visiting));
     }
@@ -272,13 +277,14 @@ fn inferCallEffects(
                 return error.UnsupportedPassPrimitive;
             }
             set.unionWith(registry.primitiveEffects(primitive));
-            if ((primitive.op == .foreach or primitive.op == .fold or primitive.op == .join) and call.args.items.len >= 2) {
-                switch (call.args.items[1]) {
+            if (primitive.callback_arg_index) |raw_index| {
+                const callback_index: usize = raw_index;
+                if (call.args.items.len > callback_index) switch (call.args.items[callback_index]) {
                     .ident => |callback_name| if (sema.function(callback_name)) |callback| {
                         set.unionWith(try inferFunctionEffects(ir, sema, pass, callback, visiting));
                     },
                     else => {},
-                }
+                };
             }
         },
         .function => |callee| set.unionWith(try inferFunctionEffects(ir, sema, pass, callee, visiting)),
@@ -716,8 +722,14 @@ fn executeStatement(
             const value = try evalExpr(ir, env, functions, origin, if_stmt.condition);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
+            var branch_env = std.StringHashMap(core.Value).init(ir.allocator);
+            defer branch_env.deinit();
+            var it = env.iterator();
+            while (it.next()) |entry| {
+                try branch_env.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
             for (branch) |nested| {
-                const flow = try executeStatement(ir, env, functions, nested, null);
+                const flow = try executeStatement(ir, &branch_env, functions, nested, null);
                 switch (flow) {
                     .none => {},
                     .returned => return flow,

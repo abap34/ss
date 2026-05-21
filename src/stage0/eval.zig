@@ -1167,8 +1167,14 @@ fn executeStatement(
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, if_stmt.condition);
             const condition = try resolveValueBoolean(value);
             const branch = if (condition) if_stmt.then_statements.items else if_stmt.else_statements.items;
+            var branch_env = std.StringHashMap(core.Value).init(ir.allocator);
+            defer branch_env.deinit();
+            var it = env.iterator();
+            while (it.next()) |entry| {
+                try branch_env.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
             for (branch) |nested| {
-                const flow = try executeStatement(ir, page_id, context, mode, env, functions, last_code_like, nested, null);
+                const flow = try executeStatement(ir, page_id, context, mode, &branch_env, functions, last_code_like, nested, null);
                 switch (flow) {
                     .none => {},
                     .returned => return flow,
