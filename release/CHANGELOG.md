@@ -4,6 +4,17 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-21
+
+### Added
+
+- `ss cache stats` for inspecting the managed render cache file count, directory count, and total size.
+
+### Changed
+
+- `ss cache clear` now succeeds when the managed render cache does not exist.
+- Documented the release checklist so version bumps, release notes, tagging, and workflow verification are kept together.
+
 ## [0.1.0] - 2026-05-21
 
 ### Added

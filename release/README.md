@@ -12,11 +12,45 @@
 - `editor/tree-sitter-ss/tree-sitter.json`
 - `release/CHANGELOG.md`
 
-Run:
+Run, replacing `vX.Y.Z` with the release tag:
 
 ```sh
-release/tools/preflight.py v0.1.0
+release/tools/preflight.py vX.Y.Z
+release/tools/changelog-section.py vX.Y.Z
 ```
+
+## Release Checklist
+
+Before tagging, update the changelog section that becomes the GitHub Release
+notes:
+
+```md
+## [X.Y.Z] - YYYY-MM-DD
+```
+
+Then keep all version metadata in sync and run the release preflight:
+
+```sh
+release/tools/preflight.py vX.Y.Z
+release/tools/changelog-section.py vX.Y.Z
+```
+
+After local and CI validation pass, create and push the tag:
+
+```sh
+git tag -a vX.Y.Z -m "ss vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+Watch the release workflows:
+
+```sh
+gh run list --repo abap34/ss --limit 10
+gh release view vX.Y.Z --repo abap34/ss
+```
+
+Verify the GitHub Release assets, VS Code Marketplace publish, render image,
+and Homebrew tap update before considering the release complete.
 
 ## CLI Distribution
 
@@ -28,7 +62,7 @@ named `ss-<version>.tar.gz` and renders a tap formula from
 Release binaries can also be attached manually when needed. Build them with:
 
 ```sh
-zig build -Doptimize=ReleaseSafe -Dversion=0.1.0 -Dcommit=<commit>
+zig build -Doptimize=ReleaseSafe -Dversion=<version> -Dcommit=<commit>
 ```
 
 Recommended macOS install path is a dedicated Homebrew tap, for example:
@@ -60,5 +94,5 @@ uploads the VSIX to the GitHub Release.
 
 ## Changelog
 
-`release/tools/changelog-section.py v0.1.0` extracts the matching changelog section for
+`release/tools/changelog-section.py vX.Y.Z` extracts the matching changelog section for
 GitHub Release notes.
