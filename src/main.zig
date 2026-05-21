@@ -13,6 +13,8 @@ fn usage() void {
         \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--jobs N]
         \\
         \\Commands:
+        \\  help
+        \\    Show this help message
         \\  check [input.ss]
         \\    Parse and type-check; print diagnostics when needed
         \\  dump [input.ss] [output.json]
@@ -35,8 +37,6 @@ fn usage() void {
         \\    Print managed render cache file, directory, and size totals
         \\
         \\Flags:
-        \\  --help, -h
-        \\    Show this help message
         \\  --version, -V
         \\    Show the ss version and source commit
         \\  --asset-base-dir DIR
@@ -57,7 +57,7 @@ fn usage() void {
         \\    Make ss doctor exit non-zero when it finds issues
         \\
         \\Examples:
-        \\  ss --help
+        \\  ss help
         \\  ss check slide.ss
         \\  ss dump slide.ss
         \\  ss dump slide.ss out.json
@@ -74,6 +74,12 @@ fn usage() void {
         \\  zig build run -- render slide.ss out.pdf
         \\
     , .{});
+}
+
+fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
+    std.debug.print(fmt ++ "\n\n", args);
+    usage();
+    return error.InvalidUsage;
 }
 
 fn version() void {
@@ -469,7 +475,7 @@ fn run(init: std.process.Init) !void {
     }
 
     const cmd = args[1];
-    if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
+    if (std.mem.eql(u8, cmd, "help")) {
         usage();
         return;
     }
@@ -530,16 +536,14 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "watch")) {
         if (args.len < 3) {
-            usage();
-            return;
+            return failUsage("missing watch mode", .{});
         }
         const mode: watcher.Mode = if (std.mem.eql(u8, args[2], "check"))
             .check
         else if (std.mem.eql(u8, args[2], "render"))
             .render
         else {
-            usage();
-            return;
+            return failUsage("unknown watch mode: {s}", .{args[2]});
         };
         const options = try parseCommandOptions(args[3..]);
         const input_path = options.input_path orelse "demo/01-language-tour.ss";
@@ -569,11 +573,11 @@ fn run(init: std.process.Init) !void {
             printCacheStats(stats);
             return;
         }
-        usage();
-        return;
+        if (args.len < 3) return failUsage("missing cache command", .{});
+        return failUsage("unknown cache command: {s}", .{args[2]});
     }
 
-    usage();
+    return failUsage("unknown command: {s}", .{cmd});
 }
 
 pub fn main(init: std.process.Init) void {

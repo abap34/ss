@@ -339,6 +339,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.DoctorIssues,
         error.InitEntryMustBeRelative,
         error.InitTargetExists,
+        error.InvalidUsage,
         => true,
         else => false,
     };
