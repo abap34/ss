@@ -27,6 +27,8 @@ fn usage() void {
         \\    Re-render PDF when the project changes
         \\  cache clear
         \\    Clear the managed render cache under .ss-cache/render
+        \\  cache stats
+        \\    Print managed render cache file, directory, and size totals
         \\
         \\Flags:
         \\  --help, -h
@@ -55,6 +57,7 @@ fn usage() void {
         \\  ss watch check slide.ss
         \\  ss watch render slide.ss out.pdf
         \\  ss cache clear
+        \\  ss cache stats
         \\  zig build run -- check slide.ss
         \\  zig build run -- render slide.ss out.pdf
         \\
@@ -63,6 +66,37 @@ fn usage() void {
 
 fn version() void {
     std.debug.print("ss {s} ({s})\n", .{ build_options.version, build_options.commit });
+}
+
+fn printCacheStats(stats: app.CacheStats) void {
+    std.debug.print("render cache: {s}\n", .{app.render_cache_path});
+    std.debug.print("files: {d}\n", .{stats.files});
+    std.debug.print("directories: {d}\n", .{stats.directories});
+    std.debug.print("size: ", .{});
+    printByteSize(stats.bytes);
+    std.debug.print("\n", .{});
+}
+
+fn printByteSize(bytes: u64) void {
+    const units = [_][]const u8{ "B", "KiB", "MiB", "GiB", "TiB" };
+    var unit_index: usize = 0;
+    var divisor: u64 = 1;
+    while (unit_index + 1 < units.len and bytes >= divisor * 1024) {
+        unit_index += 1;
+        divisor *= 1024;
+    }
+
+    if (unit_index == 0) {
+        std.debug.print("{d} {s}", .{ bytes, units[unit_index] });
+        return;
+    }
+
+    const scaled_tenths = (bytes / divisor) * 10 + ((bytes % divisor) * 10 + divisor / 2) / divisor;
+    std.debug.print("{d}.{d} {s}", .{
+        scaled_tenths / 10,
+        scaled_tenths % 10,
+        units[unit_index],
+    });
 }
 
 const CommandOptions = struct {
@@ -219,6 +253,11 @@ fn run(init: std.process.Init) !void {
         if (args.len == 3 and std.mem.eql(u8, args[2], "clear")) {
             try app.clearRenderCache(io);
             std.debug.print("cleared render cache: {s}\n", .{app.render_cache_path});
+            return;
+        }
+        if (args.len == 3 and std.mem.eql(u8, args[2], "stats")) {
+            const stats = try app.renderCacheStats(io, allocator);
+            printCacheStats(stats);
             return;
         }
         usage();

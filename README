@@ -129,6 +129,10 @@ Render cache:
 
     ss cache clear
 
+  To inspect the managed render cache footprint without deleting anything, run:
+
+    ss cache stats
+
   Managed render caches are pruned automatically to 256 MiB per working
   directory by default. Override the budget with `SS_CACHE_MAX_BYTES`, for
   example `SS_CACHE_MAX_BYTES=512M`, or set it to `off` for an unbounded cache.

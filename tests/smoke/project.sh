@@ -28,6 +28,24 @@ cmp "$CACHE/explicit.json" "$CACHE/project-dir.json"
 cmp "$CACHE/explicit.json" "$CACHE/project-file.json"
 cmp "$CACHE/explicit.json" "$CACHE/discovered.json"
 
+CACHE_STATS="$ROOT/.ss-cache/cache-stats-smoke"
+rm -rf "$CACHE_STATS"
+mkdir -p "$CACHE_STATS/.ss-cache/render/math" "$CACHE_STATS/.ss-cache/render/assets"
+printf abc > "$CACHE_STATS/.ss-cache/render/math/a.cache"
+printf 12345 > "$CACHE_STATS/.ss-cache/render/assets/b.cache"
+stats="$(cd "$CACHE_STATS" && "$SS_BIN" cache stats 2>&1)"
+printf '%s\n' "$stats" | grep -F "render cache: .ss-cache/render" >/dev/null
+printf '%s\n' "$stats" | grep -F "files: 2" >/dev/null
+printf '%s\n' "$stats" | grep -F "directories: 2" >/dev/null
+printf '%s\n' "$stats" | grep -F "size: 8 B" >/dev/null
+
+rm -rf "$CACHE_STATS/.ss-cache/render"
+stats="$(cd "$CACHE_STATS" && "$SS_BIN" cache stats 2>&1)"
+printf '%s\n' "$stats" | grep -F "files: 0" >/dev/null
+printf '%s\n' "$stats" | grep -F "directories: 0" >/dev/null
+printf '%s\n' "$stats" | grep -F "size: 0 B" >/dev/null
+(cd "$CACHE_STATS" && "$SS_BIN" cache clear >/dev/null 2>&1)
+
 if [ "$RUN_RENDER" = "1" ]; then
   "$SS_BIN" render "$FIXTURE/slide.ss" "$CACHE/explicit.pdf"
   "$SS_BIN" render --project "$FIXTURE" --output "$CACHE/project-dir.pdf"

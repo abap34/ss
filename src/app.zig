@@ -13,6 +13,12 @@ const error_report = utils.err;
 pub const render_cache_path = ".ss-cache/render";
 pub const RenderOptions = pdf.RenderOptions;
 
+pub const CacheStats = struct {
+    files: usize = 0,
+    directories: usize = 0,
+    bytes: u64 = 0,
+};
+
 pub const Progress = struct {
     total: usize,
     current: usize = 0,
@@ -180,7 +186,37 @@ pub fn checkFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []
 }
 
 pub fn clearRenderCache(io: std.Io) !void {
-    try std.Io.Dir.cwd().deleteTree(io, render_cache_path);
+    std.Io.Dir.cwd().deleteTree(io, render_cache_path) catch |err| {
+        if (err == error.FileNotFound) return;
+        return err;
+    };
+}
+
+pub fn renderCacheStats(io: std.Io, allocator: std.mem.Allocator) !CacheStats {
+    var dir = std.Io.Dir.cwd().openDir(io, render_cache_path, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return .{};
+        return err;
+    };
+    defer dir.close(io);
+
+    var stats = CacheStats{};
+    var walker = try dir.walkSelectively(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .directory) {
+            stats.directories += 1;
+            try walker.enter(io, entry);
+            continue;
+        }
+
+        const file_stat = entry.dir.statFile(io, entry.basename, .{}) catch continue;
+        if (file_stat.kind == .directory) continue;
+        stats.files += 1;
+        stats.bytes += file_stat.size;
+    }
+
+    return stats;
 }
 
 pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
