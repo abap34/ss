@@ -66,10 +66,9 @@ Yes, this is directed at you (and me), the person who hand-wrote a ToC and forgo
 update it.
 
 ```
-@pass(augment)
-fn add_page_numbers(doc: code<document>) -> code<document>
-  ! ReadGraph | CreateNode | WriteContent | WriteProperty | WriteConstraint
-  foreach(pages(doc), write_page_number)
+@pass(resolve)
+fn refresh_tocs(doc: code<document>) -> code<document> ! ReadGraph | WriteContent
+  foreach(objects_in_document(doc, "toc"), write_toc, doc)
   return doc
 end
 ```
@@ -229,20 +228,11 @@ publishing.
 
 ## Usage
 
-### Project Discovery
-
-`ss check`, `ss dump`, `ss render`, and `ss lsp` all use the same project
-discovery:
-
-- an explicit input path is treated as the entrypoint
-- `--project FILE_OR_DIR` loads that `ss.toml`
-- without an input path, ss searches upward from the current directory for the
-  nearest `ss.toml`
-
 ### Commands
 
 | Command | Purpose |
 | --- | --- |
+| `ss help` | Show help. |
 | `ss check [input.ss]` | Parse, load modules, and type-check a deck. |
 | `ss dump [input.ss] [output.json]` | Write compiler/IR metadata for tooling and debugging. |
 | `ss render [input.ss] [output.pdf]` | Render a PDF. |
@@ -266,6 +256,18 @@ ss watch render slide.ss .ss-cache/deck.pdf
 ss cache stats
 ```
 
+### Project Discovery
+
+`ss check`, `ss dump`, and `ss render` all use the same project discovery:
+
+- an explicit input path is treated as the entrypoint
+- `--project FILE_OR_DIR` loads that `ss.toml`
+- without an input path, ss searches upward from the current directory for the
+  nearest `ss.toml`
+
+`ss lsp` discovers the project from the `.ss` file opened by the editor,
+searching upward from that file's directory for the nearest `ss.toml`.
+
 ### Render Cache
 
 ss stores generated render artifacts under `.ss-cache/render` so repeated
@@ -286,18 +288,11 @@ Environment knobs:
 
 The VS Code extension is published as
 [ss-lang for VS Code](https://marketplace.visualstudio.com/items?itemName=abap34.ss-language-support).
-It is a thin TypeScript language client for `ss lsp`.
 
-It provides:
+The extension does not bundle `ss`. Install the CLI first.
 
-- TextMate syntax highlighting
-- snippets and comment configuration
-- compiler-backed diagnostics, completion, hover, definition, inlay hints,
-  document symbols, folding ranges, semantic tokens, and color decorators
-- live PDF preview owned by the extension
-
-The extension does not bundle `ss`. Install the CLI first. If `.ss` files open
-as Scheme, add this to your workspace settings:
+If `.ss` files don't open as the ss language, add this to your workspace
+settings:
 
 ```json
 {
