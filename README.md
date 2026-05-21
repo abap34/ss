@@ -246,6 +246,7 @@ discovery:
 | `ss check [input.ss]` | Parse, load modules, and type-check a deck. |
 | `ss dump [input.ss] [output.json]` | Write compiler/IR metadata for tooling and debugging. |
 | `ss render [input.ss] [output.pdf]` | Render a PDF. |
+| `ss init [dir]` | Create an `ss.toml` and starter slide deck. |
 | `ss lsp` | Run the stdio language server. |
 | `ss watch check [input.ss]` | Re-run checks as project files change. |
 | `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change. |
@@ -256,6 +257,7 @@ Examples:
 
 ```sh
 ss check slide.ss
+ss init slides
 ss dump --project . --output .ss-cache/deck.json
 ss render --project . --output .ss-cache/deck.pdf
 ss watch render slide.ss .ss-cache/deck.pdf

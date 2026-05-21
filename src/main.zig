@@ -19,6 +19,8 @@ fn usage() void {
         \\    Print IR JSON, or write it when output path is given
         \\  render [input.ss] [output.pdf]
         \\    Render PDF to the specified path
+        \\  init [dir]
+        \\    Create a new ss.toml and starter slide deck
         \\  lsp
         \\    Run the ss language server over stdio
         \\  watch check [input.ss]
@@ -45,6 +47,10 @@ fn usage() void {
         \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
         \\  --interval-ms N
         \\    Poll interval for watch commands
+        \\  --entry FILE
+        \\    Entry file to create with ss init
+        \\  --force
+        \\    Allow ss init to overwrite generated files
         \\
         \\Examples:
         \\  ss --help
@@ -54,6 +60,7 @@ fn usage() void {
         \\  ss dump --project . --output .ss-cache/dump.json
         \\  ss render slide.ss out.pdf
         \\  ss render --project . --output .ss-cache/render.pdf
+        \\  ss init slides
         \\  ss watch check slide.ss
         \\  ss watch render slide.ss out.pdf
         \\  ss cache clear
@@ -106,6 +113,12 @@ const CommandOptions = struct {
     project_path: ?[]const u8 = null,
     jobs: ?usize = null,
     interval_ms: u64 = 500,
+};
+
+const InitOptions = struct {
+    dir: []const u8 = ".",
+    entry: []const u8 = "slide.ss",
+    force: bool = false,
 };
 
 fn parseCommandOptions(args: []const []const u8) !CommandOptions {
@@ -161,6 +174,106 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
     return options;
 }
 
+fn parseInitOptions(args: []const []const u8) !InitOptions {
+    var options = InitOptions{};
+    var saw_dir = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--entry")) {
+            if (i + 1 >= args.len) return error.MissingEntryValue;
+            options.entry = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--force")) {
+            options.force = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--")) return error.UnknownFlag;
+        if (saw_dir) return error.TooManyArguments;
+        options.dir = arg;
+        saw_dir = true;
+    }
+    return options;
+}
+
+fn projectTemplate(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator,
+        \\[project]
+        \\entry = "{s}"
+        \\asset_base_dir = "."
+        \\
+    , .{entry});
+}
+
+fn starterSlideTemplate() []const u8 {
+    return
+    \\import std:themes/default
+    \\
+    \\page title
+    \\title_page(
+    \\  "Hello, ss",
+    \\  "Write slides as programs.",
+    \\  "ss init"
+    \\)
+    \\end
+    \\
+    \\page body
+    \\let title = slide_title "First slide"
+    \\let body = text <<
+    \\- Edit slide.ss.
+    \\- Run `ss render --project . --output deck.pdf`.
+    \\>>
+    \\
+    \\body.top == title.bottom - 32
+    \\page_no()
+    \\end
+    \\
+    ;
+}
+
+fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !void {
+    if (std.fs.path.isAbsolute(options.entry)) {
+        std.debug.print("init: --entry must be relative to the project directory\n", .{});
+        return error.InitEntryMustBeRelative;
+    }
+
+    try std.Io.Dir.cwd().createDirPath(io, options.dir);
+
+    const project_path = try std.fs.path.join(allocator, &.{ options.dir, "ss.toml" });
+    defer allocator.free(project_path);
+    const entry_path = try std.fs.path.join(allocator, &.{ options.dir, options.entry });
+    defer allocator.free(entry_path);
+
+    if (!options.force) {
+        var failed = false;
+        if (utils.fs.fileExists(allocator, project_path)) {
+            std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{project_path});
+            failed = true;
+        }
+        if (utils.fs.fileExists(allocator, entry_path)) {
+            std.debug.print("init: {s} already exists; pass --force to overwrite it\n", .{entry_path});
+            failed = true;
+        }
+        if (failed) return error.InitTargetExists;
+    }
+
+    if (std.fs.path.dirname(entry_path)) |entry_dir| {
+        try std.Io.Dir.cwd().createDirPath(io, entry_dir);
+    }
+
+    const project_source = try projectTemplate(allocator, options.entry);
+    defer allocator.free(project_source);
+    try utils.fs.writeFile(io, project_path, project_source);
+    try utils.fs.writeFile(io, entry_path, starterSlideTemplate());
+
+    std.debug.print("created ss project: {s}\n", .{options.dir});
+    std.debug.print("  {s}\n", .{project_path});
+    std.debug.print("  {s}\n", .{entry_path});
+    std.debug.print("\nnext:\n  ss render --project {s} --output deck.pdf\n", .{options.dir});
+}
+
 fn run(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -211,6 +324,12 @@ fn run(init: std.process.Init) !void {
         var progress = app.Progress.init(7);
         const render_options = app.RenderOptions{ .jobs = options.jobs };
         try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "init")) {
+        const options = try parseInitOptions(args[2..]);
+        try initProject(io, allocator, options);
         return;
     }
 
