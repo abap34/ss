@@ -21,8 +21,9 @@ release/tools/preflight.py v0.1.0
 ## CLI Distribution
 
 For v1, use GitHub Releases as the canonical artifact location. The Homebrew
-workflow attaches a source archive named `ss-<version>.tar.gz` and renders a tap
-formula from `release/homebrew/ss.rb.in`.
+workflow is the canonical GitHub Release creator: it attaches a source archive
+named `ss-<version>.tar.gz` and renders a tap formula from
+`release/homebrew/ss.rb.in`.
 
 Release binaries can also be attached manually when needed. Build them with:
 
@@ -46,6 +47,10 @@ The formula builds from source with Zig and stages MD4C as a pinned Homebrew
 resource. This keeps VS Code binary distribution simple: the extension can
 continue to launch the configured `ss.cli.path` without bundling
 platform-specific executables.
+
+The render image and VS Code workflows wait for the GitHub Release created by
+the Homebrew workflow, then update notes or upload artifacts. They do not create
+the release themselves.
 
 ## Editor Release
 

@@ -32,7 +32,7 @@ jobs:
       - name: Check release metadata
         run: release/tools/preflight.py "$RELEASE_TAG"
 
-      - name: Create release source archive
+      - name: Create release and source archive
         id: source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

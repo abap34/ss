@@ -124,8 +124,14 @@ jobs:
           VSIX: editor/vscode/ss-language-support-${{ github.ref_name }}.vsix
         run: |
           set -euo pipefail
-          release/tools/changelog-section.py "$TAG_NAME" > release-notes.md
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" --verify-tag --title "ss ${TAG_NAME}" --notes-file release-notes.md
-          fi
+          for attempt in {1..60}; do
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "release $TAG_NAME was not created by the source archive workflow" >&2
+              exit 1
+            fi
+            sleep 10
+          done
           gh release upload "$TAG_NAME" "$VSIX" --clobber
