@@ -71,6 +71,10 @@
               },
               {
                 "type": "SYMBOL",
+                "name": "import_spec"
+              },
+              {
+                "type": "SYMBOL",
                 "name": "identifier"
               }
             ]
@@ -338,6 +342,22 @@
         {
           "type": "SYMBOL",
           "name": "identifier"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "|"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              }
+            ]
+          }
         }
       ]
     },
@@ -650,11 +670,11 @@
         },
         {
           "type": "SYMBOL",
-          "name": "line_call_statement"
+          "name": "expression_statement"
         },
         {
           "type": "SYMBOL",
-          "name": "expression_statement"
+          "name": "line_call_statement"
         }
       ]
     },
@@ -836,8 +856,16 @@
           }
         },
         {
-          "type": "STRING",
-          "value": "then"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "then"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         },
         {
           "type": "SYMBOL",
@@ -1215,6 +1243,13 @@
             "value": "("
           },
           {
+            "type": "REPEAT",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_terminator"
+            }
+          },
+          {
             "type": "CHOICE",
             "members": [
               {
@@ -1230,8 +1265,22 @@
                       "type": "SEQ",
                       "members": [
                         {
+                          "type": "REPEAT",
+                          "content": {
+                            "type": "SYMBOL",
+                            "name": "_terminator"
+                          }
+                        },
+                        {
                           "type": "STRING",
                           "value": ","
+                        },
+                        {
+                          "type": "REPEAT",
+                          "content": {
+                            "type": "SYMBOL",
+                            "name": "_terminator"
+                          }
                         },
                         {
                           "type": "SYMBOL",
@@ -1244,8 +1293,20 @@
                     "type": "CHOICE",
                     "members": [
                       {
-                        "type": "STRING",
-                        "value": ","
+                        "type": "SEQ",
+                        "members": [
+                          {
+                            "type": "REPEAT",
+                            "content": {
+                              "type": "SYMBOL",
+                              "name": "_terminator"
+                            }
+                          },
+                          {
+                            "type": "STRING",
+                            "value": ","
+                          }
+                        ]
                       },
                       {
                         "type": "BLANK"
@@ -1258,6 +1319,13 @@
                 "type": "BLANK"
               }
             ]
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_terminator"
+            }
           },
           {
             "type": "STRING",
@@ -1522,6 +1590,10 @@
       "type": "PATTERN",
       "value": "[A-Za-z_][A-Za-z0-9_]*"
     },
+    "import_spec": {
+      "type": "PATTERN",
+      "value": "[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_./-]+"
+    },
     "type_identifier": {
       "type": "PATTERN",
       "value": "[A-Z][A-Za-z0-9_]*"
@@ -1559,8 +1631,11 @@
       }
     },
     "line_text": {
-      "type": "PATTERN",
-      "value": "[^\\n]+"
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "[ \\t][^\\n]+"
+      }
     },
     "number": {
       "type": "PATTERN",

@@ -11,6 +11,7 @@ pub const Options = struct {
     input_path: []const u8,
     output_path: ?[]const u8 = null,
     asset_base_dir: []const u8,
+    project_file: ?[]const u8 = null,
     jobs: ?usize = null,
     interval_ms: u64 = 500,
 };
@@ -78,6 +79,10 @@ fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !u64 
     var hash: u64 = 14695981039346656037;
     mixBytes(&hash, options.input_path);
     try mixStatFile(io, &hash, options.input_path);
+    if (options.project_file) |project_file| {
+        mixBytes(&hash, project_file);
+        try mixStatFile(io, &hash, project_file);
+    }
 
     var dir = std.Io.Dir.cwd().openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return hash;
@@ -141,7 +146,8 @@ fn watchFile(path: []const u8) bool {
         std.mem.eql(u8, ext, ".otf") or
         std.mem.eql(u8, ext, ".woff") or
         std.mem.eql(u8, ext, ".woff2") or
-        std.mem.eql(u8, ext, ".md");
+        std.mem.eql(u8, ext, ".md") or
+        std.mem.eql(u8, ext, ".toml");
 }
 
 fn isOutputFile(allocator: std.mem.Allocator, options: Options, relative_path: []const u8) bool {

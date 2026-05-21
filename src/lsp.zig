@@ -442,6 +442,14 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         return;
     }
+    if (std.mem.eql(u8, method, "workspace/didChangeWatchedFiles")) {
+        if (server.snapshot) |snapshot| {
+            const entry_path = try server.allocator.dupe(u8, snapshot.entry_path);
+            defer server.allocator.free(entry_path);
+            try server.rebuild(entry_path);
+        }
+        return;
+    }
     if (std.mem.eql(u8, method, "textDocument/didClose")) {
         if (params) |p| if (objectField(p, "textDocument")) |doc| {
             if (stringField(doc, "uri")) |uri| server.removeDocument(uri);
@@ -486,7 +494,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "ss/projectInfo")) {
-        try respond(server.allocator, id, try projectInfoResult(server));
+        try respond(server.allocator, id, try projectInfoResult(server, params));
         return;
     }
     if (id != null) try respondError(server.allocator, id, -32601, "method not found");
@@ -955,23 +963,47 @@ fn colorPresentationResult(server: *Server, params: ?JsonValue) ![]const u8 {
     return out.toOwnedSlice(server.allocator);
 }
 
-fn projectInfoResult(server: *Server) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    try out.append(server.allocator, '{');
-    if (server.snapshot) |snapshot| {
-        try out.appendSlice(server.allocator, "\"entryPath\":");
-        try appendJsonString(server.allocator, &out, snapshot.entry_path);
-        try out.appendSlice(server.allocator, ",\"assetBaseDir\":");
-        try appendJsonString(server.allocator, &out, snapshot.asset_base_dir);
-        try out.appendSlice(server.allocator, ",\"localModules\":[");
-        for (snapshot.module_paths.items, 0..) |path, i| {
-            if (i != 0) try out.append(server.allocator, ',');
-            try appendJsonString(server.allocator, &out, path);
+fn projectInfoResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (try docPathFromParams(server.allocator, params)) |doc_path| {
+        defer server.allocator.free(doc_path);
+        if (server.snapshot) |snapshot| {
+            if (!snapshotCoversPath(&snapshot, doc_path)) {
+                var diagnostics = DiagnosticSet.init(server.allocator);
+                defer diagnostics.deinit();
+                var requested_snapshot = try server.buildSnapshot(doc_path, &diagnostics);
+                defer requested_snapshot.deinit(server.allocator);
+                return try projectInfoJson(server.allocator, &requested_snapshot);
+            }
         }
-        try out.append(server.allocator, ']');
     }
-    try out.append(server.allocator, '}');
-    return out.toOwnedSlice(server.allocator);
+    return try projectInfoJson(server.allocator, if (server.snapshot) |*snapshot| snapshot else null);
+}
+
+fn projectInfoJson(allocator: std.mem.Allocator, snapshot: ?*const Snapshot) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    try out.append(allocator, '{');
+    if (snapshot) |snap| {
+        try out.appendSlice(allocator, "\"entryPath\":");
+        try appendJsonString(allocator, &out, snap.entry_path);
+        try out.appendSlice(allocator, ",\"assetBaseDir\":");
+        try appendJsonString(allocator, &out, snap.asset_base_dir);
+        try out.appendSlice(allocator, ",\"localModules\":[");
+        for (snap.module_paths.items, 0..) |path, i| {
+            if (i != 0) try out.append(allocator, ',');
+            try appendJsonString(allocator, &out, path);
+        }
+        try out.append(allocator, ']');
+    }
+    try out.append(allocator, '}');
+    return out.toOwnedSlice(allocator);
+}
+
+fn snapshotCoversPath(snapshot: *const Snapshot, path: []const u8) bool {
+    if (std.mem.eql(u8, snapshot.entry_path, path)) return true;
+    for (snapshot.module_paths.items) |module_path| {
+        if (std.mem.eql(u8, module_path, path)) return true;
+    }
+    return false;
 }
 
 fn readMessage(allocator: std.mem.Allocator) !?[]u8 {
@@ -1188,19 +1220,17 @@ fn wordAtRequest(server: *Server, params: ?JsonValue) !?[]u8 {
 }
 
 fn wordAt(allocator: std.mem.Allocator, source: []const u8, target_line: usize, character: usize) !?[]u8 {
-    var line_index: usize = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| : (line_index += 1) {
-        if (line_index != target_line) continue;
-        const pos = @min(character, line.len);
-        var start = pos;
-        while (start > 0 and isIdentChar(line[start - 1])) start -= 1;
-        var end = pos;
-        while (end < line.len and isIdentChar(line[end])) end += 1;
-        if (end <= start) return null;
-        return try allocator.dupe(u8, line[start..end]);
-    }
-    return null;
+    const pos = positionOffset(source, target_line, character);
+    var line_start = pos;
+    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
+    var line_end = pos;
+    while (line_end < source.len and source[line_end] != '\n') line_end += 1;
+    var start = pos;
+    while (start > line_start and isIdentChar(source[start - 1])) start -= 1;
+    var end = pos;
+    while (end < line_end and isIdentChar(source[end])) end += 1;
+    if (end <= start) return null;
+    return try allocator.dupe(u8, source[start..end]);
 }
 
 fn isIdentChar(byte: u8) bool {
@@ -1248,13 +1278,30 @@ fn percentDecode(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
 
 fn rangeFromSpan(source: []const u8, span: ?utils.err.ByteSpan) LspRange {
     const s = span orelse return .{};
-    const start = utils.err.computeLineColumn(source, @min(s.start, source.len));
-    const end = utils.err.computeLineColumn(source, @min(@max(s.end, s.start + 1), source.len));
+    const start = lspPositionFromOffset(source, @min(s.start, source.len));
+    const end = lspPositionFromOffset(source, @min(@max(s.end, s.start + 1), source.len));
     return .{
-        .start_line = start.line - 1,
-        .start_character = start.column - 1,
-        .end_line = end.line - 1,
-        .end_character = end.column - 1,
+        .start_line = start.line,
+        .start_character = start.character,
+        .end_line = end.line,
+        .end_character = end.character,
+    };
+}
+
+fn lspPositionFromOffset(source: []const u8, byte_offset: usize) struct { line: usize, character: usize } {
+    const limit = @min(byte_offset, source.len);
+    var line: usize = 0;
+    var line_start: usize = 0;
+    var index: usize = 0;
+    while (index < limit) : (index += 1) {
+        if (source[index] == '\n') {
+            line += 1;
+            line_start = index + 1;
+        }
+    }
+    return .{
+        .line = line,
+        .character = utf16Units(source[line_start..limit]),
     };
 }
 

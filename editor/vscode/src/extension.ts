@@ -19,7 +19,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     documentSelector: [{ scheme: "file", language: "ss-slide" }],
     outputChannel: output,
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.ss"),
+      fileEvents: [
+        vscode.workspace.createFileSystemWatcher("**/*.ss"),
+        vscode.workspace.createFileSystemWatcher("**/ss.toml"),
+      ],
     },
   };
 
