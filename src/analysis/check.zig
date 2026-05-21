@@ -14,6 +14,11 @@ const infoFromType = semantic_types.infoFromType;
 const inferExprInfo = infer.exprInfo;
 const validatePropertySetStatement = infer.validatePropertySetStatement;
 
+const StatementContext = enum {
+    document,
+    page,
+};
+
 pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
     return module.path orelse module.spec;
 }
@@ -94,7 +99,7 @@ pub fn checkPageStatements(
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         for (program.document_statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, origin_path, &env, stmt);
+            try checkTopLevelStatement(allocator, ir, sema, origin_path, .document, &env, stmt);
         }
     }
     for (program.pages.items) |page| {
@@ -102,7 +107,7 @@ pub fn checkPageStatements(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, origin_path, &env, stmt);
+            try checkTopLevelStatement(allocator, ir, sema, origin_path, .page, &env, stmt);
         }
     }
 }
@@ -112,12 +117,14 @@ fn checkTopLevelStatement(
     ir: *core.Ir,
     sema: *const SemanticEnv,
     origin_path: []const u8,
+    context: StatementContext,
     env: *TypeEnv,
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, origin_path, stmt.span);
     switch (stmt.kind) {
         .let_binding => |binding| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, binding.expr);
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
         },
@@ -126,32 +133,102 @@ fn checkTopLevelStatement(
             return error.ReturnOutsideFunction;
         },
         .property_set => |property_set| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, property_set.value);
             try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, if_stmt.condition);
             const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);
             try ensureType(ir, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, ir, sema, origin_path, &then_env, nested);
+                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &then_env, nested);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, ir, sema, origin_path, &else_env, nested);
+                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &else_env, nested);
             }
         },
         .expr_stmt => |expr| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, expr);
             _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
         },
         .constrain => |decl| {
+            if (context != .page) {
+                try addUserReport(ir, origin, "NoCurrentPage: constraints are only valid inside a page block", .{});
+                return error.NoCurrentPage;
+            }
+            try validateAnchorRef(allocator, ir, env, origin, decl.target, true);
+            try validateAnchorRef(allocator, ir, env, origin, decl.source, false);
             if (decl.offset) |expr| {
+                try rejectPageOnlyExpr(allocator, ir, context, origin, expr);
                 const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
                 try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
     }
+}
+
+fn rejectPageOnlyExpr(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    context: StatementContext,
+    origin: []const u8,
+    expr: ast.Expr,
+) !void {
+    if (context == .page) return;
+    switch (expr) {
+        .call => |call| {
+            if (isPageOnlyCall(call.name)) {
+                try addUserReport(ir, origin, "NoCurrentPage: '{s}' is only valid inside a page block", .{call.name});
+                return error.NoCurrentPage;
+            }
+            for (call.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
+        },
+        else => {},
+    }
+}
+
+fn isPageOnlyCall(name: []const u8) bool {
+    return std.mem.eql(u8, name, "pagectx") or
+        std.mem.eql(u8, name, "object") or
+        std.mem.eql(u8, name, "group");
+}
+
+fn validateAnchorRef(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    env: *TypeEnv,
+    origin: []const u8,
+    anchor_ref: ast.AnchorRef,
+    is_target: bool,
+) !void {
+    switch (anchor_ref.kind) {
+        .page => if (is_target) {
+            try addUserReport(ir, origin, "PageCannotBeConstraintTarget: page anchors cannot be constraint targets", .{});
+            return error.PageCannotBeConstraintTarget;
+        },
+        .node => {
+            const name = anchor_ref.node_name orelse return;
+            const info = env.get(name) orelse {
+                try addUserReport(ir, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{name});
+                return error.UnknownIdentifier;
+            };
+            if (!isObjectLike(info)) {
+                try ensureType(ir, allocator, info, Type.object, origin, .UnmatchedArgumentType);
+            }
+        },
+    }
+}
+
+fn isObjectLike(info: semantic_types.TypeInfo) bool {
+    return switch (info.ty.tag) {
+        .object => true,
+        .code => info.ty.param == .object,
+        else => info.sort == .object,
+    };
 }
 
 fn checkStatement(
