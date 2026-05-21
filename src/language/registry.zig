@@ -92,6 +92,7 @@ pub const PrimitiveDescriptor = struct {
     arg_sorts: []const ArgSort,
     result_sort: ?core.SemanticSort,
     effect: core.FunctionEffect = .pure,
+    callback_arg_index: ?u8 = null,
     summary: []const u8,
 };
 
@@ -124,9 +125,9 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .str, .name = "str", .min_arity = 1, .max_arity = 1, .arg_names = &.{"value"}, .arg_sorts = &.{.number}, .result_sort = .string, .summary = "Convert a number to string" },
     .{ .op = .concat, .name = "concat", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_sorts = &.{ .string, .string }, .result_sort = .string, .summary = "Concatenate two strings" },
     .{ .op = .replace, .name = "replace", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "text", "old", "new" }, .arg_sorts = &.{ .string, .string, .string }, .result_sort = .string, .summary = "Replace all string occurrences" },
-    .{ .op = .foreach, .name = "foreach", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "selection", "callback" }, .arg_sorts = &.{ .selection, .function, .any }, .result_sort = .selection, .summary = "Call a callback once for every item in a finite Selection snapshot" },
-    .{ .op = .fold, .name = "fold", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "initial", "callback" }, .arg_sorts = &.{ .selection, .string, .function, .any }, .result_sort = .string, .summary = "Fold a finite Selection snapshot with a string accumulator" },
-    .{ .op = .join, .name = "join", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "separator", "callback" }, .arg_sorts = &.{ .selection, .string, .function, .any }, .result_sort = .string, .summary = "Map a finite Selection snapshot to strings and join them" },
+    .{ .op = .foreach, .name = "foreach", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "selection", "callback" }, .arg_sorts = &.{ .selection, .function, .any }, .result_sort = .selection, .callback_arg_index = 1, .summary = "Call a callback once for every item in a finite Selection snapshot" },
+    .{ .op = .fold, .name = "fold", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "initial", "callback" }, .arg_sorts = &.{ .selection, .string, .function, .any }, .result_sort = .string, .callback_arg_index = 2, .summary = "Fold a finite Selection snapshot with a string accumulator" },
+    .{ .op = .join, .name = "join", .min_arity = 3, .max_arity = 255, .arg_names = &.{ "selection", "separator", "callback" }, .arg_sorts = &.{ .selection, .string, .function, .any }, .result_sort = .string, .callback_arg_index = 2, .summary = "Map a finite Selection snapshot to strings and join them" },
     .{ .op = .first, .name = "first", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_sorts = &.{.selection}, .result_sort = null, .summary = "Get the first element of a Selection" },
     .{ .op = .selection_union, .name = "selection_union", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_sorts = &.{ .selection, .selection }, .result_sort = .selection, .summary = "Return the union of two Selections" },
     .{ .op = .selection_intersection, .name = "selection_intersection", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "left", "right" }, .arg_sorts = &.{ .selection, .selection }, .result_sort = .selection, .summary = "Return the intersection of two Selections" },
