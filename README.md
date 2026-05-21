@@ -1,4 +1,4 @@
-# ss language: yet another slide building system
+# ss: yet another slide description language & system
 
 <div align="center">
 
