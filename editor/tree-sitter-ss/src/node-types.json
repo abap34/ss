@@ -121,80 +121,6 @@
     }
   },
   {
-    "type": "bind_statement",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "value": {
-        "multiple": true,
-        "required": true,
-        "types": [
-          {
-            "type": "(",
-            "named": false
-          },
-          {
-            "type": ")",
-            "named": false
-          },
-          {
-            "type": "binary_expression",
-            "named": true
-          },
-          {
-            "type": "block_text",
-            "named": true
-          },
-          {
-            "type": "boolean",
-            "named": true
-          },
-          {
-            "type": "call_expression",
-            "named": true
-          },
-          {
-            "type": "color_string",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "if_expression",
-            "named": true
-          },
-          {
-            "type": "member_expression",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "string",
-            "named": true
-          },
-          {
-            "type": "unary_expression",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "block_call_statement",
     "named": true,
     "fields": {
@@ -556,10 +482,6 @@
       "required": false,
       "types": [
         {
-          "type": "bind_statement",
-          "named": true
-        },
-        {
           "type": "block_call_statement",
           "named": true
         },
@@ -756,10 +678,6 @@
       "required": false,
       "types": [
         {
-          "type": "bind_statement",
-          "named": true
-        },
-        {
           "type": "block_call_statement",
           "named": true
         },
@@ -829,10 +747,6 @@
       "types": [
         {
           "type": "annotation",
-          "named": true
-        },
-        {
-          "type": "bind_statement",
           "named": true
         },
         {
@@ -1129,10 +1043,6 @@
       "multiple": true,
       "required": false,
       "types": [
-        {
-          "type": "bind_statement",
-          "named": true
-        },
         {
           "type": "block_call_statement",
           "named": true
@@ -1475,10 +1385,6 @@
       "multiple": true,
       "required": false,
       "types": [
-        {
-          "type": "bind_statement",
-          "named": true
-        },
         {
           "type": "block_call_statement",
           "named": true
@@ -1970,10 +1876,6 @@
     "named": false
   },
   {
-    "type": "bind",
-    "named": false
-  },
-  {
     "type": "block_text",
     "named": true
   },
@@ -2116,11 +2018,11 @@
   },
   {
     "type": "string",
-    "named": true
+    "named": false
   },
   {
     "type": "string",
-    "named": false
+    "named": true
   },
   {
     "type": "style",

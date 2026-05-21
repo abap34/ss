@@ -121,10 +121,6 @@ fn checkTopLevelStatement(
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
         },
-        .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, infoFromSort(.fragment));
-        },
         .return_expr => {
             try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
             return error.ReturnOutsideFunction;
@@ -172,10 +168,6 @@ fn checkStatement(
         .let_binding => |binding| {
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
-        },
-        .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
             const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);

@@ -8,7 +8,7 @@ end
 
 page "Control"
   let title = text("Control")
-  bind items = list("a", "b")
+  let items = list("a", "b")
   for item, index in items
     if index then
       property title "data-kind" item
@@ -32,7 +32,7 @@ end
       value: (call_expression
         function: (identifier)
         (string)))
-    (bind_statement
+    (let_statement
       name: (identifier)
       value: (call_expression
         function: (identifier)

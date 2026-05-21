@@ -307,6 +307,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.ExpectedNumber,
         error.ExpectedTypeAnnotation,
         error.AssignmentRequiresLet,
+        error.BindRemoved,
         error.ZeroArgCallRequiresParens,
         error.ExpectedReturn,
         error.UnterminatedString,
@@ -352,6 +353,7 @@ fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
         error.InvalidEscape => "InvalidEscape: invalid escape sequence",
         error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
         error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
+        error.BindRemoved => "BindRemoved: 'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
         error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: zero-argument calls require parentheses; use 'name()'",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
@@ -372,6 +374,7 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
         error.ExpectedNumber => "ExpectedNumber",
         error.ExpectedTypeAnnotation => "ExpectedTypeAnnotation",
         error.AssignmentRequiresLet => "AssignmentRequiresLet",
+        error.BindRemoved => "BindRemoved",
         error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens",
         error.ExpectedReturn => "ExpectedReturn",
         error.InvalidSemanticSort => "InvalidSemanticSort",
@@ -626,7 +629,7 @@ fn asciiIdentifierEnd(slice: []const u8, start: usize) usize {
 }
 
 fn isKeyword(token: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "const", "page", "fn", "let", "bind", "return", "end", "constrain" };
+    const keywords = [_][]const u8{ "import", "const", "page", "fn", "let", "return", "end", "constrain" };
     for (keywords) |keyword| {
         if (std.mem.eql(u8, token, keyword)) return true;
     }

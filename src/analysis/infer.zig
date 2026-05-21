@@ -212,10 +212,6 @@ fn inferUserFunctionReturnInfoInner(
                 const info = try exprInfo(allocator, null, sema, &env, binding.expr, "");
                 try env.put(binding.name, info);
             },
-            .bind_binding => |binding| {
-                _ = try exprInfo(allocator, null, sema, &env, binding.expr, "");
-                try env.put(binding.name, infoFromSort(.fragment));
-            },
             .return_expr => |expr| {
                 const info = try exprInfo(allocator, null, sema, &env, expr, "");
                 result = mergeTypeInfo(result, info);

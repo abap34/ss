@@ -288,6 +288,33 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     try expectString(property.value, "red");
 }
 
+test "syntax spec: place is an ordinary identifier and bind is removed" {
+    var parsed = try parse(
+        \\page Placement
+        \\  let place = 1
+        \\  let local = place + 1
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    try testing.expectEqualStrings("place", statements[0].kind.let_binding.name);
+    const add = try expectCall(statements[1].kind.let_binding.expr, "add", 2);
+    switch (add.args.items[0]) {
+        .ident => |name| try testing.expectEqualStrings("place", name),
+        else => return error.ExpectedIdentifier,
+    }
+    try expectNumber(add.args.items[1], 1);
+
+    try expectParseError(error.BindRemoved,
+        \\page Bad
+        \\  bind local = text("bad")
+        \\end
+        \\
+    );
+}
+
 test "syntax spec: bare assignment must say let and page dimensions are not targets" {
     try expectParseError(error.AssignmentRequiresLet,
         \\page Bad

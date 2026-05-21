@@ -89,7 +89,6 @@ fn collectStatementCallees(
 ) !void {
     switch (stmt.kind) {
         .let_binding => |binding| try collectExprCallees(allocator, sema, binding.expr, callees),
-        .bind_binding => |binding| try collectExprCallees(allocator, sema, binding.expr, callees),
         .return_expr => |expr| try collectExprCallees(allocator, sema, expr, callees),
         .property_set => |property_set| try collectExprCallees(allocator, sema, property_set.value, callees),
         .if_stmt => |if_stmt| {

@@ -1145,43 +1145,7 @@ fn executeStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
-            switch (mode) {
-                .attached => try materializeStatementValue(ir, mode, last_code_like, value),
-                .detached => {},
-            }
             try env.put(binding.name, value);
-        },
-        .bind_binding => |binding| {
-            if (context != .page) return error.NoCurrentPage;
-            switch (mode) {
-                .attached => {
-                    var builder = DetachedBuilder.init(page_id);
-                    errdefer builder.deinit(ir.allocator);
-                    const value = try evalExpr(ir, page_id, context, .{ .detached = &builder }, env, functions, origin, binding.expr);
-                    switch (value) {
-                        .fragment => {
-                            if (builder.isEmpty()) {
-                                builder.deinit(ir.allocator);
-                                try env.put(binding.name, value);
-                            } else {
-                                const root = try fragmentRootCloneFromFragment(ir.allocator, value.fragment);
-                                try builder.trackFragment(ir.allocator, value.fragment);
-                                const fragment = try ir.createFragment(page_id, root, builder.node_ids, builder.constraints, builder.deps);
-                                try env.put(binding.name, .{ .fragment = fragment });
-                            }
-                        },
-                        else => {
-                            const root = try fragmentRootFromValue(value);
-                            const fragment = try ir.createFragment(page_id, root, builder.node_ids, builder.constraints, builder.deps);
-                            try env.put(binding.name, .{ .fragment = fragment });
-                        },
-                    }
-                },
-                .detached => {
-                    const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, binding.expr);
-                    try env.put(binding.name, value);
-                },
-            }
         },
         .return_expr => |expr| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);

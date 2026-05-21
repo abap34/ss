@@ -171,7 +171,6 @@ fn inferStatementEffects(
     var set = core.EffectSet.empty();
     switch (stmt.kind) {
         .let_binding => |binding| set.unionWith(try inferExprEffects(sema, binding.expr, visiting)),
-        .bind_binding => |binding| set.unionWith(try inferExprEffects(sema, binding.expr, visiting)),
         .return_expr => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
         .property_set => |property| {
             set.insert(.WriteProperty);
@@ -539,11 +538,6 @@ fn collectVariableTypesFromStatement(
             const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
-        },
-        .bind_binding => |binding| {
-            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
-            try env.put(binding.name, infoFromSort(.fragment));
-            try variables.put(binding.name, infoFromSort(.fragment));
         },
         .return_expr => |expr| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
