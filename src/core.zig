@@ -47,6 +47,7 @@ pub const SourceModuleId = @import("core/ir.zig").SourceModuleId;
 pub const SourceModule = @import("core/ir.zig").SourceModule;
 pub const FunctionMetadata = @import("core/ir.zig").FunctionMetadata;
 pub const DefinitionKind = @import("core/ir.zig").DefinitionKind;
+pub const DefinitionScopeKind = @import("core/ir.zig").DefinitionScopeKind;
 pub const Definition = @import("core/ir.zig").Definition;
 pub const InlayHintKind = @import("core/ir.zig").InlayHintKind;
 pub const InlayHint = @import("core/ir.zig").InlayHint;

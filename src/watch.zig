@@ -1,5 +1,7 @@
 const std = @import("std");
 const app = @import("app.zig");
+const syntax = @import("syntax.zig");
+const typecheck = @import("analysis/typecheck.zig");
 const utils = @import("utils");
 
 pub const Mode = enum {
@@ -83,6 +85,7 @@ fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !u64 
         mixBytes(&hash, project_file);
         try mixStatFile(io, &hash, project_file);
     }
+    try mixModuleDependencyStats(io, allocator, &hash, options);
 
     var dir = std.Io.Dir.cwd().openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return hash;
@@ -110,6 +113,26 @@ fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !u64 
     }
 
     return hash;
+}
+
+fn mixModuleDependencyStats(io: std.Io, allocator: std.mem.Allocator, hash: *u64, options: Options) !void {
+    const source = utils.fs.readFileAlloc(io, allocator, options.input_path) catch return;
+    defer allocator.free(source);
+
+    var program = syntax.parseWithSourceName(allocator, source, options.input_path) catch return;
+    defer program.deinit(allocator);
+
+    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, options.asset_base_dir, program, null) catch return;
+    defer index.deinit();
+
+    for (index.modules.items) |module| {
+        if (module.path) |path| {
+            mixBytes(hash, path);
+            try mixStatFile(io, hash, path);
+        } else {
+            mixBytes(hash, module.spec);
+        }
+    }
 }
 
 fn mixStatFile(io: std.Io, hash: *u64, path: []const u8) !void {

@@ -29,8 +29,7 @@ fn isConst(func: ast.FunctionDecl) bool {
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
-    const diagnostic_origin = try sink.allocator.dupe(u8, origin);
-    try sink.addValidationDiagnostic(.@"error", null, null, diagnostic_origin, .{
+    try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
 }
@@ -206,50 +205,51 @@ fn inferUserFunctionReturnInfoInner(
     }
 
     var result = infoFromType(func.result_type);
-    for (func.statements.items) |stmt| {
-        switch (stmt.kind) {
-            .let_binding => |binding| {
-                const info = try exprInfo(allocator, null, sema, &env, binding.expr, "");
-                try env.put(binding.name, info);
-            },
-            .return_expr => |expr| {
-                const info = try exprInfo(allocator, null, sema, &env, expr, "");
-                result = mergeTypeInfo(result, info);
-            },
-            .property_set => |property_set| {
-                try validatePropertySetStatement(allocator, ir, sema, &env, property_set.object_name, property_set.property_name, property_set.value, "");
-            },
-            .if_stmt => |if_stmt| {
-                _ = try exprInfo(allocator, null, sema, &env, if_stmt.condition, "");
-                var then_env = try env.clone();
-                defer then_env.deinit();
-                for (if_stmt.then_statements.items) |nested| {
-                    switch (nested.kind) {
-                        .return_expr => |expr| result = mergeTypeInfo(result, try exprInfo(allocator, null, sema, &then_env, expr, "")),
-                        else => {},
-                    }
-                }
-                var else_env = try env.clone();
-                defer else_env.deinit();
-                for (if_stmt.else_statements.items) |nested| {
-                    switch (nested.kind) {
-                        .return_expr => |expr| result = mergeTypeInfo(result, try exprInfo(allocator, null, sema, &else_env, expr, "")),
-                        else => {},
-                    }
-                }
-            },
-            .expr_stmt => |expr| {
-                _ = try exprInfo(allocator, null, sema, &env, expr, "");
-            },
-            .constrain => |decl| {
-                if (decl.offset) |expr| _ = try exprInfo(allocator, null, sema, &env, expr, "");
-            },
-        }
-    }
+    try inferReturnInfoFromStatements(allocator, ir, sema, &env, func.statements.items, &result);
     result.ty = func.result_type;
     result.sort = func.result_sort;
     if (func.result_type.class_name) |class_name| result.object_class = class_name;
     return result;
+}
+
+fn inferReturnInfoFromStatements(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *TypeEnv,
+    statements: []const ast.Statement,
+    result: *TypeInfo,
+) !void {
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .let_binding => |binding| {
+                const info = try exprInfo(allocator, null, sema, env, binding.expr, "");
+                try env.put(binding.name, info);
+            },
+            .return_expr => |expr| {
+                const info = try exprInfo(allocator, null, sema, env, expr, "");
+                result.* = mergeTypeInfo(result.*, info);
+            },
+            .property_set => |property_set| {
+                try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, "");
+            },
+            .if_stmt => |if_stmt| {
+                _ = try exprInfo(allocator, null, sema, env, if_stmt.condition, "");
+                var then_env = try env.clone();
+                defer then_env.deinit();
+                try inferReturnInfoFromStatements(allocator, ir, sema, &then_env, if_stmt.then_statements.items, result);
+                var else_env = try env.clone();
+                defer else_env.deinit();
+                try inferReturnInfoFromStatements(allocator, ir, sema, &else_env, if_stmt.else_statements.items, result);
+            },
+            .expr_stmt => |expr| {
+                _ = try exprInfo(allocator, null, sema, env, expr, "");
+            },
+            .constrain => |decl| {
+                if (decl.offset) |expr| _ = try exprInfo(allocator, null, sema, env, expr, "");
+            },
+        }
+    }
 }
 
 fn primitiveResultTypeInfo(

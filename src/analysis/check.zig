@@ -33,8 +33,7 @@ fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: 
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
-    const diagnostic_origin = try sink.allocator.dupe(u8, origin);
-    try sink.addValidationDiagnostic(.@"error", null, null, diagnostic_origin, .{
+    try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
 }
@@ -122,6 +121,7 @@ fn checkTopLevelStatement(
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, origin_path, stmt.span);
+    defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
             try rejectPageOnlyExpr(allocator, ir, context, origin, binding.expr);
@@ -241,6 +241,7 @@ fn checkStatement(
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, origin_path, stmt.span);
+    defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);

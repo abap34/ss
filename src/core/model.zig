@@ -240,6 +240,21 @@ pub const FunctionRef = struct {
     returns_value: bool,
     result_sort: SemanticSort,
     effect: FunctionEffect = .unknown,
+
+    pub fn deinit(self: *FunctionRef, allocator: Allocator) void {
+        if (self.param_sorts.len != 0) allocator.free(self.param_sorts);
+    }
+
+    pub fn clone(self: FunctionRef, allocator: Allocator) !FunctionRef {
+        return .{
+            .name = self.name,
+            .param_count = self.param_count,
+            .param_sorts = try allocator.dupe(SemanticSort, self.param_sorts),
+            .returns_value = self.returns_value,
+            .result_sort = self.result_sort,
+            .effect = self.effect,
+        };
+    }
 };
 
 pub const FunctionEffect = enum {
@@ -429,6 +444,7 @@ pub const FragmentRoot = union(enum) {
     pub fn deinit(self: *FragmentRoot, allocator: Allocator) void {
         switch (self.*) {
             .selection => |*selection| selection.deinit(allocator),
+            .function => |*function| function.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
             else => {},
         }
@@ -441,7 +457,7 @@ pub const FragmentRoot = union(enum) {
             .object => |id| .{ .object = id },
             .selection => |selection| .{ .selection = try selection.clone(allocator) },
             .anchor => |anchor| .{ .anchor = anchor },
-            .function => |function| .{ .function = function },
+            .function => |function| .{ .function = try function.clone(allocator) },
             .style => |style| .{ .style = style },
             .string => |text| .{ .string = text },
             .number => |number| .{ .number = number },
@@ -507,6 +523,7 @@ pub const Value = union(SemanticSort) {
         switch (self.*) {
             .code => |*code| code.deinit(allocator),
             .selection => |*selection| selection.deinit(allocator),
+            .function => |*function| function.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
             else => {},
         }
@@ -520,7 +537,7 @@ pub const Value = union(SemanticSort) {
             .object => |id| .{ .object = id },
             .selection => |selection| .{ .selection = try selection.clone(allocator) },
             .anchor => |anchor| .{ .anchor = anchor },
-            .function => |function| .{ .function = function },
+            .function => |function| .{ .function = try function.clone(allocator) },
             .style => |style| .{ .style = style },
             .string => |text| .{ .string = text },
             .number => |number| .{ .number = number },
@@ -616,6 +633,7 @@ pub const Diagnostic = struct {
     };
 
     pub fn deinit(self: *Diagnostic, allocator: Allocator) void {
+        if (self.origin) |origin| allocator.free(origin);
         switch (self.data) {
             .user_report => |data| allocator.free(data.message),
             .asset_not_found => |data| {

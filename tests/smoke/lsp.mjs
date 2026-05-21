@@ -217,6 +217,42 @@ const firstProjectInfoAfterSecondOpen = await request("ss/projectInfo", {
 });
 assert(firstProjectInfoAfterSecondOpen.entryPath === fixture, "projectInfo used the latest global snapshot instead of the requested document");
 
+const duplicateDir = path.join(root, ".ss-cache", "lsp-duplicate-definitions");
+const duplicateSlide = path.join(duplicateDir, "slide.ss");
+const duplicateUri = pathToFileURL(duplicateSlide).toString();
+const duplicateSource = `import std:themes/default
+
+page one
+  let item = text("one")
+  place item
+end
+
+page two
+  let item = text("two")
+  place item
+end
+`;
+await mkdir(duplicateDir, { recursive: true });
+await writeFile(duplicateSlide, duplicateSource, "utf8");
+const duplicateDiagnosticsPromise = waitForNotification(
+  (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === duplicateUri,
+);
+notify("textDocument/didOpen", {
+  textDocument: {
+    uri: duplicateUri,
+    languageId: "ss-slide",
+    version: 1,
+    text: duplicateSource,
+  },
+});
+const duplicateDiagnostics = await duplicateDiagnosticsPromise;
+assert(duplicateDiagnostics.params.diagnostics.length === 0, "duplicate definition fixture opened with diagnostics");
+const duplicateDefinition = await request("textDocument/definition", {
+  textDocument: { uri: duplicateUri },
+  position: { line: 4, character: 10 },
+});
+assert(Array.isArray(duplicateDefinition) && duplicateDefinition.length >= 2, "definition response dropped same-name candidates");
+
 const rangedBrokenDiagnosticsPromise = waitForNotification(
   (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
 );
