@@ -48,7 +48,7 @@ Set the repository's Pages source to **GitHub Actions** before the first deploy.
 
 | Input | Default | Description |
 | --- | --- | --- |
-| `image` | `ghcr.io/yuchi/ss-render:v0` | Prebuilt render image. |
+| `image` | `ghcr.io/abap34/ss-render:v0` | Prebuilt render image. |
 | `input` | `slides/**/*.ss` | Newline- or comma-separated `.ss` glob patterns. |
 | `out-dir` | `_site` | Directory uploaded as the Pages artifact. |
 | `pdf-dir` | `slides` | Directory under `out-dir` for rendered PDFs. |
@@ -68,5 +68,5 @@ docker run --rm \
   -w /workspace \
   -e SS_INPUT='slides/**/*.ss' \
   -e SS_OUT_DIR='_site' \
-  ghcr.io/yuchi/ss-render:v0
+  ghcr.io/abap34/ss-render:v0
 ```
