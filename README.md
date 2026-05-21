@@ -126,7 +126,7 @@ page title
 title_page(
   "Hello, ss",
   "Write slides as programs.",
-  "v0.1.1"
+  "v0.1.2"
 )
 end
 
@@ -210,14 +210,14 @@ For CI and GitHub Pages publishing, ss also ships a render image:
 ```text
 ghcr.io/abap34/ss-render:v0
 ghcr.io/abap34/ss-render:v0.1
-ghcr.io/abap34/ss-render:v0.1.1
+ghcr.io/abap34/ss-render:v0.1.2
 ```
 
 The repository includes a GitHub Action for rendering `.ss` files to PDFs and
 uploading a Pages artifact:
 
 ```yaml
-- uses: abap34/ss/release/actions/render-pages@v0.1.1
+- uses: abap34/ss/release/actions/render-pages@v0.1.2
   with:
     image: ghcr.io/abap34/ss-render:v0
     input: "slides/**/*.ss"
