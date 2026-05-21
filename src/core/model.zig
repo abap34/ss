@@ -508,6 +508,24 @@ pub const Value = union(SemanticSort) {
         }
     }
 
+    pub fn clone(self: Value, allocator: Allocator) !Value {
+        return switch (self) {
+            .code => |code| .{ .code = try code.clone(allocator) },
+            .document => |id| .{ .document = id },
+            .page => |id| .{ .page = id },
+            .object => |id| .{ .object = id },
+            .selection => |selection| .{ .selection = try selection.clone(allocator) },
+            .anchor => |anchor| .{ .anchor = anchor },
+            .function => |function| .{ .function = function },
+            .style => |style| .{ .style = style },
+            .string => |text| .{ .string = text },
+            .number => |number| .{ .number = number },
+            .boolean => |boolean| .{ .boolean = boolean },
+            .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
+            .fragment => |fragment| .{ .fragment = fragment },
+        };
+    }
+
     pub fn firstId(self: Value) ?NodeId {
         return switch (self) {
             .code => |code| code.firstId(),

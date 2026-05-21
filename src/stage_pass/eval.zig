@@ -401,7 +401,7 @@ fn evalExpr(
 ) anyerror!core.Value {
     return switch (expr) {
         .ident => |name| blk: {
-            if (env.get(name)) |value| break :blk value;
+            if (env.get(name)) |value| break :blk try value.clone(ir.allocator);
             if (functions.get(name)) |func| {
                 if (func.kind == .constant) {
                     break :blk try invokeUserFunctionValue(ir, env, functions, func, current_origin, .{
