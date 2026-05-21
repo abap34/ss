@@ -1,6 +1,6 @@
 {
   "name": "ss-language-support",
-  "displayName": "ss Language Support",
+  "displayName": "ss-lang for VS Code",
   "description": "Language server powered editor support for ss slide source files.",
   "version": "0.1.1",
   "publisher": "abap34",
