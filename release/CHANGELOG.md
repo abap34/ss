@@ -4,6 +4,13 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-22
+
+### Added
+
+- `ss init` for creating a new `ss.toml` project and starter slide deck.
+- `ss doctor` for checking project discovery and render tool availability.
+
 ## [0.1.1] - 2026-05-21
 
 ### Added
