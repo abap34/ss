@@ -13,6 +13,7 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
+        try checkObjectNamesUnique(allocator, ir, origin_path, module.program.objects.items);
         for (module.program.objects.items) |object_decl| {
             try checkObjectDeclaration(allocator, ir, sema, module.id, origin_path, object_decl);
             try checkRolesUnique(allocator, ir, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
@@ -21,6 +22,25 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
             try checkObjectExtension(allocator, ir, sema, module.id, origin_path, extension);
             try checkRolesUnique(allocator, ir, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
+    }
+}
+
+fn checkObjectNamesUnique(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    origin_path: []const u8,
+    objects: []const ast.ObjectDecl,
+) !void {
+    var names = std.StringHashMap(void).init(allocator);
+    defer names.deinit();
+    for (objects) |object_decl| {
+        if (names.contains(object_decl.name)) {
+            const origin = try statementOrigin(allocator, origin_path, object_decl.span);
+            defer allocator.free(origin);
+            try addUserReport(ir, origin, "DuplicateObjectClass: object class '{s}' is already defined in this module", .{object_decl.name});
+            return error.InvalidSemanticSort;
+        }
+        try names.put(object_decl.name, {});
     }
 }
 

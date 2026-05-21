@@ -102,6 +102,7 @@ pub fn typecheckProgram(
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
+    try checkDuplicateFunctionDeclarations(allocator, ir);
     try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
@@ -111,6 +112,35 @@ pub fn typecheckProgram(
         const module = ir.moduleById(module_id) orelse continue;
         try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
     }
+}
+
+fn checkDuplicateFunctionDeclarations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+) !void {
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        var names = std.StringHashMap(void).init(allocator);
+        defer names.deinit();
+        const origin_path = checker.originPathForModule(module);
+        for (module.program.functions.items) |func| {
+            if (names.contains(func.name)) {
+                const origin = try originForModuleSpan(allocator, origin_path, func.span);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateFunction: function '{s}' is already defined in this module", .{func.name}) },
+                });
+                return error.DiagnosticsFailed;
+            }
+            try names.put(func.name, {});
+        }
+    }
+}
+
+fn originForModuleSpan(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
+    if (origin_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
+    }
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
 fn checkOrdinaryFunctionEffectContracts(

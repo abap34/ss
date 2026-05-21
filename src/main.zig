@@ -286,8 +286,8 @@ fn starterSlideTemplate() []const u8 {
 }
 
 fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !void {
-    if (std.fs.path.isAbsolute(options.entry)) {
-        std.debug.print("init: --entry must be relative to the project directory\n", .{});
+    if (std.fs.path.isAbsolute(options.entry) or relativePathEscapesRoot(options.entry)) {
+        std.debug.print("init: --entry must stay inside the project directory\n", .{});
         return error.InitEntryMustBeRelative;
     }
 
@@ -324,6 +324,21 @@ fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !
     std.debug.print("  {s}\n", .{project_path});
     std.debug.print("  {s}\n", .{entry_path});
     std.debug.print("\nnext:\n  ss render --project {s} --output deck.pdf\n", .{options.dir});
+}
+
+fn relativePathEscapesRoot(path: []const u8) bool {
+    var depth: usize = 0;
+    var parts = std.mem.tokenizeAny(u8, path, "/\\");
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
+        if (std.mem.eql(u8, part, "..")) {
+            if (depth == 0) return true;
+            depth -= 1;
+            continue;
+        }
+        depth += 1;
+    }
+    return false;
 }
 
 const DoctorTool = struct {
@@ -465,6 +480,19 @@ fn isExecutable(allocator: std.mem.Allocator, path: []const u8) bool {
     return std.c.access(zpath.ptr, std.c.X_OK) == 0;
 }
 
+fn resolveProjectOrUsage(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    options: CommandOptions,
+) !project.Resolved {
+    return project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
+        if (err == error.MissingInputPath) {
+            return failUsage("missing input path or --project", .{});
+        }
+        return err;
+    };
+}
+
 fn run(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -488,7 +516,7 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "check")) {
         const options = try parseCommandOptions(args[2..]);
-        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         try app.checkFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir);
         return;
@@ -496,7 +524,7 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "dump")) {
         const options = try parseCommandOptions(args[2..]);
-        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
             var progress = app.Progress.init(7);
@@ -510,7 +538,7 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "render")) {
         const options = try parseCommandOptions(args[2..]);
-        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         var progress = app.Progress.init(7);
@@ -548,7 +576,7 @@ fn run(init: std.process.Init) !void {
             return failUsage("unknown watch mode: {s}", .{args[2]});
         };
         const options = try parseCommandOptions(args[3..]);
-        var resolved = try project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         const output_path = if (mode == .render)
             options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")

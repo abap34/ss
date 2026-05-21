@@ -18,6 +18,27 @@ mkdir -p "$CACHE"
 "$SS_BIN" check --project "$FIXTURE/ss.toml"
 
 (cd "$FIXTURE" && "$SS_BIN" check)
+NO_PROJECT="$ROOT/.ss-cache/no-project-smoke"
+rm -rf "$NO_PROJECT"
+mkdir -p "$NO_PROJECT"
+if (cd "$NO_PROJECT" && "$SS_BIN" check >/dev/null 2>"$CACHE/no-input.err"); then
+  echo "ss check without input or project unexpectedly passed" >&2
+  exit 1
+fi
+grep -F "missing input path or --project" "$CACHE/no-input.err" >/dev/null
+
+"$SS_BIN" --version >"$CACHE/version.out" 2>"$CACHE/version.err"
+test -s "$CACHE/version.out"
+test ! -s "$CACHE/version.err"
+if "$SS_BIN" nope >/dev/null 2>"$CACHE/unknown-command.err"; then
+  echo "unknown command unexpectedly passed" >&2
+  exit 1
+fi
+if "$SS_BIN" cache nope >/dev/null 2>"$CACHE/unknown-cache.err"; then
+  echo "unknown cache subcommand unexpectedly passed" >&2
+  exit 1
+fi
+
 doctor="$("$SS_BIN" doctor --project "$FIXTURE" 2>&1)"
 printf '%s\n' "$doctor" | grep -F "ss doctor" >/dev/null
 printf '%s\n' "$doctor" | grep -F "project:" >/dev/null
@@ -35,6 +56,27 @@ if "$SS_BIN" init "$INIT_FIXTURE" >/dev/null 2>&1; then
   exit 1
 fi
 "$SS_BIN" init "$INIT_FIXTURE" --force >/dev/null
+if "$SS_BIN" init "$ROOT/.ss-cache/init-escape" --entry ../outside.ss >/dev/null 2>"$CACHE/init-escape.err"; then
+  echo "ss init accepted an entry outside the project root" >&2
+  exit 1
+fi
+grep -F "must stay inside" "$CACHE/init-escape.err" >/dev/null
+
+HASH_FIXTURE="$ROOT/.ss-cache/hash-project-smoke"
+rm -rf "$HASH_FIXTURE"
+mkdir -p "$HASH_FIXTURE"
+cat > "$HASH_FIXTURE/slide#1.ss" <<'SS'
+import std:themes/default
+
+page hash
+end
+SS
+cat > "$HASH_FIXTURE/ss.toml" <<'SS'
+[project]
+entry = "slide#1.ss"
+asset_base_dir = "." # normal comments still work
+SS
+"$SS_BIN" check --project "$HASH_FIXTURE"
 
 "$SS_BIN" dump "$FIXTURE/slide.ss" "$CACHE/explicit.json"
 "$SS_BIN" dump --project "$FIXTURE" --output "$CACHE/project-dir.json"

@@ -49,7 +49,7 @@ pub fn resolve(
     else if (config) |cfg|
         try allocator.dupe(u8, cfg.entry)
     else
-        try absolutePath(allocator, "demo/01-language-tour.ss");
+        return error.MissingInputPath;
     errdefer allocator.free(entry_path);
 
     const asset_base_dir = if (asset_base_arg) |asset_base|
@@ -133,7 +133,7 @@ fn parseProjectString(source: []const u8, key: []const u8) ?[]const u8 {
     var in_project = false;
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line_raw| {
-        const comment_start = std.mem.indexOfScalar(u8, line_raw, '#') orelse line_raw.len;
+        const comment_start = tomlCommentStart(line_raw);
         const line = std.mem.trim(u8, line_raw[0..comment_start], " \t\r");
         if (line.len == 0) continue;
         if (line[0] == '[') {
@@ -149,6 +149,29 @@ fn parseProjectString(source: []const u8, key: []const u8) ?[]const u8 {
         return value[1 .. value.len - 1];
     }
     return null;
+}
+
+fn tomlCommentStart(line: []const u8) usize {
+    var in_string = false;
+    var escaped = false;
+    for (line, 0..) |byte, index| {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\') {
+                escaped = true;
+            } else if (byte == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (byte == '"') {
+            in_string = true;
+        } else if (byte == '#') {
+            return index;
+        }
+    }
+    return line.len;
 }
 
 fn resolveAgainst(allocator: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
