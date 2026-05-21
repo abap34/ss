@@ -225,7 +225,7 @@ pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []cons
     const text = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(text);
     progress.step("Serialize JSON");
-    std.debug.print("{s}", .{text});
+    try stdoutWriteAll(text);
     progress.step("Print dump");
 }
 
@@ -235,7 +235,7 @@ pub fn printIrJsonForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator,
     const text = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(text);
     progress.step("Serialize JSON");
-    std.debug.print("{s}", .{text});
+    try stdoutWriteAll(text);
     progress.step("Print dump");
 }
 
@@ -360,6 +360,15 @@ fn printProgressDetail(current: usize, total: usize, label: []const u8, detail_c
         stage_text,
         total_text,
     });
+}
+
+fn stdoutWriteAll(bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const n = std.c.write(1, bytes[offset..].ptr, bytes.len - offset);
+        if (n <= 0) return error.WriteFailed;
+        offset += @intCast(n);
+    }
 }
 
 fn progressCallback(progress: *Progress) pdf.RenderProgress {

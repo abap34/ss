@@ -116,6 +116,7 @@ const initialize = await request("initialize", {
 assert(initialize.capabilities?.completionProvider, "initialize did not advertise completion");
 assert(initialize.capabilities?.semanticTokensProvider, "initialize did not advertise semantic tokens");
 assert(initialize.capabilities?.colorProvider, "initialize did not advertise document colors");
+assert(initialize.capabilities?.textDocumentSync === 2, "initialize did not advertise incremental sync");
 
 notify("initialized", {});
 const diagnosticsPromise = waitForNotification(
@@ -191,11 +192,37 @@ assert(projectInfo.entryPath === fixture, "projectInfo entryPath did not resolve
 assert(projectInfo.assetBaseDir === path.dirname(fixture), "projectInfo assetBaseDir did not resolve from ss.toml");
 assert(projectInfo.localModules?.includes(partsFixture), "projectInfo did not report imported local modules");
 
-const brokenDiagnosticsPromise = waitForNotification(
+const rangedBrokenDiagnosticsPromise = waitForNotification(
   (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
 );
 notify("textDocument/didChange", {
   textDocument: { uri, version: 2 },
+  contentChanges: [{
+    range: { start: { line: 3, character: 0 }, end: { line: 3, character: 4 } },
+    text: "pag",
+  }],
+});
+const rangedBrokenDiagnostics = await rangedBrokenDiagnosticsPromise;
+assert(rangedBrokenDiagnostics.params.diagnostics.length > 0, "ranged didChange did not publish diagnostics for broken source");
+
+const rangedFixedDiagnosticsPromise = waitForNotification(
+  (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
+);
+notify("textDocument/didChange", {
+  textDocument: { uri, version: 3 },
+  contentChanges: [{
+    range: { start: { line: 3, character: 0 }, end: { line: 3, character: 3 } },
+    text: "page",
+  }],
+});
+const rangedFixedDiagnostics = await rangedFixedDiagnosticsPromise;
+assert(rangedFixedDiagnostics.params.diagnostics.length === 0, "ranged didChange did not clear diagnostics after restoring source");
+
+const brokenDiagnosticsPromise = waitForNotification(
+  (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
+);
+notify("textDocument/didChange", {
+  textDocument: { uri, version: 4 },
   contentChanges: [{ text: "page broken\nlet x =\nend\n" }],
 });
 const brokenDiagnostics = await brokenDiagnosticsPromise;
@@ -205,7 +232,7 @@ const fixedDiagnosticsPromise = waitForNotification(
   (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
 );
 notify("textDocument/didChange", {
-  textDocument: { uri, version: 3 },
+  textDocument: { uri, version: 5 },
   contentChanges: [{ text: source }],
 });
 const fixedDiagnostics = await fixedDiagnosticsPromise;
