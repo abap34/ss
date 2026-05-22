@@ -53,6 +53,13 @@ fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
             try item.intField("node", content.node);
             try item.stringField("value", content.value);
         },
+        .add_metadata => |metadata| {
+            try item.stringField("kind", "add_metadata");
+            try item.stringField("metadata_kind", metadata.kind);
+            try item.stringField("value", metadata.value);
+            try item.optionalIntField("page", metadata.page);
+            try item.optionalStringField("origin", metadata.origin);
+        },
         .add_constraint => |constraint| {
             try item.stringField("kind", "add_constraints");
             try writeDocConstraint(&item, constraint);

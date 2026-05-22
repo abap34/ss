@@ -2,6 +2,7 @@ const model = @import("model");
 
 pub const Allocator = model.Allocator;
 pub const NodeId = model.NodeId;
+pub const MetadataId = model.MetadataId;
 pub const NodeKind = model.NodeKind;
 pub const Role = model.Role;
 pub const GroupRole = model.GroupRole;
@@ -15,6 +16,7 @@ pub const Frame = model.Frame;
 pub const Axis = model.Axis;
 pub const AxisState = model.AxisState;
 pub const Node = model.Node;
+pub const Metadata = model.Metadata;
 pub const RenderEnvEntry = model.RenderEnvEntry;
 pub const SemanticSort = model.SemanticSort;
 pub const SelectionItemSort = model.SelectionItemSort;

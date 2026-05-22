@@ -610,6 +610,30 @@ const BuiltinContext = struct {
         try self.ir.extendRenderEnv(node_id, op, key, value);
     }
 
+    pub fn emitMetadata(self: *BuiltinContext, target: core.Value, kind: []const u8, value: []const u8) !core.MetadataId {
+        return try self.ir.emitMetadata(target, kind, value, self.current_origin);
+    }
+
+    pub fn metadataInDocument(self: *BuiltinContext, kind: []const u8) !core.Selection {
+        return try self.ir.selectDocumentMetadataByKind(self.ir.allocator, kind, "metadata-in-document");
+    }
+
+    pub fn metadataOnPage(self: *BuiltinContext, page_id: core.NodeId, kind: []const u8) !core.Selection {
+        return try self.ir.selectPageMetadataByKind(self.ir.allocator, page_id, kind, "metadata-on-page");
+    }
+
+    pub fn metadataContent(self: *BuiltinContext, metadata_id: core.MetadataId) ![]const u8 {
+        return try self.ir.metadataContent(metadata_id);
+    }
+
+    pub fn metadataKind(self: *BuiltinContext, metadata_id: core.MetadataId) ![]const u8 {
+        return try self.ir.metadataKind(metadata_id);
+    }
+
+    pub fn metadataPage(self: *BuiltinContext, metadata_id: core.MetadataId) !core.NodeId {
+        return try self.ir.metadataPage(metadata_id);
+    }
+
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {
         const func = self.functions.get(function.name) orelse {
             reportUnknownFunction(function.name, self.current_origin);
@@ -1310,6 +1334,7 @@ fn fragmentRootFromValue(allocator: std.mem.Allocator, value: core.Value) !core.
         .document => |id| .{ .document = id },
         .page => |id| .{ .page = id },
         .object => |id| .{ .object = id },
+        .metadata => error.UnsupportedFragmentRoot,
         .selection => |selection| .{ .selection = try selection.clone(allocator) },
         .anchor => |anchor| .{ .anchor = anchor },
         .function => |function| .{ .function = try function.clone(allocator) },
