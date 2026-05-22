@@ -82,6 +82,11 @@ fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
     return error.InvalidUsage;
 }
 
+fn failCli(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
+    std.debug.print(fmt ++ "\n", args);
+    return error.InvalidUsage;
+}
+
 fn version() void {
     var buffer: [128]u8 = undefined;
     const text = std.fmt.bufPrint(&buffer, "ss {s} ({s})\n", .{ build_options.version, build_options.commit }) catch return;
@@ -148,46 +153,50 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--asset-base-dir")) {
-            if (i + 1 >= args.len) return error.MissingAssetBaseDirValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --asset-base-dir", .{});
             options.asset_base_dir = args[i + 1];
             i += 1;
             continue;
         }
         if (std.mem.eql(u8, arg, "--project")) {
-            if (i + 1 >= args.len) return error.MissingProjectValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --project", .{});
             options.project_path = args[i + 1];
             i += 1;
             continue;
         }
         if (std.mem.eql(u8, arg, "--output")) {
-            if (i + 1 >= args.len) return error.MissingOutputValue;
-            if (options.output_path != null) return error.DuplicateOutputPath;
+            if (i + 1 >= args.len) return failUsage("missing value for --output", .{});
+            if (options.output_path != null) return failUsage("output path specified more than once", .{});
             options.output_path = args[i + 1];
             i += 1;
             continue;
         }
         if (std.mem.eql(u8, arg, "--jobs")) {
-            if (i + 1 >= args.len) return error.MissingJobsValue;
-            options.jobs = try std.fmt.parseUnsigned(usize, args[i + 1], 10);
-            if (options.jobs.? == 0) return error.InvalidJobsValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --jobs", .{});
+            options.jobs = std.fmt.parseUnsigned(usize, args[i + 1], 10) catch {
+                return failUsage("invalid --jobs value: {s}", .{args[i + 1]});
+            };
+            if (options.jobs.? == 0) return failUsage("--jobs must be greater than zero", .{});
             i += 1;
             continue;
         }
         if (std.mem.eql(u8, arg, "--interval-ms")) {
-            if (i + 1 >= args.len) return error.MissingIntervalValue;
-            options.interval_ms = try std.fmt.parseUnsigned(u64, args[i + 1], 10);
-            if (options.interval_ms == 0) return error.InvalidIntervalValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --interval-ms", .{});
+            options.interval_ms = std.fmt.parseUnsigned(u64, args[i + 1], 10) catch {
+                return failUsage("invalid --interval-ms value: {s}", .{args[i + 1]});
+            };
+            if (options.interval_ms == 0) return failUsage("--interval-ms must be greater than zero", .{});
             i += 1;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--")) return error.UnknownFlag;
+        if (std.mem.startsWith(u8, arg, "--")) return failUsage("unknown flag: {s}", .{arg});
         switch (positional_index) {
             0 => options.input_path = arg,
             1 => {
-                if (options.output_path != null) return error.DuplicateOutputPath;
+                if (options.output_path != null) return failUsage("output path specified more than once", .{});
                 options.output_path = arg;
             },
-            else => return error.TooManyArguments,
+            else => return failUsage("too many arguments: {s}", .{arg}),
         }
         positional_index += 1;
     }
@@ -201,7 +210,7 @@ fn parseInitOptions(args: []const []const u8) !InitOptions {
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--entry")) {
-            if (i + 1 >= args.len) return error.MissingEntryValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --entry", .{});
             options.entry = args[i + 1];
             i += 1;
             continue;
@@ -210,8 +219,8 @@ fn parseInitOptions(args: []const []const u8) !InitOptions {
             options.force = true;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--")) return error.UnknownFlag;
-        if (saw_dir) return error.TooManyArguments;
+        if (std.mem.startsWith(u8, arg, "--")) return failUsage("unknown flag: {s}", .{arg});
+        if (saw_dir) return failUsage("too many arguments: {s}", .{arg});
         options.dir = arg;
         saw_dir = true;
     }
@@ -225,13 +234,13 @@ fn parseDoctorOptions(args: []const []const u8) !DoctorOptions {
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--asset-base-dir")) {
-            if (i + 1 >= args.len) return error.MissingAssetBaseDirValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --asset-base-dir", .{});
             options.asset_base_dir = args[i + 1];
             i += 1;
             continue;
         }
         if (std.mem.eql(u8, arg, "--project")) {
-            if (i + 1 >= args.len) return error.MissingProjectValue;
+            if (i + 1 >= args.len) return failUsage("missing value for --project", .{});
             options.project_path = args[i + 1];
             i += 1;
             continue;
@@ -240,10 +249,10 @@ fn parseDoctorOptions(args: []const []const u8) !DoctorOptions {
             options.strict = true;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "--")) return error.UnknownFlag;
+        if (std.mem.startsWith(u8, arg, "--")) return failUsage("unknown flag: {s}", .{arg});
         switch (positional_index) {
             0 => options.input_path = arg,
-            else => return error.TooManyArguments,
+            else => return failUsage("too many arguments: {s}", .{arg}),
         }
         positional_index += 1;
     }
@@ -493,6 +502,20 @@ fn resolveProjectOrUsage(
     };
 }
 
+fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
+    utils.fs.validateOutputParent(io, output_path) catch |err| switch (err) {
+        error.OutputParentNotFound => {
+            const parent = std.fs.path.dirname(output_path) orelse ".";
+            return failCli("output parent directory does not exist: {s}", .{parent});
+        },
+        error.OutputParentNotDirectory => {
+            const parent = std.fs.path.dirname(output_path) orelse ".";
+            return failCli("output parent path is not a directory: {s}", .{parent});
+        },
+        else => return err,
+    };
+}
+
 fn run(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -527,6 +550,7 @@ fn run(init: std.process.Init) !void {
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
+            try validateOutputParentOrCliError(io, output_path);
             var progress = app.Progress.init(7);
             try app.writeIrJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
         } else {
@@ -541,6 +565,7 @@ fn run(init: std.process.Init) !void {
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
+        try validateOutputParentOrCliError(io, output_path);
         var progress = app.Progress.init(7);
         const render_options = app.RenderOptions{ .jobs = options.jobs };
         try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
@@ -582,6 +607,7 @@ fn run(init: std.process.Init) !void {
             options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
         else
             options.output_path;
+        if (output_path) |path| try validateOutputParentOrCliError(io, path);
         try watcher.run(io, allocator, mode, .{
             .input_path = resolved.entry_path,
             .output_path = output_path,

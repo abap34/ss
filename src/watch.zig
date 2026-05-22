@@ -1,7 +1,6 @@
 const std = @import("std");
 const app = @import("app.zig");
 const syntax = @import("syntax.zig");
-const typecheck = @import("analysis/typecheck.zig");
 const utils = @import("utils");
 
 pub const Mode = enum {
@@ -116,23 +115,61 @@ fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !u64 
 }
 
 fn mixModuleDependencyStats(io: std.Io, allocator: std.mem.Allocator, hash: *u64, options: Options) !void {
-    const source = utils.fs.readFileAlloc(io, allocator, options.input_path) catch return;
+    var visited = std.StringHashMap(void).init(allocator);
+    defer {
+        var key_it = visited.keyIterator();
+        while (key_it.next()) |key| allocator.free(key.*);
+        visited.deinit();
+    }
+    try mixModuleImportGraph(io, allocator, hash, options.input_path, &visited);
+}
+
+fn mixModuleImportGraph(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    hash: *u64,
+    module_path: []const u8,
+    visited: *std.StringHashMap(void),
+) !void {
+    const resolved_module_path = try std.fs.path.resolve(allocator, &.{module_path});
+    defer allocator.free(resolved_module_path);
+    if (visited.contains(resolved_module_path)) return;
+    const owned_path = try allocator.dupe(u8, resolved_module_path);
+    errdefer allocator.free(owned_path);
+    try visited.put(owned_path, {});
+
+    mixBytes(hash, resolved_module_path);
+    try mixStatFile(io, hash, resolved_module_path);
+
+    const source = utils.fs.readFileAlloc(io, allocator, resolved_module_path) catch return;
     defer allocator.free(source);
 
-    var program = syntax.parseWithSourceName(allocator, source, options.input_path) catch return;
+    var program = syntax.parseWithSourceName(allocator, source, resolved_module_path) catch return;
     defer program.deinit(allocator);
 
-    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, options.asset_base_dir, program, null) catch return;
-    defer index.deinit();
+    const base_dir = std.fs.path.dirname(resolved_module_path) orelse ".";
+    for (program.imports.items) |import_decl| {
+        mixBytes(hash, import_decl.spec);
+        if (std.mem.startsWith(u8, import_decl.spec, "std:")) continue;
+        if (!looksLikePathImport(import_decl.spec)) continue;
 
-    for (index.modules.items) |module| {
-        if (module.path) |path| {
-            mixBytes(hash, path);
-            try mixStatFile(io, hash, path);
-        } else {
-            mixBytes(hash, module.spec);
-        }
+        const import_path = try resolveExplicitImportPath(allocator, base_dir, import_decl.spec);
+        defer allocator.free(import_path);
+        mixBytes(hash, import_path);
+        try mixStatFile(io, hash, import_path);
+        try mixModuleImportGraph(io, allocator, hash, import_path, visited);
     }
+}
+
+fn looksLikePathImport(spec: []const u8) bool {
+    return std.mem.indexOfScalar(u8, spec, '/') != null or
+        std.mem.indexOfScalar(u8, spec, '\\') != null or
+        std.mem.endsWith(u8, spec, ".ss");
+}
+
+fn resolveExplicitImportPath(allocator: std.mem.Allocator, base_dir: []const u8, spec: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(spec)) return allocator.dupe(u8, spec);
+    return std.fs.path.resolve(allocator, &.{ base_dir, spec });
 }
 
 fn mixStatFile(io: std.Io, hash: *u64, path: []const u8) !void {
@@ -191,4 +228,45 @@ fn mixBytes(hash: *u64, bytes: []const u8) void {
         hash.* ^= byte;
         hash.* *%= 1099511628211;
     }
+}
+
+test "watch fingerprint changes when a missing explicit import appears outside asset base" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const project_dir = try std.fs.path.join(allocator, &.{ root, "project" });
+    defer allocator.free(project_dir);
+    const dep_dir = try std.fs.path.join(allocator, &.{ root, "dep" });
+    defer allocator.free(dep_dir);
+    try std.Io.Dir.cwd().createDirPath(testing.io, project_dir);
+    try std.Io.Dir.cwd().createDirPath(testing.io, dep_dir);
+
+    const entry_path = try std.fs.path.join(allocator, &.{ project_dir, "main.ss" });
+    defer allocator.free(entry_path);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = entry_path,
+        .data = "import ../dep/missing.ss\npage main\nend\n",
+        .flags = .{ .truncate = true },
+    });
+
+    const options = Options{
+        .input_path = entry_path,
+        .asset_base_dir = project_dir,
+    };
+    const before = try fingerprint(testing.io, allocator, options);
+
+    const missing_path = try std.fs.path.join(allocator, &.{ dep_dir, "missing.ss" });
+    defer allocator.free(missing_path);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = missing_path,
+        .data = "page imported\nend\n",
+        .flags = .{ .truncate = true },
+    });
+
+    const after = try fingerprint(testing.io, allocator, options);
+    try testing.expect(before != after);
 }

@@ -18,6 +18,15 @@ interface PreviewSession {
   pdfPath?: string;
   renderId: number;
   timer?: NodeJS.Timeout;
+  entryPath?: string;
+  dependencyPaths?: Set<string>;
+}
+
+interface Snapshot {
+  entryPath: string;
+  assetBaseDir: string;
+  cwd: string;
+  snapshotDir: string;
 }
 
 export class LivePreview implements vscode.Disposable {
@@ -31,12 +40,12 @@ export class LivePreview implements vscode.Disposable {
   ) {
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
       if (event.document.languageId === "ss-slide") {
-        this.schedule(event.document);
+        this.scheduleAffectedDocument(event.document);
       }
     }));
     this.disposables.push(vscode.workspace.onDidSaveTextDocument((document) => {
       if (document.languageId === "ss-slide") {
-        this.schedule(document, 0);
+        this.scheduleAffectedDocument(document, 0);
       }
     }));
     this.disposables.push(vscode.workspace.onDidCloseTextDocument((document) => {
@@ -46,6 +55,13 @@ export class LivePreview implements vscode.Disposable {
       }
       this.sessions.delete(document.uri.toString());
     }));
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*.ss");
+    this.disposables.push(
+      watcher,
+      watcher.onDidChange((uri) => this.scheduleAffectedUri(uri, 0)),
+      watcher.onDidCreate((uri) => this.scheduleAffectedUri(uri, 0)),
+      watcher.onDidDelete((uri) => this.scheduleAffectedUri(uri, 0)),
+    );
   }
 
   dispose(): void {
@@ -94,6 +110,41 @@ export class LivePreview implements vscode.Disposable {
     }, delayMs ?? configuredDelay);
   }
 
+  private scheduleAffectedDocument(document: vscode.TextDocument, delayMs?: number): void {
+    this.scheduleAffectedPath(document.uri.fsPath, delayMs, document);
+  }
+
+  private scheduleAffectedUri(uri: vscode.Uri, delayMs?: number): void {
+    if (uri.scheme !== "file") {
+      return;
+    }
+    this.scheduleAffectedPath(uri.fsPath, delayMs);
+  }
+
+  private scheduleAffectedPath(changedPath: string, delayMs?: number, changedDocument?: vscode.TextDocument): void {
+    const normalized = normalizePath(changedPath);
+    const scheduled = new Set<string>();
+    if (changedDocument) {
+      const directKey = changedDocument.uri.toString();
+      if (this.sessions.has(directKey)) {
+        this.schedule(changedDocument, delayMs);
+        scheduled.add(directKey);
+      }
+    }
+
+    for (const [key, session] of this.sessions) {
+      if (scheduled.has(key) || !sessionDependsOn(session, normalized)) {
+        continue;
+      }
+      const document = documentForSession(key);
+      if (!document) {
+        continue;
+      }
+      this.schedule(document, delayMs);
+      scheduled.add(key);
+    }
+  }
+
   private async render(document: vscode.TextDocument): Promise<void> {
     const key = document.uri.toString();
     const session = this.sessions.get(key);
@@ -106,7 +157,10 @@ export class LivePreview implements vscode.Disposable {
     const projectInfo = await this.projectInfo(document);
     const entryPath = projectInfo.entryPath ?? document.uri.fsPath;
     const assetBaseDir = projectInfo.assetBaseDir ?? path.dirname(entryPath);
-    const snapshot = await this.writeSnapshot(entryPath, assetBaseDir, projectInfo.localModules ?? []);
+    const localModules = projectInfo.localModules ?? [];
+    session.entryPath = normalizePath(entryPath);
+    session.dependencyPaths = new Set(unique([entryPath, ...localModules]).map(normalizePath));
+    const snapshot = await this.writeSnapshot(entryPath, assetBaseDir, localModules, renderId);
     const paths = this.previewPaths(document, renderId);
     await fs.promises.mkdir(paths.dir, { recursive: true });
 
@@ -114,6 +168,7 @@ export class LivePreview implements vscode.Disposable {
     const args = ["render", snapshot.entryPath, paths.tempPdf, "--asset-base-dir", snapshot.assetBaseDir];
     this.output.appendLine(`[preview] ${command} ${args.join(" ")}`);
     const result = await run(command, args, snapshot.cwd);
+    await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
     if (this.sessions.get(key)?.renderId !== renderId) {
       await removeIfExists(paths.tempPdf);
       return;
@@ -145,9 +200,10 @@ export class LivePreview implements vscode.Disposable {
     }
   }
 
-  private async writeSnapshot(entryPath: string, assetBaseDir: string, modules: string[]): Promise<{ entryPath: string; assetBaseDir: string; cwd: string }> {
+  private async writeSnapshot(entryPath: string, assetBaseDir: string, modules: string[], renderId: number): Promise<Snapshot> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(entryPath);
-    const snapshotDir = path.join(workspaceRoot, ".ss-cache", "vscode-projects", stableHash(entryPath));
+    const snapshotRoot = path.join(workspaceRoot, ".ss-cache", "vscode-projects", stableHash(entryPath));
+    const snapshotDir = path.join(snapshotRoot, `${process.pid}-${renderId}`);
     await fs.promises.rm(snapshotDir, { recursive: true, force: true });
     await copyDirectory(assetBaseDir, snapshotDir);
     const paths = unique([entryPath, ...modules, ...vscode.workspace.textDocuments.filter((doc) => doc.languageId === "ss-slide" && doc.uri.scheme === "file").map((doc) => doc.uri.fsPath)]);
@@ -165,6 +221,7 @@ export class LivePreview implements vscode.Disposable {
       entryPath: path.join(snapshotDir, safeRelative(assetBaseDir, entryPath)),
       assetBaseDir: snapshotDir,
       cwd: workspaceRoot,
+      snapshotDir,
     };
   }
 
@@ -216,6 +273,21 @@ export class LivePreview implements vscode.Disposable {
 
 function stableHash(text: string): string {
   return crypto.createHash("sha1").update(text).digest("hex").slice(0, 12);
+}
+
+function normalizePath(filePath: string): string {
+  return path.resolve(filePath);
+}
+
+function sessionDependsOn(session: PreviewSession, changedPath: string): boolean {
+  if (session.entryPath === changedPath) {
+    return true;
+  }
+  return session.dependencyPaths?.has(changedPath) ?? false;
+}
+
+function documentForSession(key: string): vscode.TextDocument | undefined {
+  return vscode.workspace.textDocuments.find((document) => document.uri.toString() === key);
 }
 
 function unique(paths: string[]): string[] {
