@@ -17,6 +17,16 @@ pub fn writeFile(io: std.Io, path: []const u8, bytes: []const u8) !void {
     });
 }
 
+pub fn validateOutputParent(io: std.Io, path: []const u8) !void {
+    const parent = std.fs.path.dirname(path) orelse return;
+    if (parent.len == 0) return;
+    const stat = std.Io.Dir.cwd().statFile(io, parent, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.OutputParentNotFound,
+        else => return err,
+    };
+    if (stat.kind != .directory) return error.OutputParentNotDirectory;
+}
+
 pub fn siblingPathWithExtension(
     allocator: std.mem.Allocator,
     input_path: []const u8,
