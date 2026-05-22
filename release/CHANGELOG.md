@@ -4,6 +4,24 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-23
+
+### Added
+
+- Metadata facts for staged markers, including stdlib selector helpers for document/page markers.
+- Compiler semantics regression tests outside the smoke-test suite.
+
+### Changed
+
+- Tightened staged component ownership, callback effects, default-argument checking, and runtime value cloning.
+- Refreshed editor grammar, LSP preview/watch behavior, project path handling, and CLI diagnostics.
+- Improved layout dependency solving, bounds diagnostics, render numeric handling, and render cache recovery.
+
+### Fixed
+
+- Rejected invalid project paths, constraints, and duplicate declarations more consistently.
+- Removed hidden one-pixel object reliance for marker metadata now that metadata facts are available.
+
 ## [0.1.2] - 2026-05-22
 
 ### Added
