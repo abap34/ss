@@ -21,6 +21,17 @@ fn expectBuildFails(source: []const u8) !void {
     return error.ExpectedBuildFailure;
 }
 
+fn expectObjectContent(source: []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
+}
+
 test "compiler semantics: default argument effects are checked against function contracts" {
     try expectBuildFails(
         \\import std:themes/default
@@ -81,6 +92,38 @@ test "compiler semantics: selection values can be reused after lookup" {
         \\end
         \\
         \\page ok
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: dynamically built residual text survives lowering" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  text("hello" ++ " " ++ "world")
+        \\end
+        \\
+    , "hello world");
+}
+
+test "compiler semantics: pass select validates dynamic query arity" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn dynamic_query() -> string
+        \\  return "page_objects_by_role"
+        \\end
+        \\
+        \\@pass(resolve)
+        \\fn bad_pass(doc: code<document>) -> code<document> ! ReadGraph
+        \\  select(doc, dynamic_query())
+        \\  return doc
+        \\end
+        \\
+        \\page bad
+        \\  text("hello")
         \\end
         \\
     );

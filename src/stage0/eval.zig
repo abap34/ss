@@ -816,7 +816,10 @@ fn evalSelectCall(
         reportUnknownQuery(op_name, current_origin);
         return error.UnknownQuery;
     };
-    try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
+	    registry.validateQueryArity(descriptor, call.args.items.len) catch |err| {
+	        if (err == error.InvalidArity) try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
+	        return err;
+	    };
     try contracts.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {

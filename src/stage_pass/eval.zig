@@ -506,12 +506,22 @@ const BuiltinContext = struct {
         return .{ .document = self.ir.document_id };
     }
 
-    pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
-        const base = try self.materializeForUse(try self.evalExprValue(call.args.items[0]));
-        const op_name = try self.evalStringArg(call, 1);
-        const sema = SemanticEnv.init(self.ir, null, self.functions);
-        const descriptor = sema.query(op_name) orelse return error.UnknownQuery;
-        switch (descriptor.op) {
+	    pub fn runSelectCall(self: *BuiltinContext, call: CallExpr) anyerror!core.Value {
+	        const base = try self.materializeForUse(try self.evalExprValue(call.args.items[0]));
+	        const op_name = try self.evalStringArg(call, 1);
+	        const sema = SemanticEnv.init(self.ir, null, self.functions);
+	        const descriptor = sema.query(op_name) orelse {
+	            try self.addValidationError("UnknownQuery: unknown query: {s}", .{op_name});
+	            return error.UnknownQuery;
+	        };
+	        registry.validateQueryArity(descriptor, call.args.items.len) catch |err| {
+	            if (err == error.InvalidArity) {
+	                try self.addValidationError("InvalidArity: query {s} expects {d} arguments, got {d}", .{ descriptor.name, descriptor.arity, call.args.items.len });
+	            }
+	            return err;
+	        };
+	        try contracts.ensureValueSortWithCode(self.ir, null, base, descriptor.input_sort, self.current_origin, .UnmatchedInputType);
+	        switch (descriptor.op) {
             .self_object => return try self.ir.select(self.ir.allocator, base, core.Query.selfObject()),
             .previous_page => return try self.ir.select(self.ir.allocator, base, core.Query.previousPage()),
             .parent_page => return try self.ir.select(self.ir.allocator, base, core.Query.parentPage()),
@@ -714,11 +724,17 @@ const BuiltinContext = struct {
         };
     }
 
-    pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
-        try self.ir.addValidationDiagnostic(severity, null, null, self.current_origin, .{
-            .user_report = .{ .message = try self.ir.allocator.dupe(u8, message) },
-        });
-    }
+	    pub fn emitDiagnosticReport(self: *BuiltinContext, severity: core.DiagnosticSeverity, message: []const u8) !void {
+	        try self.ir.addValidationDiagnostic(severity, null, null, self.current_origin, .{
+	            .user_report = .{ .message = try self.ir.allocator.dupe(u8, message) },
+	        });
+	    }
+
+	    fn addValidationError(self: *BuiltinContext, comptime fmt: []const u8, args: anytype) !void {
+	        try self.ir.addValidationDiagnostic(.@"error", null, null, self.current_origin, .{
+	            .user_report = .{ .message = try std.fmt.allocPrint(self.ir.allocator, fmt, args) },
+	        });
+	    }
 
     pub fn checkAssetExists(self: *BuiltinContext, object_id: core.NodeId) !void {
         _ = self;

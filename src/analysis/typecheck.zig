@@ -444,13 +444,17 @@ pub fn buildIrWithOptions(
     index: *ProgramIndex,
     options: BuildIrOptions,
 ) !core.Ir {
-    const asset_base_dir = try allocator.dupe(u8, asset_base_path);
-    errdefer allocator.free(asset_base_dir);
-    const project_path = try allocator.dupe(u8, input_path);
-    errdefer allocator.free(project_path);
-    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source.*, project_program.*);
-    project_source.* = &.{};
-    project_program.* = ast.Program.init();
+	    const asset_base_dir = try allocator.dupe(u8, asset_base_path);
+	    var owns_asset_base_dir = true;
+	    errdefer if (owns_asset_base_dir) allocator.free(asset_base_dir);
+	    const project_path = try allocator.dupe(u8, input_path);
+	    var owns_project_path = true;
+	    errdefer if (owns_project_path) allocator.free(project_path);
+	    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source.*, project_program.*);
+	    owns_asset_base_dir = false;
+	    owns_project_path = false;
+	    project_source.* = &.{};
+	    project_program.* = ast.Program.init();
     errdefer ir.deinit();
 
     ir.functions = index.functions;

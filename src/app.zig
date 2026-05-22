@@ -121,18 +121,21 @@ pub fn buildFileWithAssetBaseAndOverlay(
     errdefer program.deinit(allocator);
     if (progress) |p| p.step("Parse");
 
-    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
-        if (err == error.UnknownImport and program.imports.items.len != 0) {
-            const message = try module_loader.formatUnknownImportMessage(allocator, asset_base_dir, program.imports.items[0].spec);
-            defer allocator.free(message);
-            error_report.print(.{
-                .path = path,
-                .source = source,
-                .severity = .@"error",
-                .message = message,
-                .span = null,
-            });
-        } else if (err == error.ImportCycle) {
+	    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
+	        if (err == error.UnknownImport) {
+	            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
+	            defer report.deinit(allocator);
+	            error_report.print(.{
+	                .path = path,
+	                .source = source,
+	                .severity = .@"error",
+	                .message = report.message,
+	                .span = .{
+	                    .start = report.span.start,
+	                    .end = report.span.end,
+	                },
+	            });
+	        } else if (err == error.ImportCycle) {
             error_report.print(.{
                 .path = path,
                 .source = source,
@@ -146,20 +149,20 @@ pub fn buildFileWithAssetBaseAndOverlay(
     };
     if (progress) |p| p.step("Load index");
 
-    var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
-        if (err == error.UnknownImport and program.imports.items.len != 0) {
-            const message = try module_loader.formatUnknownImportMessage(allocator, asset_base_dir, program.imports.items[0].spec);
-            defer allocator.free(message);
-            error_report.print(.{
-                .path = path,
-                .source = source,
-                .severity = .@"error",
-                .message = message,
-                .span = .{
-                    .start = program.imports.items[0].span.start,
-                    .end = program.imports.items[0].span.end,
-                },
-            });
+	    var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
+	        if (err == error.UnknownImport) {
+	            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
+	            defer report.deinit(allocator);
+	            error_report.print(.{
+	                .path = path,
+	                .source = source,
+	                .severity = .@"error",
+	                .message = report.message,
+	                .span = .{
+	                    .start = report.span.start,
+	                    .end = report.span.end,
+	                },
+	            });
         } else if (err != error.DiagnosticsFailed) {
             std.debug.print("error: {s}\n", .{@errorName(err)});
         }
