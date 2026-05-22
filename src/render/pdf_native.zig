@@ -713,10 +713,11 @@ fn collectOpPreloads(
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
                 ctx.allocator.free(source);
             } else {
+                const content_frame = contentFrameForRender(op.frame, op.render);
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .raster = .{
                     .source = source,
-                    .target_width = op.frame.width * raster_cache_scale,
-                    .target_height = op.frame.height * raster_cache_scale,
+                    .target_width = content_frame.width * raster_cache_scale,
+                    .target_height = content_frame.height * raster_cache_scale,
                 } });
             }
         },
@@ -1031,17 +1032,18 @@ fn drawRenderPage(ctx: *DrawContext, page: *const RenderPage) !void {
 
 fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
     drawObjectChrome(ctx.pdf, op.frame, op.render);
+    const content_frame = contentFrameForRender(op.frame, op.render);
     switch (op.render.kind) {
-        .text => if (op.render.text) |text| try drawTextOp(ctx, op, text),
+        .text => if (op.render.text) |text| try drawTextOp(ctx, op, content_frame, text),
         .code => if (op.render.text) |text| {
             var code_text = text;
             code_text.font = text.code_font;
-            try drawCodeBlock(ctx, op.frame, op.content, code_text, op.render.code);
+            try drawCodeBlock(ctx, content_frame, op.content, code_text, op.render.code);
         },
         .chrome_only => {},
-        .vector_math => try drawVectorMathOp(ctx, op, op.render.math),
-        .vector_asset => try drawVectorAsset(ctx, op.frame, op.content),
-        .raster_asset => try drawRasterAsset(ctx, op.frame, op.content),
+        .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
     }
 }
 
@@ -1126,10 +1128,11 @@ fn collectNodePreloads(
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
                 ctx.allocator.free(source);
             } else {
+                const content_frame = contentFrameForRender(node.frame, render);
                 try registerPreloadTask(ctx, tasks, seen, .{ .raster = .{
                     .source = source,
-                    .target_width = node.frame.width * raster_cache_scale,
-                    .target_height = node.frame.height * raster_cache_scale,
+                    .target_width = content_frame.width * raster_cache_scale,
+                    .target_height = content_frame.height * raster_cache_scale,
                 } });
             }
         },
@@ -1515,18 +1518,30 @@ fn clampWorkerCount(value: usize, task_count: usize) usize {
 
 fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, render: ResolvedRender) !void {
     drawObjectChrome(ctx.pdf, node.frame, render);
+    const content_frame = contentFrameForRender(node.frame, render);
     switch (render.kind) {
-        .text => if (render.text) |text| try drawTextNode(ctx, ir, node, text),
+        .text => if (render.text) |text| try drawTextNode(ctx, ir, node, content_frame, text),
         .code => if (render.text) |text| {
             var code_text = text;
             code_text.font = text.code_font;
-            try drawCodeBlock(ctx, node.frame, node.content orelse "", code_text, render.code);
+            try drawCodeBlock(ctx, content_frame, node.content orelse "", code_text, render.code);
         },
         .chrome_only => {},
-        .vector_math => try drawVectorMath(ctx, ir, node, node.frame, node.content orelse "", render.math),
-        .vector_asset => try drawVectorAsset(ctx, node.frame, node.content orelse ""),
-        .raster_asset => try drawRasterAsset(ctx, node.frame, node.content orelse ""),
+        .vector_math => try drawVectorMath(ctx, ir, node, content_frame, node.content orelse "", render.math),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, node.content orelse ""),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, node.content orelse ""),
     }
+}
+
+fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
+    return .{
+        .x = frame.x + render.chrome.pad_x,
+        .y = frame.y + render.chrome.pad_y,
+        .width = @max(@as(f32, 1.0), frame.width - 2.0 * render.chrome.pad_x),
+        .height = @max(@as(f32, 1.0), frame.height - 2.0 * render.chrome.pad_y),
+        .x_set = frame.x_set,
+        .y_set = frame.y_set,
+    };
 }
 
 fn drawObjectChrome(pdf: *c.SsPdf, frame: Frame, render: ResolvedRender) void {
@@ -1550,20 +1565,14 @@ fn drawObjectChrome(pdf: *c.SsPdf, frame: Frame, render: ResolvedRender) void {
     }
 
     if (render.chrome.fill != null or render.chrome.stroke != null) {
-        const chrome_frame = Frame{
-            .x = frame.x - render.chrome.pad_x,
-            .y = frame.y - render.chrome.pad_y,
-            .width = frame.width + render.chrome.pad_x * 2,
-            .height = frame.height + render.chrome.pad_y * 2,
-        };
         const fill = render.chrome.fill;
         const stroke = render.chrome.stroke;
         c.ss_pdf_fill_stroke_rounded_rect(
             pdf,
-            chrome_frame.x,
-            topOf(chrome_frame),
-            chrome_frame.width,
-            chrome_frame.height,
+            frame.x,
+            topOf(frame),
+            frame.width,
+            frame.height,
             render.chrome.radius,
             if (fill != null) 1 else 0,
             if (fill) |value| value.r else 0,
@@ -1583,36 +1592,36 @@ fn drawObjectChrome(pdf: *c.SsPdf, frame: Frame, render: ResolvedRender) void {
     }
 }
 
-fn drawTextNode(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, text: TextPaint) !void {
+fn drawTextNode(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame: Frame, text: TextPaint) !void {
     const content = node.content orelse "";
     var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
     defer env.deinit(ctx.allocator);
     if (core.markdown.shouldParseBlocksNode(ir, node)) {
         var doc = try core.markdown.parseMarkdownDocumentForNode(ctx.allocator, ir, node, content);
         defer doc.deinit();
-        _ = try drawMarkdownBlocks(ctx, node.frame, doc.blocks.items, text, 0, env.math_latex_packages.items);
+        _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, env.math_latex_packages.items);
         return;
     }
 
     var layout = try core.markdown.parseTextLayoutForNode(ctx.allocator, ir, node, content);
     defer layout.deinit(ctx.allocator);
-    const baseline = baselineBlForBox(node.frame, text.font_size);
-    _ = try drawInlineLines(ctx, node.frame.x, baseline, node.frame.width, layout.lines.items, text, text.wrap, env.math_latex_packages.items);
+    const baseline = baselineBlForBox(frame, text.font_size);
+    _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, env.math_latex_packages.items);
 }
 
-fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, text: TextPaint) !void {
+fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPaint) !void {
     switch (op.parse_mode) {
         .none => return,
         .block => {
             var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
             defer doc.deinit();
-            _ = try drawMarkdownBlocks(ctx, op.frame, doc.blocks.items, text, 0, op.math_packages);
+            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, op.math_packages);
         },
         .inline_text => {
             var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
             defer layout.deinit(ctx.allocator);
-            const baseline = baselineBlForBox(op.frame, text.font_size);
-            _ = try drawInlineLines(ctx, op.frame.x, baseline, op.frame.width, layout.lines.items, text, text.wrap, op.math_packages);
+            const baseline = baselineBlForBox(frame, text.font_size);
+            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, op.math_packages);
         },
     }
 }
@@ -2003,13 +2012,13 @@ fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame
     try drawSvgFrameTinted(ctx, draw_frame, svg.path, color);
 }
 
-fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, math: ?MathPaint) !void {
+fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
     const svg = try renderMathToSvg(ctx, op.content, op.math_packages, .block);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, op.frame.width, op.frame.height, op.content, math);
+    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
     const draw_frame = Frame{
-        .x = op.frame.x,
-        .y = op.frame.y + @max((op.frame.height - fitted.height) / 2, 0),
+        .x = frame.x,
+        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
     };
@@ -2057,18 +2066,18 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
         return;
     }
 
-	    const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
-	    defer ctx.allocator.free(page_paths);
-	    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
+    const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
+    defer ctx.allocator.free(page_paths);
+    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
 
-	    if (page_paths.len == 0) {
-	        if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
-	        try writeZeroPagePdf(ctx, plan.final_pdf_path);
-	        if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
-	        return;
-	    }
+    if (page_paths.len == 0) {
+        if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
+        try writeZeroPagePdf(ctx, plan.final_pdf_path);
+        if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
+        return;
+    }
 
-	    if (page_paths.len <= direct_merge_page_limit) {
+    if (page_paths.len <= direct_merge_page_limit) {
         if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
         try mergePdfInputs(ctx, page_paths, true, plan.final_pdf_path);
         if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
@@ -2213,12 +2222,12 @@ fn mergePdfInputs(ctx: *DrawContext, inputs: []const []const u8, single_page_inp
     }
     try argv.append(ctx.allocator, "--");
     try argv.append(ctx.allocator, output);
-	    try runCheckedAllowQpdfWarnings(ctx, argv.items, .inherit);
-	}
+    try runCheckedAllowQpdfWarnings(ctx, argv.items, .inherit);
+}
 
-	fn writeZeroPagePdf(ctx: *DrawContext, output: []const u8) !void {
-	    try runCheckedAllowQpdfWarnings(ctx, &.{ "qpdf", "--deterministic-id", "--empty", output }, .inherit);
-	}
+fn writeZeroPagePdf(ctx: *DrawContext, output: []const u8) !void {
+    try runCheckedAllowQpdfWarnings(ctx, &.{ "qpdf", "--deterministic-id", "--empty", output }, .inherit);
+}
 
 fn mergePdfInputsToCache(ctx: *DrawContext, inputs: []const []const u8, single_page_inputs: bool, output: []const u8) !void {
     if (try cachedPdfAvailable(ctx, output)) return;

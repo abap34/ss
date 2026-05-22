@@ -419,18 +419,18 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         return;
     }
-	    if (std.mem.eql(u8, method, "textDocument/didChange")) {
-	        if (params) |p| if (objectField(p, "textDocument")) |doc| {
-	            if (stringField(doc, "uri")) |uri| {
-	                if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0) {
-	                    for (changes.items) |*change| {
-	                        if (change.* == .object) try server.applyDocumentChange(uri, &change.object);
-	                    }
-	                    const path = try pathFromUri(server.allocator, uri);
-	                    defer server.allocator.free(path);
-	                    try server.rebuild(path);
-	                };
-	            }
+    if (std.mem.eql(u8, method, "textDocument/didChange")) {
+        if (params) |p| if (objectField(p, "textDocument")) |doc| {
+            if (stringField(doc, "uri")) |uri| {
+                if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0) {
+                    for (changes.items) |*change| {
+                        if (change.* == .object) try server.applyDocumentChange(uri, &change.object);
+                    }
+                    const path = try pathFromUri(server.allocator, uri);
+                    defer server.allocator.free(path);
+                    try server.rebuild(path);
+                };
+            }
         };
         return;
     }
@@ -459,66 +459,66 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
 
-	    if (std.mem.eql(u8, method, "textDocument/completion")) {
-	        const result = try completionResult(server);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/hover")) {
-	        const result = try hoverResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/definition")) {
-	        const result = try definitionResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
-	        const result = try inlayHintResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
-	        const result = try documentSymbolResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
-	        const result = try foldingRangeResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
-	        const result = try semanticTokensResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/documentColor")) {
-	        const result = try documentColorResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "textDocument/colorPresentation")) {
-	        const result = try colorPresentationResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
-	    if (std.mem.eql(u8, method, "ss/projectInfo")) {
-	        const result = try projectInfoResult(server, params);
-	        defer server.allocator.free(result);
-	        try respond(server.allocator, id, result);
-	        return;
-	    }
+    if (std.mem.eql(u8, method, "textDocument/completion")) {
+        const result = try completionResult(server);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/hover")) {
+        const result = try hoverResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/definition")) {
+        const result = try definitionResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
+        const result = try inlayHintResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
+        const result = try documentSymbolResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
+        const result = try foldingRangeResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+        const result = try semanticTokensResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/documentColor")) {
+        const result = try documentColorResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "textDocument/colorPresentation")) {
+        const result = try colorPresentationResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/projectInfo")) {
+        const result = try projectInfoResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
     if (id != null) try respondError(server.allocator, id, -32601, "method not found");
 }
 
@@ -1381,6 +1381,7 @@ fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
         .recursive_function => "RecursiveFunction",
         .unresolved_frame => "unresolved_frame",
         .page_overflow => "page_overflow",
+        .content_overflow => "content_overflow",
     };
 }
 

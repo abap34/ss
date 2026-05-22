@@ -12,6 +12,7 @@ pub const styleForNode = root.styleForNode;
 pub const intrinsicWidth = root.intrinsicWidth;
 pub const intrinsicHeight = root.intrinsicHeight;
 pub const shouldWrapNode = root.shouldWrapNode;
+pub const contentFrame = root.contentFrame;
 pub const lineCount = root.lineCount;
 pub const anchorAxis = root.anchorAxis;
 pub const approxEq = root.approxEq;

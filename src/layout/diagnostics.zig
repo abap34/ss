@@ -1,6 +1,8 @@
 const std = @import("std");
 const model = @import("model");
 const graph = @import("graph.zig");
+const metrics = @import("metrics.zig");
+const style = @import("style.zig");
 
 const Node = model.Node;
 const NodeId = model.NodeId;
@@ -53,6 +55,26 @@ pub fn collectPageDiagnostics(ir: anytype, page_id: NodeId, child_ids: []const N
                 }),
             }
         }
+
+        if (shouldCheckContentOverflow(ir, node)) {
+            const required_height = metrics.intrinsicHeight(ir, node);
+            const overflow_height = @max(@as(f32, 0.0), required_height - node.frame.height);
+            if (overflow_height > graph.ConstraintTolerance) {
+                switch (overflowPolicy(node)) {
+                    .ignore => {},
+                    .warn => try ir.addLayoutWarning(page_id, child_id, .{ .content_overflow = .{
+                        .required_height = required_height,
+                        .frame_height = node.frame.height,
+                        .overflow_height = overflow_height,
+                    } }),
+                    .@"error" => try ir.addLayoutError(page_id, child_id, .{ .content_overflow = .{
+                        .required_height = required_height,
+                        .frame_height = node.frame.height,
+                        .overflow_height = overflow_height,
+                    } }),
+                }
+            }
+        }
     }
 
     for (overflows.items) |overflow| {
@@ -75,6 +97,15 @@ const OverflowPolicy = enum {
     @"error",
     ignore,
 };
+
+fn shouldCheckContentOverflow(ir: anytype, node: *const Node) bool {
+    if (node.kind != .object) return false;
+    const text_style = style.styleForNode(ir, node);
+    if (text_style.font_size <= 1.0 and text_style.line_height <= 1.0 and node.frame.width <= 1.0 and node.frame.height <= 1.0) {
+        return false;
+    }
+    return true;
+}
 
 fn overflowPolicy(node: *const Node) OverflowPolicy {
     const fit = model.nodeProperty(node, "fit");
