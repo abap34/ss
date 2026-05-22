@@ -205,6 +205,30 @@ pub fn build(b: *std.Build) void {
         .root_module = project_spec_tests_mod,
     });
 
+    const compiler_semantics_support_mod = b.createModule(.{
+        .root_source_file = b.path("src/compiler_semantics_spec_support.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    compiler_semantics_support_mod.addImport("core", core_mod);
+    compiler_semantics_support_mod.addImport("utils", utils_mod);
+    compiler_semantics_support_mod.addImport("ast", ast_mod);
+    compiler_semantics_support_mod.addImport("model", model_mod);
+    compiler_semantics_support_mod.addImport("language_type", language_type_mod);
+    compiler_semantics_support_mod.addImport("stdlib_assets", stdlib_assets_mod);
+
+    const compiler_semantics_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/compiler_semantics_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    compiler_semantics_spec_tests_mod.addImport("compiler_semantics", compiler_semantics_support_mod);
+    const compiler_semantics_spec_tests = b.addTest(.{
+        .root_module = compiler_semantics_spec_tests_mod,
+    });
+
     const smoke_check_files = [_][]const u8{
         "stdlib/core/classes.ss",
         "stdlib/core/components.ss",
@@ -228,6 +252,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(core_ir_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(layout_graph_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(project_spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(compiler_semantics_spec_tests).step);
     for (smoke_check_files) |path| {
         const smoke_check = b.addRunArtifact(exe);
         smoke_check.addArgs(&.{ "check", path });
