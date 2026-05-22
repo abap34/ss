@@ -419,16 +419,18 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         return;
     }
-    if (std.mem.eql(u8, method, "textDocument/didChange")) {
-        if (params) |p| if (objectField(p, "textDocument")) |doc| {
-            if (stringField(doc, "uri")) |uri| {
-                if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0 and changes.items[changes.items.len - 1] == .object) {
-                    try server.applyDocumentChange(uri, &changes.items[changes.items.len - 1].object);
-                    const path = try pathFromUri(server.allocator, uri);
-                    defer server.allocator.free(path);
-                    try server.rebuild(path);
-                };
-            }
+	    if (std.mem.eql(u8, method, "textDocument/didChange")) {
+	        if (params) |p| if (objectField(p, "textDocument")) |doc| {
+	            if (stringField(doc, "uri")) |uri| {
+	                if (arrayField(p, "contentChanges")) |changes| if (changes.items.len != 0) {
+	                    for (changes.items) |*change| {
+	                        if (change.* == .object) try server.applyDocumentChange(uri, &change.object);
+	                    }
+	                    const path = try pathFromUri(server.allocator, uri);
+	                    defer server.allocator.free(path);
+	                    try server.rebuild(path);
+	                };
+	            }
         };
         return;
     }
@@ -457,46 +459,66 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
 
-    if (std.mem.eql(u8, method, "textDocument/completion")) {
-        try respond(server.allocator, id, try completionResult(server));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/hover")) {
-        try respond(server.allocator, id, try hoverResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/definition")) {
-        try respond(server.allocator, id, try definitionResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
-        try respond(server.allocator, id, try inlayHintResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
-        try respond(server.allocator, id, try documentSymbolResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
-        try respond(server.allocator, id, try foldingRangeResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
-        try respond(server.allocator, id, try semanticTokensResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/documentColor")) {
-        try respond(server.allocator, id, try documentColorResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "textDocument/colorPresentation")) {
-        try respond(server.allocator, id, try colorPresentationResult(server, params));
-        return;
-    }
-    if (std.mem.eql(u8, method, "ss/projectInfo")) {
-        try respond(server.allocator, id, try projectInfoResult(server, params));
-        return;
-    }
+	    if (std.mem.eql(u8, method, "textDocument/completion")) {
+	        const result = try completionResult(server);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/hover")) {
+	        const result = try hoverResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/definition")) {
+	        const result = try definitionResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
+	        const result = try inlayHintResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
+	        const result = try documentSymbolResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
+	        const result = try foldingRangeResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+	        const result = try semanticTokensResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/documentColor")) {
+	        const result = try documentColorResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "textDocument/colorPresentation")) {
+	        const result = try colorPresentationResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
+	    if (std.mem.eql(u8, method, "ss/projectInfo")) {
+	        const result = try projectInfoResult(server, params);
+	        defer server.allocator.free(result);
+	        try respond(server.allocator, id, result);
+	        return;
+	    }
     if (id != null) try respondError(server.allocator, id, -32601, "method not found");
 }
 
@@ -511,6 +533,10 @@ fn initializeResult(allocator: std.mem.Allocator) ![]const u8 {
     try appendJsonString(allocator, &out, build_options.version);
     try out.appendSlice(allocator, "}}");
     return out.toOwnedSlice(allocator);
+}
+
+fn jsonLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    return allocator.dupe(u8, text);
 }
 
 fn completionResult(server: *Server) ![]const u8 {
@@ -573,13 +599,13 @@ fn appendCompletion(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first
 }
 
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const target = try wordAtRequest(server, params) orelse return "null";
+    const target = try wordAtRequest(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer server.allocator.free(target);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
-        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return "null";
+        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
-        const markdown = try hoverMarkdown(server.allocator, &root, target) orelse return "null";
+        const markdown = try hoverMarkdown(server.allocator, &root, target) orelse return try jsonLiteral(server.allocator, "null");
         defer server.allocator.free(markdown);
         var out = std.ArrayList(u8).empty;
         try out.appendSlice(server.allocator, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
@@ -587,7 +613,7 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
         try out.appendSlice(server.allocator, "}}");
         return out.toOwnedSlice(server.allocator);
     };
-    return "null";
+    return try jsonLiteral(server.allocator, "null");
 }
 
 fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, target: []const u8) !?[]u8 {
@@ -613,10 +639,10 @@ fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, target: 
 }
 
 fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const target = try wordAtRequest(server, params) orelse return "null";
+    const target = try wordAtRequest(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer server.allocator.free(target);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
-        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return "null";
+        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
         var out = std.ArrayList(u8).empty;
@@ -636,21 +662,21 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
             first = false;
             try appendLocationObject(server.allocator, &out, uri, line, column, line, column + length);
         };
-        if (first) return "null";
+        if (first) return try jsonLiteral(server.allocator, "null");
         try out.append(server.allocator, ']');
         return out.toOwnedSlice(server.allocator);
     };
-    return "null";
+    return try jsonLiteral(server.allocator, "null");
 }
 
 fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return "[]";
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
     var out = std.ArrayList(u8).empty;
     try out.append(server.allocator, '[');
     var first = true;
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
-        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return "[]";
+        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "[]");
         defer parsed.deinit();
         if (arrayFieldObject(&parsed.value.object, "hints")) |hints| for (hints.items) |item| if (item == .object) {
             const file = stringField(&item.object, "file") orelse continue;
@@ -676,9 +702,9 @@ fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
 }
 
 fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return "[]";
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return "[]";
+    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(source);
     var out = std.ArrayList(u8).empty;
@@ -709,9 +735,9 @@ fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
 }
 
 fn foldingRangeResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return "[]";
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return "[]";
+    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(source);
     var out = std.ArrayList(u8).empty;
@@ -748,9 +774,9 @@ const SemanticToken = struct {
 };
 
 fn semanticTokensResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return "{\"data\":[]}";
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "{\"data\":[]}");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return "{\"data\":[]}";
+    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "{\"data\":[]}");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(source);
 
@@ -916,9 +942,9 @@ fn utf16Units(bytes: []const u8) usize {
 }
 
 fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return "[]";
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return "[]";
+    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(source);
     var out = std.ArrayList(u8).empty;

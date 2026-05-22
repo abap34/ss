@@ -2057,11 +2057,18 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
         return;
     }
 
-    const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
-    defer ctx.allocator.free(page_paths);
-    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
+	    const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
+	    defer ctx.allocator.free(page_paths);
+	    for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
 
-    if (page_paths.len <= direct_merge_page_limit) {
+	    if (page_paths.len == 0) {
+	        if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
+	        try writeZeroPagePdf(ctx, plan.final_pdf_path);
+	        if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
+	        return;
+	    }
+
+	    if (page_paths.len <= direct_merge_page_limit) {
         if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
         try mergePdfInputs(ctx, page_paths, true, plan.final_pdf_path);
         if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
@@ -2206,8 +2213,12 @@ fn mergePdfInputs(ctx: *DrawContext, inputs: []const []const u8, single_page_inp
     }
     try argv.append(ctx.allocator, "--");
     try argv.append(ctx.allocator, output);
-    try runCheckedAllowQpdfWarnings(ctx, argv.items, .inherit);
-}
+	    try runCheckedAllowQpdfWarnings(ctx, argv.items, .inherit);
+	}
+
+	fn writeZeroPagePdf(ctx: *DrawContext, output: []const u8) !void {
+	    try runCheckedAllowQpdfWarnings(ctx, &.{ "qpdf", "--deterministic-id", "--empty", output }, .inherit);
+	}
 
 fn mergePdfInputsToCache(ctx: *DrawContext, inputs: []const []const u8, single_page_inputs: bool, output: []const u8) !void {
     if (try cachedPdfAvailable(ctx, output)) return;

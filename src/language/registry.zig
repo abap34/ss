@@ -196,6 +196,10 @@ pub fn lookupQueryOp(name: []const u8) ?QueryDescriptor {
     return null;
 }
 
+pub fn validateQueryArity(descriptor: QueryDescriptor, actual: usize) !void {
+    if (actual != descriptor.arity) return error.InvalidArity;
+}
+
 pub fn argSortType(sort: ArgSort) ?types.Type {
     return switch (sort) {
         .any => null,

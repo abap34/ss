@@ -115,10 +115,10 @@ pub fn loadGraphWithOverlay(
     };
     errdefer graph.deinit();
 
-    for (project_program.imports.items) |import_decl| {
-        const module_id = try builder.loadImport(project_dir, import_decl.spec);
-        try graph.project_import_ids.append(allocator, module_id);
-    }
+	    for (project_program.imports.items) |import_decl| {
+	        const module_id = try builder.loadImport(project_dir, import_decl.spec);
+	        try graph.project_import_ids.append(allocator, module_id);
+	    }
 
     var seen = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
     defer seen.deinit();
@@ -156,6 +156,37 @@ pub fn formatUnknownImportMessage(
         "UnknownImport: module '{s}' was not found. imports must use std:... or explicit paths relative to {s}",
         .{ import_spec, base_dir },
     );
+}
+
+pub const UnknownImportReport = struct {
+    message: []u8,
+    span: ast.Span,
+
+    pub fn deinit(self: *UnknownImportReport, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+    }
+};
+
+pub fn findUnknownImportReport(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    program: ast.Program,
+    overlay: ?*const SourceOverlay,
+) !?UnknownImportReport {
+    for (program.imports.items) |import_decl| {
+        const resolved = resolveImport(allocator, io, base_dir, import_decl.spec, overlay) catch |err| switch (err) {
+            error.UnknownImport => {
+                return .{
+                    .message = try formatUnknownImportMessage(allocator, base_dir, import_decl.spec),
+                    .span = import_decl.span,
+                };
+            },
+            else => return err,
+        };
+        freeResolvedModule(allocator, resolved);
+    }
+    return null;
 }
 
 const VisitState = enum {
@@ -223,9 +254,11 @@ const Builder = struct {
         };
         if (kind == .project) unreachable;
 
-        const key = try self.allocator.dupe(u8, resolved.key);
-        errdefer self.allocator.free(key);
-        try self.by_key.put(key, module_id);
+	        const key = try self.allocator.dupe(u8, resolved.key);
+	        var owns_key = true;
+	        errdefer if (owns_key) self.allocator.free(key);
+	        try self.by_key.put(key, module_id);
+	        owns_key = false;
 
         const spec = try self.allocator.dupe(u8, resolved.spec);
         var owns_spec = true;

@@ -124,13 +124,13 @@ pub const Ir = struct {
     next_id: NodeId,
     document_id: NodeId,
 
-    pub fn init(
-        allocator: Allocator,
-        asset_base_dir: []u8,
-        project_path: []u8,
-        project_source: []u8,
-        project_program: ast.Program,
-    ) !Ir {
+	    pub fn init(
+	        allocator: Allocator,
+	        asset_base_dir: []u8,
+	        project_path: []u8,
+	        project_source: []u8,
+	        project_program: ast.Program,
+	    ) !Ir {
         var ir = Ir{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
@@ -152,30 +152,53 @@ pub const Ir = struct {
             .fragments = .empty,
             .runtime_strings = .empty,
             .next_id = 1,
-            .document_id = 0,
-        };
+	            .document_id = 0,
+	        };
+	        errdefer ir.deinitPartial();
 
-        try ir.modules.append(allocator, .{
-            .id = 0,
-            .kind = .project,
-            .spec = try allocator.dupe(u8, project_path),
-            .path = project_path,
-            .source = project_source,
-            .program = project_program,
-            .resolved_import_ids = .empty,
-        });
+	        const project_spec = try allocator.dupe(u8, project_path);
+	        errdefer allocator.free(project_spec);
 
-        const doc_id = try ir.freshId();
-        try ir.nodes.append(allocator, .{
-            .id = doc_id,
-            .kind = .document,
+	        const doc_id = try ir.freshId();
+	        try ir.nodes.append(allocator, .{
+	            .id = doc_id,
+	            .kind = .document,
             .name = "document",
             .attached = true,
-        });
-        ir.document_id = doc_id;
+	        });
+	        ir.document_id = doc_id;
 
-        return ir;
-    }
+	        try ir.modules.append(allocator, .{
+	            .id = 0,
+	            .kind = .project,
+	            .spec = project_spec,
+	            .path = project_path,
+	            .source = project_source,
+	            .program = project_program,
+	            .resolved_import_ids = .empty,
+	        });
+
+	        return ir;
+	    }
+
+	    fn deinitPartial(self: *Ir) void {
+	        self.modules.deinit(self.allocator);
+	        self.module_order.deinit(self.allocator);
+	        self.functions.deinit();
+	        self.function_metadata.deinit();
+	        self.variable_types.deinit();
+	        self.definitions.deinit(self.allocator);
+	        self.hints.deinit(self.allocator);
+	        self.contains.deinit();
+	        for (self.nodes.items) |*node| node.deinit(self.allocator);
+	        self.nodes.deinit(self.allocator);
+	        self.page_order.deinit(self.allocator);
+	        self.constraints.deinit(self.allocator);
+	        self.diagnostics.deinit(self.allocator);
+	        self.constraint_failures.deinit(self.allocator);
+	        self.fragments.deinit(self.allocator);
+	        self.runtime_strings.deinit(self.allocator);
+	    }
 
     pub fn deinit(self: *Ir) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
@@ -216,11 +239,19 @@ pub const Ir = struct {
         self.runtime_strings.deinit(self.allocator);
     }
 
-    pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
-        errdefer self.allocator.free(text);
-        try self.runtime_strings.append(self.allocator, text);
-        return text;
-    }
+	    pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
+	        errdefer self.allocator.free(text);
+	        try self.runtime_strings.append(self.allocator, text);
+	        return text;
+	    }
+
+	    pub fn copyString(self: *Ir, text: []const u8) ![]const u8 {
+	        return self.ownString(try self.allocator.dupe(u8, text));
+	    }
+
+	    fn copyOptionalString(self: *Ir, text: ?[]const u8) !?[]const u8 {
+	        return if (text) |value| try self.copyString(value) else null;
+	    }
 
     pub fn projectPath(self: *const Ir) []const u8 {
         return self.projectModule().path orelse "";
@@ -292,16 +323,17 @@ pub const Ir = struct {
         try self.addContainment(parent, child);
     }
 
-    pub fn addPage(self: *Ir, name: []const u8) !NodeId {
-        const page_id = try self.freshId();
-        const index = self.page_order.items.len + 1;
-        try self.nodes.append(self.allocator, .{
-            .id = page_id,
-            .kind = .page,
-            .name = name,
-            .attached = true,
-            .page_index = index,
-        });
+	    pub fn addPage(self: *Ir, name: []const u8) !NodeId {
+	        const page_id = try self.freshId();
+	        const index = self.page_order.items.len + 1;
+	        const owned_name = try self.copyString(name);
+	        try self.nodes.append(self.allocator, .{
+	            .id = page_id,
+	            .kind = .page,
+	            .name = owned_name,
+	            .attached = true,
+	            .page_index = index,
+	        });
         try self.page_order.append(self.allocator, page_id);
         try self.addContainment(self.document_id, page_id);
         return page_id;
@@ -425,30 +457,34 @@ pub const Ir = struct {
         node.content_owned = true;
     }
 
-    fn makeNodeWithOrigin(
-        self: *Ir,
-        page_id: NodeId,
-        attached: bool,
-        kind: NodeKind,
+	    fn makeNodeWithOrigin(
+	        self: *Ir,
+	        page_id: NodeId,
+	        attached: bool,
+	        kind: NodeKind,
         name: []const u8,
         role: ?Role,
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
-        origin: ?[]const u8,
-    ) !NodeId {
-        const obj_id = try self.freshId();
-        try self.nodes.append(self.allocator, .{
-            .id = obj_id,
-            .kind = kind,
-            .name = name,
-            .attached = attached,
-            .role = role,
-            .object_kind = object_kind,
-            .payload_kind = payload_kind,
-            .content = content,
-            .origin = origin,
-        });
+	        origin: ?[]const u8,
+	    ) !NodeId {
+	        const obj_id = try self.freshId();
+	        const owned_name = try self.copyString(name);
+	        const owned_role = try self.copyOptionalString(role);
+	        const owned_content = try self.copyOptionalString(content);
+	        const owned_origin = try self.copyOptionalString(origin);
+	        try self.nodes.append(self.allocator, .{
+	            .id = obj_id,
+	            .kind = kind,
+	            .name = owned_name,
+	            .attached = attached,
+	            .role = owned_role,
+	            .object_kind = object_kind,
+	            .payload_kind = payload_kind,
+	            .content = owned_content,
+	            .origin = owned_origin,
+	        });
         if (attached) try self.addContainment(page_id, obj_id);
         return obj_id;
     }

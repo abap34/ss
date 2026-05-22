@@ -86,28 +86,31 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
             .set_content => |content| {
                 try ir.setNodeContent(try ctx.node(content.node), content.value);
             },
-            .add_constraint => |constraint| {
-                try ir.constraints.append(ir.allocator, try mapConstraint(&ctx, constraint));
-            },
+	            .add_constraint => |constraint| {
+	                try ir.constraints.append(ir.allocator, try mapConstraint(ir, &ctx, constraint));
+	            },
             .materialize_fragment => {},
         }
     }
 
-    for (code.diagnostics.items) |diagnostic| {
-        try ir.addDiagnostic(try mapDiagnostic(&ctx, diagnostic));
-    }
-    code.diagnostics.items.len = 0;
-}
+	    for (code.diagnostics.items) |diagnostic| {
+	        var mapped = try mapDiagnostic(ir, &ctx, diagnostic);
+	        var owns_mapped = true;
+	        errdefer if (owns_mapped) mapped.deinit(ir.allocator);
+	        try ir.addDiagnostic(mapped);
+	        owns_mapped = false;
+	    }
+	}
 
-fn mapConstraint(ctx: *NormalizeContext, constraint: core.Constraint) !core.Constraint {
-    return .{
-        .target_node = try ctx.node(constraint.target_node),
-        .target_anchor = constraint.target_anchor,
-        .source = try mapConstraintSource(ctx, constraint.source),
-        .offset = constraint.offset,
-        .origin = constraint.origin,
-    };
-}
+	fn mapConstraint(ir: *core.Ir, ctx: *NormalizeContext, constraint: core.Constraint) !core.Constraint {
+	    return .{
+	        .target_node = try ctx.node(constraint.target_node),
+	        .target_anchor = constraint.target_anchor,
+	        .source = try mapConstraintSource(ctx, constraint.source),
+	        .offset = constraint.offset,
+	        .origin = if (constraint.origin) |origin| try ir.copyString(origin) else null,
+	    };
+	}
 
 fn mapConstraintSource(ctx: *NormalizeContext, source: core.ConstraintSource) !core.ConstraintSource {
     return switch (source) {
@@ -116,13 +119,48 @@ fn mapConstraintSource(ctx: *NormalizeContext, source: core.ConstraintSource) !c
     };
 }
 
-fn mapDiagnostic(ctx: *NormalizeContext, diagnostic: core.Diagnostic) !core.Diagnostic {
-    return .{
-        .phase = diagnostic.phase,
-        .severity = diagnostic.severity,
-        .page_id = try ctx.maybeNode(diagnostic.page_id),
-        .node_id = try ctx.maybeNode(diagnostic.node_id),
-        .origin = diagnostic.origin,
-        .data = diagnostic.data,
-    };
-}
+	fn mapDiagnostic(ir: *core.Ir, ctx: *NormalizeContext, diagnostic: core.Diagnostic) !core.Diagnostic {
+	    const page_id = try ctx.maybeNode(diagnostic.page_id);
+	    const node_id = try ctx.maybeNode(diagnostic.node_id);
+	    const data = try cloneDiagnosticData(ir, diagnostic.data);
+	    var mapped = core.Diagnostic{
+	        .phase = diagnostic.phase,
+	        .severity = diagnostic.severity,
+	        .page_id = page_id,
+	        .node_id = node_id,
+	        .origin = null,
+	        .data = data,
+	    };
+	    errdefer mapped.deinit(ir.allocator);
+	    mapped.origin = if (diagnostic.origin) |origin| try ir.allocator.dupe(u8, origin) else null;
+	    return mapped;
+	}
+
+	fn cloneDiagnosticData(ir: *core.Ir, data: core.Diagnostic.Data) !core.Diagnostic.Data {
+	    return switch (data) {
+	        .user_report => |value| .{ .user_report = .{
+	            .message = try ir.allocator.dupe(u8, value.message),
+	        } },
+	        .asset_not_found => |value| blk: {
+	            const requested_path = try ir.allocator.dupe(u8, value.requested_path);
+	            errdefer ir.allocator.free(requested_path);
+	            const resolved_path = try ir.allocator.dupe(u8, value.resolved_path);
+	            errdefer ir.allocator.free(resolved_path);
+	            break :blk .{ .asset_not_found = .{
+	                .requested_path = requested_path,
+	                .resolved_path = resolved_path,
+	                .payload_kind = value.payload_kind,
+	            } };
+	        },
+	        .asset_invalid => |value| .{ .asset_invalid = .{
+	            .reason = try ir.allocator.dupe(u8, value.reason),
+	            .payload_kind = value.payload_kind,
+	        } },
+	        .type_mismatch => |value| .{ .type_mismatch = value },
+	        .recursive_function => |value| .{ .recursive_function = .{
+	            .function_name = try ir.copyString(value.function_name),
+	        } },
+	        .unresolved_frame => |value| .{ .unresolved_frame = value },
+	        .page_overflow => |value| .{ .page_overflow = value },
+	    };
+	}
