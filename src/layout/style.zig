@@ -18,7 +18,7 @@ pub fn styleForNode(ir: anytype, node: *const Node) TextStyle {
 }
 
 pub fn shouldWrapNode(ir: anytype, node: *const Node) bool {
-    if (parseNodeFloatProperty(ir, node, "asset_width") != null) return false;
+    if (positiveNodeFloatProperty(ir, node, "asset_width") != null) return false;
     if (class_fields.property(ir, node, "wrap")) |wrap_mode| {
         if (std.mem.eql(u8, wrap_mode, "on")) return true;
         if (std.mem.eql(u8, wrap_mode, "off")) return false;
@@ -29,15 +29,26 @@ pub fn shouldWrapNode(ir: anytype, node: *const Node) bool {
 
 pub fn parseNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
     const value = class_fields.property(ir, node, key) orelse return null;
-    return std.fmt.parseFloat(f32, value) catch null;
+    const parsed = std.fmt.parseFloat(f32, value) catch return null;
+    return if (std.math.isFinite(parsed)) parsed else null;
 }
 
 fn overrideTextStyleFromProperties(ir: anytype, node: *const Node, base: TextStyle) TextStyle {
     var style = base;
-    if (parseNodeFloatProperty(ir, node, "layout_font_size") orelse parseNodeFloatProperty(ir, node, "text_size")) |value| style.font_size = value;
-    if (parseNodeFloatProperty(ir, node, "layout_line_height") orelse parseNodeFloatProperty(ir, node, "text_line_height")) |value| style.line_height = value;
-    if (parseNodeFloatProperty(ir, node, "layout_spacing_after")) |value| style.spacing_after = value;
+    if (positiveNodeFloatProperty(ir, node, "layout_font_size") orelse positiveNodeFloatProperty(ir, node, "text_size")) |value| style.font_size = value;
+    if (positiveNodeFloatProperty(ir, node, "layout_line_height") orelse positiveNodeFloatProperty(ir, node, "text_line_height")) |value| style.line_height = value;
+    if (nonNegativeNodeFloatProperty(ir, node, "layout_spacing_after")) |value| style.spacing_after = value;
     if (parseNodeFloatProperty(ir, node, "layout_x")) |value| style.default_x = value;
-    if (parseNodeFloatProperty(ir, node, "layout_right_inset")) |value| style.default_right_inset = value;
+    if (nonNegativeNodeFloatProperty(ir, node, "layout_right_inset")) |value| style.default_right_inset = value;
     return style;
+}
+
+fn positiveNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseNodeFloatProperty(ir, node, key) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn nonNegativeNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseNodeFloatProperty(ir, node, key) orelse return null;
+    return if (value >= 0) value else null;
 }

@@ -341,3 +341,113 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
     try testing.expect(expected_height > 28);
     try expectFloat(expected_height, wrapped_node.frame.height);
 }
+
+test "layout metrics: chrome padding is part of visual bounds and yields a content frame" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const plain = try ir.makeObject(page, "plain", null, .text, .text, "Hello");
+    const padded = try ir.makeObject(page, "padded", null, .text, .text, "Hello");
+    try ir.setNodeProperty(padded, "chrome_pad_x", "12");
+    try ir.setNodeProperty(padded, "chrome_pad_y", "8");
+
+    const plain_node = ir.getNode(plain).?;
+    const padded_node = ir.getNode(padded).?;
+    try expectFloat(metrics.intrinsicWidth(&ir, plain_node) + 24, metrics.intrinsicWidth(&ir, padded_node));
+    try expectFloat(metrics.intrinsicHeight(&ir, plain_node) + 16, metrics.intrinsicHeight(&ir, padded_node));
+
+    ir.getNode(padded).?.frame = .{ .x = 10, .y = 20, .width = 100, .height = 50, .x_set = true, .y_set = true };
+    const content = core.layout.contentFrame(&ir, ir.getNode(padded).?);
+    try expectFloat(22, content.x);
+    try expectFloat(28, content.y);
+    try expectFloat(76, content.width);
+    try expectFloat(34, content.height);
+}
+
+test "layout diagnostics: fixed-height object reports content overflow" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "short-box", null, .text, .text, "line one\nline two");
+    try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 20, "left");
+    try ir.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 200, "width");
+    try ir.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
+    try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 20, "height");
+
+    try solver.solveLayout(&ir);
+
+    const node = ir.getNode(object).?;
+    try expectFloat(20, node.frame.height);
+    const required_height = metrics.intrinsicHeight(&ir, node);
+    try testing.expect(required_height > node.frame.height);
+
+    var found = false;
+    for (ir.diagnostics.items) |diagnostic| {
+        if (diagnostic.node_id != object) continue;
+        switch (diagnostic.data) {
+            .content_overflow => |data| {
+                found = true;
+                try testing.expectEqual(core.DiagnosticSeverity.warning, diagnostic.severity);
+                try expectFloat(required_height, data.required_height);
+                try expectFloat(node.frame.height, data.frame_height);
+                try expectFloat(required_height - node.frame.height, data.overflow_height);
+            },
+            else => {},
+        }
+    }
+    try testing.expect(found);
+}
+
+test "layout diagnostics: one-pixel metadata text does not report content overflow" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "toc-marker", null, .text, .text, "hidden section title");
+    try ir.setNodeProperty(object, "layout_font_size", "1");
+    try ir.setNodeProperty(object, "layout_line_height", "1");
+    try ir.setNodeProperty(object, "text_size", "1");
+    try ir.setNodeProperty(object, "text_line_height", "1");
+    try ir.setNodeProperty(object, "wrap", "on");
+    try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 20, "left");
+    try ir.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 1, "width");
+    try ir.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
+    try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 1, "height");
+
+    try solver.solveLayout(&ir);
+
+    for (ir.diagnostics.items) |diagnostic| {
+        try testing.expect(diagnostic.data != .content_overflow);
+    }
+}
+
+test "render policy: invalid numeric properties fall back before rendering" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "bad-numbers", null, .text, .text, "Hello");
+    try ir.setNodeProperty(object, "text_size", "-1");
+    try ir.setNodeProperty(object, "text_line_height", "nan");
+    try ir.setNodeProperty(object, "text_inline_math_height_factor", "0");
+    try ir.setNodeProperty(object, "chrome_pad_x", "-10");
+    try ir.setNodeProperty(object, "chrome_pad_y", "inf");
+    try ir.setNodeProperty(object, "chrome_line_width", "-2");
+    try ir.setNodeProperty(object, "underline_width", "-1");
+    try ir.setNodeProperty(object, "rule_line_width", "-1");
+    try ir.setNodeProperty(object, "rule_dash", "inf, 4");
+
+    const resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
+    const text = resolved.text.?;
+    try expectFloat(20, text.font_size);
+    try expectFloat(28, text.line_height);
+    try expectFloat(1, text.inline_math_height_factor);
+    try expectFloat(0, resolved.chrome.pad_x);
+    try expectFloat(0, resolved.chrome.pad_y);
+    try expectFloat(0, resolved.chrome.line_width);
+    try expectFloat(0, resolved.underline.width);
+    try expectFloat(0, resolved.rule.line_width);
+    try testing.expect(resolved.rule.dash == null);
+}

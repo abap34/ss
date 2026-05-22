@@ -414,6 +414,11 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
             "PageOverflow: left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
             .{ data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom },
         ),
+        .content_overflow => |data| std.fmt.allocPrint(
+            allocator,
+            "ContentOverflow: required_height={d:.1} frame_height={d:.1} overflow={d:.1}",
+            .{ data.required_height, data.frame_height, data.overflow_height },
+        ),
     };
 }
 

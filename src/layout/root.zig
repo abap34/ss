@@ -11,6 +11,7 @@ pub const styleForNode = style.styleForNode;
 pub const intrinsicWidth = metrics.intrinsicWidth;
 pub const intrinsicHeight = metrics.intrinsicHeight;
 pub const shouldWrapNode = metrics.shouldWrapNode;
+pub const contentFrame = metrics.contentFrame;
 pub const lineCount = metrics.lineCount;
 pub const anchorAxis = graph.anchorAxis;
 pub const approxEq = graph.approxEq;

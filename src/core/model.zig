@@ -630,6 +630,11 @@ pub const Diagnostic = struct {
             overflow_top: f32,
             overflow_bottom: f32,
         },
+        content_overflow: struct {
+            required_height: f32,
+            frame_height: f32,
+            overflow_height: f32,
+        },
     };
 
     pub fn deinit(self: *Diagnostic, allocator: Allocator) void {

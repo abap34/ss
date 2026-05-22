@@ -17,28 +17,50 @@ fn maxWidthForStyle(style: TextStyle) f32 {
 }
 
 fn assetScale(ir: anytype, node: *const Node) f32 {
-    return parseNodeFloatProperty(ir, node, "asset_scale") orelse 1.0;
+    return positiveNodeFloatProperty(ir, node, "asset_scale") orelse 1.0;
 }
 
 fn mathScale(ir: anytype, node: *const Node) f32 {
-    return parseNodeFloatProperty(ir, node, "math_scale") orelse 1.0;
+    return positiveNodeFloatProperty(ir, node, "math_scale") orelse 1.0;
+}
+
+pub fn chromePadX(ir: anytype, node: *const Node) f32 {
+    return nonNegativeNodeFloatProperty(ir, node, "chrome_pad_x") orelse 0.0;
+}
+
+pub fn chromePadY(ir: anytype, node: *const Node) f32 {
+    return nonNegativeNodeFloatProperty(ir, node, "chrome_pad_y") orelse 0.0;
+}
+
+pub fn contentFrame(ir: anytype, node: *const Node) model.Frame {
+    const pad_x = chromePadX(ir, node);
+    const pad_y = chromePadY(ir, node);
+    return .{
+        .x = node.frame.x + pad_x,
+        .y = node.frame.y + pad_y,
+        .width = @max(@as(f32, 1.0), node.frame.width - 2.0 * pad_x),
+        .height = @max(@as(f32, 1.0), node.frame.height - 2.0 * pad_y),
+        .x_set = node.frame.x_set,
+        .y_set = node.frame.y_set,
+    };
 }
 
 pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
     const style = styleForNode(ir, node);
     const content = node.content orelse "";
+    const chrome_width = 2.0 * chromePadX(ir, node);
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
-            const base_width = parseNodeFloatProperty(ir, node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
-            return base_width * assetScale(ir, node);
+            const base_width = positiveNodeFloatProperty(ir, node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
+            return base_width * assetScale(ir, node) + chrome_width;
         },
-        .figure_text => return maxWidthForStyle(style),
-        .math_tex => return maxWidthForStyle(style),
+        .figure_text => return maxWidthForStyle(style) + chrome_width,
+        .math_tex => return maxWidthForStyle(style) + chrome_width,
         else => {},
     }
 
     if (shouldUseFullWrapWidth(ir, node, content)) {
-        return maxWidthForStyle(style);
+        return maxWidthForStyle(style) + chrome_width;
     }
 
     var max_len: usize = 0;
@@ -51,26 +73,30 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
     }
     if (max_len == 0) max_len = 1;
     const advance = if (wide) style.font_size * 1.02 else style.font_size * 0.58;
-    return @min(maxWidthForStyle(style), @as(f32, @floatFromInt(max_len)) * advance);
+    return @min(maxWidthForStyle(style), @as(f32, @floatFromInt(max_len)) * advance) + chrome_width;
 }
 
 pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
     const style = styleForNode(ir, node);
+    const chrome_height = 2.0 * chromePadY(ir, node);
     return switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => blk: {
-            const base_height = parseNodeFloatProperty(ir, node, "asset_height") orelse PageLayout.max_figure_height;
-            break :blk base_height * assetScale(ir, node);
+            const base_height = positiveNodeFloatProperty(ir, node, "asset_height") orelse PageLayout.max_figure_height;
+            break :blk base_height * assetScale(ir, node) + chrome_height;
         },
-        .figure_text => PageLayout.max_figure_height,
+        .figure_text => PageLayout.max_figure_height + chrome_height,
         .math_tex => blk: {
             const content = node.content orelse "";
             const lines = @max(lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
-            break :blk @min(PageLayout.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node));
+            break :blk @min(PageLayout.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node)) + chrome_height;
         },
         else => blk: {
             const content = node.content orelse "";
-            const width = if (node.frame.width > 0) node.frame.width else intrinsicWidth(ir, node);
+            const width = if (node.frame.width > 0)
+                @max(@as(f32, 1.0), node.frame.width - 2.0 * chromePadX(ir, node))
+            else
+                @max(@as(f32, 1.0), intrinsicWidth(ir, node) - 2.0 * chromePadX(ir, node));
             if (shouldWrapNode(ir, node) and markdown.shouldParseBlocksNode(ir, node)) {
                 var doc = markdown.parseMarkdownDocumentForNode(
                     ir.allocator,
@@ -79,13 +105,13 @@ pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
                     content,
                 ) catch break :blk fallbackTextHeight(ir, node, style, content, width);
                 defer doc.deinit();
-                break :blk markdownBlocksHeight(ir, node, style, doc.blocks.items, width, 0);
+                break :blk markdownBlocksHeight(ir, node, style, doc.blocks.items, width, 0) + chrome_height;
             }
             const lines = if (shouldWrapNode(ir, node))
                 wrappedLineCount(content, style, width, node.role)
             else
                 lineCount(content);
-            break :blk @as(f32, @floatFromInt(lines)) * style.line_height;
+            break :blk @as(f32, @floatFromInt(lines)) * style.line_height + chrome_height;
         },
     };
 }
@@ -99,7 +125,7 @@ fn fallbackTextHeight(ir: anytype, node: *const Node, style: TextStyle, content:
 }
 
 fn markdownBlockGap(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_block_gap") orelse style.line_height * 0.15;
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_block_gap") orelse style.line_height * 0.15;
 }
 
 fn markdownGapBetweenBlocks(ir: anytype, node: *const Node, style: TextStyle, current: *const markdown.Block, next: *const markdown.Block) f32 {
@@ -111,19 +137,19 @@ fn markdownGapBetweenBlocks(ir: anytype, node: *const Node, style: TextStyle, cu
 }
 
 fn markdownListIndent(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_list_indent") orelse style.font_size * 1.3;
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_list_indent") orelse style.font_size * 1.3;
 }
 
 fn markdownListInset(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return @max(@as(f32, 0), parseNodeFloatProperty(ir, node, "text_markdown_list_inset") orelse style.font_size * 0.4);
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_list_inset") orelse style.font_size * 0.4;
 }
 
 fn markdownCodeLineHeight(ir: anytype, node: *const Node) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_code_line_height") orelse 20.0;
+    return positiveNodeFloatProperty(ir, node, "text_markdown_code_line_height") orelse 20.0;
 }
 
 fn markdownCodePadY(ir: anytype, node: *const Node) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 10.0;
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 10.0;
 }
 
 fn markdownBlocksHeight(ir: anytype, node: *const Node, style: TextStyle, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
@@ -184,15 +210,15 @@ fn markdownListItemHeight(ir: anytype, node: *const Node, style: TextStyle, kind
 }
 
 fn markdownTableCellPadX(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), style.font_size * 0.55);
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), style.font_size * 0.55);
 }
 
 fn markdownTableCellPadY(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), style.font_size * 0.32);
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), style.font_size * 0.32);
 }
 
 fn markdownTableLineWidth(ir: anytype, node: *const Node) f32 {
-    return parseNodeFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8;
+    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8;
 }
 
 fn markdownTableHeight(ir: anytype, node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32) f32 {
@@ -292,6 +318,16 @@ pub fn shouldWrapNode(ir: anytype, node: *const Node) bool {
 
 fn parseNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
     return style_defaults.parseNodeFloatProperty(ir, node, key);
+}
+
+fn positiveNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseNodeFloatProperty(ir, node, key) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn nonNegativeNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseNodeFloatProperty(ir, node, key) orelse return null;
+    return if (value >= 0) value else null;
 }
 
 pub fn lineCount(text: []const u8) usize {

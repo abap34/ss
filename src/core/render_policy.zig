@@ -172,29 +172,29 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .bold_font = stringProperty(ir, node, "text_bold_font", font),
         .italic_font = stringProperty(ir, node, "text_italic_font", font),
         .code_font = stringProperty(ir, node, "text_code_font", "Courier"),
-        .font_size = parseFloatProperty(ir, node, "text_size") orelse layout_style.font_size,
-        .line_height = parseFloatProperty(ir, node, "text_line_height") orelse layout_style.line_height,
+        .font_size = positiveFloatProperty(ir, node, "text_size") orelse layout_style.font_size,
+        .line_height = positiveFloatProperty(ir, node, "text_line_height") orelse layout_style.line_height,
         .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseColorProperty(ir, node, "text_link_color") orelse FALLBACK_LINK_COLOR,
-        .link_underline_width = parseFloatProperty(ir, node, "text_link_underline_width") orelse 0,
+        .link_underline_width = nonNegativeFloatProperty(ir, node, "text_link_underline_width") orelse 0,
         .link_underline_offset = parseFloatProperty(ir, node, "text_link_underline_offset") orelse 0,
-        .inline_math_height_factor = parseFloatProperty(ir, node, "text_inline_math_height_factor") orelse 1,
-        .inline_math_spacing = parseFloatProperty(ir, node, "text_inline_math_spacing") orelse 0,
-        .markdown_block_gap = parseFloatProperty(ir, node, "text_markdown_block_gap") orelse 0,
-        .markdown_list_inset = parseFloatProperty(ir, node, "text_markdown_list_inset") orelse 0,
-        .markdown_list_indent = parseFloatProperty(ir, node, "text_markdown_list_indent") orelse 0,
-        .markdown_code_font_size = parseFloatProperty(ir, node, "text_markdown_code_font_size") orelse layout_style.font_size,
-        .markdown_code_line_height = parseFloatProperty(ir, node, "text_markdown_code_line_height") orelse layout_style.line_height,
-        .markdown_code_pad_x = parseFloatProperty(ir, node, "text_markdown_code_pad_x") orelse 0,
-        .markdown_code_pad_y = parseFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 0,
+        .inline_math_height_factor = positiveFloatProperty(ir, node, "text_inline_math_height_factor") orelse 1,
+        .inline_math_spacing = nonNegativeFloatProperty(ir, node, "text_inline_math_spacing") orelse 0,
+        .markdown_block_gap = nonNegativeFloatProperty(ir, node, "text_markdown_block_gap") orelse 0,
+        .markdown_list_inset = nonNegativeFloatProperty(ir, node, "text_markdown_list_inset") orelse 0,
+        .markdown_list_indent = nonNegativeFloatProperty(ir, node, "text_markdown_list_indent") orelse 0,
+        .markdown_code_font_size = positiveFloatProperty(ir, node, "text_markdown_code_font_size") orelse layout_style.font_size,
+        .markdown_code_line_height = positiveFloatProperty(ir, node, "text_markdown_code_line_height") orelse layout_style.line_height,
+        .markdown_code_pad_x = nonNegativeFloatProperty(ir, node, "text_markdown_code_pad_x") orelse 0,
+        .markdown_code_pad_y = nonNegativeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 0,
         .markdown_code_fill = parseColorProperty(ir, node, "text_markdown_code_fill"),
         .markdown_code_stroke = parseColorProperty(ir, node, "text_markdown_code_stroke"),
-        .markdown_code_line_width = parseFloatProperty(ir, node, "text_markdown_code_line_width") orelse 0,
-        .markdown_code_radius = parseFloatProperty(ir, node, "text_markdown_code_radius") orelse 0,
-        .markdown_table_cell_pad_x = parseFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
-        .markdown_table_cell_pad_y = parseFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
+        .markdown_code_line_width = nonNegativeFloatProperty(ir, node, "text_markdown_code_line_width") orelse 0,
+        .markdown_code_radius = nonNegativeFloatProperty(ir, node, "text_markdown_code_radius") orelse 0,
+        .markdown_table_cell_pad_x = nonNegativeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
+        .markdown_table_cell_pad_y = nonNegativeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
         .markdown_table_border = parseColorProperty(ir, node, "text_markdown_table_border"),
-        .markdown_table_line_width = parseFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8,
+        .markdown_table_line_width = nonNegativeFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8,
         .markdown_table_header_fill = parseColorProperty(ir, node, "text_markdown_table_header_fill"),
         .markdown_table_alt_row_fill = parseColorProperty(ir, node, "text_markdown_table_alt_row_fill"),
         .cjk_bold_passes = parseIntProperty(ir, node, "text_cjk_bold_passes") orelse 1,
@@ -206,10 +206,10 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
 fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
-        .block_line_height = parseFloatProperty(ir, node, "math_block_line_height") orelse 22,
-        .block_min_height = parseFloatProperty(ir, node, "math_block_min_height") orelse 30,
-        .block_vertical_padding = parseFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
-        .scale = parseFloatProperty(ir, node, "math_scale") orelse 1,
+        .block_line_height = positiveFloatProperty(ir, node, "math_block_line_height") orelse 22,
+        .block_min_height = positiveFloatProperty(ir, node, "math_block_min_height") orelse 30,
+        .block_vertical_padding = nonNegativeFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
+        .scale = positiveFloatProperty(ir, node, "math_scale") orelse 1,
         .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
     };
 }
@@ -239,29 +239,29 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
         .bold_font = stringPropertyWithEnv(node, "text_bold_font", font, sema),
         .italic_font = stringPropertyWithEnv(node, "text_italic_font", font, sema),
         .code_font = stringPropertyWithEnv(node, "text_code_font", "Courier", sema),
-        .font_size = parseFloatPropertyWithEnv(node, "text_size", sema) orelse layout_style.font_size,
-        .line_height = parseFloatPropertyWithEnv(node, "text_line_height", sema) orelse layout_style.line_height,
+        .font_size = positiveFloatPropertyWithEnv(node, "text_size", sema) orelse layout_style.font_size,
+        .line_height = positiveFloatPropertyWithEnv(node, "text_line_height", sema) orelse layout_style.line_height,
         .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
         .link_color = parseColorPropertyWithEnv(node, "text_link_color", sema) orelse FALLBACK_LINK_COLOR,
-        .link_underline_width = parseFloatPropertyWithEnv(node, "text_link_underline_width", sema) orelse 0,
+        .link_underline_width = nonNegativeFloatPropertyWithEnv(node, "text_link_underline_width", sema) orelse 0,
         .link_underline_offset = parseFloatPropertyWithEnv(node, "text_link_underline_offset", sema) orelse 0,
-        .inline_math_height_factor = parseFloatPropertyWithEnv(node, "text_inline_math_height_factor", sema) orelse 1,
-        .inline_math_spacing = parseFloatPropertyWithEnv(node, "text_inline_math_spacing", sema) orelse 0,
-        .markdown_block_gap = parseFloatPropertyWithEnv(node, "text_markdown_block_gap", sema) orelse 0,
-        .markdown_list_inset = parseFloatPropertyWithEnv(node, "text_markdown_list_inset", sema) orelse 0,
-        .markdown_list_indent = parseFloatPropertyWithEnv(node, "text_markdown_list_indent", sema) orelse 0,
-        .markdown_code_font_size = parseFloatPropertyWithEnv(node, "text_markdown_code_font_size", sema) orelse layout_style.font_size,
-        .markdown_code_line_height = parseFloatPropertyWithEnv(node, "text_markdown_code_line_height", sema) orelse layout_style.line_height,
-        .markdown_code_pad_x = parseFloatPropertyWithEnv(node, "text_markdown_code_pad_x", sema) orelse 0,
-        .markdown_code_pad_y = parseFloatPropertyWithEnv(node, "text_markdown_code_pad_y", sema) orelse 0,
+        .inline_math_height_factor = positiveFloatPropertyWithEnv(node, "text_inline_math_height_factor", sema) orelse 1,
+        .inline_math_spacing = nonNegativeFloatPropertyWithEnv(node, "text_inline_math_spacing", sema) orelse 0,
+        .markdown_block_gap = nonNegativeFloatPropertyWithEnv(node, "text_markdown_block_gap", sema) orelse 0,
+        .markdown_list_inset = nonNegativeFloatPropertyWithEnv(node, "text_markdown_list_inset", sema) orelse 0,
+        .markdown_list_indent = nonNegativeFloatPropertyWithEnv(node, "text_markdown_list_indent", sema) orelse 0,
+        .markdown_code_font_size = positiveFloatPropertyWithEnv(node, "text_markdown_code_font_size", sema) orelse layout_style.font_size,
+        .markdown_code_line_height = positiveFloatPropertyWithEnv(node, "text_markdown_code_line_height", sema) orelse layout_style.line_height,
+        .markdown_code_pad_x = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_pad_x", sema) orelse 0,
+        .markdown_code_pad_y = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_pad_y", sema) orelse 0,
         .markdown_code_fill = parseColorPropertyWithEnv(node, "text_markdown_code_fill", sema),
         .markdown_code_stroke = parseColorPropertyWithEnv(node, "text_markdown_code_stroke", sema),
-        .markdown_code_line_width = parseFloatPropertyWithEnv(node, "text_markdown_code_line_width", sema) orelse 0,
-        .markdown_code_radius = parseFloatPropertyWithEnv(node, "text_markdown_code_radius", sema) orelse 0,
-        .markdown_table_cell_pad_x = parseFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_x", sema) orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
-        .markdown_table_cell_pad_y = parseFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_y", sema) orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
+        .markdown_code_line_width = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_line_width", sema) orelse 0,
+        .markdown_code_radius = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_radius", sema) orelse 0,
+        .markdown_table_cell_pad_x = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_x", sema) orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
+        .markdown_table_cell_pad_y = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_y", sema) orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
         .markdown_table_border = parseColorPropertyWithEnv(node, "text_markdown_table_border", sema),
-        .markdown_table_line_width = parseFloatPropertyWithEnv(node, "text_markdown_table_line_width", sema) orelse 0.8,
+        .markdown_table_line_width = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_line_width", sema) orelse 0.8,
         .markdown_table_header_fill = parseColorPropertyWithEnv(node, "text_markdown_table_header_fill", sema),
         .markdown_table_alt_row_fill = parseColorPropertyWithEnv(node, "text_markdown_table_alt_row_fill", sema),
         .cjk_bold_passes = parseIntPropertyWithEnv(node, "text_cjk_bold_passes", sema) orelse 1,
@@ -273,10 +273,10 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
 fn resolveMathWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
-        .block_line_height = parseFloatPropertyWithEnv(node, "math_block_line_height", sema) orelse 22,
-        .block_min_height = parseFloatPropertyWithEnv(node, "math_block_min_height", sema) orelse 30,
-        .block_vertical_padding = parseFloatPropertyWithEnv(node, "math_block_vertical_padding", sema) orelse 2,
-        .scale = parseFloatPropertyWithEnv(node, "math_scale", sema) orelse 1,
+        .block_line_height = positiveFloatPropertyWithEnv(node, "math_block_line_height", sema) orelse 22,
+        .block_min_height = positiveFloatPropertyWithEnv(node, "math_block_min_height", sema) orelse 30,
+        .block_vertical_padding = nonNegativeFloatPropertyWithEnv(node, "math_block_vertical_padding", sema) orelse 2,
+        .scale = positiveFloatPropertyWithEnv(node, "math_scale", sema) orelse 1,
         .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
     };
 }
@@ -297,17 +297,17 @@ fn resolveChromeWithEnv(node: *const Node, sema: anytype) ChromePaint {
     return .{
         .fill = parseColorPropertyWithEnv(node, "chrome_fill", sema),
         .stroke = parseColorPropertyWithEnv(node, "chrome_stroke", sema),
-        .line_width = parseFloatPropertyWithEnv(node, "chrome_line_width", sema) orelse 0,
-        .radius = parseFloatPropertyWithEnv(node, "chrome_radius", sema) orelse 0,
-        .pad_x = parseFloatPropertyWithEnv(node, "chrome_pad_x", sema) orelse 0,
-        .pad_y = parseFloatPropertyWithEnv(node, "chrome_pad_y", sema) orelse 0,
+        .line_width = nonNegativeFloatPropertyWithEnv(node, "chrome_line_width", sema) orelse 0,
+        .radius = nonNegativeFloatPropertyWithEnv(node, "chrome_radius", sema) orelse 0,
+        .pad_x = nonNegativeFloatPropertyWithEnv(node, "chrome_pad_x", sema) orelse 0,
+        .pad_y = nonNegativeFloatPropertyWithEnv(node, "chrome_pad_y", sema) orelse 0,
     };
 }
 
 fn resolveUnderlineWithEnv(node: *const Node, sema: anytype) UnderlinePaint {
     return .{
         .color = parseColorPropertyWithEnv(node, "underline_color", sema),
-        .width = parseFloatPropertyWithEnv(node, "underline_width", sema) orelse 0,
+        .width = nonNegativeFloatPropertyWithEnv(node, "underline_width", sema) orelse 0,
         .offset = parseFloatPropertyWithEnv(node, "underline_offset", sema) orelse 0,
     };
 }
@@ -315,7 +315,7 @@ fn resolveUnderlineWithEnv(node: *const Node, sema: anytype) UnderlinePaint {
 fn resolveRuleWithEnv(node: *const Node, sema: anytype) RulePaint {
     return .{
         .stroke = parseColorPropertyWithEnv(node, "rule_stroke", sema),
-        .line_width = parseFloatPropertyWithEnv(node, "rule_line_width", sema) orelse 0,
+        .line_width = nonNegativeFloatPropertyWithEnv(node, "rule_line_width", sema) orelse 0,
         .dash = parseDashPropertyWithEnv(node, "rule_dash", sema),
     };
 }
@@ -324,17 +324,17 @@ fn resolveChrome(ir: anytype, node: *const Node) ChromePaint {
     return .{
         .fill = parseColorProperty(ir, node, "chrome_fill"),
         .stroke = parseColorProperty(ir, node, "chrome_stroke"),
-        .line_width = parseFloatProperty(ir, node, "chrome_line_width") orelse 0,
-        .radius = parseFloatProperty(ir, node, "chrome_radius") orelse 0,
-        .pad_x = parseFloatProperty(ir, node, "chrome_pad_x") orelse 0,
-        .pad_y = parseFloatProperty(ir, node, "chrome_pad_y") orelse 0,
+        .line_width = nonNegativeFloatProperty(ir, node, "chrome_line_width") orelse 0,
+        .radius = nonNegativeFloatProperty(ir, node, "chrome_radius") orelse 0,
+        .pad_x = nonNegativeFloatProperty(ir, node, "chrome_pad_x") orelse 0,
+        .pad_y = nonNegativeFloatProperty(ir, node, "chrome_pad_y") orelse 0,
     };
 }
 
 fn resolveUnderline(ir: anytype, node: *const Node) UnderlinePaint {
     return .{
         .color = parseColorProperty(ir, node, "underline_color"),
-        .width = parseFloatProperty(ir, node, "underline_width") orelse 0,
+        .width = nonNegativeFloatProperty(ir, node, "underline_width") orelse 0,
         .offset = parseFloatProperty(ir, node, "underline_offset") orelse 0,
     };
 }
@@ -342,7 +342,7 @@ fn resolveUnderline(ir: anytype, node: *const Node) UnderlinePaint {
 fn resolveRule(ir: anytype, node: *const Node) RulePaint {
     return .{
         .stroke = parseColorProperty(ir, node, "rule_stroke"),
-        .line_width = parseFloatProperty(ir, node, "rule_line_width") orelse 0,
+        .line_width = nonNegativeFloatProperty(ir, node, "rule_line_width") orelse 0,
         .dash = parseDashProperty(ir, node, "rule_dash"),
     };
 }
@@ -383,12 +383,34 @@ fn stringPropertyWithEnv(node: *const Node, key: []const u8, fallback: []const u
 
 fn parseFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
     const value = class_fields.property(ir, node, key) orelse return null;
-    return std.fmt.parseFloat(f32, value) catch null;
+    const parsed = std.fmt.parseFloat(f32, value) catch return null;
+    return if (std.math.isFinite(parsed)) parsed else null;
 }
 
 fn parseFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
     const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
-    return std.fmt.parseFloat(f32, value) catch null;
+    const parsed = std.fmt.parseFloat(f32, value) catch return null;
+    return if (std.math.isFinite(parsed)) parsed else null;
+}
+
+fn positiveFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseFloatProperty(ir, node, key) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn positiveFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
+    const value = parseFloatPropertyWithEnv(node, key, sema) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn nonNegativeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseFloatProperty(ir, node, key) orelse return null;
+    return if (value >= 0) value else null;
+}
+
+fn nonNegativeFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
+    const value = parseFloatPropertyWithEnv(node, key, sema) orelse return null;
+    return if (value >= 0) value else null;
 }
 
 fn parseIntProperty(ir: anytype, node: *const Node, key: []const u8) ?u32 {
@@ -431,8 +453,9 @@ fn parseDash(value: []const u8) ?Dash {
     const on_text = parts.next() orelse return null;
     const off_text = parts.next() orelse return null;
     if (parts.next() != null) return null;
-    return .{
-        .on = std.fmt.parseFloat(f32, std.mem.trim(u8, on_text, " ")) catch return null,
-        .off = std.fmt.parseFloat(f32, std.mem.trim(u8, off_text, " ")) catch return null,
-    };
+    const on = std.fmt.parseFloat(f32, std.mem.trim(u8, on_text, " ")) catch return null;
+    const off = std.fmt.parseFloat(f32, std.mem.trim(u8, off_text, " ")) catch return null;
+    if (!std.math.isFinite(on) or !std.math.isFinite(off)) return null;
+    if (on <= 0 or off <= 0) return null;
+    return .{ .on = on, .off = off };
 }
