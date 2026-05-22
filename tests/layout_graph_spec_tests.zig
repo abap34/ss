@@ -400,7 +400,7 @@ test "layout diagnostics: fixed-height object reports content overflow" {
     try testing.expect(found);
 }
 
-test "layout diagnostics: one-pixel metadata text does not report content overflow" {
+test "layout diagnostics: one-pixel text reports content overflow" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 
@@ -418,9 +418,11 @@ test "layout diagnostics: one-pixel metadata text does not report content overfl
 
     try solver.solveLayout(&ir);
 
+    var found = false;
     for (ir.diagnostics.items) |diagnostic| {
-        try testing.expect(diagnostic.data != .content_overflow);
+        if (diagnostic.node_id == object and diagnostic.data == .content_overflow) found = true;
     }
+    try testing.expect(found);
 }
 
 test "render policy: invalid numeric properties fall back before rendering" {

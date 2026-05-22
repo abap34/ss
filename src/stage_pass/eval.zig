@@ -176,8 +176,10 @@ fn allowedEffects(slot: PassSlot) core.EffectSet {
     switch (slot) {
         .augment => {
             set.insert(.ReadGraph);
+            set.insert(.ReadMetadata);
             set.insert(.CreatePage);
             set.insert(.CreateNode);
+            set.insert(.EmitMetadata);
             set.insert(.WriteContent);
             set.insert(.WriteProperty);
             set.insert(.WriteConstraint);
@@ -185,6 +187,7 @@ fn allowedEffects(slot: PassSlot) core.EffectSet {
         },
         .resolve => {
             set.insert(.ReadGraph);
+            set.insert(.ReadMetadata);
             set.insert(.WriteContent);
             set.insert(.WriteProperty);
             set.insert(.WriteConstraint);
@@ -192,11 +195,13 @@ fn allowedEffects(slot: PassSlot) core.EffectSet {
         },
         .inspect_layout => {
             set.insert(.ReadGraph);
+            set.insert(.ReadMetadata);
             set.insert(.ReadLayout);
             set.insert(.EmitDiagnostics);
         },
         .prepare_render => {
             set.insert(.ReadGraph);
+            set.insert(.ReadMetadata);
             set.insert(.ReadLayout);
             set.insert(.WriteRenderPolicy);
             set.insert(.EmitDiagnostics);
@@ -651,6 +656,30 @@ const BuiltinContext = struct {
 
     pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
         try self.ir.extendRenderEnv(node_id, op, key, value);
+    }
+
+    pub fn emitMetadata(self: *BuiltinContext, target: core.Value, kind: []const u8, value: []const u8) !core.MetadataId {
+        return try self.ir.emitMetadata(target, kind, value, self.current_origin);
+    }
+
+    pub fn metadataInDocument(self: *BuiltinContext, kind: []const u8) !core.Selection {
+        return try self.ir.selectDocumentMetadataByKind(self.ir.allocator, kind, "metadata-in-document");
+    }
+
+    pub fn metadataOnPage(self: *BuiltinContext, page_id: core.NodeId, kind: []const u8) !core.Selection {
+        return try self.ir.selectPageMetadataByKind(self.ir.allocator, page_id, kind, "metadata-on-page");
+    }
+
+    pub fn metadataContent(self: *BuiltinContext, metadata_id: core.MetadataId) ![]const u8 {
+        return try self.ir.metadataContent(metadata_id);
+    }
+
+    pub fn metadataKind(self: *BuiltinContext, metadata_id: core.MetadataId) ![]const u8 {
+        return try self.ir.metadataKind(metadata_id);
+    }
+
+    pub fn metadataPage(self: *BuiltinContext, metadata_id: core.MetadataId) !core.NodeId {
+        return try self.ir.metadataPage(metadata_id);
     }
 
     pub fn invokeCallback(self: *BuiltinContext, function: core.FunctionRef, args: []const core.Value) !core.Value {

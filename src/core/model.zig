@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Allocator = std.mem.Allocator;
 pub const NodeId = u32;
+pub const MetadataId = u32;
 pub const Role = []const u8;
 pub const GroupRole: Role = "group";
 
@@ -151,11 +152,26 @@ pub const Node = struct {
     }
 };
 
+pub const Metadata = struct {
+    id: MetadataId,
+    kind: []const u8,
+    value: []const u8,
+    page_id: ?NodeId = null,
+    origin: ?[]const u8 = null,
+
+    pub fn deinit(self: *Metadata, allocator: Allocator) void {
+        allocator.free(self.kind);
+        allocator.free(self.value);
+        if (self.origin) |origin| allocator.free(origin);
+    }
+};
+
 pub const SemanticSort = enum {
     code,
     document,
     page,
     object,
+    metadata,
     selection,
     anchor,
     function,
@@ -170,6 +186,7 @@ pub const SemanticSort = enum {
 pub const SelectionItemSort = enum {
     page,
     object,
+    metadata,
 };
 
 pub const Selection = struct {
@@ -338,8 +355,10 @@ pub const CodeValue = struct {
 pub const Effect = enum(u5) {
     Pure,
     ReadGraph,
+    ReadMetadata,
     CreatePage,
     CreateNode,
+    EmitMetadata,
     WriteContent,
     WriteProperty,
     WriteConstraint,
@@ -509,6 +528,7 @@ pub const Value = union(SemanticSort) {
     document: NodeId,
     page: NodeId,
     object: NodeId,
+    metadata: MetadataId,
     selection: Selection,
     anchor: AnchorValue,
     function: FunctionRef,
@@ -535,6 +555,7 @@ pub const Value = union(SemanticSort) {
             .document => |id| .{ .document = id },
             .page => |id| .{ .page = id },
             .object => |id| .{ .object = id },
+            .metadata => |id| .{ .metadata = id },
             .selection => |selection| .{ .selection = try selection.clone(allocator) },
             .anchor => |anchor| .{ .anchor = anchor },
             .function => |function| .{ .function = try function.clone(allocator) },
@@ -553,6 +574,7 @@ pub const Value = union(SemanticSort) {
             .document => |id| id,
             .page => |id| id,
             .object => |id| id,
+            .metadata => |id| id,
             .selection => |selection| selection.first(),
             .fragment => |fragment| if (fragment.root) |root| root.firstId() else null,
             .anchor, .function, .style, .string, .number, .boolean, .constraints => null,

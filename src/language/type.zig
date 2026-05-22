@@ -13,6 +13,7 @@ pub const Type = struct {
         document,
         page,
         object,
+        metadata,
         selection,
         anchor,
         function,
@@ -30,6 +31,7 @@ pub const Type = struct {
     pub const document = Type{ .tag = .document };
     pub const page = Type{ .tag = .page };
     pub const object = Type{ .tag = .object };
+    pub const metadata = Type{ .tag = .metadata };
     pub const anchor = Type{ .tag = .anchor };
     pub const function = Type{ .tag = .function };
     pub const style = Type{ .tag = .style };
@@ -76,6 +78,7 @@ pub const Type = struct {
             .document => .document,
             .page => .page,
             .object => .object,
+            .metadata => .metadata,
             .selection => selection(.any),
             .anchor => .anchor,
             .function => .function,
@@ -93,6 +96,7 @@ pub const Type = struct {
             .document => .document,
             .page => .page,
             .object => .object,
+            .metadata => .metadata,
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
@@ -134,6 +138,7 @@ pub const Type = struct {
         return switch (sort) {
             .page => selection(.page),
             .object => selection(.object),
+            .metadata => selection(.metadata),
         };
     }
 
@@ -142,6 +147,7 @@ pub const Type = struct {
             .document => .document,
             .page => .page,
             .object => .object,
+            .metadata => .metadata,
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,

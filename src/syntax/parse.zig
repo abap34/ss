@@ -554,6 +554,7 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "document")) return ast.Type.document;
         if (std.mem.eql(u8, name, "page")) return ast.Type.page;
         if (std.mem.eql(u8, name, "object")) return try self.parseObjectType(name);
+        if (std.mem.eql(u8, name, "metadata")) return ast.Type.metadata;
         if (std.mem.eql(u8, name, "anchor")) return ast.Type.anchor;
         if (std.mem.eql(u8, name, "function")) return ast.Type.function;
         if (std.mem.eql(u8, name, "style")) return ast.Type.style;

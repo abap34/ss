@@ -34,6 +34,30 @@ fn objects_in_document(doc: document, role_name: string) -> selection<object>
   return select(doc, "document_objects_by_role", role_name)
 end
 
+fn marker(kind_name: string, value_text: string) -> metadata
+  return emit_metadata(pagectx(), kind_name, value_text)
+end
+
+fn document_marker(kind_name: string, value_text: string) -> metadata
+  return emit_metadata(docctx(), kind_name, value_text)
+end
+
+fn markers_in_document(doc: document, kind_name: string) -> selection<metadata>
+  return metadata_in_document(doc, kind_name)
+end
+
+fn markers_on_page(page_value: page, kind_name: string) -> selection<metadata>
+  return metadata_on_page(page_value, kind_name)
+end
+
+fn marker_content(item: metadata) -> string
+  return metadata_content(item)
+end
+
+fn marker_page(item: metadata) -> page
+  return metadata_page(item)
+end
+
 fn parent_page(obj: object) -> page
   return select(obj, "parent_page")
 end

@@ -33,6 +33,12 @@ pub const PrimitiveCall = enum {
     frame_width,
     frame_height,
     content,
+    emit_metadata,
+    metadata_in_document,
+    metadata_on_page,
+    metadata_content,
+    metadata_kind,
+    metadata_page,
     prop,
     has_prop,
     prop_eq,
@@ -73,6 +79,7 @@ pub const ArgSort = enum {
     document,
     page,
     object,
+    metadata,
     selection,
     anchor,
     function,
@@ -139,6 +146,12 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .frame_width, .name = "frame_width", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved width for an object" },
     .{ .op = .frame_height, .name = "frame_height", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .number, .summary = "Return the solved height for an object" },
     .{ .op = .content, .name = "content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_sorts = &.{.object}, .result_sort = .string, .summary = "Return an object's textual content" },
+    .{ .op = .emit_metadata, .name = "emit_metadata", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "kind", "value" }, .arg_sorts = &.{ .any, .string, .string }, .result_sort = .metadata, .effect = .builds_graph, .summary = "Append a metadata fact associated with a document, page, or object" },
+    .{ .op = .metadata_in_document, .name = "metadata_in_document", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "kind" }, .arg_sorts = &.{ .document, .string }, .result_sort = .selection, .summary = "Select metadata facts by kind across the whole document" },
+    .{ .op = .metadata_on_page, .name = "metadata_on_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "kind" }, .arg_sorts = &.{ .page, .string }, .result_sort = .selection, .summary = "Select metadata facts by kind on one page" },
+    .{ .op = .metadata_content, .name = "metadata_content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"metadata"}, .arg_sorts = &.{.metadata}, .result_sort = .string, .summary = "Return a metadata fact's textual value" },
+    .{ .op = .metadata_kind, .name = "metadata_kind", .min_arity = 1, .max_arity = 1, .arg_names = &.{"metadata"}, .arg_sorts = &.{.metadata}, .result_sort = .string, .summary = "Return a metadata fact's kind" },
+    .{ .op = .metadata_page, .name = "metadata_page", .min_arity = 1, .max_arity = 1, .arg_names = &.{"metadata"}, .arg_sorts = &.{.metadata}, .result_sort = .page, .summary = "Return the page associated with a metadata fact" },
     .{ .op = .prop, .name = "prop", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "default" }, .arg_sorts = &.{ .any, .string, .string }, .result_sort = .string, .summary = "Read a property from a document, page, or object, falling back to a default" },
     .{ .op = .has_prop, .name = "has_prop", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "target", "key" }, .arg_sorts = &.{ .any, .string }, .result_sort = .boolean, .summary = "Return whether a document, page, or object has a property" },
     .{ .op = .prop_eq, .name = "prop_eq", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "value" }, .arg_sorts = &.{ .any, .string, .string }, .result_sort = .boolean, .summary = "Return whether a property equals a string value" },
@@ -206,6 +219,7 @@ pub fn argSortType(sort: ArgSort) ?types.Type {
         .document => types.Type.document,
         .page => types.Type.page,
         .object => types.Type.object,
+        .metadata => types.Type.metadata,
         .selection => types.Type.selection(.any),
         .anchor => types.Type.anchor,
         .function => types.Type.function,
@@ -228,6 +242,7 @@ pub fn primitiveArgType(descriptor: PrimitiveDescriptor, index: usize) ?types.Ty
 }
 
 pub fn primitiveResultType(descriptor: PrimitiveDescriptor) ?types.Type {
+    if (descriptor.op == .metadata_in_document or descriptor.op == .metadata_on_page) return types.Type.selection(.metadata);
     if (descriptor.result_sort) |sort| return types.Type.fromSort(sort);
     return null;
 }
@@ -236,6 +251,8 @@ pub fn primitiveEffects(descriptor: PrimitiveDescriptor) core.EffectSet {
     var set = core.EffectSet.empty();
     switch (descriptor.op) {
         .select, .page_index, .page_count, .content, .prop, .has_prop, .prop_eq => set.insert(.ReadGraph),
+        .metadata_in_document, .metadata_on_page, .metadata_content, .metadata_kind, .metadata_page => set.insert(.ReadMetadata),
+        .emit_metadata => set.insert(.EmitMetadata),
         .frame_x, .frame_y, .frame_width, .frame_height => set.insert(.ReadLayout),
         .rewrite_text, .set_content, .clear_content, .append_content => set.insert(.WriteContent),
         .object, .group => set.insert(.CreateNode),

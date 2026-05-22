@@ -266,6 +266,7 @@ fn primitiveResultTypeInfo(
         const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
         var info = switch (selection_info.ty.param) {
             .page => infoFromSort(.page),
+            .metadata => infoFromSort(.metadata),
             .object, .any, .none => infoFromSort(.object),
             else => infoFromSort(selection_info.sort),
         };
@@ -304,6 +305,10 @@ fn primitiveResultTypeInfo(
 
     if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
         return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin);
+    }
+
+    if (descriptor.op == .metadata_in_document or descriptor.op == .metadata_on_page) {
+        return infoFromType(Type.selection(.metadata));
     }
 
     if (descriptor.op == .select) {
@@ -390,6 +395,7 @@ fn validateCallbackShape(
     }
     const item_type = switch (selection_info.ty.param) {
         .page => Type.page,
+        .metadata => Type.metadata,
         .object, .any, .none => Type.object,
         else => Type.any,
     };
@@ -652,6 +658,7 @@ pub fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index:
         .document => .document,
         .page => .page,
         .object => .object,
+        .metadata => .metadata,
         .selection => .selection,
         .anchor => .anchor,
         .function => .function,

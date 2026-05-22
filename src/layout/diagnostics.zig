@@ -2,7 +2,6 @@ const std = @import("std");
 const model = @import("model");
 const graph = @import("graph.zig");
 const metrics = @import("metrics.zig");
-const style = @import("style.zig");
 
 const Node = model.Node;
 const NodeId = model.NodeId;
@@ -99,11 +98,8 @@ const OverflowPolicy = enum {
 };
 
 fn shouldCheckContentOverflow(ir: anytype, node: *const Node) bool {
+    _ = ir;
     if (node.kind != .object) return false;
-    const text_style = style.styleForNode(ir, node);
-    if (text_style.font_size <= 1.0 and text_style.line_height <= 1.0 and node.frame.width <= 1.0 and node.frame.height <= 1.0) {
-        return false;
-    }
     return true;
 }
 

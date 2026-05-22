@@ -86,6 +86,14 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
             .set_content => |content| {
                 try ir.setNodeContent(try ctx.node(content.node), content.value);
             },
+            .add_metadata => |metadata| {
+                _ = try ir.addMetadata(
+                    metadata.kind,
+                    metadata.value,
+                    try ctx.maybeNode(metadata.page),
+                    metadata.origin,
+                );
+            },
             .add_constraint => |constraint| {
                 try ir.constraints.append(ir.allocator, try mapConstraint(ir, &ctx, constraint));
             },

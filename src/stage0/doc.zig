@@ -41,6 +41,12 @@ pub const Term = union(enum) {
         node: HandleId,
         value: []const u8,
     },
+    add_metadata: struct {
+        kind: []const u8,
+        value: []const u8,
+        page: ?HandleId,
+        origin: ?[]const u8,
+    },
     add_constraint: core.Constraint,
     materialize_fragment: *core.Fragment,
 };
@@ -51,6 +57,7 @@ pub const Document = struct {
     document_id: HandleId,
     next_id: HandleId,
     nodes: std.ArrayList(core.Node),
+    metadata: std.ArrayList(core.Metadata),
     page_order: std.ArrayList(HandleId),
     contains: std.AutoHashMap(HandleId, std.ArrayList(HandleId)),
     constraints: std.ArrayList(core.Constraint),
@@ -58,6 +65,7 @@ pub const Document = struct {
     fragments: std.ArrayList(*core.Fragment),
     terms: std.ArrayList(Term),
     runtime_strings: std.ArrayList([]u8),
+    next_metadata_id: core.MetadataId,
 
     pub fn init(allocator: Allocator, asset_base_dir: []const u8) !Document {
         const document_id: HandleId = 1;
@@ -67,6 +75,7 @@ pub const Document = struct {
             .document_id = document_id,
             .next_id = document_id + 1,
             .nodes = .empty,
+            .metadata = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(HandleId, std.ArrayList(HandleId)).init(allocator),
             .constraints = .empty,
@@ -74,6 +83,7 @@ pub const Document = struct {
             .fragments = .empty,
             .terms = .empty,
             .runtime_strings = .empty,
+            .next_metadata_id = 1,
         };
         errdefer doc.deinit();
         try doc.nodes.append(allocator, .{
@@ -104,6 +114,8 @@ pub const Document = struct {
         self.page_order.deinit(self.allocator);
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
+        for (self.metadata.items) |*metadata| metadata.deinit(self.allocator);
+        self.metadata.deinit(self.allocator);
     }
 
     pub fn ownString(self: *Document, text: []u8) ![]const u8 {
@@ -124,6 +136,11 @@ pub const Document = struct {
                 allocator.free(entry.value);
             },
             .set_content => |content| allocator.free(content.value),
+            .add_metadata => |metadata| {
+                allocator.free(metadata.kind);
+                allocator.free(metadata.value);
+                if (metadata.origin) |origin| allocator.free(origin);
+            },
             else => {},
         }
     }
@@ -131,6 +148,12 @@ pub const Document = struct {
     fn freshId(self: *Document) HandleId {
         const id = self.next_id;
         self.next_id += 1;
+        return id;
+    }
+
+    fn freshMetadataId(self: *Document) core.MetadataId {
+        const id = self.next_metadata_id;
+        self.next_metadata_id += 1;
         return id;
     }
 
@@ -314,6 +337,40 @@ pub const Document = struct {
         try self.setNodeContent(node_id, updated);
     }
 
+    pub fn emitMetadata(self: *Document, target: core.Value, kind: []const u8, value: []const u8, origin: ?[]const u8) !core.MetadataId {
+        const page_id: ?HandleId = switch (target) {
+            .document => null,
+            .page => |id| id,
+            .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
+            .code => |code| switch (code.root) {
+                .document => null,
+                .page => |id| id,
+                .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
+                else => return error.InvalidSemanticSort,
+            },
+            else => return error.InvalidSemanticSort,
+        };
+        return try self.addMetadata(kind, value, page_id, origin);
+    }
+
+    pub fn addMetadata(self: *Document, kind: []const u8, value: []const u8, page_id: ?HandleId, origin: ?[]const u8) !core.MetadataId {
+        const id = self.freshMetadataId();
+        try self.metadata.append(self.allocator, .{
+            .id = id,
+            .kind = try self.allocator.dupe(u8, kind),
+            .value = try self.allocator.dupe(u8, value),
+            .page_id = page_id,
+            .origin = if (origin) |text| try self.allocator.dupe(u8, text) else null,
+        });
+        try self.terms.append(self.allocator, .{ .add_metadata = .{
+            .kind = try self.allocator.dupe(u8, kind),
+            .value = try self.allocator.dupe(u8, value),
+            .page = page_id,
+            .origin = if (origin) |text| try self.allocator.dupe(u8, text) else null,
+        } });
+        return id;
+    }
+
     pub fn addAnchorConstraint(
         self: *Document,
         target_node: HandleId,
@@ -424,6 +481,7 @@ pub const Document = struct {
             .document => .document,
             .page => .page,
             .object => .object,
+            .metadata => .metadata,
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
@@ -467,6 +525,49 @@ pub const Document = struct {
         var selection = core.Selection.init(.page, provenance);
         for (self.page_order.items) |page_id| try selection.ids.append(allocator, page_id);
         return selection;
+    }
+
+    pub fn selectDocumentMetadataByKind(self: *Document, allocator: Allocator, kind: []const u8, provenance: []const u8) !core.Selection {
+        var selection = core.Selection.init(.metadata, provenance);
+        for (self.metadata.items) |item| {
+            if (std.mem.eql(u8, item.kind, kind)) try selection.ids.append(allocator, item.id);
+        }
+        return selection;
+    }
+
+    pub fn selectPageMetadataByKind(self: *Document, allocator: Allocator, page_id: HandleId, kind: []const u8, provenance: []const u8) !core.Selection {
+        var selection = core.Selection.init(.metadata, provenance);
+        for (self.metadata.items) |item| {
+            if (item.page_id != null and item.page_id.? == page_id and std.mem.eql(u8, item.kind, kind)) {
+                try selection.ids.append(allocator, item.id);
+            }
+        }
+        return selection;
+    }
+
+    pub fn metadataById(self: *Document, id: core.MetadataId) ?*core.Metadata {
+        if (id != 0) {
+            const index: usize = @intCast(id - 1);
+            if (index < self.metadata.items.len and self.metadata.items[index].id == id) {
+                return &self.metadata.items[index];
+            }
+        }
+        for (self.metadata.items) |*item| {
+            if (item.id == id) return item;
+        }
+        return null;
+    }
+
+    pub fn metadataContent(self: *Document, id: core.MetadataId) ![]const u8 {
+        return (self.metadataById(id) orelse return error.UnknownMetadata).value;
+    }
+
+    pub fn metadataKind(self: *Document, id: core.MetadataId) ![]const u8 {
+        return (self.metadataById(id) orelse return error.UnknownMetadata).kind;
+    }
+
+    pub fn metadataPage(self: *Document, id: core.MetadataId) !HandleId {
+        return (self.metadataById(id) orelse return error.UnknownMetadata).page_id orelse return error.MissingParentPage;
     }
 
     fn selectChildren(self: *Document, allocator: Allocator, parent_id: HandleId, provenance: []const u8) !core.Selection {

@@ -15,6 +15,7 @@ pub fn valueSort(value: core.Value) core.SemanticSort {
         .document => .document,
         .page => .page,
         .object => .object,
+        .metadata => .metadata,
         .selection => .selection,
         .anchor => .anchor,
         .function => .function,
