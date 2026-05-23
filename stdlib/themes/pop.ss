@@ -28,8 +28,8 @@ end
 fn subhead(subtitle_text: string) -> object
   let subtitle = tspan(sub_obj(subtitle_text), 110, 110, 150)
   txt(subtitle, "Helvetica-Bold", "22", "30", "0.1569,0.1333,0.2196", "22", "78", "78")
-  set_prop(subtitle, "text_cjk_bold_passes", "3")
-  set_prop(subtitle, "text_cjk_bold_dx", "0.04")
+  subtitle.text_cjk_bold_passes = "3"
+  subtitle.text_cjk_bold_dx = "0.04"
   return subtitle
 end
 
@@ -39,9 +39,9 @@ end
 
 fn tex(text_value: string, scale: number = 1) -> object
   let obj = frame(text_value, "math", "math_tex", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16")
-  set_prop(obj, "render_kind", "vector_math")
-  set_prop(obj, "text_parse", "none")
-  set_prop(obj, "math_scale", str(scale))
+  obj.render_kind = "vector_math"
+  obj.text_parse = "none"
+  obj.math_scale = str(scale)
   return obj
 end
 

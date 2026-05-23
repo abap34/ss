@@ -8,6 +8,6 @@ cover(
   "ss.toml + LSP smoke",
   "v1"
 )
-set_prop(heading, "text_color", c"#334455")
+heading.text_color = c"#334455"
 heading.top == page.top - 96
 end

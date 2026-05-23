@@ -174,6 +174,44 @@ test "compiler semantics: style mutation is stdlib over properties" {
     );
 }
 
+test "compiler semantics: member sugar reads and writes properties and content" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let target = text("hello")
+        \\  target.content = target.content ++ "!"
+        \\end
+        \\
+    , "hello!");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let target = text("styled")
+        \\  target.style = style("custom")
+        \\  if target.style?
+        \\    text(target.style ?? "missing")
+        \\  end
+        \\end
+        \\
+    , "custom");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  docctx().footer_text = "footer"
+        \\  footers(docctx().footer_text ?? "")
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "footer");
+}
+
 test "compiler semantics: pass annotation is rejected" {
     try expectBuildFails(
         \\import std:themes/default
@@ -212,7 +250,7 @@ test "compiler semantics: void functions may finish without explicit return" {
         \\import std:themes/default
         \\
         \\fn add_page_text(page: page) -> void
-        \\  new_object(page, str(page_index(page)), "body", "text")
+        \\  new(page, str(page_index(page)), "body", "text")
         \\end
         \\
         \\document
@@ -277,7 +315,7 @@ test "compiler semantics: lambda callbacks can create objs over a document selec
         \\import std:themes/default
         \\
         \\document
-        \\  let add_each = (page_value: page) |-> new_object(page_value, "lambda", "body", "text")
+        \\  let add_each = (page_value: page) |-> new(page_value, "lambda", "body", "text")
         \\  foreach(pages(docctx()), add_each)
         \\end
         \\
@@ -292,7 +330,7 @@ test "compiler semantics: functions can return captured function values" {
         \\import std:themes/default
         \\
         \\fn make_label(text_value: string) -> page -> object
-        \\  return (page_value: page) |-> new_object(page_value, text_value, "body", "text")
+        \\  return (page_value: page) |-> new(page_value, text_value, "body", "text")
         \\end
         \\
         \\document
@@ -423,7 +461,7 @@ test "compiler semantics: lambda bodies cannot be void" {
         \\import std:themes/default
         \\
         \\fn side_effect(page_value: page) -> void
-        \\  new_object(page_value, "side", "body", "text")
+        \\  new(page_value, "side", "body", "text")
         \\end
         \\
         \\document
@@ -580,7 +618,7 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
         \\
         \\fn duplicate_title(title_obj: object) -> object
         \\  let page_value = page_of(title_obj)
-        \\  new_object(page_value, "copy", "title", "text")
+        \\  new(page_value, "copy", "title", "text")
         \\  return title_obj
         \\end
         \\

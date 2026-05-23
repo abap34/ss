@@ -325,7 +325,7 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.graphPages());
                 summary.writes_layout_input = true;
             },
-            .new_object => {
+            .new => {
                 try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 2)));
                 try summary.addWrite(Resource.content(literalStringArg(self, call, 2)));
                 summary.writes_layout_input = true;

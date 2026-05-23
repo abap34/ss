@@ -70,7 +70,7 @@ fn prop_all(items: selection<object>, key_name: string, value_name: string) -> s
 end
 
 fn style_all(items: selection<object>, style_value: style) -> selection<object>
-  set_prop(items, "style", style_value)
+  items.style = style_value
   return items
 end
 
@@ -94,6 +94,6 @@ end
 
 fn style_except(items: selection<object>, excluded: selection<object>, style_value: style) -> selection<object>
   let targets = diff(items, excluded)
-  set_prop(targets, "style", style_value)
+  targets.style = style_value
   return targets
 end
