@@ -1,15 +1,15 @@
 const core = @import("core");
-const stage0 = @import("../stage0.zig");
+const elaboration = @import("../elaboration.zig");
 
 const json = @import("utils").json;
 
-pub fn writeDocTermsField(root: *json.Object, terms: []const stage0.Term) !void {
-    var array = try root.arrayField("doc_terms");
+pub fn writeDocTermsField(root: *json.Object, terms: []const elaboration.Term) !void {
+    var array = try root.arrayField("document_terms");
     for (terms) |term| try writeDocTerm(&array, term);
     try array.end();
 }
 
-fn writeDocTerm(terms: *json.Array, term: stage0.Term) !void {
+fn writeDocTerm(terms: *json.Array, term: elaboration.Term) !void {
     var item = try terms.objectItem();
     switch (term) {
         .add_page => |page| {

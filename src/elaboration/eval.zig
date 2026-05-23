@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const builtin = @import("builtin.zig");
-const doc = @import("doc.zig");
+const doc = @import("document.zig");
 const eval_functions = @import("../eval/functions.zig");
 const eval_value = @import("../eval/value.zig");
 const utils = @import("utils");
@@ -11,6 +11,7 @@ const ast = @import("ast");
 const names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
+const dependencies = @import("../analysis/dependencies.zig");
 const contracts = @import("../analysis/contracts.zig");
 const typecheck = @import("../analysis/typecheck.zig");
 
@@ -135,6 +136,25 @@ const LowerDiagnostic = struct {
     };
 };
 
+const ScheduledRoot = struct {
+    module_id: core.SourceModuleId,
+    source: []const u8,
+    path: []const u8,
+    source_order: usize,
+    span: ast.Span,
+    summary: dependencies.AccessSummary,
+    kind: Kind,
+
+    const Kind = union(enum) {
+        document: []const Statement,
+        page: PageDecl,
+    };
+
+    fn deinit(self: *ScheduledRoot) void {
+        self.summary.deinit();
+    }
+};
+
 fn reportUnknownFunction(name: []const u8, origin: []const u8) void {
     reportNamedResolutionError(error.UnknownFunction, "function", name, origin);
 }
@@ -220,7 +240,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
         error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
-        error.UnsupportedPassPrimitive => "UnsupportedPassPrimitive: this operation is only valid inside a compiler pass",
+        error.UnsupportedScheduledPrimitive => "UnsupportedScheduledPrimitive: this operation is not valid during document elaboration",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => @errorName(err),
     };
@@ -245,10 +265,243 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
     errdefer document.deinit();
 
     diagnostic_reported = false;
-    var executed_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
-    defer executed_modules.deinit();
-    try executeModuleProgramInSourceOrder(ir, ir.projectModule(), &document, &ir.functions, &executed_modules);
+    var roots = std.ArrayList(ScheduledRoot).empty;
+    defer {
+        for (roots.items) |*root| root.deinit();
+        roots.deinit(allocator);
+    }
+    var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
+    defer collected_modules.deinit();
+    var source_order: usize = 0;
+    try collectScheduledRoots(ir, ir.projectModule(), &ir.functions, &roots, &collected_modules, &source_order);
+
+    try validateScheduledRoots(&document, roots.items);
+    const schedule = try scheduleRoots(allocator, roots.items);
+    defer allocator.free(schedule);
+    for (schedule) |root_index| try executeScheduledRoot(&document, &ir.functions, roots.items[root_index]);
     return document;
+}
+
+fn collectScheduledRoots(
+    core_ir: *const core.Ir,
+    module: *const core.SourceModule,
+    functions: *const std.StringHashMap(FunctionDecl),
+    roots: *std.ArrayList(ScheduledRoot),
+    collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
+    source_order: *usize,
+) !void {
+    if (module.kind == .library) {
+        if (collected_modules.contains(module.id)) return;
+        try collected_modules.put(module.id, {});
+    }
+
+    if (module.program.document_statements.items.len > 0) {
+        try appendDocumentRoot(core_ir.allocator, module, functions, roots, source_order);
+    }
+
+    if (module.program.top_level_items.items.len == 0) {
+        for (module.program.pages.items) |page| try appendPageRoot(core_ir.allocator, module, functions, roots, source_order, page);
+        return;
+    }
+
+    for (module.program.top_level_items.items) |item| {
+        switch (item) {
+            .import => |import_index| {
+                if (import_index >= module.resolved_import_ids.items.len) continue;
+                const import_id = module.resolved_import_ids.items[import_index];
+                const imported = core_ir.moduleById(import_id) orelse continue;
+                try collectScheduledRoots(core_ir, imported, functions, roots, collected_modules, source_order);
+            },
+            .page => |page_index| {
+                if (page_index >= module.program.pages.items.len) continue;
+                try appendPageRoot(core_ir.allocator, module, functions, roots, source_order, module.program.pages.items[page_index]);
+            },
+        }
+    }
+}
+
+fn appendDocumentRoot(
+    allocator: std.mem.Allocator,
+    module: *const core.SourceModule,
+    functions: *const std.StringHashMap(FunctionDecl),
+    roots: *std.ArrayList(ScheduledRoot),
+    source_order: *usize,
+) !void {
+    var analyzer = dependencies.Analyzer.init(allocator, functions);
+    defer analyzer.deinit();
+    const statements = module.program.document_statements.items;
+    const span = documentStatementsSpan(statements);
+    const summary = try analyzer.documentStatements(statements);
+    errdefer {
+        var owned = summary;
+        owned.deinit();
+    }
+    try roots.append(allocator, .{
+        .module_id = module.id,
+        .source = module.source,
+        .path = module.path orelse module.spec,
+        .source_order = source_order.*,
+        .span = span,
+        .summary = summary,
+        .kind = .{ .document = statements },
+    });
+    source_order.* += 1;
+}
+
+fn appendPageRoot(
+    allocator: std.mem.Allocator,
+    module: *const core.SourceModule,
+    functions: *const std.StringHashMap(FunctionDecl),
+    roots: *std.ArrayList(ScheduledRoot),
+    source_order: *usize,
+    page: PageDecl,
+) !void {
+    var analyzer = dependencies.Analyzer.init(allocator, functions);
+    defer analyzer.deinit();
+    const summary = try analyzer.page(page);
+    errdefer {
+        var owned = summary;
+        owned.deinit();
+    }
+    try roots.append(allocator, .{
+        .module_id = module.id,
+        .source = module.source,
+        .path = module.path orelse module.spec,
+        .source_order = source_order.*,
+        .span = page.span,
+        .summary = summary,
+        .kind = .{ .page = page },
+    });
+    source_order.* += 1;
+}
+
+fn documentStatementsSpan(statements: []const Statement) ast.Span {
+    if (statements.len == 0) return .{ .start = 0, .end = 0 };
+    var span = statements[0].span;
+    for (statements[1..]) |stmt| {
+        span.start = @min(span.start, stmt.span.start);
+        span.end = @max(span.end, stmt.span.end);
+    }
+    return span;
+}
+
+fn validateScheduledRoots(ir: *doc.Document, roots: []const ScheduledRoot) !void {
+    for (roots) |root| {
+        if (root.summary.invalid_foreach) |invalid| {
+            const origin = try rootOrigin(ir.allocator, root);
+            defer ir.allocator.free(origin);
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidForeachMutation: foreach callbacks must not add objects or pages to the selection being iterated") },
+            });
+            _ = invalid;
+            return error.InvalidForeachMutation;
+        }
+        if (root.summary.reads_layout and root.summary.writes_layout_input) {
+            const origin = try rootOrigin(ir.allocator, root);
+            defer ir.allocator.free(origin);
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once") },
+            });
+            return error.LayoutDependencyCycle;
+        }
+        if (root.summary.reads_layout) {
+            const origin = try rootOrigin(ir.allocator, root);
+            defer ir.allocator.free(origin);
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "PostLayoutComputationUnsupported: layout-reading root computations are not implemented yet") },
+            });
+            return error.PostLayoutComputationUnsupported;
+        }
+    }
+}
+
+fn scheduleRoots(allocator: std.mem.Allocator, roots: []const ScheduledRoot) ![]usize {
+    const count = roots.len;
+    const indegree = try allocator.alloc(usize, count);
+    defer allocator.free(indegree);
+    @memset(indegree, 0);
+
+    const edges = try allocator.alloc(std.ArrayList(usize), count);
+    defer {
+        for (edges) |*list| list.deinit(allocator);
+        allocator.free(edges);
+    }
+    for (edges) |*list| list.* = .empty;
+
+    for (roots, 0..) |left, left_index| {
+        for (roots, 0..) |right, right_index| {
+            if (left_index == right_index) continue;
+            if (hasResourceDependency(left.summary, right.summary)) {
+                try addScheduleEdge(allocator, edges, indegree, left_index, right_index);
+            }
+        }
+    }
+
+    var done = try allocator.alloc(bool, count);
+    defer allocator.free(done);
+    @memset(done, false);
+
+    var out = try allocator.alloc(usize, count);
+    errdefer allocator.free(out);
+    var produced: usize = 0;
+    while (produced < count) {
+        var best: ?usize = null;
+        for (roots, 0..) |root, index| {
+            if (done[index] or indegree[index] != 0) continue;
+            if (best == null or root.source_order < roots[best.?].source_order) best = index;
+        }
+        const next = best orelse return error.ScheduledDependencyCycle;
+        done[next] = true;
+        out[produced] = next;
+        produced += 1;
+        for (edges[next].items) |target| {
+            std.debug.assert(indegree[target] > 0);
+            indegree[target] -= 1;
+        }
+    }
+    return out;
+}
+
+fn addScheduleEdge(
+    allocator: std.mem.Allocator,
+    edges: []std.ArrayList(usize),
+    indegree: []usize,
+    from: usize,
+    to: usize,
+) !void {
+    for (edges[from].items) |existing| {
+        if (existing == to) return;
+    }
+    try edges[from].append(allocator, to);
+    indegree[to] += 1;
+}
+
+fn hasResourceDependency(left: dependencies.AccessSummary, right: dependencies.AccessSummary) bool {
+    for (left.writes.items) |write| {
+        for (right.reads.items) |read| {
+            if (write.intersects(read)) return true;
+        }
+    }
+    return false;
+}
+
+fn executeScheduledRoot(
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    root: ScheduledRoot,
+) !void {
+    setLowerDiagnosticOrigin(root.source, root.path);
+    switch (root.kind) {
+        .document => |statements| try executeDocumentStatementSlice(ir, functions, statements),
+        .page => |page| try executePage(page, ir, functions),
+    }
+}
+
+fn rootOrigin(allocator: std.mem.Allocator, root: ScheduledRoot) ![]const u8 {
+    if (root.path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ root.path, root.span.start, root.span.end });
+    }
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ root.span.start, root.span.end });
 }
 
 fn executeModuleProgramInSourceOrder(
@@ -340,10 +593,18 @@ fn executeDocumentStatements(
     ir: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
+    try executeDocumentStatementSlice(ir, functions, program.document_statements.items);
+}
+
+fn executeDocumentStatementSlice(
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    statements: []const Statement,
+) !void {
     var document_env = std.StringHashMap(core.Value).init(ir.allocator);
     defer deinitValueEnv(ir.allocator, &document_env);
     var document_last_code_like: ?core.NodeId = null;
-    for (program.document_statements.items) |stmt| {
+    for (statements) |stmt| {
         const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, &document_last_code_like, stmt, null) catch |err| {
             const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
             if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
@@ -579,9 +840,7 @@ const BuiltinContext = struct {
     }
 
     pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
-        _ = self;
-        _ = title;
-        return error.UnsupportedPassPrimitive;
+        return try self.ir.addPage(title);
     }
 
     pub fn makeObjectOnPage(
@@ -593,13 +852,25 @@ const BuiltinContext = struct {
         payload_kind: core.PayloadKind,
         content: []const u8,
     ) !core.NodeId {
-        _ = page_id;
-        return try self.makeObject(role_name, role, object_kind, payload_kind, content);
+        return switch (self.mode) {
+            .attached => try self.ir.makeObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.makeDetachedObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
     }
 
     pub fn makeGroupOnPage(self: *BuiltinContext, page_id: core.NodeId, child_ids: []const core.NodeId) !core.NodeId {
-        _ = page_id;
-        return try self.makeGroup(child_ids);
+        return switch (self.mode) {
+            .attached => try self.ir.makeGroupWithOrigin(page_id, true, child_ids, self.current_origin),
+            .detached => |builder| blk: {
+                const id = try self.ir.makeGroupWithOrigin(page_id, false, child_ids, self.current_origin);
+                try builder.trackNode(self.ir.allocator, id);
+                break :blk id;
+            },
+        };
     }
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
@@ -653,25 +924,25 @@ const BuiltinContext = struct {
     pub fn frameX(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedPassPrimitive;
+        return error.UnsupportedScheduledPrimitive;
     }
 
     pub fn frameY(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedPassPrimitive;
+        return error.UnsupportedScheduledPrimitive;
     }
 
     pub fn frameWidth(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedPassPrimitive;
+        return error.UnsupportedScheduledPrimitive;
     }
 
     pub fn frameHeight(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedPassPrimitive;
+        return error.UnsupportedScheduledPrimitive;
     }
 
     pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
@@ -840,10 +1111,10 @@ fn evalSelectCall(
         reportUnknownQuery(op_name, current_origin);
         return error.UnknownQuery;
     };
-	    registry.validateQueryArity(descriptor, call.args.items.len) catch |err| {
-	        if (err == error.InvalidArity) try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
-	        return err;
-	    };
+    registry.validateQueryArity(descriptor, call.args.items.len) catch |err| {
+        if (err == error.InvalidArity) try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
+        return err;
+    };
     try contracts.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {

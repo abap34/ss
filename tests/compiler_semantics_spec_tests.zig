@@ -108,22 +108,65 @@ test "compiler semantics: dynamically built residual text survives lowering" {
     , "hello world");
 }
 
-test "compiler semantics: pass select validates dynamic query arity" {
+test "compiler semantics: pass annotation is rejected" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn dynamic_query() -> string
-        \\  return "page_objects_by_role"
-        \\end
-        \\
-        \\@pass(resolve)
-        \\fn bad_pass(doc: code<document>) -> code<document> ! ReadGraph
-        \\  select(doc, dynamic_query())
+        \\@pass
+        \\fn old_pass(doc: document) -> document
         \\  return doc
         \\end
         \\
         \\page bad
         \\  text("hello")
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: generated page numbers run after page graph exists" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  page_no_all()
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+        \\page two
+        \\end
+        \\
+    , "1/2");
+}
+
+test "compiler semantics: foreach cannot mutate the iterated object selection" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn duplicate_title(title_obj: object) -> object
+        \\  let page_value = parent_page(title_obj)
+        \\  new_object(page_value, "copy", "title", "text")
+        \\  return title_obj
+        \\end
+        \\
+        \\page bad
+        \\  title("A")
+        \\  foreach(objects(pagectx(), "title"), duplicate_title)
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: layout reads cannot feed layout input" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let t = text("hello")
+        \\  let h = frame_height(t)
+        \\  text(str(h))
         \\end
         \\
     );

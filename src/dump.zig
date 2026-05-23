@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const stage0 = @import("stage0.zig");
+const elaboration = @import("elaboration.zig");
 const dump_calls = @import("dump/calls.zig");
 const dump_core_graph = @import("dump/core_graph.zig");
 const dump_declarations = @import("dump/declarations.zig");
@@ -8,7 +8,7 @@ const dump_editor = @import("dump/editor.zig");
 const dump_layout = @import("dump/layout.zig");
 const dump_render_doc = @import("dump/render_doc.zig");
 const dump_source = @import("dump/source.zig");
-const dump_stage0 = @import("dump/stage0.zig");
+const dump_document_terms = @import("dump/document_terms.zig");
 const json = @import("utils").json;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
@@ -24,10 +24,10 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
     try dump_source.writeModulesField(allocator, &root, ir.modules.items);
 
-    var document_code = try stage0.elaborateIr(allocator, ir);
+    var document_code = try elaboration.elaborateIr(allocator, ir);
     defer document_code.deinit();
-    try root.intField("stage0_document_handle", document_code.document_id);
-    try dump_stage0.writeDocTermsField(&root, document_code.terms.items);
+    try root.intField("document_term_root", document_code.document_id);
+    try dump_document_terms.writeDocTermsField(&root, document_code.terms.items);
 
     try dump_calls.writeFunctionsField(allocator, &root, ir);
     try dump_editor.writeVariablesField(allocator, &root, ir);

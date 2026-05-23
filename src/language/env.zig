@@ -52,16 +52,6 @@ pub const SemanticEnv = struct {
         return registry.lookupQueryOp(name);
     }
 
-    pub fn removedAnnotations(self: *const SemanticEnv) []const declarations.FunctionAnnotationDescriptor {
-        const index = self.declarations orelse return &.{};
-        return index.removed_annotations.items;
-    }
-
-    pub fn passes(self: *const SemanticEnv) []const declarations.PassDescriptor {
-        const index = self.declarations orelse return &.{};
-        return index.passes.items;
-    }
-
     pub fn hostCapabilities(self: *const SemanticEnv) []const declarations.HostCapabilityDescriptor {
         const index = self.declarations orelse return &.{};
         return index.host_capabilities.items;
