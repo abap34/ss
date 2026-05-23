@@ -8,14 +8,38 @@
   "return"
   "end"
   "constrain"
+  "property"
   "type"
   "extend"
+  "protocol"
+  "base"
+  "implements"
+  "roles"
   "if"
   "then"
   "else"
   "for"
   "in"
 ] @keyword
+
+[
+  "->"
+  "|->"
+  "++"
+  "=="
+  "="
+  ":"
+  "|"
+  "."
+  ","
+  "!"
+  "<"
+  ">"
+  "-"
+  "+"
+  "*"
+  "/"
+] @operator
 
 (comment) @comment
 (string) @string
@@ -28,9 +52,11 @@
 
 (function_declaration name: (identifier) @function)
 (call_expression function: (identifier) @function.call)
+(text_call_expression function: (identifier) @function.call)
 (line_call_statement function: (identifier) @function.call)
 (block_call_statement function: (identifier) @function.call)
 (parameter name: (identifier) @variable.parameter)
+(lambda_parameter name: (identifier) @variable.parameter)
 (let_statement name: (identifier) @variable)
 (object_field name: (identifier) @property)
 (member_expression member: (identifier) @property)

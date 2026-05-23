@@ -896,13 +896,13 @@ fn semanticTokenType(word: []const u8, previous_word: ?[]const u8, next: ?u8, pr
 }
 
 fn isKeyword(word: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "constrain", "type", "extend", "if", "then", "else", "for", "in", "property" };
+    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "constrain", "type", "extend", "protocol", "base", "implements", "roles", "if", "then", "else", "for", "in", "property" };
     for (keywords) |keyword| if (std.mem.eql(u8, word, keyword)) return true;
     return false;
 }
 
 fn isBuiltinType(word: []const u8) bool {
-    const types = [_][]const u8{ "object", "selection", "anchor", "function", "style", "string", "number", "bool", "boolean", "constraints", "fragment", "code", "list" };
+    const types = [_][]const u8{ "document", "page", "object", "selection", "metadata", "anchor", "style", "string", "number", "bool", "boolean", "constraints", "void", "Void", "fragment", "code", "list" };
     for (types) |name| if (std.mem.eql(u8, word, name)) return true;
     return false;
 }
