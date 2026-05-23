@@ -4,6 +4,7 @@ const color_utils = @import("utils").color;
 
 pub const ValueType = enum {
     string,
+    style,
     scalar_like,
     color_string,
     fit_policy,
@@ -55,6 +56,7 @@ fn infer(name: []const u8, body: []const u8) ?ValueType {
         if (std.mem.eql(u8, name, "Color")) return .color_string;
         return .string;
     }
+    if (std.mem.eql(u8, body, "style")) return .style;
     if (std.mem.eql(u8, body, "string | number")) return .scalar_like;
     if (std.mem.indexOf(u8, body, "\"top\"") != null) return .layout_policy;
     if (std.mem.indexOf(u8, body, "\"vector_math\"") != null) return .render_kind;
@@ -67,6 +69,7 @@ fn infer(name: []const u8, body: []const u8) ?ValueType {
 pub fn matches(kind: ValueType, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
     return switch (kind) {
         .string => sort == .string,
+        .style => sort == .style or sort == .string,
         .scalar_like => sort == .string or sort == .number,
         .color_string => if (string_literal) |text| text.len == 0 or color_utils.parse(text) != null else sort == .string,
         .fit_policy => if (string_literal) |text|
@@ -100,6 +103,7 @@ pub fn matches(kind: ValueType, string_literal: ?[]const u8, sort: core.Semantic
 pub fn label(kind: ValueType) []const u8 {
     return switch (kind) {
         .string => "string",
+        .style => "style",
         .scalar_like => "string or number",
         .color_string => "color string",
         .fit_policy => "\"warn\" | \"error\" | \"ignore\"",

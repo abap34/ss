@@ -238,7 +238,7 @@ fn inferPrimitiveCallInfo(
         return error.InvalidArity;
     }
     for (call.args.items, 0..) |arg, index| {
-        if (isPrimitiveFunctionArgument(descriptor.op, index)) continue;
+        if (isPrimitiveFunctionArgument(descriptor, index)) continue;
         const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
         if (registry.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
@@ -255,12 +255,9 @@ fn inferPrimitiveCallInfo(
     return info;
 }
 
-fn isPrimitiveFunctionArgument(op: registry.PrimitiveCall, index: usize) bool {
-    return switch (op) {
-        .foreach => index == 1,
-        .fold, .join => index == 2,
-        else => false,
-    };
+fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: usize) bool {
+    const callback = descriptor.callback orelse return false;
+    return index == callback.function_arg_index;
 }
 
 fn inferUserFunctionReturnInfo(
@@ -373,97 +370,76 @@ fn primitiveResultTypeInfo(
     descriptor: registry.PrimitiveDescriptor,
     origin: []const u8,
 ) !TypeInfo {
-    if (descriptor.op == .first) {
-        if (call.args.items.len == 0) return infoFromSort(.object);
-        const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-        var info = switch (selection_info.ty.param) {
-            .page => infoFromSort(.page),
-            .metadata => infoFromSort(.metadata),
-            .object, .any, .none => infoFromSort(.object),
-            else => infoFromSort(selection_info.sort),
-        };
-        if (info.sort == .object) {
-            info.object_class = selection_info.object_class;
-            info.ty.class_name = selection_info.object_class;
+    if (descriptor.callback) |callback| {
+        const selection_info = if (call.args.items.len > 0)
+            try exprInfo(allocator, ir, sema, env, call.args.items[0], origin)
+        else
+            infoFromType(Type.selection(.any));
+        if (call.args.items.len > callback.function_arg_index) {
+            try validateCallbackShape(
+                allocator,
+                ir,
+                sema,
+                env,
+                call,
+                origin,
+                callback.function_arg_index,
+                selection_info,
+                callback.supplied_arg_count,
+                callback.expected_result_sort,
+            );
         }
-        return info;
     }
 
-    if (descriptor.op == .foreach) {
-        if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
-        const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-        try validateCallbackShape(allocator, ir, sema, env, call, origin, 1, selection_info, 1, null);
-        return selection_info;
-    }
-
-    if (descriptor.op == .fold) {
-        if (call.args.items.len < 3) return infoFromSort(.string);
-        const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-        try validateCallbackShape(allocator, ir, sema, env, call, origin, 2, selection_info, 2, .string);
-        return infoFromSort(.string);
-    }
-
-    if (descriptor.op == .join) {
-        if (call.args.items.len < 3) return infoFromSort(.string);
-        const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-        try validateCallbackShape(allocator, ir, sema, env, call, origin, 2, selection_info, 1, .string);
-        return infoFromSort(.string);
-    }
-
-    if (descriptor.op == .rewrite_text or descriptor.op == .set_content or descriptor.op == .clear_content or descriptor.op == .append_content) {
-        if (call.args.items.len == 0) return infoFromSort(.object);
-        return try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-    }
-
-    if (descriptor.op == .selection_union or descriptor.op == .selection_intersection or descriptor.op == .selection_difference) {
-        return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin);
-    }
-
-    if (descriptor.op == .metadata_in_document or descriptor.op == .metadata_on_page) {
-        return infoFromType(Type.selection(.metadata));
-    }
-
-    if (descriptor.op == .select) {
-        return try inferSelectCallInfo(allocator, ir, sema, env, call, origin);
-    }
-
-    if (descriptor.op == .set_style) {
-        if (call.args.items.len == 0) return infoFromSort(.object);
-        const target_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-        if (!(target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any)))) {
-            try ensureType(ir, allocator, target_info, Type.object, origin, .UnmatchedArgumentType);
-        }
-        return target_info;
-    }
-
-    if (descriptor.op == .set_prop or descriptor.op == .extend_render_env) {
-        if (call.args.items.len == 0) return infoFromSort(.object);
-        const target_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-        if (target_info.ty.tag == .code) return target_info;
-        return .{
-            .ty = switch (target_info.ty.tag) {
-                .document, .page, .object, .selection => target_info.ty,
-                else => Type.object,
-            },
-            .sort = switch (target_info.sort) {
-                .document, .page, .object, .selection => target_info.sort,
-                else => .object,
-            },
-            .object_class = target_info.object_class,
-        };
-    }
-
-    const result_sort = descriptor.result_sort orelse .object;
-    if (result_sort != .object) return infoFromSort(result_sort);
-
-    var info = infoFromSort(result_sort);
-    info.object_class = switch (descriptor.op) {
-        .group => "GroupObject",
-        .set_style => blk: {
-            const object_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-            break :blk object_info.object_class;
+    switch (descriptor.result_policy) {
+        .first_selection_item => {
+            if (call.args.items.len == 0) return infoFromSort(.object);
+            const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+            var info = switch (selection_info.ty.param) {
+                .page => infoFromSort(.page),
+                .metadata => infoFromSort(.metadata),
+                .object, .any, .none => infoFromSort(.object),
+                else => infoFromSort(selection_info.sort),
+            };
+            if (info.sort == .object) {
+                info.object_class = selection_info.object_class;
+                info.ty.class_name = selection_info.object_class;
+            }
+            return info;
         },
-        .new_object => inferObjectConstructorClass(sema, env, call, 2),
+        .first_arg => {
+            if (call.args.items.len == 0) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
+            return try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+        },
+        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin),
+        .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin),
+        .target_arg => {
+            if (call.args.items.len == 0) return infoFromSort(.object);
+            const target_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+            if (target_info.ty.tag == .code) return target_info;
+            return .{
+                .ty = switch (target_info.ty.tag) {
+                    .document, .page, .object, .selection => target_info.ty,
+                    else => Type.object,
+                },
+                .sort = switch (target_info.sort) {
+                    .document, .page, .object, .selection => target_info.sort,
+                    else => .object,
+                },
+                .object_class = target_info.object_class,
+            };
+        },
+        .metadata_selection => return infoFromType(Type.selection(.metadata)),
+        .declared, .group_object, .object_from_role_arg => {},
+    }
+
+    const result_type = registry.primitiveResultType(descriptor) orelse Type.object;
+    if (result_type.tag != .object) return infoFromType(result_type);
+
+    var info = infoFromType(result_type);
+    info.object_class = switch (descriptor.result_policy) {
+        .group_object => "GroupObject",
+        .object_from_role_arg => inferObjectConstructorClass(sema, env, call, 2),
         else => null,
     };
     if (info.object_class) |class_name| info.ty.class_name = class_name;
@@ -477,19 +453,19 @@ fn validateCallbackShape(
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
-    callback_index: usize,
+    function_arg_index: usize,
     selection_info: TypeInfo,
-    fixed_prefix_count: usize,
-    expected_result: ?core.SemanticSort,
+    supplied_arg_count: usize,
+    expected_result_sort: ?core.SemanticSort,
 ) !void {
-    if (call.args.items.len <= callback_index) return;
-    const callback_info = try exprInfo(allocator, ir, sema, env, call.args.items[callback_index], origin);
+    if (call.args.items.len <= function_arg_index) return;
+    const callback_info = try exprInfo(allocator, ir, sema, env, call.args.items[function_arg_index], origin);
     if (callback_info.ty.tag != .function or callback_info.ty.fn_result == null) {
         try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
         return error.InvalidSemanticSort;
     }
-    const extra_count = if (call.args.items.len > callback_index + 1) call.args.items.len - callback_index - 1 else 0;
-    const expected_arg_count = fixed_prefix_count + extra_count;
+    const extra_count = if (call.args.items.len > function_arg_index + 1) call.args.items.len - function_arg_index - 1 else 0;
+    const expected_arg_count = supplied_arg_count + extra_count;
     if (expected_arg_count != callback_info.ty.fn_params.len) {
         try addUserReport(ir, origin, "InvalidCallback: callback receives {d} arguments here, but its function type has {d}", .{
             expected_arg_count,
@@ -503,19 +479,19 @@ fn validateCallbackShape(
         .object, .any, .none => Type.object,
         else => Type.any,
     };
-    if (fixed_prefix_count == 1) {
+    if (supplied_arg_count == 1) {
         try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
-    } else if (fixed_prefix_count == 2) {
+    } else if (supplied_arg_count == 2) {
         try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
         try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
     }
     var extra_index: usize = 0;
     while (extra_index < extra_count) : (extra_index += 1) {
-        const actual = try exprInfo(allocator, ir, sema, env, call.args.items[callback_index + 1 + extra_index], origin);
-        const param_index = fixed_prefix_count + extra_index;
+        const actual = try exprInfo(allocator, ir, sema, env, call.args.items[function_arg_index + 1 + extra_index], origin);
+        const param_index = supplied_arg_count + extra_index;
         try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
-    if (expected_result) |result_sort| {
+    if (expected_result_sort) |result_sort| {
         const actual_sort = callback_info.ty.fn_result.?.toRuntimeSort() orelse .fragment;
         try ensureSort(ir, actual_sort, result_sort, origin, .UnmatchedReturnType);
     }

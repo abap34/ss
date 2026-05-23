@@ -54,9 +54,9 @@ pub const AccessSummary = struct {
     selection_reads: std.ArrayList(Resource),
     reads_layout: bool = false,
     writes_layout_input: bool = false,
-    invalid_foreach: ?InvalidForeach = null,
+    invalid_selection_mutation: ?InvalidSelectionMutation = null,
 
-    pub const InvalidForeach = struct {
+    pub const InvalidSelectionMutation = struct {
         resource: Resource,
         origin: ast.Span,
     };
@@ -95,7 +95,7 @@ pub const AccessSummary = struct {
         for (other.selection_reads.items) |resource| try self.addSelectionRead(resource);
         self.reads_layout = self.reads_layout or other.reads_layout;
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
-        if (self.invalid_foreach == null) self.invalid_foreach = other.invalid_foreach;
+        if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
     }
 };
 
@@ -298,7 +298,7 @@ pub const Analyzer = struct {
     }
 
     fn primitiveCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
-        if (descriptor.op == .foreach) return try self.foreachCall(call);
+        if (descriptor.callback != null) return try self.primitiveCallbackCall(call, descriptor);
 
         var summary = try self.callArgs(call);
         errdefer summary.deinit();
@@ -313,7 +313,7 @@ pub const Analyzer = struct {
             .emit_metadata => try summary.addWrite(.{ .kind = .metadata }),
             .metadata_in_document, .metadata_on_page, .metadata_content, .metadata_kind, .metadata_page => try summary.addRead(.{ .kind = .metadata }),
             .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(literalStringArg(self, call, 1))),
-            .rewrite_text, .set_content, .clear_content, .append_content => {
+            .set_content => {
                 try summary.addWrite(Resource.content(null));
                 summary.writes_layout_input = true;
             },
@@ -334,9 +334,8 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.graphObjects("group"));
                 summary.writes_layout_input = true;
             },
-            .set_prop, .set_style => {
-                const key = if (descriptor.op == .set_style) "style" else literalStringArg(self, call, 1);
-                try summary.addWrite(Resource.property(key));
+            .set_prop => {
+                try summary.addWrite(Resource.property(literalStringArg(self, call, 1)));
                 summary.writes_layout_input = true;
             },
             .extend_render_env => try summary.addWrite(.{ .kind = .render_env }),
@@ -354,20 +353,22 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn foreachCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
+    fn primitiveCallbackCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
+        const callback_spec = descriptor.callback orelse unreachable;
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
 
-        if (call.args.items.len > 0) {
-            var selection = try self.analyzeExpr(call.args.items[0]);
-            defer selection.deinit();
-            try summary.merge(selection);
+        for (call.args.items, 0..) |arg, index| {
+            if (index == callback_spec.function_arg_index) continue;
+            var arg_summary = try self.analyzeExpr(arg);
+            defer arg_summary.deinit();
+            try summary.merge(arg_summary);
         }
 
         var callback_summary = AccessSummary.init(self.allocator);
         defer callback_summary.deinit();
-        if (call.args.items.len > 1) {
-            switch (call.args.items[1]) {
+        if (call.args.items.len > callback_spec.function_arg_index) {
+            switch (call.args.items[callback_spec.function_arg_index]) {
                 .ident => |callback_name| {
                     if (self.functions.get(callback_name)) |callback| {
                         callback_summary = try self.functionCall(callback, .{
@@ -380,30 +381,24 @@ pub const Analyzer = struct {
                     callback_summary = try self.analyzeExpr(lambda.body.*);
                 },
                 else => {
-                    var callback_expr = try self.analyzeExpr(call.args.items[1]);
+                    var callback_expr = try self.analyzeExpr(call.args.items[callback_spec.function_arg_index]);
                     defer callback_expr.deinit();
                     try callback_summary.merge(callback_expr);
                 },
             }
         }
-        var index: usize = 2;
-        while (index < call.args.items.len) : (index += 1) {
-            var extra = try self.analyzeExpr(call.args.items[index]);
-            defer extra.deinit();
-            try summary.merge(extra);
-        }
 
         for (summary.selection_reads.items) |selection_resource| {
             for (callback_summary.writes.items) |write_resource| {
                 if (selection_resource.intersects(write_resource)) {
-                    summary.invalid_foreach = .{
+                    summary.invalid_selection_mutation = .{
                         .resource = selection_resource,
                         .origin = .{ .start = 0, .end = 0 },
                     };
                     break;
                 }
             }
-            if (summary.invalid_foreach != null) break;
+            if (summary.invalid_selection_mutation != null) break;
         }
         try summary.merge(callback_summary);
         return summary;

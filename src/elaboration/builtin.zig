@@ -303,31 +303,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 else => unreachable,
             };
         },
-        .rewrite_text => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            const old = try ctx.evalStringArg(call, 1);
-            const new = try ctx.evalStringArg(call, 2);
-            const current = ctx.nodeContent(object_id) orelse "";
-            const updated = try replaceAll(ctx.ir.allocator, current, old, new);
-            defer ctx.ir.allocator.free(updated);
-            try ctx.setNodeContent(object_id, updated);
-            break :blk .{ .object = object_id };
-        },
         .set_content => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             const text = try ctx.evalStringArg(call, 1);
             try ctx.setNodeContent(object_id, text);
-            break :blk .{ .object = object_id };
-        },
-        .clear_content => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            try ctx.setNodeContent(object_id, "");
-            break :blk .{ .object = object_id };
-        },
-        .append_content => blk: {
-            const object_id = try ctx.evalObjectArg(call, 0);
-            const text = try ctx.evalStringArg(call, 1);
-            try ctx.appendNodeContent(object_id, text);
             break :blk .{ .object = object_id };
         },
         .group => blk: {
@@ -430,28 +409,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                         return error.InvalidSelectionSort;
                     }
                     for (sel.ids.items) |id| try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 target;
-                },
-                else => {
-                    target.deinit(ctx.ir.allocator);
-                    return error.InvalidSemanticSort;
-                },
-            };
-        },
-        .set_style => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
-            const style = try ctx.evalStyleArg(call, 1);
-            break :blk switch (target) {
-                .object => |id| blk2: {
-                    try ctx.setNodeProperty(id, "style", style.name);
-                    break :blk2 .{ .object = id };
-                },
-                .selection => |sel| blk2: {
-                    if (sel.item_sort != .object) {
-                        target.deinit(ctx.ir.allocator);
-                        return error.InvalidSelectionSort;
-                    }
-                    for (sel.ids.items) |id| try ctx.setNodeProperty(id, "style", style.name);
                     break :blk2 target;
                 },
                 else => {

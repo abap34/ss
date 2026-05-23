@@ -242,39 +242,20 @@ const Analyzer = struct {
             },
             .primitive => |primitive| {
                 const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-                switch (primitive.op) {
-                    .foreach => if (call.args.items.len > 1) {
-                        const callback = try self.exprLabels(call.args.items[1], env, owner);
+                if (primitive.callback) |callback_spec| {
+                    if (call.args.items.len > callback_spec.function_arg_index) {
+                        const callback = try self.exprLabels(call.args.items[callback_spec.function_arg_index], env, owner);
                         var callback_args = std.ArrayList(LabelSet).empty;
-                        try callback_args.append(self.allocator, LabelSet.init(self.allocator));
-                        var index: usize = 2;
+                        var fixed_index: usize = 0;
+                        while (fixed_index < callback_spec.supplied_arg_count) : (fixed_index += 1) {
+                            try callback_args.append(self.allocator, LabelSet.init(self.allocator));
+                        }
+                        var index = callback_spec.function_arg_index + 1;
                         while (index < arg_labels.items.len) : (index += 1) {
                             try callback_args.append(self.allocator, arg_labels.items[index]);
                         }
                         _ = try self.invokeLabels(callback, callback_args.items, owner);
-                    },
-                    .fold => if (call.args.items.len > 2) {
-                        const callback = try self.exprLabels(call.args.items[2], env, owner);
-                        var callback_args = std.ArrayList(LabelSet).empty;
-                        try callback_args.append(self.allocator, LabelSet.init(self.allocator));
-                        try callback_args.append(self.allocator, LabelSet.init(self.allocator));
-                        var index: usize = 3;
-                        while (index < arg_labels.items.len) : (index += 1) {
-                            try callback_args.append(self.allocator, arg_labels.items[index]);
-                        }
-                        _ = try self.invokeLabels(callback, callback_args.items, owner);
-                    },
-                    .join => if (call.args.items.len > 2) {
-                        const callback = try self.exprLabels(call.args.items[2], env, owner);
-                        var callback_args = std.ArrayList(LabelSet).empty;
-                        try callback_args.append(self.allocator, LabelSet.init(self.allocator));
-                        var index: usize = 3;
-                        while (index < arg_labels.items.len) : (index += 1) {
-                            try callback_args.append(self.allocator, arg_labels.items[index]);
-                        }
-                        _ = try self.invokeLabels(callback, callback_args.items, owner);
-                    },
-                    else => {},
+                    }
                 }
                 return LabelSet.init(self.allocator);
             },
