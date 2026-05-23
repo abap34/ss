@@ -436,14 +436,14 @@ fn documentStatementsSpan(statements: []const Statement) ast.Span {
 
 fn validateScheduledRoots(ir: *doc.Document, roots: []const ScheduledRoot) !void {
     for (roots) |root| {
-        if (root.summary.invalid_foreach) |invalid| {
+        if (root.summary.invalid_selection_mutation) |invalid| {
             const origin = try rootOrigin(ir.allocator, root);
             defer ir.allocator.free(origin);
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidForeachMutation: foreach callbacks must not add objects or pages to the selection being iterated") },
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated") },
             });
             _ = invalid;
-            return error.InvalidForeachMutation;
+            return error.InvalidSelectionMutation;
         }
         if (root.summary.reads_layout and root.summary.writes_layout_input) {
             const origin = try rootOrigin(ir.allocator, root);

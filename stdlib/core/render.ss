@@ -15,6 +15,26 @@ fn with_prop(obj: object, key_name: string, value_name: string) -> object
   return obj
 end
 
+fn set_style(obj: object, style_value: style) -> object
+  set_prop(obj, "style", style_value)
+  return obj
+end
+
+fn clear_content(obj: object) -> object
+  set_content(obj, "")
+  return obj
+end
+
+fn append_content(obj: object, text_value: string) -> object
+  set_content(obj, content(obj) ++ text_value)
+  return obj
+end
+
+fn rewrite_text(obj: object, old_value: string, new_value: string) -> object
+  set_content(obj, replace(content(obj), old_value, new_value))
+  return obj
+end
+
 fn add_math_package(package_name: string) -> document
   extend_render_env(docctx(), "add", "math.latex.packages", package_name)
   return docctx()

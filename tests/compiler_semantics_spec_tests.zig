@@ -108,6 +108,72 @@ test "compiler semantics: dynamically built residual text survives lowering" {
     , "hello world");
 }
 
+test "compiler semantics: content mutation helpers are stdlib functions" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let target = text("hello [1]")
+        \\  rewrite_text(target, "[1]", "world")
+        \\  append_content(target, "!")
+        \\end
+        \\
+    , "hello world!");
+
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn bad(target: object) -> object ! Pure
+        \\  clear_content(target)
+        \\  return target
+        \\end
+        \\
+        \\page bad
+        \\  let target = text("bad")
+        \\  bad(target)
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: style mutation is stdlib over properties" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let target = set_style(text("styled"), style("custom"))
+        \\  text(prop(target, "style", "missing"))
+        \\end
+        \\
+    , "custom");
+
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  text("a")
+        \\  text("b")
+        \\  with_style_all(objects(pagectx(), "body"), style("custom"))
+        \\end
+        \\
+    );
+
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn bad(target: object) -> object ! Pure
+        \\  set_style(target, style("custom"))
+        \\  return target
+        \\end
+        \\
+        \\page bad
+        \\  let target = text("bad")
+        \\  bad(target)
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: pass annotation is rejected" {
     try expectBuildFails(
         \\import std:themes/default
@@ -535,6 +601,38 @@ test "compiler semantics: foreach cannot create pages while iterating pages" {
         \\end
         \\
         \\page bad
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: fold cannot mutate the iterated page selection" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn add_page(acc: string, page_value: page) -> string
+        \\  new_page(docctx(), "extra")
+        \\  return acc
+        \\end
+        \\
+        \\page bad
+        \\  text(fold(pages(docctx()), "", add_page))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: join cannot mutate the iterated page selection" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn add_page(page_value: page) -> string
+        \\  new_page(docctx(), "extra")
+        \\  return str(page_index(page_value))
+        \\end
+        \\
+        \\page bad
+        \\  text(join(pages(docctx()), "", add_page))
         \\end
         \\
     );

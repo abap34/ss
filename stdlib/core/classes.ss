@@ -32,7 +32,7 @@ type FlowObject = object {
   layout_spacing_after: ScalarLike = "28"
   layout_x: ScalarLike = "96"
   layout_right_inset: ScalarLike = "96"
-  style: string = "default"
+  style: style = "default"
   fit: FitPolicy = "warn"
   link_id: string = ""
 }

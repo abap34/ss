@@ -1,3 +1,5 @@
+import std:core/classes
+
 fn previous_page() -> page
   return select(pagectx(), "previous_page")
 end
@@ -72,7 +74,7 @@ fn with_prop_all(items: selection<object>, key_name: string, value_name: string)
 end
 
 fn with_style_all(items: selection<object>, style_value: style) -> selection<object>
-  set_style(items, style_value)
+  set_prop(items, "style", style_value)
   return items
 end
 
@@ -96,6 +98,6 @@ end
 
 fn with_style_except(items: selection<object>, excluded: selection<object>, style_value: style) -> selection<object>
   let targets = select_difference(items, excluded)
-  set_style(targets, style_value)
+  set_prop(targets, "style", style_value)
   return targets
 end

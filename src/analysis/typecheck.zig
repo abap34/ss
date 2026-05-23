@@ -256,12 +256,8 @@ fn inferCallEffects(
     switch (descriptor) {
         .primitive => |primitive| {
             set.unionWith(registry.primitiveEffects(primitive));
-            const callback_index: ?usize = switch (primitive.op) {
-                .foreach => 1,
-                .fold, .join => 2,
-                else => null,
-            };
-            if (callback_index) |index| {
+            if (primitive.callback) |callback_spec| {
+                const index = callback_spec.function_arg_index;
                 if (call.args.items.len > index) switch (call.args.items[index]) {
                     .ident => |callback_name| if (sema.function(callback_name)) |callback| {
                         set.unionWith(try inferFunctionEffects(sema, callback, visiting));

@@ -165,6 +165,28 @@ pub fn build(b: *std.Build) void {
         .root_module = language_type_spec_tests_mod,
     });
 
+    const language_registry_mod = b.createModule(.{
+        .root_source_file = b.path("src/language/registry.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    language_registry_mod.addImport("core", core_mod);
+    language_registry_mod.addImport("language_type", language_type_mod);
+
+    const language_registry_spec_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/language_registry_spec_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    language_registry_spec_tests_mod.addImport("core", core_mod);
+    language_registry_spec_tests_mod.addImport("model", model_mod);
+    language_registry_spec_tests_mod.addImport("language_type", language_type_mod);
+    language_registry_spec_tests_mod.addImport("registry", language_registry_mod);
+    const language_registry_spec_tests = b.addTest(.{
+        .root_module = language_registry_spec_tests_mod,
+    });
+
     const core_ir_spec_tests_mod = b.createModule(.{
         .root_source_file = b.path("tests/core_ir_spec_tests.zig"),
         .target = target,
@@ -249,6 +271,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
     test_step.dependOn(&b.addRunArtifact(syntax_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(language_type_spec_tests).step);
+    test_step.dependOn(&b.addRunArtifact(language_registry_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(core_ir_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(layout_graph_spec_tests).step);
     test_step.dependOn(&b.addRunArtifact(project_spec_tests).step);
