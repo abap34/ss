@@ -273,6 +273,39 @@ test "syntax spec: lambda expressions can be used as callees" {
     }
 }
 
+test "syntax spec: lambda body may start on a later line" {
+    var parsed = try parse(
+        \\page Lambda
+        \\  let value = foreach(
+        \\    pages(docctx()),
+        \\    (page_value: page)
+        \\      |->
+        \\        new_object(
+        \\          page_value,
+        \\          str(page_index(page_value)),
+        \\          "body",
+        \\          "text"
+        \\        )
+        \\  )
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const expr = parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    switch (expr.call.args.items[1]) {
+        .lambda => |lambda| {
+            try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
+            try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
+            switch (lambda.body.*) {
+                .call => |call| try testing.expectEqualStrings("new_object", call.name),
+                else => return error.ExpectedCallExpr,
+            }
+        },
+        else => return error.ExpectedLambdaExpr,
+    }
+}
+
 test "syntax spec: required parameters cannot follow defaulted parameters" {
     try expectParseError(error.RequiredParameterAfterDefault,
         \\fn bad(a: number = 1, b: number) -> number
