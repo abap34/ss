@@ -7,7 +7,7 @@ const plus_one: number -> number = (x: number) |-> x + 1
 fn make_label(text_value: string) -> page -> object
   return (page_value: page)
     |->
-      new_object(page_value, text_value, "body", "text")
+      new(page_value, text_value, "body", "text")
 end
 
 fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> void
@@ -17,6 +17,9 @@ end
 
 page Lambda
   let title = link(head "Lambda syntax", "lambda")
+  title.text_color = c"#334455"
+  docctx().footer_text = title.content ?? "footer"
+  let has_color = title.text_color?
   let sample = code """
 fn sample() -> number
   return 1
@@ -130,6 +133,27 @@ end
           (identifier)
           (string))
         (string)))
+    (member_assignment_statement
+      (member_expression
+        (identifier)
+        (identifier))
+      (color_string))
+    (member_assignment_statement
+      (member_expression
+        (call_expression
+          (identifier))
+        (identifier))
+      (property_default_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (string)))
+    (let_statement
+      (identifier)
+      (property_exists_expression
+        (member_expression
+          (identifier)
+          (identifier))))
     (let_statement
       (identifier)
       (text_call_expression

@@ -859,21 +859,8 @@ const Parser = struct {
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
         }
-        if (self.peekPropertyAssignment()) {
-            const object_name = try self.parseIdentifier();
-            self.skipInlineSpaces();
-            try self.expectChar('.');
-            const property_name = try self.parseIdentifier();
-            self.skipTrivia();
-            try self.expectChar('=');
-            if (!self.eof() and self.source[self.pos] == '=') return self.fail(error.ExpectedChar);
-            const value = try self.parseExpr();
-            try self.consumeStatementTerminator();
-            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .property_set = .{
-                .object_name = object_name,
-                .property_name = property_name,
-                .value = value,
-            } } };
+        if (try self.parseMemberAssignmentStatement(start)) |stmt| {
+            return stmt;
         }
         if (self.peekSimpleAssignment()) {
             return self.fail(error.AssignmentRequiresLet);
@@ -973,27 +960,35 @@ const Parser = struct {
         errdefer expr.deinit(self.allocator);
         while (true) {
             self.skipInlineSpaces();
-            if (self.eof() or self.source[self.pos] != '(') return expr;
-            const callee = try self.allocator.create(Expr);
-            errdefer self.allocator.destroy(callee);
-            callee.* = expr;
-            var args = std.ArrayList(Expr).empty;
-            errdefer args.deinit(self.allocator);
-            try self.expectChar('(');
-            self.skipInlineSpaces();
-            while (!self.eof() and !self.peekChar(')')) {
-                try args.append(self.allocator, try self.parseExpr());
-                self.skipInlineSpaces();
-                if (!self.eof() and self.source[self.pos] == ',') {
-                    self.pos += 1;
-                    self.skipInlineSpaces();
-                    continue;
-                }
-                break;
+            if (self.eof()) return expr;
+            switch (self.source[self.pos]) {
+                '(' => expr = try self.parseApplyAfterCallee(expr),
+                '.' => expr = try self.parseMemberExprAfterTarget(expr),
+                else => return expr,
             }
-            try self.expectChar(')');
-            expr = .{ .apply = .{ .callee = callee, .args = args } };
         }
+    }
+
+    fn parseApplyAfterCallee(self: *Parser, expr: Expr) !Expr {
+        const callee = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(callee);
+        callee.* = expr;
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        try self.expectChar('(');
+        self.skipInlineSpaces();
+        while (!self.eof() and !self.peekChar(')')) {
+            try args.append(self.allocator, try self.parseExpr());
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == ',') {
+                self.pos += 1;
+                self.skipInlineSpaces();
+                continue;
+            }
+            break;
+        }
+        try self.expectChar(')');
+        return .{ .apply = .{ .callee = callee, .args = args } };
     }
 
     fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
@@ -1025,9 +1020,6 @@ const Parser = struct {
                 self.allocator.free(name);
                 return .{ .boolean = value };
             }
-        }
-        if (!self.eof() and self.source[self.pos] == '.') {
-            return try self.parseAnchorMemberExprAfterObjectName(name);
         }
         if (!self.eof() and self.source[self.pos] == '(') {
             return .{ .call = try self.parseCallAfterName(name) };
@@ -1156,6 +1148,115 @@ const Parser = struct {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, .{ .string = text });
+        return .{ .name = name, .args = args };
+    }
+
+    fn parseMemberAssignmentStatement(self: *Parser, start: usize) !?Statement {
+        const saved = self.pos;
+        var target = self.parseCallTargetExpr() catch {
+            self.pos = saved;
+            return null;
+        };
+        errdefer target.deinit(self.allocator);
+
+        self.skipInlineSpaces();
+        if (self.eof() or self.source[self.pos] != '.') {
+            target.deinit(self.allocator);
+            self.pos = saved;
+            return null;
+        }
+        self.pos += 1;
+        self.skipInlineSpaces();
+        const member_name = try self.parseIdentifier();
+        self.skipTrivia();
+        if (self.eof() or self.source[self.pos] != '=' or (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=')) {
+            target.deinit(self.allocator);
+            self.pos = saved;
+            return null;
+        }
+        if (names.parseAnchorName(member_name) != null or
+            std.mem.eql(u8, member_name, "width") or
+            std.mem.eql(u8, member_name, "height"))
+        {
+            target.deinit(self.allocator);
+            self.pos = saved;
+            return null;
+        }
+
+        self.pos += 1;
+        const value = try self.parseExpr();
+        try self.consumeStatementTerminator();
+        const call = if (std.mem.eql(u8, member_name, "content"))
+            try self.makeCall2("set_content", target, value)
+        else
+            try self.makeCall3("set_prop", target, .{ .string = member_name }, value);
+        return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
+    }
+
+    fn parseCallTargetExpr(self: *Parser) !Expr {
+        var expr = try self.parsePrimaryExpr();
+        errdefer expr.deinit(self.allocator);
+        while (true) {
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != '(') return expr;
+            expr = try self.parseApplyAfterCallee(expr);
+        }
+    }
+
+    fn parseMemberExprAfterTarget(self: *Parser, target: Expr) !Expr {
+        try self.expectChar('.');
+        const member_name = try self.parseIdentifier();
+        const anchor = names.parseAnchorName(member_name);
+        self.skipInlineSpaces();
+        if (anchor == null and self.startsWith("??")) {
+            self.pos += 2;
+            const fallback = try self.parseExpr();
+            return .{ .call = try self.makeCall3("prop", target, .{ .string = member_name }, fallback) };
+        }
+        if (anchor == null and !self.startsWith("??") and !self.eof() and self.source[self.pos] == '?') {
+            self.pos += 1;
+            return .{ .call = try self.makeCall2("has_prop", target, .{ .string = member_name }) };
+        }
+        if (std.mem.eql(u8, member_name, "content")) {
+            return .{ .call = try self.makeCall1("content", target) };
+        }
+        if (anchor) |_| {
+            return .{ .call = try self.makeAnchorMemberCall(target, member_name) };
+        }
+        return .{ .call = try self.makeCall3("prop", target, .{ .string = member_name }, .{ .string = "" }) };
+    }
+
+    fn makeAnchorMemberCall(self: *Parser, target: Expr, anchor_name: []const u8) !ast.CallExpr {
+        if (target == .ident and std.mem.eql(u8, target.ident, "page")) {
+            var args = std.ArrayList(Expr).empty;
+            errdefer args.deinit(self.allocator);
+            try args.append(self.allocator, .{ .string = anchor_name });
+            return .{ .name = "page_anchor", .args = args };
+        }
+        return try self.makeCall2("anchor", target, .{ .string = anchor_name });
+    }
+
+    fn makeCall1(self: *Parser, name: []const u8, arg0: Expr) !ast.CallExpr {
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        try args.append(self.allocator, arg0);
+        return .{ .name = name, .args = args };
+    }
+
+    fn makeCall2(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr) !ast.CallExpr {
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        try args.append(self.allocator, arg0);
+        try args.append(self.allocator, arg1);
+        return .{ .name = name, .args = args };
+    }
+
+    fn makeCall3(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr, arg2: Expr) !ast.CallExpr {
+        var args = std.ArrayList(Expr).empty;
+        errdefer args.deinit(self.allocator);
+        try args.append(self.allocator, arg0);
+        try args.append(self.allocator, arg1);
+        try args.append(self.allocator, arg2);
         return .{ .name = name, .args = args };
     }
 

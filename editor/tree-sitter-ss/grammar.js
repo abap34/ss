@@ -108,6 +108,7 @@ module.exports = grammar({
       $.let_statement,
       $.return_statement,
       $.constrain_statement,
+      $.member_assignment_statement,
       $.property_statement,
       $.if_statement,
       $.for_statement,
@@ -119,6 +120,7 @@ module.exports = grammar({
     let_statement: $ => seq("let", field("name", $.identifier), "=", field("value", $._expression), $._terminator),
     return_statement: $ => seq("return", optional(field("value", $._expression)), $._terminator),
     constrain_statement: $ => seq(optional("constrain"), field("left", $._expression), "==", field("right", $._expression), optional(seq(choice("+", "-"), $._expression)), $._terminator),
+    member_assignment_statement: $ => seq(field("target", $.member_expression), "=", field("value", $._expression), $._terminator),
     property_statement: $ => seq("property", field("target", $.identifier), field("key", $.string), field("value", $._expression), $._terminator),
 
     if_statement: $ => seq(
@@ -152,6 +154,8 @@ module.exports = grammar({
       $.binary_expression,
       $.unary_expression,
       $.lambda_expression,
+      $.property_default_expression,
+      $.property_exists_expression,
       $.text_call_expression,
       $.call_expression,
       $.member_expression,
@@ -185,7 +189,13 @@ module.exports = grammar({
       repeat($._terminator),
       ")",
     )),
-    member_expression: $ => prec(PREC.call, seq(field("object", $.identifier), ".", field("member", $.identifier))),
+    member_expression: $ => prec(PREC.call, seq(
+      field("object", choice($.identifier, $.call_expression, $.parenthesized_expression)),
+      ".",
+      field("member", $.identifier),
+    )),
+    property_default_expression: $ => prec.right(PREC.compare, seq(field("property", $.member_expression), "??", field("default", $._expression))),
+    property_exists_expression: $ => prec(PREC.unary, seq(field("property", $.member_expression), "?")),
     if_expression: $ => seq("if", field("condition", $._expression), "then", field("then", $._expression), "else", field("else", $._expression), "end"),
     parenthesized_expression: $ => seq("(", $._expression, ")"),
     lambda_expression: $ => seq(
