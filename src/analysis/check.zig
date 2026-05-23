@@ -198,6 +198,11 @@ fn rejectPageOnlyExpr(
             }
             for (call.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
         },
+        .apply => |apply| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, apply.callee.*);
+            for (apply.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
+        },
+        .lambda => |lambda| try rejectPageOnlyExpr(allocator, ir, context, origin, lambda.body.*),
         else => {},
     }
 }

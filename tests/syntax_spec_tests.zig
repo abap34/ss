@@ -203,6 +203,76 @@ test "syntax spec: void functions may omit explicit return values" {
     }
 }
 
+test "syntax spec: function types and lambdas are source syntax" {
+    var parsed = try parse(
+        \\fn make_label(text_value: string) -> page -> object
+        \\  return (page_value: page) |-> new_object(page_value, text_value, "body", "text")
+        \\end
+        \\
+        \\fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> number
+        \\  return thunk()
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const make_label = parsed.program.functions.items[0];
+    try testing.expectEqual(Type.Tag.function, make_label.result_type.tag);
+    try testing.expectEqual(@as(usize, 1), make_label.result_type.fn_params.len);
+    try testing.expectEqual(Type.Tag.page, make_label.result_type.fn_params[0].tag);
+    try testing.expect(make_label.result_type.fn_result != null);
+    try testing.expectEqual(Type.Tag.object, make_label.result_type.fn_result.?.tag);
+    switch (make_label.statements.items[0].kind.return_expr) {
+        .lambda => |lambda| {
+            try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
+            try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
+        },
+        else => return error.ExpectedLambdaExpr,
+    }
+
+    const use = parsed.program.functions.items[1];
+    try testing.expectEqual(Type.Tag.function, use.params.items[0].ty.tag);
+    try testing.expectEqual(Type.Tag.function, use.params.items[0].ty.fn_params[0].tag);
+    try testing.expectEqual(Type.Tag.function, use.params.items[1].ty.tag);
+    try testing.expectEqual(@as(usize, 2), use.params.items[1].ty.fn_params.len);
+    try testing.expectEqual(Type.Tag.function, use.params.items[2].ty.tag);
+    try testing.expectEqual(@as(usize, 0), use.params.items[2].ty.fn_params.len);
+}
+
+test "syntax spec: untyped function sort is not accepted as a surface type" {
+    try expectParseError(error.InvalidSemanticSort,
+        \\fn bad(f: function) -> number
+        \\  return 1
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: lambda expressions can be used as callees" {
+    var parsed = try parse(
+        \\page Lambda
+        \\  let value = ((x: number) |-> x + 1)(2)
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const expr = parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    switch (expr) {
+        .apply => |apply| {
+            try testing.expectEqual(@as(usize, 1), apply.args.items.len);
+            switch (apply.callee.*) {
+                .lambda => |lambda| {
+                    try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
+                    try testing.expectEqual(Type.Tag.number, lambda.params.items[0].ty.tag);
+                },
+                else => return error.ExpectedLambdaExpr,
+            }
+        },
+        else => return error.ExpectedApplyExpr,
+    }
+}
+
 test "syntax spec: required parameters cannot follow defaulted parameters" {
     try expectParseError(error.RequiredParameterAfterDefault,
         \\fn bad(a: number = 1, b: number) -> number

@@ -330,13 +330,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             try ctx.appendNodeContent(object_id, text);
             break :blk .{ .object = object_id };
         },
-        .object => blk: {
-            const content = try ctx.evalStringArg(call, 0);
-            const role_name = try ctx.evalStringArg(call, 1);
-            const role = try ctx.evalRoleArg(call, 1);
-            const payload = try ctx.evalPayloadArg(call, 2);
-            break :blk .{ .object = try ctx.makeObject(role_name, role, payload.object_kind, payload.payload_kind, content) };
-        },
         .group => blk: {
             var child_ids = std.ArrayList(core.NodeId).empty;
             defer child_ids.deinit(ctx.ir.allocator);

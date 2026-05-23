@@ -202,6 +202,17 @@ pub const Analyzer = struct {
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
             .ident, .string, .number, .boolean => AccessSummary.init(self.allocator),
+            .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
+            .apply => |apply| blk: {
+                var summary = try self.analyzeExpr(apply.callee.*);
+                errdefer summary.deinit();
+                for (apply.args.items) |arg| {
+                    var nested = try self.analyzeExpr(arg);
+                    defer nested.deinit();
+                    try summary.merge(nested);
+                }
+                break :blk summary;
+            },
             .call => |call| try self.analyzeCall(call),
         };
     }
@@ -306,11 +317,6 @@ pub const Analyzer = struct {
                 try summary.addWrite(Resource.content(null));
                 summary.writes_layout_input = true;
             },
-            .object => {
-                try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 1)));
-                try summary.addWrite(Resource.content(literalStringArg(self, call, 1)));
-                summary.writes_layout_input = true;
-            },
             .group => {
                 try summary.addWrite(Resource.graphObjects("group"));
                 summary.writes_layout_input = true;
@@ -369,6 +375,9 @@ pub const Analyzer = struct {
                             .args = .empty,
                         });
                     }
+                },
+                .lambda => |lambda| {
+                    callback_summary = try self.analyzeExpr(lambda.body.*);
                 },
                 else => {
                     var callback_expr = try self.analyzeExpr(call.args.items[1]);

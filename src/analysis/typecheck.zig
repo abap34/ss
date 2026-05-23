@@ -235,6 +235,12 @@ fn inferExprEffects(
 ) anyerror!core.EffectSet {
     return switch (expr) {
         .ident, .string, .number, .boolean => core.EffectSet.empty(),
+        .lambda => |lambda| try inferExprEffects(sema, lambda.body.*, visiting),
+        .apply => |apply| blk: {
+            var set = try inferExprEffects(sema, apply.callee.*, visiting);
+            for (apply.args.items) |arg| set.unionWith(try inferExprEffects(sema, arg, visiting));
+            break :blk set;
+        },
         .call => |call| try inferCallEffects(sema, call, visiting),
     };
 }
@@ -250,12 +256,17 @@ fn inferCallEffects(
     switch (descriptor) {
         .primitive => |primitive| {
             set.unionWith(registry.primitiveEffects(primitive));
-            if (primitive.callback_arg_index) |raw_index| {
-                const callback_index: usize = raw_index;
-                if (call.args.items.len > callback_index) switch (call.args.items[callback_index]) {
+            const callback_index: ?usize = switch (primitive.op) {
+                .foreach => 1,
+                .fold, .join => 2,
+                else => null,
+            };
+            if (callback_index) |index| {
+                if (call.args.items.len > index) switch (call.args.items[index]) {
                     .ident => |callback_name| if (sema.function(callback_name)) |callback| {
                         set.unionWith(try inferFunctionEffects(sema, callback, visiting));
                     },
+                    .lambda => |lambda| set.unionWith(try inferExprEffects(sema, lambda.body.*, visiting)),
                     else => {},
                 };
             }

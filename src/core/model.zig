@@ -253,6 +253,7 @@ pub const ConstraintSet = struct {
 
 pub const FunctionRef = struct {
     name: []const u8,
+    closure_id: ?usize = null,
     param_count: usize,
     param_sorts: []const SemanticSort = &.{},
     returns_value: bool,
@@ -266,6 +267,7 @@ pub const FunctionRef = struct {
     pub fn clone(self: FunctionRef, allocator: Allocator) !FunctionRef {
         return .{
             .name = self.name,
+            .closure_id = self.closure_id,
             .param_count = self.param_count,
             .param_sorts = try allocator.dupe(SemanticSort, self.param_sorts),
             .returns_value = self.returns_value,

@@ -9,6 +9,7 @@ pub const TypeInfo = struct {
     sort: core.SemanticSort,
     object_class: ?[]const u8 = null,
     string_literal: ?[]const u8 = null,
+    function_labels: []const []const u8 = &.{},
 };
 
 pub const TypeEnv = std.StringHashMap(TypeInfo);
@@ -33,13 +34,41 @@ pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
     return ty.formatAlloc(allocator);
 }
 
-pub fn mergeTypeInfo(a: TypeInfo, b: TypeInfo) TypeInfo {
+pub fn mergeTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !TypeInfo {
     return .{
         .ty = a.ty,
         .sort = a.sort,
         .object_class = mergeObjectClass(a.object_class, b.object_class),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
+        .function_labels = try mergeFunctionLabels(allocator, a.function_labels, b.function_labels),
     };
+}
+
+pub fn singleFunctionLabel(allocator: std.mem.Allocator, label: []const u8) ![]const []const u8 {
+    const labels = try allocator.alloc([]const u8, 1);
+    labels[0] = label;
+    return labels;
+}
+
+pub fn mergeFunctionLabels(
+    allocator: std.mem.Allocator,
+    left: []const []const u8,
+    right: []const []const u8,
+) ![]const []const u8 {
+    if (left.len == 0) return right;
+    if (right.len == 0) return left;
+    var out = std.ArrayList([]const u8).empty;
+    errdefer out.deinit(allocator);
+    for (left) |label| try appendUniqueLabel(allocator, &out, label);
+    for (right) |label| try appendUniqueLabel(allocator, &out, label);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendUniqueLabel(allocator: std.mem.Allocator, labels: *std.ArrayList([]const u8), label: []const u8) !void {
+    for (labels.items) |existing| {
+        if (std.mem.eql(u8, existing, label)) return;
+    }
+    try labels.append(allocator, label);
 }
 
 pub fn mergeObjectClass(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
