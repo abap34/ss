@@ -206,7 +206,7 @@ test "syntax spec: void functions may omit explicit return values" {
 test "syntax spec: function types and lambdas are source syntax" {
     var parsed = try parse(
         \\fn make_label(text_value: string) -> page -> object
-        \\  return (page_value: page) |-> new_object(page_value, text_value, "body", "text")
+        \\  return (page_value: page) |-> new(page_value, text_value, "body", "text")
         \\end
         \\
         \\fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> number
@@ -280,7 +280,7 @@ test "syntax spec: lambda body may start on a later line" {
         \\    pages(docctx()),
         \\    (page_value: page)
         \\      |->
-        \\        new_object(
+        \\        new(
         \\          page_value,
         \\          str(page_index(page_value)),
         \\          "body",
@@ -298,7 +298,7 @@ test "syntax spec: lambda body may start on a later line" {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
             try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
             switch (lambda.body.*) {
-                .call => |call| try testing.expectEqualStrings("new_object", call.name),
+                .call => |call| try testing.expectEqualStrings("new", call.name),
                 else => return error.ExpectedCallExpr,
             }
         },
@@ -420,10 +420,49 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     const neg = try expectCall(right.offset.?, "neg", 1);
     try expectNumber(neg.args.items[0], 20);
 
-    const property = statements[4].kind.property_set;
-    try testing.expectEqualStrings("box", property.object_name);
-    try testing.expectEqualStrings("fill", property.property_name);
-    try expectString(property.value, "red");
+    const property = try expectCall(statements[4].kind.expr_stmt, "set_prop", 3);
+    switch (property.args.items[0]) {
+        .ident => |name| try testing.expectEqualStrings("box", name),
+        else => return error.ExpectedIdentifier,
+    }
+    try expectString(property.args.items[1], "fill");
+    try expectString(property.args.items[2], "red");
+}
+
+test "syntax spec: member sugar lowers to primitive calls" {
+    var parsed = try parse(
+        \\page Members
+        \\  let target = text("hello")
+        \\  target.content = target.content ++ "!"
+        \\  docctx().footer_text = "footer"
+        \\  let color = target.text_color ?? "black"
+        \\  let has_color = target.text_color?
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    const content_set = try expectCall(statements[1].kind.expr_stmt, "set_content", 2);
+    switch (content_set.args.items[0]) {
+        .ident => |name| try testing.expectEqualStrings("target", name),
+        else => return error.ExpectedIdentifier,
+    }
+    const concat = try expectCall(content_set.args.items[1], "concat", 2);
+    _ = try expectCall(concat.args.items[0], "content", 1);
+    try expectString(concat.args.items[1], "!");
+
+    const doc_prop = try expectCall(statements[2].kind.expr_stmt, "set_prop", 3);
+    _ = try expectCall(doc_prop.args.items[0], "docctx", 0);
+    try expectString(doc_prop.args.items[1], "footer_text");
+    try expectString(doc_prop.args.items[2], "footer");
+
+    const prop = try expectCall(statements[3].kind.let_binding.expr, "prop", 3);
+    try expectString(prop.args.items[1], "text_color");
+    try expectString(prop.args.items[2], "black");
+
+    const has_prop = try expectCall(statements[4].kind.let_binding.expr, "has_prop", 2);
+    try expectString(has_prop.args.items[1], "text_color");
 }
 
 test "syntax spec: place is an ordinary identifier and bind is removed" {

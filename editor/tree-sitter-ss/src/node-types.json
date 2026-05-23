@@ -118,6 +118,14 @@
           "named": true
         },
         {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
+          "named": true
+        },
+        {
           "type": "string",
           "named": true
         },
@@ -186,6 +194,14 @@
         },
         {
           "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
           "named": true
         },
         {
@@ -314,6 +330,14 @@
           "named": true
         },
         {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
+          "named": true
+        },
+        {
           "type": "string",
           "named": true
         },
@@ -405,6 +429,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -477,6 +509,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -540,6 +580,14 @@
           },
           {
             "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
             "named": true
           },
           {
@@ -610,6 +658,14 @@
           "named": true
         },
         {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
+          "named": true
+        },
+        {
           "type": "string",
           "named": true
         },
@@ -658,6 +714,10 @@
         },
         {
           "type": "line_call_statement",
+          "named": true
+        },
+        {
+          "type": "member_assignment_statement",
           "named": true
         },
         {
@@ -740,6 +800,14 @@
         },
         {
           "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
           "named": true
         },
         {
@@ -834,6 +902,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -878,6 +954,10 @@
         },
         {
           "type": "line_call_statement",
+          "named": true
+        },
+        {
+          "type": "member_assignment_statement",
           "named": true
         },
         {
@@ -954,6 +1034,10 @@
         },
         {
           "type": "line_call_statement",
+          "named": true
+        },
+        {
+          "type": "member_assignment_statement",
           "named": true
         },
         {
@@ -1064,6 +1148,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -1130,6 +1222,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -1193,6 +1293,14 @@
           },
           {
             "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
             "named": true
           },
           {
@@ -1268,6 +1376,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -1312,6 +1428,10 @@
         },
         {
           "type": "line_call_statement",
+          "named": true
+        },
+        {
+          "type": "member_assignment_statement",
           "named": true
         },
         {
@@ -1403,6 +1523,14 @@
           },
           {
             "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
             "named": true
           },
           {
@@ -1539,6 +1667,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -1637,6 +1773,14 @@
           "named": true
         },
         {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
+          "named": true
+        },
+        {
           "type": "string",
           "named": true
         },
@@ -1649,6 +1793,96 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "member_assignment_statement",
+    "named": true,
+    "fields": {
+      "target": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "member_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_text",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "color_string",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expression",
+            "named": true
+          },
+          {
+            "type": "lambda_expression",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "text_call_expression",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1670,7 +1904,15 @@
         "required": true,
         "types": [
           {
+            "type": "call_expression",
+            "named": true
+          },
+          {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
             "named": true
           }
         ]
@@ -1794,6 +2036,14 @@
         },
         {
           "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
           "named": true
         },
         {
@@ -1937,6 +2187,10 @@
           "named": true
         },
         {
+          "type": "member_assignment_statement",
+          "named": true
+        },
+        {
           "type": "property_statement",
           "named": true
         },
@@ -2022,6 +2276,14 @@
         },
         {
           "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
           "named": true
         },
         {
@@ -2111,6 +2373,14 @@
           "named": true
         },
         {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
+          "named": true
+        },
+        {
           "type": "string",
           "named": true
         },
@@ -2142,6 +2412,112 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "property_default_expression",
+    "named": true,
+    "fields": {
+      "default": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_text",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "color_string",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "if_expression",
+            "named": true
+          },
+          {
+            "type": "lambda_expression",
+            "named": true
+          },
+          {
+            "type": "list_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "text_call_expression",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          }
+        ]
+      },
+      "property": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "member_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "property_exists_expression",
+    "named": true,
+    "fields": {
+      "property": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "member_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -2221,6 +2597,14 @@
             "named": true
           },
           {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
+            "named": true
+          },
+          {
             "type": "string",
             "named": true
           },
@@ -2290,6 +2674,14 @@
           },
           {
             "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "property_default_expression",
+            "named": true
+          },
+          {
+            "type": "property_exists_expression",
             "named": true
           },
           {
@@ -2541,6 +2933,14 @@
           "named": true
         },
         {
+          "type": "property_default_expression",
+          "named": true
+        },
+        {
+          "type": "property_exists_expression",
+          "named": true
+        },
+        {
           "type": "string",
           "named": true
         },
@@ -2617,6 +3017,14 @@
   },
   {
     "type": ">",
+    "named": false
+  },
+  {
+    "type": "?",
+    "named": false
+  },
+  {
+    "type": "??",
     "named": false
   },
   {
