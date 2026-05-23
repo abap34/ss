@@ -1,6 +1,6 @@
 const std = @import("std");
 const syntax = @import("syntax.zig");
-const stage1 = @import("stage1.zig");
+const lowering = @import("lowering.zig");
 const typecheck = @import("analysis/typecheck.zig");
 const utils = @import("utils");
 
@@ -18,7 +18,7 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
 
     try typecheck.typecheckProgram(allocator, &ir);
     if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try stage1.lowerToIr(&ir);
+    try lowering.lowerToIr(&ir);
     if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
 }
 
@@ -36,7 +36,7 @@ pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []con
 
     try typecheck.typecheckProgram(allocator, &ir);
     if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try stage1.lowerToIr(&ir);
+    try lowering.lowerToIr(&ir);
     if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
 
     for (ir.nodes.items) |node| {

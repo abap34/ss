@@ -45,8 +45,7 @@ fn require_titles_all() -> document
   return docctx()
 end
 
-@pass(augment)
-fn materialize_document_page_numbers(doc: code<document>) -> code<document> ! ReadGraph | CreateNode | WriteContent | WriteProperty | WriteConstraint
+fn materialize_document_page_numbers(doc: document) -> document
   if prop_eq(doc, "page_numbers_enabled", "true")
     foreach(pages(doc), materialize_page_number_for_page)
   end
@@ -61,13 +60,12 @@ fn materialize_page_number_for_page(page: page) -> page
   return page
 end
 
-@pass(resolve)
-fn refresh_page_numbers(doc: code<document>) -> code<document> ! ReadGraph | WriteContent
+fn refresh_page_numbers(doc: document) -> document
   foreach(objects_in_document(doc, "page_number"), refresh_page_number, doc)
   return doc
 end
 
-fn refresh_page_number(page_no: object, doc: code<document>) -> object
+fn refresh_page_number(page_no: object, doc: document) -> object
   let page = parent_page(page_no)
   if prop_eq(doc, "page_numbers_format", "")
     set_content(page_no, concat(str(page_index(page)), concat("/", str(page_count(doc)))))
@@ -80,15 +78,14 @@ fn refresh_page_number(page_no: object, doc: code<document>) -> object
   return page_no
 end
 
-@pass(augment)
-fn materialize_running_footers(doc: code<document>) -> code<document> ! ReadGraph | CreateNode | WriteContent | WriteProperty | WriteConstraint
+fn materialize_running_footers(doc: document) -> document
   if has_prop(doc, "running_footer_text")
     foreach(pages(doc), materialize_running_footer_for_page, doc)
   end
   return doc
 end
 
-fn materialize_running_footer_for_page(page: page, doc: code<document>) -> page
+fn materialize_running_footer_for_page(page: page, doc: document) -> page
   if selection_empty(objects(page, "running_footer"))
     let footer = new_object(page, prop(doc, "running_footer_text", ""), "running_footer", "text")
     text_preset(footer, "Helvetica", "12", "15", "0.42,0.42,0.42", "0", "72", "160")
@@ -99,15 +96,14 @@ fn materialize_running_footer_for_page(page: page, doc: code<document>) -> page
   return page
 end
 
-@pass(augment)
-fn materialize_document_logos(doc: code<document>) -> code<document> ! ReadGraph | CreateNode | WriteContent | WriteProperty | WriteConstraint
+fn materialize_document_logos(doc: document) -> document
   if has_prop(doc, "document_logo_path")
     foreach(pages(doc), materialize_document_logo_for_page, doc)
   end
   return doc
 end
 
-fn materialize_document_logo_for_page(page: page, doc: code<document>) -> page
+fn materialize_document_logo_for_page(page: page, doc: document) -> page
   if selection_empty(objects(page, "document_logo"))
     let logo = new_object(page, prop(doc, "document_logo_path", ""), "document_logo", "image_ref")
     set_prop(logo, "render_kind", "raster_asset")
@@ -121,15 +117,14 @@ fn materialize_document_logo_for_page(page: page, doc: code<document>) -> page
   return page
 end
 
-@pass(augment)
-fn materialize_watermarks(doc: code<document>) -> code<document> ! ReadGraph | CreateNode | WriteContent | WriteProperty | WriteConstraint
+fn materialize_watermarks(doc: document) -> document
   if has_prop(doc, "watermark_text")
     foreach(pages(doc), materialize_watermark_for_page, doc)
   end
   return doc
 end
 
-fn materialize_watermark_for_page(page: page, doc: code<document>) -> page
+fn materialize_watermark_for_page(page: page, doc: document) -> page
   if selection_empty(objects(page, "watermark"))
     let mark = new_object(page, prop(doc, "watermark_text", ""), "watermark", "text")
     text_preset(mark, "Helvetica", "72", "80", "0.85,0.85,0.85", "0", "0", "0")
@@ -152,13 +147,12 @@ fn toc_list_object() -> object
   return toc_object()
 end
 
-@pass(resolve)
-fn refresh_tocs(doc: code<document>) -> code<document> ! ReadGraph | WriteContent
+fn refresh_tocs(doc: document) -> document
   foreach(objects_in_document(doc, "toc"), refresh_toc, doc)
   return doc
 end
 
-fn refresh_toc(toc: object, doc: code<document>) -> object
+fn refresh_toc(toc: object, doc: document) -> object
   clear_content(toc)
   append_content(toc, "Table of Contents\n")
   foreach(pages(doc), append_toc_page, toc)
@@ -175,8 +169,7 @@ fn append_toc_title(title: object, toc: object, page: page) -> object
   return title
 end
 
-@pass(inspect_layout)
-fn inspect_required_titles(doc: code<document>) -> code<document> ! ReadGraph | EmitDiagnostics
+fn inspect_required_titles(doc: document) -> document
   if prop_eq(doc, "require_titles_enabled", "true")
     foreach(pages(doc), report_missing_title)
   end
@@ -188,4 +181,14 @@ fn report_missing_title(page: page) -> page
     report_warning("MissingTitle: page has no title object")
   end
   return page
+end
+
+document
+  materialize_document_page_numbers(docctx())
+  materialize_running_footers(docctx())
+  materialize_document_logos(docctx())
+  materialize_watermarks(docctx())
+  refresh_page_numbers(docctx())
+  refresh_tocs(docctx())
+  inspect_required_titles(docctx())
 end

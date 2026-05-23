@@ -1,8 +1,7 @@
 const std = @import("std");
 const core = @import("core");
-const stage0 = @import("../stage0/eval.zig");
-const doc = @import("../stage0/doc.zig");
-const stage_pass = @import("../stage_pass.zig");
+const elaboration = @import("../elaboration/eval.zig");
+const doc = @import("../elaboration/document.zig");
 const editor = @import("../analysis/editor.zig");
 
 const NormalizeContext = struct {
@@ -37,13 +36,11 @@ const NormalizeContext = struct {
 };
 
 pub fn lowerToIr(ir: *core.Ir) !void {
-    var code = try stage0.elaborateIr(ir.allocator, ir);
+    var code = try elaboration.elaborateIr(ir.allocator, ir);
     defer code.deinit();
 
     try normalizeDocumentCode(ir, &code);
-    try stage_pass.runPreLayoutPasses(ir);
     try ir.finalize();
-    try stage_pass.runPostLayoutPasses(ir);
     try editor.refreshSolvedFrameHints(ir.allocator, ir);
 }
 

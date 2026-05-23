@@ -3,7 +3,7 @@ const ast = @import("ast");
 const build_options = @import("build_options");
 const core = @import("core");
 const syntax = @import("syntax.zig");
-const stage1 = @import("stage1.zig");
+const lowering = @import("lowering.zig");
 const typecheck = @import("analysis/typecheck.zig");
 const module_loader = @import("modules/loader.zig");
 const project = @import("project.zig");
@@ -199,7 +199,7 @@ const Server = struct {
         typecheck.typecheckProgram(self.allocator, &ir) catch {};
         try diagnostics.addIr(&ir);
         if (!diagnostics.hasErrors()) {
-            stage1.lowerToIr(&ir) catch {};
+            lowering.lowerToIr(&ir) catch {};
             try diagnostics.addIr(&ir);
         }
 

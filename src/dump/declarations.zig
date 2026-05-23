@@ -65,32 +65,6 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
     }
     try annotations.end();
 
-    var removed_annotations = try object.arrayField("removedAnnotations");
-    for (index.removed_annotations.items) |annotation| {
-        var item = try removed_annotations.objectItem();
-        try item.stringField("function", annotation.function_name);
-        try item.stringField("annotation", annotation.annotation_name);
-        try writeAnnotationArgs(&item, annotation.args);
-        try item.intField("moduleId", annotation.module_id);
-        try item.end();
-    }
-    try removed_annotations.end();
-
-    var passes = try object.arrayField("passes");
-    for (index.passes.items) |pass| {
-        var item = try passes.objectItem();
-        try item.stringField("id", pass.id);
-        try item.stringField("function", pass.function_name);
-        try item.stringField("slot", pass.slot_name);
-        try item.optionalStringField("effects", pass.effects_text);
-        try writeStringArrayField(&item, "after", pass.after);
-        try writeStringArrayField(&item, "before", pass.before);
-        try item.intField("moduleId", pass.module_id);
-        try item.intField("sourceOrder", pass.source_order);
-        try item.end();
-    }
-    try passes.end();
-
     var host_capabilities = try object.arrayField("hostCapabilities");
     for (index.host_capabilities.items) |capability| {
         var item = try host_capabilities.objectItem();
@@ -115,12 +89,6 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
     try render_ops.end();
 
     try object.end();
-}
-
-fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const []const u8) !void {
-    var array = try object.arrayField(name);
-    for (values) |value| try array.stringItem(value);
-    try array.end();
 }
 
 fn writeAnnotationArgs(object: *json.Object, args: []const ast.AnnotationArg) !void {

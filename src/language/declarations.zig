@@ -48,42 +48,6 @@ pub const RenderOpDescriptor = struct {
     module_id: core.SourceModuleId,
 };
 
-pub const PassSlot = enum {
-    augment,
-    resolve,
-    inspect_layout,
-    prepare_render,
-
-    pub fn parse(name: []const u8) ?PassSlot {
-        if (std.mem.eql(u8, name, "augment")) return .augment;
-        if (std.mem.eql(u8, name, "resolve")) return .resolve;
-        if (std.mem.eql(u8, name, "inspect_layout")) return .inspect_layout;
-        if (std.mem.eql(u8, name, "prepare_render")) return .prepare_render;
-        return null;
-    }
-};
-
-pub const PassDescriptor = struct {
-    id: []const u8,
-    function_name: []const u8,
-    slot_name: []const u8,
-    slot: ?PassSlot,
-    after: []const []const u8,
-    before: []const []const u8,
-    effects_text: ?[]const u8,
-    effects: ?core.EffectSet,
-    effects_parse_failed: bool,
-    module_id: core.SourceModuleId,
-    source_order: usize,
-    function: ast.FunctionDecl,
-
-    pub fn deinit(self: PassDescriptor, allocator: std.mem.Allocator) void {
-        allocator.free(self.id);
-        allocator.free(self.after);
-        allocator.free(self.before);
-    }
-};
-
 pub const ValueDomainDescriptor = struct {
     name: []const u8,
     body: []const u8,
@@ -98,8 +62,6 @@ pub const DeclarationIndex = struct {
     roles: std.ArrayList(RoleDescriptor),
     fields: std.ArrayList(FieldDescriptor),
     function_annotations: std.ArrayList(FunctionAnnotationDescriptor),
-    removed_annotations: std.ArrayList(FunctionAnnotationDescriptor),
-    passes: std.ArrayList(PassDescriptor),
     host_capabilities: std.ArrayList(HostCapabilityDescriptor),
     render_ops: std.ArrayList(RenderOpDescriptor),
     class_by_name: std.StringHashMap(usize),
@@ -113,8 +75,6 @@ pub const DeclarationIndex = struct {
             .roles = .empty,
             .fields = .empty,
             .function_annotations = .empty,
-            .removed_annotations = .empty,
-            .passes = .empty,
             .host_capabilities = .empty,
             .render_ops = .empty,
             .class_by_name = std.StringHashMap(usize).init(allocator),
@@ -128,9 +88,6 @@ pub const DeclarationIndex = struct {
         self.roles.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.function_annotations.deinit(self.allocator);
-        self.removed_annotations.deinit(self.allocator);
-        for (self.passes.items) |pass| pass.deinit(self.allocator);
-        self.passes.deinit(self.allocator);
         self.host_capabilities.deinit(self.allocator);
         self.render_ops.deinit(self.allocator);
         self.class_by_name.deinit();
@@ -330,7 +287,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         try appendFields(index, module.id, extension.target, extension.fields.items);
     }
 
-    for (module.program.functions.items, 0..) |func, source_order| {
+    for (module.program.functions.items) |func| {
         for (func.annotations.items) |annotation| {
             const descriptor = FunctionAnnotationDescriptor{
                 .function_name = func.name,
@@ -339,11 +296,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
                 .module_id = module.id,
             };
             try index.function_annotations.append(index.allocator, descriptor);
-            if (std.mem.eql(u8, annotation.name, "phase")) {
-                try index.removed_annotations.append(index.allocator, descriptor);
-            } else if (std.mem.eql(u8, annotation.name, "pass")) {
-                try index.passes.append(index.allocator, try passDescriptor(index, module, func, annotation, source_order));
-            } else if (std.mem.eql(u8, annotation.name, "host")) {
+            if (std.mem.eql(u8, annotation.name, "host")) {
                 const effects_text = func.effects orelse annotationArgValue(annotation.args.items, "effects");
                 try index.host_capabilities.append(index.allocator, .{
                     .function_name = func.name,
@@ -366,37 +319,6 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
             }
         }
     }
-}
-
-fn passDescriptor(
-    index: *DeclarationIndex,
-    module: *const core.SourceModule,
-    func: ast.FunctionDecl,
-    annotation: ast.Annotation,
-    source_order: usize,
-) !PassDescriptor {
-    const slot_name = annotationPositionalArg(annotation.args.items, 0) orelse "";
-    const after = try annotationListArg(index.allocator, annotation.args.items, "after");
-    errdefer index.allocator.free(after);
-    const before = try annotationListArg(index.allocator, annotation.args.items, "before");
-    errdefer index.allocator.free(before);
-    const id = try std.fmt.allocPrint(index.allocator, "{s}::{s}", .{ module.spec, func.name });
-    errdefer index.allocator.free(id);
-    const effects = parseEffectSetMaybe(func.effects);
-    return .{
-        .id = id,
-        .function_name = func.name,
-        .slot_name = slot_name,
-        .slot = PassSlot.parse(slot_name),
-        .after = after,
-        .before = before,
-        .effects_text = func.effects,
-        .effects = effects,
-        .effects_parse_failed = func.effects != null and effects == null,
-        .module_id = module.id,
-        .source_order = source_order,
-        .function = func,
-    };
 }
 
 fn annotationArgValue(args: []const ast.AnnotationArg, key: []const u8) ?[]const u8 {
@@ -453,23 +375,6 @@ pub fn parseEffectName(name: []const u8) ?core.Effect {
         if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
     }
     return null;
-}
-
-fn annotationListArg(allocator: std.mem.Allocator, args: []const ast.AnnotationArg, key: []const u8) ![]const []const u8 {
-    const value = annotationNamedValue(args, key) orelse return allocator.alloc([]const u8, 0);
-    var items = std.ArrayList([]const u8).empty;
-    errdefer items.deinit(allocator);
-    switch (value) {
-        .list => |list| {
-            for (list.items) |item| {
-                if (annotationValueScalar(item)) |text| try items.append(allocator, text);
-            }
-        },
-        else => {
-            if (annotationValueScalar(value)) |text| try items.append(allocator, text);
-        },
-    }
-    return try items.toOwnedSlice(allocator);
 }
 
 fn annotationNamedValue(args: []const ast.AnnotationArg, key: []const u8) ?ast.AnnotationValue {

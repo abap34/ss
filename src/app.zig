@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const parser = @import("syntax.zig");
-const stage1 = @import("stage1.zig");
+const lowering = @import("lowering.zig");
 const pdf = @import("render/pdf.zig");
 const dump = @import("dump.zig");
 const typecheck = @import("analysis/typecheck.zig");
@@ -121,21 +121,21 @@ pub fn buildFileWithAssetBaseAndOverlay(
     errdefer program.deinit(allocator);
     if (progress) |p| p.step("Parse");
 
-	    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
-	        if (err == error.UnknownImport) {
-	            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
-	            defer report.deinit(allocator);
-	            error_report.print(.{
-	                .path = path,
-	                .source = source,
-	                .severity = .@"error",
-	                .message = report.message,
-	                .span = .{
-	                    .start = report.span.start,
-	                    .end = report.span.end,
-	                },
-	            });
-	        } else if (err == error.ImportCycle) {
+    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
+        if (err == error.UnknownImport) {
+            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
+            defer report.deinit(allocator);
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = report.message,
+                .span = .{
+                    .start = report.span.start,
+                    .end = report.span.end,
+                },
+            });
+        } else if (err == error.ImportCycle) {
             error_report.print(.{
                 .path = path,
                 .source = source,
@@ -149,20 +149,20 @@ pub fn buildFileWithAssetBaseAndOverlay(
     };
     if (progress) |p| p.step("Load index");
 
-	    var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
-	        if (err == error.UnknownImport) {
-	            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
-	            defer report.deinit(allocator);
-	            error_report.print(.{
-	                .path = path,
-	                .source = source,
-	                .severity = .@"error",
-	                .message = report.message,
-	                .span = .{
-	                    .start = report.span.start,
-	                    .end = report.span.end,
-	                },
-	            });
+    var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
+        if (err == error.UnknownImport) {
+            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
+            defer report.deinit(allocator);
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = report.message,
+                .span = .{
+                    .start = report.span.start,
+                    .end = report.span.end,
+                },
+            });
         } else if (err != error.DiagnosticsFailed) {
             std.debug.print("error: {s}\n", .{@errorName(err)});
         }
@@ -182,7 +182,7 @@ pub fn buildFileWithAssetBaseAndOverlay(
         return error.DiagnosticsFailed;
     }
 
-    stage1.lowerToIr(&ir) catch |err| {
+    lowering.lowerToIr(&ir) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), &ir, err, core.formatConstraint),
             else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir),

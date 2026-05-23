@@ -153,7 +153,7 @@ fn checkOrdinaryFunctionEffectContracts(
     while (it.next()) |entry| {
         const func = entry.value_ptr.*;
         if (func.effects == null) continue;
-        if (hasAnnotation(func, "pass") or hasAnnotation(func, "host") or hasAnnotation(func, "op")) continue;
+        if (hasAnnotation(func, "host") or hasAnnotation(func, "op")) continue;
         const origin = try functionOriginForDecl(allocator, ir, func);
         defer allocator.free(origin);
         const declared = declarations.parseEffectSet(func.effects.?) catch {
@@ -287,13 +287,14 @@ fn checkAnnotationContracts(
     ir: *core.Ir,
     index: *const declarations.DeclarationIndex,
 ) !void {
-    for (index.removed_annotations.items) |annotation| {
+    for (index.function_annotations.items) |annotation| {
+        if (std.mem.eql(u8, annotation.annotation_name, "host") or std.mem.eql(u8, annotation.annotation_name, "op")) continue;
         const origin = try functionOrigin(allocator, ir, annotation.module_id, annotation.function_name);
         defer allocator.free(origin);
         try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try ir.allocator.dupe(u8, "@phase is removed; use @pass(augment), @pass(resolve), @pass(inspect_layout), or @pass(prepare_render)") },
+            .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnknownAnnotation: function annotation '@{s}' is not supported", .{annotation.annotation_name}) },
         });
-        return error.LegacyPhaseAnnotation;
+        return error.UnknownAnnotation;
     }
     for (index.host_capabilities.items) |capability| {
         if (capability.effects != null) continue;
@@ -444,17 +445,17 @@ pub fn buildIrWithOptions(
     index: *ProgramIndex,
     options: BuildIrOptions,
 ) !core.Ir {
-	    const asset_base_dir = try allocator.dupe(u8, asset_base_path);
-	    var owns_asset_base_dir = true;
-	    errdefer if (owns_asset_base_dir) allocator.free(asset_base_dir);
-	    const project_path = try allocator.dupe(u8, input_path);
-	    var owns_project_path = true;
-	    errdefer if (owns_project_path) allocator.free(project_path);
-	    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source.*, project_program.*);
-	    owns_asset_base_dir = false;
-	    owns_project_path = false;
-	    project_source.* = &.{};
-	    project_program.* = ast.Program.init();
+    const asset_base_dir = try allocator.dupe(u8, asset_base_path);
+    var owns_asset_base_dir = true;
+    errdefer if (owns_asset_base_dir) allocator.free(asset_base_dir);
+    const project_path = try allocator.dupe(u8, input_path);
+    var owns_project_path = true;
+    errdefer if (owns_project_path) allocator.free(project_path);
+    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source.*, project_program.*);
+    owns_asset_base_dir = false;
+    owns_project_path = false;
+    project_source.* = &.{};
+    project_program.* = ast.Program.init();
     errdefer ir.deinit();
 
     ir.functions = index.functions;
