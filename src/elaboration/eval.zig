@@ -1538,6 +1538,7 @@ fn executeStatement(
             const value = try evalExpr(ir, page_id, context, mode, env, functions, origin, expr);
             return .{ .returned = value };
         },
+        .return_void => return .{ .returned = .{ .void = {} } },
         .property_set => |property_set| {
             const base = env.get(property_set.object_name) orelse return error.UnknownIdentifier;
             const object_id = try resolveValueObjectId(ir, mode, base);
@@ -1707,12 +1708,17 @@ fn executeCallStatement(
                     var owned = value;
                     owned.deinit(ir.allocator);
                 }
-                try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
-                try materializeStatementValue(ir, mode, last_code_like, value);
+                if (func.result_sort == .void) {
+                    try contracts.ensureValueSortWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
+                } else {
+                    try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                    try materializeStatementValue(ir, mode, last_code_like, value);
+                }
                 return;
             },
         }
     }
+    if (func.result_sort != .void) return error.FunctionDidNotReturnValue;
 }
 
 fn invokeUserFunctionValue(
@@ -1761,8 +1767,6 @@ fn invokeUserFunctionValues(
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
-    try eval_functions.requireReturnsValue(func);
-
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionValueArgs(ir, page_id, context, mode, env, &local_env, functions, func, current_origin, args);
@@ -1779,6 +1783,7 @@ fn invokeUserFunctionValues(
         }
     }
 
+    if (func.result_sort == .void) return .{ .void = {} };
     return error.FunctionDidNotReturnValue;
 }
 

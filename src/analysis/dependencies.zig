@@ -162,6 +162,7 @@ pub const Analyzer = struct {
                 defer nested.deinit();
                 try summary.merge(nested);
             },
+            .return_void => {},
             .property_set => |property_set| {
                 var expr = try self.analyzeExpr(property_set.value);
                 defer expr.deinit();

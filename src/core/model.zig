@@ -181,6 +181,7 @@ pub const SemanticSort = enum {
     boolean,
     constraints,
     fragment,
+    void,
 };
 
 pub const SelectionItemSort = enum {
@@ -538,6 +539,7 @@ pub const Value = union(SemanticSort) {
     boolean: bool,
     constraints: ConstraintSet,
     fragment: *Fragment,
+    void: void,
 
     pub fn deinit(self: *Value, allocator: Allocator) void {
         switch (self.*) {
@@ -565,6 +567,7 @@ pub const Value = union(SemanticSort) {
             .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
             .fragment => |fragment| .{ .fragment = fragment },
+            .void => .{ .void = {} },
         };
     }
 
@@ -577,7 +580,7 @@ pub const Value = union(SemanticSort) {
             .metadata => |id| id,
             .selection => |selection| selection.first(),
             .fragment => |fragment| if (fragment.root) |root| root.firstId() else null,
-            .anchor, .function, .style, .string, .number, .boolean, .constraints => null,
+            .anchor, .function, .style, .string, .number, .boolean, .constraints, .void => null,
         };
     }
 };

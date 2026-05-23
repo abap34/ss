@@ -197,7 +197,7 @@ const Parser = struct {
             try self.consumeStatementTerminator();
         } else {
             statements = try self.parseBodyStatements();
-            if (!functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+            if (result_sort != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         }
         return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_sort = result_sort, .effects = effects, .annotations = annotations, .statements = statements };
     }
@@ -562,6 +562,7 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "number")) return ast.Type.number;
         if (std.mem.eql(u8, name, "bool") or std.mem.eql(u8, name, "boolean")) return ast.Type.boolean;
         if (std.mem.eql(u8, name, "constraints")) return ast.Type.constraints;
+        if (std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "Void")) return .{ .tag = .void };
         if (std.mem.eql(u8, name, "selection")) return ast.Type.selectionType(try self.parseOptionalTypeParam());
         if (std.mem.eql(u8, name, "fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
         if (std.mem.eql(u8, name, "code")) return ast.Type.code(try self.parseRequiredTypeParam());
@@ -764,6 +765,10 @@ const Parser = struct {
             } } };
         }
         if (try self.consumeKeyword("return")) {
+            if (self.atStatementBoundary()) {
+                try self.consumeStatementTerminator();
+                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .return_void };
+            }
             const expr = try self.parseExpr();
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .return_expr = expr } };

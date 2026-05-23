@@ -92,6 +92,7 @@ fn collectStatementCallees(
     switch (stmt.kind) {
         .let_binding => |binding| try collectExprCallees(allocator, sema, binding.expr, callees),
         .return_expr => |expr| try collectExprCallees(allocator, sema, expr, callees),
+        .return_void => {},
         .property_set => |property_set| try collectExprCallees(allocator, sema, property_set.value, callees),
         .if_stmt => |if_stmt| {
             try collectExprCallees(allocator, sema, if_stmt.condition, callees);

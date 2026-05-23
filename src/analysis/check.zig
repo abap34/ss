@@ -126,9 +126,14 @@ fn checkTopLevelStatement(
         .let_binding => |binding| {
             try rejectPageOnlyExpr(allocator, ir, context, origin, binding.expr);
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
+            try rejectVoidValue(ir, info, origin);
             try env.put(binding.name, info);
         },
         .return_expr => {
+            try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
+            return error.ReturnOutsideFunction;
+        },
+        .return_void => {
             try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
             return error.ReturnOutsideFunction;
         },
@@ -169,6 +174,12 @@ fn checkTopLevelStatement(
             }
         },
     }
+}
+
+fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const u8) !void {
+    if (info.sort != .void) return;
+    try addUserReport(ir, origin, "VoidValue: void results can only be used as statements", .{});
+    return error.InvalidSemanticSort;
 }
 
 fn rejectPageOnlyExpr(
@@ -245,11 +256,17 @@ fn checkStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
+            try rejectVoidValue(ir, info, origin);
             try env.put(binding.name, info);
         },
         .return_expr => |expr| {
             const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
             try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
+        },
+        .return_void => {
+            if (result_type.tag != .void) {
+                try ensureType(ir, allocator, infoFromType(.{ .tag = .void }), result_type, origin, .UnmatchedReturnType);
+            }
         },
         .property_set => |property_set| {
             try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);

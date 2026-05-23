@@ -788,6 +788,7 @@ pub const Ir = struct {
             .boolean => .boolean,
             .constraints => .constraints,
             .fragment => .fragment,
+            .void => .void,
         };
         if (actual != expected) {
             std.debug.print("sort mismatch in {s}: expected {s}, got {s}\n", .{
