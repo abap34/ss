@@ -4,6 +4,16 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-24
+
+### Changed
+
+- Use the ssbird logo as the VS Code extension icon.
+
+### Fixed
+
+- Fixed the render Docker image smoke test so an installed `ss-render-smoke` script checks the render cache under its working directory.
+
 ## [0.1.3] - 2026-05-23
 
 ### Added

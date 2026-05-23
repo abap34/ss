@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+script_root="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -f "$script_root/build.zig" ]]; then
+  repo_root="$script_root"
+else
+  repo_root="$(pwd)"
+fi
 ss_bin="${SS_BIN:-"$repo_root/zig-out/bin/ss"}"
 work_dir="${SS_RENDER_SMOKE_DIR:-"$repo_root/.ss-cache/render-smoke"}"
 
