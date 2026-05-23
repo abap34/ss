@@ -282,6 +282,9 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
             try item.stringField("kind", "return_expr");
             try writeExpr(allocator, &item, "expr", expr);
         },
+        .return_void => {
+            try item.stringField("kind", "return_void");
+        },
         .expr_stmt => |expr| {
             try item.stringField("kind", "expr_stmt");
             try writeExpr(allocator, &item, "expr", expr);

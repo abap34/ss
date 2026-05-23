@@ -266,6 +266,7 @@ pub const Statement = struct {
             expr: Expr,
         },
         return_expr: Expr,
+        return_void,
         constrain: ConstraintDecl,
         property_set: struct {
             object_name: []const u8,
@@ -284,6 +285,7 @@ pub const Statement = struct {
         switch (self.kind) {
             .let_binding => |*binding| binding.expr.deinit(allocator),
             .return_expr => |*expr| expr.deinit(allocator),
+            .return_void => {},
             .constrain => |*decl| decl.deinit(allocator),
             .property_set => |*property_set| property_set.value.deinit(allocator),
             .if_stmt => |*if_stmt| {

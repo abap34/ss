@@ -230,6 +230,7 @@ fn inferReturnInfoFromStatements(
                 const info = try exprInfo(allocator, null, sema, env, expr, "");
                 result.* = mergeTypeInfo(result.*, info);
             },
+            .return_void => {},
             .property_set => |property_set| {
                 try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, "");
             },

@@ -168,6 +168,41 @@ test "syntax spec: non-host functions must return on at least one complete path"
     );
 }
 
+test "syntax spec: user functions require result annotations" {
+    try expectParseError(error.ExpectedTypeAnnotation,
+        \\fn bad()
+        \\  return
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: void functions may omit explicit return values" {
+    var parsed = try parse(
+        \\fn noop() -> void
+        \\  let x = 1
+        \\end
+        \\
+        \\fn stop() -> void
+        \\  return
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const noop = parsed.program.functions.items[0];
+    try testing.expectEqual(Type.Tag.void, noop.result_type.tag);
+    try testing.expectEqual(@as(usize, 1), noop.statements.items.len);
+
+    const stop = parsed.program.functions.items[1];
+    try testing.expectEqual(Type.Tag.void, stop.result_type.tag);
+    try testing.expectEqual(@as(usize, 1), stop.statements.items.len);
+    switch (stop.statements.items[0].kind) {
+        .return_void => {},
+        else => return error.ExpectedReturnVoid,
+    }
+}
+
 test "syntax spec: required parameters cannot follow defaulted parameters" {
     try expectParseError(error.RequiredParameterAfterDefault,
         \\fn bad(a: number = 1, b: number) -> number

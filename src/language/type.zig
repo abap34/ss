@@ -25,6 +25,7 @@ pub const Type = struct {
         fragment,
         code,
         list,
+        void,
     };
 
     pub const any = Type{ .tag = .any };
@@ -88,6 +89,7 @@ pub const Type = struct {
             .boolean => .boolean,
             .constraints => .constraints,
             .fragment => fragment(.any),
+            .void => .{ .tag = .void },
         };
     }
 
@@ -107,6 +109,7 @@ pub const Type = struct {
             .constraints => .constraints,
             .fragment => .fragment,
             .code => .code,
+            .void => .void,
             .none, .any, .list => null,
         };
     }
@@ -158,6 +161,7 @@ pub const Type = struct {
             .constraints => .constraints,
             .fragment => .fragment,
             .code => .code,
+            .void => .void,
         };
     }
 

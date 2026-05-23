@@ -491,6 +491,7 @@ pub const Document = struct {
             .boolean => .boolean,
             .constraints => .constraints,
             .fragment => .fragment,
+            .void => .void,
         };
     }
 

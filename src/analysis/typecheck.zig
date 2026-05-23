@@ -209,6 +209,7 @@ fn inferStatementEffects(
     switch (stmt.kind) {
         .let_binding => |binding| set.unionWith(try inferExprEffects(sema, binding.expr, visiting)),
         .return_expr => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
+        .return_void => {},
         .property_set => |property| {
             set.insert(.WriteProperty);
             set.unionWith(try inferExprEffects(sema, property.value, visiting));
@@ -588,6 +589,7 @@ fn collectVariableTypesFromStatement(
         .return_expr => |expr| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
         },
+        .return_void => {},
         .property_set => |property_set| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
         },

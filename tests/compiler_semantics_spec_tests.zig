@@ -141,6 +141,71 @@ test "compiler semantics: generated page numbers run after page graph exists" {
     , "1/2");
 }
 
+test "compiler semantics: void functions may finish without explicit return" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn add_page_text(page: page) -> void
+        \\  new_object(page, str(page_index(page)), "body", "text")
+        \\end
+        \\
+        \\document
+        \\  foreach(pages(docctx()), add_page_text)
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+        \\page two
+        \\end
+        \\
+    , "1");
+}
+
+test "compiler semantics: bare return is only valid for void functions" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\fn stop() -> void
+        \\  return
+        \\end
+        \\
+        \\document
+        \\  stop()
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn bad() -> string
+        \\  return
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: void results cannot be used as values" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn side_effect() -> void
+        \\end
+        \\
+        \\page bad
+        \\  let value = side_effect()
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: foreach cannot mutate the iterated object selection" {
     try expectBuildFails(
         \\import std:themes/default
