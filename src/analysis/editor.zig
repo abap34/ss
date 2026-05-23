@@ -114,6 +114,20 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             }
             break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ call.name, args.items });
         },
+        .apply => |apply| blk: {
+            const callee = try formatExpr(allocator, apply.callee.*);
+            defer allocator.free(callee);
+            var args = std.ArrayList(u8).empty;
+            defer args.deinit(allocator);
+            for (apply.args.items, 0..) |arg, index| {
+                if (index != 0) try args.appendSlice(allocator, ", ");
+                const text = try formatExpr(allocator, arg);
+                defer allocator.free(text);
+                try args.appendSlice(allocator, text);
+            }
+            break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ callee, args.items });
+        },
+        .lambda => allocator.dupe(u8, "<lambda>"),
     };
 }
 
@@ -282,6 +296,11 @@ fn collectExprHints(
             try hintForCallExpr(allocator, hints, functions, source, source_path, module_id, span, call);
             for (call.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
         },
+        .apply => |apply| {
+            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, apply.callee.*);
+            for (apply.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
+        },
+        .lambda => |lambda| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, lambda.body.*),
         else => {},
     }
 }

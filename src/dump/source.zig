@@ -259,6 +259,16 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "call");
             try object.stringField("name", call.name);
         },
+        .apply => |apply| {
+            try object.stringField("exprKind", "apply");
+            var callee = try object.objectField("callee");
+            try writeExprValue(&callee, apply.callee.*);
+            try callee.end();
+        },
+        .lambda => |lambda| {
+            try object.stringField("exprKind", "lambda");
+            try object.intField("paramCount", lambda.params.items.len);
+        },
     }
 }
 
@@ -363,6 +373,27 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             var args = try item.arrayField("args");
             for (call.args.items) |arg| try writeExprItem(allocator, &args, arg);
             try args.end();
+        },
+        .apply => |apply| {
+            try item.stringField("kind", "apply");
+            try writeExpr(allocator, item, "callee", apply.callee.*);
+            var args = try item.arrayField("args");
+            for (apply.args.items) |arg| try writeExprItem(allocator, &args, arg);
+            try args.end();
+        },
+        .lambda => |lambda| {
+            try item.stringField("kind", "lambda");
+            var params = try item.arrayField("params");
+            for (lambda.params.items) |param| {
+                var param_item = try params.objectItem();
+                try param_item.stringField("name", param.name);
+                const label = try param.ty.formatAlloc(allocator);
+                defer allocator.free(label);
+                try param_item.stringField("type", label);
+                try param_item.end();
+            }
+            try params.end();
+            try writeExpr(allocator, item, "body", lambda.body.*);
         },
     }
 }

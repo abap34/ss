@@ -550,13 +550,78 @@ const Parser = struct {
     }
 
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
+        return try self.parseFunctionTypeAnnotation();
+    }
+
+    fn parseFunctionTypeAnnotation(self: *Parser) anyerror!ast.Type {
+        self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '(') {
+            const start = self.pos;
+            try self.expectChar('(');
+            var params = std.ArrayList(ast.Type).empty;
+            errdefer {
+                for (params.items) |*param| param.deinit(self.allocator);
+                params.deinit(self.allocator);
+            }
+            self.skipInlineSpaces();
+            while (!self.eof() and !self.peekChar(')')) {
+                const param_type = try self.parseTypeAnnotation();
+                try params.append(self.allocator, param_type);
+                self.skipInlineSpaces();
+                if (!self.eof() and self.source[self.pos] == ',') {
+                    self.pos += 1;
+                    self.skipInlineSpaces();
+                    continue;
+                }
+                break;
+            }
+            try self.expectChar(')');
+            self.skipInlineSpaces();
+            if (self.startsWith("->")) {
+                self.pos += 2;
+                self.skipInlineSpaces();
+                const result_type = try self.parseTypeAnnotation();
+                defer {
+                    for (params.items) |*param| param.deinit(self.allocator);
+                    params.deinit(self.allocator);
+                    var owned_result = result_type;
+                    owned_result.deinit(self.allocator);
+                }
+                return try ast.Type.functionType(self.allocator, params.items, result_type);
+            }
+            if (params.items.len == 1) {
+                const grouped = params.items[0];
+                params.deinit(self.allocator);
+                return grouped;
+            }
+            self.pos = start;
+            return self.fail(error.ExpectedTypeAnnotation);
+        }
+
+        var left = try self.parsePrimaryTypeAnnotation();
+        errdefer left.deinit(self.allocator);
+        self.skipInlineSpaces();
+        if (!self.startsWith("->")) return left;
+        self.pos += 2;
+        self.skipInlineSpaces();
+        const result_type = try self.parseTypeAnnotation();
+        defer {
+            var owned_left = left;
+            owned_left.deinit(self.allocator);
+            var owned_result = result_type;
+            owned_result.deinit(self.allocator);
+        }
+        return try ast.Type.functionType(self.allocator, &.{left}, result_type);
+    }
+
+    fn parsePrimaryTypeAnnotation(self: *Parser) anyerror!ast.Type {
         const name = try self.parseIdentifier();
         if (std.mem.eql(u8, name, "document")) return ast.Type.document;
         if (std.mem.eql(u8, name, "page")) return ast.Type.page;
         if (std.mem.eql(u8, name, "object")) return try self.parseObjectType(name);
         if (std.mem.eql(u8, name, "metadata")) return ast.Type.metadata;
         if (std.mem.eql(u8, name, "anchor")) return ast.Type.anchor;
-        if (std.mem.eql(u8, name, "function")) return ast.Type.function;
+        if (std.mem.eql(u8, name, "function")) return self.fail(error.InvalidSemanticSort);
         if (std.mem.eql(u8, name, "style")) return ast.Type.style;
         if (std.mem.eql(u8, name, "string")) return ast.Type.string;
         if (std.mem.eql(u8, name, "number")) return ast.Type.number;
@@ -900,12 +965,41 @@ const Parser = struct {
             try args.append(self.allocator, try self.parseUnaryExpr());
             return .{ .call = .{ .name = "neg", .args = args } };
         }
-        return self.parsePrimaryExpr();
+        return self.parsePostfixExpr();
+    }
+
+    fn parsePostfixExpr(self: *Parser) anyerror!Expr {
+        var expr = try self.parsePrimaryExpr();
+        errdefer expr.deinit(self.allocator);
+        while (true) {
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != '(') return expr;
+            const callee = try self.allocator.create(Expr);
+            errdefer self.allocator.destroy(callee);
+            callee.* = expr;
+            var args = std.ArrayList(Expr).empty;
+            errdefer args.deinit(self.allocator);
+            try self.expectChar('(');
+            self.skipInlineSpaces();
+            while (!self.eof() and !self.peekChar(')')) {
+                try args.append(self.allocator, try self.parseExpr());
+                self.skipInlineSpaces();
+                if (!self.eof() and self.source[self.pos] == ',') {
+                    self.pos += 1;
+                    self.skipInlineSpaces();
+                    continue;
+                }
+                break;
+            }
+            try self.expectChar(')');
+            expr = .{ .apply = .{ .callee = callee, .args = args } };
+        }
     }
 
     fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
         self.skipInlineSpaces();
         if (!self.eof() and self.source[self.pos] == '(') {
+            if (self.startsLambdaExpr()) return try self.parseLambdaExpr();
             self.pos += 1;
             const expr = try self.parseExpr();
             try self.expectChar(')');
@@ -948,6 +1042,89 @@ const Parser = struct {
             return .{ .ident = name };
         }
         return .{ .ident = name };
+    }
+
+    fn startsLambdaExpr(self: *Parser) bool {
+        if (self.eof() or self.source[self.pos] != '(') return false;
+        var probe = self.pos + 1;
+        scanner.skipTrivia(self.source, &probe);
+        if (probe < self.source.len and self.source[probe] == ')') {
+            probe += 1;
+            scanner.skipInlineSpaces(self.source, &probe);
+            return scanner.startsWith(self.source, probe, "|->");
+        }
+        if (!scanner.scanIdentifier(self.source, &probe)) return false;
+        scanner.skipInlineSpaces(self.source, &probe);
+        if (probe < self.source.len and self.source[probe] == ':') return true;
+
+        var depth: usize = 1;
+        while (probe < self.source.len) : (probe += 1) {
+            switch (self.source[probe]) {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) {
+                        probe += 1;
+                        scanner.skipInlineSpaces(self.source, &probe);
+                        return scanner.startsWith(self.source, probe, "|->");
+                    }
+                },
+                '\n' => return false,
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    fn parseLambdaExpr(self: *Parser) !Expr {
+        const start = self.pos;
+        try self.expectChar('(');
+        var params = std.ArrayList(ast.ParamDecl).empty;
+        errdefer {
+            for (params.items) |*param| param.deinit(self.allocator);
+            params.deinit(self.allocator);
+        }
+        self.skipTrivia();
+        while (!self.eof() and !self.peekChar(')')) {
+            const param_name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
+            self.pos += 1;
+            self.skipInlineSpaces();
+            const param_type = try self.parseTypeAnnotation();
+            const param_sort = try self.runtimeSortForType(param_type);
+            try params.append(self.allocator, .{
+                .name = param_name,
+                .ty = param_type,
+                .sort = param_sort,
+                .default_value = null,
+            });
+            self.skipTrivia();
+            if (!self.eof() and self.source[self.pos] == ',') {
+                self.pos += 1;
+                self.skipTrivia();
+                continue;
+            }
+            break;
+        }
+        try self.expectChar(')');
+        self.skipInlineSpaces();
+        if (!self.startsWith("|->")) return self.fail(error.ExpectedChar);
+        self.pos += 3;
+        self.skipInlineSpaces();
+        const body_start = self.pos;
+        const body = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(body);
+        body.* = try self.parseExpr();
+        errdefer body.deinit(self.allocator);
+        if (std.mem.indexOfScalar(u8, self.source[body_start..self.pos], '\n') != null) {
+            return self.failAt(body_start, error.ExpectedLineBreak);
+        }
+        return .{ .lambda = .{
+            .params = params,
+            .body = body,
+            .span = .{ .start = start, .end = self.pos },
+        } };
     }
 
     fn makeBinaryCall(self: *Parser, name: []const u8, left: Expr, right: Expr) !Expr {

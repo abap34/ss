@@ -1,5 +1,9 @@
 import std:core/layout
 
+fn object(text_value: string, role_name: string, payload_name: string) -> object
+  return new_object(pagectx(), text_value, role_name, payload_name)
+end
+
 fn text_object(text_value: string, role_name: string) -> object
   let obj = object(text_value, role_name, "text")
   return obj

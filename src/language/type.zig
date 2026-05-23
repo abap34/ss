@@ -6,6 +6,8 @@ pub const Type = struct {
     param: Tag = .none,
     class_name: ?[]const u8 = null,
     param_class_name: ?[]const u8 = null,
+    fn_params: []const Type = &.{},
+    fn_result: ?*Type = null,
 
     pub const Tag = enum {
         none,
@@ -34,7 +36,6 @@ pub const Type = struct {
     pub const object = Type{ .tag = .object };
     pub const metadata = Type{ .tag = .metadata };
     pub const anchor = Type{ .tag = .anchor };
-    pub const function = Type{ .tag = .function };
     pub const style = Type{ .tag = .style };
     pub const string = Type{ .tag = .string };
     pub const number = Type{ .tag = .number };
@@ -69,6 +70,44 @@ pub const Type = struct {
         return .{ .tag = .list, .param = normalizeParam(inner) };
     }
 
+    pub fn functionType(allocator: std.mem.Allocator, params: []const Type, result: Type) anyerror!Type {
+        const copied_params = try allocator.alloc(Type, params.len);
+        errdefer allocator.free(copied_params);
+        for (params, 0..) |param, index| copied_params[index] = try param.clone(allocator);
+        errdefer {
+            for (copied_params) |*param| param.deinit(allocator);
+        }
+        const copied_result = try allocator.create(Type);
+        errdefer allocator.destroy(copied_result);
+        copied_result.* = try result.clone(allocator);
+        return .{
+            .tag = .function,
+            .fn_params = copied_params,
+            .fn_result = copied_result,
+        };
+    }
+
+    pub fn deinit(self: *Type, allocator: std.mem.Allocator) void {
+        if (self.tag != .function) return;
+        for (self.fn_params) |param| {
+            var owned = param;
+            owned.deinit(allocator);
+        }
+        if (self.fn_params.len != 0) allocator.free(self.fn_params);
+        if (self.fn_result) |result| {
+            result.deinit(allocator);
+            allocator.destroy(result);
+        }
+        self.fn_params = &.{};
+        self.fn_result = null;
+    }
+
+    pub fn clone(self: Type, allocator: std.mem.Allocator) anyerror!Type {
+        if (self.tag != .function) return self;
+        const result = self.fn_result orelse return self;
+        return try functionType(allocator, self.fn_params, result.*);
+    }
+
     fn normalizeParam(param: Tag) Tag {
         return if (param == .none) .any else param;
     }
@@ -82,7 +121,7 @@ pub const Type = struct {
             .metadata => .metadata,
             .selection => selection(.any),
             .anchor => .anchor,
-            .function => .function,
+            .function => .{ .tag = .function },
             .style => .style,
             .string => .string,
             .number => .number,
@@ -115,7 +154,20 @@ pub const Type = struct {
     }
 
     pub fn eql(a: Type, b: Type) bool {
-        return a.tag == b.tag and
+        if (a.tag != b.tag) return false;
+        if (a.tag == .function) {
+            if ((a.fn_result == null) != (b.fn_result == null)) return false;
+            if (a.fn_params.len != b.fn_params.len) return false;
+            for (a.fn_params, 0..) |param, index| {
+                if (!eql(param, b.fn_params[index])) return false;
+            }
+            if (a.fn_result) |a_result| {
+                const b_result = b.fn_result orelse return false;
+                if (!eql(a_result.*, b_result.*)) return false;
+            }
+            return true;
+        }
+        return
             normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
             optionalStringEql(a.param_class_name, b.param_class_name);
@@ -125,6 +177,14 @@ pub const Type = struct {
         if (expected.tag == .any or actual.tag == .any) return true;
         if (actual.tag == .code and expected.tag == normalizeParam(actual.param)) return true;
         if (expected.tag != actual.tag) return false;
+        if (expected.tag == .function) {
+            if (expected.fn_result == null or actual.fn_result == null) return false;
+            if (expected.fn_params.len != actual.fn_params.len) return false;
+            for (expected.fn_params, 0..) |expected_param, index| {
+                if (!accepts(expected_param, actual.fn_params[index])) return false;
+            }
+            return accepts(expected.fn_result.?.*, actual.fn_result.?.*);
+        }
         if (expected.tag == .object and expected.class_name != null and actual.class_name != null) {
             if (!std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
         }
@@ -193,6 +253,28 @@ pub const Type = struct {
                     try out.appendSlice(allocator, class_name);
                     try out.append(allocator, '>');
                 }
+            },
+            .function => {
+                if (self.fn_result == null) {
+                    try out.appendSlice(allocator, "function");
+                    return;
+                }
+                if (self.fn_params.len == 1) {
+                    const param = self.fn_params[0];
+                    const needs_parens = param.tag == .function;
+                    if (needs_parens) try out.append(allocator, '(');
+                    try param.formatInto(allocator, out);
+                    if (needs_parens) try out.append(allocator, ')');
+                } else {
+                    try out.append(allocator, '(');
+                    for (self.fn_params, 0..) |param, index| {
+                        if (index > 0) try out.appendSlice(allocator, ", ");
+                        try param.formatInto(allocator, out);
+                    }
+                    try out.append(allocator, ')');
+                }
+                try out.appendSlice(allocator, " -> ");
+                try self.fn_result.?.formatInto(allocator, out);
             },
             else => try out.appendSlice(allocator, @tagName(self.tag)),
         }

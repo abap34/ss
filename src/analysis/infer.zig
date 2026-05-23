@@ -19,8 +19,11 @@ const isPropertyTarget = semantic_types.isPropertyTarget;
 const mergeObjectClass = semantic_types.mergeObjectClass;
 const mergeTypeInfo = semantic_types.mergeTypeInfo;
 const resolveStringLiteral = semantic_types.resolveStringLiteral;
+const singleFunctionLabel = semantic_types.singleFunctionLabel;
 const targetClassForInfo = semantic_types.targetClassForInfo;
 const typeLabelAlloc = semantic_types.typeLabelAlloc;
+
+threadlocal var active_return_visiting: ?*std.StringHashMap(void) = null;
 
 fn isConst(func: ast.FunctionDecl) bool {
     return func.kind == .constant;
@@ -65,13 +68,56 @@ pub fn exprInfo(
             if (env.get(name)) |info| break :blk info;
             if (sema.function(name)) |func| {
                 if (isConst(func)) break :blk infoFromType(func.result_type);
-                break :blk infoFromSort(.function);
+                var info = infoFromType(try functionTypeForDecl(allocator, func));
+                info.function_labels = try singleFunctionLabel(allocator, func.name);
+                break :blk info;
             }
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
         .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin),
+        .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin),
+        .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin),
     };
+}
+
+fn functionTypeForDecl(allocator: std.mem.Allocator, func: ast.FunctionDecl) !Type {
+    const params = try allocator.alloc(Type, func.params.items.len);
+    defer allocator.free(params);
+    for (func.params.items, 0..) |param, index| params[index] = param.ty;
+    return try Type.functionType(allocator, params, func.result_type);
+}
+
+fn lambdaLabel(allocator: std.mem.Allocator, lambda: ast.LambdaExpr) ![]const u8 {
+    return try std.fmt.allocPrint(allocator, "lambda:{d}-{d}", .{ lambda.span.start, lambda.span.end });
+}
+
+fn inferLambdaInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    lambda: ast.LambdaExpr,
+    origin: []const u8,
+) !TypeInfo {
+    var local_env = try env.clone();
+    defer local_env.deinit();
+    const param_types = try allocator.alloc(Type, lambda.params.items.len);
+    defer allocator.free(param_types);
+    for (lambda.params.items, 0..) |param, index| {
+        param_types[index] = param.ty;
+        var param_info = infoFromType(param.ty);
+        param_info.sort = param.sort;
+        try local_env.put(param.name, param_info);
+    }
+    const body_info = try exprInfo(allocator, ir, sema, &local_env, lambda.body.*, origin);
+    if (body_info.sort == .void) {
+        try addUserReport(ir, origin, "VoidValue: lambda bodies must produce a value", .{});
+        return error.InvalidSemanticSort;
+    }
+    var info = infoFromType(try Type.functionType(allocator, param_types, body_info.ty));
+    info.function_labels = try singleFunctionLabel(allocator, try lambdaLabel(allocator, lambda));
+    return info;
 }
 
 fn inferCallInfo(
@@ -82,6 +128,20 @@ fn inferCallInfo(
     call: ast.CallExpr,
     origin: []const u8,
 ) anyerror!TypeInfo {
+    if (env.get(call.name)) |callee_info| {
+        if (callee_info.ty.tag == .function and callee_info.ty.fn_result != null) {
+            return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin);
+        }
+    }
+    if (sema.function(call.name)) |func| {
+        if (isConst(func) and func.result_type.tag == .function and func.result_type.fn_result != null) {
+            const const_info = try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, .{
+                .name = call.name,
+                .args = std.ArrayList(ast.Expr).empty,
+            }, origin);
+            return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin);
+        }
+    }
     const descriptor = sema.call(call.name) orelse {
         try addUserReport(ir, origin, "UnknownFunction: unknown function: {s}", .{call.name});
         return error.UnknownFunction;
@@ -90,6 +150,43 @@ fn inferCallInfo(
         .function => |func| try inferUserCallInfo(allocator, ir, sema, env, call, origin, func),
         .primitive => |primitive| try inferPrimitiveCallInfo(allocator, ir, sema, env, call, origin, primitive),
     };
+}
+
+fn inferApplyInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    callee: ast.Expr,
+    args: []const ast.Expr,
+    origin: []const u8,
+) !TypeInfo {
+    const callee_info = try exprInfo(allocator, ir, sema, env, callee, origin);
+    return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, args, origin);
+}
+
+fn inferFunctionValueCallInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    callee_info: TypeInfo,
+    args: []const ast.Expr,
+    origin: []const u8,
+) !TypeInfo {
+    if (callee_info.ty.tag != .function or callee_info.ty.fn_result == null) {
+        try ensureSort(ir, callee_info.sort, .function, origin, .UnmatchedArgumentType);
+        return error.InvalidSemanticSort;
+    }
+    if (args.len != callee_info.ty.fn_params.len) {
+        try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
+        return error.InvalidArity;
+    }
+    for (args, 0..) |arg, index| {
+        const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
+        try ensureType(ir, allocator, actual, callee_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
+    }
+    return infoFromType(callee_info.ty.fn_result.?.*);
 }
 
 fn inferUserCallInfo(
@@ -141,6 +238,7 @@ fn inferPrimitiveCallInfo(
         return error.InvalidArity;
     }
     for (call.args.items, 0..) |arg, index| {
+        if (isPrimitiveFunctionArgument(descriptor.op, index)) continue;
         const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
         if (registry.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
@@ -157,6 +255,14 @@ fn inferPrimitiveCallInfo(
     return info;
 }
 
+fn isPrimitiveFunctionArgument(op: registry.PrimitiveCall, index: usize) bool {
+    return switch (op) {
+        .foreach => index == 1,
+        .fold, .join => index == 2,
+        else => false,
+    };
+}
+
 fn inferUserFunctionReturnInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
@@ -166,8 +272,13 @@ fn inferUserFunctionReturnInfo(
     call: ast.CallExpr,
     origin: []const u8,
 ) !TypeInfo {
+    if (active_return_visiting) |visiting| {
+        return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, visiting);
+    }
     var visiting = std.StringHashMap(void).init(allocator);
     defer visiting.deinit();
+    active_return_visiting = &visiting;
+    defer active_return_visiting = null;
     return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, &visiting);
 }
 
@@ -228,7 +339,7 @@ fn inferReturnInfoFromStatements(
             },
             .return_expr => |expr| {
                 const info = try exprInfo(allocator, null, sema, env, expr, "");
-                result.* = mergeTypeInfo(result.*, info);
+                result.* = try mergeTypeInfo(allocator, result.*, info);
             },
             .return_void => {},
             .property_set => |property_set| {
@@ -352,7 +463,7 @@ fn primitiveResultTypeInfo(
             const object_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
             break :blk object_info.object_class;
         },
-        .object => inferObjectConstructorClass(sema, env, call),
+        .new_object => inferObjectConstructorClass(sema, env, call, 2),
         else => null,
     };
     if (info.object_class) |class_name| info.ty.class_name = class_name;
@@ -372,25 +483,17 @@ fn validateCallbackShape(
     expected_result: ?core.SemanticSort,
 ) !void {
     if (call.args.items.len <= callback_index) return;
-    const callback_name = switch (call.args.items[callback_index]) {
-        .ident => |name| name,
-        else => {
-            try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function", .{});
-            return error.InvalidSemanticSort;
-        },
-    };
-    const callback = sema.function(callback_name) orelse {
-        try addUserReport(ir, origin, "InvalidCallback: callback must be a named top-level function: {s}", .{callback_name});
-        return error.UnknownFunction;
-    };
+    const callback_info = try exprInfo(allocator, ir, sema, env, call.args.items[callback_index], origin);
+    if (callback_info.ty.tag != .function or callback_info.ty.fn_result == null) {
+        try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
+        return error.InvalidSemanticSort;
+    }
     const extra_count = if (call.args.items.len > callback_index + 1) call.args.items.len - callback_index - 1 else 0;
     const expected_arg_count = fixed_prefix_count + extra_count;
-    if (expected_arg_count < contracts.requiredParamCount(callback) or expected_arg_count > callback.params.items.len) {
-        try addUserReport(ir, origin, "InvalidCallback: callback {s} receives {d} arguments here, but its contract is {d}..{d}", .{
-            callback_name,
+    if (expected_arg_count != callback_info.ty.fn_params.len) {
+        try addUserReport(ir, origin, "InvalidCallback: callback receives {d} arguments here, but its function type has {d}", .{
             expected_arg_count,
-            contracts.requiredParamCount(callback),
-            callback.params.items.len,
+            callback_info.ty.fn_params.len,
         });
         return error.InvalidArity;
     }
@@ -401,19 +504,20 @@ fn validateCallbackShape(
         else => Type.any,
     };
     if (fixed_prefix_count == 1) {
-        try ensureType(ir, allocator, infoFromType(callback.params.items[0].ty), item_type, origin, .UnmatchedArgumentType);
+        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
     } else if (fixed_prefix_count == 2) {
-        try ensureType(ir, allocator, infoFromType(callback.params.items[0].ty), Type.string, origin, .UnmatchedArgumentType);
-        try ensureType(ir, allocator, infoFromType(callback.params.items[1].ty), item_type, origin, .UnmatchedArgumentType);
+        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
+        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
     }
     var extra_index: usize = 0;
     while (extra_index < extra_count) : (extra_index += 1) {
         const actual = try exprInfo(allocator, ir, sema, env, call.args.items[callback_index + 1 + extra_index], origin);
         const param_index = fixed_prefix_count + extra_index;
-        try ensureType(ir, allocator, actual, callback.params.items[param_index].ty, origin, .UnmatchedArgumentType);
+        try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
     if (expected_result) |result_sort| {
-        try ensureSort(ir, callback.result_sort, result_sort, origin, .UnmatchedReturnType);
+        const actual_sort = callback_info.ty.fn_result.?.toRuntimeSort() orelse .fragment;
+        try ensureSort(ir, actual_sort, result_sort, origin, .UnmatchedReturnType);
     }
 }
 
@@ -505,9 +609,9 @@ fn inferQueryOutputClass(
     };
 }
 
-fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr) ?[]const u8 {
-    if (call.args.items.len < 3) return null;
-    const role_name = resolveStringLiteral(env, call.args.items[1]) orelse return null;
+fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, call: ast.CallExpr, role_index: usize) ?[]const u8 {
+    if (call.args.items.len <= role_index) return null;
+    const role_name = resolveStringLiteral(env, call.args.items[role_index]) orelse return null;
     return sema.roleClass(role_name);
 }
 
@@ -535,6 +639,10 @@ fn validateSetPropCall(
     }
 
     const value_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[2], origin);
+    if (value_info.ty.tag == .function) {
+        try addUserReport(ir, origin, "InvalidProperty: function values cannot be stored as properties", .{});
+        return error.InvalidSemanticSort;
+    }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
         try validateFieldValue(ir, sema, field, key, value_info, origin);
         return;

@@ -137,6 +137,7 @@ pub const FunctionDecl = struct {
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
+        self.result_type.deinit(allocator);
         if (self.effects) |effects| allocator.free(effects);
         for (self.annotations.items) |*annotation| annotation.deinit(allocator);
         self.annotations.deinit(allocator);
@@ -200,6 +201,7 @@ pub const ParamDecl = struct {
     default_value: ?*Expr = null,
 
     pub fn deinit(self: *ParamDecl, allocator: Allocator) void {
+        self.ty.deinit(allocator);
         if (self.default_value) |expr| {
             expr.deinit(allocator);
             allocator.destroy(expr);
@@ -217,6 +219,31 @@ pub const CallExpr = struct {
     }
 };
 
+pub const ApplyExpr = struct {
+    callee: *Expr,
+    args: std.ArrayList(Expr),
+
+    pub fn deinit(self: *ApplyExpr, allocator: Allocator) void {
+        self.callee.deinit(allocator);
+        allocator.destroy(self.callee);
+        for (self.args.items) |*arg| arg.deinit(allocator);
+        self.args.deinit(allocator);
+    }
+};
+
+pub const LambdaExpr = struct {
+    params: std.ArrayList(ParamDecl),
+    body: *Expr,
+    span: Span,
+
+    pub fn deinit(self: *LambdaExpr, allocator: Allocator) void {
+        for (self.params.items) |*param| param.deinit(allocator);
+        self.params.deinit(allocator);
+        self.body.deinit(allocator);
+        allocator.destroy(self.body);
+    }
+};
+
 pub const Span = struct {
     start: usize,
     end: usize,
@@ -228,10 +255,14 @@ pub const Expr = union(enum) {
     number: f32,
     boolean: bool,
     call: CallExpr,
+    apply: ApplyExpr,
+    lambda: LambdaExpr,
 
     pub fn deinit(self: *Expr, allocator: Allocator) void {
         switch (self.*) {
             .call => |*call| call.deinit(allocator),
+            .apply => |*apply| apply.deinit(allocator),
+            .lambda => |*lambda| lambda.deinit(allocator),
             else => {},
         }
     }

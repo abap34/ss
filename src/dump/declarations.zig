@@ -189,5 +189,12 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "call");
             try object.stringField("name", call.name);
         },
+        .apply => {
+            try object.stringField("exprKind", "apply");
+        },
+        .lambda => |lambda| {
+            try object.stringField("exprKind", "lambda");
+            try object.intField("paramCount", lambda.params.items.len);
+        },
     }
 }

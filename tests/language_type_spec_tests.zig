@@ -61,3 +61,39 @@ test "type spec: formatting exposes the source-level type constructor shape" {
     try expectFormat(Type.code(.number), "code<number>");
     try expectFormat(Type.list(.string), "list<string>");
 }
+
+test "type spec: function types format as source-level arrows" {
+    var unary = try Type.functionType(testing.allocator, &.{Type.page}, Type.object);
+    defer unary.deinit(testing.allocator);
+    try expectFormat(unary, "page -> object");
+
+    var multi = try Type.functionType(testing.allocator, &.{ Type.page, Type.document }, Type.object);
+    defer multi.deinit(testing.allocator);
+    try expectFormat(multi, "(page, document) -> object");
+
+    var zero = try Type.functionType(testing.allocator, &.{}, Type.number);
+    defer zero.deinit(testing.allocator);
+    try expectFormat(zero, "() -> number");
+
+    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.object);
+    defer callback.deinit(testing.allocator);
+    var higher_order = try Type.functionType(testing.allocator, &.{callback}, Type.document);
+    defer higher_order.deinit(testing.allocator);
+    try expectFormat(higher_order, "(page -> object) -> document");
+}
+
+test "type spec: function acceptance checks parameters and result types" {
+    var number_to_number = try Type.functionType(testing.allocator, &.{Type.number}, Type.number);
+    defer number_to_number.deinit(testing.allocator);
+    var number_to_string = try Type.functionType(testing.allocator, &.{Type.number}, Type.string);
+    defer number_to_string.deinit(testing.allocator);
+    var string_to_number = try Type.functionType(testing.allocator, &.{Type.string}, Type.number);
+    defer string_to_number.deinit(testing.allocator);
+    var binary_number = try Type.functionType(testing.allocator, &.{ Type.number, Type.number }, Type.number);
+    defer binary_number.deinit(testing.allocator);
+
+    try testing.expect(Type.accepts(number_to_number, number_to_number));
+    try testing.expect(!Type.accepts(number_to_number, number_to_string));
+    try testing.expect(!Type.accepts(number_to_number, string_to_number));
+    try testing.expect(!Type.accepts(number_to_number, binary_number));
+}

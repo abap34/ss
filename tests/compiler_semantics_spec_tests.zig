@@ -206,6 +206,308 @@ test "compiler semantics: void results cannot be used as values" {
     );
 }
 
+test "compiler semantics: lambda callbacks can create objects over a document selection" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  let add_each = (page_value: page) |-> new_object(page_value, "lambda", "body", "text")
+        \\  foreach(pages(docctx()), add_each)
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+    , "lambda");
+}
+
+test "compiler semantics: functions can return captured function values" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn make_label(text_value: string) -> page -> object
+        \\  return (page_value: page) |-> new_object(page_value, text_value, "body", "text")
+        \\end
+        \\
+        \\document
+        \\  foreach(pages(docctx()), make_label("made"))
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+    , "made");
+}
+
+test "compiler semantics: function values use ordinary application" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn apply(f: number -> number, x: number) -> number
+        \\  return f(x)
+        \\end
+        \\
+        \\fn inc(x: number) -> number
+        \\  return x + 1
+        \\end
+        \\
+        \\page ok
+        \\  text(str(apply(inc, 2)))
+        \\end
+        \\
+    , "3");
+}
+
+test "compiler semantics: direct lambda application works" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  text(str(((x: number) |-> x + 4)(1)))
+        \\end
+        \\
+    , "5");
+}
+
+test "compiler semantics: constants can hold function values" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\const plus_one: number -> number = (x: number) |-> x + 1
+        \\
+        \\page ok
+        \\  text(str(plus_one(2)))
+        \\end
+        \\
+    , "3");
+}
+
+test "compiler semantics: returned lambdas are directly applicable" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn add_two() -> number -> number
+        \\  return (x: number) |-> x + 2
+        \\end
+        \\
+        \\page ok
+        \\  text(str(add_two()(1)))
+        \\end
+        \\
+    , "3");
+}
+
+test "compiler semantics: returned named functions flow through branches" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn inc(x: number) -> number
+        \\  return x + 1
+        \\end
+        \\
+        \\fn dec(x: number) -> number
+        \\  return x - 1
+        \\end
+        \\
+        \\fn choose(flag: boolean) -> number -> number
+        \\  if flag
+        \\    return inc
+        \\  else
+        \\    return dec
+        \\  end
+        \\end
+        \\
+        \\page ok
+        \\  text(str(choose(true)(2)) ++ "," ++ str(choose(false)(2)))
+        \\end
+        \\
+    , "3,1");
+}
+
+test "compiler semantics: join accepts an inline typed lambda" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page one
+        \\  text(join(pages(docctx()), ",", (page_value: page) |-> str(page_index(page_value))))
+        \\end
+        \\
+        \\page two
+        \\end
+        \\
+    , "1,2");
+}
+
+test "compiler semantics: fold accepts an inline typed lambda" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page one
+        \\  text(fold(pages(docctx()), "", (acc: string, page_value: page) |-> acc ++ str(page_index(page_value))))
+        \\end
+        \\
+        \\page two
+        \\end
+        \\
+    , "12");
+}
+
+test "compiler semantics: lambda bodies cannot be void" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn side_effect(page_value: page) -> void
+        \\  new_object(page_value, "side", "body", "text")
+        \\end
+        \\
+        \\document
+        \\  foreach(pages(docctx()), (page_value: page) |-> side_effect(page_value))
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: function value application checks argument types" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let f = (x: number) |-> x + 1
+        \\  text(str(f("oops")))
+        \\end
+        \\
+    );
+
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let value = 1
+        \\  text(str(value(2)))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: function return annotations are checked for function values" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn bad() -> number -> number
+        \\  return (text_value: string) |-> text_value
+        \\end
+        \\
+        \\page bad
+        \\  text(str(bad()(1)))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: function values cannot be stored as properties" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn id(x: number) -> number
+        \\  return x
+        \\end
+        \\
+        \\page bad
+        \\  let obj = text("bad")
+        \\  set_prop(obj, "wrap", id)
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: function values cannot be stored as metadata content" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn id(x: number) -> number
+        \\  return x
+        \\end
+        \\
+        \\document
+        \\  emit_metadata(docctx(), "kind", id)
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: function-value recursion is rejected" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn bad(x: number) -> number
+        \\  let f = bad
+        \\  return f(x)
+        \\end
+        \\
+        \\page bad
+        \\  text(str(bad(1)))
+        \\end
+        \\
+    );
+
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn apply(f: number -> number, x: number) -> number
+        \\  return f(x)
+        \\end
+        \\
+        \\fn bad(x: number) -> number
+        \\  return apply(bad, x)
+        \\end
+        \\
+        \\page bad
+        \\  text(str(bad(1)))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: mutual recursion is rejected" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn first(x: number) -> number
+        \\  return second(x)
+        \\end
+        \\
+        \\fn second(x: number) -> number
+        \\  return first(x)
+        \\end
+        \\
+        \\page bad
+        \\  text(str(first(1)))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: function-returning lambda recursion is rejected" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\fn make_bad() -> number -> number
+        \\  return (x: number) |-> make_bad()(x)
+        \\end
+        \\
+        \\page bad
+        \\  text(str(make_bad()(1)))
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: foreach cannot mutate the iterated object selection" {
     try expectBuildFails(
         \\import std:themes/default
@@ -219,6 +521,20 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
         \\page bad
         \\  title("A")
         \\  foreach(objects(pagectx(), "title"), duplicate_title)
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: foreach cannot create pages while iterating pages" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  foreach(pages(docctx()), (page_value: page) |-> new_page(docctx(), "extra"))
+        \\end
+        \\
+        \\page bad
         \\end
         \\
     );
