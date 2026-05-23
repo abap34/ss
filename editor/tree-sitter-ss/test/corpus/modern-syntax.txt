@@ -1,0 +1,151 @@
+================================================================================
+Function types and lambdas
+================================================================================
+
+const plus_one: number -> number = (x: number) |-> x + 1
+
+fn make_label(text_value: string) -> page -> object
+  return (page_value: page)
+    |->
+      new_object(page_value, text_value, "body", "text")
+end
+
+fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> void
+  foreach(pages(docctx()), (page_value: page) |-> pair(page_value, docctx()))
+  return
+end
+
+page Lambda
+  let title = link(head "Lambda syntax", "lambda")
+  let sample = code """
+fn sample() -> number
+  return 1
+end
+"""
+  let value = ((x: number) |-> x + 1)(2)
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (const_declaration
+    (identifier)
+    (type
+      (function_type
+        (primary_type)
+        (type
+          (primary_type))))
+    (lambda_expression
+      (lambda_parameters
+        (lambda_parameter
+          (identifier)
+          (type
+            (primary_type))))
+      (binary_expression
+        (identifier)
+        (number))))
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (primary_type))))
+    (type
+      (function_type
+        (primary_type)
+        (type
+          (primary_type))))
+    (return_statement
+      (lambda_expression
+        (lambda_parameters
+          (lambda_parameter
+            (identifier)
+            (type
+              (primary_type))))
+        (call_expression
+          (identifier)
+          (identifier)
+          (identifier)
+          (string)
+          (string)))))
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (function_type
+            (type
+              (function_type
+                (primary_type)
+                (type
+                  (primary_type))))
+            (type
+              (primary_type)))))
+      (parameter
+        (identifier)
+        (type
+          (function_type
+            (type
+              (primary_type))
+            (type
+              (primary_type))
+            (type
+              (primary_type)))))
+      (parameter
+        (identifier)
+        (type
+          (function_type
+            (type
+              (primary_type))))))
+    (type
+      (primary_type))
+    (expression_statement
+      (call_expression
+        (identifier)
+        (call_expression
+          (identifier)
+          (call_expression
+            (identifier)))
+        (lambda_expression
+          (lambda_parameters
+            (lambda_parameter
+              (identifier)
+              (type
+                (primary_type))))
+          (call_expression
+            (identifier)
+            (identifier)
+            (call_expression
+              (identifier))))))
+    (return_statement))
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (call_expression
+        (identifier)
+        (text_call_expression
+          (identifier)
+          (string))
+        (string)))
+    (let_statement
+      (identifier)
+      (text_call_expression
+        (identifier)
+        (string)))
+    (let_statement
+      (identifier)
+      (call_expression
+        (parenthesized_expression
+          (lambda_expression
+            (lambda_parameters
+              (lambda_parameter
+                (identifier)
+                (type
+                  (primary_type))))
+            (binary_expression
+              (identifier)
+              (number))))
+        (number)))))

@@ -34,16 +34,23 @@ end
     spec: (string))
   (const_declaration
     name: (identifier)
-    type: (type)
+    type: (type
+      (primary_type))
     value: (number))
   (function_declaration
-    (annotation name: (identifier) (string))
+    (annotation
+      name: (identifier)
+      (annotation_arg
+        (annotation_value
+          (string))))
     name: (identifier)
     (parameters
       (parameter
         name: (identifier)
-        type: (type)))
-    result: (type)
+        type: (type
+          (primary_type))))
+    result: (type
+      (primary_type))
     (return_statement
       value: (call_expression
         function: (identifier)
@@ -53,16 +60,20 @@ end
   (type_declaration
     name: (type_identifier)
     (object_type
-      (object_field
-        name: (identifier)
-        type: (type)
-        (string))))
+      (object_member
+        (object_field
+          name: (identifier)
+          type: (type
+            (primary_type))
+          (string)))))
   (object_extension
     target: (type_identifier)
-    (object_field
-      name: (identifier)
-      type: (type)
-      (string)))
+    (object_member
+      (object_field
+        name: (identifier)
+        type: (type
+          (primary_type))
+        (string))))
   (page_declaration
     name: (string)
     (let_statement
@@ -79,6 +90,6 @@ end
         member: (identifier))
       right: (binary_expression
         (member_expression
-          object: (page)
+          object: (identifier)
           member: (identifier))
         (identifier)))))
