@@ -56,19 +56,25 @@ Also, just to add, "slide theme" is just a library of functions.
 
 ### 2. Document-Wide Computation Can Be Expressed Inside the Language
 
-In many slide description languages, defining something like a table of
-contents inside the language itself is hard. The computation has to inspect the
+In many slide description languages, defining something like a page number view
+inside the language itself is hard. The computation has to inspect the
 whole document after pages and objects have been created.
 
 In ss, this kind of computation can be written naturally:
 
 ```ss
-fn add_pageno() -> Void
-  foreach(pages(doc), add_each_page)
+import std:themes/default
+
+fn add_pageno() -> void
+  foreach(
+    pages(docctx()),
+    (page: page) |->
+      new_object(page, str(page_index(page)), "body", "text")
+  )
 end
 
-fn add_each_page(page: page) -> Void
-  new_object(page, str(page_index(page)), "body", "text")
+page page1
+  text("This is page 1.")
 end
 
 document
@@ -76,11 +82,9 @@ document
 end
 ```
 
-ss analyzes the dependencies of all computations and runs them in dependency
-order. In this example, the page-number objects are materialized only after the
-pages exist, and their text is refreshed only after the page-number objects and
-the document page count are available. That means document-wide behavior such
-as adding a table of contents or page numbers can be defined in ss itself, not
+ss analyzes the dependencies across the whole computations in the program, thet enables ss prove that the `add_pageno()` depends on the pages, so it will be evaluated after those values are available.
+
+That means document-wide behavior suchas adding a table of contents or page numbers can be defined in ss itself, not
 bolted on from outside the language. Yes, this is directed at you (and me), the
 person who hand-wrote a ToC and forgot to update it.
 
