@@ -137,11 +137,11 @@ Create `slide.ss`:
 import std:themes/default
 
 document
-page_no_all()
+pagenos()
 end
 
 page title
-title_page(
+cover(
   "Hello, ss",
   "Write slides as programs.",
   "v0.1.2"
@@ -149,7 +149,7 @@ title_page(
 end
 
 page body
-let title = slide_title "Why ss?"
+let title = head "Why ss?"
 let body = text <<
 - Components are ordinary definitions.
 - Layout can be constrained when needed.

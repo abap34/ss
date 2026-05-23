@@ -32,7 +32,7 @@ cat > "$work_dir/smoke.ss" <<'SS'
 import std:themes/default
 
 page native_render_smoke
-let title = slide_title "Native renderer smoke"
+let title = head "Native renderer smoke"
 
 let body = text <<
 - Bullets must not overlap.
@@ -48,7 +48,7 @@ svg_fig.left == page.left + 120
 svg_fig.width == 320
 svg_fig.height == 180
 
-page_no()
+pageno()
 end
 SS
 

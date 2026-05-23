@@ -6,24 +6,24 @@ type FitPolicy = "warn" | "error" | "ignore"
 type Color = string @refine(color)
 type ScalarLike = string | number
 
-type DocumentObject = object {
+type DocObj = object {
   layout_v: LayoutPolicy = "top_flow"
   layout_v_center_offset: ScalarLike = "0"
   background_fill: Color = ""
-  page_numbers_enabled: string = ""
-  page_numbers_format: string = ""
-  running_footer_text: string = ""
-  document_logo_path: string = ""
-  document_logo_scale: ScalarLike = "1"
-  watermark_text: string = ""
-  require_titles_enabled: string = ""
+  pageno_on: string = ""
+  pageno_fmt: string = ""
+  footer_text: string = ""
+  logo_path: string = ""
+  logo_scale: ScalarLike = "1"
+  watermark: string = ""
+  need_titles: string = ""
 }
 
-type PageObject = object {
-  base = DocumentObject
+type PageObj = object {
+  base = DocObj
 }
 
-type FlowObject = object {
+type FlowObj = object {
   render_kind: RenderKind = "text"
   text_parse: TextParseMode = "none"
   wrap: WrapMode = "on"
@@ -37,8 +37,8 @@ type FlowObject = object {
   link_id: string = ""
 }
 
-type TextObject = object {
-  base = FlowObject
+type TextObj = object {
+  base = FlowObj
 
   text_parse: TextParseMode = "inline"
   text_font: string = "Helvetica"
@@ -77,8 +77,8 @@ type TextObject = object {
   underline_offset: ScalarLike = "-2"
 }
 
-type TitleObject = object {
-  base = TextObject
+type TitleObj = object {
+  base = TextObj
   roles = ["title"]
 
   text_size: ScalarLike = "34"
@@ -91,8 +91,8 @@ type TitleObject = object {
   layout_right_inset: ScalarLike = "72"
 }
 
-type SubtitleObject = object {
-  base = TextObject
+type SubObj = object {
+  base = TextObj
   roles = ["subtitle"]
 
   text_size: ScalarLike = "18"
@@ -105,8 +105,8 @@ type SubtitleObject = object {
   layout_right_inset: ScalarLike = "96"
 }
 
-type BodyObject = object {
-  base = TextObject
+type BodyObj = object {
+  base = TextObj
   roles = ["body"]
 
   text_parse: TextParseMode = "block"
@@ -120,15 +120,15 @@ type BodyObject = object {
   layout_right_inset: ScalarLike = "96"
 }
 
-type NoteObject = object {
-  base = BodyObject
+type NoteObj = object {
+  base = BodyObj
   roles = ["note"]
 
   layout_spacing_after: ScalarLike = "24"
 }
 
-type BylineObject = object {
-  base = TextObject
+type ByObj = object {
+  base = TextObj
   roles = ["byline"]
 
   text_size: ScalarLike = "20"
@@ -141,8 +141,8 @@ type BylineObject = object {
   layout_right_inset: ScalarLike = "72"
 }
 
-type LabelObject = object {
-  base = TextObject
+type LabObj = object {
+  base = TextObj
   roles = ["label"]
 
   text_size: ScalarLike = "14"
@@ -156,8 +156,8 @@ type LabelObject = object {
   wrap: WrapMode = "off"
 }
 
-type CitationObject = object {
-  base = TextObject
+type CiteObj = object {
+  base = TextObj
   roles = ["citation"]
 
   text_parse: TextParseMode = "inline"
@@ -173,8 +173,8 @@ type CitationObject = object {
   wrap: WrapMode = "off"
 }
 
-type CodeObject = object {
-  base = TextObject
+type CodeObj = object {
+  base = TextObj
   roles = ["code"]
 
   render_kind: RenderKind = "code"
@@ -196,8 +196,8 @@ type CodeObject = object {
   code_string_color: Color = c"0.6980,0.2549,0.2157"
 }
 
-type MathObject = object {
-  base = TextObject
+type MathObj = object {
+  base = TextObj
   roles = ["math"]
 
   text_font: string = "Courier"
@@ -216,16 +216,16 @@ type MathObject = object {
   math_block_vertical_padding: ScalarLike = "2"
 }
 
-type MathTexObject = object {
-  base = MathObject
+type TexObj = object {
+  base = MathObj
   roles = ["math_tex"]
 
   render_kind: RenderKind = "vector_math"
   text_parse: TextParseMode = "none"
 }
 
-type FigureObject = object {
-  base = TextObject
+type FigObj = object {
+  base = TextObj
   roles = ["figure"]
 
   text_font: string = "Courier"
@@ -241,24 +241,24 @@ type FigureObject = object {
   asset_scale: ScalarLike = "1"
 }
 
-type ImageObject = object {
-  base = FigureObject
+type ImgObj = object {
+  base = FigObj
   roles = ["image"]
 
   render_kind: RenderKind = "raster_asset"
   text_parse: TextParseMode = "none"
 }
 
-type PdfObject = object {
-  base = FigureObject
+type PdfObj = object {
+  base = FigObj
   roles = ["pdf"]
 
   render_kind: RenderKind = "vector_asset"
   text_parse: TextParseMode = "none"
 }
 
-type PanelObject = object {
-  base = FlowObject
+type PanelObj = object {
+  base = FlowObj
   roles = ["panel"]
 
   render_kind: RenderKind = "chrome"
@@ -276,8 +276,8 @@ type PanelObject = object {
   chrome_pad_y: ScalarLike = "0"
 }
 
-type RuleObject = object {
-  base = PanelObject
+type RuleObj = object {
+  base = PanelObj
   roles = ["rule"]
 
   rule_stroke: Color = ""
@@ -285,9 +285,9 @@ type RuleObject = object {
   rule_dash: string = ""
 }
 
-type PageNumberObject = object {
-  base = TextObject
-  roles = ["page_number"]
+type PagenoObj = object {
+  base = TextObj
+  roles = ["pageno"]
 
   text_size: ScalarLike = "11"
   text_line_height: ScalarLike = "14"
@@ -297,9 +297,9 @@ type PageNumberObject = object {
   wrap: WrapMode = "off"
 }
 
-type RunningFooterObject = object {
-  base = TextObject
-  roles = ["running_footer"]
+type FooterObj = object {
+  base = TextObj
+  roles = ["footer"]
 
   text_size: ScalarLike = "12"
   text_line_height: ScalarLike = "15"
@@ -310,16 +310,16 @@ type RunningFooterObject = object {
   wrap: WrapMode = "off"
 }
 
-type DocumentLogoObject = object {
-  base = ImageObject
-  roles = ["document_logo"]
+type LogoObj = object {
+  base = ImgObj
+  roles = ["logo"]
 
   asset_scale: ScalarLike = "1"
   wrap: WrapMode = "off"
 }
 
-type WatermarkObject = object {
-  base = TextObject
+type WatermarkObj = object {
+  base = TextObj
   roles = ["watermark"]
 
   text_size: ScalarLike = "72"
@@ -331,13 +331,13 @@ type WatermarkObject = object {
   wrap: WrapMode = "off"
 }
 
-type TocObject = object {
-  base = BodyObject
+type TocObj = object {
+  base = BodyObj
   roles = ["toc"]
 }
 
-type GroupObject = object {
-  base = FlowObject
+type GroupObj = object {
+  base = FlowObj
   roles = ["group"]
 
   render_kind: RenderKind = "chrome_only"

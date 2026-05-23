@@ -1,26 +1,26 @@
 import std:core/classes
 
-fn previous_page() -> page
+fn prev_page() -> page
   return select(pagectx(), "previous_page")
 end
 
-fn objects(page_value: page, role_name: string) -> selection<object>
+fn objs(page_value: page, role_name: string) -> selection<object>
   return select(page_value, "page_objects_by_role", role_name)
 end
 
-fn current_objects(role_name: string) -> selection<object>
-  return objects(pagectx(), role_name)
+fn objs_here(role_name: string) -> selection<object>
+  return objs(pagectx(), role_name)
 end
 
 fn children(base: object) -> selection<object>
   return select(base, "children")
 end
 
-fn descendants(base: object) -> selection<object>
+fn desc(base: object) -> selection<object>
   return select(base, "descendants")
 end
 
-fn document_pages() -> selection<page>
+fn doc_pages() -> selection<page>
   return select(docctx(), "document_pages")
 end
 
@@ -28,76 +28,72 @@ fn pages(doc: document) -> selection<page>
   return select(doc, "document_pages")
 end
 
-fn document_objects(role_name: string) -> selection<object>
+fn objs_all(role_name: string) -> selection<object>
   return select(docctx(), "document_objects_by_role", role_name)
 end
 
-fn objects_in_document(doc: document, role_name: string) -> selection<object>
+fn doc_objs(doc: document, role_name: string) -> selection<object>
   return select(doc, "document_objects_by_role", role_name)
 end
 
-fn marker(kind_name: string, value_text: string) -> metadata
+fn mark(kind_name: string, value_text: string) -> metadata
   return emit_metadata(pagectx(), kind_name, value_text)
 end
 
-fn document_marker(kind_name: string, value_text: string) -> metadata
+fn doc_mark(kind_name: string, value_text: string) -> metadata
   return emit_metadata(docctx(), kind_name, value_text)
 end
 
-fn markers_in_document(doc: document, kind_name: string) -> selection<metadata>
+fn doc_marks(doc: document, kind_name: string) -> selection<metadata>
   return metadata_in_document(doc, kind_name)
 end
 
-fn markers_on_page(page_value: page, kind_name: string) -> selection<metadata>
+fn page_marks(page_value: page, kind_name: string) -> selection<metadata>
   return metadata_on_page(page_value, kind_name)
 end
 
-fn marker_content(item: metadata) -> string
+fn mark_text(item: metadata) -> string
   return metadata_content(item)
 end
 
-fn marker_page(item: metadata) -> page
+fn mark_page(item: metadata) -> page
   return metadata_page(item)
 end
 
-fn parent_page(obj: object) -> page
+fn page_of(obj: object) -> page
   return select(obj, "parent_page")
 end
 
-fn all_objects(role_name: string) -> selection<object>
-  return document_objects(role_name)
-end
-
-fn with_prop_all(items: selection<object>, key_name: string, value_name: string) -> selection<object>
+fn prop_all(items: selection<object>, key_name: string, value_name: string) -> selection<object>
   set_prop(items, key_name, value_name)
   return items
 end
 
-fn with_style_all(items: selection<object>, style_value: style) -> selection<object>
+fn style_all(items: selection<object>, style_value: style) -> selection<object>
   set_prop(items, "style", style_value)
   return items
 end
 
-fn select_union(left: selection<object>, right: selection<object>) -> selection<object>
+fn union(left: selection<object>, right: selection<object>) -> selection<object>
   return selection_union(left, right)
 end
 
-fn select_intersection(left: selection<object>, right: selection<object>) -> selection<object>
+fn intersect(left: selection<object>, right: selection<object>) -> selection<object>
   return selection_intersection(left, right)
 end
 
-fn select_difference(left: selection<object>, right: selection<object>) -> selection<object>
+fn diff(left: selection<object>, right: selection<object>) -> selection<object>
   return selection_difference(left, right)
 end
 
-fn with_prop_except(items: selection<object>, excluded: selection<object>, key_name: string, value_name: string) -> selection<object>
-  let targets = select_difference(items, excluded)
+fn prop_except(items: selection<object>, excluded: selection<object>, key_name: string, value_name: string) -> selection<object>
+  let targets = diff(items, excluded)
   set_prop(targets, key_name, value_name)
   return targets
 end
 
-fn with_style_except(items: selection<object>, excluded: selection<object>, style_value: style) -> selection<object>
-  let targets = select_difference(items, excluded)
+fn style_except(items: selection<object>, excluded: selection<object>, style_value: style) -> selection<object>
+  let targets = diff(items, excluded)
   set_prop(targets, "style", style_value)
   return targets
 end

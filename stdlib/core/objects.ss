@@ -1,56 +1,55 @@
 import std:core/layout
 
-fn object(text_value: string, role_name: string, payload_name: string) -> object
+fn obj(text_value: string, role_name: string, payload_name: string) -> object
   return new_object(pagectx(), text_value, role_name, payload_name)
 end
 
-fn text_object(text_value: string, role_name: string) -> object
-  let obj = object(text_value, role_name, "text")
+fn txt_obj(text_value: string, role_name: string) -> object
+  return obj(text_value, role_name, "text")
+end
+
+fn title_obj(text_value: string) -> object
+  return txt_obj(text_value, "title")
+end
+
+fn sub_obj(text_value: string) -> object
+  return txt_obj(text_value, "subtitle")
+end
+
+fn body_obj(text_value: string) -> object
+  return txt_obj(text_value, "body")
+end
+
+fn note_obj(text_value: string) -> object
+  return txt_obj(text_value, "note")
+end
+
+fn by_obj(text_value: string) -> object
+  return txt_obj(text_value, "byline")
+end
+
+fn lab_obj(text_value: string) -> object
+  return txt_obj(text_value, "label")
+end
+
+fn cite_obj(text_value: string) -> object
+  return txt_obj(text_value, "citation")
+end
+
+fn rule_obj() -> object
+  let obj = txt_obj("", "rule")
   return obj
 end
 
-fn title_object(text_value: string) -> object
-  return text_object(text_value, "title")
-end
-
-fn subtitle_object(text_value: string) -> object
-  return text_object(text_value, "subtitle")
-end
-
-fn body_object(text_value: string) -> object
-  return text_object(text_value, "body")
-end
-
-fn note_object(text_value: string) -> object
-  return text_object(text_value, "note")
-end
-
-fn byline_object(text_value: string) -> object
-  return text_object(text_value, "byline")
-end
-
-fn label_object(text_value: string) -> object
-  return text_object(text_value, "label")
-end
-
-fn citation_object(text_value: string) -> object
-  return text_object(text_value, "citation")
-end
-
-fn rule_object() -> object
-  let obj = text_object("", "rule")
-  return obj
-end
-
-fn panel_object() -> object
-  let obj = text_object("", "panel")
+fn panel_obj() -> object
+  let obj = txt_obj("", "panel")
   return obj
 end
 
 fn spacer(height: number, width: number = 1) -> object
-  let obj = panel_object()
-  fixed_height(obj, height)
-  fixed_width(obj, width)
+  let obj = panel_obj()
+  fix_h(obj, height)
+  fix_w(obj, width)
   return obj
 end
 
@@ -58,44 +57,31 @@ fn vspace(height: number) -> object
   return spacer(height)
 end
 
-fn payload_object(text_value: string, role_name: string, payload_name: string) -> object
-  let obj = object(text_value, role_name, payload_name)
-  return obj
+fn raw_obj(text_value: string, role_name: string, payload_name: string) -> object
+  return obj(text_value, role_name, payload_name)
 end
 
-fn math_text_object(text_value: string) -> object
-  return payload_object(text_value, "math", "math_text")
+fn math_obj(text_value: string) -> object
+  return raw_obj(text_value, "math", "math_text")
 end
 
-fn math_tex_object(text_value: string) -> object
-  return payload_object(text_value, "math_tex", "math_tex")
+fn tex_obj(text_value: string) -> object
+  return raw_obj(text_value, "math_tex", "math_tex")
 end
 
-fn figure_text_object(text_value: string) -> object
-  return payload_object(text_value, "figure", "figure_text")
+fn fig_obj(text_value: string) -> object
+  return raw_obj(text_value, "figure", "figure_text")
 end
 
-fn image_object(path_value: string) -> object
-  return payload_object(path_value, "image", "image_ref")
+fn img_obj(path_value: string) -> object
+  return raw_obj(path_value, "image", "image_ref")
 end
 
-fn pdf_object(path_value: string) -> object
-  return payload_object(path_value, "pdf", "pdf_ref")
+fn pdf_obj(path_value: string) -> object
+  return raw_obj(path_value, "pdf", "pdf_ref")
 end
 
-fn code_object(text_value: string) -> object
-  let code = payload_object(text_value, "code", "code")
+fn code_obj(text_value: string) -> object
+  let code = raw_obj(text_value, "code", "code")
   return code
-end
-
-fn inset_object(text_value: string, role_name: string, payload_name: string, left: number, right: number) -> object
-  let obj = payload_object(text_value, role_name, payload_name)
-  inset_x(obj, left, right)
-  return obj
-end
-
-fn inset_text(text_value: string, role_name: string, left: number, right: number) -> object
-  let obj = text_object(text_value, role_name)
-  inset_x(obj, left, right)
-  return obj
 end

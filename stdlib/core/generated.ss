@@ -1,82 +1,74 @@
 import std:core/render
 import std:core/selectors
 
-fn page_number_preset(page_no: object) -> object
-  text_preset(page_no, "Helvetica", "13", "16", "0.5,0.5,0.5", "0", "60", "24")
+fn pageno_s(page_no: object) -> object
+  txt(page_no, "Helvetica", "13", "16", "0.5,0.5,0.5", "0", "60", "24")
   set_prop(page_no, "wrap", "off")
-  overflow_error(page_no)
-  right_inset(page_no, 24)
-  bottom_inset(page_no, 20)
+  fit_error(page_no)
+  pin_r(page_no, 24)
+  pin_b(page_no, 20)
   return page_no
 end
 
-fn page_number_object() -> object
-  return page_number_preset(object("", "page_number", "text"))
+fn pageno_obj() -> object
+  return pageno_s(obj("", "pageno", "text"))
 end
 
-fn page_numbers(format: string = "") -> document
-  set_prop(docctx(), "page_numbers_enabled", "true")
-  set_prop(docctx(), "page_numbers_format", format)
-  materialize_document_page_numbers(docctx())
-  refresh_page_numbers(docctx())
-  return docctx()
+fn pagenos(format: string = "") -> void
+  set_prop(docctx(), "pageno_on", "true")
+  set_prop(docctx(), "pageno_fmt", format)
+  mk_pagenos(docctx())
+  set_pagenos(docctx())
 end
 
-fn page_no_all(format: string = "") -> document
-  return page_numbers(format)
+fn footers(text_value: string) -> void
+  set_prop(docctx(), "footer_text", text_value)
+  mk_footers(docctx())
 end
 
-fn running_footer(text_value: string) -> document
-  set_prop(docctx(), "running_footer_text", text_value)
-  materialize_running_footers(docctx())
-  return docctx()
+fn logos(path_value: string, scale: number = 1) -> void
+  set_prop(docctx(), "logo_path", path_value)
+  set_prop(docctx(), "logo_scale", scale)
+  mk_logos(docctx())
 end
 
-fn logo_all(path_value: string, scale: number = 1) -> document
-  set_prop(docctx(), "document_logo_path", path_value)
-  set_prop(docctx(), "document_logo_scale", scale)
-  materialize_document_logos(docctx())
-  return docctx()
+fn watermark(text_value: string) -> void
+  set_prop(docctx(), "watermark", text_value)
+  mk_marks(docctx())
 end
 
-fn watermark(text_value: string) -> document
-  set_prop(docctx(), "watermark_text", text_value)
-  materialize_watermarks(docctx())
-  return docctx()
+fn need_titles() -> void
+  set_prop(docctx(), "need_titles", "true")
+  chk_titles(docctx())
 end
 
-fn require_titles_all() -> document
-  set_prop(docctx(), "require_titles_enabled", "true")
-  inspect_required_titles(docctx())
-  return docctx()
-end
-
-fn materialize_document_page_numbers(doc: document) -> document
-  if prop_eq(doc, "page_numbers_enabled", "true")
-    foreach(pages(doc), materialize_page_number_for_page)
+fn mk_pagenos(doc: document) -> void
+  if prop_eq(doc, "pageno_on", "true")
+    foreach(pages(doc), mk_pageno)
   end
-  return doc
 end
 
-fn materialize_page_number_for_page(page: page) -> page
-  if selection_empty(objects(page, "page_number"))
-    let page_no = new_object(page, "", "page_number", "text")
-    page_number_preset(page_no)
+fn mk_pageno(page: page) -> page
+  if selection_empty(objs(page, "pageno"))
+    let page_no = new_object(page, "", "pageno", "text")
+    pageno_s(page_no)
   end
   return page
 end
 
-fn refresh_page_numbers(doc: document) -> document
-  foreach(objects_in_document(doc, "page_number"), refresh_page_number, doc)
-  return doc
+fn set_pagenos(doc: document) -> void
+  foreach(
+    doc_objs(doc, "pageno"),
+    (page_no: object) |-> set_pageno(page_no, doc)
+  )
 end
 
-fn refresh_page_number(page_no: object, doc: document) -> object
-  let page = parent_page(page_no)
-  if prop_eq(doc, "page_numbers_format", "")
-    set_content(page_no, concat(str(page_index(page)), concat("/", str(page_count(doc)))))
+fn set_pageno(page_no: object, doc: document) -> object
+  let page = page_of(page_no)
+  if prop_eq(doc, "pageno_fmt", "")
+    set_content(page_no, str(page_index(page)) ++ "/" ++ str(page_count(doc)))
   else
-    let format = prop(doc, "page_numbers_format", "")
+    let format = prop(doc, "pageno_fmt", "")
     let page_text = replace(format, "{page}", str(page_index(page)))
     let text = replace(page_text, "{total}", str(page_count(doc)))
     set_content(page_no, text)
@@ -84,107 +76,115 @@ fn refresh_page_number(page_no: object, doc: document) -> object
   return page_no
 end
 
-fn materialize_running_footers(doc: document) -> document
-  if has_prop(doc, "running_footer_text")
-    foreach(pages(doc), materialize_running_footer_for_page, doc)
+fn mk_footers(doc: document) -> void
+  if has_prop(doc, "footer_text")
+    foreach(
+      pages(doc),
+      (page: page) |-> mk_footer(page, doc)
+    )
   end
-  return doc
 end
 
-fn materialize_running_footer_for_page(page: page, doc: document) -> page
-  if selection_empty(objects(page, "running_footer"))
-    let footer = new_object(page, prop(doc, "running_footer_text", ""), "running_footer", "text")
-    text_preset(footer, "Helvetica", "12", "15", "0.42,0.42,0.42", "0", "72", "160")
+fn mk_footer(page: page, doc: document) -> page
+  if selection_empty(objs(page, "footer"))
+    let footer = new_object(page, prop(doc, "footer_text", ""), "footer", "text")
+    txt(footer, "Helvetica", "12", "15", "0.42,0.42,0.42", "0", "72", "160")
     set_prop(footer, "wrap", "off")
-    left_inset(footer, 72)
-    bottom_inset(footer, 20)
+    pin_l(footer, 72)
+    pin_b(footer, 20)
   end
   return page
 end
 
-fn materialize_document_logos(doc: document) -> document
-  if has_prop(doc, "document_logo_path")
-    foreach(pages(doc), materialize_document_logo_for_page, doc)
+fn mk_logos(doc: document) -> void
+  if has_prop(doc, "logo_path")
+    foreach(
+      pages(doc),
+      (page: page) |-> mk_logo(page, doc)
+    )
   end
-  return doc
 end
 
-fn materialize_document_logo_for_page(page: page, doc: document) -> page
-  if selection_empty(objects(page, "document_logo"))
-    let logo = new_object(page, prop(doc, "document_logo_path", ""), "document_logo", "image_ref")
+fn mk_logo(page: page, doc: document) -> page
+  if selection_empty(objs(page, "logo"))
+    let logo = new_object(page, prop(doc, "logo_path", ""), "logo", "image_ref")
     set_prop(logo, "render_kind", "raster_asset")
-    set_prop(logo, "asset_scale", prop(doc, "document_logo_scale", "1"))
+    set_prop(logo, "asset_scale", prop(doc, "logo_scale", "1"))
     set_prop(logo, "wrap", "off")
-    fixed_width(logo, 96)
-    fixed_height(logo, 40)
-    right_inset(logo, 72)
-    top_inset(logo, 36)
+    fix_w(logo, 96)
+    fix_h(logo, 40)
+    pin_r(logo, 72)
+    pin_t(logo, 36)
   end
   return page
 end
 
-fn materialize_watermarks(doc: document) -> document
-  if has_prop(doc, "watermark_text")
-    foreach(pages(doc), materialize_watermark_for_page, doc)
+fn mk_marks(doc: document) -> void
+  if has_prop(doc, "watermark")
+    foreach(
+      pages(doc),
+      (page: page) |-> mk_mark(page, doc)
+    )
   end
-  return doc
 end
 
-fn materialize_watermark_for_page(page: page, doc: document) -> page
-  if selection_empty(objects(page, "watermark"))
-    let mark = new_object(page, prop(doc, "watermark_text", ""), "watermark", "text")
-    text_preset(mark, "Helvetica", "72", "80", "0.85,0.85,0.85", "0", "0", "0")
+fn mk_mark(page: page, doc: document) -> page
+  if selection_empty(objs(page, "watermark"))
+    let mark = new_object(page, prop(doc, "watermark", ""), "watermark", "text")
+    txt(mark, "Helvetica", "72", "80", "0.85,0.85,0.85", "0", "0", "0")
     set_prop(mark, "wrap", "off")
-    fixed_width(mark, 800)
-    fixed_height(mark, 90)
+    fix_w(mark, 800)
+    fix_h(mark, 90)
     equal(anchor(mark, "center_x"), page_anchor("center_x"), 0)
     equal(anchor(mark, "center_y"), page_anchor("center_y"), 0)
   end
   return page
 end
 
-fn toc_object() -> object
-  let toc = object("", "toc", "text")
-  text_preset(toc, "Helvetica", "18", "24", "0,0,0.0353", "24", "96", "96")
-  refresh_toc(toc, docctx())
+fn toc_obj() -> object
+  let toc = obj("", "toc", "text")
+  txt(toc, "Helvetica", "18", "24", "0,0,0.0353", "24", "96", "96")
+  set_toc(toc, docctx())
   return toc
 end
 
-fn toc_list_object() -> object
-  return toc_object()
+fn set_tocs(doc: document) -> void
+  foreach(
+    doc_objs(doc, "toc"),
+    (toc: object) |-> set_toc(toc, doc)
+  )
 end
 
-fn refresh_tocs(doc: document) -> document
-  foreach(objects_in_document(doc, "toc"), refresh_toc, doc)
-  return doc
+fn toc_row(title: object, page: page) -> string
+  return "- " ++ content(title) ++ " .... " ++ str(page_index(page)) ++ "\n"
 end
 
-fn refresh_toc(toc: object, doc: document) -> object
-  clear_content(toc)
-  append_content(toc, "Table of Contents\n")
-  foreach(pages(doc), append_toc_page, toc)
+fn toc_text(doc: document) -> string
+  return "Table of Contents\n" ++ join(
+    pages(doc),
+    "",
+    (page: page) |->
+      join(
+        objs(page, "title"),
+        "",
+        (title: object) |-> toc_row(title, page)
+      )
+  )
+end
+
+fn set_toc(toc: object, doc: document) -> object
+  set_content(toc, toc_text(doc))
   return toc
 end
 
-fn append_toc_page(page: page, toc: object) -> page
-  foreach(objects(page, "title"), append_toc_title, toc, page)
-  return page
-end
-
-fn append_toc_title(title: object, toc: object, page: page) -> object
-  append_content(toc, concat("- ", concat(content(title), concat(" .... ", concat(str(page_index(page)), "\n")))))
-  return title
-end
-
-fn inspect_required_titles(doc: document) -> document
-  if prop_eq(doc, "require_titles_enabled", "true")
-    foreach(pages(doc), report_missing_title)
+fn chk_titles(doc: document) -> void
+  if prop_eq(doc, "need_titles", "true")
+    foreach(pages(doc), warn_title)
   end
-  return doc
 end
 
-fn report_missing_title(page: page) -> page
-  if selection_empty(objects(page, "title"))
+fn warn_title(page: page) -> page
+  if selection_empty(objs(page, "title"))
     report_warning("MissingTitle: page has no title object")
   end
   return page
