@@ -17,6 +17,8 @@ end
 fn page_numbers(format: string = "") -> document
   set_prop(docctx(), "page_numbers_enabled", "true")
   set_prop(docctx(), "page_numbers_format", format)
+  materialize_document_page_numbers(docctx())
+  refresh_page_numbers(docctx())
   return docctx()
 end
 
@@ -26,22 +28,26 @@ end
 
 fn running_footer(text_value: string) -> document
   set_prop(docctx(), "running_footer_text", text_value)
+  materialize_running_footers(docctx())
   return docctx()
 end
 
 fn logo_all(path_value: string, scale: number = 1) -> document
   set_prop(docctx(), "document_logo_path", path_value)
   set_prop(docctx(), "document_logo_scale", scale)
+  materialize_document_logos(docctx())
   return docctx()
 end
 
 fn watermark(text_value: string) -> document
   set_prop(docctx(), "watermark_text", text_value)
+  materialize_watermarks(docctx())
   return docctx()
 end
 
 fn require_titles_all() -> document
   set_prop(docctx(), "require_titles_enabled", "true")
+  inspect_required_titles(docctx())
   return docctx()
 end
 
@@ -140,6 +146,7 @@ end
 fn toc_object() -> object
   let toc = object("", "toc", "text")
   text_preset(toc, "Helvetica", "18", "24", "0,0,0.0353", "24", "96", "96")
+  refresh_toc(toc, docctx())
   return toc
 end
 
@@ -181,14 +188,4 @@ fn report_missing_title(page: page) -> page
     report_warning("MissingTitle: page has no title object")
   end
   return page
-end
-
-document
-  materialize_document_page_numbers(docctx())
-  materialize_running_footers(docctx())
-  materialize_document_logos(docctx())
-  materialize_watermarks(docctx())
-  refresh_page_numbers(docctx())
-  refresh_tocs(docctx())
-  inspect_required_titles(docctx())
 end

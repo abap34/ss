@@ -110,16 +110,19 @@ pub const Analyzer = struct {
     allocator: std.mem.Allocator,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     visiting: std.StringHashMap(void),
+    string_bindings: std.StringHashMap([]const u8),
 
     pub fn init(allocator: std.mem.Allocator, functions: *const std.StringHashMap(ast.FunctionDecl)) Analyzer {
         return .{
             .allocator = allocator,
             .functions = functions,
             .visiting = std.StringHashMap(void).init(allocator),
+            .string_bindings = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *Analyzer) void {
+        self.string_bindings.deinit();
         self.visiting.deinit();
     }
 
@@ -130,8 +133,6 @@ pub const Analyzer = struct {
     pub fn page(self: *Analyzer, page_decl: ast.PageDecl) anyerror!AccessSummary {
         var summary = try self.analyzeStatements(page_decl.statements.items);
         errdefer summary.deinit();
-        try summary.addWrite(Resource.graphPages());
-        try summary.addWrite(Resource.graphObjects(null));
         summary.writes_layout_input = true;
         return summary;
     }
@@ -231,10 +232,57 @@ pub const Analyzer = struct {
         try self.visiting.put(func.name, {});
         defer _ = self.visiting.remove(func.name);
 
+        var bindings = std.ArrayList(StringBindingRestore).empty;
+        defer {
+            var index = bindings.items.len;
+            while (index > 0) {
+                index -= 1;
+                const binding = bindings.items[index];
+                if (binding.had_old) {
+                    self.string_bindings.put(binding.name, binding.old.?) catch {};
+                } else {
+                    _ = self.string_bindings.remove(binding.name);
+                }
+            }
+            bindings.deinit(self.allocator);
+        }
+        try self.bindLiteralStringArgs(func, call, &bindings);
+
         var body = try self.analyzeStatements(func.statements.items);
         defer body.deinit();
         try summary.merge(body);
         return summary;
+    }
+
+    const StringBindingRestore = struct {
+        name: []const u8,
+        had_old: bool,
+        old: ?[]const u8,
+    };
+
+    fn bindLiteralStringArgs(
+        self: *Analyzer,
+        func: ast.FunctionDecl,
+        call: ast.CallExpr,
+        restores: *std.ArrayList(StringBindingRestore),
+    ) !void {
+        for (func.params.items, 0..) |param, index| {
+            const previous = self.string_bindings.get(param.name);
+            try restores.append(self.allocator, .{
+                .name = param.name,
+                .had_old = previous != null,
+                .old = previous,
+            });
+            if (index < call.args.items.len) {
+                if (literalStringExpr(self, call.args.items[index])) |value| {
+                    try self.string_bindings.put(param.name, value);
+                } else {
+                    _ = self.string_bindings.remove(param.name);
+                }
+            } else {
+                _ = self.string_bindings.remove(param.name);
+            }
+        }
     }
 
     fn primitiveCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
@@ -252,14 +300,14 @@ pub const Analyzer = struct {
             .content => try summary.addRead(Resource.content(null)),
             .emit_metadata => try summary.addWrite(.{ .kind = .metadata }),
             .metadata_in_document, .metadata_on_page, .metadata_content, .metadata_kind, .metadata_page => try summary.addRead(.{ .kind = .metadata }),
-            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(literalStringArg(call, 1))),
+            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(literalStringArg(self, call, 1))),
             .rewrite_text, .set_content, .clear_content, .append_content => {
                 try summary.addWrite(Resource.content(null));
                 summary.writes_layout_input = true;
             },
             .object => {
-                try summary.addWrite(Resource.graphObjects(literalStringArg(call, 1)));
-                try summary.addWrite(Resource.content(literalStringArg(call, 1)));
+                try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.content(literalStringArg(self, call, 1)));
                 summary.writes_layout_input = true;
             },
             .group => {
@@ -271,8 +319,8 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .new_object => {
-                try summary.addWrite(Resource.graphObjects(literalStringArg(call, 2)));
-                try summary.addWrite(Resource.content(literalStringArg(call, 2)));
+                try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 2)));
+                try summary.addWrite(Resource.content(literalStringArg(self, call, 2)));
                 summary.writes_layout_input = true;
             },
             .new_group => {
@@ -280,7 +328,7 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .set_prop, .set_style => {
-                const key = if (descriptor.op == .set_style) "style" else literalStringArg(call, 1);
+                const key = if (descriptor.op == .set_style) "style" else literalStringArg(self, call, 1);
                 try summary.addWrite(Resource.property(key));
                 summary.writes_layout_input = true;
             },
@@ -352,8 +400,7 @@ pub const Analyzer = struct {
     }
 
     fn applySelectSummary(self: *Analyzer, summary: *AccessSummary, call: ast.CallExpr) !void {
-        _ = self;
-        const query_name = literalStringArg(call, 1) orelse {
+        const query_name = literalStringArg(self, call, 1) orelse {
             try summary.addRead(Resource.graphObjects(null));
             try summary.addSelectionRead(Resource.graphObjects(null));
             return;
@@ -363,7 +410,7 @@ pub const Analyzer = struct {
         } else if (std.mem.eql(u8, query_name, "page_objects_by_role") or
             std.mem.eql(u8, query_name, "document_objects_by_role"))
         {
-            try summary.addSelectionRead(Resource.graphObjects(literalStringArg(call, 2)));
+            try summary.addSelectionRead(Resource.graphObjects(literalStringArg(self, call, 2)));
         } else if (std.mem.eql(u8, query_name, "children") or
             std.mem.eql(u8, query_name, "descendants") or
             std.mem.eql(u8, query_name, "self_object"))
@@ -379,10 +426,15 @@ pub const Analyzer = struct {
     }
 };
 
-fn literalStringArg(call: ast.CallExpr, index: usize) ?[]const u8 {
+fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) ?[]const u8 {
     if (index >= call.args.items.len) return null;
-    return switch (call.args.items[index]) {
+    return literalStringExpr(self, call.args.items[index]);
+}
+
+fn literalStringExpr(self: *Analyzer, expr: ast.Expr) ?[]const u8 {
+    return switch (expr) {
         .string => |value| value,
+        .ident => |name| self.string_bindings.get(name),
         else => null,
     };
 }
