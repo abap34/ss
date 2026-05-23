@@ -1050,7 +1050,7 @@ const Parser = struct {
         scanner.skipTrivia(self.source, &probe);
         if (probe < self.source.len and self.source[probe] == ')') {
             probe += 1;
-            scanner.skipInlineSpaces(self.source, &probe);
+            scanner.skipTrivia(self.source, &probe);
             return scanner.startsWith(self.source, probe, "|->");
         }
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
@@ -1065,7 +1065,7 @@ const Parser = struct {
                     depth -= 1;
                     if (depth == 0) {
                         probe += 1;
-                        scanner.skipInlineSpaces(self.source, &probe);
+                        scanner.skipTrivia(self.source, &probe);
                         return scanner.startsWith(self.source, probe, "|->");
                     }
                 },
@@ -1108,18 +1108,14 @@ const Parser = struct {
             break;
         }
         try self.expectChar(')');
-        self.skipInlineSpaces();
+        self.skipTrivia();
         if (!self.startsWith("|->")) return self.fail(error.ExpectedChar);
         self.pos += 3;
-        self.skipInlineSpaces();
-        const body_start = self.pos;
+        self.skipTrivia();
         const body = try self.allocator.create(Expr);
         errdefer self.allocator.destroy(body);
         body.* = try self.parseExpr();
         errdefer body.deinit(self.allocator);
-        if (std.mem.indexOfScalar(u8, self.source[body_start..self.pos], '\n') != null) {
-            return self.failAt(body_start, error.ExpectedLineBreak);
-        }
         return .{ .lambda = .{
             .params = params,
             .body = body,
