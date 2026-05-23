@@ -147,7 +147,10 @@ const ScheduledRoot = struct {
 
     const Kind = union(enum) {
         document: []const Statement,
-        page: PageDecl,
+        page: struct {
+            decl: PageDecl,
+            page_id: core.NodeId,
+        },
     };
 
     fn deinit(self: *ScheduledRoot) void {
@@ -273,7 +276,7 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
     var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
     defer collected_modules.deinit();
     var source_order: usize = 0;
-    try collectScheduledRoots(ir, ir.projectModule(), &ir.functions, &roots, &collected_modules, &source_order);
+    try collectScheduledRoots(ir, ir.projectModule(), &document, &ir.functions, &roots, &collected_modules, &source_order);
 
     try validateScheduledRoots(&document, roots.items);
     const schedule = try scheduleRoots(allocator, roots.items);
@@ -285,6 +288,7 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
 fn collectScheduledRoots(
     core_ir: *const core.Ir,
     module: *const core.SourceModule,
+    document: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
     roots: *std.ArrayList(ScheduledRoot),
     collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
@@ -300,7 +304,7 @@ fn collectScheduledRoots(
     }
 
     if (module.program.top_level_items.items.len == 0) {
-        for (module.program.pages.items) |page| try appendPageRoot(core_ir.allocator, module, functions, roots, source_order, page);
+        for (module.program.pages.items) |page| try appendPageRoot(core_ir.allocator, module, document, functions, roots, source_order, page);
         return;
     }
 
@@ -310,11 +314,11 @@ fn collectScheduledRoots(
                 if (import_index >= module.resolved_import_ids.items.len) continue;
                 const import_id = module.resolved_import_ids.items[import_index];
                 const imported = core_ir.moduleById(import_id) orelse continue;
-                try collectScheduledRoots(core_ir, imported, functions, roots, collected_modules, source_order);
+                try collectScheduledRoots(core_ir, imported, document, functions, roots, collected_modules, source_order);
             },
             .page => |page_index| {
                 if (page_index >= module.program.pages.items.len) continue;
-                try appendPageRoot(core_ir.allocator, module, functions, roots, source_order, module.program.pages.items[page_index]);
+                try appendPageRoot(core_ir.allocator, module, document, functions, roots, source_order, module.program.pages.items[page_index]);
             },
         }
     }
@@ -351,11 +355,13 @@ fn appendDocumentRoot(
 fn appendPageRoot(
     allocator: std.mem.Allocator,
     module: *const core.SourceModule,
+    document: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
     roots: *std.ArrayList(ScheduledRoot),
     source_order: *usize,
     page: PageDecl,
 ) !void {
+    const page_id = try document.addPage(page.name);
     var analyzer = dependencies.Analyzer.init(allocator, functions);
     defer analyzer.deinit();
     const summary = try analyzer.page(page);
@@ -370,7 +376,7 @@ fn appendPageRoot(
         .source_order = source_order.*,
         .span = page.span,
         .summary = summary,
-        .kind = .{ .page = page },
+        .kind = .{ .page = .{ .decl = page, .page_id = page_id } },
     });
     source_order.* += 1;
 }
@@ -434,6 +440,9 @@ fn scheduleRoots(allocator: std.mem.Allocator, roots: []const ScheduledRoot) ![]
             if (hasResourceDependency(left.summary, right.summary)) {
                 try addScheduleEdge(allocator, edges, indegree, left_index, right_index);
             }
+            if (rootKindIsPage(left) and rootKindIsDocument(right) and documentRootNeedsPageBody(right.summary)) {
+                try addScheduleEdge(allocator, edges, indegree, left_index, right_index);
+            }
         }
     }
 
@@ -478,9 +487,42 @@ fn addScheduleEdge(
 
 fn hasResourceDependency(left: dependencies.AccessSummary, right: dependencies.AccessSummary) bool {
     for (left.writes.items) |write| {
+        if (!resourceNeedsScheduleEdge(write)) continue;
         for (right.reads.items) |read| {
+            if (!resourceNeedsScheduleEdge(read)) continue;
             if (write.intersects(read)) return true;
         }
+    }
+    return false;
+}
+
+fn resourceNeedsScheduleEdge(resource: dependencies.Resource) bool {
+    return switch (resource.kind) {
+        .graph_pages, .graph_objects, .metadata => true,
+        .property, .content, .constraints, .render_env, .diagnostics, .layout, .asset => false,
+    };
+}
+
+fn rootKindIsPage(root: ScheduledRoot) bool {
+    return switch (root.kind) {
+        .page => true,
+        .document => false,
+    };
+}
+
+fn rootKindIsDocument(root: ScheduledRoot) bool {
+    return switch (root.kind) {
+        .document => true,
+        .page => false,
+    };
+}
+
+fn documentRootNeedsPageBody(summary: dependencies.AccessSummary) bool {
+    for (summary.reads.items) |resource| {
+        if (resource.kind == .graph_objects or resource.kind == .metadata) return true;
+    }
+    for (summary.writes.items) |resource| {
+        if (resource.kind == .graph_objects or resource.kind == .metadata) return true;
     }
     return false;
 }
@@ -493,7 +535,7 @@ fn executeScheduledRoot(
     setLowerDiagnosticOrigin(root.source, root.path);
     switch (root.kind) {
         .document => |statements| try executeDocumentStatementSlice(ir, functions, statements),
-        .page => |page| try executePage(page, ir, functions),
+        .page => |page| try executePageBody(page.decl, page.page_id, ir, functions),
     }
 }
 
@@ -627,6 +669,15 @@ fn executePage(
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
     const page_id = try ir.addPage(page.name);
+    try executePageBody(page, page_id, ir, functions);
+}
+
+fn executePageBody(
+    page: PageDecl,
+    page_id: core.NodeId,
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+) !void {
     var last_code_like: ?core.NodeId = null;
     var env = std.StringHashMap(core.Value).init(ir.allocator);
     defer deinitValueEnv(ir.allocator, &env);
