@@ -55,23 +55,35 @@ That should have just been a global constant!
 
 Also, just to add, "slide theme" is just a library of functions.
 
-### 2. Staged Compilation and Rendering Accessible in the Language
+### 2. Document-Wide Computation Can Be Expressed Inside the Language
 
-The ss compilation and rendering process is defined as a strict multi-stage
-pipeline, and ss can access intermediate representations along the way.
+In many slide description languages, defining something like a table of
+contents inside the language itself is hard. The computation has to inspect the
+whole document after pages and objects have been created.
 
-That means document-wide behavior such as adding a table of contents or page
-numbers can be defined in ss itself, not bolted on from outside the language.
-Yes, this is directed at you (and me), the person who hand-wrote a ToC and forgot to
-update it.
+In ss, this kind of computation can be written naturally:
 
-```
-@pass(resolve)
-fn refresh_tocs(doc: code<document>) -> code<document> ! ReadGraph | WriteContent
-  foreach(objects_in_document(doc, "toc"), write_toc, doc)
-  return doc
+```ss
+fn add_pageno() -> Void
+  foreach(pages(doc), add_each_page)
+end
+
+fn add_each_page(page: page) -> Void
+  new_object(page, str(page_index(page)), "body", "text")
+end
+
+document
+  add_pageno()
 end
 ```
+
+ss analyzes the dependencies of all computations and runs them in dependency
+order. In this example, the page-number objects are materialized only after the
+pages exist, and their text is refreshed only after the page-number objects and
+the document page count are available. That means document-wide behavior such
+as adding a table of contents or page numbers can be defined in ss itself, not
+bolted on from outside the language. Yes, this is directed at you (and me), the
+person who hand-wrote a ToC and forgot to update it.
 
 ### 3. Layout Should Be Precise When You Need It
 
@@ -121,6 +133,10 @@ Create `slide.ss`:
 ```text
 import std:themes/default
 
+document
+page_no_all()
+end
+
 page title
 title_page(
   "Hello, ss",
@@ -138,7 +154,6 @@ let body = text <<
 >>
 
 body.top == title.bottom - 32
-page_no()
 end
 ```
 
@@ -230,19 +245,19 @@ publishing.
 
 ### Commands
 
-| Command | Purpose |
-| --- | --- |
-| `ss help` | Show help. |
-| `ss check [input.ss]` | Parse, load modules, and type-check a deck. |
-| `ss dump [input.ss] [output.json]` | Write compiler/IR metadata for tooling and debugging. |
-| `ss render [input.ss] [output.pdf]` | Render a PDF. |
-| `ss init [dir]` | Create an `ss.toml` and starter slide deck. |
-| `ss doctor` | Check project discovery and render tool availability. |
-| `ss lsp` | Run the stdio language server. |
-| `ss watch check [input.ss]` | Re-run checks as project files change. |
-| `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change. |
-| `ss cache stats` | Show managed render cache file count, directory count, and size. |
-| `ss cache clear` | Clear the managed render cache under `.ss-cache/render`. |
+| Command                                   | Purpose                                                          |
+| ----------------------------------------- | ---------------------------------------------------------------- |
+| `ss help`                                 | Show help.                                                       |
+| `ss check [input.ss]`                     | Parse, load modules, and type-check a deck.                      |
+| `ss dump [input.ss] [output.json]`        | Write compiler/IR metadata for tooling and debugging.            |
+| `ss render [input.ss] [output.pdf]`       | Render a PDF.                                                    |
+| `ss init [dir]`                           | Create an `ss.toml` and starter slide deck.                      |
+| `ss doctor`                               | Check project discovery and render tool availability.            |
+| `ss lsp`                                  | Run the stdio language server.                                   |
+| `ss watch check [input.ss]`               | Re-run checks as project files change.                           |
+| `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change.                         |
+| `ss cache stats`                          | Show managed render cache file count, directory count, and size. |
+| `ss cache clear`                          | Clear the managed render cache under `.ss-cache/render`.         |
 
 Examples:
 
@@ -275,12 +290,12 @@ renders can reuse generated documents, math images, and converted assets.
 
 Environment knobs:
 
-| Variable | Meaning |
-| --- | --- |
-| `SS_RENDER_JOBS=4` | Override the render worker count. |
-| `SS_RENDER_JOBS=off` | Disable parallel cache generation. |
+| Variable                  | Meaning                            |
+| ------------------------- | ---------------------------------- |
+| `SS_RENDER_JOBS=4`        | Override the render worker count.  |
+| `SS_RENDER_JOBS=off`      | Disable parallel cache generation. |
 | `SS_CACHE_MAX_BYTES=512M` | Override the managed cache budget. |
-| `SS_CACHE_MAX_BYTES=off` | Disable cache pruning. |
+| `SS_CACHE_MAX_BYTES=off`  | Disable cache pruning.             |
 
 ## Editor Support
 
