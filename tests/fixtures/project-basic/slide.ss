@@ -3,7 +3,7 @@ import "./parts.ss"
 
 page title
 let heading = module_label("Project fixture")
-title_page(
+cover(
   "Project fixture",
   "ss.toml + LSP smoke",
   "v1"

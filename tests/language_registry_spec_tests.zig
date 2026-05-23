@@ -51,8 +51,8 @@ test "language registry spec: query output types are declared in the registry" {
 }
 
 test "language registry spec: stdlib helpers are not kernel primitives" {
-    try testing.expect(registry.lookupPrimitiveCall("rewrite_text") == null);
-    try testing.expect(registry.lookupPrimitiveCall("append_content") == null);
-    try testing.expect(registry.lookupPrimitiveCall("clear_content") == null);
-    try testing.expect(registry.lookupPrimitiveCall("set_style") == null);
+    try testing.expect(registry.lookupPrimitiveCall("rewrite") == null);
+    try testing.expect(registry.lookupPrimitiveCall("append") == null);
+    try testing.expect(registry.lookupPrimitiveCall("clear") == null);
+    try testing.expect(registry.lookupPrimitiveCall("sty") == null);
 }

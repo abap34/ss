@@ -46,7 +46,7 @@ class Ss < Formula
       import std:themes/default
 
       page home
-      title_page("Homebrew", "ss formula smoke", "v#{version}")
+      cover("Homebrew", "ss formula smoke", "v#{version}")
       end
     EOS
 

@@ -36,7 +36,7 @@ test "compiler semantics: default argument effects are checked against function 
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn creates_by_default(x: object = object("x", "body", "text")) -> object ! Pure
+        \\fn creates_by_default(x: object = obj("x", "body", "text")) -> object ! Pure
         \\  return x
         \\end
         \\
@@ -114,8 +114,8 @@ test "compiler semantics: content mutation helpers are stdlib functions" {
         \\
         \\page ok
         \\  let target = text("hello [1]")
-        \\  rewrite_text(target, "[1]", "world")
-        \\  append_content(target, "!")
+        \\  rewrite(target, "[1]", "world")
+        \\  append(target, "!")
         \\end
         \\
     , "hello world!");
@@ -124,7 +124,7 @@ test "compiler semantics: content mutation helpers are stdlib functions" {
         \\import std:themes/default
         \\
         \\fn bad(target: object) -> object ! Pure
-        \\  clear_content(target)
+        \\  clear(target)
         \\  return target
         \\end
         \\
@@ -141,7 +141,7 @@ test "compiler semantics: style mutation is stdlib over properties" {
         \\import std:themes/default
         \\
         \\page ok
-        \\  let target = set_style(text("styled"), style("custom"))
+        \\  let target = sty(text("styled"), style("custom"))
         \\  text(prop(target, "style", "missing"))
         \\end
         \\
@@ -153,7 +153,7 @@ test "compiler semantics: style mutation is stdlib over properties" {
         \\page ok
         \\  text("a")
         \\  text("b")
-        \\  with_style_all(objects(pagectx(), "body"), style("custom"))
+        \\  style_all(objs(pagectx(), "body"), style("custom"))
         \\end
         \\
     );
@@ -162,7 +162,7 @@ test "compiler semantics: style mutation is stdlib over properties" {
         \\import std:themes/default
         \\
         \\fn bad(target: object) -> object ! Pure
-        \\  set_style(target, style("custom"))
+        \\  sty(target, style("custom"))
         \\  return target
         \\end
         \\
@@ -195,7 +195,7 @@ test "compiler semantics: generated page numbers run after page graph exists" {
         \\import std:themes/default
         \\
         \\document
-        \\  page_no_all()
+        \\  pagenos()
         \\end
         \\
         \\page one
@@ -272,7 +272,7 @@ test "compiler semantics: void results cannot be used as values" {
     );
 }
 
-test "compiler semantics: lambda callbacks can create objects over a document selection" {
+test "compiler semantics: lambda callbacks can create objs over a document selection" {
     try expectObjectContent(
         \\import std:themes/default
         \\
@@ -579,14 +579,14 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
         \\import std:themes/default
         \\
         \\fn duplicate_title(title_obj: object) -> object
-        \\  let page_value = parent_page(title_obj)
+        \\  let page_value = page_of(title_obj)
         \\  new_object(page_value, "copy", "title", "text")
         \\  return title_obj
         \\end
         \\
         \\page bad
         \\  title("A")
-        \\  foreach(objects(pagectx(), "title"), duplicate_title)
+        \\  foreach(objs(pagectx(), "title"), duplicate_title)
         \\end
         \\
     );
