@@ -1,13 +1,13 @@
 import std:core/classes
 
 fn vflow(policy: string, center_offset: number = 0) -> void
-  set_prop(pagectx(), "layout_v", policy)
-  set_prop(pagectx(), "layout_v_center_offset", center_offset)
+  pagectx().layout_v = policy
+  pagectx().layout_v_center_offset = center_offset
 end
 
 fn vflow_doc(policy: string, center_offset: number = 0) -> void
-  set_prop(docctx(), "layout_v", policy)
-  set_prop(docctx(), "layout_v_center_offset", center_offset)
+  docctx().layout_v = policy
+  docctx().layout_v_center_offset = center_offset
 end
 
 fn pin_l(node: object, amount: number) -> constraints
@@ -67,9 +67,9 @@ fn inset(node: object, left: number, right: number) -> object
 end
 
 fn flow(node: object, left: string, right: string) -> object
-  set_prop(node, "layout_x", left)
-  set_prop(node, "layout_right_inset", right)
-  set_prop(node, "wrap", "on")
+  node.layout_x = left
+  node.layout_right_inset = right
+  node.wrap = "on"
   return node
 end
 

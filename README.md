@@ -69,7 +69,7 @@ fn add_pageno() -> void
   foreach(
     pages(docctx()),
     (page: page) |->
-      new_object(page, str(page_index(page)), "body", "text")
+      new(page, str(page_index(page)), "body", "text")
   )
 end
 

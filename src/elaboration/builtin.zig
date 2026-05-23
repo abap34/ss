@@ -322,7 +322,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const title = try ctx.evalStringArg(call, 1);
             break :blk .{ .page = try ctx.makePage(title) };
         },
-        .new_object => blk: {
+        .new => blk: {
             const page_id = try evalPageArg(ctx, call, 0);
             const content = try ctx.evalStringArg(call, 1);
             const role_name = try ctx.evalStringArg(call, 2);

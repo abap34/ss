@@ -1,7 +1,7 @@
 import std:core/layout
 
 fn obj(text_value: string, role_name: string, payload_name: string) -> object
-  return new_object(pagectx(), text_value, role_name, payload_name)
+  return new(pagectx(), text_value, role_name, payload_name)
 end
 
 fn txt_obj(text_value: string, role_name: string) -> object

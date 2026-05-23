@@ -28,11 +28,11 @@ fn panel(style_value: style) -> object
 end
 
 fn page_bg(fill_name: string) -> void
-  set_prop(pagectx(), "background_fill", fill_name)
+  pagectx().background_fill = fill_name
 end
 
 fn doc_bg(fill_name: string) -> void
-  set_prop(docctx(), "background_fill", fill_name)
+  docctx().background_fill = fill_name
 end
 
 fn frame_s(inner: object, panel_style_name: string, pad_x: number, pad_y: number) -> object
@@ -57,8 +57,8 @@ end
 
 fn border_p(inner: object, pad_x: number, pad_y: number, fill_name: string, stroke_name: string, line_width: number, radius: number) -> object
   box(inner, fill_name, stroke_name, str(line_width), str(radius))
-  set_prop(inner, "chrome_pad_x", str(pad_x))
-  set_prop(inner, "chrome_pad_y", str(pad_y))
+  inner.chrome_pad_x = str(pad_x)
+  inner.chrome_pad_y = str(pad_y)
   return inner
 end
 
@@ -72,7 +72,7 @@ end
 
 fn code_l(text_value: string, language_name: string) -> object
   let code = code_obj(text_value)
-  set_prop(code, "language", language_name)
+  code.language = language_name
   return code
 end
 
@@ -102,7 +102,7 @@ end
 
 fn tex(text_value: string, scale: number = 1) -> object
   let obj = flow(tex_obj(text_value), "102", "102")
-  set_prop(obj, "math_scale", str(scale))
+  obj.math_scale = str(scale)
   return obj
 end
 
