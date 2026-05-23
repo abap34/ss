@@ -2,12 +2,11 @@
 
 <div align="center">
 
-ss is a slide description language and system.
-With ss, you can build slides as if you were writing a program.
+ss is a yet another slide description language and system.
 
 If you are a programmer who puts a lot of code on slides, a mathematics
-enthusiast who uses plenty of unusual symbols, or an educator or student who
-spends long hours making slides every day, you will probably like it.
+enthusiast who uses plenty of unusual symbols, or a goofy AI Agent, you will probably like it.
+
 
 <p><sub>⚠️ WIP: ss is highly experimental software and still at a very early stage, so expect bugs and missing features. Breaking changes are also likely to continue arriving, especially in the user interface, including the syntax.</sub></p>
 
