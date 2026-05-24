@@ -4,6 +4,18 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-05-24
+
+### Changed
+
+- Scheduled document statements independently so document-level computations can be evaluated without relying on source order.
+- Refreshed README release and usage notes.
+
+### Fixed
+
+- Fixed native PDF emoji spacing so emoji glyphs no longer overlap the following text in paragraphs, tables, or code blocks.
+- Fixed Font Awesome icon runs so parsed `fa` sources render as SVG-backed icons instead of fallback placeholder text.
+
 ## [0.1.5] - 2026-05-24
 
 ### Added
