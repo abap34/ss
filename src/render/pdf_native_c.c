@@ -294,6 +294,38 @@ double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, 
     return ((double)width) / PANGO_SCALE;
 }
 
+double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_spec, double font_size) {
+    if (pdf == NULL || pdf->cr == NULL) return 0.0;
+
+    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
+    if (layout == NULL) return 0.0;
+
+    PangoFontDescription *desc = pango_font_description_from_string(font_spec);
+    if (desc == NULL) {
+        g_object_unref(layout);
+        return 0.0;
+    }
+    pango_font_description_set_absolute_size(desc, font_size * PANGO_SCALE);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    char *valid_text = g_utf8_make_valid(text, -1);
+    if (valid_text == NULL) {
+        g_object_unref(layout);
+        return 0.0;
+    }
+    pango_layout_set_text(layout, valid_text, -1);
+    g_free(valid_text);
+
+    PangoRectangle ink = {0};
+    PangoRectangle logical = {0};
+    pango_layout_get_extents(layout, &ink, &logical);
+    g_object_unref(layout);
+
+    const double logical_width = ((double)logical.width) / PANGO_SCALE;
+    const double ink_right = ((double)(ink.x + ink.width)) / PANGO_SCALE;
+    return ink_right > logical_width ? ink_right : logical_width;
+}
+
 int ss_png_size(const char *path, double *width, double *height) {
     cairo_surface_t *surface = cairo_image_surface_create_from_png(path);
     if (surface == NULL || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {

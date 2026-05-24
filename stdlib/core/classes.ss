@@ -53,6 +53,7 @@ type Text = object {
   text_link_underline_offset: ScalarLike = "-1.5"
   text_inline_math_height_factor: ScalarLike = "1.02"
   text_inline_math_spacing: ScalarLike = "0.08"
+  text_emoji_spacing: ScalarLike = "0.12"
   text_markdown_block_gap: ScalarLike = "4"
   text_markdown_list_inset: ScalarLike = "8"
   text_markdown_list_indent: ScalarLike = "26"

@@ -28,11 +28,12 @@ const NativePdfError = error{
     ImageDecodeFailed,
     AssetConversionFailed,
     InvalidPdfCache,
+    InvalidFontAwesomeIcon,
     UnsupportedAssetType,
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v1";
+const page_pdf_cache_version = "ss-native-page-pdf-v5";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -52,14 +53,22 @@ const DrawContext = struct {
 };
 
 const Atom = struct {
-    kind: enum { text, math } = .text,
+    kind: enum { text, math, icon } = .text,
     text: []const u8,
     font: []const u8,
     color: Color,
     width: f32,
     height: f32 = 0,
     is_space: bool,
+    is_emoji: bool = false,
     svg_path: ?[]const u8 = null,
+};
+
+const AtomPaint = struct {
+    font_size: f32,
+    line_height: f32,
+    emoji_spacing: f32,
+    inline_math_spacing: f32,
 };
 
 const MathKind = enum { inline_math, display, block };
@@ -70,8 +79,14 @@ const SvgAsset = struct {
     height: f32,
 };
 
+const IconSpec = struct {
+    style: []const u8,
+    name: []const u8,
+};
+
 const PreloadTask = union(enum) {
     math: MathPreload,
+    icon: []const u8,
     vector_pdf: []const u8,
     raster: RasterPreload,
 };
@@ -568,6 +583,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashF32(hasher, text.link_underline_offset);
         hashF32(hasher, text.inline_math_height_factor);
         hashF32(hasher, text.inline_math_spacing);
+        hashF32(hasher, text.emoji_spacing);
         hashF32(hasher, text.markdown_block_gap);
         hashF32(hasher, text.markdown_list_inset);
         hashF32(hasher, text.markdown_list_indent);
@@ -792,6 +808,9 @@ fn collectLinePreloadsForPlan(
                     .packages = try clonePackageSlice(ctx.allocator, packages),
                     .kind = if (run.kind == .display_math) .display else .inline_math,
                 } }),
+                .icon => if (run.icon) |source| try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{
+                    .icon = try ctx.allocator.dupe(u8, source),
+                }),
                 else => {},
             }
         }
@@ -1207,6 +1226,9 @@ fn collectLinePreloads(
                     .packages = try clonePackageSlice(ctx.allocator, packages),
                     .kind = .inline_math,
                 } }),
+                .icon => if (run.icon) |source| try registerPreloadTask(ctx, tasks, seen, .{
+                    .icon = try ctx.allocator.dupe(u8, source),
+                }),
                 else => {},
             }
         }
@@ -1249,6 +1271,7 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
             allocator.free(math.source);
             allocator.free(math.packages);
         },
+        .icon => |source| allocator.free(source),
         .vector_pdf => |source| allocator.free(source),
         .raster => |raster| allocator.free(raster.source),
     }
@@ -1257,6 +1280,7 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     return switch (task) {
         .math => |math| cachedMathPath(ctx, math.source, math.packages, math.kind, "svg"),
+        .icon => |source| cachedIconPath(ctx, source, "svg"),
         .vector_pdf => |source| cachedAssetPath(ctx, "pdf", source, "svg"),
         .raster => |raster| cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png"),
     };
@@ -1326,6 +1350,11 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
             defer ctx.allocator.free(out);
             return fileExists(out);
         },
+        .icon => |source| {
+            const out = try cachedIconPath(ctx, source, "svg");
+            defer ctx.allocator.free(out);
+            return fileExists(out);
+        },
         .vector_pdf => |source| {
             const out = try cachedAssetPath(ctx, "pdf", source, "svg");
             defer ctx.allocator.free(out);
@@ -1344,6 +1373,11 @@ fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
             const out = try cachedMathPath(ctx, math.source, math.packages, math.kind, "svg");
+            defer ctx.allocator.free(out);
+            return (try cachedSvgAsset(ctx, out)) != null;
+        },
+        .icon => |source| {
+            const out = try cachedIconPath(ctx, source, "svg");
             defer ctx.allocator.free(out);
             return (try cachedSvgAsset(ctx, out)) != null;
         },
@@ -1459,6 +1493,10 @@ fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
     switch (task) {
         .math => |math| {
             const svg = try renderMathToSvg(ctx, math.source, math.packages, math.kind);
+            ctx.allocator.free(svg.path);
+        },
+        .icon => |source| {
+            const svg = try renderIconToSvg(ctx, source);
             ctx.allocator.free(svg.path);
         },
         .vector_pdf => |source| {
@@ -1641,7 +1679,7 @@ fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block
             },
             .code_block => cursor_bl = try drawMarkdownCodeBlock(ctx, frame.x, cursor_bl, frame.width, block, text),
             .bullet_list, .ordered_list => cursor_bl = try drawList(ctx, frame, cursor_bl, block, text, list_depth, packages),
-            .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text),
+            .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text, packages),
         }
         if (index + 1 < blocks.len) cursor_bl -= text.markdown_block_gap;
     }
@@ -1710,14 +1748,14 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         var physical = std.mem.splitScalar(u8, plain.items, '\n');
         while (physical.next()) |segment| {
             if (segment.len == 0 and physical.index == null and plain.items[plain.items.len - 1] == '\n') break;
-            try drawRawText(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, text.color, false);
+            _ = try drawPlainTextAtTop(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, text.color, false, text.emoji_spacing);
             cursor_bl -= text.markdown_code_line_height;
         }
     }
     return baseline_bl - box_height;
 }
 
-fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
+fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, packages: []const []const u8) !f32 {
     const table = block.table orelse return baseline_bl;
     const columns = @max(table.columns, 1);
     const column_width = width / @as(f32, @floatFromInt(columns));
@@ -1727,7 +1765,11 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
     for (table.rows.items) |row| {
         var row_lines: usize = 1;
         const content_width = @max(column_width - text.markdown_table_cell_pad_x * 2, 1);
-        for (row.cells.items) |cell| row_lines = @max(row_lines, try markdownTableCellVisualLineCount(ctx, cell.lines.items, if (row.header) text.bold_font else text.font, text.font_size, content_width));
+        for (row.cells.items) |cell| {
+            var cell_text = text;
+            cell_text.font = if (row.header) text.bold_font else text.font;
+            row_lines = @max(row_lines, try markdownTableCellVisualLineCount(ctx, cell.lines.items, cell_text, content_width, packages));
+        }
         const row_height = @as(f32, @floatFromInt(row_lines)) * text.line_height + text.markdown_table_cell_pad_y * 2;
         const row_bottom = cursor_top_bl - row_height;
         const fill = if (row.header)
@@ -1761,15 +1803,12 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
 
             if (column_index < row.cells.items.len) {
                 const cell = row.cells.items[column_index];
-                const cell_text = if (row.header) text.bold_font else text.font;
+                var cell_text = text;
+                cell_text.font = if (row.header) text.bold_font else text.font;
                 var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - text.font_size;
                 for (cell.lines.items) |line| {
-                    const plain = try markdownLinePlainText(ctx.allocator, line);
-                    defer ctx.allocator.free(plain);
-                    const visual_lines = try markdownTableLineVisualLineCount(ctx, plain, cell_text, text.font_size, content_width);
-                    const visual_height = @as(f32, @floatFromInt(visual_lines)) * text.line_height;
-                    try drawRawText(ctx, cell_x + text.markdown_table_cell_pad_x, baselineTop(line_bl, text.font_size), content_width, visual_height, plain, cell_text, text.font_size, text.color, true);
-                    line_bl -= visual_height;
+                    const one_line = [_]Line{line};
+                    line_bl = try drawInlineLines(ctx, cell_x + text.markdown_table_cell_pad_x, line_bl, content_width, one_line[0..], cell_text, true, packages);
                 }
             }
         }
@@ -1778,29 +1817,21 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
     return cursor_top_bl;
 }
 
-fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, font: []const u8, font_size: f32, max_width: f32) !usize {
+fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
     if (lines.len == 0) return 1;
     var total: usize = 0;
     for (lines) |line| {
-        const plain = try markdownLinePlainText(ctx.allocator, line);
-        defer ctx.allocator.free(plain);
-        total += try markdownTableLineVisualLineCount(ctx, plain, font, font_size, max_width);
+        total += try markdownTableLineVisualLineCount(ctx, line, text, max_width, packages);
     }
     return @max(total, 1);
 }
 
-fn markdownTableLineVisualLineCount(ctx: *DrawContext, text: []const u8, font: []const u8, font_size: f32, max_width: f32) !usize {
-    if (std.mem.trim(u8, text, " \t\r\n").len == 0) return 1;
-    const width = try measureText(ctx, text, font, font_size);
-    const available = @max(max_width, 1);
-    return @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(width / available))));
-}
-
-fn markdownLinePlainText(allocator: Allocator, line: Line) ![]u8 {
-    var plain = std.ArrayList(u8).empty;
-    errdefer plain.deinit(allocator);
-    for (line.runs.items) |run| try plain.appendSlice(allocator, run.text);
-    return try plain.toOwnedSlice(allocator);
+fn markdownTableLineVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+    var atoms = std.ArrayList(Atom).empty;
+    defer atoms.deinit(ctx.allocator);
+    defer freeAtoms(ctx.allocator, atoms.items);
+    try layoutAtoms(ctx, line, text, packages, &atoms);
+    return atomVisualLineCount(atoms.items, atomPaint(text), max_width);
 }
 
 fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
@@ -1810,7 +1841,7 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
         try layoutAtoms(ctx, line, text, packages, &atoms);
-        cursor_bl = try drawAtoms(ctx, x, cursor_bl, width, atoms.items, text, wrap);
+        cursor_bl = try drawAtoms(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
@@ -1822,7 +1853,7 @@ fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, packages: []const
             .math, .display_math => {
                 try appendMathAtom(ctx, atoms, run.text, text, packages, if (run.kind == .display_math) .display else .inline_math);
             },
-            .icon => try appendTextAtoms(ctx, atoms, "■", text.font, text.link_color, text.font_size),
+            .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
             .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.color, text.font_size),
             .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size),
             .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size),
@@ -1841,7 +1872,12 @@ fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
 fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: []const u8, color: Color, font_size: f32) !void {
     var tokenizer = Tokenizer.init(value);
     while (tokenizer.next()) |token| {
-        const width = try measureText(ctx, token, font, font_size);
+        const is_emoji = isEmojiToken(token);
+        const measured_width = if (is_emoji)
+            try measureTextVisualWidth(ctx, token, font, font_size)
+        else
+            try measureText(ctx, token, font, font_size);
+        const width = if (is_emoji) @max(measured_width, font_size * 1.05) else measured_width;
         try atoms.append(ctx.allocator, .{
             .kind = .text,
             .text = token,
@@ -1849,6 +1885,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             .color = color,
             .width = width,
             .is_space = isWhitespace(token),
+            .is_emoji = is_emoji,
         });
     }
 }
@@ -1870,30 +1907,128 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
     });
 }
 
-fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, text: TextPaint, wrap: bool) !f32 {
+fn appendIconAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), source: []const u8, text: TextPaint) !void {
+    const svg = try renderIconToSvg(ctx, source);
+    errdefer ctx.allocator.free(svg.path);
+    const target_height = @max(text.font_size, 1);
+    const scale = if (svg.height > 0) target_height / svg.height else 1;
+    try atoms.append(ctx.allocator, .{
+        .kind = .icon,
+        .text = source,
+        .font = text.font,
+        .color = text.link_color,
+        .width = @max(svg.width * scale, 1),
+        .height = target_height,
+        .is_space = false,
+        .svg_path = svg.path,
+    });
+}
+
+fn atomPaint(text: TextPaint) AtomPaint {
+    return .{
+        .font_size = text.font_size,
+        .line_height = text.line_height,
+        .emoji_spacing = text.emoji_spacing,
+        .inline_math_spacing = text.inline_math_spacing,
+    };
+}
+
+fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, paint: AtomPaint, wrap: bool) !f32 {
     var cursor_bl = baseline_bl;
     var cursor_x = x;
-    for (atoms) |atom| {
+    for (atoms, 0..) |atom, index| {
         if (atom.is_space and cursor_x == x) continue;
         if (wrap and cursor_x > x and cursor_x + atom.width > x + width) {
-            cursor_bl -= text.line_height;
+            cursor_bl -= paint.line_height;
             cursor_x = x;
             if (atom.is_space) continue;
         }
         switch (atom.kind) {
             .text => {
-                try drawRawText(ctx, cursor_x, baselineTop(cursor_bl, text.font_size), @max(atom.width + text.font_size, 1), text.line_height, atom.text, atom.font, text.font_size, atom.color, false);
-                cursor_x += atom.width;
+                try drawRawText(ctx, cursor_x, baselineTop(cursor_bl, paint.font_size), @max(atom.width + paint.font_size, 1), paint.line_height, atom.text, atom.font, paint.font_size, atom.color, false);
+                cursor_x += atomAdvance(atoms, index, paint);
             },
             .math => {
                 const path = atom.svg_path orelse continue;
                 const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
                 try drawSvgFrameTinted(ctx, frame, path, atom.color);
-                cursor_x += atom.width + text.font_size * text.inline_math_spacing;
+                cursor_x += atomAdvance(atoms, index, paint);
+            },
+            .icon => {
+                const path = atom.svg_path orelse continue;
+                const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.2, .width = atom.width, .height = atom.height };
+                try drawSvgFrameTinted(ctx, frame, path, atom.color);
+                cursor_x += atomAdvance(atoms, index, paint);
             },
         }
     }
-    return cursor_bl - text.line_height;
+    return cursor_bl - paint.line_height;
+}
+
+fn atomVisualLineCount(atoms: []const Atom, paint: AtomPaint, max_width: f32) usize {
+    if (atoms.len == 0) return 1;
+    const available = @max(max_width, 1);
+    var lines: usize = 1;
+    var cursor: f32 = 0;
+    for (atoms, 0..) |atom, index| {
+        if (atom.is_space and cursor == 0) continue;
+        if (cursor > 0 and cursor + atom.width > available) {
+            lines += 1;
+            cursor = 0;
+            if (atom.is_space) continue;
+        }
+        cursor += atomAdvance(atoms, index, paint);
+    }
+    return lines;
+}
+
+fn atomLineAdvance(atoms: []const Atom, paint: AtomPaint) f32 {
+    var width: f32 = 0;
+    for (atoms, 0..) |_, index| width += atomAdvance(atoms, index, paint);
+    return width;
+}
+
+fn atomAdvance(atoms: []const Atom, index: usize, paint: AtomPaint) f32 {
+    const atom = atoms[index];
+    return switch (atom.kind) {
+        .text => atom.width + atomSpacingAfter(atoms, index, paint),
+        .math => atom.width + paint.font_size * paint.inline_math_spacing,
+        .icon => atom.width,
+    };
+}
+
+fn atomSpacingAfter(atoms: []const Atom, index: usize, paint: AtomPaint) f32 {
+    if (index + 1 >= atoms.len) return 0;
+    if (!atoms[index].is_emoji or atoms[index + 1].is_space) return 0;
+    return paint.font_size * paint.emoji_spacing;
+}
+
+fn drawPlainTextAtTop(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    width: f32,
+    line_height: f32,
+    content: []const u8,
+    font: []const u8,
+    font_size: f32,
+    color: Color,
+    wrap: bool,
+    emoji_spacing: f32,
+) !f32 {
+    var atoms = std.ArrayList(Atom).empty;
+    defer atoms.deinit(ctx.allocator);
+    defer freeAtoms(ctx.allocator, atoms.items);
+    try appendTextAtoms(ctx, &atoms, content, font, color, font_size);
+    const paint = AtomPaint{
+        .font_size = font_size,
+        .line_height = line_height,
+        .emoji_spacing = emoji_spacing,
+        .inline_math_spacing = 0,
+    };
+    const baseline_bl = PageLayout.height - (y_top + font_size);
+    _ = try drawAtoms(ctx, x, baseline_bl, width, atoms.items, paint, wrap);
+    return atomLineAdvance(atoms.items, paint);
 }
 
 fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: ?CodePaint) !void {
@@ -1907,7 +2042,7 @@ fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: Tex
     var cursor_bl = baselineBlForBox(frame, text.font_size);
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        try drawCodeLine(ctx, frame.x, baselineTop(cursor_bl, text.font_size), frame.width, line, text.code_font, text.font_size, text.line_height, code_paint);
+        try drawCodeLine(ctx, frame.x, baselineTop(cursor_bl, text.font_size), frame.width, line, text.code_font, text.font_size, text.line_height, code_paint, text.emoji_spacing);
         cursor_bl -= text.line_height;
     }
 }
@@ -1922,9 +2057,10 @@ fn drawCodeLine(
     font_size: f32,
     line_height: f32,
     code: CodePaint,
+    emoji_spacing: f32,
 ) !void {
     if (code.language == null or !std.ascii.eqlIgnoreCase(code.language.?, "python")) {
-        try drawRawText(ctx, x, y_top, width, line_height, line, font, font_size, code.plain, false);
+        _ = try drawPlainTextAtTop(ctx, x, y_top, width, line_height, line, font, font_size, code.plain, false, emoji_spacing);
         return;
     }
 
@@ -1934,30 +2070,29 @@ fn drawCodeLine(
         const start = index;
         const byte = line[index];
         if (byte == '#') {
-            try drawCodeSegment(ctx, &cursor_x, y_top, line[start..], font, font_size, line_height, code.comment);
+            try drawCodeSegment(ctx, &cursor_x, y_top, line[start..], font, font_size, line_height, code.comment, emoji_spacing);
             break;
         }
         if (byte == '"' or byte == '\'') {
             index = stringLiteralEnd(line, index);
-            try drawCodeSegment(ctx, &cursor_x, y_top, line[start..index], font, font_size, line_height, code.string);
+            try drawCodeSegment(ctx, &cursor_x, y_top, line[start..index], font, font_size, line_height, code.string, emoji_spacing);
             continue;
         }
         if (isIdentifierStart(byte)) {
             index += 1;
             while (index < line.len and isIdentifierContinue(line[index])) index += 1;
             const segment = line[start..index];
-            try drawCodeSegment(ctx, &cursor_x, y_top, segment, font, font_size, line_height, if (isPythonKeyword(segment)) code.keyword else code.plain);
+            try drawCodeSegment(ctx, &cursor_x, y_top, segment, font, font_size, line_height, if (isPythonKeyword(segment)) code.keyword else code.plain, emoji_spacing);
             continue;
         }
         index += utf8ByteSequenceLength(byte);
-        try drawCodeSegment(ctx, &cursor_x, y_top, line[start..@min(index, line.len)], font, font_size, line_height, code.plain);
+        try drawCodeSegment(ctx, &cursor_x, y_top, line[start..@min(index, line.len)], font, font_size, line_height, code.plain, emoji_spacing);
     }
 }
 
-fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []const u8, font: []const u8, font_size: f32, line_height: f32, color: Color) !void {
+fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []const u8, font: []const u8, font_size: f32, line_height: f32, color: Color, emoji_spacing: f32) !void {
     if (segment.len == 0) return;
-    const segment_width = try measureText(ctx, segment, font, font_size);
-    try drawRawText(ctx, cursor_x.*, y_top, @max(segment_width + font_size, 1), line_height, segment, font, font_size, color, false);
+    const segment_width = try drawPlainTextAtTop(ctx, cursor_x.*, y_top, 1, line_height, segment, font, font_size, color, false, emoji_spacing);
     cursor_x.* += segment_width;
 }
 
@@ -2282,6 +2417,15 @@ fn measureText(ctx: *DrawContext, content: []const u8, font: []const u8, font_si
     return @floatCast(c.ss_pdf_measure_text(ctx.pdf, content_z.ptr, font_spec.ptr, font_size));
 }
 
+fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: []const u8, font_size: f32) !f32 {
+    if (content.len == 0) return 0;
+    const font_spec = try fontSpec(ctx.allocator, font, font_size);
+    defer ctx.allocator.free(font_spec);
+    const content_z = try ctx.allocator.dupeZ(u8, content);
+    defer ctx.allocator.free(content_z);
+    return @floatCast(c.ss_pdf_measure_text_visual_width(ctx.pdf, content_z.ptr, font_spec.ptr, font_size));
+}
+
 fn baselineBlForBox(frame: Frame, font_size: f32) f32 {
     return frame.y + frame.height - font_size;
 }
@@ -2407,6 +2551,12 @@ fn isWhitespace(text: []const u8) bool {
         if (byte != ' ' and byte != '\t' and byte != '\r' and byte != '\n') return false;
     }
     return text.len > 0;
+}
+
+fn isEmojiToken(text: []const u8) bool {
+    if (text.len == 0) return false;
+    const first = utf8CodepointAt(text, 0);
+    return first.len > 0 and isEmojiStart(first.value);
 }
 
 fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8) !void {
@@ -2586,6 +2736,33 @@ fn renderMathToSvg(ctx: *DrawContext, source: []const u8, packages: []const []co
     return try svgAsset(ctx, out);
 }
 
+fn renderIconToSvg(ctx: *DrawContext, source: []const u8) !SvgAsset {
+    const out = try cachedIconPath(ctx, source, "svg");
+    errdefer ctx.allocator.free(out);
+    if (try cachedSvgAsset(ctx, out)) |asset| return asset;
+    const spec = parseIconSource(source) orelse return NativePdfError.InvalidFontAwesomeIcon;
+    const dir = try tempCachePath(ctx, out, "dir");
+    defer ctx.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
+    errdefer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(ctx.io, dir);
+    const tex_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.tex" });
+    defer ctx.allocator.free(tex_path);
+    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
+    defer ctx.allocator.free(pdf_path);
+    const tex = try iconDocumentSource(ctx.allocator, spec);
+    defer ctx.allocator.free(tex);
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
+    try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
+    const tmp = try tempCachePath(ctx, out, "svg");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    try runChecked(ctx, &.{ "pdftocairo", "-svg", pdf_path, tmp }, .inherit);
+    _ = try svgAsset(ctx, tmp);
+    try publishCacheFile(ctx, tmp, out);
+    return try svgAsset(ctx, out);
+}
+
 fn normalizePdf(ctx: *DrawContext, pdf_path: []const u8) ![]const u8 {
     const out = try std.fmt.allocPrint(ctx.allocator, "{s}.qpdf.pdf", .{pdf_path});
     errdefer ctx.allocator.free(out);
@@ -2595,6 +2772,46 @@ fn normalizePdf(ctx: *DrawContext, pdf_path: []const u8) ![]const u8 {
         return err;
     };
     return out;
+}
+
+fn iconDocumentSource(allocator: Allocator, spec: IconSpec) ![]const u8 {
+    return std.fmt.allocPrint(allocator,
+        \\ \documentclass[border=0pt]{{standalone}}
+        \\ \usepackage{{xcolor}}
+        \\ \usepackage{{fontawesome6}}
+        \\ \begin{{document}}
+        \\ \textcolor[rgb]{{0,0,0}}{{\faIcon[{s}]{{{s}}}}}
+        \\ \end{{document}}
+        \\
+    , .{ spec.style, spec.name });
+}
+
+fn parseIconSource(source: []const u8) ?IconSpec {
+    const variants = [_]struct { prefix: []const u8, style: []const u8 }{
+        .{ .prefix = "fa:", .style = "solid" },
+        .{ .prefix = "fas:", .style = "solid" },
+        .{ .prefix = "far:", .style = "regular" },
+        .{ .prefix = "fab:", .style = "brands" },
+        .{ .prefix = "fa-solid:", .style = "solid" },
+        .{ .prefix = "fa-regular:", .style = "regular" },
+        .{ .prefix = "fa-brands:", .style = "brands" },
+    };
+    for (variants) |variant| {
+        if (std.mem.startsWith(u8, source, variant.prefix)) {
+            const name = source[variant.prefix.len..];
+            if (!isValidIconName(name)) return null;
+            return .{ .style = variant.style, .name = name };
+        }
+    }
+    return null;
+}
+
+fn isValidIconName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |byte| {
+        if (!(std.ascii.isAlphanumeric(byte) or byte == '-')) return false;
+    }
+    return true;
 }
 
 fn mathDocumentSource(allocator: Allocator, source: []const u8, packages: []const []const u8, kind: MathKind) ![]const u8 {
@@ -2703,6 +2920,14 @@ fn cachedMathPath(ctx: *DrawContext, source: []const u8, packages: []const []con
     hashUsize(&hasher, packages.len);
     for (packages) |package| hashString(&hasher, package);
     return std.fmt.allocPrint(ctx.allocator, "{s}/math-{x}.{s}", .{ ctx.cache_dir, hasher.final(), extension });
+}
+
+fn cachedIconPath(ctx: *DrawContext, source: []const u8, extension: []const u8) ![]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, native_artifact_cache_version);
+    hashString(&hasher, "fontawesome6");
+    hashString(&hasher, source);
+    return std.fmt.allocPrint(ctx.allocator, "{s}/fontawesome6-{x}.{s}", .{ ctx.cache_dir, hasher.final(), extension });
 }
 
 fn tempCachePath(ctx: *DrawContext, final_path: []const u8, extension: []const u8) ![]u8 {

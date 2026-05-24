@@ -211,6 +211,7 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("link_underline_offset", text_spec.link_underline_offset, "{d:.1}");
     try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
     try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
+    try text.floatField("emoji_spacing", text_spec.emoji_spacing, "{d:.4}");
     try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
     try text.floatField("markdown_list_inset", text_spec.markdown_list_inset, "{d:.4}");
     try text.floatField("markdown_list_indent", text_spec.markdown_list_indent, "{d:.4}");
