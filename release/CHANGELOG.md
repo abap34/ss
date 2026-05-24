@@ -4,6 +4,22 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-24
+
+### Added
+
+- Added dependency-based document-wide computation so helpers such as page numbering can be expressed in ss itself.
+- Added first-class function values, void-returning functions, and multiline lambda expressions.
+- Added a local pre-release check script that validates release metadata, editor packages, Homebrew formula rendering, smoke tests, and the render Docker image before tagging.
+
+### Changed
+
+- Replaced pass execution with dependency scheduling for document computations.
+- Shortened stdlib API and object class names, and updated stdlib code to use member property syntax.
+- Replaced unmarked layout equality statements with `~`-marked constraint statements.
+- Cleaned up builtin registry definitions and made generated policies explicit.
+- Refreshed README examples, VS Code language support, LSP keyword handling, and tree-sitter grammar for the current syntax.
+
 ## [0.1.4] - 2026-05-24
 
 ### Changed
