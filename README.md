@@ -2,11 +2,10 @@
 
 <div align="center">
 
-ss is a yet another slide description language and system.
+ss is a slide description language and system.
 
 If you are a programmer who puts a lot of code on slides, a mathematics
-enthusiast who uses plenty of unusual symbols, or a goofy AI Agent, you will probably like it.
-
+enthusiast who uses plenty of unusual symbols, or a pitiful AI Agent forced to make slides, you will probably like it.
 
 <p><sub>⚠️ WIP: ss is highly experimental software and still at a very early stage, so expect bugs and missing features. Breaking changes are also likely to continue arriving, especially in the user interface, including the syntax.</sub></p>
 
@@ -82,7 +81,9 @@ document
 end
 ```
 
-ss analyzes the dependencies across the whole computations in the program, thet enables ss prove that the `add_pageno()` depends on the pages, so it will be evaluated after those values are available.
+ss analyzes dependencies across the whole program.
+This enables ss to infer that `add_pageno()` depends on the page list,
+so the function is evaluated only after the pages become available.
 
 That means document-wide behavior suchas adding a table of contents or page numbers can be defined in ss itself, not
 bolted on from outside the language. Yes, this is directed at you (and me), the
