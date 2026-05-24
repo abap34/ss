@@ -730,7 +730,7 @@ test "compiler semantics: page anchors cannot be constraint targets" {
         \\import std:themes/default
         \\
         \\page bad
-        \\  constrain left(page) == left(page)
+        \\  ~ page.left == page.left
         \\end
         \\
     );
@@ -741,7 +741,7 @@ test "compiler semantics: missing constraint anchors are rejected statically" {
         \\import std:themes/default
         \\
         \\page bad
-        \\  constrain left(missing) == left(page)
+        \\  ~ missing.left == page.left
         \\end
         \\
     );

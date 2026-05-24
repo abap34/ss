@@ -388,10 +388,10 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     var parsed = try parse(
         \\page Layout
         \\  let local = 42
-        \\  box.width == 100
-        \\  box.left == page.left + 10
-        \\  constrain right(box) == right(page) - 20
-        \\  box.fill = "red"
+        \\  ~ box.width == 100
+        \\  ~ box.left == page.left + 10
+        \\  ~ box.right == page.right - 20
+        \\  box.left = "red"
         \\end
         \\
     );
@@ -425,8 +425,15 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
         .ident => |name| try testing.expectEqualStrings("box", name),
         else => return error.ExpectedIdentifier,
     }
-    try expectString(property.args.items[1], "fill");
+    try expectString(property.args.items[1], "left");
     try expectString(property.args.items[2], "red");
+
+    try expectParseError(error.ExpectedConstraintMarker,
+        \\page Bad
+        \\  box.left == page.left + 10
+        \\end
+        \\
+    );
 }
 
 test "syntax spec: member sugar lowers to primitive calls" {
@@ -502,7 +509,7 @@ test "syntax spec: bare assignment must say let and page dimensions are not targ
 
     try expectParseError(error.PageCannotBeConstraintTarget,
         \\page Bad
-        \\  page.width == 100
+        \\  ~ page.width == 100
         \\end
         \\
     );

@@ -38,15 +38,15 @@ let body = text <<
 - Bullets must not overlap.
 - Japanese text should render: 日本語の本文。
 >>
-body.top == title.bottom - 28
-body.left == page.left + 110
-body.width == 1120
+~ body.top == title.bottom - 28
+~ body.left == page.left + 110
+~ body.width == 1120
 
 let svg_fig = image("assets/vector.svg", 1)
-svg_fig.top == body.bottom - 34
-svg_fig.left == page.left + 120
-svg_fig.width == 320
-svg_fig.height == 180
+~ svg_fig.top == body.bottom - 34
+~ svg_fig.left == page.left + 120
+~ svg_fig.width == 320
+~ svg_fig.height == 180
 
 pageno()
 end

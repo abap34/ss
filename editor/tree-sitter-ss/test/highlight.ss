@@ -13,5 +13,5 @@ if title then
 else
   property title "text_color" c"#111111"
 end
-title.left == page.left + 24
+~ title.left == page.left + 24
 end

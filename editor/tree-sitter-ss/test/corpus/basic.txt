@@ -24,7 +24,7 @@ page "Intro"
   text <<
 Markdown body
 >>
-  constrain title.left == page.left + gap
+  ~ title.left == page.left + gap
 end
 
 --------------------------------------------------------------------------------

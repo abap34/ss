@@ -634,7 +634,7 @@ fn asciiIdentifierEnd(slice: []const u8, start: usize) usize {
 }
 
 fn isKeyword(token: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "const", "page", "fn", "let", "return", "end", "constrain" };
+    const keywords = [_][]const u8{ "import", "const", "page", "fn", "let", "return", "end" };
     for (keywords) |keyword| {
         if (std.mem.eql(u8, token, keyword)) return true;
     }
