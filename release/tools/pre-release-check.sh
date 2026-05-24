@@ -15,6 +15,7 @@ Options:
 Environment:
   PRE_RELEASE_DOCKER_PLATFORM  Docker platform to build and run. Defaults to linux/amd64.
   PRE_RELEASE_IMAGE            Local Docker image tag. Defaults to ss-render:<tag>-local.
+  PRE_RELEASE_DOCKER_TIMEOUT   Seconds to wait for Docker daemon readiness. Defaults to 180.
 EOF
 }
 
@@ -122,6 +123,7 @@ formula_path="$cache_dir/ss.rb"
 vsix_path="$cache_dir/ss-language-support-$tag.vsix"
 docker_platform="${PRE_RELEASE_DOCKER_PLATFORM:-linux/amd64}"
 docker_image="${PRE_RELEASE_IMAGE:-ss-render:${tag}-local}"
+docker_timeout="${PRE_RELEASE_DOCKER_TIMEOUT:-180}"
 
 mkdir -p "$cache_dir"
 
@@ -215,7 +217,7 @@ if [[ "$skip_docker" == true ]]; then
   echo "pre-release-check: skipped Docker render image checks"
 else
   step "Docker availability"
-  run_with_timeout 45 docker info >/dev/null || fail "docker daemon did not respond within 45 seconds"
+  run_with_timeout "$docker_timeout" docker info >/dev/null || fail "docker daemon did not respond within ${docker_timeout} seconds"
 
   step "render Docker image build"
   if docker buildx version >/dev/null 2>&1; then
