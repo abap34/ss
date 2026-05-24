@@ -438,7 +438,7 @@ fn primitiveResultTypeInfo(
 
     var info = infoFromType(result_type);
     info.object_class = switch (descriptor.result_policy) {
-        .group_object => "GroupObj",
+        .group_object => "Group",
         .object_from_role_arg => inferObjectConstructorClass(sema, env, call, 2),
         else => null,
     };
