@@ -177,7 +177,7 @@ const LowerDiagnostic = struct {
     };
 };
 
-const ScheduledRoot = struct {
+const ScheduledUnit = struct {
     module_id: core.SourceModuleId,
     source: []const u8,
     path: []const u8,
@@ -187,15 +187,61 @@ const ScheduledRoot = struct {
     kind: Kind,
 
     const Kind = union(enum) {
-        document: []const Statement,
+        document_statement: struct {
+            stmt: Statement,
+            index: usize,
+        },
         page: struct {
             decl: PageDecl,
             page_id: core.NodeId,
         },
     };
 
-    fn deinit(self: *ScheduledRoot) void {
+    fn deinit(self: *ScheduledUnit) void {
         self.summary.deinit();
+    }
+};
+
+const ScheduleEdge = struct {
+    from: usize,
+    to: usize,
+};
+
+const ScheduleGraph = struct {
+    allocator: std.mem.Allocator,
+    functions: *const std.StringHashMap(FunctionDecl),
+    document: doc.Document,
+    units: std.ArrayList(ScheduledUnit),
+    edges: std.ArrayList(ScheduleEdge),
+    order: []usize,
+
+    fn build(allocator: std.mem.Allocator, ir: *const core.Ir) !ScheduleGraph {
+        var graph = ScheduleGraph{
+            .allocator = allocator,
+            .functions = &ir.functions,
+            .document = try doc.Document.init(allocator, ir.asset_base_dir),
+            .units = .empty,
+            .edges = .empty,
+            .order = &.{},
+        };
+        errdefer graph.deinit();
+
+        var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
+        defer collected_modules.deinit();
+        var source_order: usize = 0;
+        try collectScheduledUnits(ir, ir.projectModule(), &graph.document, &ir.functions, &graph.units, &collected_modules, &source_order);
+        try validateScheduledUnits(&graph.document, graph.units.items);
+        try buildScheduleEdges(allocator, graph.units.items, &graph.edges);
+        graph.order = try scheduleFromEdges(allocator, graph.units.items, graph.edges.items);
+        return graph;
+    }
+
+    fn deinit(self: *ScheduleGraph) void {
+        self.allocator.free(self.order);
+        self.edges.deinit(self.allocator);
+        for (self.units.items) |*unit| unit.deinit();
+        self.units.deinit(self.allocator);
+        self.document.deinit();
     }
 };
 
@@ -305,35 +351,33 @@ pub fn elaborateProgram(
 }
 
 pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Document {
-    var document = try doc.Document.init(allocator, ir.asset_base_dir);
-    errdefer document.deinit();
-
     diagnostic_reported = false;
-    var roots = std.ArrayList(ScheduledRoot).empty;
+    var graph = try ScheduleGraph.build(allocator, ir);
+    errdefer graph.document.deinit();
     defer {
-        for (roots.items) |*root| root.deinit();
-        roots.deinit(allocator);
+        graph.allocator.free(graph.order);
+        graph.edges.deinit(graph.allocator);
+        for (graph.units.items) |*unit| unit.deinit();
+        graph.units.deinit(graph.allocator);
     }
-    var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
-    defer collected_modules.deinit();
-    var source_order: usize = 0;
-    try collectScheduledRoots(ir, ir.projectModule(), &document, &ir.functions, &roots, &collected_modules, &source_order);
-
-    try validateScheduledRoots(&document, roots.items);
-    const schedule = try scheduleRoots(allocator, roots.items);
-    defer allocator.free(schedule);
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
-    for (schedule) |root_index| try executeScheduledRoot(&document, &ir.functions, &closures, roots.items[root_index]);
-    return document;
+    var document_states = std.AutoHashMap(core.SourceModuleId, DocumentExecutionState).init(allocator);
+    defer {
+        var iter = document_states.valueIterator();
+        while (iter.next()) |state| state.deinit(allocator);
+        document_states.deinit();
+    }
+    for (graph.order) |unit_index| try executeScheduledUnit(&graph.document, &ir.functions, &closures, &document_states, graph.units.items[unit_index]);
+    return graph.document;
 }
 
-fn collectScheduledRoots(
+fn collectScheduledUnits(
     core_ir: *const core.Ir,
     module: *const core.SourceModule,
     document: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
-    roots: *std.ArrayList(ScheduledRoot),
+    units: *std.ArrayList(ScheduledUnit),
     collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
     source_order: *usize,
 ) !void {
@@ -342,12 +386,10 @@ fn collectScheduledRoots(
         try collected_modules.put(module.id, {});
     }
 
-    if (module.program.document_statements.items.len > 0) {
-        try appendDocumentRoot(core_ir.allocator, module, functions, roots, source_order);
-    }
+    try appendDocumentStatementUnits(core_ir.allocator, module, functions, units, source_order);
 
     if (module.program.top_level_items.items.len == 0) {
-        for (module.program.pages.items) |page| try appendPageRoot(core_ir.allocator, module, document, functions, roots, source_order, page);
+        for (module.program.pages.items) |page| try appendPageUnit(core_ir.allocator, module, document, functions, units, source_order, page);
         return;
     }
 
@@ -357,50 +399,53 @@ fn collectScheduledRoots(
                 if (import_index >= module.resolved_import_ids.items.len) continue;
                 const import_id = module.resolved_import_ids.items[import_index];
                 const imported = core_ir.moduleById(import_id) orelse continue;
-                try collectScheduledRoots(core_ir, imported, document, functions, roots, collected_modules, source_order);
+                try collectScheduledUnits(core_ir, imported, document, functions, units, collected_modules, source_order);
             },
             .page => |page_index| {
                 if (page_index >= module.program.pages.items.len) continue;
-                try appendPageRoot(core_ir.allocator, module, document, functions, roots, source_order, module.program.pages.items[page_index]);
+                try appendPageUnit(core_ir.allocator, module, document, functions, units, source_order, module.program.pages.items[page_index]);
             },
         }
     }
 }
 
-fn appendDocumentRoot(
+fn appendDocumentStatementUnits(
     allocator: std.mem.Allocator,
     module: *const core.SourceModule,
     functions: *const std.StringHashMap(FunctionDecl),
-    roots: *std.ArrayList(ScheduledRoot),
+    units: *std.ArrayList(ScheduledUnit),
     source_order: *usize,
 ) !void {
     var analyzer = dependencies.Analyzer.init(allocator, functions);
     defer analyzer.deinit();
-    const statements = module.program.document_statements.items;
-    const span = documentStatementsSpan(statements);
-    const summary = try analyzer.documentStatements(statements);
-    errdefer {
-        var owned = summary;
-        owned.deinit();
+    for (module.program.document_statements.items, 0..) |stmt, stmt_index| {
+        const summary = try analyzer.statement(stmt);
+        errdefer {
+            var owned = summary;
+            owned.deinit();
+        }
+        try units.append(allocator, .{
+            .module_id = module.id,
+            .source = module.source,
+            .path = module.path orelse module.spec,
+            .source_order = source_order.*,
+            .span = stmt.span,
+            .summary = summary,
+            .kind = .{ .document_statement = .{
+                .stmt = stmt,
+                .index = stmt_index,
+            } },
+        });
+        source_order.* += 1;
     }
-    try roots.append(allocator, .{
-        .module_id = module.id,
-        .source = module.source,
-        .path = module.path orelse module.spec,
-        .source_order = source_order.*,
-        .span = span,
-        .summary = summary,
-        .kind = .{ .document = statements },
-    });
-    source_order.* += 1;
 }
 
-fn appendPageRoot(
+fn appendPageUnit(
     allocator: std.mem.Allocator,
     module: *const core.SourceModule,
     document: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
-    roots: *std.ArrayList(ScheduledRoot),
+    units: *std.ArrayList(ScheduledUnit),
     source_order: *usize,
     page: PageDecl,
 ) !void {
@@ -412,7 +457,7 @@ fn appendPageRoot(
         var owned = summary;
         owned.deinit();
     }
-    try roots.append(allocator, .{
+    try units.append(allocator, .{
         .module_id = module.id,
         .source = module.source,
         .path = module.path orelse module.spec,
@@ -424,20 +469,10 @@ fn appendPageRoot(
     source_order.* += 1;
 }
 
-fn documentStatementsSpan(statements: []const Statement) ast.Span {
-    if (statements.len == 0) return .{ .start = 0, .end = 0 };
-    var span = statements[0].span;
-    for (statements[1..]) |stmt| {
-        span.start = @min(span.start, stmt.span.start);
-        span.end = @max(span.end, stmt.span.end);
-    }
-    return span;
-}
-
-fn validateScheduledRoots(ir: *doc.Document, roots: []const ScheduledRoot) !void {
-    for (roots) |root| {
-        if (root.summary.invalid_selection_mutation) |invalid| {
-            const origin = try rootOrigin(ir.allocator, root);
+fn validateScheduledUnits(ir: *doc.Document, units: []const ScheduledUnit) !void {
+    for (units) |unit| {
+        if (unit.summary.invalid_selection_mutation) |invalid| {
+            const origin = try unitOrigin(ir.allocator, unit);
             defer ir.allocator.free(origin);
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
                 .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated") },
@@ -445,49 +480,49 @@ fn validateScheduledRoots(ir: *doc.Document, roots: []const ScheduledRoot) !void
             _ = invalid;
             return error.InvalidSelectionMutation;
         }
-        if (root.summary.reads_layout and root.summary.writes_layout_input) {
-            const origin = try rootOrigin(ir.allocator, root);
+        if (unit.summary.reads_layout and unit.summary.writes_layout_input) {
+            const origin = try unitOrigin(ir.allocator, unit);
             defer ir.allocator.free(origin);
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
                 .user_report = .{ .message = try ir.allocator.dupe(u8, "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once") },
             });
             return error.LayoutDependencyCycle;
         }
-        if (root.summary.reads_layout) {
-            const origin = try rootOrigin(ir.allocator, root);
+        if (unit.summary.reads_layout) {
+            const origin = try unitOrigin(ir.allocator, unit);
             defer ir.allocator.free(origin);
             try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "PostLayoutComputationUnsupported: layout-reading root computations are not implemented yet") },
+                .user_report = .{ .message = try ir.allocator.dupe(u8, "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet") },
             });
             return error.PostLayoutComputationUnsupported;
         }
     }
 }
 
-fn scheduleRoots(allocator: std.mem.Allocator, roots: []const ScheduledRoot) ![]usize {
-    const count = roots.len;
+fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit, edges: *std.ArrayList(ScheduleEdge)) !void {
+    for (units, 0..) |left, left_index| {
+        for (units, 0..) |right, right_index| {
+            if (left_index == right_index) continue;
+            if (!sameDocumentStatementSequence(left, right) or left.source_order < right.source_order) {
+                try addResourceScheduleEdges(allocator, edges, left.summary, right.summary, left_index, right_index);
+            }
+            if (unitKindIsPage(left) and unitKindIsDocumentStatement(right) and documentStatementNeedsPageBody(right.summary)) {
+                try addScheduleEdge(allocator, edges, left_index, right_index);
+            }
+            if (consecutiveDocumentStatements(left, right)) {
+                try addScheduleEdge(allocator, edges, left_index, right_index);
+            }
+        }
+    }
+}
+
+fn scheduleFromEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit, edges: []const ScheduleEdge) ![]usize {
+    const count = units.len;
     const indegree = try allocator.alloc(usize, count);
     defer allocator.free(indegree);
     @memset(indegree, 0);
 
-    const edges = try allocator.alloc(std.ArrayList(usize), count);
-    defer {
-        for (edges) |*list| list.deinit(allocator);
-        allocator.free(edges);
-    }
-    for (edges) |*list| list.* = .empty;
-
-    for (roots, 0..) |left, left_index| {
-        for (roots, 0..) |right, right_index| {
-            if (left_index == right_index) continue;
-            if (hasResourceDependency(left.summary, right.summary)) {
-                try addScheduleEdge(allocator, edges, indegree, left_index, right_index);
-            }
-            if (rootKindIsPage(left) and rootKindIsDocument(right) and documentRootNeedsPageBody(right.summary)) {
-                try addScheduleEdge(allocator, edges, indegree, left_index, right_index);
-            }
-        }
-    }
+    for (edges) |edge| indegree[edge.to] += 1;
 
     var done = try allocator.alloc(bool, count);
     defer allocator.free(done);
@@ -498,45 +533,55 @@ fn scheduleRoots(allocator: std.mem.Allocator, roots: []const ScheduledRoot) ![]
     var produced: usize = 0;
     while (produced < count) {
         var best: ?usize = null;
-        for (roots, 0..) |root, index| {
+        for (units, 0..) |unit, index| {
             if (done[index] or indegree[index] != 0) continue;
-            if (best == null or root.source_order < roots[best.?].source_order) best = index;
+            if (best == null or unit.source_order < units[best.?].source_order) best = index;
         }
         const next = best orelse return error.ScheduledDependencyCycle;
         done[next] = true;
         out[produced] = next;
         produced += 1;
-        for (edges[next].items) |target| {
-            std.debug.assert(indegree[target] > 0);
-            indegree[target] -= 1;
+        for (edges) |edge| {
+            if (edge.from != next) continue;
+            std.debug.assert(indegree[edge.to] > 0);
+            indegree[edge.to] -= 1;
         }
     }
     return out;
 }
 
-fn addScheduleEdge(
+fn addResourceScheduleEdges(
     allocator: std.mem.Allocator,
-    edges: []std.ArrayList(usize),
-    indegree: []usize,
+    edges: *std.ArrayList(ScheduleEdge),
+    left: dependencies.AccessSummary,
+    right: dependencies.AccessSummary,
     from: usize,
     to: usize,
 ) !void {
-    for (edges[from].items) |existing| {
-        if (existing == to) return;
-    }
-    try edges[from].append(allocator, to);
-    indegree[to] += 1;
-}
-
-fn hasResourceDependency(left: dependencies.AccessSummary, right: dependencies.AccessSummary) bool {
     for (left.writes.items) |write| {
         if (!resourceNeedsScheduleEdge(write)) continue;
         for (right.reads.items) |read| {
             if (!resourceNeedsScheduleEdge(read)) continue;
-            if (write.intersects(read)) return true;
+            if (write.intersects(read)) {
+                try addScheduleEdge(allocator, edges, from, to);
+            }
         }
     }
-    return false;
+}
+
+fn addScheduleEdge(
+    allocator: std.mem.Allocator,
+    edges: *std.ArrayList(ScheduleEdge),
+    from: usize,
+    to: usize,
+) !void {
+    for (edges.items) |edge| {
+        if (edge.from == from and edge.to == to) return;
+    }
+    try edges.append(allocator, .{
+        .from = from,
+        .to = to,
+    });
 }
 
 fn resourceNeedsScheduleEdge(resource: dependencies.Resource) bool {
@@ -546,21 +591,45 @@ fn resourceNeedsScheduleEdge(resource: dependencies.Resource) bool {
     };
 }
 
-fn rootKindIsPage(root: ScheduledRoot) bool {
-    return switch (root.kind) {
+fn unitKindIsPage(unit: ScheduledUnit) bool {
+    return switch (unit.kind) {
         .page => true,
-        .document => false,
+        .document_statement => false,
     };
 }
 
-fn rootKindIsDocument(root: ScheduledRoot) bool {
-    return switch (root.kind) {
-        .document => true,
+fn unitKindIsDocumentStatement(unit: ScheduledUnit) bool {
+    return switch (unit.kind) {
+        .document_statement => true,
         .page => false,
     };
 }
 
-fn documentRootNeedsPageBody(summary: dependencies.AccessSummary) bool {
+fn sameDocumentStatementSequence(left: ScheduledUnit, right: ScheduledUnit) bool {
+    if (left.module_id != right.module_id) return false;
+    return switch (left.kind) {
+        .document_statement => switch (right.kind) {
+            .document_statement => true,
+            .page => false,
+        },
+        .page => false,
+    };
+}
+
+fn consecutiveDocumentStatements(left: ScheduledUnit, right: ScheduledUnit) bool {
+    if (left.module_id != right.module_id) return false;
+    const left_index = switch (left.kind) {
+        .document_statement => |stmt| stmt.index,
+        .page => return false,
+    };
+    const right_index = switch (right.kind) {
+        .document_statement => |stmt| stmt.index,
+        .page => return false,
+    };
+    return left_index + 1 == right_index;
+}
+
+fn documentStatementNeedsPageBody(summary: dependencies.AccessSummary) bool {
     for (summary.reads.items) |resource| {
         if (resource.kind == .graph_objects or resource.kind == .metadata) return true;
     }
@@ -570,24 +639,64 @@ fn documentRootNeedsPageBody(summary: dependencies.AccessSummary) bool {
     return false;
 }
 
-fn executeScheduledRoot(
+const DocumentExecutionState = struct {
+    env: std.StringHashMap(core.Value),
+    last_code_like: ?core.NodeId = null,
+
+    fn init(allocator: std.mem.Allocator) DocumentExecutionState {
+        return .{ .env = std.StringHashMap(core.Value).init(allocator) };
+    }
+
+    fn deinit(self: *DocumentExecutionState, allocator: std.mem.Allocator) void {
+        deinitValueEnv(allocator, &self.env);
+    }
+};
+
+fn executeScheduledUnit(
     ir: *doc.Document,
     functions: *const std.StringHashMap(FunctionDecl),
     closures: *ClosureStore,
-    root: ScheduledRoot,
+    document_states: *std.AutoHashMap(core.SourceModuleId, DocumentExecutionState),
+    unit: ScheduledUnit,
 ) !void {
-    setLowerDiagnosticOrigin(root.source, root.path);
-    switch (root.kind) {
-        .document => |statements| try executeDocumentStatementSlice(ir, functions, closures, statements),
+    setLowerDiagnosticOrigin(unit.source, unit.path);
+    switch (unit.kind) {
+        .document_statement => |document_statement| {
+            const entry = try document_states.getOrPut(unit.module_id);
+            if (!entry.found_existing) entry.value_ptr.* = DocumentExecutionState.init(ir.allocator);
+            try executeScheduledDocumentStatement(ir, functions, closures, entry.value_ptr, document_statement.stmt);
+        },
         .page => |page| try executePageBody(page.decl, page.page_id, ir, functions, closures),
     }
 }
 
-fn rootOrigin(allocator: std.mem.Allocator, root: ScheduledRoot) ![]const u8 {
-    if (root.path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ root.path, root.span.start, root.span.end });
+fn executeScheduledDocumentStatement(
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    closures: *ClosureStore,
+    state: *DocumentExecutionState,
+    stmt: Statement,
+) !void {
+    const flow = executeStatement(ir, ir.document_id, .document, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
+        const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
+        if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+        return err;
+    };
+    switch (flow) {
+        .none => {},
+        .returned => |value| {
+            var owned = value;
+            owned.deinit(ir.allocator);
+            return error.ReturnOutsideFunction;
+        },
     }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ root.span.start, root.span.end });
+}
+
+fn unitOrigin(allocator: std.mem.Allocator, unit: ScheduledUnit) ![]const u8 {
+    if (unit.path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ unit.path, unit.span.start, unit.span.end });
+    }
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ unit.span.start, unit.span.end });
 }
 
 fn executeModuleProgramInSourceOrder(

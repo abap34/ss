@@ -245,6 +245,24 @@ test "compiler semantics: generated page numbers run after page graph exists" {
     , "1/2");
 }
 
+test "compiler semantics: scheduled document statements share document scope" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  let label = "from document scope"
+        \\  foreach(
+        \\    pages(docctx()),
+        \\    (page_value: page) |-> new(page_value, label, "body", "text")
+        \\  )
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+    , "from document scope");
+}
+
 test "compiler semantics: void functions may finish without explicit return" {
     try expectObjectContent(
         \\import std:themes/default

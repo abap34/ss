@@ -137,6 +137,10 @@ pub const Analyzer = struct {
         return summary;
     }
 
+    pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
+        return try self.analyzeStatement(stmt);
+    }
+
     fn analyzeStatements(self: *Analyzer, items: []const ast.Statement) anyerror!AccessSummary {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
