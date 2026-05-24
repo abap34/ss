@@ -3081,10 +3081,6 @@
     "named": false
   },
   {
-    "type": "constrain",
-    "named": false
-  },
-  {
     "type": "constraints",
     "named": false
   },
@@ -3242,6 +3238,10 @@
   },
   {
     "type": "}",
+    "named": false
+  },
+  {
+    "type": "~",
     "named": false
   }
 ]

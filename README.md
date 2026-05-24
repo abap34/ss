@@ -94,7 +94,7 @@ Layout relationships between components can be expressed precisely as
 constraints:
 
 ```text
-program.bottom == caption.top + 10
+~ program.bottom == caption.top + 10
 ```
 
 Precise layout constraints let you push slide quality as far as you want. ss
@@ -156,7 +156,7 @@ let body = text <<
 - Math is rendered with real local LaTeX.
 >>
 
-body.top == title.bottom - 32
+~ body.top == title.bottom - 32
 end
 ```
 

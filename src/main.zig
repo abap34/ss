@@ -287,7 +287,7 @@ fn starterSlideTemplate() []const u8 {
     \\- Run `ss render --project . --output deck.pdf`.
     \\>>
     \\
-    \\body.top == title.bottom - 32
+    \\~ body.top == title.bottom - 32
     \\pageno()
     \\end
     \\

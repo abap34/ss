@@ -9,5 +9,5 @@ cover(
   "v1"
 )
 heading.text_color = c"#334455"
-heading.top == page.top - 96
+~ heading.top == page.top - 96
 end

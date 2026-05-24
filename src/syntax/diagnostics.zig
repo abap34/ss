@@ -30,6 +30,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.RequiredParameterAfterDefault => "defaulted parameters must trail required parameters",
         error.ExpectedReturn => "return statement",
         error.ExpectedEqualityOperator => "'=='",
+        error.ExpectedConstraintMarker => "'~' before a constraint",
         error.ReservedPageNamePrefix => "page name not starting with '#'",
         else => null,
     };
