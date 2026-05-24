@@ -30,7 +30,7 @@
   "annotated function": {
     "prefix": "ss-fn-ann",
     "body": [
-      "fn ${1:op_text}(${2:self}: object<${3:TextObj}>) -> object ! LowerRender @op(${4:draw_text})"
+      "fn ${1:op_text}(${2:self}: object<${3:Text}>) -> object ! LowerRender @op(${4:draw_text})"
     ],
     "description": "Create an annotated function declaration"
   },
@@ -46,8 +46,8 @@
   "object class": {
     "prefix": "ss-type-object",
     "body": [
-      "type ${1:MyObj} = object {",
-      "  base = ${2:TextObj}",
+      "type ${1:MyText} = object {",
+      "  base = ${2:Text}",
       "  roles = [\"${3:my_role}\"]",
       "",
       "  ${4:field_name}: ${5:string} = \"${6:value}\"",
@@ -59,7 +59,7 @@
   "extend object": {
     "prefix": "ss-extend",
     "body": [
-      "extend ${1:TextObj} {",
+      "extend ${1:Text} {",
       "  roles = [\"${2:my_role}\"]",
       "  ${3:field_name}: ${4:string} = \"${5:value}\"",
       "}"

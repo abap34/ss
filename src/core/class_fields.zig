@@ -28,16 +28,16 @@ pub fn defaultPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype)
 
 pub fn classNameForNode(ir: anytype, node: *const Node) ?[]const u8 {
     return switch (node.kind) {
-        .document => "DocObj",
-        .page => "PageObj",
+        .document => "Doc",
+        .page => "Page",
         .object => if (node.role) |role| roleClass(ir, role) else null,
     };
 }
 
 pub fn classNameForNodeWithEnv(node: *const Node, sema: anytype) ?[]const u8 {
     return switch (node.kind) {
-        .document => "DocObj",
-        .page => "PageObj",
+        .document => "Doc",
+        .page => "Page",
         .object => if (node.role) |role| sema.roleClass(role) else null,
     };
 }
