@@ -75,6 +75,7 @@ int ss_pdf_draw_text_baseline(
     int wrap
 );
 double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, double font_size);
+double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_spec, double font_size);
 int ss_png_size(const char *path, double *width, double *height);
 int ss_pdf_draw_png(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_svg_size(const char *path, double *width, double *height);
