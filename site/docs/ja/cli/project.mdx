@@ -1,0 +1,88 @@
+---
+title: "ss.toml"
+description: "プロジェクトファイルの探索，入口ファイル解決，アセット基準，CLI での上書きを説明します．"
+---
+
+# ss.toml
+
+`ss.toml` はスライドプロジェクトの入口ファイルとアセット基準を記録します．
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+現在の CLI は `[project]` テーブルを読みます．`entry` は必須です．`asset_base_dir` は省略でき，省略時は解決済み入口ファイルのディレクトリを使います．
+
+## パス解決
+
+`ss.toml` 内のパスは，`ss.toml` があるディレクトリから解決されます．
+
+```text
+slides/
+  ss.toml
+  slide.ss
+  assets/
+    logo.png
+```
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "assets"
+```
+
+この設定では，`image("logo.png")` は `slides/assets/logo.png` を読みます．
+
+## 探索
+
+入力パスも `--project` もない場合，`ss` は現在のディレクトリから親へ向かって `ss.toml` を探します．
+
+```sh
+cd slides/sections
+ss check
+```
+
+`slides/ss.toml` が最も近いプロジェクトファイルであれば，そのプロジェクトを使います．
+
+明示的なプロジェクト指定では，ディレクトリと TOML ファイルのどちらも指定できます．
+
+```sh
+ss check --project slides
+ss check --project slides/ss.toml
+```
+
+## 上書き
+
+入力ファイルとアセット基準はコマンドラインで上書きできます．
+
+```sh
+ss render --project slides alternate.ss out.pdf
+ss render --project slides --asset-base-dir slides/assets alternate.ss out.pdf
+```
+
+入力ファイルを渡した場合は，そのファイルが入口になります．`--asset-base-dir` を渡した場合は，`ss.toml` のアセット基準より優先されます．
+
+## プロジェクト作成
+
+`init` は `ss.toml` と入口ファイルの雛形を作ります．
+
+```sh
+ss init slides
+ss init slides --entry deck/main.ss
+ss init slides --force
+```
+
+`--entry` はプロジェクトディレクトリの内側を指す相対パスである必要があります．`--force` は生成対象ファイルの上書きを許可します．
+
+## プロジェクト確認
+
+`doctor` は，プロジェクトファイル，入口ファイル，アセット基準，描画用コマンドを確認します．
+
+```sh
+ss doctor --project slides
+ss doctor --project slides --strict
+```
+
+スクリプトでは `--strict` を付けると，必要なパスや描画依存がない場合に失敗終了します．

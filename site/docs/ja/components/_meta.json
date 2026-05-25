@@ -1,0 +1,21 @@
+[
+  { "type": "file", "name": "cover", "label": "表紙" },
+  { "type": "file", "name": "headings", "label": "見出し" },
+  { "type": "file", "name": "text", "label": "本文" },
+  { "type": "file", "name": "markdown", "label": "Markdown" },
+  { "type": "file", "name": "math", "label": "数式" },
+  { "type": "file", "name": "code", "label": "コード" },
+  { "type": "file", "name": "figure", "label": "図" },
+  { "type": "file", "name": "image", "label": "画像" },
+  { "type": "file", "name": "pdf", "label": "PDF" },
+  { "type": "file", "name": "note", "label": "注記" },
+  { "type": "file", "name": "citation", "label": "引用" },
+  { "type": "file", "name": "panel", "label": "パネル" },
+  { "type": "file", "name": "border", "label": "枠線" },
+  { "type": "file", "name": "rule", "label": "罫線" },
+  { "type": "file", "name": "pageno", "label": "ページ番号" },
+  { "type": "file", "name": "footer", "label": "フッター" },
+  { "type": "file", "name": "logo", "label": "ロゴ" },
+  { "type": "file", "name": "watermark", "label": "透かし" },
+  { "type": "file", "name": "toc", "label": "目次" }
+]

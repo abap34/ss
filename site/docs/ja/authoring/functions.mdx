@@ -1,0 +1,352 @@
+---
+title: "関数と定義"
+description: "fn，const，型注釈，既定引数，返り値，スコープ，コールバックを説明します．"
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+import { SsExample } from '../../../components/SsExample';
+
+# 関数と定義
+
+関数は，値を受け取り，値を返す名前付きの処理です．`ss` では標準コンポーネント，配置補助，文書全体の生成，ユーザ定義の見た目をすべて関数として扱います．関数の引数と返り値には型を書きます．使える型は [値と型](./values-and-types) を参照してください．式と演算子は [構文](./syntax) と [演算子と組み込み関数](./operators-and-builtins) を参照してください．
+
+## 関数宣言
+
+```text
+FunctionDecl ::= Annotation* "fn" Identifier "(" ParamList? ")" "->" Type EffectClause? Annotation* FunctionBody
+ParamList    ::= Param ("," Param)*
+Param        ::= Identifier ":" Type DefaultValue?
+DefaultValue ::= "=" Expr
+FunctionBody ::= Newline Statement* "end"
+```
+
+<ApiCard
+  locale="ja"
+  kind="syntax"
+  name="fn"
+  syntax="fn name(param: Type, optional: Type = default) -> Result\n  Statement*\nend"
+  summary="関数を定義します．引数には型を書き，返り値型を -> の後に書きます．"
+/>
+
+```ss
+fn callout(message: string, stroke_name: string = "0.2745,0.5098,0.7059") -> object
+  let body = note(message)
+  border(body, 18, 12, stroke_name, 1, 8)
+  return body
+end
+```
+
+この関数は `string` を受け取り，`object` を返します．第二引数には既定値があります．呼び出し側は第二引数を省略できます．
+
+```ss
+let a = callout("補足")
+let b = callout("注意", "0.8,0.1,0.1")
+```
+
+## 引数
+
+引数は，関数本体の中で名前として参照できます．引数の型は呼び出し時に検査されます．
+
+```ss
+fn badge(label_text: string, size: number, fill_name: string = "0.95,0.95,0.95") -> object
+  let body = text(label_text)
+  body.text_size = size
+  border(body, 10, 6, fill_name, 1, 6)
+  return body
+end
+```
+
+```ss
+let ok = badge("OK", 18)
+let warn = badge("WARN", 18, "1,0.9,0.9")
+```
+
+既定値を持つ引数の後ろに，既定値を持たない引数は置けません．
+
+```ss
+fn bad(a: string = "x", b: number) -> object
+  return text(a)
+end
+```
+
+この形は定義エラーです．
+
+## 返り値
+
+返り値型は，呼び出し側が結果をどう使えるかを決めます．
+
+| 返り値型 | 呼び出し側での使い方 |
+| --- | --- |
+| `object` | 制約，プロパティ代入，別の関数の引数に使います． |
+| `constraints` | 配置グラフへ追加する制約集合として使います． |
+| `void` | 返り値を使わず，文として呼び出します． |
+| `string`，`number`，`bool` | 式の一部として使います． |
+| `selection<T>` | `foreach`，`join` などで処理します． |
+
+`object` を返す関数は，現在のページに object を作る関数であることが多いです．すべての `object` 関数が新しい object を作るとは限りません．`border` や `flow` は既存 object のプロパティや制約を変更し，同じ object を返します．
+
+```ss
+let body = text("本文")
+let same_body = border(body, 18, 12)
+```
+
+この例では，`text` は現在ページに本文 object を追加します．`border` は `body` の枠線プロパティを更新し，`body` と同じ object を返します．
+
+`void` を返す関数は，返り値を `let` で受けません．
+
+```ss
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+end
+```
+
+## return
+
+`return` は関数の実行を終え，値を返します．返り値型が `void` でない関数では，値を返す `return` が必要です．
+
+```ss
+fn make_title(s: string) -> object
+  return head(s)
+end
+```
+
+`void` 関数では式を省略できます．
+
+```ss
+fn setup_doc() -> void
+  pagenos("{page} / {total}")
+  footers("研究会資料")
+  return
+end
+```
+
+## 定数
+
+定数は名前付きの値です．色，余白，題名，アセットパスなど，複数箇所で使う値に付けます．
+
+```text
+ConstDecl ::= "const" Identifier ":" Type "=" Expr Terminator
+```
+
+<ApiCard
+  locale="ja"
+  kind="syntax"
+  name="const"
+  syntax="const name: Type = Expr"
+  summary="トップレベルで名前付きの値を定義します．"
+/>
+
+```ss
+const brand_blue: string = "0.2745,0.5098,0.7059"
+const body_left: number = 102
+const body_right: number = 102
+```
+
+定数は引数を持たない定義として扱えます．ページ内で同じ値を繰り返す場合は，定数を使うと変更箇所が一つになります．
+
+## スコープ
+
+名前の有効範囲は，定義された場所で決まります．
+
+| 場所 | 見える名前 |
+| --- | --- |
+| モジュール | 読み込んだ関数，トップレベルの `const`，トップレベルの `fn` |
+| 関数本体 | 引数，前に出た `let`，モジュール内の関数と定数 |
+| 文書ブロック | 前に出た `let`，モジュール内の関数と定数 |
+| ページブロック | 前に出た `let`，モジュール内の関数と定数 |
+| `if` の各分岐 | 分岐内で前に出た `let` |
+
+`let` で作った名前は，その後ろの文から参照します．前の文でまだ作っていない名前は参照できません．
+
+```ss
+page ok
+let title = head("題名")
+let body = text("本文")
+below(body, title, 32)
+end
+```
+
+```ss
+page bad
+below(body, title, 32)
+let title = head("題名")
+let body = text("本文")
+end
+```
+
+二つ目は，`body` と `title` が制約を書いた時点で未定義です．
+
+## 関数呼び出し
+
+関数呼び出しは，関数名と引数式の列からなります．
+
+```text
+CallExpr     ::= Expr "(" ArgumentList? ")"
+ArgumentList ::= Expr ("," Expr)*
+```
+
+呼び出しでは次を確認します．
+
+| 確認 | 内容 |
+| --- | --- |
+| 名前解決 | 関数名が現在のモジュールまたは読み込み先にあるか |
+| 引数の数 | 必須引数を満たし，最大個数を超えていないか |
+| 引数の型 | 各実引数の型が仮引数の型に合うか |
+| 返り値の使い方 | `void` を値として使っていないか |
+
+```ss
+fn label(text_value: string, size: number = 18) -> object
+  let obj = text(text_value)
+  obj.text_size = size
+  return obj
+end
+
+let a = label("A")
+let b = label("B", 24)
+```
+
+次の呼び出しは，第一引数が `number` なのでエラーです．
+
+```ss
+let bad = label(24)
+```
+
+## コンポーネントを返す関数
+
+ページ内でよく使う関数は，object を返す関数です．標準ライブラリの多くのコンポーネント関数は，呼び出した時点で現在のページへ object を追加し，その object を返します．
+
+```ss
+fn theorem(title_text: string, body_text: string) -> object
+  let title = text("定理．" ++ title_text)
+  title.text_size = 24
+
+  let body = text(body_text)
+  below(body, title, 12)
+
+  let chrome = panel(style("custom"))
+  box(chrome, "0.98,0.98,1", "0.72,0.76,0.86", "1", "8")
+  surround(chrome, group(title, body), 16, 12)
+
+  return group(title, body, chrome)
+end
+```
+
+返り値を `let` で受けると，ページ内の他の object と同じように制約で扱えます．
+
+```ss
+let thm = theorem("和の公式", "1 から n までの和を考えます．")
+below(thm, head("定理"), 32)
+```
+
+## 制約を返す関数
+
+複数の制約をまとめる関数は `constraints` を返します．
+
+```ss
+fn top_band(node: object) -> constraints
+  return constraints(
+    pin_l(node, 72),
+    pin_r(node, 72),
+    pin_t(node, 100)
+  )
+end
+
+page example
+let body = text("本文")
+top_band(body)
+end
+```
+
+`constraints` の返り値を文として評価すると，現在ページの配置グラフに追加されます．制約の詳しい扱いは [制約](./constraints) を参照してください．
+
+## 文書全体の関数
+
+`void` を返す関数は，文書設定や文書全体の生成をまとめるときに使います．
+
+```ss
+fn setup_doc() -> void
+  pagenos("{page} / {total}")
+  footers("研究会資料")
+  need_titles()
+end
+
+document
+setup_doc()
+end
+```
+
+`setup_doc` は文書ブロックから呼び出します．ページ番号，フッター，タイトル検査はページ列やページ内のロールに依存します．詳しくは [文書全体を使った生成](./generation) を参照してください．
+
+## ラムダとコールバック
+
+標準ライブラリには，選択集合を処理する関数があります．その一部は関数値を受け取ります．
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="join"
+  signature="join(selection: selection<T>, separator: string, callback: T -> string) -> string"
+  module="組み込み"
+  returns="string"
+  summary="選択の各要素を文字列に変換し，区切り文字で連結します．"
+/>
+
+```ss
+let lines = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+通常の関数名を渡すこともできます．複数の文が必要な処理では，通常の関数として定義します．
+
+```ss
+fn title_line(title: object) -> string
+  return "- " ++ title.content
+end
+
+let lines = join(objs(pagectx(), "title"), "\n", title_line)
+```
+
+コールバックが要求される型は，呼び出し先の関数によって決まります．`join` は `string` を返すコールバックを要求します．`foreach` は選択の要素ごとに処理を実行し，返り値を選択自体として返します．
+
+## 実行例
+
+次の例は，定数，既定引数，`object` 返り値，`void` 返り値を一つのファイルで使います．`callout` は object を返す関数です．`setup_document` は文書設定だけを行うため `void` を返します．
+
+<SsExample
+  id="authoring-functions"
+  title="関数定義の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-functions.ss
+ss dump site/samples/authoring-functions.ss .ss-cache/authoring-functions.json
+ss render site/samples/authoring-functions.ss .ss-cache/authoring-functions.pdf
+```
+
+`dump` の JSON では，二つの `note` ロールの object と，ページ番号，フッターの生成結果を見ます．PDF では，`callout` の既定引数を使った object と，第二引数を渡した object の本文が違うことを見ます．
+
+## 診断
+
+次の内容は `ss check` で検出されます．
+
+| 状態 | 診断の種類 |
+| --- | --- |
+| 関数名が見つからない | 名前解決エラー |
+| 引数が多い，または少ない | 呼び出しエラー |
+| 引数型が合わない | 型エラー |
+| `object` などの値を返す関数で `return` がない | 返り値エラー |
+| 既定値付き引数の後ろに必須引数がある | 定義エラー |
+| コールバックの返り値型が違う | コールバック型エラー |
+
+関数がアセットを参照する場合は，アセットの存在確認も診断に含まれます．アセットは [アセットファイル](../cli/assets) を参照してください．

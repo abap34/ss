@@ -1,0 +1,265 @@
+---
+title: "ページと文書"
+description: "document ブロック，page ブロック，ページ順序，文書文脈を定義します．"
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# ページと文書
+
+`ss` の入力は，文書全体の定義とページの列からなります．文書は PDF 一つに対応します．ページは PDF の一ページに対応します．
+
+## 基本構造
+
+```text
+DocumentSource ::= Import* Definition* DocumentDecl? PageDecl*
+DocumentDecl   ::= "document" Newline Statement* "end"
+PageDecl       ::= "page" PageName Newline Statement* "end"
+```
+
+`document` は文書全体の処理を置くブロックです．`page` は一枚のスライドを置くブロックです．
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+end
+
+page intro
+let title = head("導入")
+end
+```
+
+## ページ順序
+
+ページ順序は，ソース内の `page` ブロックの出現順です．この順序はページ番号，目次，文書全体の生成，診断の表示に使われます．
+
+```text
+pages(document) = [page1, page2, ..., pageN]
+page_index(pageK) = K
+page_count(document) = N
+```
+
+ページを並べ替える場合は，ソース中の `page` ブロックの順序を変えます．ページ名は識別に使われます．
+
+## ページ名
+
+ページ名は，診断，目次，内部表現，生成処理の参照に使われます．
+
+```text
+PageName ::= Identifier | "_"
+```
+
+`page _` は内部名を生成します．一時的なページや，ページ名を直接参照しない資料で使えます．公開資料では，診断を読みやすくするために意味のある名前を付けます．
+
+```ss
+page theorem
+let title = head("定理")
+end
+```
+
+## 文書文脈
+
+文書文脈は，文書全体のプロパティ，ページ一覧，文書単位の生成処理を保持します．標準ライブラリでは `docctx()` で参照します．
+
+```ss
+document
+docctx().background_fill = "1,1,1"
+end
+```
+
+通常の資料作成では，`docctx()` を直接使うより，`pagenos`，`footers`，`logos`，`watermark`，`need_titles` などの関数を使います．
+
+## ページ文脈
+
+ページ文脈は，現在のページの object，配置方針，背景，ページ内プロパティを保持します．標準ライブラリでは `pagectx()` で参照します．
+
+```ss
+page sample
+pagectx().background_fill = "0.98,0.98,1"
+let title = head("例")
+end
+```
+
+通常は `page_bg` やテーマ関数を使います．直接プロパティを設定する場合は，その値が描画器で解釈されるかを確認します．
+
+## ページ内の object
+
+標準ライブラリの多くのコンポーネント関数は，ページ内で呼び出すと現在ページへ object を追加し，その object を返します．`text`，`code`，`image` などが該当します．`border` や `flow` のように，既存 object を変更して返す関数もあります．
+
+```ss
+page body
+let title = head("本文")
+let body = text("内容")
+~ body.top == title.bottom - 32
+end
+```
+
+`let` で束縛した object は，後続の制約やプロパティ代入で参照できます．束縛しない呼び出しは，後から名前で参照できません．
+
+## 文書ブロックで書くもの
+
+文書ブロックには，ページ一覧や文書全体の設定へ依存する処理を書きます．
+
+```ss
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+logos("assets/logo.png", 0.5)
+watermark("draft")
+need_titles()
+end
+```
+
+`pagenos` はページ番号用 object を各ページへ作ります．`footers` はフッター用 object を各ページへ作ります．`logos` はロゴ画像を各ページへ作ります．`watermark` は透かしを各ページへ作ります．`need_titles` はタイトルがないページを警告します．
+
+## ページブロックで書くもの
+
+ページブロックには，そのページだけに出るコンポーネントと，そのページだけの配置制約を書きます．
+
+```ss
+page result
+let title = head("結果")
+let plot = image("assets/result.png", 0.8)
+let caption = figure("図 1．結果")
+
+~ plot.top == title.bottom - 36
+~ caption.top == plot.bottom - 16
+end
+```
+
+ページ内の制約はページ内の object だけに作用します．別ページの object を直接制約で結びません．
+
+## 処理の単位
+
+文書とページは，現行実装では次の単位で処理されます．
+
+```text
+read source             -> source text
+parse                   -> ast.Program
+load imports            -> module graph
+build initial Ir        -> modules，functions，definitions
+typecheck               -> checked declarations and calls
+elaborate               -> document terms
+normalize and finalize  -> core.Ir
+solve layout            -> positioned objects
+render                  -> PDF
+```
+
+文書ブロックとページブロックは，依存関係を解析して実行順序を決めます．ページ番号のようにページ一覧へ依存する処理と，ページ内の object 生成を同じ言語で書けます．実装の流れは [コンパイラの流れ](../dev/pipeline) を参照してください．
+
+## 状態の変化
+
+文書ブロックは文書状態を更新します．ページブロックはページ列へページを追加し，そのページに object と制約を追加します．
+
+```text
+before:
+  document.pages = []
+
+page intro:
+  add page "intro"
+  add object role = "title"
+  add object role = "body"
+
+after:
+  document.pages = ["intro"]
+```
+
+`document` ブロックの生成処理は，必要に応じてページ列や既存 object を読みます．例えば `pagenos` はページ数を読み，各ページへ `pageno` ロールの object を追加します．
+
+## 目次との関係
+
+目次はページ一覧と，タイトルロールを持つ object に依存します．
+
+```ss
+page toc_page
+let title = head("目次")
+let list = toc_obj()
+~ list.top == title.bottom - 32
+end
+```
+
+`toc_obj` は文書中のページとタイトルを読み，目次本文を作ります．ページを追加した場合，目次の内容も生成時に更新されます．
+
+## 通し例
+
+次の例は，文書ブロック，ページブロック，ページ番号，見出し，本文，配置制約を一つのファイルに含めています．
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+need_titles()
+end
+
+page intro
+let title = cover(
+  "ss",
+  "スライドをプログラムとして書く",
+  "2026"
+)
+end
+
+page body
+let title = head("本文")
+let body = text <<
+- ページは `page` ブロックで定義します．
+- 文書全体の生成は `document` ブロックに置きます．
+- 位置関係は制約で指定します．
+>>
+
+below(body, title, 32)
+same_l(body, title, 0)
+end
+```
+
+この例では，`document` が二つのページを読み，ページ番号とフッターを各ページへ生成します．`need_titles` は `intro` と `body` にタイトルロールの object があるかを確認します．
+
+## 実行例
+
+次の例は，文書ブロックと三つのページブロックを持つファイルです．文書ブロックはページ番号，フッター，タイトル検査を登録します．最後のページでは `page_count(docctx())` で総ページ数を読み，本文に埋め込みます．
+
+<SsExample
+  id="authoring-pages"
+  title="ページと文書の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-pages.ss
+ss dump site/samples/authoring-pages.ss .ss-cache/authoring-pages.json
+ss render site/samples/authoring-pages.ss .ss-cache/authoring-pages.pdf
+```
+
+`dump` を使うと，ページと object の情報を確認できます．確認する項目は次の通りです．
+
+| 項目 | 内容 |
+| --- | --- |
+| ページ名 | `pages_cover`，`pages_body`，`pages_summary` |
+| ページ順序 | ソース中の出現順 |
+| object のロール | `title`，`body`，`pageno`，`footer` |
+| 文書生成物 | ページ番号，フッター |
+| 文書文脈の参照 | `page_count(docctx())` の結果 |
+| 配置制約 | 見出しと本文の関係 |
+
+ページが期待した順序にならない場合は，ソース中の `page` ブロックの順序を見ます．目次やページ番号が期待した内容にならない場合は，タイトルロールの object と文書ブロックの生成関数を見ます．
+
+## 診断
+
+ページ名の衝突，未定義の関数，存在しないアセット，制約の矛盾，はみ出しは診断の対象です．
+
+```sh
+ss check site/samples/authoring-pages.ss
+ss render site/samples/authoring-pages.ss .ss-cache/authoring-pages.pdf
+```
+
+`ss check` は構文，読み込み，型，アセットの一部を確認します．`ss render` は描画器と外部コマンドを含む確認を行います．

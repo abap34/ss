@@ -1,0 +1,87 @@
+---
+title: "Pop theme"
+description: "`std:themes/pop` functions, chrome choices, asset handling, and layout effects."
+---
+
+# Pop theme
+
+`std:themes/pop` defines a higher-contrast set of presentation functions with colored text and framed content.
+
+```ss
+import std:themes/pop
+
+page title
+  cover("Slide title", "Subtitle", "Author")
+end
+
+page body
+  let title = head("Result")
+  let plot = image("plots/result.png", 0.8)
+  let caption = figure("Accuracy by condition")
+
+  ~ plot.top = title.bottom + 28
+  ~ caption.top = plot.bottom + 12
+  ~ caption.left = plot.left
+end
+```
+
+## Provided Functions
+
+| Function | Result |
+| --- | --- |
+| `h1(text)` | Styled title object using `style("pop")` |
+| `h2(text)` | Subtitle object |
+| `head(text)` | Page heading with chip label and title |
+| `subhead(text)` | Subtitle with CJK bold-pass settings |
+| `text(source)` | Body object from the base component |
+| `tex(source, scale = 1)` | Framed math object |
+| `figure(text)` | Framed figure caption object |
+| `image(path, factor = 1)` | Image object with surrounding panel |
+| `pdf(path, factor = 1)` | PDF object with surrounding panel |
+| `code(source, language = "python")` | Code block with colored chrome |
+| `note(text)` | Inset note object |
+| `toc(title)` | Heading, table-of-contents object, panel, and page number |
+| `cover(title, subtitle, author)` | Cover page objects |
+
+The image and PDF functions call `require_asset_exists`, so missing assets are reported during checking or rendering.
+
+## Visual Settings
+
+The pop theme uses pink, orange, and violet accents. Content frames use pale warm backgrounds and orange borders.
+
+| Area | Setting |
+| --- | --- |
+| Heading | Small colored chip aligned near the title |
+| Math | `vector_math` with frame padding |
+| Image and PDF | Content object surrounded by a panel |
+| Code | Larger padding than the default theme |
+| Cover | Large violet title, dark subtitle, orange author line |
+
+The theme writes several style names, such as `pop`, `pop_chip`, `pop_hero`, and `custom`.
+
+## Layout Effects
+
+Image and PDF components add a panel around the content. The surrounding panel is an extra object, and the visible footprint includes padding.
+
+```ss
+page asset_page
+  let title = head("Asset")
+  let diagram = image("diagrams/flow.png")
+  diagram.fit = "contain"
+
+  ~ diagram.top = title.bottom + 28
+  ~ diagram.left = page.left + 96
+  ~ diagram.right = page.right - 96
+end
+```
+
+When an image is close to another object, leave room for the panel padding.
+
+## Checking
+
+Run a PDF render after switching to this theme, especially when pages use assets, math, or code.
+
+```sh
+ss check deck.ss
+ss render deck.ss .ss-cache/pop.pdf
+```

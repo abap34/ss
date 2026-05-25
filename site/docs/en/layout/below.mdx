@@ -1,0 +1,88 @@
+---
+title: "Below constraints"
+description: "`below`, vertical object relations, horizontal companion constraints, and overflow checks."
+---
+
+# Below constraints
+
+`below(target, source, gap)` places `target` below `source` by adding an anchor constraint.
+
+```ss
+below(body, title, 32)
+```
+
+The helper is defined in `std:core/layout`.
+
+```ss
+fn below(target: object, source: object, gap: number) -> constraints
+  return equal(anchor(target, "top"), anchor(source, "bottom"), neg(gap))
+end
+```
+
+## Basic Use
+
+```ss
+import std:themes/default
+
+page layout_example
+  let title = head("Layout")
+  let body = text("Body text")
+
+  below(body, title, 32)
+end
+```
+
+`below` only describes the vertical relation. Add a horizontal relation when the left edge, right edge, or width must be fixed.
+
+```ss
+page aligned
+  let title = head("Layout")
+  let body = text("Body text")
+
+  below(body, title, 32)
+  same_l(body, title, 0)
+end
+```
+
+## Width and Wrapping
+
+Text and code need a horizontal range before wrapping can be measured.
+
+```ss
+page wrapped
+  let title = head("Layout")
+  let body = text("A longer paragraph that should wrap inside the page.")
+
+  flow(body, "102", "102")
+  below(body, title, 32)
+end
+```
+
+`flow(body, "102", "102")` sets the horizontal layout properties and enables wrapping. `fix_w(body, 520)` can be used when a fixed width is wanted.
+
+## Combining Constraints
+
+`below_l` combines `same_l` and `below`, then returns the target object.
+
+```ss
+let body = below_l(text("Body"), title, 0, 32)
+```
+
+The function is useful inside theme code where a helper should return the object for later property assignment.
+
+## Diagnostics
+
+| Problem | Command |
+| --- | --- |
+| Unknown object name | `ss check` |
+| Unknown anchor | `ss check` |
+| Contradictory vertical constraints | `ss render` or `ss check`, depending on when the graph is solved |
+| Text overflow after wrapping | `ss render` and PDF inspection |
+
+Use `dump` when the source looks right but the solved frames do not.
+
+```sh
+ss dump slide.ss .ss-cache/layout.json
+```
+
+Inspect the target object frame and the constraints that mention its `top` or `bottom` anchors.

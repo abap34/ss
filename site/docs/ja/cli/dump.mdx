@@ -1,0 +1,86 @@
+---
+title: "dump"
+description: "`dump` は検査済みの文書グラフ，宣言，呼び出し，診断，エディタ用情報を JSON として出力します．"
+---
+
+# dump
+
+`dump` は `check` と同じ検査と配置処理を実行した後，JSON を出力します．
+
+```sh
+ss dump slide.ss .ss-cache/deck.json
+ss dump --project . --output .ss-cache/deck.json
+```
+
+出力先を省略した場合は，標準出力へ JSON を書きます．
+
+```sh
+ss dump slide.ss
+```
+
+## 出力先
+
+第二引数は出力 JSON ファイルです．
+
+```sh
+ss dump slide.ss out.json
+```
+
+プロジェクト指定では `--output` を使います．
+
+```sh
+ss dump --project . --output .ss-cache/out.json
+```
+
+出力先の親ディレクトリは事前に存在している必要があります．検査用の生成物は通常 `.ss-cache` 以下に置きます．
+
+## 内容
+
+dump には処理系と文書の情報が入ります．
+
+| 情報 | 用途 |
+| --- | --- |
+| モジュールと宣言 | import，関数，object クラス，ロール，値ドメイン |
+| 関数と呼び出し | 関数の型，メタデータ，呼び出し位置 |
+| ノード | 文書，ページ，object のグラフ |
+| 制約 | 展開後のアンカー関係 |
+| プロパティ | ノードに保存された描画値と配置値 |
+| メタデータ | ページタイトル，生成マーク，ページ関係 |
+| 診断 | 解析や配置で付いたエラーと警告 |
+| エディタ情報 | 定義位置，変数，インレイヒント，矩形ヒント |
+
+JSON 形式は，言語が変わる間は変更される場合があります．外部ツールで使う場合は，対象バージョンを固定してください．
+
+## 配置の確認
+
+PDF では原因が見えにくい配置不具合は JSON で確認できます．
+
+```sh
+ss dump slide.ss .ss-cache/layout.json
+```
+
+`nodes[*].frame` で解決済み矩形を見ます．`constraints` で，その矩形を作ったアンカー関係を見ます．
+
+## 生成された object
+
+`pagenos`，`footers`，`logos`，`watermark`，`toc` などの文書全体関数は，ページ本文の評価後に object を作ります．`dump` では生成後のグラフを見られます．
+
+```ss
+document
+  pagenos()
+  footers("internal draft")
+end
+```
+
+dump 後に `pageno` や `footer` などのロールを探します．
+
+## 診断
+
+`dump` は `check` と同じ検査を実行します．グラフを書ける段階の前で失敗した場合，出力ファイルは作られません．
+
+```sh
+ss check slide.ss
+ss dump slide.ss .ss-cache/after-check.json
+```
+
+グラフが正しく見えるのに PDF が違う場合は，[render](./render) を続けて実行します．

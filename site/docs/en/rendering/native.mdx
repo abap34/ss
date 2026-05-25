@@ -1,0 +1,86 @@
+---
+title: "Cairo and Pango"
+description: "Native PDF backend inputs, text shaping, drawing order, PDF output, and diagnostics."
+---
+
+# Cairo and Pango
+
+The native renderer writes PDF output through Cairo and uses Pango for text shaping and measurement.
+
+```sh
+ss render slide.ss .ss-cache/render.pdf
+```
+
+The render command runs after parsing, import loading, checking, elaboration, normalization, and layout solving. It reads a solved `core.Ir`.
+
+## Input Graph
+
+| Input | Use |
+| --- | --- |
+| Page order | PDF page sequence |
+| Object nodes | Drawn content |
+| Frames | Position and size of each object |
+| Content | Text, code, math source, asset path, or chrome content |
+| Properties | Fonts, colors, padding, wrapping, fit policy, render kind |
+| Render environment | Scoped math and render settings |
+| Diagnostics | Errors and warnings already attached to the graph |
+
+The renderer does not call user functions. Function calls have already produced document graph changes.
+
+## Text
+
+Text objects are measured and shaped with Pango. The renderer reads properties such as font family, font size, line height, CJK fallback settings, Markdown parsing mode, and text color.
+
+```ss
+page text_sample
+  let body = text("Pango shapes this line.")
+  body.text_size = 22
+  body.text_color = "0.1,0.1,0.1"
+end
+```
+
+Markdown text is parsed before drawing. Inline code, emphasis, links, and image runs can change the measured line width.
+
+## Drawing Order
+
+Objects are drawn by page. Chrome-only objects can be drawn before regular content so that panels and borders appear behind text or assets. Regular objects draw their chrome and payload according to their resolved render policy.
+
+Common render kinds:
+
+| Render kind | Drawn content |
+| --- | --- |
+| `text` | Markdown or plain text |
+| `code` | Syntax-highlighted code block |
+| `vector_math` | LaTeX math output |
+| `raster_asset` | Image asset |
+| `vector_asset` | PDF or vector asset |
+| `chrome` | Frame and optional text |
+| `chrome_only` | Frame without payload text |
+
+## Output
+
+The renderer writes a PDF byte stream. The CLI writes it to the requested output path.
+
+```sh
+ss render --project . --output .ss-cache/deck.pdf
+```
+
+When `qpdf` is available, the output can be normalized after drawing. Normalization errors are render errors.
+
+## Diagnostics
+
+Native rendering can report problems that `ss check` cannot prove.
+
+| Diagnostic | Cause |
+| --- | --- |
+| Missing font or fallback difference | Local font configuration |
+| Text overflow | Frame height is smaller than shaped text |
+| Asset conversion failure | External tool or unreadable input |
+| PDF write failure | Output path or normalization failure |
+
+Use `dump` with `render` when separating layout from drawing.
+
+```sh
+ss dump slide.ss .ss-cache/ir.json
+ss render slide.ss .ss-cache/render.pdf
+```

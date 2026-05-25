@@ -1,0 +1,161 @@
+---
+title: "Objects and roles"
+description: "Object data, roles, payload kinds, anchors, selections, and diagnostics."
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# Objects and roles
+
+An `object` is a drawable value on a page. Text, headings, code blocks, math, images, PDFs, rules, panels, page numbers, footers, logos, and tables of contents are represented as objects.
+
+## Object data
+
+At runtime an object has content, a role, a payload kind, properties, and anchors.
+
+```text
+Object ::= {
+  content: string,
+  role: string,
+  payload: string,
+  props: map<string, string>,
+  anchors: AnchorSet
+}
+```
+
+`content` stores text or an asset path. `role` is used for lookup, tables of contents, title checks, and theme behavior. `payload` tells the renderer how to interpret `content`. `props` store text, layout, chrome, asset, and render settings. `anchors` are the positions used by constraints.
+
+## Roles
+
+Roles are string labels attached by component constructors.
+
+| Role | Typical object |
+| --- | --- |
+| `title` | Page heading or cover title |
+| `subtitle` | Subtitle |
+| `body` | Body text |
+| `note` | Note text |
+| `code` | Code block |
+| `math` | Math object |
+| `figure` | Figure caption or asset label |
+| `image` | Raster image |
+| `pdf` | Embedded PDF |
+| `panel` | Background or chrome object |
+| `pageno` | Page number |
+| `footer` | Footer |
+| `logo` | Logo image |
+| `watermark` | Watermark text |
+| `toc` | Table of contents |
+| `group` | Group bounding box |
+
+`need_titles()` checks whether each page has an object with the `title` role. Table-of-contents helpers read title-role objects from pages.
+
+```ss
+document
+need_titles()
+end
+
+page intro
+head("Intro")
+end
+```
+
+## Payload kinds
+
+The payload kind determines how the renderer reads `content`.
+
+| Payload | Content interpretation |
+| --- | --- |
+| `text` | Plain text or Markdown text, depending on properties |
+| `code` | Code text with optional syntax highlighting |
+| `math_tex` | LaTeX input rendered as vector math |
+| `image` | Raster image path |
+| `pdf` | PDF asset path |
+| `chrome` | Fill, stroke, and shape properties |
+| `chrome_only` | Layout object with chrome only |
+
+Component functions choose the role and payload. Page code usually calls theme functions instead of `raw_obj` or `new`.
+
+```ss
+let title = head("Results")
+let body = text("The method uses two passes.")
+let plot = image("assets/plot.png", 0.8)
+```
+
+## Binding objects
+
+A call that returns `object` can be bound with `let`. Bound objects can be used in later constraints, property assignments, and function calls.
+
+```ss
+page example
+let title = head("Objects")
+let body = text("Body text")
+
+body.text_size = 22
+below(body, title, 32)
+same_l(body, title, 0)
+end
+```
+
+An unbound component call still creates the object when the function has that effect, but later code has no name for that object.
+
+## Selecting objects
+
+Selection helpers read objects by role.
+
+```ss
+let titles = objs(pagectx(), "title")
+let all_titles = objs_all("title")
+```
+
+`objs(page, role)` returns `selection<object>` for one page. `objs_all(role)` returns a document-wide object selection. Selection functions such as `foreach` and `join` receive one selected object at a time.
+
+```ss
+let lines = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+## Properties
+
+Properties control rendering and layout. The right-hand side of a property assignment can be `string`, `number`, `bool`, or `style`. The document graph stores renderer-readable values after conversion.
+
+```ss
+let body = text("Body")
+body.text_size = 22
+body.text_line_height = 30
+body.wrap = "on"
+```
+
+Common object properties are documented in [Properties and styles](./properties). Layout relations are documented in [Constraints](./constraints).
+
+## Diagnostics
+
+Object-related diagnostics usually come from name resolution, type checking, asset lookup, layout, or rendering.
+
+| Cause | Diagnostic source |
+| --- | --- |
+| Unknown object name in a constraint | `ss check` |
+| Function result used as the wrong type | `ss check` |
+| Missing image or PDF path | `ss check` or `ss render` |
+| Conflicting constraints | `ss render` |
+| Object content exceeds its frame | `ss render` |
+
+## Example
+
+The sample creates a heading, body text, math, and a figure label. The objects have different roles and payload kinds, and the page places them with `below` and `same_l`.
+
+<SsExample
+  id="authoring-objects"
+  title="Objects and roles example"
+/>
+
+```sh
+ss check site/samples/authoring-objects.ss
+ss dump site/samples/authoring-objects.ss .ss-cache/authoring-objects.json
+ss render site/samples/authoring-objects.ss .ss-cache/authoring-objects.pdf
+```
+
+In the dump output, inspect role, payload, content, props, and constraints for the named objects.

@@ -1,0 +1,181 @@
+---
+title: "Functions and definitions"
+description: "Function declarations, constants, type annotations, return values, defaults, scope, and callbacks."
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+import { SsExample } from '../../../components/SsExample';
+
+# Functions and definitions
+
+Functions receive values and return values. Standard components, layout helpers, whole-document generation, and user-defined visual patterns are functions in `ss`.
+
+## Function declaration
+
+```text
+FunctionDecl ::= Annotation* "fn" Identifier "(" ParamList? ")" "->" Type EffectClause? Annotation* FunctionBody
+ParamList    ::= Param ("," Param)*
+Param        ::= Identifier ":" Type DefaultValue?
+DefaultValue ::= "=" Expr
+FunctionBody ::= Newline Statement* "end"
+```
+
+<ApiCard
+  locale="en"
+  kind="syntax"
+  name="fn"
+  syntax="fn name(param: Type, optional: Type = default) -> Result\n  Statement*\nend"
+  summary="Defines a function. Parameters have explicit types. The result type is written after ->."
+/>
+
+```ss
+fn callout(message: string, stroke_name: string = "0.2745,0.5098,0.7059") -> object
+  let body = note(message)
+  border(body, 18, 12, stroke_name, 1, 8)
+  return body
+end
+```
+
+The function above receives a `string` and returns an `object`. The second parameter has a default value.
+
+```ss
+let a = callout("Note")
+let b = callout("Warning", "0.8,0.1,0.1")
+```
+
+## Constants
+
+Constants are top-level named values.
+
+```text
+ConstDecl ::= "const" Identifier ":" Type "=" Expr Terminator
+```
+
+```ss
+const margin: number = 72
+const accent: string = "0.2745,0.5098,0.7059"
+```
+
+Constants are useful for repeated numbers, colors, labels, and asset paths.
+
+## Return values
+
+A non-`void` function must return a value of the declared result type.
+
+```ss
+fn headline(text_value: string) -> object
+  return head(text_value)
+end
+```
+
+A `void` function is called for its effect and can use `return` without an expression.
+
+```ss
+fn brand_footer(text_value: string) -> void
+  footers(text_value)
+  return
+end
+```
+
+## Default parameters
+
+Parameters with default values must be at the end of the parameter list.
+
+```ss
+fn gap_after(target: object, source: object, gap: number = 32) -> constraints
+  return below(target, source, gap)
+end
+```
+
+The caller may omit the trailing defaulted argument.
+
+```ss
+gap_after(body, title)
+gap_after(caption, body, 18)
+```
+
+## Scope
+
+Top-level functions and constants are visible after import. A `let` binding is visible in later statements of the same block. Function parameters are visible in the function body.
+
+```ss
+fn label(text_value: string) -> object
+  let item = text(text_value)
+  item.text_size = 14
+  return item
+end
+```
+
+The name `item` is local to `label`.
+
+## Functions that return objects
+
+Many component functions add an object to the current page and return that object.
+
+```ss
+fn badge(text_value: string) -> object
+  let item = text(text_value)
+  border(item, 12, 8)
+  return item
+end
+```
+
+Use the returned object for placement.
+
+```ss
+let title = head("Results")
+let b = badge("new")
+below(b, title, 24)
+```
+
+## Callbacks
+
+Functions can be passed to selection functions. `join` receives a selection, a separator, and a function that maps one selected item to a string.
+
+```ss
+fn title_line(title: object) -> string
+  return "- " ++ title.content
+end
+
+let lines = join(objs(pagectx(), "title"), "\n", title_line)
+```
+
+The same callback can be written as a lambda expression.
+
+```ss
+let lines = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+The callback parameter type must match the selection item type. A `selection<object>` callback receives `object`.
+
+## Diagnostics
+
+| Cause | Typical diagnostic |
+| --- | --- |
+| Unknown function name | `UnknownFunction` |
+| Wrong number of arguments | `InvalidArity` |
+| Argument type mismatch | `TypeMismatch` |
+| Return type mismatch | `TypeMismatch` |
+| `void` result used as a value | `VoidValue` |
+| Callback shape mismatch | `InvalidCallback` |
+
+## Example
+
+The sample defines constants, object-returning functions, default parameters, and callbacks used by `join`.
+
+<SsExample
+  id="authoring-functions"
+  title="Functions and definitions example"
+/>
+
+```sh
+ss check site/samples/authoring-functions.ss
+ss dump site/samples/authoring-functions.ss .ss-cache/authoring-functions.json
+ss render site/samples/authoring-functions.ss .ss-cache/authoring-functions.pdf
+```
+
+Inspect the dump for function-created objects, their properties, and the generated text from `join`.

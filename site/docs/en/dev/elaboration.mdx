@@ -1,0 +1,252 @@
+---
+title: "Elaboration"
+description: "Executing checked programs into a temporary document graph and ordered document terms."
+---
+
+# Elaboration
+
+Elaboration executes the checked program and produces a document state with pages, objects, metadata, properties, render environment entries, constraints, diagnostics, and operation terms.
+
+The implementation is in `src/elaboration/eval.zig`, `src/elaboration/document.zig`, and `src/elaboration/builtin.zig`. The output is normalized by [Lowering](./lowering).
+
+## Input and Output
+
+| Item | Content |
+| --- | --- |
+| Input | Checked `core.Ir` |
+| Output | `elaboration.Document` |
+| Main entrypoint | `elaboration.elaborateIr` |
+| Executed code | `document` statements, `page` bodies, standard library functions, user functions |
+| Products | Pages, objects, metadata, properties, render env, constraints, diagnostics, terms |
+
+Elaboration does not draw. Text width, image dimensions, PDF conversion, Font Awesome conversion, and LaTeX compilation are render-stage work.
+
+## Document State
+
+`Document` in `src/elaboration/document.zig` stores the temporary graph.
+
+```zig
+pub const Document = struct {
+    asset_base_dir: []const u8,
+    document_id: HandleId,
+    next_id: HandleId,
+    nodes: std.ArrayList(core.Node),
+    metadata: std.ArrayList(core.Metadata),
+    page_order: std.ArrayList(HandleId),
+    contains: std.AutoHashMap(HandleId, std.ArrayList(HandleId)),
+    constraints: std.ArrayList(core.Constraint),
+    diagnostics: std.ArrayList(core.Diagnostic),
+    fragments: std.ArrayList(*core.Fragment),
+    terms: std.ArrayList(Term),
+};
+```
+
+`HandleId` is valid only during elaboration. Normalization maps it to `core.NodeId`.
+
+## Terms
+
+Operations are recorded as `Term` values.
+
+```zig
+pub const Term = union(enum) {
+    add_page,
+    make_node,
+    add_containment,
+    set_property,
+    extend_render_env,
+    set_content,
+    add_metadata,
+    add_constraint,
+    materialize_fragment,
+};
+```
+
+| Term | Meaning | Common source |
+| --- | --- | --- |
+| `add_page` | Add a page | `page` block |
+| `make_node` | Create document, page, object, or group node | `text`, `image`, `new`, `group` |
+| `add_containment` | Add parent-child edge | Place object on page or child in group |
+| `set_property` | Set node property | `obj.text_size = 22`, `set_prop` |
+| `extend_render_env` | Add render environment value | Math package helpers |
+| `set_content` | Replace node content | `set_content`, generated functions |
+| `add_metadata` | Add metadata | `mark`, `doc_mark` |
+| `add_constraint` | Add layout constraint | `below`, `pin_l`, `equal` |
+| `materialize_fragment` | Materialize a fragment | Internal fragment path |
+
+Terms are the input to normalization. They are part of the compiler data path, not trace output.
+
+## Scheduled Units
+
+Elaboration schedules page bodies and document statements.
+
+```zig
+const ScheduledUnit = struct {
+    module_id: core.SourceModuleId,
+    source_order: usize,
+    summary: dependencies.AccessSummary,
+    kind: union(enum) {
+        document_statement,
+        page,
+    },
+};
+```
+
+A page unit executes all statements in one page body. A document-statement unit represents one statement inside a `document` block. Treating document statements separately allows page-dependent generation to run after page bodies.
+
+## Dependencies
+
+`src/analysis/dependencies.zig` records what each unit reads and writes.
+
+```zig
+pub const ResourceKind = enum {
+    graph_pages,
+    graph_objects,
+    property,
+    content,
+    metadata,
+    constraints,
+    render_env,
+    diagnostics,
+    layout,
+    asset,
+};
+```
+
+```zig
+pub const AccessSummary = struct {
+    reads: std.ArrayList(Resource),
+    writes: std.ArrayList(Resource),
+    selection_reads: std.ArrayList(Resource),
+    reads_layout: bool,
+    writes_layout_input: bool,
+    invalid_selection_mutation: ?InvalidSelectionMutation,
+};
+```
+
+Page lists, page objects, and metadata affect execution order. A document statement that reads titles or page objects must run after the page bodies that create them.
+
+## Document and Page Contexts
+
+Page bodies run with a current page.
+
+```ss
+page intro
+  let title = head("Title")
+  let body = text("Body")
+  below(body, title, 32)
+end
+```
+
+Document statements run without a current page. They are for document-wide functions.
+
+```ss
+document
+  pagenos("{page} / {total}")
+  need_titles()
+end
+```
+
+When a document statement reads pages or page objects, the scheduler orders page execution before that statement.
+
+## Values
+
+Elaboration evaluates expressions to `core.Value`.
+
+```zig
+pub const Value = union(SemanticSort) {
+    code,
+    document,
+    page,
+    object,
+    metadata,
+    selection,
+    anchor,
+    function,
+    style,
+    string,
+    number,
+    boolean,
+    constraints,
+    fragment,
+    void,
+};
+```
+
+Function calls bind argument values to declared parameters. Lambdas are stored in `ClosureStore` and called by functions such as `foreach` and `join`.
+
+## Standard Library Convention
+
+Many standard component functions add an object to the current page and return that object.
+
+```ss
+let body = text("Body")
+border(body, 18, 12, "0.36,0.40,0.48", 1, 8)
+```
+
+In that example, `text` adds an object. `border` updates the existing object and returns it. Whole-document functions such as `pagenos` and `need_titles` read document data and may add objects to several pages or emit diagnostics.
+
+This behavior is a convention of standard library functions. It is not a rule for every user function.
+
+## Property Values
+
+Property assignment accepts values checked against field declarations. User code can write strings, numbers, booleans, and styles where the field permits them.
+
+```ss
+body.text_size = 22
+body.wrap = true
+body.theme = style("hero")
+```
+
+Core IR stores property values as renderer-readable strings. That storage format does not mean user properties are limited to string expressions.
+
+## Diagnostics
+
+| Diagnostic | Example | Meaning |
+| --- | --- | --- |
+| `NoCurrentPage` | Calling `text("x")` directly in `document` | Operation required a current page |
+| `InvalidArity` | Wrong argument count | Runtime call arity did not match contract |
+| `InvalidSemanticSort` | String where number is required | Runtime value sort mismatch |
+| `RecursiveFunction` | Function calls itself | Recursion is rejected |
+| `InvalidSelectionMutation` | Selection traversal mutates the same selected resource | Mutation during traversal is rejected |
+| `LayoutDependencyCycle` | Layout output is used to create layout input | Current layout solving is one pass |
+
+Type-checkable problems are rejected earlier. Elaboration handles problems that depend on runtime context, selection state, current page, and scheduling.
+
+## Example
+
+```ss
+import std:themes/default
+
+document
+  toc_obj()
+end
+
+page intro
+  head("Intro")
+  text("Body")
+end
+
+page body
+  head("Main")
+  text("Body")
+end
+```
+
+Use `dump` to inspect the normalized result.
+
+```sh
+ss dump slide.ss .ss-cache/elaboration.json
+```
+
+The final dump shows pages, objects, metadata, and constraints in core IR form. The raw `Document.terms` list is applied during normalization.
+
+## Checks
+
+```sh
+zig build
+zig build test
+zig build run -- check demo/seminar-05-12.ss
+zig build run -- dump demo/seminar-05-12.ss .ss-cache/elaboration-dump.json
+```
+
+When page bodies, document statements, selections, metadata, property assignment, or constraint generation changes, also check representative standard library functions.

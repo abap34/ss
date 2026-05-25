@@ -1,0 +1,91 @@
+---
+title: "VS Code 拡張"
+description: "VS Code で使う言語登録，構文強調，スニペット，言語サーバ，コマンド，設定を説明します．"
+---
+
+# VS Code 拡張
+
+VS Code 拡張は `.ss` ファイルを `ss-slide` 言語として登録し，`ss` 言語サーバを起動します．
+
+## 必要なもの
+
+拡張は `ss` 実行ファイルを同梱しません．先に `ss` をインストールし，`PATH` から見えるようにするか，`ss.cli.path` を設定します．
+
+```json
+{
+  "ss.cli.path": "/Users/example/.local/bin/ss"
+}
+```
+
+リポジトリ開発中は，ビルド済みバイナリを指します．
+
+```json
+{
+  "ss.cli.path": "/path/to/ss/zig-out/bin/ss"
+}
+```
+
+## ファイル関連付け
+
+拡張は `.ss` を `ss-slide` に関連付けます．別の拡張が `.ss` を別言語に関連付ける場合は，ワークスペース設定で上書きします．
+
+```json
+{
+  "files.associations": {
+    "*.ss": "ss-slide"
+  }
+}
+```
+
+## 機能
+
+| 機能 | 実体 |
+| --- | --- |
+| 構文強調 | `editor/vscode/syntaxes/ss.tmLanguage.json` |
+| 括弧，コメント，インデント | `editor/vscode/language-configuration.json` |
+| スニペット | `editor/vscode/snippets/ss.code-snippets` |
+| 診断，hover，補完，定義ジャンプ，シンボル | `ss lsp` |
+| PDF ライブプレビュー | 拡張コマンドから `ss render` を実行 |
+
+言語サーバは CLI と同じ parser，loader，checker，graph builder を使います．
+
+## コマンド
+
+| コマンドパレット項目 | コマンド ID | 動作 |
+| --- | --- | --- |
+| `ss: Check Current File` | `ss.checkCurrentFile` | アクティブな `.ss` 文書を保存し，言語サーバの診断更新を促します |
+| `ss: Open Live Preview` | `ss.preview.live` | アクティブな `.ss` 文書の PDF プレビューを開始または表示します |
+
+プレビューコマンドは，現在のファイルが `ss-slide` のときにエディタタイトルにも出ます．
+
+## 設定
+
+```json
+{
+  "ss.cli.path": "ss",
+  "ss.livePreview.debounceMs": 350,
+  "ss.livePreview.openMode": "vscode",
+  "ss.lsp.trace.server": "off"
+}
+```
+
+| 設定 | 値 |
+| --- | --- |
+| `ss.cli.path` | `ss` 実行ファイルのパス |
+| `ss.livePreview.debounceMs` | 編集後にプレビューを再描画するまでの遅延 |
+| `ss.livePreview.openMode` | `vscode` または `external` |
+| `ss.lsp.trace.server` | `off`，`messages`，`verbose` |
+
+trace 出力は `ss` 出力チャンネルに出ます．
+
+## プロジェクトファイル
+
+エディタ機能は，言語サーバが発見したプロジェクトを使います．入口ファイルとアセット基準を安定させる場合は，デッキまたはワークスペースのルートに `ss.toml` を置きます．
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+同じファイルは，`ss check --project .` や `ss render --project . --output deck.pdf` でも使われます．

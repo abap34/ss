@@ -1,0 +1,47 @@
+---
+title: "Headings"
+description: "Signature, value, placement, properties, and diagnostics for Headings."
+---
+
+# Headings
+
+## Definition
+
+```text
+head : string -> object
+```
+
+Creates an object with the `title` role. Table-of-contents generation and title checks read this role.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let title = head("Method")
+end
+```
+
+## Value
+
+Heading functions add title or subtitle role objects to the current page and return those objects. `head` is the usual page title helper.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let subtitle = subhead("Details")
+below(subtitle, title, 18)
+same_l(subtitle, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

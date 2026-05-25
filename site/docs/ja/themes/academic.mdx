@@ -1,0 +1,87 @@
+---
+title: "論文風テーマ"
+description: "`std:themes/academic` の関数，cover の引数，文字サイズ，配置への影響を説明します．"
+---
+
+# 論文風テーマ
+
+`std:themes/academic` は，研究発表やゼミ用のデッキ向けのプレゼンテーション関数を定義します．
+
+```ss
+import std:themes/academic
+
+page title
+  cover("Talk title", "Venue or subtitle", "Author", "2026-05-25")
+end
+
+page outline
+  let title = head("Outline")
+  let body = text <<
+- Background
+- Method
+- Result
+>>
+  ~ body.top = title.bottom + 28
+end
+```
+
+このテーマは `std:themes/base` を import し，`pop` より少ない関数を上書きします．
+
+## 提供する関数
+
+| 関数 | 返すもの |
+| --- | --- |
+| `h1(text)` | 32 pt のタイトル object |
+| `h2(text)` | 28 pt のサブタイトル object |
+| `h3(text)` | 24 pt のサブタイトル object |
+| `head(text)` | 左上寄せのページタイトル |
+| `subhead(text)` | 小さめのサブタイトル object |
+| `text(source)` | Markdown とコード表示を設定した本文 object |
+| `code(source, language = "python")` | 灰色の枠を持つコード object |
+| `toc(title)` | 見出し，目次 object，ページ番号 |
+| `cover(title, subtitle, author, date = "")` | 日付を含められる表紙用 object 群 |
+
+このテーマの `cover` は第四引数を受け取ります．`date` には既定値があるため，三引数の呼び出しも使えます．
+
+## 見た目の設定
+
+論文風テーマは黒い本文色，左上寄せの見出し，中立的なコード枠を使います．
+
+| 領域 | 設定 |
+| --- | --- |
+| 見出し | `(30, 30)` 付近に 34 pt の太字タイトル |
+| 本文 | 18 pt，行送り 24 pt |
+| コード | 灰色の背景と枠 |
+| 表紙 | y = 240 付近のタイトル，下にサブタイトル，著者，日付 |
+| 目次 | 追加の panel chrome なしで見出しとページ番号を生成 |
+
+画像や PDF コンポーネントはこのテーマでは上書きしません．別の import がなければ base 側の定義を使います．
+
+## 配置への影響
+
+表紙タイトルは既定テーマより下に置かれます．ページ見出しは左上に寄ります．本文の多いページでは，見出し後の利用可能領域が変わります．
+
+```ss
+page code_page
+  let title = head("Implementation")
+  let source = code <<
+fn add(left: number, right: number) -> number
+  return left + right
+end
+>>
+  ~ source.top = title.bottom + 24
+  ~ source.left = page.left + 72
+  ~ source.right = page.right - 72
+end
+```
+
+長いコードは，テーマ変更後に描画して行高と余白を確認します．
+
+## 確認
+
+言語と配置の診断は `check` で確認します．文字組みと PDF 出力は `render` で確認します．
+
+```sh
+ss check talk.ss
+ss render talk.ss .ss-cache/academic.pdf
+```

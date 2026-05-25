@@ -1,0 +1,6 @@
+[
+  { "type": "file", "name": "default", "label": "Default theme" },
+  { "type": "file", "name": "academic", "label": "Academic theme" },
+  { "type": "file", "name": "pop", "label": "Pop theme" },
+  { "type": "file", "name": "custom", "label": "Custom theme" }
+]

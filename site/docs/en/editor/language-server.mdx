@@ -1,0 +1,78 @@
+---
+title: "Language server"
+description: "`ss lsp` capabilities, project snapshots, editor metadata, and trace settings."
+---
+
+# Language server
+
+`ss lsp` runs over standard input and output. The VS Code extension starts it by calling the executable configured in `ss.cli.path`.
+
+```sh
+ss lsp
+```
+
+The command is normally started by the editor. Running it directly is useful only when testing LSP traffic.
+
+## Capabilities
+
+The server advertises these capabilities.
+
+| Capability | Editor use |
+| --- | --- |
+| Text synchronization | Rebuild project snapshots after edits |
+| Completion | Functions, variables, declarations, fields |
+| Hover | Function signatures, variable types, class and field information |
+| Definition | Jump to definitions recorded during analysis |
+| Inlay hints | Parameter names and inferred type hints |
+| Document symbols | Page, function, constant, and declaration outline |
+| Folding ranges | Blocks that can be folded |
+| Semantic tokens | Keywords, functions, variables, strings, numbers, types, properties |
+| Document colors | Color literals and color presentations |
+
+The server data comes from the same dump-oriented metadata used by the compiler pipeline.
+
+## Snapshot
+
+For each edited file, the server resolves project information, reads sources, parses, loads imports, builds the initial IR, checks the program, and stores a snapshot.
+
+```text
+text document -> project resolution -> source graph -> checked IR -> editor metadata
+```
+
+The snapshot records entry path, asset base, local modules, diagnostics, definitions, variables, symbols, and hints.
+
+## Project Info Request
+
+The extension uses a custom request named `ss/projectInfo` for live preview. The response can include:
+
+```json
+{
+  "entryPath": "/path/to/slide.ss",
+  "assetBaseDir": "/path/to/assets",
+  "localModules": ["/path/to/helpers.ss"]
+}
+```
+
+Live preview uses those paths to write a snapshot and call `ss render`.
+
+## Trace
+
+Set `ss.lsp.trace.server` to inspect protocol messages.
+
+```json
+{
+  "ss.lsp.trace.server": "messages"
+}
+```
+
+Use `verbose` when message bodies are needed. Trace output appears in the `ss` output channel.
+
+## CLI Parity
+
+Editor diagnostics should match `ss check` when the same binary and project root are used.
+
+```sh
+ss check --project .
+```
+
+If the editor and terminal disagree, compare `ss.cli.path`, the workspace folder, and the nearest `ss.toml`.

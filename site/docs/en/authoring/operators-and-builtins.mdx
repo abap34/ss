@@ -1,0 +1,97 @@
+---
+title: "Operators and built-ins"
+description: "Operator precedence and the core functions used by expressions."
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+
+# Operators and built-ins
+
+Expressions use built-in functions for numeric operations, string concatenation, selections, properties, page information, and diagnostics. Operator notation is a short form for ordinary function calls. `a + b` calls the same function as `add(a, b)`, and `a ++ b` calls the same function as `concat(a, b)`.
+
+## Functions With Operator Notation
+
+| Function | Operator notation | Function call | Signature |
+| --- | --- | --- | --- |
+| `neg` | `-x` | `neg(x)` | `number -> number` |
+| `add` | `a + b` | `add(a, b)` | `(number, number) -> number` |
+| `sub` | `a - b` | `sub(a, b)` | `(number, number) -> number` |
+| `mul` | `a * b` | `mul(a, b)` | `(number, number) -> number` |
+| `div` | `a / b` | `div(a, b)` | `(number, number) -> number` |
+| `concat` | `a ++ b` | `concat(a, b)` | `(string, string) -> string` |
+
+<ApiCard
+  locale="en"
+  kind="function"
+  name="neg"
+  signature="neg(value: number) -> number"
+  module="built-in"
+  returns="number"
+  summary="Negates a number. It is the same function as `-value`."
+/>
+
+<ApiCard
+  locale="en"
+  kind="function"
+  name="add"
+  signature="add(left: number, right: number) -> number"
+  module="built-in"
+  returns="number"
+  summary="Adds two numeric values. It is the same function as `left + right`."
+/>
+
+<ApiCard
+  locale="en"
+  kind="function"
+  name="sub"
+  signature="sub(left: number, right: number) -> number"
+  module="built-in"
+  returns="number"
+  summary="Subtracts the right value from the left value. It is the same function as `left - right`."
+/>
+
+<ApiCard
+  locale="en"
+  kind="function"
+  name="mul"
+  signature="mul(left: number, right: number) -> number"
+  module="built-in"
+  returns="number"
+  summary="Multiplies two numeric values. It is the same function as `left * right`."
+/>
+
+<ApiCard
+  locale="en"
+  kind="function"
+  name="div"
+  signature="div(left: number, right: number) -> number"
+  module="built-in"
+  returns="number"
+  summary="Divides the left value by the right value. It is the same function as `left / right`."
+/>
+
+<ApiCard
+  locale="en"
+  kind="function"
+  name="concat"
+  signature="concat(left: string, right: string) -> string"
+  module="built-in"
+  returns="string"
+  summary="Concatenates two strings. It is the same function as `left ++ right`."
+/>
+
+## Examples
+
+```ss
+let size = 18 + 4
+let label = "page " ++ str(page_index(pagectx()))
+```
+
+The same code can be written with ordinary function calls.
+
+```ss
+let size = add(18, 4)
+let label = concat("page ", str(page_index(pagectx())))
+```
+
+For syntax details, see [Syntax](./syntax). For values and type names, see [Values and types](./values-and-types).

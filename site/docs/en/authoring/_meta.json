@@ -1,0 +1,47 @@
+[
+  {
+    "type": "file",
+    "name": "syntax",
+    "label": "Syntax"
+  },
+  {
+    "type": "file",
+    "name": "values-and-types",
+    "label": "Values and types"
+  },
+  {
+    "type": "file",
+    "name": "operators-and-builtins",
+    "label": "Operators and built-ins"
+  },
+  {
+    "type": "file",
+    "name": "pages",
+    "label": "Pages and documents"
+  },
+  {
+    "type": "file",
+    "name": "functions",
+    "label": "Functions and definitions"
+  },
+  {
+    "type": "file",
+    "name": "objects",
+    "label": "Objects and roles"
+  },
+  {
+    "type": "file",
+    "name": "properties",
+    "label": "Properties and styles"
+  },
+  {
+    "type": "file",
+    "name": "constraints",
+    "label": "Constraints"
+  },
+  {
+    "type": "file",
+    "name": "generation",
+    "label": "Whole-deck generation"
+  }
+]

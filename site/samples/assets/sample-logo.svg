@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="150" viewBox="0 0 360 150">
+  <rect width="360" height="150" rx="22" fill="#f4f9ff"/>
+  <rect x="24" y="24" width="312" height="102" rx="18" fill="#ffffff" stroke="#467fb2" stroke-width="6"/>
+  <circle cx="82" cy="75" r="30" fill="#467fb2"/>
+  <path d="M142 54h140v16H142zM142 84h96v16h-96z" fill="#1f2933"/>
+  <text x="64" y="85" font-family="Helvetica, Arial, sans-serif" font-size="27" font-weight="700" fill="#ffffff">ss</text>
+</svg>

@@ -1,0 +1,87 @@
+---
+title: "Grouping"
+description: "`group`, child bounding boxes, group translation, and layout diagnostics."
+---
+
+# Grouping
+
+`group` creates an object whose frame is the bounding box of its children.
+
+```ss
+let pair = group(left, right)
+```
+
+Groups are useful when several objects should be positioned together after their internal layout is known.
+
+## Basic Use
+
+```ss
+import std:themes/default
+
+page grouped
+  let title = head("Grouped")
+  let left = text("Left")
+  let right = text("Right")
+
+  fix_w(left, 320)
+  fix_w(right, 320)
+  cols2c(left, right, 40)
+
+  let pair = group(left, right)
+  below(pair, title, 32)
+  same_l(pair, title, 0)
+end
+```
+
+`cols2c` sets the relation between the children. `group` then gives that pair a frame that can be used by later constraints.
+
+## Translation
+
+When a group receives a constraint that changes its frame position, the solver translates all children by the same delta.
+
+```ss
+let pair = group(left, right)
+pin_l(pair, 96)
+```
+
+The children keep their relative positions inside the group.
+
+## Nested Groups
+
+Groups can contain objects that are also part of other helper patterns. Keep ownership clear by grouping after the child layout relation has been added.
+
+```ss
+cols2c(left, right, 30)
+let columns = group(left, right)
+
+below(caption, columns, 16)
+let figure_block = group(columns, caption)
+```
+
+The second group can be moved as one figure block.
+
+## Constraints on Children
+
+Constraints can still refer to child objects after grouping.
+
+```ss
+same_l(caption, left, 0)
+below(caption, left, 24)
+```
+
+Use child constraints for internal relations. Use group constraints for relations between the group and other page objects.
+
+## Diagnostics
+
+| Problem | Cause |
+| --- | --- |
+| Empty or unexpected group frame | Child frames are incomplete |
+| Group move does not match expectation | A child has additional external constraints |
+| Overlap inside group | Child-to-child constraints are missing |
+| Overflow | Child content exceeds its frame |
+
+Use JSON output to inspect both the group and children.
+
+```sh
+ss dump slide.ss .ss-cache/groups.json
+```

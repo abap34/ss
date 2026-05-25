@@ -1,0 +1,48 @@
+---
+pageType: home
+hero:
+  name: ss
+  text: スライドを `.ss` で書き，PDF を生成します．
+  tagline: 関数，定数，コンポーネント，文書単位の生成処理，配置制約を同じソースに置きます．
+  image:
+    src: /ssbird.png
+    alt: ss のロゴ
+  actions:
+    - theme: brand
+      text: はじめる
+      link: /ja/guide/getting-started
+    - theme: alt
+      text: GitHub
+      link: https://github.com/abap34/ss
+features:
+  - title: スライドを書くための表現力
+    details: 関数，定数，型定義を使って，コンポーネント，生成されるラベル，ページ番号，目次を同じソースに書きます．
+  - title: 必要な場所を制約で配置する
+    details: object 間の関係を制約で指定します．未指定の object には既定配置が入ります．
+  - title: LaTeX で数式を描画する
+    details: 数式は手元の LaTeX で描画します．追加パッケージも `document` ブロックから指定します．
+  - title: 差分処理と並列処理に向いた設計
+    details: コンパイラは import，関数，document 文，page 文，配置制約の依存関係を解析します．
+  - title: エディタ支援
+    details: 言語サーバと VS Code 拡張は，同じ構文解析，型検査，配置情報を使います．
+---
+
+import { SsExample } from '../../components/SsExample';
+
+# ss
+
+`ss` は，コード，数式，画像，繰り返しの構造を含むスライドを書くための言語とコマンドラインツールです．
+
+デッキは `.ss` ソースとして保存します．共有するコンポーネントは関数にします．ページ番号や目次は `document` ブロックに書きます．配置を固定する箇所には制約を書きます．
+
+次の例は，表紙と本文を持つ最小の資料です．PDF とソースを並べて載せています．
+
+<SsExample
+  id="quick-start"
+  title="最初の例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソースファイル"
+  generatedPdfLabel="生成された PDF"
+  previewImageLabel="プレビュー画像"
+  rendererLabel="描画器"
+/>

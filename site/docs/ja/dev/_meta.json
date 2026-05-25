@@ -1,0 +1,13 @@
+[
+  { "type": "file", "name": "pipeline", "label": "コンパイラの流れ" },
+  { "type": "file", "name": "parser", "label": "パーサ" },
+  { "type": "file", "name": "analysis", "label": "解析と型" },
+  { "type": "file", "name": "elaboration", "label": "展開" },
+  { "type": "file", "name": "lowering", "label": "正規化" },
+  { "type": "file", "name": "core-ir", "label": "中核 IR" },
+  { "type": "file", "name": "layout-solver", "label": "配置ソルバ" },
+  { "type": "file", "name": "pdf-backend", "label": "PDF 描画器" },
+  { "type": "file", "name": "stdlib", "label": "標準ライブラリの設計" },
+  { "type": "file", "name": "incremental-parallel", "label": "差分処理と並列処理" },
+  { "type": "file", "name": "documentation", "label": "文書サイト" }
+]

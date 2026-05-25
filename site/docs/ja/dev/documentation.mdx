@@ -1,0 +1,53 @@
+---
+title: "文書サイト"
+description: "文書サイトの入力，サンプル生成，LLM 向け出力，検査です．"
+---
+
+# 文書サイト
+
+文書サイトは `site` ディレクトリにあります．このファイル群は，公開文書を保守する人が対象です．
+
+## 入力
+
+文書の入力は `site/docs` の MDX，`site/samples` の `.ss` サンプル，`site/components` の表示コンポーネントです．ロゴなどの静的アセットは `site/docs/public` に置きます．
+
+```text
+site/
+  docs/
+  samples/
+  components/
+  scripts/
+  rspress.config.ts
+```
+
+## サンプル生成
+
+`npm run build` の前に `npm run render:samples` が動きます．この処理は `site/samples` の `.ss` を `ss render` で PDF にし，プレビュー画像を作り，表示コンポーネントが読む JSON を生成します．
+
+```sh
+npm run render:samples
+```
+
+生成物は `site/docs/public/generated` と `site/generated` に置かれます．これらはソースではありません．
+
+## LLM 向け出力
+
+Rspress の `llms: true` により，構築後に LLM が読みやすい Markdown 出力が生成されます．場所は `site/doc_build` です．
+
+```text
+site/doc_build/llms.txt
+site/doc_build/llms-full.txt
+site/doc_build/ja/llms.txt
+site/doc_build/ja/llms-full.txt
+site/doc_build/**/*.md
+```
+
+この出力は文書サイトの生成物です．`ss render` が作るスライド PDF とは別のものです．
+
+## 検査
+
+```sh
+npm run build
+```
+
+構築では，サンプル生成，MDX の変換，ページ生成，言語対応検査が実行されます．`DefinePlugin` の `import.meta.env.SSR` 警告は現状の Rspress 構成で出ていますが，ページ生成と対応検査は成功します．

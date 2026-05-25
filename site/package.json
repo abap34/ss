@@ -1,0 +1,16 @@
+{
+  "name": "ss-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render:samples": "node scripts/render-samples.mjs",
+    "audit:writing": "node scripts/audit-writing.mjs",
+    "dev": "npm run render:samples && rspress dev --host 127.0.0.1",
+    "build": "npm run render:samples && rspress build",
+    "preview": "rspress preview --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "@rspress/core": "2.0.12",
+    "typescript": "^5.9.3"
+  }
+}

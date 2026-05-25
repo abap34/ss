@@ -1,0 +1,45 @@
+---
+title: "Table of contents"
+description: "Signature, value, placement, properties, and diagnostics for Table of contents."
+---
+
+# Table of contents
+
+## Definition
+
+```text
+toc : string -> object
+```
+
+Builds table-of-contents text from objects with the `title` role.
+
+## Syntax
+
+```ss
+page contents
+toc("Contents")
+end
+```
+
+## Value
+
+`toc` creates a `toc` role text object and returns it. The content is built from pages and their `title` role objects.
+
+## Static conditions
+
+The function name must come from an imported module. Pages that should appear in the table of contents need title-role objects, usually from `head` or `cover`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+page contents
+let list = toc("Contents")
+pin_l(list, 96)
+pin_t(list, 130)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

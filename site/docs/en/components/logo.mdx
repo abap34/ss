@@ -1,0 +1,50 @@
+---
+title: "Logo"
+description: "Signature, value, placement, properties, and diagnostics for Logo."
+---
+
+# Logo
+
+## Definition
+
+```text
+logos : string × number? -> void
+```
+
+Generates a logo object on each page in the document.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+document
+logos("assets/logo.png", 0.4)
+end
+```
+
+## Value
+
+`logos` returns `void`. It stores the logo path and scale on the document and generates a `logo` role image object for each page that does not already have one.
+
+## Static conditions
+
+The function name must come from an imported module. The path must be a string and the scale must be a number. The asset path is resolved from `asset_base_dir`.
+
+## Placement
+
+Generated logo objects are placed near the top-right of each page by the standard library. The generated object uses raster-asset rendering and the `asset_scale` value from the second argument.
+
+```ss
+document
+logos("assets/logo.png", 0.4)
+end
+
+page body
+head("Body")
+end
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

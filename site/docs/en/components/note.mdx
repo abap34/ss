@@ -1,0 +1,47 @@
+---
+title: "Note"
+description: "Signature, value, placement, properties, and diagnostics for Note."
+---
+
+# Note
+
+## Definition
+
+```text
+note : string -> object
+```
+
+Creates a note object for supplementary text.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let n = note("Write a note here.")
+end
+```
+
+## Value
+
+`note` adds a note-role text object to the current page and returns it. Themes can give notes different spacing or color from body text.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let n = note("Assumption: input data is fixed.")
+below(n, title, 32)
+same_l(n, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

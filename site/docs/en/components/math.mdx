@@ -1,0 +1,47 @@
+---
+title: "Math"
+description: "Signature, value, placement, properties, and diagnostics for Math."
+---
+
+# Math
+
+## Definition
+
+```text
+tex : string × number? -> object
+```
+
+Renders a LaTeX string as a math object.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let formula = tex("\\sum_{i=1}^{n} i")
+end
+```
+
+## Value
+
+Math helpers add a math object to the current page and return it. `tex` and `mathtex` use LaTeX input for vector math rendering.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let eq = tex("\\sum_{i=1}^{n} i", 1)
+below(eq, title, 32)
+same_l(eq, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

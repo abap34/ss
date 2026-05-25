@@ -1,0 +1,22 @@
+[
+  {
+    "text": "はじめる",
+    "link": "/ja/guide/getting-started",
+    "activeMatch": "^/ja/guide/"
+  },
+  {
+    "text": "言語リファレンス",
+    "link": "/ja/authoring/syntax",
+    "activeMatch": "^/ja/authoring/"
+  },
+  {
+    "text": "コンポーネント",
+    "link": "/ja/components/cover",
+    "activeMatch": "^/ja/components/"
+  },
+  {
+    "text": "実装",
+    "link": "/ja/dev/pipeline",
+    "activeMatch": "^/ja/dev/"
+  }
+]

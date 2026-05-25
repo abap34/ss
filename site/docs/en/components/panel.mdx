@@ -1,0 +1,49 @@
+---
+title: "Panel"
+description: "Signature, value, placement, properties, and diagnostics for Panel."
+---
+
+# Panel
+
+## Definition
+
+```text
+panel : style -> object
+```
+
+Creates a chrome object for backgrounds and frames.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let bg = panel(style("custom"))
+end
+```
+
+## Value
+
+`panel` creates a chrome object and returns it. It is usually used behind another object or as a surrounding frame.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let background = panel(style("custom"))
+pin_l(background, 72)
+pin_t(background, 96)
+fix_w(background, 500)
+fix_h(background, 180)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

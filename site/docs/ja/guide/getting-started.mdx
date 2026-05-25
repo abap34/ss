@@ -1,0 +1,425 @@
+---
+title: "はじめる"
+description: "プロジェクト設定，ソースの構成，最小のデッキ，検査，PDF 生成を説明します．"
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# はじめる
+
+ss はスライド記述言語とその処理系です．
+
+WSYIWYG (What You See Is What You Get) なスライドエディタとは異なり，
+ss 言語によってスライドの本文や各種コンポーネント，レイアウトを記述し， ss コンパイラにより PDF を生成します．
+
+これによる利点としては，次のようなものがあります．
+
+- 慣れれば同じようなスライドを非常に素早く作ることができる
+- バージョン管理システムによって変更履歴を管理しやすい
+- テキストエディタの補完やリファクタリングを活用できる
+- さまざまな検査を用意に実行できて品質を保ちやすい
+- AI Agent によるスライド生成や修正がしやすい
+
+さらにそのほかのテキストをベースにしたスライド記述言語と比べて ss は次のような優位性を持ちます．
+
+- 必要な場合は厳密なレイアウト制約の指定により細かい調整も可能
+- Web ベースではない．これにより数式は真の LaTeX を使って描画したり，自由度の高いレイアウトを実現できる
+- 依存関係をコンパイラが解析してスケジューリングする特殊な実行モデルにより，ほかのコンポーネントに依存したコンポーネントを簡単に記述できる
+- 充実したエディタ支援，インクリメンタル・並列コンパイルによる高速なフィードバックループ
+
+そのため ss 言語は次のようなユーザにとっては特に有用であると考えています．
+
+- スライドを頻繁に作る人，とくに同じようなスライドを何度も作る人
+- 特殊な記号を多用する理系分野の人
+- スライドの生成を自動化したい人
+
+もし自分が上のどれかに当てはまると思ったら，ぜひ ss を試してみてください．
+
+まずは ss で簡単なスライドを作る例から大体の流れを掴んでみましょう．
+
+
+## 入力と出力
+
+`ss` の入力は，プロジェクト設定と `.ss` ソースです．出力は PDF です．描画中の中間ファイルとキャッシュは `.ss-cache` 以下に入ります．
+
+```text
+slides/
+  ss.toml
+  slide.ss
+  assets/
+    logo.png
+    plot.png
+    appendix.pdf
+  .ss-cache/
+```
+
+`ss.toml` は入口ファイルとアセット基準ディレクトリを指定します．`slide.ss` は入口ソースです．`assets` には，スライドから参照する画像，PDF，ロゴを置きます．`.ss-cache` は生成物です．通常は編集しません．
+
+## 導入
+
+macOS では Homebrew を使います．
+
+```sh
+brew tap abap34/ss
+brew install ss
+```
+
+`ss help` が表示されれば，コマンドにパスが通っています．
+
+```sh
+ss help
+```
+
+このリポジトリから開発用に組み立てる場合は，MD4C を準備してから Zig でビルドします．
+
+```sh
+scripts/setup-md4c.sh
+zig build
+```
+
+PDF 描画では，内容に応じて外部コマンドを使います．環境を確認するには `doctor` を実行します．
+
+```sh
+ss doctor
+```
+
+## プロジェクト設定
+
+プロジェクトは `ss init` で作ります．
+
+```sh
+ss init slides
+cd slides
+```
+
+手で作る場合は，プロジェクトのルートに `ss.toml` を置きます．
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+`entry` は入口ファイルです．`asset_base_dir` はアセットファイルを解決する基準ディレクトリです．上の設定では，`assets/plot.png` はプロジェクトルートからの相対パスとして解決されます．
+
+## ソースの構成
+
+`.ss` ソースの最上位には，import，型定義，定数，関数，document ブロック，page ブロックを置きます．実用上の最小構成は，テーマの import，document ブロック，page ブロックです．
+
+```text
+Program       ::= TopLevelItem*
+TopLevelItem  ::= Import | TypeDecl | ConstDecl | FunctionDecl | DocumentDecl | PageDecl
+Import        ::= "import" ImportSpec Terminator
+DocumentDecl  ::= "document" Newline Statement* "end"
+PageDecl      ::= "page" PageName Newline Statement* "end"
+```
+
+`ImportSpec` は，`std:themes/default` のような標準モジュール名，またはローカルファイルへの相対パスです．`PageName` はページ識別子です．`Terminator` は改行または文末記号です．
+
+## 最小のデッキ
+
+次のソースは，表紙と本文を持つ二ページのデッキです．
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+end
+
+page title
+cover(
+  "Hello，ss",
+  "最初のスライド",
+  "2026"
+)
+end
+
+page body
+let title = head("最初の本文")
+let body = text <<
+- `page` ブロックが一枚のスライドになります．
+- `text` の本文は Markdown として解釈されます．
+- 必要な位置関係は制約で指定します．
+>>
+
+~ body.top == title.bottom - 32
+end
+```
+
+このソースでは，`std:themes/default` が `cover`，`head`，`text`，`pagenos` を提供します．`document` ブロックの `pagenos` は，ページ番号を生成します．`page title` と `page body` は，それぞれ一枚のページです．
+
+## 文書ブロック
+
+`document` ブロックは，文書全体に関係する処理を書く場所です．ページ番号，フッター，ロゴ，透かし，タイトル検査，LaTeX パッケージの追加はここに書けます．
+
+```ss
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+logos("assets/logo.png", 0.4)
+need_titles()
+pkg("stmaryrd")
+end
+```
+
+文書ブロック内の文は，ページ一覧や文書全体のプロパティを読みます．`pagenos` はページ数が確定した後に各ページへ番号を生成します．`need_titles` は各ページにタイトルロールのコンポーネントがあるかを検査します．
+
+## ページブロック
+
+`page` ブロックは，一枚のスライドを定義します．ページ名はリンク，目次，診断，内部表現で使われます．
+
+```text
+PageDecl ::= "page" PageName Newline Statement* "end"
+```
+
+```ss
+page method
+let title = head("方法")
+let body = text("ここに本文を書きます．")
+
+~ body.top == title.bottom - 32
+end
+```
+
+ページの中では，`let` でコンポーネントに名前を付けます．名前を付けたコンポーネントは，後続の制約，プロパティ設定，関数呼び出しから参照します．
+
+## 文
+
+ページや関数の本体には文を書きます．主要な文は次の通りです．
+
+```text
+Statement          ::= LetBinding | Return | If | Constraint | PropertyAssignment | CallStatement
+LetBinding         ::= "let" Identifier "=" Expr Terminator
+Return             ::= "return" Expr? Terminator
+Constraint         ::= "~" ConstraintTarget "==" ConstraintSource Offset? Terminator
+PropertyAssignment ::= Expr "." Identifier "=" Expr Terminator
+CallStatement      ::= Identifier "(" ArgumentList? ")" Terminator
+```
+
+`let` は値を束縛します．`return` は関数の返り値を返します．`if` は条件分岐です．制約文は `~` で始めます．プロパティ代入は，コンポーネントの描画や配置に使う値を設定します．
+
+## 式
+
+式は値を作ります．関数呼び出し，文字列，数値，真偽値，識別子，プロパティ参照，ラムダ式，連結，四則演算を使います．
+
+```text
+Expr       ::= ConcatExpr
+ConcatExpr ::= AddSubExpr ("++" AddSubExpr)*
+AddSubExpr ::= MulDivExpr (("+" | "-") MulDivExpr)*
+MulDivExpr ::= UnaryExpr (("*" | "/") UnaryExpr)*
+UnaryExpr  ::= "-" UnaryExpr | PostfixExpr
+PostfixExpr ::= PrimaryExpr ("(" ArgumentList? ")" | "." Identifier PropertyFallback?)*
+```
+
+文字列の連結は `++` です．数値には `+`，`-`，`*`，`/` を使えます．プロパティ参照は，`obj.content`，`obj.width`，`obj.text_size` のように書きます．
+
+## 型
+
+関数の引数と返り値には型を書きます．よく使う型は次の通りです．
+
+```text
+string
+number
+bool
+void
+object
+page
+document
+style
+constraints
+selection<object>
+metadata
+```
+
+`object` は描画対象のコンポーネントです．`page` はページ，`document` は文書全体です．`constraints` は配置制約の値です．`selection<object>` は，文書やページから選んだコンポーネントの集合です．
+
+## 関数
+
+繰り返し使うコンポーネントは関数にします．関数定義には，引数名，引数型，返り値型を書きます．
+
+```text
+FunctionDecl ::= "fn" Identifier "(" ParamList? ")" "->" Type EffectClause? Annotation* Body
+Param        ::= Identifier ":" Type DefaultValue?
+DefaultValue ::= "=" Expr
+```
+
+```ss
+fn callout(message: string) -> object
+  let body = text(message)
+  border(body, 18, 12, "0.2745,0.5098,0.7059", 1, 8)
+  return body
+end
+```
+
+この関数は，文字列を受け取り，本文コンポーネントを作り，枠線を設定し，そのコンポーネントを返します．返り値が `object` なので，呼び出し側はその結果を制約から参照します．
+
+```ss
+page note_page
+let title = head("注意")
+let box = callout("この箱は自作コンポーネントです．")
+
+~ box.top == title.bottom - 36
+end
+```
+
+## 本文と Markdown
+
+本文には `text` を使います．複数行の本文は `<<` と `>>` で囲みます．
+
+```ss
+let body = text <<
+スライドには，同じ記法，同じ図，同じ説明が何度も出ます．
+
+- 共通の文字列は定数としてまとめます．
+- 共通の見た目は関数としてまとめます．
+- 文書全体で決まる要素は `document` に書きます．
+>>
+```
+
+`text` の中では Markdown を使います．箇条書き，太字，斜体，インラインコード，リンク，表，コードブロックに対応しています．Markdown の画像記法に `fa-solid:house` などを渡すと Font Awesome アイコンを参照します．
+
+## コード
+
+コードコンポーネントには `code` を使います．第二引数には言語名を渡します．
+
+```ss
+let sample = code("""
+fn square(x: number) -> number
+  return x * x
+end
+""", "ss")
+
+~ sample.width == 720
+fit_warn(sample)
+```
+
+長いコードでは，幅とはみ出し方を指定します．`fit_warn` は警告，`fit_error` はエラー，`fit_ignore` は診断なしにします．
+
+## 数式
+
+数式には `tex` を使います．文字列中の LaTeX コマンドでは，バックスラッシュを `\\` と書きます．
+
+```ss
+let formula = tex("\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}")
+```
+
+追加パッケージは `pkg`，`page_pkg`，`obj_pkg` で指定します．
+
+```ss
+document
+pkg("stmaryrd")
+end
+
+page notation
+let title = head("記法")
+let formula = tex("\\llbracket e \\rrbracket")
+~ formula.top == title.bottom - 48
+end
+```
+
+## 画像と PDF アセット
+
+画像には `image`，PDF には `pdf` を使います．パスは `asset_base_dir` からの相対パスです．
+
+```ss
+page assets
+let title = head("実験結果")
+let plot = image("assets/plot.png", 0.7)
+let appendix = pdf("assets/result.pdf", 0.55)
+
+~ plot.top == title.bottom - 36
+~ appendix.top == plot.bottom - 28
+end
+```
+
+`image` と `pdf` はアセットファイルの存在を検査します．存在しない場合は，検査または描画でエラーになります．
+
+## 配置
+
+配置制約は，コンポーネントやページのアンカーの関係です．アンカーは `left`，`right`，`top`，`bottom`，`center_x`，`center_y` です．寸法には `width` と `height` を指定します．
+
+```text
+Constraint ::= "~" AnchorRef "==" AnchorRef Offset?
+AnchorRef  ::= Identifier "." AnchorName | "page" "." AnchorName
+Offset     ::= ("+" | "-") Expr
+```
+
+```ss
+let title = head("制約")
+let left = text("左の説明")
+let right = text("右の説明")
+
+~ left.top == title.bottom - 36
+~ right.top == left.top
+~ left.width == 460
+~ right.width == 460
+cols2(left, right)
+```
+
+補助関数も制約を作ります．`pin_l` は左端固定，`pin_r` は右端固定，`below` は上下関係，`same_l` は左端そろえ，`cols2` は二段組の横関係を作ります．
+
+## 検査
+
+PDF を作る前に `check` を実行します．
+
+```sh
+ss check slide.ss
+ss check --project .
+```
+
+`check` は，構文解析，モジュール読み込み，型検査，関数呼び出し，アセット参照，診断を実行します．PDF は生成しません．
+
+## 描画
+
+PDF は `render` で生成します．
+
+```sh
+ss render slide.ss deck.pdf
+ss render --project . --output deck.pdf
+```
+
+描画では，検査の後に文書グラフを作り，配置を解き，PDF を書き出します．数式，Font Awesome アイコン，SVG，画像，PDF アセットでは外部コマンドを使う場合があります．
+
+```sh
+ss doctor --project .
+```
+
+`doctor` は，プロジェクトの入口，アセットの基準ディレクトリ，描画に必要な外部コマンドを確認します．
+
+## 変更中の確認
+
+編集中に検査や描画を繰り返す場合は `watch` を使います．
+
+```sh
+ss watch check slide.ss
+ss watch render slide.ss deck.pdf
+```
+
+VS Code 拡張は `ss lsp` と `ss render` を使います．`ss.cli.path` には `ss` コマンドのパスを指定します．
+
+## 診断
+
+`Unknown import` は import 先が見つからない場合に出ます．標準テーマは `std:themes/default` のように書きます．
+
+`MissingTitle` は `need_titles()` が有効で，ページにタイトルロールのコンポーネントがない場合に出ます．`head("...")` などでタイトルを置きます．
+
+アセットが見つからない場合は，`asset_base_dir` とソース中の相対パスを確認します．
+
+数式で失敗する場合は，`pdflatex` と追加パッケージを確認します．
+
+配置が重なる場合は，コンポーネントに名前を付け，幅，上端，下端を一つずつ指定します．二段組やコードでは幅を明示すると診断が読みやすくなります．
+
+## 出力例
+
+次の例は，`document`，`page`，`head`，`text`，`pagenos`，配置制約を使った最小の出力です．
+
+<SsExample
+  id="quick-start"
+  title="最小のデッキ"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>

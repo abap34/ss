@@ -1,0 +1,95 @@
+---
+title: "Two columns"
+description: "`cols2`, `cols2c`, `cols2g`, grouped column frames, and wrapping requirements."
+---
+
+# Two columns
+
+Two-column helpers place two objects next to each other.
+
+```ss
+let both = cols2(left, right)
+```
+
+The helpers are defined in `std:core/layout`.
+
+| Helper | Return | Behavior |
+| --- | --- | --- |
+| `cols2c(left, right, gap)` | `constraints` | Adds the horizontal gap constraint |
+| `cols2g(left, right, gap)` | `object` | Adds the constraint and returns a group |
+| `cols2(left, right)` | `object` | Uses a 30 point gap and returns a group |
+
+## Basic Use
+
+```ss
+import std:themes/default
+
+page columns
+  let title = head("Columns")
+  let left = text("Left column")
+  let right = text("Right column")
+
+  fix_w(left, 360)
+  fix_w(right, 360)
+  let both = cols2(left, right)
+
+  below(both, title, 32)
+  same_l(both, title, 0)
+end
+```
+
+The returned group can be constrained as one object. Moving the group moves both children.
+
+## Wrapping
+
+Column text should have known widths before grouping.
+
+```ss
+fix_w(left, 360)
+fix_w(right, 360)
+left.wrap = "on"
+right.wrap = "on"
+```
+
+Without a width, text measurement may produce a frame that does not match the intended column.
+
+## Custom Gap
+
+Use `cols2g` for a custom gap.
+
+```ss
+let pair = cols2g(left, right, 48)
+```
+
+Use `cols2c` when the columns should not be grouped.
+
+```ss
+cols2c(left, right, 48)
+below(left, title, 32)
+below(right, title, 32)
+```
+
+## Group Frame
+
+The group frame is computed from the child frames. A constraint on the group translates the children by the same amount.
+
+```ss
+let pair = cols2(left, right)
+pin_l(pair, 96)
+```
+
+This is useful when the pair has to align with a heading, image, or page margin.
+
+## Diagnostics
+
+| Problem | Check |
+| --- | --- |
+| `left` or `right` is not bound | `ss check` |
+| Text does not wrap as expected | Column widths and `wrap` |
+| Columns overlap | Widths and gap |
+| Group moves but children look wrong | Dump group and child frames |
+
+```sh
+ss dump slide.ss .ss-cache/columns.json
+ss render slide.ss .ss-cache/columns.pdf
+```

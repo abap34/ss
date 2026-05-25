@@ -1,0 +1,53 @@
+---
+title: "Code"
+description: "Signature, value, placement, properties, and diagnostics for Code."
+---
+
+# Code
+
+## Definition
+
+```text
+code : string × string? -> object
+```
+
+Renders a code fragment as a monospaced code object.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let sample = code("""
+print("hello")
+""", "python")
+end
+```
+
+## Language names
+
+The second argument is the code language name. The documentation site registers the bundled Shiki languages, plus `ss`. Common names include `ss`, `sh`, `bash`, `zsh`, `fish`, `powershell`, `html`, `css`, `javascript`, `typescript`, `jsx`, `tsx`, `vue`, `svelte`, `c`, `cpp`, `csharp`, `go`, `java`, `kotlin`, `python`, `ruby`, `rust`, `swift`, `zig`, `haskell`, `ocaml`, `fsharp`, `clojure`, `scheme`, `racket`, `julia`, `matlab`, `r`, `json`, `yaml`, `toml`, `xml`, `markdown`, `mdx`, `latex`, `tex`, `typst`, `mermaid`, `docker`, `terraform`, `sql`, and `graphql`.
+
+## Value
+
+`code` adds a `code` role object to the current page and returns it. The object stores the source text and the `language` property used by the highlighter.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let sample = code("print(\"hello\")", "python")
+below(sample, title, 32)
+same_l(sample, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

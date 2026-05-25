@@ -1,0 +1,434 @@
+---
+title: "演算子と組み込み関数"
+description: "数値演算，文字列連結，選択，プロパティ，ページ情報，診断に使う組み込み関数です．"
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+import { SsExample } from '../../../components/SsExample';
+
+# 演算子と組み込み関数
+
+式でよく使う組み込み関数には，数値演算，文字列連結，選択，プロパティ操作，ページ情報，診断があります．演算子表記は，普通の関数呼び出しの短い書き方です．`a + b` は `add(a, b)` と同じ関数を呼び，`a ++ b` は `concat(a, b)` と同じ関数を呼びます．関数定義や型注釈は [関数と定義](./functions) を参照してください．値の分類は [値と型](./values-and-types) を参照してください．
+
+## 演算子として書ける関数
+
+演算子として書ける関数は，通常の関数呼び出しとしても書けます．演算子表記では，優先順位と結合規則によって引数のまとまりが決まります．その後は，ほかの関数呼び出しと同じように引数型と返り値型を検査します．
+
+| 関数 | 演算子表記 | 通常の呼び出し | シグネチャ |
+| --- | --- | --- | --- |
+| `neg` | `-x` | `neg(x)` | `number -> number` |
+| `add` | `a + b` | `add(a, b)` | `(number, number) -> number` |
+| `sub` | `a - b` | `sub(a, b)` | `(number, number) -> number` |
+| `mul` | `a * b` | `mul(a, b)` | `(number, number) -> number` |
+| `div` | `a / b` | `div(a, b)` | `(number, number) -> number` |
+| `concat` | `a ++ b` | `concat(a, b)` | `(string, string) -> string` |
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="neg"
+  signature="neg(value: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="数値の符号を反転します．`-value` と同じ関数です．"
+  params={[
+    { name: 'value', type: 'number', description: '符号を反転する数値です．' },
+  ]}
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="add"
+  signature="add(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="二つの数値を加算します．`left + right` と同じ関数です．"
+  params={[
+    { name: 'left', type: 'number', description: '左側の数値です．' },
+    { name: 'right', type: 'number', description: '右側の数値です．' },
+  ]}
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="sub"
+  signature="sub(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="左側の数値から右側の数値を引きます．`left - right` と同じ関数です．"
+  params={[
+    { name: 'left', type: 'number', description: '引かれる数値です．' },
+    { name: 'right', type: 'number', description: '引く数値です．' },
+  ]}
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="mul"
+  signature="mul(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="二つの数値を乗算します．`left * right` と同じ関数です．"
+  params={[
+    { name: 'left', type: 'number', description: '左側の数値です．' },
+    { name: 'right', type: 'number', description: '右側の数値です．' },
+  ]}
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="div"
+  signature="div(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="左側の数値を右側の数値で割ります．`left / right` と同じ関数です．"
+  params={[
+    { name: 'left', type: 'number', description: '割られる数値です．' },
+    { name: 'right', type: 'number', description: '割る数値です．' },
+  ]}
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="concat"
+  signature="concat(left: string, right: string) -> string"
+  module="組み込み"
+  returns="string"
+  summary="二つの文字列を連結します．`left ++ right` と同じ関数です．"
+  params={[
+    { name: 'left', type: 'string', description: '左側の文字列です．' },
+    { name: 'right', type: 'string', description: '右側の文字列です．' },
+  ]}
+/>
+
+```ss
+let a = 10 + 4
+let b = a * 2
+let c = -b
+let label = "value = " ++ str(c)
+```
+
+同じ式を通常の関数呼び出しで書くと次の形になります．
+
+```ss
+let a = add(10, 4)
+let b = mul(a, 2)
+let c = neg(b)
+let label = concat("value = ", str(c))
+```
+
+演算子の優先順位は [構文](./syntax) の式の節にあります．複数の演算子が混ざる場合は，丸かっこで意図を明示できます．
+
+```ss
+let x = 10 + 20 * 3
+let y = (10 + 20) * 3
+let same_x = add(10, mul(20, 3))
+let same_y = mul(add(10, 20), 3)
+```
+
+## 数値関数
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="min"
+  signature="min(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="二つの数値の小さい方を返します．"
+  params={[
+    { name: 'left', type: 'number', description: '比較する数値です．' },
+    { name: 'right', type: 'number', description: '比較する数値です．' },
+  ]}
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="max"
+  signature="max(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="二つの数値の大きい方を返します．"
+  params={[
+    { name: 'left', type: 'number', description: '比較する数値です．' },
+    { name: 'right', type: 'number', description: '比較する数値です．' },
+  ]}
+/>
+
+```ss
+let natural_width = 640
+let page_width = 1024
+let width = min(natural_width, page_width - 144)
+fix_w(plot, width)
+```
+
+## 文字列関数
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="str"
+  signature="str(value: number) -> string"
+  module="組み込み"
+  returns="string"
+  summary="数値を文字列に変換します．ページ番号や寸法値を文字列プロパティへ渡すときに使います．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="replace"
+  signature="replace(text: string, old: string, new: string) -> string"
+  module="組み込み"
+  returns="string"
+  summary="文字列中の一致箇所を置き換えます．"
+/>
+
+```ss
+let page_text = "page " ++ str(page_index(pagectx()))
+let total_text = replace("{page} / {total}", "{total}", str(page_count(docctx())))
+```
+
+`++` は文字列だけを受け取ります．数値を連結する場合は `str` で明示的に変換します．
+
+```ss
+let ok = "page " ++ str(3)
+```
+
+## 文脈関数
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="pagectx"
+  signature="pagectx() -> page"
+  module="組み込み"
+  returns="page"
+  summary="現在のページを返します．ページブロック内で使います．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="docctx"
+  signature="docctx() -> document"
+  module="組み込み"
+  returns="document"
+  summary="現在の文書を返します．文書ブロックとページブロックで使えます．"
+/>
+
+```ss
+page sample
+pagectx().background_fill = "1,1,1"
+let current = page_index(pagectx())
+let total = page_count(docctx())
+let label = figure(str(current) ++ " / " ++ str(total))
+end
+```
+
+ページと文書の関係は [ページと文書](./pages) を参照してください．
+
+## 選択関数
+
+選択は，ページ，object，メタデータの集合です．`foreach`，`fold`，`join` は選択を処理します．
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="foreach"
+  signature="foreach(selection: selection<T>, callback: T -> R) -> selection<T>"
+  module="組み込み"
+  returns="selection<T>"
+  effects="callback の効果を実行します．"
+  summary="選択の各要素にコールバックを適用します．選択は呼び出し時点の有限なスナップショットとして扱います．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="join"
+  signature="join(selection: selection<T>, separator: string, callback: T -> string) -> string"
+  module="組み込み"
+  returns="string"
+  summary="選択の各要素を文字列に変換し，区切り文字で連結します．"
+/>
+
+```ss
+let title_lines = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+```ss
+document
+foreach(
+  pages(docctx()),
+  (page: page) |-> warn_title(page)
+)
+end
+```
+
+ページや object を選ぶ標準ライブラリ関数は [文書全体を使った生成](./generation) と [オブジェクトとロール](./objects) を参照してください．
+
+## プロパティ関数
+
+プロパティ参照構文は，内部では `prop`，`has_prop`，`set_prop` に対応します．
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="prop"
+  signature="prop(target: any, key: string, default: string) -> string"
+  module="組み込み"
+  returns="string"
+  summary="document，page，object のプロパティを読みます．値がない場合は既定値を返します．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="has_prop"
+  signature="has_prop(target: any, key: string) -> bool"
+  module="組み込み"
+  returns="bool"
+  summary="プロパティが存在するかを返します．"
+/>
+
+```ss
+let body = text("本文")
+body.text_size = 22
+
+let size = body.text_size ?? "18"
+let exists = body.text_size?
+```
+
+この例では，`body.text_size ?? "18"` が `prop(body, "text_size", "18")` と同じ扱いになります．`body.text_size?` は `has_prop(body, "text_size")` と同じ扱いです．プロパティの値と保存形式は [プロパティとスタイル](./properties) を参照してください．
+
+## グラフ生成関数
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="new"
+  signature="new(page: page, content: string, role_name: string, payload_name: string) -> object"
+  module="組み込み"
+  returns="object"
+  effects="CreateNode，WriteContent"
+  summary="指定したページに object を作ります．標準コンポーネントの低水準の入口です．"
+/>
+
+```ss
+fn raw_label(text_value: string) -> object
+  let obj = new(pagectx(), text_value, "label", "text")
+  obj.text_size = 14
+  return obj
+end
+```
+
+通常の資料では `new` を直接使うより，`text`，`head`，`image` などのコンポーネント関数を使います．コンポーネントは [コンポーネント](../components/text) を参照してください．
+
+## 制約関数
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="anchor"
+  signature="anchor(object: object, anchor_name: string) -> anchor"
+  module="組み込み"
+  returns="anchor"
+  summary="object のアンカー値を返します．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="equal"
+  signature="equal(target: anchor, source: anchor, offset: number = 0) -> constraints"
+  module="組み込み"
+  returns="constraints"
+  effects="WriteConstraint"
+  summary="二つのアンカーを等式制約で結びます．"
+/>
+
+```ss
+equal(anchor(body, "top"), anchor(title, "bottom"), -32)
+```
+
+この呼び出しは，次の制約文と同じ種類の制約を追加します．
+
+```ss
+~ body.top == title.bottom - 32
+```
+
+標準ライブラリの `below`，`same_l`，`pin_l` などは `anchor` と `equal` を包む補助関数です．詳しくは [制約](./constraints) と [配置](../layout/default) を参照してください．
+
+## 実行例
+
+次の例は，演算子表記と通常の関数呼び出しを同じファイルで使います．`*`，`-`，`/` は列幅の計算に使い，`add` と `mul` は同じ数値計算を関数呼び出しで行います．`++`，`str`，`replace` は表示する文字列を作ります．
+
+<SsExample
+  id="authoring-operators-and-builtins"
+  title="演算子と組み込み関数の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-operators-and-builtins.ss
+ss dump site/samples/authoring-operators-and-builtins.ss .ss-cache/authoring-operators-and-builtins.json
+ss render site/samples/authoring-operators-and-builtins.ss .ss-cache/authoring-operators-and-builtins.pdf
+```
+
+`dump` の JSON では，本文 object の `content` に計算後の数値と `replace` 後の文字列が入っているかを見ます．PDF では，計算結果の行と図注が表示されているかを見ます．
+
+## 診断関数
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="report_warning"
+  signature="report_warning(message: string) -> string"
+  module="組み込み"
+  returns="string"
+  effects="EmitDiagnostics"
+  summary="ユーザ定義の検査から警告診断を出します．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="require_asset_exists"
+  signature="require_asset_exists(object: object) -> object"
+  module="組み込み"
+  returns="object"
+  effects="EmitDiagnostics"
+  summary="アセット参照 object のパスが存在するかを検査します．"
+/>
+
+```ss
+fn checked_image(path_value: string) -> object
+  let obj = image(path_value)
+  require_asset_exists(obj)
+  return obj
+end
+```
+
+診断は `ss check` と `ss render` で確認します．
+
+```sh
+ss check site/samples/authoring-operators-and-builtins.ss
+ss render site/samples/authoring-operators-and-builtins.ss .ss-cache/authoring-operators-and-builtins.pdf
+```

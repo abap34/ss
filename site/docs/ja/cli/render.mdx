@@ -1,0 +1,86 @@
+---
+title: "render"
+description: "`render` は検査，配置，描画入力の変換を行い，PDF を書き出します．"
+---
+
+# render
+
+`render` は PDF を書き出します．
+
+```sh
+ss render slide.ss deck.pdf
+ss render --project . --output deck.pdf
+```
+
+出力先を省略した場合は，入口ファイルと同じ場所に同名の PDF を書きます．
+
+```sh
+ss render slide.ss
+```
+
+## 処理
+
+`render` は `check` と同じ解析を実行し，その後 PDF 描画器を呼びます．
+
+```text
+check と同じ処理
+描画プロパティ解決
+数式，アイコン，画像，PDF アセットの変換
+Cairo と Pango によるページ描画
+PDF 正規化
+出力ファイル書き込み
+```
+
+出力先の親ディレクトリは事前に存在している必要があります．
+
+## プロジェクト指定
+
+プロジェクト指定では，`ss.toml` から入口ファイルとアセット基準を読みます．
+
+```sh
+ss render --project slides --output .ss-cache/slides.pdf
+ss render --project slides/ss.toml --output .ss-cache/slides.pdf
+```
+
+入力ファイルを明示した場合は，その入力ファイルが入口になります．`--asset-base-dir` はプロジェクトのアセット基準を上書きします．
+
+```sh
+ss render --project slides --asset-base-dir slides/assets slides/alternate.ss out.pdf
+```
+
+## 並列実行
+
+`--jobs N` は描画中の並列処理数を指定します．描画器は `SS_RENDER_JOBS` も読みます．
+
+```sh
+ss render slide.ss out.pdf --jobs 4
+SS_RENDER_JOBS=4 ss render slide.ss out.pdf
+```
+
+変換失敗を調べる場合は小さい値を使います．多数のアセットや数式を含む文書では，大きい値で処理時間を短くできる場合があります．
+
+## キャッシュ
+
+描画時の変換生成物は `.ss-cache/render` に保存されます．
+
+```sh
+ss cache stats
+ss cache clear
+```
+
+最終 PDF の出力先はコマンドで指定します．キャッシュは `ss` が管理する生成物なので，不要になったら削除できます．
+
+## 診断
+
+`render` は `check` と同じ診断を出せます．さらに，描画や変換が必要な失敗も報告します．
+
+| 失敗 | 主な確認コマンド |
+| --- | --- |
+| 構文や型の誤り | `check` と `render` |
+| アセットファイル不足 | コンポーネントにより `check` または `render` |
+| `pdflatex`，`rsvg-convert`，`magick`，`qpdf` 不足 | `doctor` と `render` |
+| LaTeX コンパイル失敗 | `render` |
+| PDF 正規化失敗 | `render` |
+| text や object のはみ出し | `render` と PDF |
+
+ある環境で動き，別の環境で失敗する場合は [外部コマンド](../rendering/external-tools) を確認します．

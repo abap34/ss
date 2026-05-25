@@ -1,0 +1,47 @@
+---
+title: "PDF"
+description: "Signature, value, placement, properties, and diagnostics for PDF."
+---
+
+# PDF
+
+## Definition
+
+```text
+pdf : string × number? -> object
+```
+
+Places a PDF asset as a vector asset object.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let page_img = pdf("assets/result.pdf", 0.55)
+end
+```
+
+## Value
+
+`pdf` adds a PDF asset object to the current page and returns it. The object has the `pdf` role, vector-asset rendering, and an `asset_scale` derived from the second argument.
+
+## Static conditions
+
+The function name must come from an imported module. The path argument must be a string and the scale argument must be a number. The path is resolved from `asset_base_dir`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let paper = pdf("assets/appendix.pdf", 0.65)
+below(paper, title, 32)
+same_l(paper, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

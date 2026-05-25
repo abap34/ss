@@ -1,0 +1,251 @@
+---
+title: "本文"
+description: "本文 コンポーネントの署名，生成される値，配置，診断を説明します．"
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+import { SsExample } from '../../../components/SsExample';
+
+# 本文
+
+Markdown として解釈される本文を作ります．
+
+## 仕様
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="text"
+  signature="text : string -> object"
+  module="std:themes/default"
+  source="stdlib/core/components.ss"
+  returns="object"
+  summary="返り値は `object` です．本文ロールの object を返します．"
+  params={[
+    { name: 'text_value', type: 'string', description: '本文です．' },
+  ]}
+/>
+
+## 読み込み
+
+標準テーマでは，次の import で使います．
+
+```ss
+import std:themes/default
+```
+
+低水準のコンポーネント関数を直接使う場合は，`std:core/components` や `std:core/generated` を読み込みます．通常の資料ではテーマを読み込み，テーマが公開している関数を使います．
+
+## 基本例
+
+```ss
+import std:themes/default
+
+page example
+let body = text <<
+- 一つ目
+- 二つ目
+>>
+end
+```
+
+`let` で返り値に名前を付けると，後続の制約とプロパティ代入で参照します．
+
+## 生成される値
+
+標準ライブラリのコンポーネント関数は，多くの場合，現在ページへ object を追加してその object を返します．既存 object を受け取る関数は，プロパティや制約を更新して同じ object を返します．文書全体の生成関数は，ページ列や既存 object を読み，各ページへ object を追加し，既存 object の内容を更新します．
+
+`let` で返り値を束縛すると，後続の制約，プロパティ代入，別の関数呼び出しで参照します．
+
+```ss
+let item = text("本文")
+item.text_size = 22
+below(item, head("見出し"), 32)
+```
+
+## 配置
+
+object を返すコンポーネントは，アンカーで配置します．
+
+```ss
+let title = head("例")
+let item = text("本文")
+below(item, title, 32)
+same_l(item, title, 0)
+```
+
+コンポーネントによっては，既定の幅や折り返しを持ちます．位置や寸法を固定する場合は，`flow`，`inset_x`，`fix_w`，`fix_h`，`pin_l`，`pin_t` などで制約を追加します．
+
+## プロパティ
+
+コンポーネントの見た目はプロパティで決まります．よく使う調整は次の通りです．
+
+| プロパティ | 用途 |
+| --- | --- |
+| `text_size` | 文字サイズ |
+| `text_line_height` | 行送り |
+| `text_color` | 文字色 |
+| `wrap` | 折り返し |
+| `render_kind` | 描画方式 |
+| `asset_scale` | アセットの拡大率 |
+
+```ss
+let obj = text("本文")
+obj.text_size = "22"
+obj.text_line_height = "30"
+obj.wrap = "on"
+```
+
+複数ページで同じ調整を使う場合は，プロパティ代入を関数へまとめます．
+
+## 文書全体との関係
+
+ページ番号，フッター，ロゴ，透かし，目次は，ページ一覧やタイトルロールの object に依存することがあります．その場合は `document` ブロックで生成登録を行い，ページ側では必要な見出しや目次 object を置きます．
+
+```ss
+document
+pagenos("{page} / {total}")
+need_titles()
+end
+```
+
+`need_titles` を使う資料では，ページごとに `head` や `cover` など，タイトルロールの object を置きます．
+
+## 失敗しやすい例
+
+アセットを使うコンポーネントでは，存在しないパスが診断になります．
+
+```ss
+let img = image("assets/missing.png")
+```
+
+object を後から配置したい場合に `let` を付けないと，名前で参照できません．
+
+```ss
+text("本文")
+~ body.top == title.bottom - 32
+```
+
+この場合，`body` は束縛されていません．
+
+## 組み合わせ例
+
+コンポーネントは単独で置くより，見出し，本文，図注，枠，制約を組み合わせて使うことが多くあります．
+
+```ss
+import std:themes/default
+
+page composed
+let title = head("組み合わせ")
+let body = text <<
+本文を置きます．
+必要な説明を箇条書きで追加します．
+>>
+let caption = figure("図 1．補足説明")
+
+below(body, title, 32)
+below(caption, body, 18)
+same_l(body, title, 0)
+same_l(caption, body, 0)
+end
+```
+
+この形では，見出しを基準に本文を下へ置き，本文を基準に図注を下へ置きます．同じ左端を使うため，読み始めの位置がそろいます．
+
+## 枠と余白を付ける例
+
+本文やコードを強調する場合は，枠線やパネルを組み合わせます．
+
+```ss
+let body = text("説明本文")
+border(body, 18, 12, "0.36,0.40,0.48", 1, 8)
+flow(body, "102", "102")
+```
+
+枠線を付けると，コンポーネントの見た目だけでなく，内側余白も関係します．隣の object との間隔は，枠を含めた矩形を見ながら調整します．
+
+## 文書全体で使う例
+
+同じコンポーネントの形を複数ページで使う場合は，関数にします．
+
+```ss
+fn section_note(message: string) -> object
+  let n = note(message)
+  n.text_size = "18"
+  n.text_line_height = "24"
+  border(n, 14, 10, "0.72,0.76,0.86", 1, 8)
+  return n
+end
+
+page first
+let title = head("一枚目")
+let n = section_note("補足説明")
+below(n, title, 32)
+end
+```
+
+関数にすると，文字サイズ，余白，枠線を一箇所にまとめられます．見た目を変えるときも，ページごとの編集を減らします．
+
+## 実行例
+
+実行例では，主要なコンポーネントを一つの資料にまとめています．対象コンポーネントが作る object の role，payload，props，配置結果は `dump` と PDF で見ます．
+
+<SsExample
+  id="components-showcase"
+  title="コンポーネントの実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+## 検査時に見る値
+
+`ss dump` で見る値は，コンポーネントの role，payload，props です．
+
+```sh
+ss dump site/samples/components-showcase.ss .ss-cache/components-showcase.json
+```
+
+確認する値は次の通りです．
+
+| 値 | 確認すること |
+| --- | --- |
+| `role` | 目次やタイトル検査の対象になるか |
+| `payload` | 文字，数式，画像，PDF のどれとして描画されるか |
+| `props` | 文字サイズ，色，折り返し，描画方式が入っているか |
+| `bbox` | 期待した位置と大きさになっているか |
+
+## PDF で見る値
+
+PDF で見る点は次の通りです．
+
+| 項目 | 例 |
+| --- | --- |
+| 文字の折り返し | 長い行がページ外へ出ていないか |
+| 行間 | 箇条書きが詰まりすぎていないか |
+| 余白 | 枠線と文字が近すぎないか |
+| 重なり | 図，本文，脚注が重なっていないか |
+| 位置 | ページ番号やロゴが本文を邪魔していないか |
+
+構文検査だけでは，見た目，はみ出し，外部コマンドの失敗は分かりません．`ss render` で PDF を生成します．
+
+## 確認
+
+構文と型は `ss check`，描画結果，はみ出し，外部コマンド，アセット解決は `ss render` で見ます．
+
+```sh
+ss check site/samples/components-showcase.ss
+ss render site/samples/components-showcase.ss .ss-cache/components-showcase.pdf
+```
+
+配置の原因を調べる場合は `ss dump` を使います．
+
+```sh
+ss dump site/samples/components-showcase.ss .ss-cache/components-showcase.json
+```
+
+## 関連
+
+このコンポーネントの配置は [配置](../layout/default) で扱います．文字，色，枠，折り返しは [プロパティとスタイル](../authoring/properties) で扱います．画像，PDF，数式，Font Awesome の描画条件は [描画](../rendering/native) で扱います．

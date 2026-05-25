@@ -1,0 +1,262 @@
+---
+title: "Getting started"
+description: "Project configuration, source structure, a minimal deck, checking, and PDF rendering."
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# Getting started
+
+`ss` reads `.ss` files and writes slide decks as PDF files. A source file can define pages, text, code, math, image assets, PDF assets, page numbers, tables of contents, footers, logos, layout constraints, and functions.
+
+The setup path uses a project file, one source file, `ss check`, and `ss render`. Detailed reference material is split into language reference, components, layout, rendering, and implementation pages.
+
+## Input and output
+
+The inputs are a project file and `.ss` source. The output is a PDF. Generated intermediate files and render cache entries live under `.ss-cache`.
+
+```text
+slides/
+  ss.toml
+  slide.ss
+  assets/
+    logo.png
+    plot.png
+    appendix.pdf
+  .ss-cache/
+```
+
+`ss.toml` selects the entry source. `slide.ss` is the entry source file. `assets` contains images, PDFs, and logos referenced from the deck.
+
+## Install
+
+On macOS, install from the Homebrew tap.
+
+```sh
+brew tap abap34/ss
+brew install ss
+```
+
+Check the command.
+
+```sh
+ss help
+```
+
+For local development from this repository, prepare MD4C and build with Zig.
+
+```sh
+scripts/setup-md4c.sh
+zig build
+```
+
+Rendering may use external commands depending on the deck. Check the environment with `doctor`.
+
+```sh
+ss doctor
+```
+
+## Project configuration
+
+Create a project with `ss init`.
+
+```sh
+ss init slides
+cd slides
+```
+
+Or write `ss.toml` by hand.
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+`entry` is the entry file. `asset_base_dir` is the base directory for asset paths. With this configuration, `assets/plot.png` is resolved from the project root.
+
+## Source structure
+
+At the top level, an `.ss` source file may contain imports, type declarations, constants, functions, a document block, and page blocks.
+
+```text
+Program       ::= TopLevelItem*
+TopLevelItem  ::= Import | TypeDecl | ConstDecl | FunctionDecl | DocumentDecl | PageDecl
+Import        ::= "import" ImportSpec Terminator
+DocumentDecl  ::= "document" Newline Statement* "end"
+PageDecl      ::= "page" PageName Newline Statement* "end"
+```
+
+`ImportSpec` is a standard module name such as `std:themes/default` or a local relative path. `PageName` is the page identifier.
+
+## Minimal deck
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+end
+
+page title
+cover(
+  "Hello, ss",
+  "First deck",
+  "2026"
+)
+end
+
+page body
+let title = head("First body page")
+let body = text <<
+- A `page` block defines one slide.
+- `text` content is parsed as Markdown.
+- Required placement relationships are written as constraints.
+>>
+
+~ body.top == title.bottom - 32
+end
+```
+
+The default theme provides `cover`, `head`, `text`, and `pagenos`. The document block creates page numbers. Each `page` block creates one slide.
+
+## Statements
+
+```text
+Statement          ::= LetBinding | Return | If | Constraint | PropertyAssignment | CallStatement
+LetBinding         ::= "let" Identifier "=" Expr Terminator
+Return             ::= "return" Expr? Terminator
+Constraint         ::= "~" ConstraintTarget "==" ConstraintSource Offset? Terminator
+PropertyAssignment ::= Expr "." Identifier "=" Expr Terminator
+CallStatement      ::= Identifier "(" ArgumentList? ")" Terminator
+```
+
+`let` binds a value. `return` returns from a function. A constraint starts with `~`. A property assignment sets a render or layout property on an object.
+
+## Types
+
+Common types are:
+
+```text
+string
+number
+bool
+void
+object
+page
+document
+style
+constraints
+selection<object>
+metadata
+```
+
+`object` is a renderable slide object. `page` and `document` represent the current page and deck. `constraints` is a value containing layout constraints.
+
+## Functions
+
+```ss
+fn callout(message: string) -> object
+  let body = text(message)
+  border(body, 18, 12, "0.2745,0.5098,0.7059", 1, 8)
+  return body
+end
+```
+
+Functions are typed. The example takes a string and returns the object that should participate in layout.
+
+## Text and Markdown
+
+```ss
+let body = text <<
+Slides often repeat notation, diagrams, and explanations.
+
+- Shared strings can become constants.
+- Shared visual treatment can become functions.
+- Whole-deck generated elements belong in `document`.
+>>
+```
+
+Body text is parsed as Markdown. Lists, emphasis, inline code, links, tables, and code blocks are supported.
+
+## Code
+
+```ss
+let sample = code("""
+fn square(x: number) -> number
+  return x * x
+end
+""", "ss")
+
+~ sample.width == 720
+fit_warn(sample)
+```
+
+Set a width and an overflow policy for long code blocks.
+
+## Math
+
+```ss
+let formula = tex("\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}")
+```
+
+LaTeX commands need escaped backslashes inside ordinary strings. Add packages with `pkg`, `page_pkg`, or `obj_pkg`.
+
+## Assets
+
+```ss
+let plot = image("assets/plot.png", 0.7)
+let appendix = pdf("assets/result.pdf", 0.55)
+```
+
+Asset paths are relative to `asset_base_dir`. Missing assets are reported by `check` or `render`.
+
+## Layout
+
+```text
+Constraint ::= "~" AnchorRef "==" AnchorRef Offset?
+AnchorRef  ::= Identifier "." AnchorName | "page" "." AnchorName
+Offset     ::= ("+" | "-") Expr
+```
+
+```ss
+let title = head("Constraints")
+let left = text("Left")
+let right = text("Right")
+
+~ left.top == title.bottom - 36
+~ right.top == left.top
+~ left.width == 460
+~ right.width == 460
+cols2(left, right)
+```
+
+Helpers such as `pin_l`, `pin_r`, `below`, `same_l`, and `cols2` create constraints.
+
+## Check
+
+```sh
+ss check slide.ss
+ss check --project .
+```
+
+`check` parses, loads modules, type-checks calls, checks assets, and reports diagnostics. It does not write a PDF.
+
+## Render
+
+```sh
+ss render slide.ss deck.pdf
+ss render --project . --output deck.pdf
+```
+
+`render` checks the deck, builds the document graph, solves layout, and writes a PDF. Math, Font Awesome icons, SVG, images, and PDF assets may use external commands.
+
+```sh
+ss doctor --project .
+```
+
+`doctor` checks project discovery, the asset base directory, and render tools.
+
+## Example output
+
+<SsExample id="quick-start" />

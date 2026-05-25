@@ -1,0 +1,47 @@
+[
+  {
+    "type": "file",
+    "name": "syntax",
+    "label": "構文"
+  },
+  {
+    "type": "file",
+    "name": "values-and-types",
+    "label": "値と型"
+  },
+  {
+    "type": "file",
+    "name": "operators-and-builtins",
+    "label": "演算子と組み込み関数"
+  },
+  {
+    "type": "file",
+    "name": "pages",
+    "label": "ページと文書"
+  },
+  {
+    "type": "file",
+    "name": "functions",
+    "label": "関数と定義"
+  },
+  {
+    "type": "file",
+    "name": "objects",
+    "label": "オブジェクトとロール"
+  },
+  {
+    "type": "file",
+    "name": "properties",
+    "label": "プロパティとスタイル"
+  },
+  {
+    "type": "file",
+    "name": "constraints",
+    "label": "制約"
+  },
+  {
+    "type": "file",
+    "name": "generation",
+    "label": "文書全体を使った生成"
+  }
+]

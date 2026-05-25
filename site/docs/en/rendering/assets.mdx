@@ -1,0 +1,102 @@
+---
+title: "Image and PDF assets"
+description: "Asset path resolution, image conversion, PDF embedding, cache files, and render diagnostics."
+---
+
+# Image and PDF assets
+
+Images and PDF files enter the document through standard components such as `image` and `pdf`.
+
+```ss
+import std:core
+import std:themes/default
+
+page assets
+  let photo = image("figures/architecture.png", 0.72)
+  let appendix = pdf("figures/table.pdf", 0.60)
+
+  ~ appendix.top = photo.bottom + 32
+  ~ appendix.left = photo.left
+end
+```
+
+The first argument is an asset path. The second argument is a scale factor. Relative paths are resolved from `asset_base_dir`.
+
+## Path Resolution
+
+`asset_base_dir` is set by one of three inputs.
+
+| Input | Asset base |
+| --- | --- |
+| `ss render slide.ss out.pdf` | Directory containing `slide.ss` |
+| `ss render --asset-base-dir assets slide.ss out.pdf` | The directory passed to `--asset-base-dir` |
+| `ss render --project . --output out.pdf` | The `asset_base_dir` value in `ss.toml`, or the project directory |
+
+An absolute asset path is read as written. A relative asset path is joined with the asset base. Import paths such as `std:themes/default` are resolved by the module loader and do not use the asset base.
+
+## Render Data
+
+After checking and layout, the renderer reads the object content and render properties.
+
+| Field | Use |
+| --- | --- |
+| `content` | Asset path |
+| `render_kind` | `raster_asset` for images, `vector_asset` for PDF input |
+| `asset_scale` | Scale factor written by `scale` or the component argument |
+| `frame` | Solved rectangle used for placement |
+| `props` | Padding, chrome, fit policy, and related render settings |
+
+The source `.ss` functions are not evaluated during drawing. The renderer consumes the graph that has already been checked, elaborated, normalized, and laid out.
+
+## Image Files
+
+Raster assets are loaded as images and drawn into the object frame. When a file requires conversion, the renderer writes an intermediate file under `.ss-cache/render`.
+
+Common inputs are PNG, JPEG, and formats supported by the local ImageMagick installation. The exact support depends on the installed `magick` command.
+
+```sh
+ss render slides.ss .ss-cache/assets.pdf
+ss cache stats
+```
+
+`ss cache stats` prints the number and size of managed render cache files. `ss cache clear` removes `.ss-cache/render`.
+
+## PDF Files
+
+PDF assets are converted before placement. The render path depends on local tools, but the result is drawn as vector content when conversion succeeds.
+
+```ss
+page appendix
+  let table = pdf("tables/results.pdf", 0.82)
+  table.fit = "contain"
+end
+```
+
+Use `fit = "contain"` when the PDF page should keep its aspect ratio inside the assigned object frame. Use explicit constraints when the PDF needs a known width or position.
+
+```ss
+page appendix
+  let table = pdf("tables/results.pdf")
+  ~ table.left = page.left + 72
+  ~ table.right = page.right - 72
+  ~ table.top = page.top + 120
+end
+```
+
+## Diagnostics
+
+Asset failures are render diagnostics because they depend on files and external commands.
+
+| Condition | Typical cause |
+| --- | --- |
+| Asset not found | Path is wrong or `asset_base_dir` is wrong |
+| Conversion failed | Required command is missing or the input format is unsupported |
+| Empty output | Conversion command returned success but did not produce a readable file |
+| Object overflow | Frame is smaller than the converted image or PDF content |
+
+Run `ss doctor --project .` when render fails on a machine that should have all tools installed.
+
+```sh
+ss doctor --project .
+ss render --project . --output .ss-cache/render.pdf
+```

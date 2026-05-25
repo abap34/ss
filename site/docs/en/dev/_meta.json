@@ -1,0 +1,13 @@
+[
+  { "type": "file", "name": "pipeline", "label": "Compiler pipeline" },
+  { "type": "file", "name": "parser", "label": "Parser" },
+  { "type": "file", "name": "analysis", "label": "Analysis and types" },
+  { "type": "file", "name": "elaboration", "label": "Elaboration" },
+  { "type": "file", "name": "lowering", "label": "Lowering" },
+  { "type": "file", "name": "core-ir", "label": "Core IR" },
+  { "type": "file", "name": "layout-solver", "label": "Layout solver" },
+  { "type": "file", "name": "pdf-backend", "label": "PDF backend" },
+  { "type": "file", "name": "stdlib", "label": "Standard library design" },
+  { "type": "file", "name": "incremental-parallel", "label": "Incremental and parallel work" },
+  { "type": "file", "name": "documentation", "label": "Documentation site" }
+]

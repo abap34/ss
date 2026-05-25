@@ -1,0 +1,94 @@
+---
+title: "Default layout"
+description: "Page layout policies, document defaults, explicit constraints, and fallback placement."
+---
+
+# Default layout
+
+Objects do not need explicit constraints for every edge. A page can use a layout policy for objects that still have missing positions after explicit constraints are applied.
+
+```ss
+vflow("top")
+```
+
+The page policy is stored on the page. The document policy is stored on the document and used by pages that do not override it.
+
+## Policies
+
+The current standard helpers write string policy names.
+
+```ss
+vflow("top")
+vflow("top_flow")
+vflow("center")
+vflow("center_stack")
+```
+
+`vflow_doc(policy, center_offset = 0)` sets the document default.
+
+```ss
+document
+  vflow_doc("top_flow")
+end
+```
+
+`vflow(policy, center_offset = 0)` sets the current page.
+
+```ss
+page local
+  vflow("center_stack")
+  text("First")
+  text("Second")
+end
+```
+
+## Explicit Constraints
+
+Explicit constraints and policy placement share the same page-local layout graph. Constraints fix relations that the policy should not decide.
+
+```ss
+page mixed
+  vflow("top_flow")
+  let title = head("Mixed layout")
+  let body = text("Body")
+  let aside = note("Aside")
+
+  below(body, title, 32)
+  same_l(body, title, 0)
+  pin_r(aside, 72)
+  same_t(aside, body, 0)
+end
+```
+
+The policy handles objects without enough explicit constraints. The pinned aside keeps its page-edge relation.
+
+## Object Properties
+
+Layout helpers often set properties that are later read by fallback placement.
+
+| Property | Written by |
+| --- | --- |
+| `layout_v` | `vflow`, `vflow_doc` |
+| `layout_v_center_offset` | `vflow`, `vflow_doc` |
+| `layout_x` | `flow` |
+| `layout_right_inset` | `flow` |
+| `wrap` | `flow` |
+
+Theme functions often call `flow` so body text, code, math, image, and note objects get a usable horizontal range.
+
+## Diagnostics
+
+Default layout reduces the amount of source code needed for ordinary pages. It does not hide impossible constraints.
+
+| Problem | Command |
+| --- | --- |
+| Invalid policy string | Usually visible through unexpected layout behavior |
+| Constraint conflict | `ss check`, `ss render`, or dump diagnostics |
+| Object overflow | `ss render` and PDF inspection |
+| Unexpected order | Object creation order and generated objects |
+
+Use `dump` to see final frames and policy properties.
+
+```sh
+ss dump slide.ss .ss-cache/default-layout.json
+```

@@ -1,0 +1,247 @@
+---
+title: "オブジェクトとロール"
+description: "object，ロール，ペイロード種別，アンカー，選択を定義します．"
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# オブジェクトとロール
+
+object は，ページ上に描画される値です．本文，見出し，コード，数式，画像，PDF，罫線，背景，ページ番号はいずれも object として扱われます．
+
+## object の構成
+
+object は，内容，ロール，ペイロード種別，プロパティ，アンカーを持ちます．
+
+```text
+Object ::= {
+  content: string,
+  role: string,
+  payload: string,
+  props: map<string, string>,
+  anchors: AnchorSet
+}
+```
+
+`content` は本文やアセットパスなどの内容です．`role` はロールです．ロールは検索，目次，警告，テーマの適用に使います．`payload` はペイロード種別です．ペイロード種別は描画器が `content` をどう解釈するかを決めます．`props` は文字サイズ，色，折り返し，描画方式などのプロパティです．`anchors` は配置制約で参照する点です．
+
+## ロール
+
+ロールは，検索，目次，警告，テーマの適用に使われます．
+
+| ロール | 例 |
+| --- | --- |
+| `title` | ページ見出し，表紙題名 |
+| `subtitle` | 副題 |
+| `body` | 本文 |
+| `code` | コード |
+| `math` | 数式 |
+| `figure` | 図注 |
+| `pageno` | ページ番号 |
+| `footer` | フッター |
+| `logo` | ロゴ |
+| `toc` | 目次 |
+
+`need_titles()` は，ページ内に `title` ロールの object があるかを調べます．`toc_obj()` は，ページと `title` ロールの object から目次本文を作ります．
+
+## ペイロード種別
+
+ペイロード種別は，描画器が `content` をどう解釈するかに関係します．
+
+| ペイロード種別 | 解釈 |
+| --- | --- |
+| `text` | Markdown または通常テキスト |
+| `code` | コードブロック |
+| `math_text` | 文字列として書いた数式 |
+| `math_tex` | LaTeX 数式 |
+| `figure_text` | 図注 |
+| `image_ref` | 画像アセット |
+| `pdf_ref` | PDF アセット |
+
+標準ライブラリの関数は，これらの値を直接指定する低水準関数を包み，利用しやすいコンポーネント関数として提供します．
+
+## object の生成
+
+標準ライブラリの多くのコンポーネント関数は，呼び出した時点で現在のページへ object を追加し，その object を返します．すべての関数が新しい object を作るとは限りません．`border` や `flow` は既存 object のプロパティや制約を更新し，同じ object を返します．`pagenos` や `footers` のような `void` 関数は，文書全体の生成処理を登録します．
+
+```ss
+page sample
+let title = head("題名")
+let body = text("本文")
+let img = image("assets/plot.png", 0.8)
+end
+```
+
+`title`，`body`，`img` はいずれも `object` 型です．`let` で名前を付けると，後続の文で参照できます．
+
+既存 object を変更して返す関数の例です．
+
+```ss
+let body = text("本文")
+flow(body, "102", "102")
+border(body, 18, 12)
+```
+
+この例では，`text` が object を作ります．`flow` と `border` は `body` を変更します．
+
+## アンカー
+
+配置制約では，object のアンカーを参照します．
+
+| アンカー | 意味 |
+| --- | --- |
+| `left` | 左端 |
+| `right` | 右端 |
+| `top` | 上端 |
+| `bottom` | 下端 |
+| `center_x` | 水平方向の中央 |
+| `center_y` | 垂直方向の中央 |
+| `width` | 幅 |
+| `height` | 高さ |
+
+```ss
+~ body.top == title.bottom - 32
+~ body.left == title.left
+```
+
+アンカーは配置グラフの節点として扱われます．制約は節点間の等式として追加されます．
+
+## ページとの所有関係
+
+object は一つのページに属します．ページ内の制約は，同じページ内の object を対象にします．文書ブロックで生成されるページ番号やフッターも，生成後は各ページに属する object になります．
+
+```text
+page_of(object) = page
+objects(page) = [object1, object2, ...]
+```
+
+別ページの object を直接配置制約で参照する形は使いません．ページをまたぐ処理は，文書ブロックでページ列を走査して，各ページに object を作る形にします．
+
+## 選択
+
+選択は，条件に合う object の集合です．
+
+```text
+selection<object>
+```
+
+標準ライブラリでは，`objs(page, "title")` のようにページ内の object をロールで選べます．`doc_objs(doc, "pageno")` のように文書全体から選ぶ関数もあります．
+
+```ss
+foreach(
+  pages(docctx()),
+  (page: page) |-> warn_title(page)
+)
+```
+
+選択は，生成処理，検査，目次，ページ番号設定に使われます．
+
+## プロパティとの関係
+
+object の見た目はプロパティで決まります．
+
+```ss
+let body = text("本文")
+body.text_size = "22"
+body.text_line_height = "30"
+body.wrap = "on"
+```
+
+プロパティ代入の右辺には，`string`，`number`，`bool`，`style` を使えます．内部の文書グラフでは，描画器が読める文字列へ変換して保持します．描画器や標準ライブラリは，プロパティ名ごとに値を解釈します．同じ調整を複数箇所で使う場合は，プロパティ代入を関数にまとめます．
+
+## 生成の見方
+
+object を新しく作る関数は，現在のページに object を追加し，その object を返します．
+
+```text
+before:
+  page.objects = [...]
+
+call:
+  text("本文")
+
+after:
+  page.objects = [..., object(role = "body", payload = "text")]
+  result = that object
+```
+
+既存 object を受け取る関数は，object を追加せず，プロパティや制約を更新して同じ object を返す場合があります．
+
+## 通し例
+
+次の例は，複数のロールを持つ object を一つのページに置きます．
+
+```ss
+import std:themes/default
+
+page object_example
+let title = head("Object")
+let body = text <<
+object は内容，ロール，ペイロード種別，プロパティ，アンカーを持ちます．
+>>
+let eq = tex("\\sum_{i=1}^{n} i", 1.0)
+let cap = figure("式 1．和の記法")
+
+below(body, title, 32)
+below(eq, body, 28)
+below(cap, eq, 16)
+same_l(body, title, 0)
+same_l(cap, body, 0)
+end
+```
+
+実行後のページには，見出し，本文，数式，図注が作られます．それぞれ role と payload が異なるため，描画器での扱いと生成処理での扱いも変わります．
+
+## 実行例
+
+次の例は，実際に描画できる object の確認用ファイルです．本文，数式，図注を作り，それぞれを `below` と `same_l` で配置します．
+
+<SsExample
+  id="authoring-objects"
+  title="object とロールの実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+同じ内容を手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-objects.ss
+ss dump site/samples/authoring-objects.ss .ss-cache/authoring-objects.json
+ss render site/samples/authoring-objects.ss .ss-cache/authoring-objects.pdf
+```
+
+`dump` の JSON では，`title`，`body`，`math`，`figure` のロールと，`text`，`math_tex` のペイロード種別を見ます．PDF では，本文，数式，図注が上から順に並び，左端がそろっているかを見ます．
+
+## ロールとペイロード種別の確認
+
+`dump` では，object ごとに role，payload，content，props を確認します．
+
+| object | role | payload |
+| --- | --- | --- |
+| `title` | `title` | `text` |
+| `body` | `body` | `text` |
+| `eq` | `math` | `math_tex` |
+| `cap` | `figure` | `text` |
+
+ロールは文書生成や検査に使われます．ペイロード種別は描画時の扱いに使われます．例えば `eq` は数式ロールを持ち，LaTeX 数式として描画されます．
+
+## object の境界
+
+配置では，object の外接矩形が使われます．文字が複数行になった場合，本文 object の高さは増えます．画像や PDF は拡大率によって幅と高さが変わります．枠線やパネルを付ける場合は，枠を含む矩形を意識します．
+
+```ss
+let body = text("長い本文")
+flow(body, "102", "102")
+body.wrap = "on"
+border(body, 18, 12, "0.36,0.40,0.48", 1, 8)
+```
+
+この場合，本文の折り返し，枠線，内側余白が最終的な矩形に影響します．
+
+## 診断
+
+存在しない object 名，存在しないアンカー，不適切なアセットパス，描画できないペイロード種別は診断の対象です．配置の診断は，配置ソルバと描画器の段階で出ます．

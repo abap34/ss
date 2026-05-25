@@ -1,0 +1,87 @@
+---
+title: "Academic theme"
+description: "`std:themes/academic` functions, cover signature, text sizing, and layout effects."
+---
+
+# Academic theme
+
+`std:themes/academic` defines presentation functions for research talks and seminar decks.
+
+```ss
+import std:themes/academic
+
+page title
+  cover("Talk title", "Venue or subtitle", "Author", "2026-05-25")
+end
+
+page outline
+  let title = head("Outline")
+  let body = text <<
+- Background
+- Method
+- Result
+>>
+  ~ body.top = title.bottom + 28
+end
+```
+
+The theme imports `std:themes/base` and overrides a smaller set of functions than `pop`.
+
+## Provided Functions
+
+| Function | Result |
+| --- | --- |
+| `h1(text)` | 32 pt title object |
+| `h2(text)` | 28 pt subtitle object |
+| `h3(text)` | 24 pt subtitle object |
+| `head(text)` | Page title placed near the top-left corner |
+| `subhead(text)` | Small subtitle object |
+| `text(source)` | Body object with Markdown and code styling |
+| `code(source, language = "python")` | Code block with neutral chrome |
+| `toc(title)` | Heading, table-of-contents object, and page number |
+| `cover(title, subtitle, author, date = "")` | Cover page objects, including date |
+
+The `cover` function in this theme accepts a fourth argument. Existing pages that use the three-argument form still work because `date` has a default value.
+
+## Visual Settings
+
+The academic theme uses black text, larger top-left titles, and neutral code blocks.
+
+| Area | Setting |
+| --- | --- |
+| Heading | Bold 34 pt title at `(30, 30)` |
+| Body text | 18 pt text with 24 pt line height |
+| Code | Neutral gray background and border |
+| Cover | Title around y = 240, then subtitle, author, and date below it |
+| Table of contents | Heading and generated page number without extra panel chrome |
+
+The theme does not override image and PDF components. Those definitions come from base components unless another imported module changes them.
+
+## Layout Effects
+
+The cover title starts lower than in the default theme. The page heading starts near the top-left corner. These choices leave more area for text-heavy slides.
+
+```ss
+page code_page
+  let title = head("Implementation")
+  let source = code <<
+fn add(left: number, right: number) -> number
+  return left + right
+end
+>>
+  ~ source.top = title.bottom + 24
+  ~ source.left = page.left + 72
+  ~ source.right = page.right - 72
+end
+```
+
+Long code blocks should be rendered after a theme switch because line height and padding are theme-controlled.
+
+## Checking
+
+Use `check` for language and layout diagnostics. Use `render` for text shaping and PDF output.
+
+```sh
+ss check talk.ss
+ss render talk.ss .ss-cache/academic.pdf
+```

@@ -1,0 +1,86 @@
+---
+title: "Default theme"
+description: "`std:themes/default` functions, visual settings, and layout effects."
+---
+
+# Default theme
+
+`std:themes/default` provides the default presentation functions used in starter decks.
+
+```ss
+import std:themes/default
+
+page title
+  cover("Slide title", "Subtitle", "Author")
+end
+
+page body
+  let title = head("Section")
+  let body = text("Body text")
+  ~ body.top = title.bottom + 32
+end
+```
+
+The theme imports `std:themes/base`, which imports the standard component module.
+
+## Provided Functions
+
+| Function | Result |
+| --- | --- |
+| `h1(text)` | Title object with 34 pt Helvetica |
+| `h2(text)` | Subtitle object with 18 pt Helvetica |
+| `head(text)` | Page heading with a rule and section label |
+| `subhead(text)` | Positioned subtitle object |
+| `tex(source, scale = 1)` | Math object with a framed vector-math render policy |
+| `code(source, language = "python")` | Code block with default code chrome |
+| `toc(title)` | Table-of-contents object and page number |
+| `cover(title, subtitle, author)` | Cover page objects |
+
+The functions return objects when the page source may need later constraints. `toc` and `cover` also create supporting objects such as panels, labels, or bylines.
+
+## Visual Settings
+
+The default theme uses Helvetica, dark text, muted blue accents, and pale blue chrome for code and math.
+
+| Area | Setting |
+| --- | --- |
+| Headings | Blue rule and small label above the title |
+| Body text | Inherited from base components unless overridden by a theme function |
+| Code | Pale background, gray border, 12 pt padding |
+| Math | `vector_math`, no text parsing, `math_scale` from the function argument |
+| Cover | Large title, subtitle, and author aligned around the title object |
+
+Color values are stored as renderer-readable RGB strings such as `"0.2745,0.5098,0.7059"`.
+
+## Layout Effects
+
+Theme functions set margins, padding, and text metrics. Those values affect object frames after layout.
+
+```ss
+page precise
+  let title = head("Measured")
+  let code_block = code("print('hello')")
+
+  ~ code_block.top = title.bottom + 32
+  ~ code_block.left = title.left
+end
+```
+
+Changing the theme can change the height of `title` and `code_block`, which changes later constraints that depend on their anchors.
+
+## Switching Themes
+
+A page that imports `std:themes/default` can usually switch to another theme by changing the import.
+
+```ss
+import std:themes/pop
+```
+
+After switching, run both checks used for layout and drawing.
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/theme.pdf
+```
+
+Two-column pages, long code blocks, image captions, and cover pages are the first places to inspect.

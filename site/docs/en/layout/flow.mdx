@@ -1,0 +1,88 @@
+---
+title: "Vertical flow"
+description: "`vflow`, `vflow_doc`, page policies, document policies, and flow-related properties."
+---
+
+# Vertical flow
+
+`vflow` and `vflow_doc` set vertical placement policies.
+
+```ss
+vflow("top_flow")
+vflow_doc("center")
+```
+
+They do not create objects. They write properties on the current page or document.
+
+## Page Policy
+
+Use `vflow` inside a page.
+
+```ss
+import std:themes/default
+
+page page_policy
+  vflow("top_flow")
+  head("Flow")
+  text("First paragraph")
+  text("Second paragraph")
+end
+```
+
+The policy is used for objects that do not already have enough explicit vertical constraints.
+
+## Document Policy
+
+Use `vflow_doc` inside `document` to set a default for pages.
+
+```ss
+document
+  vflow_doc("top_flow")
+end
+
+page first
+  head("First")
+  text("Body")
+end
+
+page centered
+  vflow("center_stack")
+  text("Centered content")
+end
+```
+
+The `centered` page overrides the document setting.
+
+## Center Offset
+
+Both functions accept an optional `center_offset`.
+
+```ss
+vflow("center", -24)
+vflow_doc("center_stack", 18)
+```
+
+The offset is stored as `layout_v_center_offset` and is used by policies that place content around the vertical center.
+
+## Relation to `flow`
+
+`vflow` controls vertical placement policy. `flow(obj, left, right)` controls an object's horizontal flow properties and wrapping.
+
+```ss
+let body = text("Long text")
+flow(body, "102", "102")
+vflow("top_flow")
+```
+
+Use both when the page should stack objects vertically and text should wrap within page margins.
+
+## Diagnostics
+
+Flow policy problems usually show up as unexpected positions rather than parser errors because policy names are strings.
+
+```sh
+ss dump slide.ss .ss-cache/flow.json
+ss render slide.ss .ss-cache/flow.pdf
+```
+
+In the dump, inspect page properties such as `layout_v` and object properties such as `layout_x`, `layout_right_inset`, and `wrap`.

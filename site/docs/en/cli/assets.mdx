@@ -1,0 +1,86 @@
+---
+title: "Asset files"
+description: "Asset paths, asset base directories, conversion cache files, and project layout."
+---
+
+# Asset files
+
+Asset components store paths in the document graph. The renderer resolves those paths from `asset_base_dir`.
+
+```ss
+let img = image("diagrams/system.png", 0.7)
+let table = pdf("tables/results.pdf", 0.55)
+```
+
+## Directory Layout
+
+A project can keep source files and assets in separate directories.
+
+```text
+slides/
+  ss.toml
+  src/
+    deck.ss
+  assets/
+    diagrams/system.png
+    tables/results.pdf
+```
+
+```toml
+[project]
+entry = "src/deck.ss"
+asset_base_dir = "assets"
+```
+
+With that configuration, `image("diagrams/system.png")` resolves to `slides/assets/diagrams/system.png`.
+
+## Command-Line Asset Base
+
+For a one-off file, the default asset base is the directory containing the input file.
+
+```sh
+ss render slides/src/deck.ss out.pdf
+```
+
+Override it with `--asset-base-dir`.
+
+```sh
+ss render --asset-base-dir slides/assets slides/src/deck.ss out.pdf
+```
+
+Project mode uses `asset_base_dir` from `ss.toml` unless the command line overrides it.
+
+## Accepted Uses
+
+Common asset-producing components:
+
+| Component | Input |
+| --- | --- |
+| `image(path, factor)` | Raster image path |
+| `pdf(path, factor)` | PDF path |
+| `logos(path, factor)` | Logo path used for generated logo objects |
+
+Markdown image syntax can also reference ordinary assets. Font Awesome references use prefix paths such as `fa-solid:house` and are handled separately.
+
+## Cache
+
+Converted assets are cached under `.ss-cache/render`.
+
+```sh
+ss render --project . --output .ss-cache/deck.pdf
+ss cache stats
+ss cache clear
+```
+
+The cache is derived output. It should not be edited by hand.
+
+## Diagnostics
+
+| Problem | Command |
+| --- | --- |
+| Wrong path or wrong asset base | `check` or `render` |
+| Unsupported image format | `render` |
+| PDF conversion failure | `render` |
+| Missing local conversion tool | `doctor` and `render` |
+
+Use absolute paths sparingly. Project-relative paths make the same slide deck easier to run from different directories.

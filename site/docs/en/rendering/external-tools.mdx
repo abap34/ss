@@ -1,0 +1,75 @@
+---
+title: "External tools"
+description: "Render-time command dependencies, when they are used, and how to inspect failures."
+---
+
+# External tools
+
+The native PDF backend uses Cairo and Pango directly. Some object kinds also require command-line tools.
+
+| Tool | Used for |
+| --- | --- |
+| `pdflatex` | LaTeX math source |
+| `rsvg-convert` | SVG conversion for math and icon output |
+| `pdftoppm` | PDF raster previews and sampled images |
+| `pdftocairo` | PDF asset conversion when available |
+| `magick` | Image conversion through ImageMagick |
+| `qpdf` | PDF normalization after rendering |
+
+`ss check` does not run these tools. `ss render` runs them only when the document contains the corresponding object kind.
+
+## Doctor
+
+Use `doctor` to inspect project discovery and render dependencies.
+
+```sh
+ss doctor --project .
+ss doctor --project . --strict
+```
+
+`--strict` makes the command exit with a failure status when it finds a missing dependency. That mode is useful in continuous integration.
+
+## Render-Time Use
+
+Tool calls are tied to payloads and render properties.
+
+| Source construct | Render path |
+| --- | --- |
+| `tex("x^2")` | Write LaTeX source, run `pdflatex`, convert output |
+| Markdown Font Awesome image | Resolve icon, generate vector asset, convert if needed |
+| `image("figure.png")` | Load or convert raster image |
+| `pdf("table.pdf")` | Convert PDF page and draw it in the object frame |
+| Final PDF | Normalize with `qpdf` when available |
+
+Documents without math, icons, images, or PDF assets can render with fewer external tool calls.
+
+## Cache Files
+
+Conversions are written under `.ss-cache/render`. A cache key includes the input content and conversion settings. Changing the source asset, LaTeX source, icon name, or relevant render property creates a new cache entry.
+
+```sh
+ss cache stats
+ss cache clear
+```
+
+Use `cache clear` when a local tool changed and old conversion output should be discarded.
+
+## Failure Output
+
+Render failures usually include the object or conversion step that failed. The original command output is often the most direct clue.
+
+| Failure | Next check |
+| --- | --- |
+| Command not found | Install the tool or adjust `PATH` |
+| LaTeX compile error | Render the smallest page containing the math object |
+| Image conversion error | Open the input image with the same local tool |
+| PDF conversion error | Check whether the input PDF has a readable first page |
+| Normalization error | Run without unrelated assets and inspect the produced PDF path |
+
+Commands used for local checks:
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/render.pdf
+ss doctor --project .
+```

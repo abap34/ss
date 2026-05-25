@@ -1,0 +1,91 @@
+---
+title: "VS Code extension"
+description: "Language registration, syntax highlighting, snippets, language server support, commands, and settings for VS Code."
+---
+
+# VS Code extension
+
+The VS Code extension registers `.ss` files as `ss-slide` and starts the `ss` language server.
+
+## Requirements
+
+The extension does not bundle the `ss` executable. Install `ss` first and make it visible through `PATH`, or set `ss.cli.path`.
+
+```json
+{
+  "ss.cli.path": "/Users/example/.local/bin/ss"
+}
+```
+
+For repository development, point the setting at a built binary.
+
+```json
+{
+  "ss.cli.path": "/path/to/ss/zig-out/bin/ss"
+}
+```
+
+## File Association
+
+The extension contributes the `.ss` extension for the `ss-slide` language. If another extension associates `.ss` with a different language, add a workspace association.
+
+```json
+{
+  "files.associations": {
+    "*.ss": "ss-slide"
+  }
+}
+```
+
+## Features
+
+| Feature | Source |
+| --- | --- |
+| Syntax highlighting | `editor/vscode/syntaxes/ss.tmLanguage.json` |
+| Brackets, comments, and indentation | `editor/vscode/language-configuration.json` |
+| Snippets | `editor/vscode/snippets/ss.code-snippets` |
+| Diagnostics, hover, completion, definition, symbols | `ss lsp` |
+| Live PDF preview | Extension command that calls `ss render` |
+
+The language server uses the same parser, loader, checker, and graph builder as the CLI.
+
+## Commands
+
+| Command palette item | Command id | Action |
+| --- | --- | --- |
+| `ss: Check Current File` | `ss.checkCurrentFile` | Saves the active `.ss` document so diagnostics refresh through the language server |
+| `ss: Open Live Preview` | `ss.preview.live` | Starts or reveals the PDF preview for the active `.ss` document |
+
+The preview command is also available from the editor title when the current file is `ss-slide`.
+
+## Settings
+
+```json
+{
+  "ss.cli.path": "ss",
+  "ss.livePreview.debounceMs": 350,
+  "ss.livePreview.openMode": "vscode",
+  "ss.lsp.trace.server": "off"
+}
+```
+
+| Setting | Values |
+| --- | --- |
+| `ss.cli.path` | Path to the `ss` executable |
+| `ss.livePreview.debounceMs` | Delay before preview render after edits |
+| `ss.livePreview.openMode` | `vscode` or `external` |
+| `ss.lsp.trace.server` | `off`, `messages`, or `verbose` |
+
+Trace output is written to the `ss` output channel.
+
+## Project Files
+
+Editor features use the project discovered by the language server. Put `ss.toml` at the deck or workspace root when the entry file and asset base should be stable.
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+The same file is used by CLI commands such as `ss check --project .` and `ss render --project . --output deck.pdf`.

@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "lib": ["DOM", "ES2020"],
+    "jsx": "react-jsx",
+    "target": "ES2020",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noUncheckedSideEffectImports": true,
+    "isolatedModules": true,
+    "strict": true
+  },
+  "include": [
+    "components",
+    "docs",
+    "generated",
+    "rspress.config.ts",
+    "types.d.ts"
+  ],
+  "mdx": {
+    "checkMdx": true
+  }
+}

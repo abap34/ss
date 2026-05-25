@@ -1,0 +1,238 @@
+---
+title: "制約"
+description: "アンカー等式，補助関数，配置グラフ，衝突診断を定義します．"
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# 制約
+
+制約は，ページ内の object の位置や大きさを指定する等式です．`ss` は制約をページごとの配置グラフに下げ，配置ソルバで各 object の矩形を決めます．
+
+## 制約文
+
+```text
+Constraint ::= "~" ConstraintTarget "==" ConstraintSource Offset? Terminator
+Offset     ::= ("+" | "-") Number
+```
+
+```ss
+~ body.top == title.bottom - 32
+~ body.left == title.left
+```
+
+左辺と右辺はアンカーです．末尾の数値は差分です．
+
+## アンカー
+
+object の矩形には，次のアンカーがあります．
+
+| アンカー | 意味 |
+| --- | --- |
+| `left` | 左端 |
+| `right` | 右端 |
+| `top` | 上端 |
+| `bottom` | 下端 |
+| `center_x` | 水平方向の中央 |
+| `center_y` | 垂直方向の中央 |
+| `width` | 幅 |
+| `height` | 高さ |
+
+ページにもアンカーがあります．標準ライブラリの `pin_l`，`pin_r`，`pin_t`，`pin_b` は，object の端をページ端へ結びます．
+
+## 基本の等式
+
+制約は，アンカー間の等式として扱います．
+
+```text
+anchor(target, a) = anchor(source, b) + delta
+```
+
+例えば次の制約は，本文の上端を見出しの下端から 32 離します．
+
+```ss
+~ body.top == title.bottom - 32
+```
+
+この符号は，実装の座標系と補助関数の規約に従います．通常は `below`，`pin_t`，`same_l` などの補助関数を使うと，符号を直接扱う量を減らせます．
+
+## 補助関数
+
+標準ライブラリは，よく使う制約を関数として提供します．
+
+| 関数 | 意味 |
+| --- | --- |
+| `pin_l(node, amount)` | 左端をページ左端から指定 |
+| `pin_r(node, amount)` | 右端をページ右端から指定 |
+| `pin_t(node, amount)` | 上端をページ上端から指定 |
+| `pin_b(node, amount)` | 下端をページ下端から指定 |
+| `same_l(target, source, delta)` | 左端をそろえる |
+| `same_r(target, source, delta)` | 右端をそろえる |
+| `same_t(target, source, delta)` | 上端をそろえる |
+| `same_b(target, source, delta)` | 下端をそろえる |
+| `below(target, source, gap)` | target を source の下へ置く |
+| `fix_w(node, value)` | 幅を固定 |
+| `fix_h(node, value)` | 高さを固定 |
+| `inset_x(node, left, right)` | 左右の内側余白を指定 |
+
+```ss
+let title = head("配置")
+let body = text("本文")
+below(body, title, 32)
+same_l(body, title, 0)
+```
+
+## 制約集合
+
+複数の制約は `constraints` でまとめられます．
+
+```ss
+fn body_area(node: object) -> constraints
+  return constraints(
+    pin_l(node, 102),
+    pin_r(node, 102),
+    pin_t(node, 160)
+  )
+end
+```
+
+関数で返した制約集合は，呼び出し側のページの配置グラフへ追加されます．
+
+## 配置グラフ
+
+配置グラフは，ページごとに作られます．節点はアンカーです．辺は等式です．
+
+```text
+Node ::= ObjectAnchor | PageAnchor
+Edge ::= Node == Node + Number
+LayoutGraph ::= (Node*, Edge*)
+```
+
+ページをまたいだ制約グラフは作りません．ページ番号やフッターのような生成物は，各ページに object を作ってから，そのページ内で配置します．
+
+## 既定配置との関係
+
+明示的な制約がない object には，ページの配置方針に応じた既定配置が使われます．`vflow` は縦方向の配置方針を設定します．
+
+```ss
+page sample
+vflow("top")
+let title = head("題名")
+let body = text("本文")
+end
+```
+
+必要な位置関係だけを制約で指定し，その他は既定配置に任せることもできます．厳密にそろえたい資料では，見出し，本文，図，注釈の関係を制約で明示します．
+
+## グループ
+
+複数 object を一つのまとまりとして扱う場合は `group` を使います．
+
+```ss
+let title = text("定理")
+let body = text("本文")
+below(body, title, 12)
+let theorem = group(title, body)
+pin_l(theorem, 96)
+```
+
+グループの外接矩形は，含まれる object の矩形から計算されます．グループを動かすと，含まれる object も同じだけ移動します．
+
+## 矛盾
+
+同じアンカーへ互いに矛盾する制約を与えると，配置は決まりません．
+
+```ss
+pin_l(body, 72)
+pin_l(body, 120)
+```
+
+幅を固定し，左右も固定した場合，ページ幅と値が合わないと矛盾します．
+
+```ss
+pin_l(body, 72)
+pin_r(body, 72)
+fix_w(body, 100)
+```
+
+この場合，ページ幅が 244 でない限り三つの条件を同時に満たせません．
+
+## 通し例
+
+次の例は，見出し，本文，コード，図注を縦に並べます．
+
+```ss
+import std:themes/default
+
+page constraints_example
+let title = head("制約")
+let body = text("本文を見出しの下へ置きます．")
+let sample = code("""
+let x = 1
+let y = x + 1
+""", "ss")
+let cap = figure("例 1．制約で並べたコンポーネント")
+
+flow(body, "102", "102")
+flow(sample, "102", "102")
+below(body, title, 32)
+below(sample, body, 28)
+below(cap, sample, 16)
+same_l(body, title, 0)
+same_l(sample, body, 0)
+same_l(cap, body, 0)
+end
+```
+
+例では，縦方向の順序を `below` で指定し，左端を `same_l` でそろえています．本文とコードには `flow` を使い，折り返しの幅を決めています．
+
+## 制約の読み下し
+
+上の例の一部は，次の関係として読めます．
+
+| 制約 | 意味 |
+| --- | --- |
+| `below(body, title, 32)` | 本文を見出しの下へ置く |
+| `below(sample, body, 28)` | コードを本文の下へ置く |
+| `same_l(sample, body, 0)` | コードの左端を本文の左端にそろえる |
+| `flow(sample, "102", "102")` | コードの左右範囲を決める |
+
+制約を読むときは，対象，基準，距離の三つを分けます．対象は動かしたい object です．基準はページ端または別の object です．距離は数値で指定します．
+
+## 実行例
+
+次の例は，二つの本文 object をアンカー制約で横に並べ，図注を下へ置くファイルです．`below`，`same_l`，`fix_w` に加えて，制約文 `~ right.left == left.right + 40` を使います．
+
+<SsExample
+  id="authoring-constraints"
+  title="制約の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-constraints.ss
+ss dump site/samples/authoring-constraints.ss .ss-cache/authoring-constraints.json
+ss render site/samples/authoring-constraints.ss .ss-cache/authoring-constraints.pdf
+```
+
+`dump` の JSON では，`left` と `right` の `top` が同じ値になり，`right.left` が `left.right` から 40 離れているかを見ます．PDF では，二つの本文 object が横並びになり，図注が左側の本文の下に置かれているかを見ます．意図しない重なりがある場合は，制約が足りないのか，幅が違うのか，object の高さが想定より大きいのかを分けて確認します．
+
+## 診断
+
+次の状態は診断になります．
+
+| 状態 | 確認方法 |
+| --- | --- |
+| 存在しない object 名 | `ss check` |
+| 存在しないアンカー名 | `ss check` |
+| 制約の矛盾 | `ss render` |
+| object のはみ出し | `ss render` と PDF |
+| 意図しない重なり | PDF と必要に応じて `ss dump` |
+
+`ss dump` は配置前後の情報を JSON として出します．制約の原因を追うときに使います．

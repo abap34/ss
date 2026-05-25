@@ -1,0 +1,46 @@
+---
+title: "Border"
+description: "Signature, value, placement, properties, and diagnostics for Border."
+---
+
+# Border
+
+## Definition
+
+```text
+border : object × number? × number? × string? × number? × number? -> object
+```
+
+Sets border and padding properties on an existing object.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+border(body, 18, 12, "0.36,0.40,0.48", 1, 8)
+end
+```
+
+## Value
+
+`border` updates the object passed as its first argument and returns the same object. It sets chrome stroke, padding, line width, and radius properties.
+
+## Static conditions
+
+The function name must come from an imported module. The first argument must be an object. Padding, line width, and radius are numbers.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let body = border(text("Body"), 18, 12)
+below(body, title, 32)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

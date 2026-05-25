@@ -1,0 +1,7 @@
+[
+  { "type": "file", "name": "native", "label": "Cairo と Pango" },
+  { "type": "file", "name": "math", "label": "LaTeX 数式" },
+  { "type": "file", "name": "fontawesome", "label": "Font Awesome" },
+  { "type": "file", "name": "assets", "label": "画像と PDF アセット" },
+  { "type": "file", "name": "external-tools", "label": "外部コマンド" }
+]

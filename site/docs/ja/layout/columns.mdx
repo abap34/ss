@@ -1,0 +1,95 @@
+---
+title: "二段組"
+description: "`cols2`，`cols2c`，`cols2g`，group frame，折り返しに必要な幅を説明します．"
+---
+
+# 二段組
+
+二段組の関数は，二つの object を横に並べます．
+
+```ss
+let both = cols2(left, right)
+```
+
+これらは `std:core/layout` に定義されています．
+
+| 関数 | 返り値 | 動作 |
+| --- | --- | --- |
+| `cols2c(left, right, gap)` | `constraints` | 横方向の段間制約を追加する |
+| `cols2g(left, right, gap)` | `object` | 制約を追加し，group を返す |
+| `cols2(left, right)` | `object` | 30 point の段間で group を返す |
+
+## 基本例
+
+```ss
+import std:themes/default
+
+page columns
+  let title = head("二段組")
+  let left = text("左段")
+  let right = text("右段")
+
+  fix_w(left, 360)
+  fix_w(right, 360)
+  let both = cols2(left, right)
+
+  below(both, title, 32)
+  same_l(both, title, 0)
+end
+```
+
+返された group は一つの object として制約できます．group を移動すると子 object も同じだけ移動します．
+
+## 折り返し
+
+段の本文は，group 化の前に幅を決めます．
+
+```ss
+fix_w(left, 360)
+fix_w(right, 360)
+left.wrap = "on"
+right.wrap = "on"
+```
+
+幅がないと，本文の測定結果が意図した段幅と合わないことがあります．
+
+## 段間
+
+段間を指定する場合は `cols2g` を使います．
+
+```ss
+let pair = cols2g(left, right, 48)
+```
+
+group が不要な場合は `cols2c` を使います．
+
+```ss
+cols2c(left, right, 48)
+below(left, title, 32)
+below(right, title, 32)
+```
+
+## group frame
+
+group の frame は子 object の frame から計算されます．group に制約を与えると，子 object も同じ差分で移動します．
+
+```ss
+let pair = cols2(left, right)
+pin_l(pair, 96)
+```
+
+段組全体を見出し，画像，ページ余白へ揃える場合に使います．
+
+## 診断
+
+| 問題 | 確認箇所 |
+| --- | --- |
+| `left` または `right` が未束縛 | `ss check` |
+| 文章が折り返さない | 段幅と `wrap` |
+| 段が重なる | 幅と段間 |
+| group の移動結果が違う | group と子 object の frame |
+
+```sh
+ss dump slide.ss .ss-cache/columns.json
+ss render slide.ss .ss-cache/columns.pdf
+```

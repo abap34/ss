@@ -1,0 +1,88 @@
+---
+title: "縦方向の流し込み"
+description: "`vflow`，`vflow_doc`，ページ方針，文書方針，flow 関連プロパティを説明します．"
+---
+
+# 縦方向の流し込み
+
+`vflow` と `vflow_doc` は，縦方向の配置方針を設定します．
+
+```ss
+vflow("top_flow")
+vflow_doc("center")
+```
+
+これらは object を作りません．現在ページまたは文書にプロパティを書きます．
+
+## ページ方針
+
+`vflow` はページ内で使います．
+
+```ss
+import std:themes/default
+
+page page_policy
+  vflow("top_flow")
+  head("Flow")
+  text("一つ目")
+  text("二つ目")
+end
+```
+
+この方針は，明示的な縦方向制約が足りない object に使われます．
+
+## 文書方針
+
+`vflow_doc` は `document` 内で使い，ページの既定値を設定します．
+
+```ss
+document
+  vflow_doc("top_flow")
+end
+
+page first
+  head("First")
+  text("Body")
+end
+
+page centered
+  vflow("center_stack")
+  text("Centered content")
+end
+```
+
+`centered` ページは文書方針を上書きします．
+
+## center offset
+
+どちらの関数も省略可能な `center_offset` を受け取ります．
+
+```ss
+vflow("center", -24)
+vflow_doc("center_stack", 18)
+```
+
+この値は `layout_v_center_offset` として保存され，縦方向の中央を使う方針で読まれます．
+
+## `flow` との関係
+
+`vflow` は縦方向の配置方針を決めます．`flow(obj, left, right)` は object の水平方向の配置プロパティと折り返しを設定します．
+
+```ss
+let body = text("長い本文")
+flow(body, "102", "102")
+vflow("top_flow")
+```
+
+ページ内の object を縦に並べ，本文をページ余白内で折り返す場合は両方を使います．
+
+## 診断
+
+方針名は文字列なので，誤りは parser エラーよりも位置の結果として現れることがあります．
+
+```sh
+ss dump slide.ss .ss-cache/flow.json
+ss render slide.ss .ss-cache/flow.pdf
+```
+
+dump では，ページの `layout_v` と，object の `layout_x`，`layout_right_inset`，`wrap` を見ます．

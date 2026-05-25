@@ -1,0 +1,50 @@
+---
+title: "Watermark"
+description: "Signature, value, placement, properties, and diagnostics for Watermark."
+---
+
+# Watermark
+
+## Definition
+
+```text
+watermark : string -> void
+```
+
+Generates watermark text on each page in the document.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+document
+watermark("draft")
+end
+```
+
+## Value
+
+`watermark` returns `void`. It stores the watermark text on the document and generates a `watermark` role object for each page that does not already have one.
+
+## Static conditions
+
+The function name must come from an imported module. The argument must be a string. Call `watermark` from a `document` block because it generates objects for the page list.
+
+## Placement
+
+Generated watermark objects are centered on each page by the standard library. Appearance comes from the `Watermark` object class defaults and theme properties.
+
+```ss
+document
+watermark("draft")
+end
+
+page body
+head("Body")
+end
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

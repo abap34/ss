@@ -1,0 +1,21 @@
+[
+  { "type": "file", "name": "cover", "label": "Cover" },
+  { "type": "file", "name": "headings", "label": "Headings" },
+  { "type": "file", "name": "text", "label": "Text" },
+  { "type": "file", "name": "markdown", "label": "Markdown" },
+  { "type": "file", "name": "math", "label": "Math" },
+  { "type": "file", "name": "code", "label": "Code" },
+  { "type": "file", "name": "figure", "label": "Figure" },
+  { "type": "file", "name": "image", "label": "Image" },
+  { "type": "file", "name": "pdf", "label": "PDF" },
+  { "type": "file", "name": "note", "label": "Note" },
+  { "type": "file", "name": "citation", "label": "Citation" },
+  { "type": "file", "name": "panel", "label": "Panel" },
+  { "type": "file", "name": "border", "label": "Border" },
+  { "type": "file", "name": "rule", "label": "Rule" },
+  { "type": "file", "name": "pageno", "label": "Page number" },
+  { "type": "file", "name": "footer", "label": "Footer" },
+  { "type": "file", "name": "logo", "label": "Logo" },
+  { "type": "file", "name": "watermark", "label": "Watermark" },
+  { "type": "file", "name": "toc", "label": "Table of contents" }
+]

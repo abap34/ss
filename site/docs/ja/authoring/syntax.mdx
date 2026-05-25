@@ -1,0 +1,596 @@
+---
+title: "構文"
+description: "ソースファイル，読み込み，定義，文，式，演算子，制約表記を説明します．"
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+import { SsExample } from '../../../components/SsExample';
+
+# 構文
+
+`.ss` ファイルは，読み込み，定義，文書ブロック，ページブロックからなります．ページブロックの中ではコンポーネントを置き，プロパティを設定し，制約を書きます．文書ブロックの中ではページ番号，フッター，ロゴ，目次，検査など，文書全体に関係する処理を書きます．
+
+構文だけを扱います．値と型は [値と型](./values-and-types) を参照してください．基本演算子と組み込み関数は [演算子と組み込み関数](./operators-and-builtins) を参照してください．関数定義は [関数と定義](./functions) を参照してください．プロパティ代入は [プロパティとスタイル](./properties) を参照してください．制約の意味は [制約](./constraints) を参照してください．
+
+## ファイルの形
+
+```text
+SourceFile ::= TopLevelItem*
+
+TopLevelItem ::= ImportDecl
+               | TypeDecl
+               | ObjectDecl
+               | ExtendDecl
+               | ConstDecl
+               | FunctionDecl
+               | DocumentBlock
+               | PageBlock
+```
+
+トップレベル項目は上から順に読みます．ページの順序は `page` ブロックの出現順です．`import` がページより前にある場合，読み込まれたモジュールの関数を後続のページで使えます．
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+end
+
+page intro
+let title = head("導入")
+let body = text("本文")
+below(body, title, 32)
+end
+```
+
+この例では，`std:themes/default` から `head`，`text`，`below`，`pagenos` などを読み込みます．`document` ブロックはページ番号の生成を登録します．`page intro` は一枚のページを作ります．
+
+## 空白と改行
+
+空白は字句を分けるために使います．改行は，ブロックの開始直後，文の区切り，`end` の前後で意味を持ちます．一行に複数の文を書く場合は `;` を使えます．通常の資料では，一文一行で書くと読みやすくなります．
+
+```text
+Terminator ::= Newline | ";"
+Block      ::= Header Newline Statement* "end"
+```
+
+```ss
+page one_line
+let title = head("題名"); let body = text("本文")
+below(body, title, 32)
+end
+```
+
+上の `let` は二つの文です．セミコロンを使わずに次のように書いても同じです．
+
+```ss
+page normal
+let title = head("題名")
+let body = text("本文")
+below(body, title, 32)
+end
+```
+
+## コメント
+
+コメントは行末まで続きます．`#`，`//`，`;;` を使えます．
+
+```text
+Comment ::= "#" TextUntilNewline
+          | "//" TextUntilNewline
+          | ";;" TextUntilNewline
+```
+
+```ss
+# 見出しを作る
+let title = head("題名")
+
+// 本文を見出しの下に置く
+let body = text("本文")
+below(body, title, 32)
+
+;; 一時的なメモにも使える
+```
+
+コメントは文字列の外でだけコメントとして扱われます．文字列中の `#` や `//` は文字列の一部です．
+
+## 識別子
+
+識別子は，関数名，定数名，引数名，`let` で束縛する名前，型名，プロパティ名に使います．
+
+```text
+Identifier ::= IdentifierStart IdentifierContinue*
+```
+
+識別子として使える文字は実装の `src/utils/source.zig` に従います．通常は英字，数字，アンダースコアを使います．数字で始まる名前は使いません．
+
+```ss
+let title = head("題名")
+let body_text = "本文"
+let chart2 = image("assets/chart.png")
+```
+
+次の語は構文上の位置によってキーワードとして扱われます．
+
+```text
+import fn const type extend document page
+let return if else end true false
+```
+
+## 読み込み
+
+読み込みは `import` で書きます．標準モジュールは `std:` で始まる名前です．ローカルファイルは相対パスで書きます．
+
+```text
+ImportDecl ::= "import" ImportSpec Terminator
+```
+
+```ss
+import std:themes/default
+import std:core/layout
+import ./components.ss
+```
+
+テーマを読み込むと，テーマが再公開する標準コンポーネントと配置補助を使えます．一般的な資料では `std:themes/default` から始めます．テーマとコンポーネントは [コンポーネント](../components/text) と [テーマ](../themes/default) を参照してください．
+
+## 型定義
+
+型定義には，型エイリアスと object 宣言があります．型エイリアスはプロパティ値の検査にも使われます．object 宣言は，object クラス，ロール，フィールドを定義します．
+
+```text
+TypeAliasDecl ::= "type" Identifier "=" TypeText Annotation* Terminator
+ObjectDecl    ::= "type" Identifier "=" ("object" | "protocol") "{" ObjectMember* "}"
+ExtendDecl    ::= "extend" Identifier "{" ObjectMember* "}"
+```
+
+```ss
+type FitPolicy = "warn" | "error" | "ignore"
+type Color = string @refine(color)
+type ScalarLike = string | number
+```
+
+```ss
+type Callout = object {
+  base = Text
+  roles = ["callout"]
+  tone: string = "info"
+}
+```
+
+型注釈で使える型は [値と型](./values-and-types) を参照してください．object のロールとペイロード種別は [オブジェクトとロール](./objects) を参照してください．
+
+## 定数
+
+定数は，型注釈付きの名前に式の値を結びます．
+
+```text
+ConstDecl ::= "const" Identifier ":" Type "=" Expr Terminator
+```
+
+```ss
+const page_margin: number = 72
+const brand_color: string = "0.2745,0.5098,0.7059"
+const title_text: string = "研究会資料"
+```
+
+定数はトップレベルで定義します．ページや関数の中で同じ値を繰り返す場合に使います．定数の右辺は式です．使える演算子は [演算子と組み込み関数](./operators-and-builtins) を参照してください．
+
+## 関数宣言
+
+関数は，名前，引数，返り値型，本体を持ちます．
+
+```text
+FunctionDecl ::= Annotation* "fn" Identifier "(" ParamList? ")" "->" Type EffectClause? Annotation* FunctionBody
+ParamList    ::= Param ("," Param)*
+Param        ::= Identifier ":" Type DefaultValue?
+DefaultValue ::= "=" Expr
+FunctionBody ::= Newline Statement* "end"
+```
+
+```ss
+fn callout(message: string, gap: number = 12) -> object
+  let body = note(message)
+  border(body, 18, gap, "0.36,0.40,0.48", 1, 8)
+  return body
+end
+```
+
+既定値を持つ引数は末尾に置きます．返り値型が `void` 以外の関数では，値を返す `return` が必要です．関数の詳しい規則は [関数と定義](./functions) を参照してください．
+
+## 文書ブロック
+
+文書ブロックは，文書全体の状態やページ列に関係する処理を書く場所です．
+
+```text
+DocumentBlock ::= "document" Newline Statement* "end"
+```
+
+```ss
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+need_titles()
+end
+```
+
+文書ブロックの文は，ページ一覧，文書プロパティ，既存 object の選択に依存できます．ページ番号，フッター，ロゴ，透かし，目次，タイトル検査は [文書全体を使った生成](./generation) を参照してください．
+
+## ページブロック
+
+ページブロックは，一枚のスライドに置く object と配置制約を書く場所です．
+
+```text
+PageBlock ::= "page" PageName Newline Statement* "end"
+PageName  ::= Identifier | String | "_"
+```
+
+```ss
+page result
+let title = head("結果")
+let plot = image("assets/result.png", 0.8)
+let caption = figure("図 1．結果")
+
+below(plot, title, 36)
+below(caption, plot, 16)
+same_l(caption, plot, 0)
+end
+```
+
+`page _` と書くと内部名が生成されます．ページ名を直接参照しない資料や一時的なページで使えます．公開資料では診断を読みやすくするため，意味のあるページ名を付けます．
+
+## 文
+
+文はページ，文書，関数の本体に書きます．
+
+```text
+Statement ::= LetBinding
+            | Return
+            | If
+            | Constraint
+            | PropertyAssignment
+            | CallStatement
+```
+
+### let 文
+
+`let` は名前を導入します．名前は後続の文で使えます．
+
+```text
+LetBinding ::= "let" Identifier "=" Expr Terminator
+```
+
+```ss
+let title = head("題名")
+let body = text("本文")
+below(body, title, 32)
+```
+
+`let` で束縛した値が `object` の場合，後続の制約，プロパティ代入，関数呼び出しで参照できます．束縛しない呼び出しは，後から名前で参照できません．
+
+### return 文
+
+`return` は関数から戻ります．`void` 関数では式を省略できます．
+
+```text
+Return ::= "return" Expr? Terminator
+```
+
+```ss
+fn make_title(text_value: string) -> object
+  return head(text_value)
+end
+
+fn setup() -> void
+  pagenos("{page} / {total}")
+  return
+end
+```
+
+### if 文
+
+`if` は `bool` 値で分岐します．`else` は省略できます．
+
+```text
+If ::= "if" Expr Newline Statement* ("else" Newline Statement*)? "end"
+```
+
+```ss
+if selection_empty(objs(pagectx(), "title"))
+  report_warning("MissingTitle: page has no title object")
+end
+```
+
+```ss
+if docctx().footer_text?
+  footers(docctx().footer_text ?? "")
+else
+  footers("draft")
+end
+```
+
+`obj.prop?` と `obj.prop ?? default` はプロパティ参照の構文です．詳しくは [プロパティとスタイル](./properties) を参照してください．
+
+### 呼び出し文
+
+関数呼び出しを文として書けます．返り値を使わない処理や，制約を追加する関数に使います．
+
+```text
+CallStatement ::= Identifier "(" ArgumentList? ")" Terminator
+                | Identifier String Terminator
+                | Identifier ChevronBlockString Terminator
+```
+
+```ss
+pagenos("{page} / {total}")
+below(body, title, 32)
+vflow("top")
+```
+
+一引数の文字列を取る関数では，丸かっこを省略できます．
+
+```ss
+head "題名"
+text <<
+本文を複数行で書きます．
+>>
+```
+
+丸かっこ付きで書くと次の形です．
+
+```ss
+head("題名")
+text("本文を複数行で書きます．")
+```
+
+### プロパティ代入
+
+プロパティ代入は，対象のプロパティを設定します．対象は主に `object`，`page`，`document` です．
+
+```text
+PropertyAssignment ::= Expr "." Identifier "=" Expr Terminator
+```
+
+```ss
+let body = text("本文")
+body.text_size = 22
+body.text_line_height = "30"
+body.wrap = "on"
+pagectx().background_fill = "1,1,1"
+```
+
+右辺には `string`，`number`，`bool`，`style` を使えます．内部のグラフでは，描画器が読める文字列へ変換して保持します．詳細は [プロパティとスタイル](./properties) を参照してください．
+
+### 制約文
+
+制約文は `~` で始めます．左右のアンカーの関係を配置グラフへ追加します．
+
+```text
+Constraint ::= "~" ConstraintTarget "==" ConstraintSource Offset? Terminator
+Offset     ::= ("+" | "-") Expr
+```
+
+```ss
+~ body.top == title.bottom - 32
+~ body.left == title.left
+~ body.width == 520
+~ body.center_x == page.center_x
+```
+
+制約補助関数でも同じ種類の制約を作れます．
+
+```ss
+below(body, title, 32)
+same_l(body, title, 0)
+fix_w(body, 520)
+```
+
+制約の詳しい説明は [制約](./constraints) と [配置](../layout/default) を参照してください．
+
+## 式
+
+式は値を作ります．式の値は，`let` の右辺，関数の実引数，`return`，プロパティ代入の右辺，制約のオフセットで使えます．
+
+```text
+Expr        ::= ConcatExpr
+ConcatExpr  ::= AddSubExpr ("++" AddSubExpr)*
+AddSubExpr  ::= MulDivExpr (("+" | "-") MulDivExpr)*
+MulDivExpr  ::= UnaryExpr (("*" | "/") UnaryExpr)*
+UnaryExpr   ::= "-" UnaryExpr | PostfixExpr
+PostfixExpr ::= PrimaryExpr Postfix*
+Postfix     ::= "(" ArgumentList? ")" | "." Identifier PropertySuffix?
+PrimaryExpr ::= Identifier
+              | Number
+              | String
+              | Bool
+              | Lambda
+              | "(" Expr ")"
+```
+
+演算子表記は，関数呼び出しの短い書き方です．`a + b` は `add(a, b)`，`a ++ b` は `concat(a, b)` と同じ関数を呼びます．優先順位と結合規則は，関数に渡す引数のまとまりを決めるために使います．演算子として書ける関数のシグネチャと例は [演算子と組み込み関数](./operators-and-builtins) にまとめています．
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="add"
+  signature="add(left: number, right: number) -> number"
+  module="組み込み"
+  returns="number"
+  summary="`left + right` と同じ関数です．ほかの関数呼び出しと同じように，引数型と返り値型を検査します．"
+/>
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="concat"
+  signature="concat(left: string, right: string) -> string"
+  module="組み込み"
+  returns="string"
+  summary="`left ++ right` と同じ関数です．数値を連結する場合は `str` で文字列へ変換します．"
+/>
+
+```ss
+let x = 10 + 20 * 3
+let y = (10 + 20) * 3
+let name = "page " ++ str(page_index(pagectx()))
+let left = 72
+let width = 1024 - left * 2
+```
+
+優先順位は，後置，単項，乗除，加減，連結の順です．同じ優先順位では左から結合します．読みやすさが必要な場合は丸かっこを使います．
+
+| 優先順位 | 形 | 例 |
+| --- | --- | --- |
+| 高 | 後置 | `f(x)`，`obj.prop`，`obj.prop?`，`obj.prop ?? ""` |
+|  | 単項 | `-x` |
+|  | 乗除 | `x * y`，`x / y` |
+|  | 加減 | `x + y`，`x - y` |
+| 低 | 連結 | `a ++ b` |
+
+## プロパティ参照式
+
+プロパティ参照は後置式です．
+
+```text
+PropertyRead       ::= Expr "." Identifier
+PropertyExists     ::= Expr "." Identifier "?"
+PropertyWithDefault ::= Expr "." Identifier "??" Expr
+```
+
+```ss
+let title = head("題名")
+let size = title.text_size
+let has_size = title.text_size?
+let size_or_default = title.text_size ?? "24"
+```
+
+`obj.name` は，プロパティがない場合に空文字列を返します．`obj.name?` はプロパティの有無を `bool` で返します．`obj.name ?? default` は，プロパティがない場合に既定値を返します．
+
+## ラムダ式
+
+ラムダ式は関数値を作ります．`foreach`，`fold`，`join` など，コールバックを受け取る組み込み関数で使います．
+
+```text
+Lambda ::= "(" ParamList? ")" "|->" Expr
+```
+
+```ss
+foreach(
+  pages(docctx()),
+  (page: page) |-> warn_title(page)
+)
+```
+
+```ss
+let lines = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+ラムダ式の引数には型注釈を書きます．本体は一つの式です．複数の文を持つ処理が必要な場合は，通常の関数として定義し，その関数名を渡します．
+
+```ss
+fn title_line(title: object) -> string
+  return "- " ++ title.content
+end
+
+let lines = join(objs(pagectx(), "title"), "\n", title_line)
+```
+
+## 文字列リテラル
+
+文字列には，通常文字列，三重引用符文字列，山括弧ブロック文字列があります．
+
+```text
+String ::= QuotedString | TripleQuotedString | ChevronBlockString
+```
+
+通常文字列は一行です．
+
+```ss
+let title = "題名"
+let newline = "a\nb"
+let latex = "\\sum_{i=1}^{n} i"
+```
+
+三重引用符文字列は複数行の文字列です．コードや長い LaTeX 片を渡す場合に使います．
+
+```ss
+let sample = code("""
+fn main() {
+  return 0
+}
+""", "zig")
+```
+
+山括弧ブロック文字列は，呼び出しの引数として複数行の文字列を渡す構文です．本文やコードで使います．
+
+```ss
+text <<
+- 一つ目
+- 二つ目
+>>
+```
+
+## 実行例
+
+次の例は，読み込み，定数，関数，既定引数，文書ブロック，ページブロック，文字列，プロパティ代入，式，制約を一つのファイルで使います．
+
+<SsExample
+  id="authoring-syntax"
+  title="構文の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-syntax.ss
+ss dump site/samples/authoring-syntax.ss .ss-cache/authoring-syntax.json
+ss render site/samples/authoring-syntax.ss .ss-cache/authoring-syntax.pdf
+```
+
+`check` では定数，関数，引数，返り値，プロパティ代入，制約の型を確認します．`dump` の JSON では，`syntax_overview` ページ，`title`，`body`，`marker` の object，ページ番号 object，配置制約を見ます．PDF では，本文とページ表示用の小さな object が見出しの下に並ぶことを見ます．
+
+## 失敗例
+
+未定義の名前はエラーです．
+
+```ss
+page bad
+let body = unknown("x")
+end
+```
+
+既に作っていない object は制約で参照できません．
+
+```ss
+page bad
+below(body, title, 32)
+let title = head("題名")
+let body = text("本文")
+end
+```
+
+引数型が合わない呼び出しはエラーです．
+
+```ss
+page bad
+let img = image(1)
+end
+```
+
+返り値が必要な関数で値を返さない場合もエラーです．
+
+```ss
+fn make() -> object
+  text("x")
+end
+```
+
+エラーの読み方は [コマンドラインの check](../cli/check) と [エディタ診断](../editor/diagnostics) を参照してください．

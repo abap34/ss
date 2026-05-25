@@ -1,0 +1,6 @@
+[
+  { "type": "file", "name": "vscode", "label": "VS Code extension" },
+  { "type": "file", "name": "language-server", "label": "Language server" },
+  { "type": "file", "name": "diagnostics", "label": "Diagnostics" },
+  { "type": "file", "name": "live-preview", "label": "Live preview" }
+]

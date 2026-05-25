@@ -1,0 +1,108 @@
+---
+title: "Standard library design"
+description: "Components, themes, layout helpers, generated content, properties, and kernel boundaries."
+---
+
+# Standard library design
+
+The standard library keeps the language kernel small. Components, themes, layout helpers, generated content, and many render properties live under `stdlib/`.
+
+## Directories
+
+| Directory | Content |
+| --- | --- |
+| `stdlib/core` | Low-level components, layout helpers, generated content, selectors |
+| `stdlib/themes` | Default and alternate themes |
+| `site/docs/en/components` | Component documentation |
+| `site/docs/en/themes` | Theme documentation |
+
+Typical slide sources import a theme.
+
+```ss
+import std:themes/default
+```
+
+The theme re-exports common component functions and sets visual defaults.
+
+## Component functions
+
+Many standard component functions add an object to the current page and return it.
+
+```ss
+let title = head("Title")
+let body = text("Body")
+let plot = image("assets/plot.png", 0.8)
+```
+
+This is a standard-library convention. Some functions update an existing object. `border` and `flow` are examples. Whole-document functions such as `pagenos` and `footers` read page data and generate additional objects.
+
+## Function groups
+
+| Group | Examples | Result | Main effect |
+| --- | --- | --- | --- |
+| Component | `text`, `head`, `image`, `pdf` | `object` | Add an object to the current page |
+| Decoration | `border`, `panel`, `styled` | `object` | Update object properties or add chrome |
+| Layout helper | `below`, `same_l`, `pin_l` | `constraints` | Build layout constraints |
+| Document generation | `pagenos`, `footers`, `need_titles` | `void` | Read pages or objects and generate output |
+| Selector | `pages`, `objs`, `page_marks` | `selection<T>` | Read graph selections |
+| String helper | `str`, `replace`, `join` | `string` | Build display text |
+
+Documentation for a function should include its callable form, parameters, result, effect, common properties, examples, and diagnostics.
+
+## Themes
+
+Themes define visual defaults by wrapping or replacing component functions.
+
+```ss
+import std:themes/default
+
+page intro
+head("Title")
+text("Body")
+end
+```
+
+Changing a theme can change dimensions because fonts, line heights, padding, and code block metrics change. Render representative pages after theme changes.
+
+## Properties
+
+The standard library communicates with layout and rendering through properties.
+
+| Property | Read by |
+| --- | --- |
+| `text_size` | Layout metrics and PDF rendering |
+| `text_line_height` | Layout metrics and PDF rendering |
+| `text_color` | PDF rendering |
+| `chrome_fill` | PDF rendering |
+| `chrome_stroke` | PDF rendering |
+| `wrap` | Layout metrics and PDF rendering |
+| `asset_scale` | Layout metrics and PDF rendering |
+| `render_kind` | PDF rendering |
+
+When a new property is added, document whether it is standard-library-local or read by layout/rendering. If layout or rendering reads it, update the reader and the documentation together.
+
+## Adding features
+
+| Feature | Starting point |
+| --- | --- |
+| Visual variant | `stdlib/themes` |
+| New component | `stdlib/core` or a theme |
+| Decoration around an existing object | `stdlib/core` |
+| Layout helper | `stdlib/core` |
+| Whole-document generation | `stdlib/core/generated.ss` |
+| New renderer input | Standard-library property plus `src/render` |
+| New value category | `src/core`, `src/analysis`, and `src/elaboration` |
+
+Add a kernel primitive only when the behavior cannot be expressed through standard-library functions, object classes, properties, queries, or contracts.
+
+## Verification
+
+```sh
+for f in stdlib/core/*.ss stdlib/themes/*.ss; do
+  zig-out/bin/ss check "$f"
+done
+
+zig build run -- render demo/seminar-05-12.ss .ss-cache/stdlib.pdf
+```
+
+Update component or theme pages when public function behavior changes.

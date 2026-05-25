@@ -1,0 +1,7 @@
+[
+  { "type": "file", "name": "native", "label": "Cairo and Pango" },
+  { "type": "file", "name": "math", "label": "LaTeX math" },
+  { "type": "file", "name": "fontawesome", "label": "Font Awesome" },
+  { "type": "file", "name": "assets", "label": "Image and PDF assets" },
+  { "type": "file", "name": "external-tools", "label": "External tools" }
+]

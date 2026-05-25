@@ -1,0 +1,261 @@
+---
+title: "プロパティとスタイル"
+description: "プロパティ代入，文字，色，折り返し，描画方式，スタイル関数を定義します．"
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# プロパティとスタイル
+
+プロパティは，object，page，document に付く名前付きの値です．文字サイズ，色，行間，折り返し，描画方式，アセットの拡大率，背景色などを指定します．
+
+## 代入構文
+
+```text
+PropertyAssignment ::= Expr "." Identifier "=" Expr Terminator
+```
+
+```ss
+let body = text("本文")
+body.text_size = "22"
+body.text_line_height = "30"
+body.text_color = "0,0,0"
+```
+
+左辺はプロパティを持つ値です．よく使う対象は `object`，`page`，`document` です．右辺は値を作る式です．右辺には `string`，`number`，`bool`，`style` を使えます．内部の文書グラフでは，描画器が読める文字列へ変換して保持します．
+
+## 文字プロパティ
+
+本文，見出し，ページ番号，フッターでは文字プロパティを使います．
+
+| プロパティ | 用途 |
+| --- | --- |
+| `font_family` | フォント名 |
+| `text_size` | 文字サイズ |
+| `text_line_height` | 行送り |
+| `text_color` | 文字色 |
+| `text_margin_top` | 上余白 |
+| `text_margin_left` | 左余白 |
+| `text_margin_right` | 右余白 |
+| `wrap` | 折り返し |
+
+テーマ関数は，これらの値をまとめて設定します．ページ内で直接上書きすることもできます．
+
+```ss
+let title = head("題名")
+title.text_size = "32"
+title.text_color = "0.1,0.1,0.1"
+```
+
+## 色
+
+色は文字列で書きます．現在の標準ライブラリでは，`"r,g,b"` の形をよく使います．各成分は `0` から `1` の値です．
+
+```ss
+body.text_color = "0,0,0"
+page_bg("1,1,1")
+```
+
+テーマで名前付きの色を使う場合も，最終的には描画器が解釈できる値に下げられます．
+
+## 折り返しと幅
+
+長い本文やコードでは，幅と折り返しを指定します．
+
+```ss
+let body = text("長い本文")
+flow(body, "102", "102")
+body.wrap = "on"
+```
+
+`flow` は水平方向の内側余白と折り返しを設定する補助関数です．幅を固定したい場合は `fix_w` を使います．
+
+```ss
+let note = text("補足")
+fix_w(note, 360)
+```
+
+## 枠と背景
+
+枠や背景は，`panel`，`border`，`box`，`surround` などの関数で設定します．
+
+```ss
+let body = text("補足")
+border(body, 18, 12, "0.36,0.40,0.48", 1, 8)
+```
+
+`border` は対象 object に枠線のプロパティと内側余白を設定します．`surround` は別のパネル object を対象 object の周囲へ配置します．
+
+## プロパティ値の変換
+
+プロパティ代入では，右辺の値が次のように扱われます．
+
+| 右辺の型 | 例 | 内部で保持される値 |
+| --- | --- | --- |
+| `string` | `"22"` | その文字列 |
+| `number` | `22` | 数値を文字列化した値 |
+| `bool` | `true` | `"true"` または `"false"` |
+| `style` | `style("hero")` | スタイル名 |
+
+```ss
+let body = text("本文")
+body.text_size = 22
+body.wrap = "on"
+body.debug = true
+body.variant = style("hero")
+```
+
+値ドメインが定義されているプロパティでは，文字列の内容も検査されます．`wrap` は `"on"` または `"off"`，`fit` は `"warn"`，`"error"`，`"ignore"` など，プロパティごとの規約があります．
+
+## 描画方式
+
+一部の object は，描画方式を表すプロパティを持ちます．
+
+| 値 | 用途 |
+| --- | --- |
+| `vector_math` | LaTeX 数式をベクターとして描画 |
+| `raster_asset` | 画像アセットを描画 |
+| `vector_asset` | PDF などのベクターアセットを描画 |
+
+通常は `tex`，`image`，`pdf` のようなコンポーネント関数が設定します．直接設定する場合は，必要なアセットや外部コマンドがそろっているかを見ます．
+
+## スタイル
+
+スタイルは，複数のプロパティをまとめる値です．
+
+```ss
+let p = panel(style("custom"))
+box(p, "0.98,0.98,1", "0.72,0.76,0.86", "1", "8")
+```
+
+テーマは，見出し，本文，コード，表紙，目次などの関数を通じてスタイルを適用します．同じ見た目を複数箇所で使う場合は，ページごとに直接プロパティを代入するより，関数やテーマにまとめます．
+
+## 文書とページのプロパティ
+
+文書全体やページ全体にもプロパティがあります．
+
+```ss
+document
+doc_bg("1,1,1")
+end
+
+page section
+page_bg("0.98,0.98,1")
+end
+```
+
+文書プロパティは全ページに関係する設定です．ページプロパティは現在のページにだけ作用します．
+
+## 更新の見方
+
+プロパティ代入は，対象のプロパティ表を更新する文です．
+
+```text
+before:
+  body.props = {}
+
+statement:
+  body.text_size = 22
+
+after:
+  body.props["text_size"] = "22"
+```
+
+実装では，プロパティ名の一部は描画器で解釈され，一部は標準ライブラリの生成処理で解釈されます．未使用のプロパティは描画結果に影響しません．
+
+## 通し例
+
+次の例は，本文，コード，パネルにプロパティを設定します．
+
+```ss
+import std:themes/default
+
+page styled
+let title = head("プロパティ")
+let body = text("本文の文字サイズと行送りを指定します．")
+body.text_size = "22"
+body.text_line_height = "30"
+body.text_color = "0.1,0.1,0.1"
+flow(body, "102", "102")
+
+let sample = code("""
+fn main() {
+  return 0
+}
+""", "zig")
+sample.text_size = "15"
+below(body, title, 32)
+below(sample, body, 28)
+end
+```
+
+この例では，`body` と `sample` が別々の object として扱われます．それぞれに異なる文字サイズや行送りを設定できます．
+
+## 実行例
+
+次の例は，プロパティ代入が描画結果に反映されることを確認するためのファイルです．本文では文字サイズ，行送り，色，折り返しを設定し，コード object では文字サイズ，行送り，枠線を設定します．
+
+<SsExample
+  id="authoring-properties"
+  title="プロパティ代入の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-properties.ss
+ss dump site/samples/authoring-properties.ss .ss-cache/authoring-properties.json
+ss render site/samples/authoring-properties.ss .ss-cache/authoring-properties.pdf
+```
+
+`dump` の JSON では，`body` の `text_size`，`text_line_height`，`text_color` と，`sample` の枠線に関係するプロパティを見ます．PDF では，本文とコードの文字サイズが異なり，コード object に枠線と余白が付いているかを見ます．
+
+## プロパティの適用順序
+
+テーマ関数は，object を作る時点で既定のプロパティを設定します．ページ内の代入は，その後に値を上書きします．
+
+```text
+theme function creates object
+theme function sets default props
+page statement assigns props
+renderer reads final props
+```
+
+ページ内で設定した値が PDF に出ない場合は，プロパティ名，値の形式，対象 object，描画方式を見ます．
+
+## 変更を関数へまとめる例
+
+複数ページで同じ設定を使う場合は，関数へまとめます．
+
+```ss
+fn small_caption(text_value: string) -> object
+  let cap = figure(text_value)
+  cap.text_size = "14"
+  cap.text_line_height = "18"
+  cap.text_color = "0.35,0.35,0.35"
+  return cap
+end
+```
+
+関数にすると，見た目の規約が一箇所に集まります．ページ側には，コンポーネントを置く位置関係だけが残ります．
+
+## 確認する順序
+
+プロパティが反映されない場合は，次の順序で確認します．
+
+| 順序 | 確認内容 |
+| --- | --- |
+| 1 | 対象 object を `let` で束縛しているか |
+| 2 | プロパティ名の綴りが描画器の規約に合っているか |
+| 3 | 値の形式が文字列，数値，色の規約に合っているか |
+| 4 | 後続の関数が同じプロパティを上書きしていないか |
+| 5 | `ss render` で実際の PDF を確認しているか |
+
+## 診断
+
+型が合わない値，存在しない対象，描画器が解釈できないアセット値は診断の対象です．プロパティ名の綴り間違いは，そのプロパティが描画器で使われない場合，見た目に反映されない形で表れます．再利用するプロパティ設定は関数化し，局所的な綴り間違いを減らします．

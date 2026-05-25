@@ -1,0 +1,50 @@
+---
+title: "Footer"
+description: "Signature, value, placement, properties, and diagnostics for Footer."
+---
+
+# Footer
+
+## Definition
+
+```text
+footers : string -> void
+```
+
+Generates a footer object on each page in the document.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+document
+footers("seminar handout")
+end
+```
+
+## Value
+
+`footers` returns `void`. It stores the footer text on the document and generates a `footer` role object for each page that does not already have one.
+
+## Static conditions
+
+The function name must come from an imported module. The argument must be a string. Call `footers` from a `document` block because it reads the page list.
+
+## Placement
+
+Generated footer objects are placed near the bottom-left of each page by the standard library. To customize placement, define a footer generator or update objects selected by the `footer` role.
+
+```ss
+document
+footers("seminar handout")
+end
+
+page body
+head("Body")
+end
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

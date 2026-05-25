@@ -1,0 +1,86 @@
+---
+title: "はみ出しの扱い"
+description: "`fit_warn`，`fit_error`，`fit_ignore`，はみ出し方針，描画診断を説明します．"
+---
+
+# はみ出しの扱い
+
+はみ出し関数は，object の `fit` プロパティを設定します．
+
+```ss
+fit_warn(body)
+fit_error(code_block)
+fit_ignore(marker)
+```
+
+これらは `std:core/render` に定義されており，対象 object を返します．
+
+## 方針
+
+| 関数 | 保存される方針 | 結果 |
+| --- | --- | --- |
+| `fit_warn(obj)` | `warn` | はみ出しを報告し，描画を続ける |
+| `fit_error(obj)` | `error` | はみ出しを描画エラーとして扱う |
+| `fit_ignore(obj)` | `ignore` | 対象 object のはみ出し診断を抑制する |
+
+関数は同じ object を返すため，束縛や後続の呼び出しに使えます．
+
+```ss
+let body = fit_warn(text("本文"))
+```
+
+## 例
+
+```ss
+import std:themes/default
+
+page overflow
+  let title = head("はみ出し")
+  let code_block = code <<
+line one
+line two
+line three
+line four
+>>
+
+  below(code_block, title, 32)
+  same_l(code_block, title, 0)
+  fix_h(code_block, 42)
+  fit_error(code_block)
+end
+```
+
+固定した高さがコード内容より小さいため，描画時にはみ出しがエラーとして報告されます．
+
+## 使い分け
+
+`fit_warn` は，作業中に少し狭い frame でも PDF を出したい object に使います．
+
+`fit_error` は，生成デッキや公開前検査で，切れた内容を失敗として扱いたい object に使います．
+
+`fit_ignore` は，意図的に切り抜く装飾 object に使います．
+
+## 配置と描画
+
+はみ出しは，text，code，math，asset の内容を解決済み frame と比較した後に分かります．そのため，多くは `render` で表面化します．
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/fit.pdf
+```
+
+`check` は引数型の誤りを検出します．`render` は最終的な frame に内容が収まるかを確認します．
+
+## 調べる値
+
+object がはみ出す場合は，次の値を分けて見ます．
+
+| 値 | 確認箇所 |
+| --- | --- |
+| 幅 | `left`，`right`，`fix_w`，`flow`，`inset_x` |
+| 高さ | `fix_h`，`top`，`bottom`，内容の長さ |
+| 折り返し | `wrap`，`layout_x`，`layout_right_inset` |
+| 文字寸法 | テーマの文字サイズと行送り |
+| padding | text や code の枠余白 |
+
+`dump` で frame とプロパティを見ます．

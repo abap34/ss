@@ -1,0 +1,94 @@
+---
+title: "check"
+description: "`check` は PDF を書き出さずに，構文，読み込み，型，展開，配置診断を実行します．"
+---
+
+# check
+
+`check` は `.ss` ソースを検査し，診断を表示します．PDF は書き出しません．描画時だけに必要な変換コマンドも実行しません．
+
+```sh
+ss check slide.ss
+ss check --project .
+```
+
+## 実行される処理
+
+`check` は `render` と同じ前半の処理を使います．
+
+```text
+ソース読み込み
+構文解析
+import 読み込み
+初期 IR 構築
+関数とページの型検査
+文書グラフの展開
+中核 IR への正規化
+配置解決
+診断表示
+```
+
+構文エラー，不明な import，不明な関数，引数個数の不一致，型の不一致，プロパティの誤り，不正な制約，配置制約の衝突を検出します．
+
+## 入力指定
+
+入力ファイルを直接指定できます．
+
+```sh
+ss check slides/intro.ss
+```
+
+プロジェクト指定では `ss.toml` を読みます．
+
+```sh
+ss check --project .
+ss check --project slides/ss.toml
+```
+
+入力ファイルも `--project` も省略した場合は，現在のディレクトリから親へ向かって `ss.toml` を探します．
+
+## アセット基準
+
+`check` は描画なしで確認できる範囲で `asset_base_dir` を使います．相対アセットはアセット基準から解決します．
+
+```sh
+ss check --asset-base-dir assets slide.ss
+```
+
+外部コマンド不足，LaTeX のコンパイル失敗，PDF 正規化失敗などは `render` で確認します．
+
+## 終了状態
+
+エラー診断がない場合は成功で終了します．構文解析，読み込み，型検査，展開，配置で失敗した場合は失敗で終了します．
+
+警告は診断出力に表示されます．スクリプトでは，非ゼロ終了を失敗として扱うのが基本です．
+
+## 実行例
+
+一つのファイルを検査します．
+
+```sh
+ss check demo/seminar-05-12.ss
+```
+
+任意の場所からプロジェクトを検査します．
+
+```sh
+ss check --project /path/to/slides
+```
+
+開発中のバイナリで検査します．
+
+```sh
+zig build run -- check demo/seminar-05-12.ss
+```
+
+標準ライブラリをまとめて検査します．
+
+```sh
+for f in stdlib/core/*.ss stdlib/themes/*.ss; do
+  zig-out/bin/ss check "$f"
+done
+```
+
+グラフや診断を JSON で見たい場合は [dump](./dump) を使います．PDF，アセット，数式，Font Awesome，外部描画コマンドを含めて確認する場合は [render](./render) を使います．

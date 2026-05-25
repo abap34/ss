@@ -1,0 +1,86 @@
+---
+title: "dump"
+description: "`dump` writes the checked document graph, declarations, calls, diagnostics, and editor metadata as JSON."
+---
+
+# dump
+
+`dump` writes JSON after the same checking and layout pipeline used by `check`.
+
+```sh
+ss dump slide.ss .ss-cache/deck.json
+ss dump --project . --output .ss-cache/deck.json
+```
+
+Without an output path, JSON is written to standard output.
+
+```sh
+ss dump slide.ss
+```
+
+## Output Path
+
+The second positional argument is the output JSON file.
+
+```sh
+ss dump slide.ss out.json
+```
+
+Project mode uses `--output`.
+
+```sh
+ss dump --project . --output .ss-cache/out.json
+```
+
+The output parent directory must already exist. Generated inspection files should usually be placed under `.ss-cache`.
+
+## Contents
+
+The dump contains compiler and document data.
+
+| Field group | Use |
+| --- | --- |
+| Modules and declarations | Imports, functions, object classes, roles, value domains |
+| Functions and calls | Function signatures, metadata, call sites |
+| Nodes | Document, page, and object graph |
+| Constraints | Anchor relations after elaboration |
+| Properties | Render and layout values stored on nodes |
+| Metadata | Page titles, generated marks, page relations |
+| Diagnostics | Errors and warnings attached during analysis or layout |
+| Editor data | Definitions, variables, inlay hints, and node rectangles |
+
+The exact JSON shape can change while the language is still evolving. Treat it as a compiler inspection format unless a tool pins a specific version.
+
+## Layout Inspection
+
+Layout failures are easier to debug from JSON when the PDF is crowded.
+
+```sh
+ss dump slide.ss .ss-cache/layout.json
+```
+
+Inspect `nodes[*].frame` for solved rectangles and `constraints` for the anchor relations that produced them.
+
+## Generated Content
+
+Whole-document functions such as `pagenos`, `footers`, `logos`, `watermark`, and `toc` create objects after page bodies are evaluated. `dump` shows those objects in the graph.
+
+```ss
+document
+  pagenos()
+  footers("internal draft")
+end
+```
+
+After dumping, search for objects with roles such as `pageno` or `footer`.
+
+## Diagnostics
+
+`dump` runs the same checks as `check`. If the source fails before a graph can be written, no output file is produced.
+
+```sh
+ss check slide.ss
+ss dump slide.ss .ss-cache/after-check.json
+```
+
+Use [`render`](./render) after `dump` when the graph looks right but the PDF output is wrong.

@@ -1,0 +1,48 @@
+[
+  "index",
+  {
+    "type": "dir-section-header",
+    "name": "guide",
+    "label": "Getting started"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "authoring",
+    "label": "Language reference"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "components",
+    "label": "Components"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "layout",
+    "label": "Layout"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "themes",
+    "label": "Themes"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "cli",
+    "label": "Command line"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "rendering",
+    "label": "Rendering"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "editor",
+    "label": "Editor support"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "dev",
+    "label": "Implementation"
+  }
+]

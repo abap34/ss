@@ -1,0 +1,51 @@
+---
+title: "Markdown"
+description: "Signature, value, placement, properties, and diagnostics for Markdown."
+---
+
+# Markdown
+
+## Definition
+
+```text
+text : markdown string -> object
+```
+
+Treats a body object's content as Markdown.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let body = text <<
+**Strong** and `code` and [link](https://example.com)
+>>
+end
+```
+
+## Value
+
+Markdown text is stored in a body object and parsed by the renderer. The returned object can be placed and styled like other text objects.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let body = text <<
+- first
+- second
+>>
+below(body, title, 32)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

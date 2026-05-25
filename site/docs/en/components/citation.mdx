@@ -1,0 +1,46 @@
+---
+title: "Citation"
+description: "Signature, value, placement, properties, and diagnostics for Citation."
+---
+
+# Citation
+
+## Definition
+
+```text
+citation : object × number × string -> object
+```
+
+Rewrites in-text citation numbers as links and places reference text.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+citation(body, 1, "Reference text")
+end
+```
+
+## Value
+
+`citation` rewrites the marker in the target object and returns a new reference object. The target remains the body object, and the returned object is placed separately.
+
+## Static conditions
+
+The function name must come from an imported module. The target must be an object, the citation number must be numeric, and the reference text must be a string.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let body = text("This follows [1].")
+let ref = citation(body, 1, "A. Author, Title, 2026.")
+below(ref, body, 18)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

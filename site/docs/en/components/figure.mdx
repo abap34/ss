@@ -1,0 +1,47 @@
+---
+title: "Figure"
+description: "Signature, value, placement, properties, and diagnostics for Figure."
+---
+
+# Figure
+
+## Definition
+
+```text
+figure : string -> object
+```
+
+Creates a figure object for captions or placeholders.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let fig = figure("Figure 1: Pipeline")
+end
+```
+
+## Value
+
+`figure` adds a figure-role text object to the current page and returns it. It is commonly placed under an image, chart, or PDF asset.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let caption = figure("Figure 1. Result summary")
+below(caption, title, 32)
+same_l(caption, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

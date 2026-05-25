@@ -1,0 +1,47 @@
+---
+title: "Image"
+description: "Signature, value, placement, properties, and diagnostics for Image."
+---
+
+# Image
+
+## Definition
+
+```text
+image : string × number? -> object
+```
+
+Places an image asset as a raster asset object.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let plot = image("assets/plot.png", 0.7)
+end
+```
+
+## Value
+
+`image` adds an image object to the current page and returns it. The object has the `image` role, raster-asset rendering, and an `asset_scale` derived from the second argument.
+
+## Static conditions
+
+The function name must come from an imported module. The path argument must be a string and the scale argument must be a number. The path is resolved from `asset_base_dir`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let plot = image("assets/plot.png", 0.7)
+below(plot, title, 32)
+same_l(plot, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

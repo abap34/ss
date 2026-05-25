@@ -1,0 +1,121 @@
+---
+title: "Pages and documents"
+description: "Document blocks, page blocks, page order, contexts, and diagnostics."
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# Pages and documents
+
+An `ss` input contains whole-document definitions and a sequence of pages. The document maps to one PDF file. Each `page` block maps to one PDF page.
+
+## Basic structure
+
+```text
+DocumentSource ::= Import* Definition* DocumentDecl? PageDecl*
+DocumentDecl   ::= "document" Newline Statement* "end"
+PageDecl       ::= "page" PageName Newline Statement* "end"
+```
+
+The `document` block contains work that depends on the whole deck. A `page` block contains objects, properties, and constraints for one slide.
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+end
+
+page intro
+let title = head("Intro")
+end
+```
+
+## Page order
+
+Page order is the source order of `page` blocks. Page numbering, table-of-contents generation, diagnostics, and document-wide generation use this order.
+
+```text
+pages(document) = [page1, page2, ..., pageN]
+page_index(pageK) = K
+page_count(document) = N
+```
+
+Move a page by moving its `page` block. Page names are identifiers used in diagnostics, links, dumps, and editor data.
+
+## Document context
+
+`docctx()` returns the current document. Document functions can read the page list and document properties.
+
+```ss
+document
+doc_bg("1,1,1")
+pagenos("{page} / {total}")
+footers("internal note")
+end
+```
+
+Document-block code commonly registers generated objects such as page numbers, footers, logos, watermarks, and tables of contents. See [Whole-document generation](./generation).
+
+## Page context
+
+`pagectx()` returns the current page. Component constructors such as `head`, `text`, `image`, and `code` use the current page when they add an object.
+
+```ss
+page method
+let title = head("Method")
+let body = text("Two passes are used.")
+below(body, title, 32)
+end
+```
+
+Page-block code can use page-local layout constraints. A constraint cannot target an object from another page.
+
+## Statements in each block
+
+| Block | Common statements |
+| --- | --- |
+| `document` | document properties, page numbers, footers, logos, title checks, table-of-contents generation |
+| `page` | component calls, `let` bindings, property assignments, constraints, page-local helper calls |
+| function body | `let`, `return`, `if`, calls, property assignments, constraints when a current page exists |
+
+The checker rejects page-only calls in a context that has no current page.
+
+## Page references
+
+Selectors return page and object selections.
+
+```ss
+let all_pages = pages(docctx())
+let titles = objs(pagectx(), "title")
+let previous = prev_page()
+```
+
+`pages(docctx())` returns `selection<page>`. `objs(pagectx(), "title")` returns `selection<object>`.
+
+## Diagnostics
+
+| Cause | Command |
+| --- | --- |
+| Syntax error in a block | `ss check` |
+| Unknown function or object name | `ss check` |
+| Page-only call outside a page block | `ss check` |
+| Missing title when `need_titles()` is used | `ss check` |
+| Layout conflict on a page | `ss render` |
+
+## Example
+
+The sample has one document block and three pages. The document block registers page numbers, a footer, and title checks. The last page reads the total page count with `page_count(docctx())`.
+
+<SsExample
+  id="authoring-pages"
+  title="Pages and documents example"
+/>
+
+```sh
+ss check site/samples/authoring-pages.ss
+ss dump site/samples/authoring-pages.ss .ss-cache/authoring-pages.json
+ss render site/samples/authoring-pages.ss .ss-cache/authoring-pages.pdf
+```
+
+In the dump output, inspect page order, generated page-number objects, footer objects, and page-local object lists.

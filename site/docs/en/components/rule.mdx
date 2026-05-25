@@ -1,0 +1,47 @@
+---
+title: "Rule"
+description: "Signature, value, placement, properties, and diagnostics for Rule."
+---
+
+# Rule
+
+## Definition
+
+```text
+rule : string -> object
+```
+
+Creates a rule object for horizontal lines and separators.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+let line = rule("page_header")
+end
+```
+
+## Value
+
+`rule` creates a rule object and returns it. The style name selects stroke and dash settings used by the standard library.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+let title = head("Example")
+let line = rule("section")
+below(line, title, 24)
+same_l(line, title, 0)
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

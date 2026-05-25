@@ -1,0 +1,10 @@
+[
+  { "type": "file", "name": "default", "label": "Default layout" },
+  { "type": "file", "name": "flow", "label": "Vertical flow" },
+  { "type": "file", "name": "pinning", "label": "Pinning" },
+  { "type": "file", "name": "alignment", "label": "Edge alignment" },
+  { "type": "file", "name": "below", "label": "Below constraints" },
+  { "type": "file", "name": "columns", "label": "Two columns" },
+  { "type": "file", "name": "groups", "label": "Grouping" },
+  { "type": "file", "name": "fit", "label": "Overflow handling" }
+]

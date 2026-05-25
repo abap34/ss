@@ -1,0 +1,96 @@
+---
+title: "check"
+description: "`check` runs parsing, import loading, type checking, elaboration, and layout diagnostics without writing a PDF."
+---
+
+# check
+
+`check` validates a slide source and reports diagnostics. It does not write a PDF and does not run render-only conversions.
+
+```sh
+ss check slide.ss
+ss check --project .
+```
+
+## What It Runs
+
+`check` uses the same front half of the pipeline as `render`.
+
+```text
+read source
+parse
+load imports
+build initial IR
+type-check functions and pages
+elaborate document graph
+normalize to core IR
+solve layout
+print diagnostics
+```
+
+The command can catch syntax errors, unknown imports, unknown functions, invalid argument counts, type mismatches, property errors, invalid constraints, and layout conflicts.
+
+## Input Selection
+
+The input can be passed directly.
+
+```sh
+ss check slides/intro.ss
+```
+
+Project mode reads `ss.toml`.
+
+```sh
+ss check --project .
+ss check --project slides/ss.toml
+```
+
+When the input file is omitted and `--project` is not passed, the CLI searches upward from the current directory for `ss.toml`.
+
+## Asset Base
+
+`check` uses `asset_base_dir` for checks that can be done without drawing. Relative assets are resolved from the asset base.
+
+```sh
+ss check --asset-base-dir assets slide.ss
+```
+
+Render-only failures still need `render`. Examples include a missing conversion command, LaTeX compile failure, and PDF normalization failure.
+
+## Exit Status
+
+`check` exits with success when no error diagnostics are reported. It exits with failure when parsing, loading, typing, elaboration, or layout fails.
+
+Warnings are printed with the diagnostics output. The exact failure code is less stable than the diagnostic text, so scripts should treat any non-zero status as failure.
+
+## Examples
+
+Validate one file:
+
+```sh
+ss check demo/seminar-05-12.ss
+```
+
+Validate a project from any directory:
+
+```sh
+ss check --project /path/to/slides
+```
+
+Use a local build during development:
+
+```sh
+zig build run -- check demo/seminar-05-12.ss
+```
+
+Run through standard library files:
+
+```sh
+for f in stdlib/core/*.ss stdlib/themes/*.ss; do
+  zig-out/bin/ss check "$f"
+done
+```
+
+## Related Commands
+
+Use [`dump`](./dump) when the graph or diagnostics should be inspected as JSON. Use [`render`](./render) when PDF output, assets, math, Font Awesome, or external render tools must be tested.

@@ -1,0 +1,78 @@
+---
+title: "Syntax"
+description: "Top-level items, statements, expressions, strings, and comments."
+---
+
+# Syntax
+
+An `.ss` file contains imports, definitions, an optional document block, and page blocks. Page blocks place components, set properties, and write constraints. The document block holds operations that depend on the whole deck.
+
+## Lexical forms
+
+Identifiers are names made from identifier start and continuation characters. A digit cannot start an identifier. Keywords are reserved in the syntactic positions where they are recognized.
+
+```text
+Identifier ::= IdentifierStart IdentifierContinue*
+```
+
+Strings can be ordinary strings, triple-quoted strings, or chevron block strings.
+
+```ss
+"single line"
+"""
+multi
+line
+"""
+text <<
+block
+text
+>>
+```
+
+Ordinary strings support `\\`, `\"`, `\n`, `\r`, and `\t`. Write LaTeX commands with escaped backslashes, for example `"\\sum"`.
+
+Line comments start with `#`, `//`, or `;;`.
+
+## Top level
+
+```text
+Program       ::= TopLevelItem*
+TopLevelItem  ::= Import | TypeDecl | ObjectDecl | ExtendDecl | ConstDecl | FunctionDecl | DocumentDecl | PageDecl
+Import        ::= "import" ImportSpec Terminator
+ConstDecl     ::= "const" Identifier ":" Type "=" Expr Terminator
+DocumentDecl  ::= "document" Newline Statement* "end"
+PageDecl      ::= "page" PageName Newline Statement* "end"
+```
+
+## Statements
+
+```text
+Statement          ::= LetBinding | Return | If | Constraint | PropertyAssignment | CallStatement
+LetBinding         ::= "let" Identifier "=" Expr Terminator
+Return             ::= "return" Expr? Terminator
+If                 ::= "if" Expr Newline Statement* ("else" Newline Statement*)? "end"
+Constraint         ::= "~" ConstraintTarget "==" ConstraintSource Offset? Terminator
+PropertyAssignment ::= Expr "." Identifier "=" Expr Terminator
+CallStatement      ::= Identifier CallTail Terminator
+```
+
+## Expressions
+
+```text
+Expr        ::= ConcatExpr
+ConcatExpr  ::= AddSubExpr ("++" AddSubExpr)*
+AddSubExpr  ::= MulDivExpr (("+" | "-") MulDivExpr)*
+MulDivExpr  ::= UnaryExpr (("*" | "/") UnaryExpr)*
+UnaryExpr   ::= "-" UnaryExpr | PostfixExpr
+PostfixExpr ::= PrimaryExpr Postfix*
+Postfix     ::= "(" ArgumentList? ")" | "." Identifier PropertySuffix?
+PrimaryExpr ::= Identifier | Number | String | Bool | Color | Lambda | "(" Expr ")"
+```
+
+The precedence order is postfix, unary, multiplication and division, addition and subtraction, then string concatenation.
+
+Operator notation is a short form for ordinary function calls. `a + b` calls the same function as `add(a, b)`, and `a ++ b` calls the same function as `concat(a, b)`. Precedence and associativity only decide how the arguments are grouped. The function signatures are listed in [Operators and built-ins](./operators-and-builtins).
+
+## Static conditions
+
+Identifiers must resolve to visible definitions. Function calls must match parameter counts and types. A return expression must match the declared return type.

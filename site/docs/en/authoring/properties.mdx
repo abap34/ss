@@ -1,0 +1,157 @@
+---
+title: "Properties and styles"
+description: "Property assignment, property value domains, style values, defaults, and inheritance."
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# Properties and styles
+
+Properties are named values attached to objects, pages, and documents. They set text size, color, line height, wrapping, render kind, asset scale, background color, chrome, and layout behavior.
+
+## Assignment syntax
+
+```text
+PropertyAssignment ::= Expr "." Identifier "=" Expr Terminator
+```
+
+```ss
+let body = text("Body")
+body.text_size = 22
+body.text_line_height = 30
+body.text_color = "0,0,0"
+```
+
+The left side must be a property target. Common targets are `object`, `page`, `document`, and `selection<object>`. The right side can be `string`, `number`, `bool`, or `style`, depending on the field declaration.
+
+## Text properties
+
+Text, headings, page numbers, footers, and table-of-contents entries read text properties.
+
+| Property | Meaning |
+| --- | --- |
+| `text_font` | Regular font |
+| `text_bold_font` | Bold font |
+| `text_italic_font` | Italic font |
+| `text_code_font` | Inline code font |
+| `text_size` | Font size |
+| `text_line_height` | Line height |
+| `text_color` | Text color |
+| `text_link_color` | Link color |
+| `wrap` | Wrapping mode |
+
+```ss
+let title = head("Title")
+title.text_size = 36
+title.text_line_height = 42
+title.text_color = "0,0,0"
+```
+
+## Layout properties
+
+Default placement reads layout properties when an object has no explicit constraints.
+
+| Property | Meaning |
+| --- | --- |
+| `layout_x` | Left inset for default flow |
+| `layout_right_inset` | Right inset for default flow |
+| `layout_font_size` | Measured font size for default flow |
+| `layout_line_height` | Measured line height for default flow |
+| `layout_spacing_after` | Gap after the object |
+| `fit` | Overflow policy |
+
+Explicit constraints can override the frame that default placement would create.
+
+## Chrome properties
+
+Panels, bordered text, rules, and grouped regions read chrome properties.
+
+| Property | Meaning |
+| --- | --- |
+| `chrome_fill` | Fill color |
+| `chrome_stroke` | Stroke color |
+| `chrome_line_width` | Stroke width |
+| `chrome_radius` | Corner radius |
+| `chrome_pad_x` | Horizontal padding |
+| `chrome_pad_y` | Vertical padding |
+
+```ss
+let item = text("Framed")
+border_p(item, 18, 12, "", "0.2,0.2,0.2", 1, 8)
+```
+
+## Asset properties
+
+Image and PDF objects use asset properties.
+
+| Property | Meaning |
+| --- | --- |
+| `asset_scale` | Scale factor |
+| `render_kind` | Renderer path |
+| `fit` | Overflow policy |
+
+```ss
+let plot = image("assets/plot.png", 0.8)
+plot.asset_scale = 0.75
+```
+
+## Styles
+
+`style("name")` creates a style value. Theme helpers can read that style and apply a group of properties.
+
+```ss
+let panel_obj = panel(style("custom"))
+box(panel_obj, "0.96,0.97,0.99", "0.35,0.38,0.43", "1", "8")
+```
+
+Styles are ordinary values in the language. They are checked by the property declarations that accept `style`.
+
+## Value domains
+
+Object fields in `stdlib/core/classes.ss` declare value domains. The checker uses these domains when a known property is assigned.
+
+| Domain | Accepted values |
+| --- | --- |
+| `Color` | Empty string or a parseable color string |
+| `ScalarLike` | `string` or `number` |
+| `FitPolicy` | `"warn"`, `"error"`, `"ignore"` |
+| `RenderKind` | `"text"`, `"code"`, `"vector_math"`, `"vector_asset"`, `"raster_asset"`, `"chrome"`, `"chrome_only"` |
+| `WrapMode` | `"on"`, `"off"` |
+| `LayoutPolicy` | `"top"`, `"top_flow"`, `"center"`, `"center_stack"` |
+
+## Selection assignment
+
+A `selection<object>` target updates each selected object.
+
+```ss
+let titles = objs_all("title")
+titles.text_color = "0.1,0.2,0.5"
+```
+
+This form is useful for document-wide theming and generated content.
+
+## Diagnostics
+
+| Cause | Typical diagnostic |
+| --- | --- |
+| Unknown field for the target class | `UnknownField` |
+| Field value outside its domain | `InvalidProperty` |
+| Function value assigned as a property | `InvalidProperty` |
+| Property target has the wrong type | `TypeMismatch` |
+
+## Example
+
+The sample sets text, layout, chrome, and style properties on separate objects.
+
+<SsExample
+  id="authoring-properties"
+  title="Properties and styles example"
+/>
+
+```sh
+ss check site/samples/authoring-properties.ss
+ss dump site/samples/authoring-properties.ss .ss-cache/authoring-properties.json
+ss render site/samples/authoring-properties.ss .ss-cache/authoring-properties.pdf
+```
+
+In the dump output, inspect `props` on each object and compare them with the rendered PDF.

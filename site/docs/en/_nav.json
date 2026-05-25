@@ -1,0 +1,22 @@
+[
+  {
+    "text": "Getting started",
+    "link": "/guide/getting-started",
+    "activeMatch": "^/guide/"
+  },
+  {
+    "text": "Language reference",
+    "link": "/authoring/syntax",
+    "activeMatch": "^/authoring/"
+  },
+  {
+    "text": "Components",
+    "link": "/components/cover",
+    "activeMatch": "^/components/"
+  },
+  {
+    "text": "Implementation",
+    "link": "/dev/pipeline",
+    "activeMatch": "^/dev/"
+  }
+]

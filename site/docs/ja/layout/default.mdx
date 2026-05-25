@@ -1,0 +1,94 @@
+---
+title: "既定の配置"
+description: "ページ配置方針，文書既定値，明示的な制約，fallback 配置を説明します．"
+---
+
+# 既定の配置
+
+すべての object のすべての端に明示的な制約を書く必要はありません．ページは，明示的な制約を適用した後も位置が足りない object に対して配置方針を使います．
+
+```ss
+vflow("top")
+```
+
+ページ方針はページに保存されます．文書方針は document に保存され，個別ページが上書きしない場合に使われます．
+
+## 方針
+
+現在の標準関数は，文字列の方針名をプロパティに書きます．
+
+```ss
+vflow("top")
+vflow("top_flow")
+vflow("center")
+vflow("center_stack")
+```
+
+`vflow_doc(policy, center_offset = 0)` は文書既定値を設定します．
+
+```ss
+document
+  vflow_doc("top_flow")
+end
+```
+
+`vflow(policy, center_offset = 0)` は現在ページを設定します．
+
+```ss
+page local
+  vflow("center_stack")
+  text("一つ目")
+  text("二つ目")
+end
+```
+
+## 明示的な制約
+
+明示的な制約と既定配置は，同じページ内配置グラフに入ります．既定配置に決めさせたくない関係だけを制約で固定します．
+
+```ss
+page mixed
+  vflow("top_flow")
+  let title = head("混在")
+  let body = text("本文")
+  let aside = note("補足")
+
+  below(body, title, 32)
+  same_l(body, title, 0)
+  pin_r(aside, 72)
+  same_t(aside, body, 0)
+end
+```
+
+方針は明示制約が足りない object に使われます．右端に固定した補足は，そのページ端との関係を保ちます．
+
+## object プロパティ
+
+配置補助関数は，後の fallback 配置が読むプロパティを設定することがあります．
+
+| プロパティ | 書く関数 |
+| --- | --- |
+| `layout_v` | `vflow`，`vflow_doc` |
+| `layout_v_center_offset` | `vflow`，`vflow_doc` |
+| `layout_x` | `flow` |
+| `layout_right_inset` | `flow` |
+| `wrap` | `flow` |
+
+テーマ関数は `flow` をよく呼びます．これにより，本文，コード，数式，画像，note が水平方向の範囲を持ちます．
+
+## 診断
+
+既定配置は通常のページで必要な制約の量を減らします．不可能な制約を隠すものではありません．
+
+| 問題 | コマンド |
+| --- | --- |
+| 不正な方針文字列 | 位置の結果として現れる |
+| 制約衝突 | `ss check`，`ss render`，または dump 診断 |
+| object のはみ出し | `ss render` と PDF |
+| 想定外の順序 | object の生成順と生成 object |
+
+`dump` で最終的な frame と方針プロパティを見ます．
+
+```sh
+ss dump slide.ss .ss-cache/default-layout.json
+```

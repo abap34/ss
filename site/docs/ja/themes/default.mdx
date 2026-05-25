@@ -1,0 +1,86 @@
+---
+title: "既定テーマ"
+description: "`std:themes/default` の関数，見た目の設定，配置への影響を説明します．"
+---
+
+# 既定テーマ
+
+`std:themes/default` は，雛形デッキで使う既定のプレゼンテーション関数を提供します．
+
+```ss
+import std:themes/default
+
+page title
+  cover("Slide title", "Subtitle", "Author")
+end
+
+page body
+  let title = head("Section")
+  let body = text("Body text")
+  ~ body.top = title.bottom + 32
+end
+```
+
+このテーマは `std:themes/base` を import します．`std:themes/base` は標準コンポーネントモジュールを import します．
+
+## 提供する関数
+
+| 関数 | 返すもの |
+| --- | --- |
+| `h1(text)` | 34 pt Helvetica のタイトル object |
+| `h2(text)` | 18 pt Helvetica のサブタイトル object |
+| `head(text)` | 罫線とセクションラベル付きのページ見出し |
+| `subhead(text)` | 配置済みのサブタイトル object |
+| `tex(source, scale = 1)` | 枠付きの vector math object |
+| `code(source, language = "python")` | 既定のコード枠を持つコード object |
+| `toc(title)` | 目次 object とページ番号 |
+| `cover(title, subtitle, author)` | 表紙用 object 群 |
+
+ページ側で後から制約を書くことがある関数は object を返します．`toc` や `cover` は，panel，label，byline などの補助 object も作ります．
+
+## 見た目の設定
+
+既定テーマは Helvetica，暗い本文色，青系のアクセント，淡い青のコード枠と数式枠を使います．
+
+| 領域 | 設定 |
+| --- | --- |
+| 見出し | 青い罫線と小さなラベル |
+| 本文 | 上書きがない場合は base コンポーネントの設定 |
+| コード | 淡い背景，灰色の枠，12 pt の余白 |
+| 数式 | `vector_math`，text parse なし，関数引数から `math_scale` |
+| 表紙 | 大きなタイトル，サブタイトル，著者をタイトル object に合わせて配置 |
+
+色は `"0.2745,0.5098,0.7059"` のような RGB 文字列として保存されます．
+
+## 配置への影響
+
+テーマ関数は余白，padding，文字サイズ，行送りを設定します．これらは配置後の object frame に影響します．
+
+```ss
+page precise
+  let title = head("Measured")
+  let code_block = code("print('hello')")
+
+  ~ code_block.top = title.bottom + 32
+  ~ code_block.left = title.left
+end
+```
+
+テーマを変えると，`title` や `code_block` の高さが変わり，それらのアンカーに依存する後続の制約も変わります．
+
+## テーマ切り替え
+
+`std:themes/default` を import しているページは，import を変えるだけで別テーマを試せます．
+
+```ss
+import std:themes/pop
+```
+
+切り替え後は，配置と描画の両方を確認します．
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/theme.pdf
+```
+
+二段組，長いコード，画像キャプション，表紙ページを確認対象にします．

@@ -1,0 +1,151 @@
+---
+title: "Constraints"
+description: "Anchor equations, helper functions, layout graph behavior, and diagnostics."
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# Constraints
+
+Constraints are equations over page and object anchors. `ss` lowers them into a page-local layout graph and solves object rectangles before rendering.
+
+## Constraint statement
+
+```text
+Constraint ::= "~" ConstraintTarget "==" ConstraintSource Offset? Terminator
+Offset     ::= ("+" | "-") Number
+```
+
+```ss
+~ body.top == title.bottom - 32
+~ body.left == title.left
+```
+
+The left side is the target anchor. The right side is the source anchor. The optional number is an offset.
+
+## Anchors
+
+Objects have frame anchors.
+
+| Anchor | Meaning |
+| --- | --- |
+| `left` | Left edge |
+| `right` | Right edge |
+| `top` | Top edge |
+| `bottom` | Bottom edge |
+| `center_x` | Horizontal center |
+| `center_y` | Vertical center |
+| `width` | Width |
+| `height` | Height |
+
+Pages also have anchors. Page anchors can be used as sources. Object anchors are used as sources and targets.
+
+```ss
+~ title.top == page.top - 72
+~ title.left == page.left + 72
+```
+
+## Equations
+
+A constraint has this shape after parsing.
+
+```text
+anchor(target, target_anchor) = anchor(source, source_anchor) + delta
+```
+
+The helper call below creates the same relation as the explicit constraint.
+
+```ss
+below(body, title, 32)
+```
+
+```text
+anchor(body, top) = anchor(title, bottom) - 32
+```
+
+## Helper functions
+
+The standard layout helpers create `constraints` values.
+
+| Helper | Relation |
+| --- | --- |
+| `same_l(target, source, delta)` | Align left edges |
+| `same_r(target, source, delta)` | Align right edges |
+| `same_t(target, source, delta)` | Align top edges |
+| `same_b(target, source, delta)` | Align bottom edges |
+| `below(target, source, gap)` | Place target below source |
+| `pin_l(target, inset)` | Pin left edge to page left |
+| `pin_r(target, inset)` | Pin right edge to page right |
+| `pin_t(target, inset)` | Pin top edge to page top |
+| `pin_b(target, inset)` | Pin bottom edge to page bottom |
+| `fix_w(target, width)` | Fix width |
+| `fix_h(target, height)` | Fix height |
+
+```ss
+let title = head("Layout")
+let body = text("Body")
+below(body, title, 32)
+same_l(body, title, 0)
+```
+
+## Constraint values
+
+Helpers return `constraints`. A constraints value evaluated as a statement is added to the current page.
+
+```ss
+fn title_body(body: object, title: object) -> constraints
+  return constraints(
+    below(body, title, 32),
+    same_l(body, title, 0)
+  )
+end
+
+page example
+let title = head("Title")
+let body = text("Body")
+title_body(body, title)
+end
+```
+
+## Default placement
+
+Objects do not need explicit constraints for every edge. Unconstrained objects use the page layout policy and object layout properties. Explicit constraints are useful for relations that must hold across theme changes or content changes.
+
+## Groups
+
+`group(a, b, ...)` creates an object whose frame is the bounding box of its members. Constraints can target the group object.
+
+```ss
+let a = text("A")
+let b = text("B")
+below(b, a, 18)
+let g = group(a, b)
+pin_l(g, 72)
+```
+
+## Diagnostics
+
+| Diagnostic | Meaning |
+| --- | --- |
+| `ConstraintConflict` | Equations on the same axis contradict each other |
+| `NegativeConstraintSize` | Edges imply a negative width or height |
+| `unresolved_frame` | Position or size remains unknown |
+| `page_overflow` | Object frame leaves the page |
+| `content_overflow` | Content needs more space than its frame |
+
+## Example
+
+The sample places a heading, body, code block, and note with explicit helper functions.
+
+<SsExample
+  id="authoring-constraints"
+  title="Constraints example"
+/>
+
+```sh
+ss check site/samples/authoring-constraints.ss
+ss dump site/samples/authoring-constraints.ss .ss-cache/authoring-constraints.json
+ss render site/samples/authoring-constraints.ss .ss-cache/authoring-constraints.pdf
+```
+
+In the dump output, inspect each constraint target, source, offset, and resulting frame.

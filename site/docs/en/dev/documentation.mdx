@@ -1,0 +1,87 @@
+---
+title: "Documentation site"
+description: "Documentation inputs, sample rendering, Markdown output for language models, writing audit, and build checks."
+---
+
+# Documentation site
+
+The documentation site is under `site`. These notes are for maintainers of the public documentation.
+
+## Inputs
+
+| Path | Content |
+| --- | --- |
+| `site/docs` | MDX pages and navigation files |
+| `site/samples` | `.ss` samples rendered into PDFs and preview images |
+| `site/components` | React components used by MDX pages |
+| `site/scripts` | Sample generation, writing audit, and parity checks |
+| `site/docs/public` | Static assets served by the site |
+| `site/rspress.config.ts` | Rspress configuration |
+
+Pages are written in Japanese and English. Keep page sets aligned so navigation and generated output have the same structure.
+
+## Sample Rendering
+
+`npm run build` runs `npm run render:samples` first.
+
+```sh
+npm run render:samples
+```
+
+The script renders `.ss` samples with `ss render`, creates preview images, and writes JSON consumed by MDX components such as `SsExample`.
+
+Generated files are written under:
+
+```text
+site/docs/public/generated
+site/generated
+```
+
+They are documentation-site build artifacts, not source material.
+
+## Markdown Output for Language Models
+
+Rspress is configured with `llms: true`. After a build, Markdown output is written under `site/doc_build`.
+
+```text
+site/doc_build/llms.txt
+site/doc_build/llms-full.txt
+site/doc_build/ja/llms.txt
+site/doc_build/ja/llms-full.txt
+site/doc_build/**/*.md
+```
+
+These files are generated from the docs site. They are separate from slide PDFs produced by `ss render`.
+
+## Writing Audit
+
+The writing audit is `site/scripts/audit-writing.mjs`.
+
+```sh
+npm run audit:writing
+```
+
+It scans docs for banned patterns such as promotional filler, negative contrast templates, vague abstractions, English phrases that read like generated text, Japanese text in English pages, and stale terms such as old type names.
+
+The project writing rules are recorded in `site/docs/_writing-style.md`. Keep prose direct: define syntax, state behavior, show examples, and describe diagnostics.
+
+## Build
+
+```sh
+npm run build
+```
+
+The build runs sample rendering, MDX conversion, page generation, generated Markdown output, and language parity checks.
+
+Current builds can print a `DefinePlugin` warning about `import.meta.env.SSR` from the Rspress setup. Treat the build result and parity check as the gate.
+
+## Editing Workflow
+
+For a documentation change, run these checks from `site`.
+
+```sh
+npm run audit:writing
+npm run build
+```
+
+When a page includes a rendered sample, also inspect the generated preview image and PDF under the generated output directories. When navigation changes, check both `docs/ja` and `docs/en`.

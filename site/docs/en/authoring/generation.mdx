@@ -1,0 +1,178 @@
+---
+title: "Whole-document generation"
+description: "Page numbers, tables of contents, footers, logos, watermarks, and title checks."
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# Whole-document generation
+
+Whole-document generation covers operations that need the page list or existing page objects. Page numbers, tables of contents, footers, logos, watermarks, and title checks are registered in the `document` block.
+
+## Document block
+
+```ss
+document
+pagenos("{page} / {total}")
+footers("Seminar notes")
+logos("assets/logo.png", 0.5)
+watermark("draft")
+need_titles()
+end
+```
+
+The document block registers work that reads pages, existing objects, metadata, or document properties. Page-local content belongs in `page` blocks.
+
+## Page numbers
+
+`pagenos` adds a `pageno` role object to each page.
+
+```text
+pagenos : string? -> void
+```
+
+```ss
+pagenos("{page} / {total}")
+```
+
+`{page}` is replaced with the current page number. `{total}` is replaced with the page count.
+
+## Footers
+
+`footers` adds a `footer` role object to each page.
+
+```text
+footers : string -> void
+```
+
+```ss
+footers("Research meeting")
+```
+
+The footer text is the same on every page unless user code defines a different generator.
+
+## Logos
+
+`logos` adds a `logo` role image object to each page.
+
+```text
+logos : string × number? -> void
+```
+
+```ss
+logos("assets/logo.png", 0.35)
+```
+
+The path is resolved relative to the asset base directory. Missing assets are reported as diagnostics.
+
+## Watermarks
+
+`watermark` adds watermark text to each page.
+
+```text
+watermark : string -> void
+```
+
+```ss
+watermark("draft")
+```
+
+Watermark appearance is controlled by the `Watermark` object class defaults and theme properties.
+
+## Title checks
+
+`need_titles` checks that each page has a `title` role object.
+
+```text
+need_titles : void -> void
+```
+
+```ss
+document
+need_titles()
+end
+
+page intro
+head("Intro")
+end
+```
+
+A page without a title object produces a diagnostic.
+
+## Table of contents
+
+Table-of-contents helpers read pages and title-role objects.
+
+```ss
+document
+toc()
+end
+```
+
+A table of contents depends on page order and page titles. The title object normally comes from `head` or `cover`.
+
+## Reading selections
+
+Whole-document functions use selection helpers to read pages and objects.
+
+```ss
+let all_pages = pages(docctx())
+let all_titles = objs_all("title")
+```
+
+`pages(docctx())` returns `selection<page>`. `objs_all("title")` returns `selection<object>`.
+
+## Writing custom generators
+
+A generator can be a regular function called from `document`.
+
+```ss
+fn deck_footer(label: string) -> void
+  footers(label)
+  pagenos("{page} / {total}")
+end
+
+document
+deck_footer("internal")
+end
+```
+
+For page-specific generated objects, read the page selection and create objects on each page through standard library helpers.
+
+## Execution order
+
+Document statements can depend on page objects. The analyzer records those dependencies and schedules page bodies before document statements that read them.
+
+```text
+page body -> title objects
+document statement -> read title objects -> generate derived objects
+```
+
+This is the reason `need_titles` and tables of contents can see objects created inside page blocks.
+
+## Diagnostics
+
+| Cause | Typical diagnostic |
+| --- | --- |
+| Missing title object under `need_titles` | title check diagnostic |
+| Missing logo asset | asset diagnostic |
+| Unknown generator function | `UnknownFunction` |
+| Wrong generator argument type | `TypeMismatch` |
+| Generated object layout conflict | render diagnostic |
+
+## Example
+
+The sample registers page numbers, a footer, a logo, a watermark, and title checks. It also uses page titles for generated content.
+
+<SsExample
+  id="authoring-generation"
+  title="Whole-document generation example"
+/>
+
+```sh
+ss check site/samples/authoring-generation.ss
+ss dump site/samples/authoring-generation.ss .ss-cache/authoring-generation.json
+ss render site/samples/authoring-generation.ss .ss-cache/authoring-generation.pdf
+```
+
+In the dump output, inspect generated `pageno`, `footer`, `logo`, `watermark`, and `toc` role objects.

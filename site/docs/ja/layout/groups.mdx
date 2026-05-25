@@ -1,0 +1,87 @@
+---
+title: "group"
+description: "`group`，子 object の外接矩形，group の移動，配置診断を説明します．"
+---
+
+# group
+
+`group` は，子 object の外接矩形を frame とする object を作ります．
+
+```ss
+let pair = group(left, right)
+```
+
+複数の object の内部関係を決めた後，まとめて位置を決めたい場合に使います．
+
+## 基本例
+
+```ss
+import std:themes/default
+
+page grouped
+  let title = head("group")
+  let left = text("左")
+  let right = text("右")
+
+  fix_w(left, 320)
+  fix_w(right, 320)
+  cols2c(left, right, 40)
+
+  let pair = group(left, right)
+  below(pair, title, 32)
+  same_l(pair, title, 0)
+end
+```
+
+`cols2c` は子 object の関係を指定します．その後 `group` により，二つの object を持つまとまりへ制約を書けます．
+
+## 移動
+
+group に与えた制約で group の位置が変わる場合，配置ソルバは子 object を同じ差分だけ移動します．
+
+```ss
+let pair = group(left, right)
+pin_l(pair, 96)
+```
+
+子 object 同士の相対位置は保たれます．
+
+## 入れ子
+
+他の補助関数で配置した object も group にできます．子 object 間の関係を先に追加してから group を作ります．
+
+```ss
+cols2c(left, right, 30)
+let columns = group(left, right)
+
+below(caption, columns, 16)
+let figure_block = group(columns, caption)
+```
+
+二つ目の group は，図とキャプションをまとめて動かす単位になります．
+
+## 子 object への制約
+
+group 後も，子 object を直接参照できます．
+
+```ss
+same_l(caption, left, 0)
+below(caption, left, 24)
+```
+
+内部関係は子 object への制約で指定します．ページ上の他の object との関係は group への制約で指定します．
+
+## 診断
+
+| 問題 | 原因 |
+| --- | --- |
+| group frame が空または想定外 | 子 object の frame が決まっていない |
+| group 移動が想定と違う | 子 object に外部制約が追加されている |
+| group 内で重なる | 子 object 間の制約が不足している |
+| はみ出し | 子 object の内容が frame を超えている |
+
+JSON で group と子 object の両方を見ます．
+
+```sh
+ss dump slide.ss .ss-cache/groups.json
+```

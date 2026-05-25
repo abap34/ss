@@ -1,0 +1,243 @@
+---
+title: "文書全体を使った生成"
+description: "ページ番号，目次，フッター，ロゴ，透かし，検査を文書全体の処理として説明します．"
+---
+
+import { SsExample } from '../../../components/SsExample';
+
+# 文書全体を使った生成
+
+文書全体を使った生成は，ページ列が必要な処理です．ページ番号，目次，フッター，ロゴ，透かし，タイトル検査は，文書ブロックで指定します．これらはページ列，既存 object，文書プロパティを読むため，ページを一枚描く処理とは分けて扱います．
+
+## 文書ブロック
+
+```ss
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+logos("assets/logo.png", 0.5)
+watermark("draft")
+need_titles()
+end
+```
+
+文書ブロックは，ページを一枚描く場所ではありません．ページ列や文書プロパティを使う処理を登録する場所です．
+
+## ページ番号
+
+`pagenos` は各ページに `pageno` ロールの object を作り，ページ番号の文字列を設定します．
+
+```text
+pagenos : string? -> void
+```
+
+```ss
+pagenos("{page} / {total}")
+```
+
+`{page}` は現在ページ番号，`{total}` は総ページ数に置き換えられます．書式を省略した場合は標準の表示になります．
+
+## フッター
+
+`footers` は各ページに `footer` ロールの object を作ります．
+
+```text
+footers : string -> void
+```
+
+```ss
+footers("研究会資料")
+```
+
+生成されたフッターは，標準ライブラリの配置規則でページ下部に置かれます．特定ページだけ別のフッターが必要な場合は，そのページで明示的に `footer` ロールの object を置く方針を取ります．
+
+## ロゴ
+
+`logos` は各ページにロゴ画像を作ります．
+
+```text
+logos : string × number? -> void
+```
+
+```ss
+logos("assets/logo.png", 0.4)
+```
+
+第一引数はアセットパスです．第二引数は拡大率です．アセットパスは `asset_base_dir` から解決されます．
+
+## 透かし
+
+`watermark` は各ページに透かし文字列を作ります．
+
+```text
+watermark : string -> void
+```
+
+```ss
+watermark("draft")
+```
+
+透かしはページ中央に置かれます．色，サイズ，位置の詳細は標準ライブラリ側で定義されています．必要なら独自の生成関数を作ります．
+
+## 目次
+
+目次はページ列とタイトルロールの object から生成されます．
+
+```ss
+page toc_page
+let title = head("目次")
+let toc = toc_obj()
+below(toc, title, 32)
+end
+```
+
+`toc_obj` は，文書中のページを走査し，各ページの `title` ロールの object から行を作ります．ページ順序や見出しが変われば，生成結果も変わります．
+
+## タイトル検査
+
+`need_titles` は，各ページに `title` ロールの object があるかを調べます．
+
+```text
+need_titles : () -> void
+```
+
+```ss
+document
+need_titles()
+end
+```
+
+タイトルがないページは警告になります．目次を使う資料では，タイトル検査も入れておくと，目次に出ないページを見つけやすくなります．
+
+## 依存関係
+
+文書全体を使った生成は，ページ一覧や既存 object に依存します．
+
+```text
+pages(doc)          -> selection<page>
+objs(page, role)    -> selection<object>
+doc_objs(doc, role) -> selection<object>
+```
+
+ページ番号はページ数に依存します．目次はページ順序とタイトルに依存します．タイトル検査はページとタイトル選択に依存します．現行実装では，`src/analysis/dependencies.zig` が読み書きする資源を集計し，`src/elaboration/eval.zig` が文書文とページを依存関係に従って並べます．
+
+## 独自の生成関数
+
+文書全体で同じ処理を行う場合は，`document` から呼ぶ関数として定義できます．
+
+```ss
+fn add_section_footer(label: string) -> void
+  footers(label)
+end
+
+document
+add_section_footer("型システム入門")
+end
+```
+
+ページ列を直接走査する処理も標準ライブラリでは使われています．通常の資料では，既存の `pagenos`，`footers`，`logos`，`watermark`，`toc_obj` を使うところから始めます．
+
+## 生成の流れ
+
+文書生成は，文書状態とページ列を読む処理です．
+
+```text
+before:
+  pages = [p1, p2, ...]
+  objects(pi) = page-local objects
+
+generation:
+  pagenos("{page} / {total}")
+
+after:
+  each page has pageno object
+  each pageno content uses page_index and page_count
+```
+
+ページ番号の場合，`g` は各ページに `pageno` object を作り，`page_index` と `page_count` から文字列を設定します．
+
+## 通し例
+
+次の例は，ページ番号，フッター，目次，タイトル検査を含む資料です．
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+footers("研究会資料")
+need_titles()
+end
+
+page title
+cover("ss", "文書全体の生成", "2026")
+end
+
+page toc_page
+let title = head("目次")
+let list = toc_obj()
+below(list, title, 32)
+end
+
+page body
+let title = head("本文")
+let body = text("本文ページです．")
+below(body, title, 32)
+end
+```
+
+この資料では，三つのページが作られます．`pagenos` は各ページにページ番号を生成します．`footers` は各ページにフッターを生成します．`toc_obj` は各ページのタイトルから目次本文を作ります．
+
+## 実行例
+
+次の例は，文書ブロックからページ番号，フッター，タイトル検査を登録し，本文ページ側で目次を作る資料です．目次はページ列と `title` ロールの object を読みます．ページ番号とフッターは各ページに object を追加します．
+
+<SsExample
+  id="authoring-generation"
+  title="文書全体を使った生成の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-generation.ss
+ss dump site/samples/authoring-generation.ss .ss-cache/authoring-generation.json
+ss render site/samples/authoring-generation.ss .ss-cache/authoring-generation.pdf
+```
+
+`dump` の JSON では，各ページに `pageno` ロールと `footer` ロールの object が追加されているかを見ます．PDF では，目次ページに各ページのタイトルとページ番号が出ているか，すべてのページにページ番号とフッターが出ているかを見ます．
+
+## 依存する値
+
+文書全体の生成は，次の値に依存します．
+
+| 生成 | 依存する値 |
+| --- | --- |
+| ページ番号 | ページ順序，総ページ数 |
+| フッター | ページ一覧，指定文字列 |
+| ロゴ | ページ一覧，アセットパス，拡大率 |
+| 透かし | ページ一覧，指定文字列 |
+| 目次 | ページ順序，タイトルロールの object |
+| タイトル検査 | ページ一覧，タイトルロールの object |
+
+生成結果が期待と違う場合は，生成関数の引数，ページ順序，タイトルロール，アセットパスを見ます．
+
+## 更新されるもの
+
+ページ番号やフッターは，ページごとの object として追加されます．目次は，目次 object の `content` を更新します．タイトル検査は PDF の見た目を変えず，診断を出します．
+
+```text
+pagenos    -> add pageno object to each page
+footers    -> add footer object to each page
+toc_obj    -> set content from page titles
+need_titles -> report warning when title is missing
+```
+
+## 診断
+
+生成処理では，アセットが存在しない，タイトルがない，生成後に object がはみ出す，外部コマンドが失敗する，などが診断になります．`ss check` と `ss render` の両方を使って確認します．

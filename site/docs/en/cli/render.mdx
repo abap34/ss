@@ -1,0 +1,86 @@
+---
+title: "render"
+description: "`render` checks the source, solves layout, converts render inputs, and writes a PDF."
+---
+
+# render
+
+`render` writes a PDF.
+
+```sh
+ss render slide.ss deck.pdf
+ss render --project . --output deck.pdf
+```
+
+If the output path is omitted, the CLI writes a sibling PDF next to the entry file.
+
+```sh
+ss render slide.ss
+```
+
+## Pipeline
+
+`render` runs the same analysis as `check`, then calls the PDF backend.
+
+```text
+check pipeline
+resolve render properties
+convert math, icons, images, and PDF assets
+draw pages with Cairo and Pango
+normalize output PDF
+write output file
+```
+
+The output directory must exist before running the command.
+
+## Project Mode
+
+Project mode reads `ss.toml` for the entry file and asset base.
+
+```sh
+ss render --project slides --output .ss-cache/slides.pdf
+ss render --project slides/ss.toml --output .ss-cache/slides.pdf
+```
+
+The explicit input file still wins over `entry` when both are passed. `--asset-base-dir` overrides the project asset base.
+
+```sh
+ss render --project slides --asset-base-dir slides/assets slides/alternate.ss out.pdf
+```
+
+## Parallel Jobs
+
+`--jobs N` controls parallel render work. The renderer also reads `SS_RENDER_JOBS`.
+
+```sh
+ss render slide.ss out.pdf --jobs 4
+SS_RENDER_JOBS=4 ss render slide.ss out.pdf
+```
+
+Use a small value when debugging one failing conversion. Use a larger value when rendering a document with many independent assets or math objects.
+
+## Cache
+
+Rendered conversion artifacts are stored in `.ss-cache/render`.
+
+```sh
+ss cache stats
+ss cache clear
+```
+
+The final PDF path is chosen by the command. The cache directory is managed by `ss` and can be deleted when it is no longer useful.
+
+## Diagnostics
+
+`render` can report every diagnostic that `check` reports. It can also report failures that require drawing or conversion.
+
+| Failure | Usually found by |
+| --- | --- |
+| Syntax or type error | `check` and `render` |
+| Missing asset file | `check` or `render`, depending on component |
+| Missing `pdflatex`, `rsvg-convert`, `magick`, or `qpdf` | `render` and `doctor` |
+| LaTeX compile error | `render` |
+| PDF normalization error | `render` |
+| Text or object overflow | `render` and PDF inspection |
+
+Run [`doctor`](../rendering/external-tools) when a document works on one machine and fails on another.

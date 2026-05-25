@@ -1,0 +1,88 @@
+---
+title: "Pinning"
+description: "`pin_l`, `pin_r`, `pin_t`, `pin_b`, page-edge offsets, and fixed-size constraints."
+---
+
+# Pinning
+
+Pinning helpers constrain an object edge to a page edge.
+
+```ss
+pin_l(body, 72)
+pin_t(body, 120)
+```
+
+They are defined in `std:core/layout`.
+
+| Helper | Meaning |
+| --- | --- |
+| `pin_l(node, amount)` | Left edge is `amount` from the page left edge |
+| `pin_r(node, amount)` | Right edge is `amount` from the page right edge |
+| `pin_t(node, amount)` | Top edge is `amount` from the page top edge |
+| `pin_b(node, amount)` | Bottom edge is `amount` from the page bottom edge |
+
+## Basic Use
+
+```ss
+import std:themes/default
+
+page pinned
+  let title = head("Pinned")
+  let body = text("Body")
+
+  pin_l(body, 72)
+  pin_t(body, 160)
+end
+```
+
+Pinning two adjacent edges fixes a corner. It does not set width or height.
+
+## Width and Height
+
+Use `fix_w` or `fix_h` when the object needs a fixed size.
+
+```ss
+page fixed
+  let box = note("Fixed")
+
+  pin_l(box, 72)
+  pin_t(box, 120)
+  fix_w(box, 360)
+  fix_h(box, 120)
+end
+```
+
+Pinning both left and right sets width from the page size.
+
+```ss
+pin_l(body, 96)
+pin_r(body, 96)
+```
+
+Do not also add a contradictory `fix_w`.
+
+## Insets
+
+`inset_x(node, left, right)` combines `pin_l` and `pin_r`.
+
+```ss
+inset_x(body, 102, 102)
+```
+
+`inset(node, left, right)` performs the same horizontal inset and returns the object.
+
+## Diagnostics
+
+| Problem | Example |
+| --- | --- |
+| Same edge pinned twice | `pin_l(body, 72)` and `pin_l(body, 120)` |
+| Width contradiction | `pin_l`, `pin_r`, and incompatible `fix_w` |
+| Height contradiction | `pin_t`, `pin_b`, and incompatible `fix_h` |
+| Overflow | Content is larger than the pinned frame |
+
+Use `dump` to inspect frame values after solving.
+
+```sh
+ss dump slide.ss .ss-cache/pinning.json
+ss render slide.ss .ss-cache/pinning.pdf
+```

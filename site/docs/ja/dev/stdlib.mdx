@@ -1,0 +1,135 @@
+---
+title: "標準ライブラリの設計"
+description: "コンポーネント，テーマ，配置補助，生成関数を標準ライブラリ側で扱う方針です．"
+---
+
+# 標準ライブラリの設計
+
+標準ライブラリは，言語中核を小さく保つための主要な場所です．コンポーネント，テーマ，配置補助，生成関数，描画プロパティの多くは `stdlib/` に置きます．処理系のプリミティブを増やす前に，標準ライブラリ関数で表せるかを確認します．
+
+## ディレクトリ
+
+| ディレクトリ | 内容 |
+| --- | --- |
+| `stdlib/core` | 低水準コンポーネント，配置補助，生成関数，セレクタ |
+| `stdlib/themes` | 既定テーマと差し替えテーマ |
+| `site/docs/ja/components` | 利用者向けコンポーネント文書 |
+| `site/docs/ja/themes` | テーマ文書 |
+
+`stdlib/core` は，テーマに依存しないコンポーネントを持ちます．`stdlib/themes` は，既定の見た目やテーマ別の上書きを持ちます．通常の資料では `import std:themes/default` を使い，テーマが公開する関数を呼びます．
+
+## コンポーネント関数
+
+標準ライブラリの多くのコンポーネント関数は，ページ環境で object を追加し，その object を返します．
+
+```ss
+let title = head("題名")
+let body = text("本文")
+let plot = image("assets/plot.png", 0.8)
+```
+
+この性質は標準ライブラリ関数の実装上の慣習です．すべての関数が object を追加するわけではありません．`border` や `flow` は既存 object を受け取り，プロパティや制約を更新します．`pagenos` や `footers` は文書全体を使って生成します．
+
+## 関数の分類
+
+| 分類 | 例 | 返り値 | 主な効果 |
+| --- | --- | --- | --- |
+| コンポーネント | `text`，`head`，`image`，`pdf` | `object` | 現在ページへ object を追加 |
+| 装飾 | `border`，`panel`，`styled` | `object` | 既存 object のプロパティや overlay を追加 |
+| 配置補助 | `below`，`same_l`，`pin_l` | `constraints` | 配置制約を作る |
+| 文書生成 | `pagenos`，`footers`，`need_titles` | `void` | ページ列や object を読んで追加生成 |
+| 選択 | `pages`，`objs`，`page_marks` | `selection<T>` | 文書グラフから集合を作る |
+| 文字列処理 | `str`，`replace`，`join` | `string` | 表示文字列を作る |
+
+関数の文書化では，署名，返り値，副作用，主なプロパティ，実行例を載せます．文書サイトでは `ApiCard` を使って統一した表示にします．
+
+## テーマ
+
+テーマは，コンポーネントの既定プロパティを決めます．テーマ側で `head` や `text` を上書きすると，利用者コードは同じ呼び出しのまま見た目を変えられます．
+
+```ss
+import std:themes/default
+
+page intro
+head("題名")
+text("本文")
+end
+```
+
+テーマを変更すると寸法も変わります．文字サイズ，行送り，枠の余白，コードブロックの行高が変わるため，render で PDF を見ます．
+
+## プロパティ名
+
+標準ライブラリはプロパティ名を通じて配置と描画器に情報を渡します．
+
+| プロパティ例 | 読む場所 |
+| --- | --- |
+| `text_size` | 配置見積もり，PDF 描画 |
+| `text_line_height` | 配置見積もり，PDF 描画 |
+| `text_color` | PDF 描画 |
+| `fill` | PDF 描画 |
+| `stroke` | PDF 描画 |
+| `wrap` | 配置見積もり，PDF 描画 |
+| `asset_scale` | 配置見積もり，PDF 描画 |
+| `render_kind` | PDF 描画 |
+
+新しいプロパティを追加する場合は，標準ライブラリだけで使うプロパティか，配置や描画器も読むプロパティかを分けます．配置や描画器が読む場合は，その読み取り処理と文書も更新します．
+
+## 生成関数
+
+文書全体を使う生成関数は，`document` ブロックで呼びます．
+
+```ss
+document
+pagenos("{page} / {total}")
+need_titles()
+end
+```
+
+この種類の関数は，ページ一覧，タイトルロールの object，メタデータなどを読みます．展開スケジューラは，必要に応じてページ本体の実行後に document 文を実行します．詳しくは [展開](./elaboration) を参照してください．
+
+## 追加方針
+
+新しい機能を追加するときは，次の順で置き場所を検討します．
+
+| 追加したいもの | 置き場所 |
+| --- | --- |
+| 見た目の違い | `stdlib/themes` |
+| 新しいコンポーネント | `stdlib/core` またはテーマ |
+| 既存 object の装飾 | `stdlib/core` |
+| 配置補助 | `stdlib/core` |
+| 文書全体生成 | `stdlib/core/generated.ss` |
+| 描画器が新しく読む情報 | 標準ライブラリのプロパティと `src/render` |
+| 新しい値分類 | `src/core`，`src/analysis`，`src/elaboration` |
+
+言語中核にプリミティブを追加するのは，標準ライブラリでは表現できない場合に限ります．プリミティブを増やすと，型検査，依存関係解析，展開，文書化のすべてに作業が発生します．
+
+## 実行例
+
+標準ライブラリを編集した場合は，全体を検査します．
+
+```sh
+for f in stdlib/core/*.ss stdlib/themes/*.ss; do
+  zig-out/bin/ss check "$f"
+done
+```
+
+コンポーネントやテーマの見た目を変えた場合は，render まで確認します．
+
+```sh
+zig build run -- render demo/seminar-05-12.ss .ss-cache/stdlib.pdf
+```
+
+## 文書の更新
+
+標準ライブラリ関数を追加または変更した場合は，次を更新します．
+
+| 変更 | 文書 |
+| --- | --- |
+| 新しいコンポーネント | `site/docs/ja/components` と英語対応ページ |
+| 署名変更 | `ApiCard` の `signature`，引数表，返り値説明 |
+| プロパティ変更 | [プロパティとスタイル](../authoring/properties) |
+| 生成関数変更 | [文書全体を使った生成](../authoring/generation) |
+| 描画条件変更 | [描画](../rendering/native) 以下 |
+
+利用者向け文書では，関数の内部都合より，呼び出し方，返り値，副作用，PDF で確認する点を優先します．

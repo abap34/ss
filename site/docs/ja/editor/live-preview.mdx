@@ -1,0 +1,79 @@
+---
+title: "ライブプレビュー"
+description: "VS Code 拡張がソースをスナップショット化し，PDF を描画し，プレビューを更新する仕組みを説明します．"
+---
+
+# ライブプレビュー
+
+ライブプレビューは，アクティブな `.ss` 文書を PDF に描画し，その PDF を VS Code または OS の PDF アプリで開きます．
+
+## コマンド
+
+コマンドパレットまたはエディタタイトルから開始します．
+
+```text
+ss: Open Live Preview
+```
+
+ファイルとして存在する `.ss` 文書が必要です．無題文書や `.ss` 以外の文書は対象外です．
+
+## スナップショット
+
+プレビュー描画は，開いているエディタバッファの内容を反映します．拡張は `ss render` を呼ぶ前に一時的なプロジェクトスナップショットを書きます．
+
+```text
+開いているバッファとプロジェクトファイル
+-> .ss-cache/vscode-projects/<hash>/<process-render-id>/
+-> ss render <snapshot-entry> <temp-pdf> --asset-base-dir <snapshot-dir>
+-> .ss-cache/vscode-preview/<file-hash>.pdf
+```
+
+スナップショットには，アセット基準ディレクトリ，入口ファイル，言語サーバが返したローカルモジュール，開いている `.ss` バッファが入ります．`.git`，`.ss-cache`，`zig-out`，`node_modules`，`dist`，`build`，`coverage` などはコピーしません．
+
+## 更新規則
+
+編集後のプレビュー更新は，`ss.livePreview.debounceMs` の遅延後に行われます．
+
+```json
+{
+  "ss.livePreview.debounceMs": 350
+}
+```
+
+`.ss` ファイルを保存した場合は，該当するプレビューをすぐ更新します．監視中の `.ss` ファイルが変更された場合も，そのファイルに依存するプレビューを更新します．
+
+## 開き方
+
+生成 PDF は一度だけ開きます．以後の描画では同じファイルパスを更新します．
+
+```json
+{
+  "ss.livePreview.openMode": "vscode"
+}
+```
+
+| 値 | 動作 |
+| --- | --- |
+| `vscode` | VS Code のエディタ列で PDF を開く |
+| `external` | OS の PDF アプリで PDF を開く |
+
+## 出力ファイル
+
+プレビュー出力はワークスペース内に書きます．
+
+| ディレクトリ | 内容 |
+| --- | --- |
+| `.ss-cache/vscode-projects` | 一時的なソーススナップショット |
+| `.ss-cache/vscode-preview` | 生成されたプレビュー PDF |
+
+一時スナップショットは各描画後に削除します．プレビュー PDF は，開いているビューアが更新できるように残します．
+
+## 失敗時
+
+描画に失敗した場合，拡張は実行コマンドとエラー出力を `ss` 出力チャンネルに書きます．既存のプレビュー PDF がある場合は，そのまま開いた状態にします．
+
+出力チャンネルだけで原因が分からない場合は，同じ描画をターミナルで実行します．
+
+```sh
+ss render --project . --output .ss-cache/manual-preview.pdf
+```

@@ -1,0 +1,86 @@
+---
+title: "アセットファイル"
+description: "アセットパス，アセット基準，変換キャッシュ，プロジェクト内の置き場所を説明します．"
+---
+
+# アセットファイル
+
+アセットを使うコンポーネントは，文書グラフにパスを保存します．描画器はそのパスを `asset_base_dir` から解決します．
+
+```ss
+let img = image("diagrams/system.png", 0.7)
+let table = pdf("tables/results.pdf", 0.55)
+```
+
+## ディレクトリ構成
+
+ソースファイルとアセットは別のディレクトリに置けます．
+
+```text
+slides/
+  ss.toml
+  src/
+    deck.ss
+  assets/
+    diagrams/system.png
+    tables/results.pdf
+```
+
+```toml
+[project]
+entry = "src/deck.ss"
+asset_base_dir = "assets"
+```
+
+この設定では，`image("diagrams/system.png")` は `slides/assets/diagrams/system.png` として解決されます．
+
+## コマンドラインでのアセット基準
+
+一つのファイルを直接指定する場合，既定のアセット基準は入力ファイルがあるディレクトリです．
+
+```sh
+ss render slides/src/deck.ss out.pdf
+```
+
+`--asset-base-dir` で上書きできます．
+
+```sh
+ss render --asset-base-dir slides/assets slides/src/deck.ss out.pdf
+```
+
+プロジェクト指定では，`ss.toml` の `asset_base_dir` を使います．コマンドライン指定がある場合は，そちらを優先します．
+
+## 主な利用箇所
+
+アセットを読む主なコンポーネントは次の通りです．
+
+| コンポーネント | 入力 |
+| --- | --- |
+| `image(path, factor)` | ラスター画像のパス |
+| `pdf(path, factor)` | PDF のパス |
+| `logos(path, factor)` | 生成ロゴ object に使うロゴ画像のパス |
+
+Markdown の画像記法でも通常のアセットを参照できます．`fa-solid:house` のような Font Awesome 参照は，接頭辞付きの別経路で処理されます．
+
+## キャッシュ
+
+変換されたアセットは `.ss-cache/render` にキャッシュされます．
+
+```sh
+ss render --project . --output .ss-cache/deck.pdf
+ss cache stats
+ss cache clear
+```
+
+キャッシュは生成物です．手で編集しないでください．
+
+## 診断
+
+| 問題 | 確認コマンド |
+| --- | --- |
+| パスまたはアセット基準の誤り | `check` または `render` |
+| 未対応の画像形式 | `render` |
+| PDF 変換失敗 | `render` |
+| ローカル変換コマンド不足 | `doctor` と `render` |
+
+絶対パスは必要な場合だけ使います．プロジェクト相対のパスにすると，別のディレクトリから同じスライドを実行しやすくなります．

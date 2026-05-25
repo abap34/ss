@@ -1,0 +1,91 @@
+---
+title: "端の揃え"
+description: "`same_l`，`same_r`，`same_t`，`same_b`，差分値，アンカー診断を説明します．"
+---
+
+# 端の揃え
+
+端を揃える関数は，`target` の端を `source` の同じ端に関係付けます．
+
+```ss
+same_l(target, source, 0)
+same_t(target, source, 12)
+```
+
+これらは `std:core/layout` の通常の関数です．
+
+| 関数 | 制約 |
+| --- | --- |
+| `same_l(target, source, delta)` | target の左端を source の左端に合わせる |
+| `same_r(target, source, delta)` | target の右端を source の右端に合わせる |
+| `same_t(target, source, delta)` | target の上端を source の上端に合わせる |
+| `same_b(target, source, delta)` | target の下端を source の下端に合わせる |
+
+`delta` は source 側アンカーに加算されます．
+
+## 基本例
+
+```ss
+import std:themes/default
+
+page aligned
+  let title = head("揃え")
+  let note1 = note("一つ目")
+  let note2 = note("二つ目")
+
+  below(note1, title, 36)
+  same_l(note1, title, 0)
+
+  below(note2, note1, 16)
+  same_l(note2, note1, 0)
+end
+```
+
+二つの note は同じ左端を持ちます．縦方向の位置は別の制約で指定します．
+
+## 差分値
+
+`delta` はインデントや横方向のずらしに使います．
+
+```ss
+page offsets
+  let title = head("差分")
+  let body = text("本文")
+  let aside = note("補足")
+
+  below(body, title, 32)
+  same_l(body, title, 0)
+
+  same_t(aside, body, 0)
+  same_l(aside, body, 420)
+end
+```
+
+`aside` は本文と同じ上端を持ち，本文の左端から右へ 420 離れます．
+
+## 端の組
+
+水平端を一つだけ揃えても幅は決まりません．幅も揃えたい場合は，左端と右端の両方を指定します．
+
+```ss
+same_l(body, title, 0)
+same_r(body, title, 0)
+```
+
+ページ余白に合わせる場合は，`flow` や `inset_x` でページ基準の範囲を設定します．
+
+## 診断
+
+| 問題 | 原因 |
+| --- | --- |
+| 不明な object | 名前がページ内でまだ束縛されていない |
+| 不正なアンカー名 | カスタム制約でアンカー集合外の名前を使った |
+| 端の制約衝突 | 同じ端を互いに合わない値へ固定した |
+| 想定外の幅 | 片側の端だけを揃えた |
+
+カスタム制約で使えるアンカー名は `left`，`right`，`top`，`bottom`，`center_x`，`center_y`，`width`，`height` です．
+
+```sh
+ss check slide.ss
+ss dump slide.ss .ss-cache/alignment.json
+```

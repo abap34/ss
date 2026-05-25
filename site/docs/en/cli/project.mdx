@@ -1,0 +1,88 @@
+---
+title: "ss.toml"
+description: "Project file discovery, entry resolution, asset base resolution, and CLI overrides."
+---
+
+# ss.toml
+
+`ss.toml` records the entry file and asset base for a slide project.
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "."
+```
+
+Only the `[project]` table is read by the current CLI. `entry` is required. `asset_base_dir` is optional and defaults to the directory containing the resolved entry file.
+
+## Resolution
+
+Paths inside `ss.toml` are resolved relative to the directory containing `ss.toml`.
+
+```text
+slides/
+  ss.toml
+  slide.ss
+  assets/
+    logo.png
+```
+
+```toml
+[project]
+entry = "slide.ss"
+asset_base_dir = "assets"
+```
+
+With this project file, `image("logo.png")` reads `slides/assets/logo.png`.
+
+## Discovery
+
+When a command has no input path and no `--project`, `ss` searches upward from the current directory for `ss.toml`.
+
+```sh
+cd slides/sections
+ss check
+```
+
+If `slides/ss.toml` is the nearest project file, the command uses that project.
+
+Explicit project selection accepts either a directory or a TOML file.
+
+```sh
+ss check --project slides
+ss check --project slides/ss.toml
+```
+
+## Overrides
+
+The input file and asset base can be overridden on the command line.
+
+```sh
+ss render --project slides alternate.ss out.pdf
+ss render --project slides --asset-base-dir slides/assets alternate.ss out.pdf
+```
+
+When an input file is passed, that input file is used as the entry. When `--asset-base-dir` is passed, it overrides the asset base from `ss.toml`.
+
+## Creating a Project
+
+`init` creates `ss.toml` and a starter entry file.
+
+```sh
+ss init slides
+ss init slides --entry deck/main.ss
+ss init slides --force
+```
+
+`--entry` must stay inside the project directory. `--force` allows generated files to be overwritten.
+
+## Project Checks
+
+`doctor` checks whether the project file, entry file, asset base, and render tools can be found.
+
+```sh
+ss doctor --project slides
+ss doctor --project slides --strict
+```
+
+Use `--strict` for scripts that should fail when a required path or render dependency is missing.

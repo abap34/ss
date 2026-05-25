@@ -1,0 +1,178 @@
+---
+title: "Values and types"
+description: "Expression values, type annotations, runtime value categories, and type checking."
+---
+
+# Values and types
+
+Expressions produce values. Types are used in function parameters, return types, constants, lambda expressions, selections, and property checks.
+
+## Runtime value categories
+
+The user-facing value categories are `string`, `number`, `boolean`, `document`, `page`, `object`, `metadata`, `selection`, `anchor`, `function`, `style`, `constraints`, and `void`.
+
+`void` results are only valid as statements.
+
+```ss
+document
+pagenos("{page} / {total}")
+end
+```
+
+## Type syntax
+
+```text
+Type ::= ScalarType
+       | "object"
+       | "selection" TypeArgument?
+       | FunctionType
+ScalarType ::= "document"
+             | "page"
+             | "metadata"
+             | "anchor"
+             | "style"
+             | "string"
+             | "number"
+             | "bool"
+             | "boolean"
+             | "constraints"
+             | "void"
+FunctionType ::= Type "->" Type
+               | "(" TypeList? ")" "->" Type
+```
+
+`bool` and `boolean` denote the same type. `void` and `Void` denote the same type.
+
+## Type list
+
+The source-level and implementation-level type forms are listed below.
+
+| Type | Type argument | Use | Notes |
+| --- | --- | --- | --- |
+| `document` | none | Whole-document reference | Returned by `docctx()`. |
+| `page` | none | Page reference | Returned by `pagectx()` and related functions. |
+| `object` | none | Drawable object reference | The implementation may attach object class information. |
+| `metadata` | none | Metadata reference | Produced by functions such as `mark`. |
+| `selection<T>` | optional | Selected graph items | Omitted arguments are treated as `any`. |
+| `anchor` | none | Page or object position | Used by constraints. |
+| `style` | none | Style reference | Produced by `style("name")`. |
+| `string` | none | String values | Text, colors, asset paths, property values. |
+| `number` | none | Numeric values | Dimensions, coordinates, spacing, scale factors. |
+| `bool` | none | Boolean values | Same as `boolean`. |
+| `boolean` | none | Boolean values | Same as `bool`. |
+| `constraints` | none | Layout constraint set | Adds equations to the page layout graph when evaluated as a statement. |
+| `void` | none | Call result that is not used | Valid as a statement. |
+| `Void` | none | Call result that is not used | Same as `void`. |
+| Function type | parameter and result types | Function values | Written as `(string, number) -> object`. |
+
+`any` and `none` are implementation type forms. `any` is used by acceptance rules. `none` represents an omitted type argument or missing type information.
+
+## Selection type arguments
+
+`selection<T>` carries the selected item type.
+
+```text
+selection<object>
+selection<page>
+selection<metadata>
+```
+
+`selection` without an argument is treated as `selection<any>`.
+
+## Common types
+
+| Type | Use |
+| --- | --- |
+| `string` | Text, colors, asset paths, property values |
+| `number` | Layout values, dimensions, scale factors |
+| `bool` | Conditions |
+| `object` | Component results |
+| `page` | Page references |
+| `document` | Whole-document processing |
+| `selection<object>` | Object selections |
+| `constraints` | Layout constraint sets |
+| `void` | Calls whose result is not used |
+
+## Literals
+
+String literals have type `string`. Numeric literals have type `number`. `true` and `false` have type `bool`.
+
+## Names
+
+`let` binds the type of the right-hand expression.
+
+```ss
+let title = head("Title")
+let body = text("Body")
+```
+
+Both names have type `object`.
+
+## Calls
+
+Argument count and argument types must match the function definition.
+
+## Type acceptance
+
+Type checking compares an expected type with the actual expression type.
+
+`any` accepts every type. An actual type of `any` is also accepted.
+
+```text
+any accepts T
+T accepts any
+```
+
+Selections must agree on their item type unless one side is `any`.
+
+```text
+selection<object> accepts selection<object>
+selection<any> accepts selection<object>
+selection<object> does not accept selection<page>
+```
+
+Function types compare parameter count, parameter types, and result type.
+
+## Object values
+
+`object` values reference drawable objects in the document graph. Standard component functions usually add an object to the current page and return that object. Object class information is inferred from roles and object declarations.
+
+## Selection values
+
+`selection<T>` is a set of graph items. Common forms are `selection<page>`, `selection<object>`, and `selection<metadata>`.
+
+```ss
+let all_pages = pages(docctx())
+let titles = objs(pagectx(), "title")
+```
+
+Callbacks passed to selection functions must accept the selection item type.
+
+## Constraints and anchors
+
+`constraints` values add equations to the page layout graph. `anchor` values refer to a page anchor or object anchor.
+
+```ss
+below(body, title, 32)
+equal(anchor(body, "top"), anchor(title, "bottom"), -32)
+```
+
+## Value domains
+
+The component schema uses value domains for property validation. Examples are `Color`, `ScalarLike`, `FitPolicy`, `RenderKind`, `WrapMode`, and `LayoutPolicy`.
+
+```ss
+type FitPolicy = "warn" | "error" | "ignore"
+type Color = string @refine(color)
+type ScalarLike = string | number
+```
+
+These domains are used by object field declarations in `stdlib/core/classes.ss`.
+
+## Diagnostics
+
+Type-related diagnostics include `UnknownIdentifier`, `UnknownFunction`, `InvalidArity`, `TypeMismatch`, `VoidValue`, and `InvalidCallback`.
+
+```sh
+ss check slide.ss
+```

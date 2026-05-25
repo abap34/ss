@@ -1,0 +1,79 @@
+---
+title: "Live preview"
+description: "How the VS Code extension snapshots sources, renders a PDF, and refreshes the preview."
+---
+
+# Live preview
+
+Live preview renders the active `.ss` document to a PDF and opens that PDF from VS Code or the operating system.
+
+## Command
+
+Start it from the command palette or the editor title.
+
+```text
+ss: Open Live Preview
+```
+
+The command requires a file-backed `.ss` document. It ignores untitled documents and non-`ss` files.
+
+## Snapshot
+
+Preview rendering should reflect open editor buffers. The extension writes a temporary project snapshot before calling `ss render`.
+
+```text
+open buffers and project files
+-> .ss-cache/vscode-projects/<hash>/<process-render-id>/
+-> ss render <snapshot-entry> <temp-pdf> --asset-base-dir <snapshot-dir>
+-> .ss-cache/vscode-preview/<file-hash>.pdf
+```
+
+The snapshot copies the asset base directory, the entry file, local modules reported by the language server, and open `.ss` buffers. Directories such as `.git`, `.ss-cache`, `zig-out`, `node_modules`, `dist`, `build`, and `coverage` are skipped.
+
+## Refresh Rules
+
+The preview refreshes after edits with a delay controlled by `ss.livePreview.debounceMs`.
+
+```json
+{
+  "ss.livePreview.debounceMs": 350
+}
+```
+
+Saving a `.ss` file triggers an immediate refresh for affected preview sessions. Changes to watched `.ss` files also refresh sessions that depend on those files.
+
+## Opening Mode
+
+The generated PDF opens once. Later renders update the same file path.
+
+```json
+{
+  "ss.livePreview.openMode": "vscode"
+}
+```
+
+| Value | Behavior |
+| --- | --- |
+| `vscode` | Open the PDF in a VS Code editor column |
+| `external` | Open the PDF with the operating system's PDF application |
+
+## Output Files
+
+Preview output is written under the workspace.
+
+| Directory | Contents |
+| --- | --- |
+| `.ss-cache/vscode-projects` | Temporary source snapshots |
+| `.ss-cache/vscode-preview` | Generated preview PDFs |
+
+Temporary snapshot directories are removed after each render attempt. Preview PDFs remain so the open viewer can refresh them.
+
+## Failures
+
+When rendering fails, the extension writes the command and error output to the `ss` output channel. The previous preview PDF remains open if one exists.
+
+Run the same render command in a terminal when the output channel is not enough.
+
+```sh
+ss render --project . --output .ss-cache/manual-preview.pdf
+```

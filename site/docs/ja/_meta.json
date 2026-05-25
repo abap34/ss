@@ -1,0 +1,48 @@
+[
+  "index",
+  {
+    "type": "dir-section-header",
+    "name": "guide",
+    "label": "はじめる"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "authoring",
+    "label": "言語リファレンス"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "components",
+    "label": "コンポーネント"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "layout",
+    "label": "配置"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "themes",
+    "label": "テーマ"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "cli",
+    "label": "コマンドライン"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "rendering",
+    "label": "描画"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "editor",
+    "label": "エディタ支援"
+  },
+  {
+    "type": "dir-section-header",
+    "name": "dev",
+    "label": "実装"
+  }
+]

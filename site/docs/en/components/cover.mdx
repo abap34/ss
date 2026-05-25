@@ -1,0 +1,47 @@
+---
+title: "Cover"
+description: "Signature, value, placement, properties, and diagnostics for Cover."
+---
+
+# Cover
+
+## Definition
+
+```text
+cover : string × string × string -> object
+```
+
+Creates cover-page structure. The result is the title object.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+page example
+cover("Title", "Subtitle", "Author")
+end
+```
+
+## Value
+
+`cover` creates the cover title, subtitle, and author objects. It returns the main title object.
+
+## Static conditions
+
+The function name must come from an imported module. Arguments must match the declared types. Object-returning calls that are used later should be bound with `let`.
+
+## Placement
+
+Use `let` when later constraints or property assignments need the returned object name.
+
+```ss
+page title
+let title = cover("Deck title", "Subtitle", "Author")
+title.text_size = 52
+end
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

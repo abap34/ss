@@ -1,0 +1,114 @@
+---
+title: "LaTeX math"
+description: "Math components, LaTeX input, conversion cache, packages, and render diagnostics."
+---
+
+# LaTeX math
+
+Math is written as LaTeX source and rendered as vector content.
+
+```ss
+import std:core
+import std:themes/default
+
+page equation
+  let title = head("Equation")
+  let eq = tex("E = mc^2", 1.2)
+
+  ~ eq.top = title.bottom + 36
+  ~ eq.left = title.left
+end
+```
+
+`tex(source, scale)` creates an object with the math payload. The first argument is LaTeX source. The second argument scales the rendered math.
+
+## String Input
+
+LaTeX backslashes are written inside `ss` strings. Escape a backslash in a quoted string.
+
+```ss
+let inline = tex("\\alpha + \\beta")
+```
+
+Longer input can use a block string.
+
+```ss
+let derivation = tex <<
+\\int_0^1 x^2\\,dx = \\frac{1}{3}
+>>
+```
+
+The block string still contains LaTeX syntax. The renderer passes the source to the math conversion path.
+
+## Packages
+
+Additional LaTeX packages can be added through the render environment helpers in `std:core/render`.
+
+```ss
+import std:core
+import std:core/render
+import std:themes/default
+
+document
+  latex_package("amsmath")
+end
+
+page aligned
+  let eq = tex <<
+\\begin{aligned}
+a &= b + c \\\\
+d &= e + f
+\\end{aligned}
+>>
+end
+```
+
+Package names are checked before rendering. Invalid package names are reported as render environment errors.
+
+## Conversion
+
+Math conversion runs during `ss render`.
+
+```text
+math source -> LaTeX document -> PDF/SVG conversion -> PDF drawing
+```
+
+Intermediate files are stored under `.ss-cache/render`. The cache key includes the source text, scale, package list, and relevant render settings.
+
+```sh
+ss render math.ss .ss-cache/math.pdf
+ss cache stats
+```
+
+## Layout
+
+The math object has a solved frame like other objects. The rendered formula is drawn inside that frame. Explicit constraints are useful when a formula must align with text.
+
+```ss
+page layout
+  let label = text("Energy")
+  let eq = tex("E = mc^2")
+
+  ~ eq.left = label.right + 24
+  ~ eq.top = label.top
+end
+```
+
+For large formulas, assign enough width and height or use a smaller scale.
+
+## Diagnostics
+
+| Condition | Where it appears |
+| --- | --- |
+| Invalid `tex` argument type | `ss check` |
+| Invalid package name | `ss check` or `ss render`, depending on where it is written |
+| Missing `pdflatex` or converter | `ss render` |
+| LaTeX compile error | `ss render` |
+| Object overflow | `ss render` and the generated PDF |
+
+Run both commands when changing math-heavy pages.
+
+```sh
+ss check math.ss
+ss render math.ss .ss-cache/math.pdf
+```

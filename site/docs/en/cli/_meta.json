@@ -1,0 +1,7 @@
+[
+  { "type": "file", "name": "check", "label": "check" },
+  { "type": "file", "name": "dump", "label": "dump" },
+  { "type": "file", "name": "render", "label": "render" },
+  { "type": "file", "name": "project", "label": "ss.toml" },
+  { "type": "file", "name": "assets", "label": "Asset files" }
+]

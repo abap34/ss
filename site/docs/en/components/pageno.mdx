@@ -1,0 +1,52 @@
+---
+title: "Page number"
+description: "Signature, value, placement, properties, and diagnostics for Page number."
+---
+
+# Page number
+
+## Definition
+
+```text
+pageno : () -> object
+pagenos : string? -> void
+```
+
+`pageno` places one page-number object on the current page. `pagenos` registers document-wide page-number generation.
+
+## Syntax
+
+```ss
+import std:themes/default
+
+document
+pagenos("{page} / {total}")
+end
+
+page example
+head("Example")
+end
+```
+
+## Value
+
+`pageno()` returns the page-number object it creates. `pagenos(...)` returns `void`, creates missing page-number objects, and updates their content after the page count is known.
+
+## Static conditions
+
+The function name must come from an imported module. The format argument to `pagenos` is a string. `{page}` is replaced with the current page number, and `{total}` is replaced with the page count.
+
+## Placement
+
+The standard page-number object is pinned near the bottom-right of the page. Bind `pageno()` with `let` when custom constraints or properties need to refer to that one object.
+
+```ss
+page custom_number
+let n = pageno()
+n.text_color = "0.5,0.5,0.5"
+end
+```
+
+## Diagnostics
+
+`ss check` reports unknown names, wrong argument counts, and type mismatches. `ss render` reports layout overflow, rendering failures, and asset conversion failures when the component uses external files.

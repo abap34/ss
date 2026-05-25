@@ -1,0 +1,61 @@
+---
+title: "外部コマンド"
+description: "外部コマンド の入力，生成物，診断を説明します．"
+---
+
+# 外部コマンド
+
+描画内容に応じて，LaTeX，rsvg-convert，pdftoppm，magick，qpdf などを使います．
+
+## 描画の位置付け
+
+描画は，構文解析，読み込み，型検査，展開，正規化，配置解決の後に行われます．
+
+```text
+source -> typed program -> document terms -> core graph -> layout -> PDF
+```
+
+描画器は，core graph に含まれる object，プロパティ，アセット参照，配置済み矩形を読み，PDF を出力します．
+
+
+## 確認
+
+```sh
+ss doctor
+```
+
+`doctor` はプロジェクト設定と描画に必要な外部コマンドを確認します．CI では，描画用のコンテナを使うと環境差を減らせます．
+
+
+## 入力
+
+描画器が読む主な値は次の通りです．
+
+| 値 | 用途 |
+| --- | --- |
+| `content` | 本文，コード，数式，アセットパス |
+| `role` | object の意味上の分類 |
+| `payload` | 描画時のペイロード種別 |
+| `props` | 文字，色，折り返し，描画方式 |
+| `bbox` | 配置済み矩形 |
+
+## 生成物
+
+`ss render` は PDF を出力します．中間ファイルやキャッシュは `.ss-cache` 以下に置きます．
+
+```sh
+ss render slide.ss .ss-cache/out.pdf
+```
+
+公開用の PDF だけをソース管理へ含めるかどうかは，プロジェクトの運用で決めます．通常の開発では，生成物を `.ss-cache` に置きます．
+
+## 診断
+
+描画時には，外部コマンドの失敗，アセットの読み込み失敗，数式のコンパイル失敗，object のはみ出し，フォントやアイコンの解決失敗が分かります．
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/out.pdf
+```
+
+`check` と `render` は目的が違います．`check` は描画前に分かる誤りを確認します．`render` は実際の PDF 生成に必要な処理まで実行します．

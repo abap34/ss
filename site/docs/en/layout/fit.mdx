@@ -1,0 +1,86 @@
+---
+title: "Overflow handling"
+description: "`fit_warn`, `fit_error`, `fit_ignore`, overflow policy, and render diagnostics."
+---
+
+# Overflow handling
+
+Overflow helpers set the `fit` property on an object.
+
+```ss
+fit_warn(body)
+fit_error(code_block)
+fit_ignore(marker)
+```
+
+They are defined in `std:core/render` and return the target object.
+
+## Policies
+
+| Helper | Stored policy | Result |
+| --- | --- | --- |
+| `fit_warn(obj)` | `warn` | Report overflow and continue rendering |
+| `fit_error(obj)` | `error` | Treat overflow as a render error |
+| `fit_ignore(obj)` | `ignore` | Suppress overflow diagnostics for the object |
+
+The helper returns the same object, so it can be used in a binding or in a later call.
+
+```ss
+let body = fit_warn(text("Body"))
+```
+
+## Example
+
+```ss
+import std:themes/default
+
+page overflow
+  let title = head("Overflow")
+  let code_block = code <<
+line one
+line two
+line three
+line four
+>>
+
+  below(code_block, title, 32)
+  same_l(code_block, title, 0)
+  fix_h(code_block, 42)
+  fit_error(code_block)
+end
+```
+
+The fixed height is smaller than the code content, so rendering reports overflow as an error.
+
+## When to Use Each Policy
+
+Use `fit_warn` for content where a slightly tight frame should still produce a PDF during drafting.
+
+Use `fit_error` for generated decks and release checks where clipped content should fail the render.
+
+Use `fit_ignore` for decorative or intentionally cropped objects.
+
+## Layout and Render
+
+Overflow is known after text, code, math, or asset content is measured against the solved frame. That means it often appears during `render`.
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/fit.pdf
+```
+
+`check` can catch the wrong argument type. `render` confirms whether the final frame contains the content.
+
+## Debugging
+
+If an object overflows, inspect these values:
+
+| Value | Check |
+| --- | --- |
+| Width | `left`, `right`, `fix_w`, `flow`, `inset_x` |
+| Height | `fix_h`, `top`, `bottom`, content length |
+| Wrapping | `wrap`, `layout_x`, `layout_right_inset` |
+| Text metrics | Theme font size and line height |
+| Padding | Chrome padding around text or code |
+
+Use `dump` to inspect frame values and properties.

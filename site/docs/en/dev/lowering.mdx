@@ -1,0 +1,196 @@
+---
+title: "Lowering"
+description: "Mapping elaboration document terms into core IR before layout and rendering."
+---
+
+# Lowering
+
+Lowering maps the `elaboration.Document` produced by [Elaboration](./elaboration) into [Core IR](./core-ir). The implementation is `src/lowering/normalize.zig`.
+
+The code uses the name `lowerToIr`, and the main work is normalization.
+
+## Entrypoint
+
+```zig
+pub fn lowerToIr(ir: *core.Ir) !void {
+    var code = try elaboration.elaborateIr(ir.allocator, ir);
+    defer code.deinit();
+
+    try normalizeDocumentCode(ir, &code);
+    try ir.finalize();
+    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+}
+```
+
+The function performs three operations.
+
+| Operation | Content |
+| --- | --- |
+| `elaborateIr` | Executes the checked program and standard library functions |
+| `normalizeDocumentCode` | Applies document terms to `core.Ir` |
+| `ir.finalize` | Runs layout solving and validation steps needed before dump or render |
+
+Editor solved-frame hints are refreshed after finalization.
+
+## Input Terms
+
+Normalization reads `code.terms`.
+
+```zig
+for (code.terms.items) |term| {
+    switch (term) {
+        .add_page => ...,
+        .make_node => ...,
+        .add_containment => ...,
+        .set_property => ...,
+        .extend_render_env => ...,
+        .set_content => ...,
+        .add_metadata => ...,
+        .add_constraint => ...,
+        .materialize_fragment => {},
+    }
+}
+```
+
+The normalizer does not copy the whole elaboration document at once. It replays the ordered term list. That preserves the order in which pages, objects, containment edges, properties, constraints, and diagnostics were created.
+
+## Handle Map
+
+Elaboration handles and core IR node ids are different. `NormalizeContext` stores the map.
+
+```zig
+const NormalizeContext = struct {
+    allocator: std.mem.Allocator,
+    node_map: std.AutoHashMap(doc.HandleId, core.NodeId),
+};
+```
+
+The document handle is mapped to `ir.document_id` at the start.
+
+```text
+doc.document_id -> ir.document_id
+```
+
+Each `add_page` or `make_node` creates a core node and adds another map entry. Later property, containment, metadata, diagnostic, and constraint terms use the map.
+
+## Term Mapping
+
+| Elaboration term | Core IR effect |
+| --- | --- |
+| `add_page` | Add a page with `ir.addPage` and store the handle map |
+| `make_node` | Create an object or node with `ir.makeNodeFromStage` |
+| `add_containment` | Map parent and child handles, then call `ir.addContainmentFromStage` |
+| `set_property` | Map node handle, then call `ir.setNodeProperty` |
+| `extend_render_env` | Map node handle, then call `ir.extendRenderEnv` |
+| `set_content` | Map node handle, then call `ir.setNodeContent` |
+| `add_metadata` | Map page handle, then call `ir.addMetadata` |
+| `add_constraint` | Map target and source node handles, then append a core constraint |
+| `materialize_fragment` | No direct normalization action at the moment |
+
+Do not rely on elaboration handle values matching core node ids. Import order and generated content can change creation order.
+
+## Constraint Mapping
+
+A core constraint stores target node, target anchor, source anchor, offset, and source origin.
+
+```zig
+pub const Constraint = struct {
+    target_node: NodeId,
+    target_anchor: Anchor,
+    source: ConstraintSource,
+    offset: f32,
+    origin: ?[]const u8,
+};
+```
+
+For node sources, normalization maps both the target handle and source handle. For page-anchor sources, there is no source node to map.
+
+```text
+elaboration:
+  target_node = handle 8
+  source = node handle 5 bottom
+
+core IR:
+  target_node = NodeId 12
+  source = node NodeId 9 bottom
+```
+
+`origin` is duplicated into the core IR allocator. Constraint diagnostics use that origin to report the source location.
+
+## Diagnostics
+
+Elaboration diagnostics are also mapped.
+
+```zig
+fn mapDiagnostic(ir: *core.Ir, ctx: *NormalizeContext, diagnostic: core.Diagnostic) !core.Diagnostic
+```
+
+`page_id` and `node_id` fields are mapped from elaboration handles to core node ids. String payloads such as user reports and asset paths are duplicated into the core IR allocator.
+
+| Diagnostic data | Normalization handling |
+| --- | --- |
+| `user_report` | Duplicate message |
+| `asset_not_found` | Duplicate requested path, resolved path, and payload kind |
+| `asset_invalid` | Duplicate reason and payload kind |
+| `type_mismatch` | Copy values |
+| `recursive_function` | Duplicate function name |
+| `unresolved_frame` | Copy values |
+| `page_overflow` | Copy values |
+| `content_overflow` | Copy values |
+
+Normalization changes ownership and node ids. It does not change diagnostic meaning.
+
+## Invariants
+
+| Invariant | Failure mode |
+| --- | --- |
+| A handle is mapped before later terms reference it | Unknown node during normalization |
+| Every `add_page` and `make_node` writes a map entry | Later properties or constraints cannot resolve |
+| `origin` strings are owned by core IR | Source locations can point to freed memory |
+| Diagnostics map their node ids | Dump and error output can point to the wrong node |
+| Page-anchor constraints skip node mapping for the source | Page anchors can be treated as node anchors |
+
+When elaboration adds a new `Term` variant, normalization must be updated. Otherwise dump and render will not see the new operation.
+
+## Example
+
+```ss
+import std:themes/default
+
+page example
+  let title = head("Lowering")
+  let body = text("Body")
+  body.text_size = 22
+  below(body, title, 32)
+end
+```
+
+The elaboration term list is conceptually:
+
+```text
+add_page(example)
+add_containment(document, example)
+make_node(title)
+add_containment(example, title)
+make_node(body)
+add_containment(example, body)
+set_property(body, text_size, "22")
+add_constraint(body.top, title.bottom, -32)
+```
+
+Use `dump` to inspect the result after normalization.
+
+```sh
+ss dump slide.ss .ss-cache/lowering.json
+```
+
+Inspect `nodes`, `contains`, `constraints`, `diagnostics`, and solved `frame` values.
+
+## Checks
+
+```sh
+zig build
+zig build test
+zig build run -- dump demo/seminar-05-12.ss .ss-cache/lowering-dump.json
+zig build run -- render demo/seminar-05-12.ss .ss-cache/lowering-render.pdf
+```

@@ -1,0 +1,40 @@
+---
+pageType: home
+hero:
+  name: ss
+  text: Write slides as programs.
+  tagline: Compose repeated parts, whole-deck behavior, and precise layout in one analyzable language.
+  image:
+    src: /ssbird.png
+    alt: ss logo
+  actions:
+    - theme: brand
+      text: Get started
+      link: /guide/getting-started
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/abap34/ss
+features:
+  - title: Expressive slide programs
+    details: Use functions, constants, and definitions for notation, components, generated labels, page numbers, and tables of contents.
+  - title: Precise layout when needed
+    details: Constraints describe relationships between objects, while the default layout gives a starting point for short slide decks.
+  - title: Local LaTeX math
+    details: Math rendering uses local LaTeX, so uncommon packages and symbols can be used.
+  - title: Incremental and parallel by design
+    details: The compiler analyzes dependencies so rendering work can move toward incremental updates and parallel execution.
+  - title: Editor support
+    details: The language server and VS Code extension use the same project model for checks, diagnostics, and live preview.
+---
+
+import { SsExample } from '../../components/SsExample';
+
+# ss
+
+`ss` is a slide description language and command-line tool for people who put code, notation, and repeated structure on slides.
+
+The language treats a deck as a program. Shared pieces can be named, generated structure can stay in the source, and precise layout can be written as constraints.
+
+The example below is a minimal deck with a title page and a body page. The PDF and source are available from the preview.
+
+<SsExample id="quick-start" />

@@ -1,0 +1,91 @@
+---
+title: "Custom theme"
+description: "How to define theme functions as an ordinary `.ss` module."
+---
+
+# Custom theme
+
+A custom theme is an `.ss` module that imports `std:themes/base` and defines presentation functions.
+
+```ss
+import std:themes/base
+
+fn head(title_text: string) -> object
+  let title = title_obj(title_text)
+  txt(title, "Helvetica-Bold", "34", "42", "0.1,0.1,0.1", "44", "72", "72")
+  return title
+end
+
+fn text(text_value: string) -> object
+  let body = body_obj(text_value)
+  txt(body, "Helvetica", "20", "28", "0.08,0.08,0.08", "28", "96", "96")
+  return body
+end
+```
+
+Pages can import the custom file instead of a standard theme.
+
+```ss
+import ./theme
+
+page sample
+  let title = head("Custom theme")
+  let body = text("Theme functions are ordinary functions.")
+  ~ body.top = title.bottom + 32
+end
+```
+
+## Theme Boundary
+
+Theme functions usually choose the object constructor, text metrics, color, chrome, and default placement. Page source should keep content and slide-specific constraints.
+
+| Theme code | Page code |
+| --- | --- |
+| `head`, `text`, `code`, `cover`, `toc` definitions | Calls to those functions |
+| Font, size, line height, color | Slide text |
+| Component chrome and padding | Relations between objects |
+| Theme-level generated objects | Per-page content |
+
+This division keeps a theme switch localized to imports and theme modules.
+
+## Starting Points
+
+`std:themes/base` re-exports the standard component functions. A custom theme can override only the functions it needs.
+
+```ss
+import std:themes/base
+
+fn code(text_value: string, language_name: string = "python") -> object
+  return code_box(text_value, language_name, "96", "96", 16, 12, "0.98,0.98,0.98", "0.70,0.70,0.70", "1.0", "8")
+end
+```
+
+If a function is not defined by the custom theme, the imported base function remains available.
+
+## Object Properties
+
+Theme functions can set properties directly.
+
+```ss
+fn warning(text_value: string) -> object
+  let obj = note_obj(text_value)
+  obj.text_color = "0.55,0.05,0.05"
+  obj.chrome_fill = "1,0.94,0.94"
+  obj.chrome_stroke = "0.75,0.2,0.2"
+  return obj
+end
+```
+
+Use declared fields from the standard classes when possible. Unknown fields are reported by `ss check`.
+
+## Verification
+
+Check the theme module and at least one deck that imports it.
+
+```sh
+ss check theme.ss
+ss check deck.ss
+ss render deck.ss .ss-cache/custom-theme.pdf
+```
+
+Inspect headings, long text, code blocks, image captions, math, and cover pages after changing font sizes or padding.

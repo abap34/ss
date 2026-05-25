@@ -1,0 +1,90 @@
+---
+title: "Font Awesome"
+description: "Font Awesome icon references in Markdown text, prefix rules, conversion, and diagnostics."
+---
+
+# Font Awesome
+
+Font Awesome icons can be placed inside Markdown text by using image syntax with a Font Awesome path.
+
+```ss
+import std:core
+import std:themes/default
+
+page icons
+  let body = text <<
+![home](fa-solid:house) Home
+![github](fa-brands:github) Repository
+![note](fa-regular:note-sticky) Notes
+>>
+end
+```
+
+The text component stores Markdown content. The renderer resolves the image path, detects the Font Awesome prefix, and draws the icon inline with the surrounding text.
+
+## Prefixes
+
+| Prefix | Style |
+| --- | --- |
+| `fa:` | Default Font Awesome lookup |
+| `fas:` | Solid |
+| `far:` | Regular |
+| `fab:` | Brands |
+| `fa-solid:` | Solid |
+| `fa-regular:` | Regular |
+| `fa-brands:` | Brands |
+
+The icon name is the part after the prefix. For `fa-solid:house`, the style is `solid` and the icon name is `house`.
+
+## Markdown Input
+
+Font Awesome references use the same Markdown form as images.
+
+```md
+![label](fa-solid:triangle-exclamation)
+```
+
+The label is used as image text in the Markdown source. The renderer uses the path to identify the icon. The icon participates in inline text layout, so it affects line width and wrapping.
+
+## Conversion
+
+Font Awesome drawing happens during render. The renderer reads the parsed Markdown blocks, resolves each icon, converts it to drawable vector data, and places it in the text run.
+
+The conversion output is cached under `.ss-cache/render`. Changing the icon name, prefix, text size, or related render setting can create a different cache entry.
+
+```sh
+ss render icons.ss .ss-cache/icons.pdf
+ss cache stats
+```
+
+## Layout Effects
+
+Icons occupy inline space. They are measured with the text around them. If an icon appears at the end of a narrow line, it can cause wrapping in the same way as a word or image run.
+
+```ss
+page narrow
+  let body = text <<
+![warn](fa-solid:triangle-exclamation) Check the build output.
+>>
+  ~ body.left = page.left + 72
+  ~ body.right = body.left + 220
+end
+```
+
+Use a wider frame or shorter text when an icon causes an unwanted wrap.
+
+## Diagnostics
+
+| Condition | Result |
+| --- | --- |
+| Unknown prefix | The path is treated as an ordinary asset path or reported as unresolved |
+| Unknown icon name | The icon cannot be drawn |
+| Missing conversion tool | `ss render` fails during conversion |
+| Cache file cannot be written | Render fails before PDF output is complete |
+
+Run `ss render` after `ss check` when changing icon references.
+
+```sh
+ss check icons.ss
+ss render icons.ss .ss-cache/icons.pdf
+```

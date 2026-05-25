@@ -1,0 +1,88 @@
+---
+title: "ページ端への固定"
+description: "`pin_l`，`pin_r`，`pin_t`，`pin_b`，ページ端からの距離，固定寸法を説明します．"
+---
+
+# ページ端への固定
+
+固定関数は，object の端をページ端へ制約します．
+
+```ss
+pin_l(body, 72)
+pin_t(body, 120)
+```
+
+これらは `std:core/layout` に定義されています．
+
+| 関数 | 意味 |
+| --- | --- |
+| `pin_l(node, amount)` | 左端をページ左端から `amount` の位置へ置く |
+| `pin_r(node, amount)` | 右端をページ右端から `amount` の位置へ置く |
+| `pin_t(node, amount)` | 上端をページ上端から `amount` の位置へ置く |
+| `pin_b(node, amount)` | 下端をページ下端から `amount` の位置へ置く |
+
+## 基本例
+
+```ss
+import std:themes/default
+
+page pinned
+  let title = head("固定")
+  let body = text("本文")
+
+  pin_l(body, 72)
+  pin_t(body, 160)
+end
+```
+
+隣り合う二つの端を固定すると角が決まります．幅や高さはまだ決まりません．
+
+## 幅と高さ
+
+固定寸法が必要な場合は `fix_w` または `fix_h` を使います．
+
+```ss
+page fixed
+  let box = note("固定")
+
+  pin_l(box, 72)
+  pin_t(box, 120)
+  fix_w(box, 360)
+  fix_h(box, 120)
+end
+```
+
+左端と右端の両方を固定すると，ページ幅から object 幅が決まります．
+
+```ss
+pin_l(body, 96)
+pin_r(body, 96)
+```
+
+この場合，矛盾する `fix_w` を追加しないようにします．
+
+## inset
+
+`inset_x(node, left, right)` は `pin_l` と `pin_r` をまとめて呼びます．
+
+```ss
+inset_x(body, 102, 102)
+```
+
+`inset(node, left, right)` は同じ水平 inset を設定し，object を返します．
+
+## 診断
+
+| 問題 | 例 |
+| --- | --- |
+| 同じ端を二回固定 | `pin_l(body, 72)` と `pin_l(body, 120)` |
+| 幅の矛盾 | `pin_l`，`pin_r`，不一致な `fix_w` |
+| 高さの矛盾 | `pin_t`，`pin_b`，不一致な `fix_h` |
+| はみ出し | 固定 frame より内容が大きい |
+
+`dump` で解決後の frame を見ます．
+
+```sh
+ss dump slide.ss .ss-cache/pinning.json
+ss render slide.ss .ss-cache/pinning.pdf
+```

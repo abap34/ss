@@ -1,0 +1,69 @@
+---
+title: "Diagnostics"
+description: "How editor diagnostics are produced, where they appear, and how to compare them with `ss check`."
+---
+
+# Diagnostics
+
+Editor diagnostics come from `ss lsp`. The language server builds a project snapshot and publishes diagnostics for `.ss` files.
+
+## Sources
+
+Diagnostics can be produced by the parser, module loader, checker, elaboration path, layout solver, and user-defined reports.
+
+| Diagnostic source | Examples |
+| --- | --- |
+| Parser | Invalid token, unfinished string, malformed declaration |
+| Module loader | Unknown `std:` import or project import |
+| Type checker | Unknown function, wrong arity, wrong argument type |
+| Property checker | Unknown field, invalid value domain |
+| Elaboration | Invalid context or failed generated content |
+| Layout | Constraint conflict, object overflow |
+| User report | `report_error` or `report_warning` |
+
+Render-only failures are not editor diagnostics until a preview render runs. Missing `pdflatex`, failed PDF conversion, and `qpdf` failures are examples.
+
+## Refresh
+
+The extension sends document open, change, save, and close events to the language server. It also watches `*.ss` and `ss.toml` files.
+
+The command `ss: Check Current File` saves the active `.ss` file. Saving triggers the normal language server refresh.
+
+## Comparing With CLI
+
+When an editor diagnostic is unclear, run the matching CLI command from the project root.
+
+```sh
+ss check --project .
+```
+
+If the editor uses a different binary, set `ss.cli.path` to the same executable used in the terminal.
+
+```json
+{
+  "ss.cli.path": "/path/to/ss/zig-out/bin/ss"
+}
+```
+
+## Project Resolution
+
+The language server resolves project information from the file being edited. If `ss.toml` cannot be found, it falls back to the active file and uses that file's directory as the asset base.
+
+Project-related diagnostics often mean one of these paths is wrong:
+
+| Path | Check |
+| --- | --- |
+| `ss.toml` | The file exists at the expected root |
+| `entry` | The entry path is relative to `ss.toml` |
+| `asset_base_dir` | The directory exists and contains referenced assets |
+| Local imports | Imported `.ss` files exist under the asset base or project paths |
+
+Run `ss doctor --project .` when path diagnostics and render tool diagnostics need to be separated.
+
+## Output Channel
+
+The extension writes language server and preview output to the `ss` output channel. Open it when diagnostics differ from the terminal.
+
+```text
+View -> Output -> ss
+```

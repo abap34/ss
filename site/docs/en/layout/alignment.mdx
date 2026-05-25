@@ -1,0 +1,91 @@
+---
+title: "Edge alignment"
+description: "`same_l`, `same_r`, `same_t`, `same_b`, offsets, and anchor diagnostics."
+---
+
+# Edge alignment
+
+Edge alignment helpers relate one edge of `target` to the same edge of `source`.
+
+```ss
+same_l(target, source, 0)
+same_t(target, source, 12)
+```
+
+The helpers are ordinary functions from `std:core/layout`.
+
+| Helper | Constraint |
+| --- | --- |
+| `same_l(target, source, delta)` | Target left edge follows source left edge |
+| `same_r(target, source, delta)` | Target right edge follows source right edge |
+| `same_t(target, source, delta)` | Target top edge follows source top edge |
+| `same_b(target, source, delta)` | Target bottom edge follows source bottom edge |
+
+`delta` is added to the source anchor in the generated constraint.
+
+## Basic Use
+
+```ss
+import std:themes/default
+
+page aligned
+  let title = head("Alignment")
+  let note1 = note("First")
+  let note2 = note("Second")
+
+  below(note1, title, 36)
+  same_l(note1, title, 0)
+
+  below(note2, note1, 16)
+  same_l(note2, note1, 0)
+end
+```
+
+The two notes share the same left edge. Their vertical positions are controlled separately.
+
+## Offsets
+
+Use `delta` for indentation or controlled overlap.
+
+```ss
+page offsets
+  let title = head("Offsets")
+  let body = text("Body")
+  let aside = note("Side note")
+
+  below(body, title, 32)
+  same_l(body, title, 0)
+
+  same_t(aside, body, 0)
+  same_l(aside, body, 420)
+end
+```
+
+The `aside` object is aligned to the body top and shifted right from the body left edge.
+
+## Edge Pairs
+
+Aligning only one horizontal edge does not set width. Align both left and right when the target should inherit a width.
+
+```ss
+same_l(body, title, 0)
+same_r(body, title, 0)
+```
+
+Use `flow` or `inset_x` when the object should be constrained to page margins instead of another object.
+
+## Diagnostics
+
+| Problem | Cause |
+| --- | --- |
+| Unknown object | The name is not bound earlier in the page |
+| Bad anchor name | A custom constraint used a name outside the anchor set |
+| Conflicting alignment | The same edge is fixed to incompatible values |
+| Unexpected width | Only one side was aligned |
+
+For custom constraints, valid anchor names are `left`, `right`, `top`, `bottom`, `center_x`, `center_y`, `width`, and `height`.
+
+```sh
+ss check slide.ss
+ss dump slide.ss .ss-cache/alignment.json
+```

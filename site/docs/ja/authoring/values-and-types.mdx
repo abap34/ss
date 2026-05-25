@@ -1,0 +1,402 @@
+---
+title: "値と型"
+description: "値の分類，型注釈，型検査，プロパティ値，文書グラフ参照を説明します．"
+---
+
+import { ApiCard } from '../../../components/ApiCard';
+import { SsExample } from '../../../components/SsExample';
+
+# 値と型
+
+`ss` の式は値を作ります．関数の引数，返り値，定数，ラムダ式，選択，プロパティ代入では，その値の分類を検査します．構文は [構文](./syntax)，演算子と組み込み関数は [演算子と組み込み関数](./operators-and-builtins) を参照してください．
+
+## 値の分類
+
+値は，スカラー値，文書グラフ参照，計算用の値に分かれます．
+
+| 分類 | 例 | 説明 |
+| --- | --- | --- |
+| スカラー値 | `string`，`number`，`bool`，`style` | 式の中で直接計算し，関数引数やプロパティ値に渡します． |
+| 文書グラフ参照 | `document`，`page`，`object`，`metadata`，`anchor` | 文書，ページ，描画対象，メタデータ，配置位置を指します． |
+| 計算と集合 | `function`，`selection<T>`，`constraints`，`void` | コールバック，選択集合，制約集合，返り値なしを表します． |
+
+通常のスライドでよく出る型は，`string`，`number`，`bool`，`object`，`page`，`document`，`selection<object>`，`constraints`，`void` です．
+
+## 値の一覧
+
+実行時の値は次の分類を持ちます．
+
+| 値の分類 | 作る式の例 | 主な用途 |
+| --- | --- | --- |
+| `string` | `"text"`，`"a" ++ "b"` | 本文，色，アセットパス，プロパティ値 |
+| `number` | `12`，`0.5`，`10 + 4` | 寸法，余白，拡大率，線幅 |
+| `boolean` | `true`，`false`，`body.wrap?` | `if` の条件 |
+| `document` | `docctx()` | 文書全体の生成，ページ列の参照 |
+| `page` | `pagectx()`，`prev_page()` | 現在ページ，ページ番号，ページ内 object 選択 |
+| `object` | `text("本文")`，`image("plot.png")` | 描画対象，配置制約，プロパティ代入 |
+| `metadata` | `mark("section", "intro")` | 文書やページに付ける追加情報 |
+| `selection` | `pages(docctx())`，`objs(pagectx(), "title")` | ページ，object，メタデータの集合 |
+| `anchor` | `anchor(body, "top")` | 配置制約 |
+| `function` | `(page: page) |-> page_index(page)` | `foreach`，`join` などのコールバック |
+| `style` | `style("hero")` | スタイル適用 |
+| `constraints` | `below(body, title, 32)` | 配置制約の集合 |
+| `void` | `pagenos()` | 返り値を使わない処理 |
+
+`void` は式の値として束縛しません．`void` を返す関数は文として呼び出します．
+
+```ss
+document
+pagenos("{page} / {total}")
+end
+```
+
+次の形は不正です．
+
+```ss
+let x = pagenos()
+```
+
+## 型注釈
+
+型注釈は，関数の引数，返り値，定数，ラムダ式に書きます．`let` の型は右辺の式から決まります．
+
+```ss
+const margin: number = 72
+
+fn label(text_value: string, size: number) -> object
+  let obj = text(text_value)
+  obj.text_size = size
+  return obj
+end
+
+let line = (title: object) |-> "- " ++ title.content
+```
+
+型の構文は次の通りです．
+
+```text
+Type ::= ScalarType
+       | "object"
+       | "selection" TypeArgument?
+       | FunctionType
+
+ScalarType ::= "document"
+             | "page"
+             | "metadata"
+             | "anchor"
+             | "style"
+             | "string"
+             | "number"
+             | "bool"
+             | "boolean"
+             | "constraints"
+             | "void"
+
+TypeArgument ::= "<" Type ">"
+FunctionType ::= Type "->" Type
+               | "(" TypeList? ")" "->" Type
+TypeList     ::= Type ("," Type)*
+```
+
+`bool` と `boolean` は同じ型です．`void` と `Void` は同じ型です．関数型は，単一引数なら `string -> object`，複数引数なら `(string, number) -> object` と書きます．
+
+## 型の一覧
+
+| 型 | 型引数 | 用途 | 備考 |
+| --- | --- | --- | --- |
+| `document` | なし | 文書全体の参照 | `docctx()` の返り値です． |
+| `page` | なし | ページの参照 | `pagectx()`，`prev_page()` の返り値です． |
+| `object` | なし | 描画対象の参照 | 実装上は object クラス情報を持つ場合があります． |
+| `metadata` | なし | メタデータの参照 | `mark`，`doc_mark` などで生成します． |
+| `selection<T>` | 任意 | 文書グラフ上の集合 | 省略時は `selection<any>` として扱います． |
+| `anchor` | なし | object または page の位置 | 制約式で使います． |
+| `style` | なし | スタイル参照 | `style("name")` で作ります． |
+| `string` | なし | 文字列 | 本文，色，アセットパス，プロパティ値 |
+| `number` | なし | 数値 | 寸法，座標，余白，倍率 |
+| `bool` | なし | 真偽値 | `boolean` と同じです． |
+| `boolean` | なし | 真偽値 | `bool` と同じです． |
+| `constraints` | なし | 配置制約の集合 | 文として評価すると配置グラフへ追加されます． |
+| `void` | なし | 返り値を使わない呼び出し | 文として呼び出します． |
+| `Void` | なし | 返り値を使わない呼び出し | `void` と同じです． |
+
+`any` と `none` は実装上の型表現です．`any` は受理規則で使われます．`none` は型引数や型情報が未指定の状態を表します．通常のユーザコードの型注釈には書きません．
+
+## スカラー値
+
+スカラー値は，式の中で直接計算する値です．
+
+```ss
+let title_text = "題名"
+let size = 18 + 4
+let enabled = true
+let hero = style("hero")
+```
+
+文字列は本文，コード，色，アセットパスに使います．数値は余白やサイズに使います．真偽値は `if` で使います．`style` はスタイル名への参照です．
+
+<ApiCard
+  locale="ja"
+  kind="function"
+  name="style"
+  signature="style(style_name: string) -> style"
+  module="組み込み"
+  returns="style"
+  summary="文字列からスタイル参照を作ります．panel，styled，sty などへ渡します．"
+/>
+
+```ss
+let chrome = panel(style("custom"))
+```
+
+## 文書グラフ参照
+
+`document`，`page`，`object`，`metadata` は，文書グラフ上の要素を指す値です．文字列や数値は値そのものを計算します．`document`，`page`，`object`，`metadata` は，同じ文書グラフ上の要素を指し，後続の処理でその要素を読み書きします．
+
+```ss
+let doc = docctx()
+let page = pagectx()
+let body = text("本文")
+let item = mark("section", "intro")
+```
+
+`body` は `object` 型です．この値は，プロパティ代入，制約，選択，ページ取得に使えます．
+
+```ss
+body.text_size = 22
+below(body, head("見出し"), 32)
+let page = page_of(body)
+```
+
+object のロールとペイロード種別は [オブジェクトとロール](./objects) を参照してください．
+
+## object 型と object クラス
+
+`object` はページ上の描画対象への参照です．標準コンポーネントの多くは，呼び出した時点で現在のページに object を追加し，その object を返します．
+
+```ss
+let body = text("本文")
+let plot = image("assets/plot.png", 0.8)
+let eq = tex("\\sum_{i=1}^{n} i", 1)
+```
+
+実装上の型情報には object クラス名が入る場合があります．クラス情報は，object 宣言，role，プロパティ検査で使われます．
+
+```text
+object
+```
+
+型注釈では `object` を使います．クラス名は，標準ライブラリの role や object 宣言から推論されます．
+
+## selection 型
+
+`selection<T>` は，文書グラフから選ばれた値の集合です．主な形は `selection<page>`，`selection<object>`，`selection<metadata>` です．
+
+```ss
+let all_pages = pages(docctx())
+let titles = objs(pagectx(), "title")
+let marks = page_marks(pagectx(), "section")
+```
+
+選択は，ページ番号，目次，タイトル検査，文書生成に使います．`foreach` は選択の各要素に関数を適用します．`join` は選択から文字列を作ります．
+
+```ss
+let lines = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+詳しい関数は [演算子と組み込み関数](./operators-and-builtins) と [文書全体を使った生成](./generation) を参照してください．
+
+## constraints 型
+
+`constraints` は配置制約の集合です．`below`，`pin_l`，`same_l` などの配置関数は制約を生成します．
+
+```ss
+let title = head("配置")
+let body = text("本文")
+below(body, title, 32)
+```
+
+制約集合を文として評価すると，現在ページの配置グラフへ追加されます．`constraints` はページ内で使います．文書ブロックには現在ページがないため，ページ内制約を直接作れません．
+
+```ss
+fn top_left(node: object) -> constraints
+  return constraints(
+    pin_l(node, 72),
+    pin_t(node, 96)
+  )
+end
+
+page sample
+let body = text("本文")
+top_left(body)
+end
+```
+
+配置の詳しい説明は [制約](./constraints) と [配置](../layout/default) を参照してください．
+
+## anchor 型
+
+`anchor` は，page または object の位置を指す値です．
+
+```ss
+let body = text("本文")
+let top = anchor(body, "top")
+let page_top = page_anchor("top")
+equal(top, page_top, -96)
+```
+
+制約文で書くと次の形です．
+
+```ss
+~ body.top == page.top - 96
+```
+
+使えるアンカー名は，`left`，`right`，`top`，`bottom`，`center_x`，`center_y` です．`width` と `height` は寸法制約の構文として使います．
+
+## function 型
+
+関数値は，関数名またはラムダ式で渡します．標準的な用途は `foreach`，`fold`，`join` のコールバックです．
+
+```ss
+fn title_line(title: object) -> string
+  return "- " ++ title.content
+end
+
+let text_value = join(objs(pagectx(), "title"), "\n", title_line)
+```
+
+ラムダ式で同じことを書けます．
+
+```ss
+let text_value = join(
+  objs(pagectx(), "title"),
+  "\n",
+  (title: object) |-> "- " ++ title.content
+)
+```
+
+関数型は引数型と返り値型で決まります．`join` のコールバックは `object -> string` のような型を要求します．
+
+## 型の受理
+
+型検査では，期待される型と実際の式の型を比較します．次の規則で受理される場合，その式をその位置で使えます．
+
+| 期待型 | 実際の型 | 結果 |
+| --- | --- | --- |
+| `T` | `T` | 受理します． |
+| `any` | `T` | 受理します． |
+| `T` | `any` | 受理します． |
+| `object` | `object` | 受理します． |
+| `selection<object>` | `selection<object>` | 受理します． |
+| `selection<any>` | `selection<object>` | 受理します． |
+| `selection<object>` | `selection<page>` | 要素の型が違うため受理しません． |
+
+関数型では，引数の数，引数型，返り値型を比較します．既定値を持つ末尾引数は省略できます．
+
+```ss
+fn label(text_value: string, size: number = 18) -> object
+  let obj = text(text_value)
+  obj.text_size = size
+  return obj
+end
+
+let a = label("A")
+let b = label("B", 24)
+```
+
+次の呼び出しは，引数の型が合いません．
+
+```ss
+let bad = label(24, "B")
+```
+
+## プロパティ値
+
+プロパティ代入の右辺には，`string`，`number`，`bool`，`style` を使えます．内部の文書グラフでは，描画器が読む文字列へ変換して保持します．
+
+```ss
+let body = text("本文")
+body.text_size = 22
+body.wrap = "on"
+body.debug = true
+body.variant = style("note")
+```
+
+`body.text_size = 22` は数値を受け取り，内部では `"22"` のような文字列値として保持されます．`body.wrap = "on"` は文字列値です．値ドメインが定義されているプロパティでは，文字列の内容も検査されます．
+
+| 値ドメイン | 受理する値 |
+| --- | --- |
+| `Color` | 空文字列，または解釈できる色文字列 |
+| `ScalarLike` | `string` または `number` |
+| `FitPolicy` | `"warn"`，`"error"`，`"ignore"` |
+| `RenderKind` | `"text"`，`"code"`，`"vector_math"`，`"vector_asset"`，`"raster_asset"`，`"chrome"`，`"chrome_only"` |
+| `WrapMode` | `"on"`，`"off"` |
+| `LayoutPolicy` | `"top"`，`"top_flow"`，`"center"`，`"center_stack"` |
+
+値ドメインは `stdlib/core/classes.ss` の object フィールド宣言で使われます．プロパティ名と描画器での扱いは [プロパティとスタイル](./properties) を参照してください．
+
+## 実行例
+
+次の例は，スカラー値，文書グラフ参照，選択，関数値，文字列生成，プロパティ代入，制約を一つのページで使います．`join` は `selection<object>` と `object -> string` の関数を受け取り，タイトル一覧の文字列を作ります．
+
+<SsExample
+  id="authoring-values-and-types"
+  title="値と型の実行例"
+  pdfLabel="PDF を開く"
+  sourceLabel="ソース"
+  generatedPdfLabel="PDF"
+  previewImageLabel="プレビュー"
+  rendererLabel="描画器"
+/>
+
+手元で実行するコマンドです．
+
+```sh
+ss check site/samples/authoring-values-and-types.ss
+ss dump site/samples/authoring-values-and-types.ss .ss-cache/authoring-values-and-types.json
+ss render site/samples/authoring-values-and-types.ss .ss-cache/authoring-values-and-types.pdf
+```
+
+`check` では `selection_count`，`join`，`title_line` の引数型と返り値型を確認します．`dump` では，object のロール，ペイロード種別，プロパティ，配置制約，`summary` の `content` に生成された文字列が入っているかを見ます．PDF では，本文とタイトル数の表示が見出しの下に並ぶことを見ます．
+
+## 型エラー
+
+型が合わない呼び出しはエラーです．
+
+```ss
+fn f(x: string) -> object
+  return text(x)
+end
+
+let a = f(1)
+```
+
+`void` の結果を値として使うこともエラーです．
+
+```ss
+let x = footers("研究会資料")
+```
+
+この場合は文として呼び出します．
+
+```ss
+document
+footers("研究会資料")
+end
+```
+
+## 主な診断
+
+| 診断 | 状態 |
+| --- | --- |
+| `UnknownIdentifier` | 名前が現在の環境にありません． |
+| `UnknownFunction` | 呼び出し先の関数がありません． |
+| `InvalidArity` | 引数の数が合いません． |
+| `TypeMismatch` | 期待型と実際の型が合いません． |
+| `VoidValue` | `void` の結果を値として使っています． |
+| `InvalidCallback` | コールバックの型が合いません． |
+
+診断を読むときは，該当する式の値の分類と，関数が要求している引数型を見ます．関数シグネチャは各コンポーネントページと [演算子と組み込み関数](./operators-and-builtins) にあります．

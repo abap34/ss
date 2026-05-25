@@ -1,0 +1,10 @@
+[
+  { "type": "file", "name": "default", "label": "既定の配置" },
+  { "type": "file", "name": "flow", "label": "縦方向の流し込み" },
+  { "type": "file", "name": "pinning", "label": "端への固定" },
+  { "type": "file", "name": "alignment", "label": "端をそろえる制約" },
+  { "type": "file", "name": "below", "label": "下に置く制約" },
+  { "type": "file", "name": "columns", "label": "二段組" },
+  { "type": "file", "name": "groups", "label": "グループ化" },
+  { "type": "file", "name": "fit", "label": "はみ出し時の扱い" }
+]

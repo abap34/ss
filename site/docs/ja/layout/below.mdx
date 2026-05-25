@@ -1,0 +1,88 @@
+---
+title: "下に置く制約"
+description: "`below`，縦方向の object 関係，横方向の併用制約，はみ出し診断を説明します．"
+---
+
+# 下に置く制約
+
+`below(target, source, gap)` は，`target` を `source` の下へ置くアンカー制約を追加します．
+
+```ss
+below(body, title, 32)
+```
+
+この関数は `std:core/layout` に定義されています．
+
+```ss
+fn below(target: object, source: object, gap: number) -> constraints
+  return equal(anchor(target, "top"), anchor(source, "bottom"), neg(gap))
+end
+```
+
+## 基本例
+
+```ss
+import std:themes/default
+
+page layout_example
+  let title = head("配置")
+  let body = text("本文")
+
+  below(body, title, 32)
+end
+```
+
+`below` が指定するのは縦方向の関係だけです．左端，右端，幅を決める必要がある場合は，横方向の制約を追加します．
+
+```ss
+page aligned
+  let title = head("配置")
+  let body = text("本文")
+
+  below(body, title, 32)
+  same_l(body, title, 0)
+end
+```
+
+## 幅と折り返し
+
+本文やコードは，水平方向の範囲が決まってから折り返しを測定します．
+
+```ss
+page wrapped
+  let title = head("配置")
+  let body = text("折り返す本文をここに書きます．")
+
+  flow(body, "102", "102")
+  below(body, title, 32)
+end
+```
+
+`flow(body, "102", "102")` は水平方向の配置プロパティを設定し，折り返しを有効にします．固定幅を使う場合は `fix_w(body, 520)` を使います．
+
+## 組み合わせ関数
+
+`below_l` は `same_l` と `below` をまとめて呼び，対象 object を返します．
+
+```ss
+let body = below_l(text("本文"), title, 0, 32)
+```
+
+テーマ関数の中で，配置した object を後続のプロパティ設定へ渡したい場合に使います．
+
+## 診断
+
+| 問題 | コマンド |
+| --- | --- |
+| 存在しない object 名 | `ss check` |
+| 存在しないアンカー名 | `ss check` |
+| 縦方向の制約衝突 | グラフ解決時点により `ss check` または `ss render` |
+| 折り返し後のはみ出し | `ss render` と PDF |
+
+ソースが正しく見えるのに配置結果が違う場合は `dump` を使います．
+
+```sh
+ss dump slide.ss .ss-cache/layout.json
+```
+
+対象 object の frame と，`top` または `bottom` を含む制約を見ます．

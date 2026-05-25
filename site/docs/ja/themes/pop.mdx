@@ -1,0 +1,87 @@
+---
+title: "ポップテーマ"
+description: "`std:themes/pop` の関数，枠の設定，アセット処理，配置への影響を説明します．"
+---
+
+# ポップテーマ
+
+`std:themes/pop` は，色付き文字と枠付きコンテンツを多く使うプレゼンテーション関数を定義します．
+
+```ss
+import std:themes/pop
+
+page title
+  cover("Slide title", "Subtitle", "Author")
+end
+
+page body
+  let title = head("Result")
+  let plot = image("plots/result.png", 0.8)
+  let caption = figure("Accuracy by condition")
+
+  ~ plot.top = title.bottom + 28
+  ~ caption.top = plot.bottom + 12
+  ~ caption.left = plot.left
+end
+```
+
+## 提供する関数
+
+| 関数 | 返すもの |
+| --- | --- |
+| `h1(text)` | `style("pop")` を使うタイトル object |
+| `h2(text)` | サブタイトル object |
+| `head(text)` | チップラベルとタイトルを持つページ見出し |
+| `subhead(text)` | CJK 太字補助設定付きのサブタイトル |
+| `text(source)` | base コンポーネント由来の本文 object |
+| `tex(source, scale = 1)` | 枠付きの数式 object |
+| `figure(text)` | 枠付きの図注 object |
+| `image(path, factor = 1)` | panel で囲んだ画像 object |
+| `pdf(path, factor = 1)` | panel で囲んだ PDF object |
+| `code(source, language = "python")` | 色付きの枠を持つコード object |
+| `note(text)` | inset された note object |
+| `toc(title)` | 見出し，目次 object，panel，ページ番号 |
+| `cover(title, subtitle, author)` | 表紙用 object 群 |
+
+`image` と `pdf` は `require_asset_exists` を呼ぶため，アセット不足を検査時または描画時に報告します．
+
+## 見た目の設定
+
+ポップテーマはピンク，オレンジ，紫のアクセントを使います．コンテンツ枠は淡い暖色の背景とオレンジの枠線です．
+
+| 領域 | 設定 |
+| --- | --- |
+| 見出し | タイトル付近に小さな色付きチップ |
+| 数式 | 余白付きの `vector_math` |
+| 画像と PDF | content object を panel で囲む |
+| コード | 既定テーマより大きい余白 |
+| 表紙 | 大きい紫のタイトル，暗いサブタイトル，オレンジの著者行 |
+
+テーマ内では `pop`，`pop_chip`，`pop_hero`，`custom` などの style 名を使います．
+
+## 配置への影響
+
+画像と PDF コンポーネントは，content の周囲に panel を作ります．見た目上の占有領域には padding が含まれます．
+
+```ss
+page asset_page
+  let title = head("Asset")
+  let diagram = image("diagrams/flow.png")
+  diagram.fit = "contain"
+
+  ~ diagram.top = title.bottom + 28
+  ~ diagram.left = page.left + 96
+  ~ diagram.right = page.right - 96
+end
+```
+
+画像を別の object に近づける場合は，panel の余白を含めて配置します．
+
+## 確認
+
+このテーマへ切り替えた後は，アセット，数式，コードを含むページを PDF で確認します．
+
+```sh
+ss check deck.ss
+ss render deck.ss .ss-cache/pop.pdf
+```

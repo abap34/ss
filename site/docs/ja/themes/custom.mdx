@@ -1,0 +1,91 @@
+---
+title: "独自テーマ"
+description: "通常の `.ss` モジュールとしてテーマ関数を定義する方法を説明します．"
+---
+
+# 独自テーマ
+
+独自テーマは，`std:themes/base` を import してプレゼンテーション関数を定義する `.ss` モジュールです．
+
+```ss
+import std:themes/base
+
+fn head(title_text: string) -> object
+  let title = title_obj(title_text)
+  txt(title, "Helvetica-Bold", "34", "42", "0.1,0.1,0.1", "44", "72", "72")
+  return title
+end
+
+fn text(text_value: string) -> object
+  let body = body_obj(text_value)
+  txt(body, "Helvetica", "20", "28", "0.08,0.08,0.08", "28", "96", "96")
+  return body
+end
+```
+
+ページは標準テーマの代わりに独自テーマを import します．
+
+```ss
+import ./theme
+
+page sample
+  let title = head("Custom theme")
+  let body = text("Theme functions are ordinary functions.")
+  ~ body.top = title.bottom + 32
+end
+```
+
+## テーマの境界
+
+テーマ関数は，object コンストラクタ，文字設定，色，枠，既定の配置を選びます．ページ側には，内容とスライド固有の制約を書きます．
+
+| テーマ側 | ページ側 |
+| --- | --- |
+| `head`，`text`，`code`，`cover`，`toc` の定義 | それらの関数呼び出し |
+| フォント，文字サイズ，行送り，色 | スライド本文 |
+| コンポーネントの枠と余白 | object 同士の関係 |
+| テーマ共通の生成 object | ページごとの内容 |
+
+この分け方にすると，テーマ変更を import とテーマモジュールに閉じやすくなります．
+
+## 開始点
+
+`std:themes/base` は標準コンポーネント関数を再公開します．独自テーマは必要な関数だけ上書きできます．
+
+```ss
+import std:themes/base
+
+fn code(text_value: string, language_name: string = "python") -> object
+  return code_box(text_value, language_name, "96", "96", 16, 12, "0.98,0.98,0.98", "0.70,0.70,0.70", "1.0", "8")
+end
+```
+
+独自テーマが定義しない関数は，import した base 側の関数を使います．
+
+## object プロパティ
+
+テーマ関数はプロパティを直接設定できます．
+
+```ss
+fn warning(text_value: string) -> object
+  let obj = note_obj(text_value)
+  obj.text_color = "0.55,0.05,0.05"
+  obj.chrome_fill = "1,0.94,0.94"
+  obj.chrome_stroke = "0.75,0.2,0.2"
+  return obj
+end
+```
+
+できる限り標準クラスで宣言されたフィールドを使います．不明なフィールドは `ss check` で報告されます．
+
+## 確認
+
+テーマモジュールと，そのテーマを import するデッキを検査します．
+
+```sh
+ss check theme.ss
+ss check deck.ss
+ss render deck.ss .ss-cache/custom-theme.pdf
+```
+
+フォントサイズや余白を変えた後は，見出し，長い本文，コード，画像キャプション，数式，表紙を確認します．

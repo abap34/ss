@@ -1,0 +1,6 @@
+[
+  { "type": "file", "name": "default", "label": "既定テーマ" },
+  { "type": "file", "name": "academic", "label": "論文風テーマ" },
+  { "type": "file", "name": "pop", "label": "ポップテーマ" },
+  { "type": "file", "name": "custom", "label": "独自テーマ" }
+]

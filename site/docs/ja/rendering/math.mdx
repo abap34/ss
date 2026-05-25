@@ -1,0 +1,67 @@
+---
+title: "LaTeX 数式"
+description: "LaTeX 数式 の入力，生成物，診断を説明します．"
+---
+
+# LaTeX 数式
+
+数式 object は LaTeX を使って描画されます．追加パッケージが必要な場合は文書側で指定します．
+
+## 描画の位置付け
+
+描画は，構文解析，読み込み，型検査，展開，正規化，配置解決の後に行われます．
+
+```text
+source -> typed program -> document terms -> core graph -> layout -> PDF
+```
+
+描画器は，core graph に含まれる object，プロパティ，アセット参照，配置済み矩形を読み，PDF を出力します．
+
+
+## 例
+
+```ss
+import std:themes/default
+
+page math_example
+let title = head("数式")
+let eq = tex("\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}", 1.0)
+below(eq, title, 36)
+end
+```
+
+通常文字列の中に LaTeX のバックスラッシュを書く場合は，`\\` と書きます．複数行にしたい場合は三重引用符文字列を使います．
+
+
+## 入力
+
+描画器が読む主な値は次の通りです．
+
+| 値 | 用途 |
+| --- | --- |
+| `content` | 本文，コード，数式，アセットパス |
+| `role` | object の意味上の分類 |
+| `payload` | 描画時のペイロード種別 |
+| `props` | 文字，色，折り返し，描画方式 |
+| `bbox` | 配置済み矩形 |
+
+## 生成物
+
+`ss render` は PDF を出力します．中間ファイルやキャッシュは `.ss-cache` 以下に置きます．
+
+```sh
+ss render slide.ss .ss-cache/out.pdf
+```
+
+公開用の PDF だけをソース管理へ含めるかどうかは，プロジェクトの運用で決めます．通常の開発では，生成物を `.ss-cache` に置きます．
+
+## 診断
+
+描画時には，外部コマンドの失敗，アセットの読み込み失敗，数式のコンパイル失敗，object のはみ出し，フォントやアイコンの解決失敗が分かります．
+
+```sh
+ss check slide.ss
+ss render slide.ss .ss-cache/out.pdf
+```
+
+`check` と `render` は目的が違います．`check` は描画前に分かる誤りを確認します．`render` は実際の PDF 生成に必要な処理まで実行します．
