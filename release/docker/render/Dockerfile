@@ -52,8 +52,9 @@ FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         fontconfig \
@@ -66,16 +67,15 @@ RUN apt-get update \
         librsvg2-bin \
         poppler-utils \
         qpdf \
-        texlive-fonts-recommended \
-        texlive-latex-base \
-        texlive-latex-extra \
-        texlive-latex-recommended \
-        texlive-science \
-    && rm -rf /var/lib/apt/lists/*
+        texlive-full; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
-COPY release/docker/render/entrypoint.sh /usr/local/bin/ss-render-pages
+COPY release/docker/render/docker-entrypoint.sh /usr/local/bin/ss-docker-entrypoint
 COPY tests/smoke/render.sh /usr/local/bin/ss-render-smoke
+
+RUN chmod +x /usr/local/bin/ss-docker-entrypoint /usr/local/bin/ss-render-smoke
 
 RUN cd /tmp \
     && SS_BIN=/usr/local/bin/ss SS_RENDER_SMOKE_DIR=/tmp/ss-render-smoke /usr/local/bin/ss-render-smoke \
@@ -84,4 +84,4 @@ RUN cd /tmp \
 ENV SS_CACHE_MAX_BYTES="512M"
 
 WORKDIR /workspace
-ENTRYPOINT ["/usr/local/bin/ss-render-pages"]
+ENTRYPOINT ["/usr/local/bin/ss-docker-entrypoint"]

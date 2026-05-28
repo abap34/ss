@@ -4,6 +4,14 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- Made the render Docker image expose the normal `ss` CLI directly.
+- Installed Debian's complete `texlive-full` package in the render Docker
+  image.
+- Removed the Docker-specific batch renderer and the generated `index.html` and
+  `manifest.json` files.
+
 ## [0.1.6] - 2026-05-24
 
 ### Changed
