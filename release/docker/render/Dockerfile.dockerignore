@@ -8,7 +8,7 @@
 !release/docker/render
 !release/docker/render/Dockerfile
 !release/docker/render/Dockerfile.dockerignore
-!release/docker/render/entrypoint.sh
+!release/docker/render/docker-entrypoint.sh
 
 !scripts
 !scripts/setup-md4c.sh
