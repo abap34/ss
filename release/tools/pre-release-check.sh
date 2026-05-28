@@ -240,17 +240,17 @@ else
   fi
 
   step "render Docker image version"
-  docker run --rm --platform "$docker_platform" --entrypoint ss "$docker_image" --version
+  docker run --rm --platform "$docker_platform" "$docker_image" --version
 
-  step "render Docker image entrypoint"
-  container_workspace="$cache_dir/render-pages-workspace"
+  step "render Docker image CLI"
+  container_workspace="$cache_dir/render-workspace"
   rm -rf "$container_workspace"
-  mkdir -p "$container_workspace/slides"
+  mkdir -p "$container_workspace/slides" "$container_workspace/.ss-cache"
   cat > "$container_workspace/slides/release-check.ss" <<'SS'
 import std:themes/default
 
 page release_check
-cover("Release check", "render image entrypoint", "local")
+cover("Release check", "render image CLI", "local")
 pageno()
 end
 SS
@@ -259,21 +259,24 @@ SS
     --platform "$docker_platform" \
     --user "$(id -u):$(id -g)" \
     -e HOME=/tmp \
-    -e SS_INPUT='slides/**/*.ss' \
-    -e SS_OUT_DIR=_site \
-    -e SS_PDF_DIR=slides \
-    -e SS_INDEX_TITLE='Release Check' \
-    -e SS_CHECK=true \
-    -e SS_WRITE_DUMP=true \
     -v "$container_workspace:/workspace" \
     -w /workspace \
-    "$docker_image"
+    "$docker_image" \
+    render slides/release-check.ss .ss-cache/direct-render.pdf
 
-  test -s "$container_workspace/_site/index.html"
-  test -s "$container_workspace/_site/manifest.json"
-  test -s "$container_workspace/_site/slides/release-check.pdf"
-  test -s "$container_workspace/_site/slides/release-check.json"
-  qpdf --check "$container_workspace/_site/slides/release-check.pdf" >/dev/null
+  test -s "$container_workspace/.ss-cache/direct-render.pdf"
+  qpdf --check "$container_workspace/.ss-cache/direct-render.pdf" >/dev/null
+
+  docker run --rm \
+    --platform "$docker_platform" \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp \
+    -v "$container_workspace:/workspace" \
+    -w /workspace \
+    "$docker_image" \
+    dump slides/release-check.ss .ss-cache/direct-render.json
+
+  test -s "$container_workspace/.ss-cache/direct-render.json"
 fi
 
 if [[ "$allow_dirty" != true ]]; then

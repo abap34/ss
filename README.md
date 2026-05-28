@@ -223,27 +223,44 @@ Install a TeX distribution when you render LaTeX math.
 
 ### Container and GitHub Actions
 
-For CI and GitHub Pages publishing, ss also ships a render image:
+ss ships a Docker image with the CLI, render toolchain,
+and Debian's complete `texlive-full` package installed:
 
 ```text
 ghcr.io/abap34/ss-render:v0
 ghcr.io/abap34/ss-render:v0.1
-ghcr.io/abap34/ss-render:v0.1.2
 ```
 
-The repository includes a GitHub Action for rendering `.ss` files to PDFs and
-uploading a Pages artifact:
+Mount the current directory as `/workspace` and pass normal `ss` subcommands:
+
+```sh
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/abap34/ss-render:v0 \
+  check slides/deck.ss
+
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/abap34/ss-render:v0 \
+  render slides/deck.ss .ss-cache/deck.pdf
+```
+
+The repository also includes a GitHub Action for rendering matching `.ss` files
+to PDFs with the same Docker image:
 
 ```yaml
-- uses: abap34/ss/release/actions/render-pages@v0.1.2
+- uses: abap34/ss/release/actions/render@v0
   with:
     image: ghcr.io/abap34/ss-render:v0
     input: "slides/**/*.ss"
-    title: "Slides"
+    out-dir: dist
 ```
-
-Use the CLI or Homebrew for local authoring; use the render image for automated
-publishing.
 
 ## Usage
 

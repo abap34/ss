@@ -1,0 +1,146 @@
+name: Render ss slides
+description: Render .ss slide decks to PDF with the ss render container.
+
+inputs:
+  image:
+    description: Prebuilt ss render image to run.
+    required: false
+    default: ghcr.io/abap34/ss-render:v0
+  input:
+    description: Newline- or comma-separated glob patterns for .ss files.
+    required: false
+    default: slides/**/*.ss
+  out-dir:
+    description: Directory to populate with rendered PDFs.
+    required: false
+    default: dist
+  pdf-dir:
+    description: Optional directory under out-dir where rendered PDFs are written.
+    required: false
+    default: ""
+  asset-base-dir:
+    description: Optional --asset-base-dir passed to ss check/render.
+    required: false
+    default: ""
+  clean:
+    description: Remove out-dir before rendering.
+    required: false
+    default: "true"
+  check:
+    description: Run ss check before rendering each source.
+    required: false
+    default: "true"
+  write-dump:
+    description: Write dump JSON files next to rendered PDFs.
+    required: false
+    default: "false"
+
+outputs:
+  out-dir:
+    description: The populated output directory.
+    value: ${{ inputs.out-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Render ss slides
+      shell: bash
+      env:
+        SS_RENDER_IMAGE: ${{ inputs.image }}
+        SS_INPUT: ${{ inputs.input }}
+        SS_OUT_DIR: ${{ inputs.out-dir }}
+        SS_PDF_DIR: ${{ inputs.pdf-dir }}
+        SS_ASSET_BASE_DIR: ${{ inputs.asset-base-dir }}
+        SS_CLEAN: ${{ inputs.clean }}
+        SS_CHECK: ${{ inputs.check }}
+        SS_WRITE_DUMP: ${{ inputs.write-dump }}
+      run: |
+        set -euo pipefail
+
+        cd "$GITHUB_WORKSPACE"
+
+        trim() {
+          local value="$1"
+          value="${value#"${value%%[![:space:]]*}"}"
+          value="${value%"${value##*[![:space:]]}"}"
+          printf '%s' "$value"
+        }
+
+        run_ss() {
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            "$SS_RENDER_IMAGE" \
+            "$@"
+        }
+
+        docker pull "$SS_RENDER_IMAGE"
+
+        if [[ "$SS_CLEAN" == "true" ]]; then
+          rm -rf "$SS_OUT_DIR"
+        fi
+        mkdir -p "$SS_OUT_DIR"
+
+        shopt -s globstar nullglob
+
+        declare -A seen=()
+        sources=()
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          IFS=',' read -ra parts <<< "$line"
+          for raw_pattern in "${parts[@]}"; do
+            pattern="$(trim "$raw_pattern")"
+            [[ -n "$pattern" ]] || continue
+            while IFS= read -r path; do
+              [[ -f "$path" && "$path" == *.ss ]] || continue
+              if [[ -z "${seen[$path]:-}" ]]; then
+                seen[$path]=1
+                sources+=("$path")
+              fi
+            done < <(compgen -G "$pattern" || true)
+          done
+        done <<< "$SS_INPUT"
+
+        if [[ "${#sources[@]}" -eq 0 ]]; then
+          echo "render action: no .ss files matched '$SS_INPUT'" >&2
+          exit 2
+        fi
+
+        mapfile -t sources < <(printf '%s\n' "${sources[@]}" | sort)
+
+        declare -A outputs=()
+        for src in "${sources[@]}"; do
+          stem="$(basename "$src" .ss)"
+          if [[ -n "$SS_PDF_DIR" ]]; then
+            pdf_path="$SS_OUT_DIR/$SS_PDF_DIR/$stem.pdf"
+          else
+            pdf_path="$SS_OUT_DIR/$stem.pdf"
+          fi
+
+          if [[ -n "${outputs[$pdf_path]:-}" ]]; then
+            echo "render action: output collision for $pdf_path from $src and ${outputs[$pdf_path]}" >&2
+            exit 2
+          fi
+          outputs[$pdf_path]="$src"
+
+          mkdir -p "$(dirname "$pdf_path")"
+
+          ss_args=()
+          if [[ -n "$SS_ASSET_BASE_DIR" ]]; then
+            ss_args+=(--asset-base-dir "$SS_ASSET_BASE_DIR")
+          fi
+
+          if [[ "$SS_CHECK" == "true" ]]; then
+            echo "check  $src"
+            run_ss check "$src" "${ss_args[@]}"
+          fi
+
+          echo "render $src -> $pdf_path"
+          run_ss render "$src" "$pdf_path" "${ss_args[@]}"
+
+          if [[ "$SS_WRITE_DUMP" == "true" ]]; then
+            echo "dump   $src -> ${pdf_path%.pdf}.json"
+            run_ss dump "$src" "${pdf_path%.pdf}.json" "${ss_args[@]}"
+          fi
+        done
