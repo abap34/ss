@@ -4,6 +4,8 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-28
+
 ### Changed
 
 - Made the render Docker image expose the normal `ss` CLI directly.

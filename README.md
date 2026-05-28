@@ -145,7 +145,7 @@ page title
 cover(
   "Hello, ss",
   "Write slides as programs.",
-  "v0.1.2"
+  "v0.1.7"
 )
 end
 
@@ -229,6 +229,7 @@ and Debian's complete `texlive-full` package installed:
 ```text
 ghcr.io/abap34/ss-render:v0
 ghcr.io/abap34/ss-render:v0.1
+ghcr.io/abap34/ss-render:v0.1.7
 ```
 
 Mount the current directory as `/workspace` and pass normal `ss` subcommands:
@@ -255,7 +256,7 @@ The repository also includes a GitHub Action for rendering matching `.ss` files
 to PDFs with the same Docker image:
 
 ```yaml
-- uses: abap34/ss/release/actions/render@v0
+- uses: abap34/ss/release/actions/render@v0.1.7
   with:
     image: ghcr.io/abap34/ss-render:v0
     input: "slides/**/*.ss"
