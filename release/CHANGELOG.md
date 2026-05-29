@@ -4,6 +4,18 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-29
+
+### Changed
+
+- Simplified the native PDF backend dependency setup by using the bundled
+  Cairo/Pango/librsvg shim package configuration.
+
+### Fixed
+
+- Preserved imported source locations in diagnostics so errors from imported
+  files point back to their original source spans.
+
 ## [0.1.7] - 2026-05-28
 
 ### Changed
