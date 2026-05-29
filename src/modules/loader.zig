@@ -332,12 +332,32 @@ const Builder = struct {
         }
 
         const module = self.moduleByIdMutable(module_id) orelse return error.UnknownImport;
-        for (module.resolved_import_ids.items) |import_id| {
+        for (module.resolved_import_ids.items, 0..) |import_id, import_index| {
+            if (self.state_by_id.get(import_id)) |state| {
+                if (state == .visiting) {
+                    reportImportCycle(module, import_index);
+                    return error.DiagnosticsFailed;
+                }
+            }
             try self.appendPostOrder(import_id, order, seen);
         }
         gop.value_ptr.* = .done;
         try seen.put(module_id, {});
         try order.append(self.allocator, module_id);
+    }
+
+    fn reportImportCycle(module: *const core.SourceModule, import_index: usize) void {
+        const span = if (import_index < module.program.imports.items.len)
+            module.program.imports.items[import_index].span
+        else
+            ast.Span{ .start = 0, .end = 1 };
+        error_report.print(.{
+            .path = module.path orelse module.spec,
+            .source = module.source,
+            .severity = .@"error",
+            .message = "ImportCycle: import graph contains a cycle",
+            .span = .{ .start = span.start, .end = span.end },
+        });
     }
 };
 

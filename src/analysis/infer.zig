@@ -25,6 +25,10 @@ const typeLabelAlloc = semantic_types.typeLabelAlloc;
 
 threadlocal var active_return_visiting: ?*std.StringHashMap(void) = null;
 
+const InferenceOptions = struct {
+    validate_contracts: bool = true,
+};
+
 fn isConst(func: ast.FunctionDecl) bool {
     return func.kind == .constant;
 }
@@ -37,6 +41,20 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     });
 }
 
+fn originPathForFunction(sema: *const SemanticEnv, func: ast.FunctionDecl) []const u8 {
+    const ir = sema.ir orelse return "";
+    const metadata = ir.function_metadata.get(func.name) orelse return "";
+    const module = ir.moduleById(metadata.module_id) orelse return "";
+    return module.path orelse module.spec;
+}
+
+fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: ast.Span) ![]const u8 {
+    if (origin_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
+    }
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
+}
+
 pub fn exprSort(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
@@ -45,7 +63,7 @@ pub fn exprSort(
     expr: ast.Expr,
     origin: []const u8,
 ) anyerror!core.SemanticSort {
-    return (try exprInfo(allocator, ir, sema, env, expr, origin)).sort;
+    return (try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, .{})).sort;
 }
 
 pub fn exprInfo(
@@ -55,6 +73,18 @@ pub fn exprInfo(
     env: *const TypeEnv,
     expr: ast.Expr,
     origin: []const u8,
+) anyerror!TypeInfo {
+    return exprInfoWithOptions(allocator, ir, sema, env, expr, origin, .{});
+}
+
+fn exprInfoWithOptions(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    expr: ast.Expr,
+    origin: []const u8,
+    options: InferenceOptions,
 ) anyerror!TypeInfo {
     return switch (expr) {
         .string => |text| blk: {
@@ -75,9 +105,9 @@ pub fn exprInfo(
             try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
-        .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin),
-        .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin),
-        .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin),
+        .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin, options),
+        .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin, options),
+        .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin, options),
     };
 }
 
@@ -99,6 +129,7 @@ fn inferLambdaInfo(
     env: *const TypeEnv,
     lambda: ast.LambdaExpr,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
     var local_env = try env.clone();
     defer local_env.deinit();
@@ -110,7 +141,7 @@ fn inferLambdaInfo(
         param_info.sort = param.sort;
         try local_env.put(param.name, param_info);
     }
-    const body_info = try exprInfo(allocator, ir, sema, &local_env, lambda.body.*, origin);
+    const body_info = try exprInfoWithOptions(allocator, ir, sema, &local_env, lambda.body.*, origin, options);
     if (body_info.sort == .void) {
         try addUserReport(ir, origin, "VoidValue: lambda bodies must produce a value", .{});
         return error.InvalidSemanticSort;
@@ -127,10 +158,11 @@ fn inferCallInfo(
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
+    options: InferenceOptions,
 ) anyerror!TypeInfo {
     if (env.get(call.name)) |callee_info| {
         if (callee_info.ty.tag == .function and callee_info.ty.fn_result != null) {
-            return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin);
+            return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin, options);
         }
     }
     if (sema.function(call.name)) |func| {
@@ -138,8 +170,8 @@ fn inferCallInfo(
             const const_info = try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, .{
                 .name = call.name,
                 .args = std.ArrayList(ast.Expr).empty,
-            }, origin);
-            return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin);
+            }, origin, options);
+            return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin, options);
         }
     }
     const descriptor = sema.call(call.name) orelse {
@@ -147,8 +179,8 @@ fn inferCallInfo(
         return error.UnknownFunction;
     };
     return switch (descriptor) {
-        .function => |func| try inferUserCallInfo(allocator, ir, sema, env, call, origin, func),
-        .primitive => |primitive| try inferPrimitiveCallInfo(allocator, ir, sema, env, call, origin, primitive),
+        .function => |func| try inferUserCallInfo(allocator, ir, sema, env, call, origin, func, options),
+        .primitive => |primitive| try inferPrimitiveCallInfo(allocator, ir, sema, env, call, origin, primitive, options),
     };
 }
 
@@ -160,9 +192,10 @@ fn inferApplyInfo(
     callee: ast.Expr,
     args: []const ast.Expr,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
-    const callee_info = try exprInfo(allocator, ir, sema, env, callee, origin);
-    return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, args, origin);
+    const callee_info = try exprInfoWithOptions(allocator, ir, sema, env, callee, origin, options);
+    return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, args, origin, options);
 }
 
 fn inferFunctionValueCallInfo(
@@ -173,6 +206,7 @@ fn inferFunctionValueCallInfo(
     callee_info: TypeInfo,
     args: []const ast.Expr,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (callee_info.ty.tag != .function or callee_info.ty.fn_result == null) {
         try ensureSort(ir, callee_info.sort, .function, origin, .UnmatchedArgumentType);
@@ -183,7 +217,7 @@ fn inferFunctionValueCallInfo(
         return error.InvalidArity;
     }
     for (args, 0..) |arg, index| {
-        const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
+        const actual = try exprInfoWithOptions(allocator, ir, sema, env, arg, origin, options);
         try ensureType(ir, allocator, actual, callee_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
     }
     return infoFromType(callee_info.ty.fn_result.?.*);
@@ -197,6 +231,7 @@ fn inferUserCallInfo(
     call: ast.CallExpr,
     origin: []const u8,
     func: ast.FunctionDecl,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (isConst(func)) {
         try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
@@ -214,10 +249,10 @@ fn inferUserCallInfo(
     }
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
-        const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
+        const actual = try exprInfoWithOptions(allocator, ir, sema, env, arg, origin, options);
         try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
     }
-    return try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, call, origin);
+    return try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, call, origin, options);
 }
 
 fn inferPrimitiveCallInfo(
@@ -228,6 +263,7 @@ fn inferPrimitiveCallInfo(
     call: ast.CallExpr,
     origin: []const u8,
     descriptor: registry.PrimitiveDescriptor,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
         if (descriptor.min_arity == descriptor.max_arity) {
@@ -239,13 +275,13 @@ fn inferPrimitiveCallInfo(
     }
     for (call.args.items, 0..) |arg, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
-        const actual = try exprInfo(allocator, ir, sema, env, arg, origin);
+        const actual = try exprInfoWithOptions(allocator, ir, sema, env, arg, origin, options);
         if (registry.primitiveArgType(descriptor, index)) |expected| {
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
-    const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin);
-    if (ir != null) {
+    const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin, options);
+    if (ir != null and options.validate_contracts) {
         switch (descriptor.op) {
             .set_prop => try validateSetPropCall(ir.?, call, env, sema, origin),
             .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, sema, origin),
@@ -268,15 +304,16 @@ fn inferUserFunctionReturnInfo(
     func: ast.FunctionDecl,
     call: ast.CallExpr,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (active_return_visiting) |visiting| {
-        return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, visiting);
+        return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, options, visiting);
     }
     var visiting = std.StringHashMap(void).init(allocator);
     defer visiting.deinit();
     active_return_visiting = &visiting;
     defer active_return_visiting = null;
-    return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, &visiting);
+    return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, options, &visiting);
 }
 
 fn inferUserFunctionReturnInfoInner(
@@ -287,6 +324,7 @@ fn inferUserFunctionReturnInfoInner(
     func: ast.FunctionDecl,
     call: ast.CallExpr,
     origin: []const u8,
+    options: InferenceOptions,
     visiting: *std.StringHashMap(void),
 ) !TypeInfo {
     if (visiting.contains(func.name)) {
@@ -301,9 +339,9 @@ fn inferUserFunctionReturnInfoInner(
     defer env.deinit();
     for (func.params.items, 0..) |param, index| {
         const info: TypeInfo = if (index < call.args.items.len)
-            try exprInfo(allocator, ir, sema, caller_env, call.args.items[index], origin)
+            try exprInfoWithOptions(allocator, ir, sema, caller_env, call.args.items[index], origin, options)
         else if (param.default_value) |default_value|
-            try exprInfo(allocator, ir, sema, &env, default_value.*, origin)
+            try exprInfoWithOptions(allocator, ir, sema, &env, default_value.*, origin, options)
         else blk: {
             var param_info = infoFromType(param.ty);
             param_info.sort = param.sort;
@@ -313,7 +351,16 @@ fn inferUserFunctionReturnInfoInner(
     }
 
     var result = infoFromType(func.result_type);
-    try inferReturnInfoFromStatements(allocator, ir, sema, &env, func.statements.items, &result);
+    try inferReturnInfoFromStatements(
+        allocator,
+        ir,
+        sema,
+        originPathForFunction(sema, func),
+        .{ .validate_contracts = false },
+        &env,
+        func.statements.items,
+        &result,
+    );
     result.ty = func.result_type;
     result.sort = func.result_sort;
     if (func.result_type.class_name) |class_name| result.object_class = class_name;
@@ -324,38 +371,42 @@ fn inferReturnInfoFromStatements(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
     sema: *const SemanticEnv,
+    origin_path: []const u8,
+    options: InferenceOptions,
     env: *TypeEnv,
     statements: []const ast.Statement,
     result: *TypeInfo,
 ) !void {
     for (statements) |stmt| {
+        const origin = try statementOrigin(allocator, origin_path, stmt.span);
+        defer allocator.free(origin);
         switch (stmt.kind) {
             .let_binding => |binding| {
-                const info = try exprInfo(allocator, null, sema, env, binding.expr, "");
+                const info = try exprInfoWithOptions(allocator, ir, sema, env, binding.expr, origin, options);
                 try env.put(binding.name, info);
             },
             .return_expr => |expr| {
-                const info = try exprInfo(allocator, null, sema, env, expr, "");
+                const info = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
                 result.* = try mergeTypeInfo(allocator, result.*, info);
             },
             .return_void => {},
             .property_set => |property_set| {
-                try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, "");
+                try validatePropertySetStatementWithOptions(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin, options);
             },
             .if_stmt => |if_stmt| {
-                _ = try exprInfo(allocator, null, sema, env, if_stmt.condition, "");
+                _ = try exprInfoWithOptions(allocator, ir, sema, env, if_stmt.condition, origin, options);
                 var then_env = try env.clone();
                 defer then_env.deinit();
-                try inferReturnInfoFromStatements(allocator, ir, sema, &then_env, if_stmt.then_statements.items, result);
+                try inferReturnInfoFromStatements(allocator, ir, sema, origin_path, options, &then_env, if_stmt.then_statements.items, result);
                 var else_env = try env.clone();
                 defer else_env.deinit();
-                try inferReturnInfoFromStatements(allocator, ir, sema, &else_env, if_stmt.else_statements.items, result);
+                try inferReturnInfoFromStatements(allocator, ir, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
             },
             .expr_stmt => |expr| {
-                _ = try exprInfo(allocator, null, sema, env, expr, "");
+                _ = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
             },
             .constrain => |decl| {
-                if (decl.offset) |expr| _ = try exprInfo(allocator, null, sema, env, expr, "");
+                if (decl.offset) |expr| _ = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
             },
         }
     }
@@ -369,10 +420,11 @@ fn primitiveResultTypeInfo(
     call: ast.CallExpr,
     descriptor: registry.PrimitiveDescriptor,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (descriptor.callback) |callback| {
         const selection_info = if (call.args.items.len > 0)
-            try exprInfo(allocator, ir, sema, env, call.args.items[0], origin)
+            try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options)
         else
             infoFromType(Type.selection(.any));
         if (call.args.items.len > callback.function_arg_index) {
@@ -387,6 +439,7 @@ fn primitiveResultTypeInfo(
                 selection_info,
                 callback.supplied_arg_count,
                 callback.expected_result_sort,
+                options,
             );
         }
     }
@@ -394,7 +447,7 @@ fn primitiveResultTypeInfo(
     switch (descriptor.result_policy) {
         .first_selection_item => {
             if (call.args.items.len == 0) return infoFromSort(.object);
-            const selection_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+            const selection_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             var info = switch (selection_info.ty.param) {
                 .page => infoFromSort(.page),
                 .metadata => infoFromSort(.metadata),
@@ -409,13 +462,13 @@ fn primitiveResultTypeInfo(
         },
         .first_arg => {
             if (call.args.items.len == 0) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
-            return try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+            return try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
         },
-        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin),
-        .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin),
+        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin, options),
+        .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin, options),
         .target_arg => {
             if (call.args.items.len == 0) return infoFromSort(.object);
-            const target_info = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+            const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             if (target_info.ty.tag == .code) return target_info;
             return .{
                 .ty = switch (target_info.ty.tag) {
@@ -457,9 +510,10 @@ fn validateCallbackShape(
     selection_info: TypeInfo,
     supplied_arg_count: usize,
     expected_result_sort: ?core.SemanticSort,
+    options: InferenceOptions,
 ) !void {
     if (call.args.items.len <= function_arg_index) return;
-    const callback_info = try exprInfo(allocator, ir, sema, env, call.args.items[function_arg_index], origin);
+    const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index], origin, options);
     if (callback_info.ty.tag != .function or callback_info.ty.fn_result == null) {
         try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
         return error.InvalidSemanticSort;
@@ -487,7 +541,7 @@ fn validateCallbackShape(
     }
     var extra_index: usize = 0;
     while (extra_index < extra_count) : (extra_index += 1) {
-        const actual = try exprInfo(allocator, ir, sema, env, call.args.items[function_arg_index + 1 + extra_index], origin);
+        const actual = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index + 1 + extra_index], origin, options);
         const param_index = supplied_arg_count + extra_index;
         try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
@@ -504,10 +558,11 @@ fn inferSelectionAlgebraInfo(
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
-    const left = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
-    const right = try exprInfo(allocator, ir, sema, env, call.args.items[1], origin);
+    const left = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
+    const right = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[1], origin, options);
     try ensureType(ir, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
     try ensureType(ir, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
 
@@ -539,6 +594,7 @@ fn inferSelectCallInfo(
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
+    options: InferenceOptions,
 ) !TypeInfo {
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
     const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
@@ -550,12 +606,12 @@ fn inferSelectCallInfo(
         try addUserReport(ir, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
         return error.InvalidArity;
     }
-    const base = try exprInfo(allocator, ir, sema, env, call.args.items[0], origin);
+    const base = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
     try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
     for (query.extra_arg_sorts, 0..) |_, extra_index| {
         const arg_index = 2 + extra_index;
         if (arg_index >= call.args.items.len) break;
-        const actual = try exprInfo(allocator, ir, sema, env, call.args.items[arg_index], origin);
+        const actual = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[arg_index], origin, options);
         if (registry.argSortType(query.extra_arg_sorts[extra_index])) |expected| {
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
@@ -714,12 +770,27 @@ pub fn validatePropertySetStatement(
     value: ast.Expr,
     origin: []const u8,
 ) !void {
+    return validatePropertySetStatementWithOptions(allocator, ir, sema, env, object_name, property_name, value, origin, .{});
+}
+
+fn validatePropertySetStatementWithOptions(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    object_name: []const u8,
+    property_name: []const u8,
+    value: ast.Expr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !void {
     const object_info = env.get(object_name) orelse {
         try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{object_name});
         return error.UnknownIdentifier;
     };
     try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
-    const value_info = try exprInfo(allocator, ir, sema, env, value, origin);
+    const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
+    if (!options.validate_contracts) return;
     if (ir) |sink| {
         if (lookupFieldForTarget(sema, object_info, property_name)) |field| {
             try validateFieldValue(sink, sema, field, property_name, value_info, origin);
