@@ -15,6 +15,12 @@ pub fn build(b: *std.Build) void {
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
     const md4c_include = b.path(md4c_src);
+    const pdf_pkg_config_path = b.path("src/render/pdf").getPath(b);
+    const pkg_config_path = if (b.graph.environ_map.get("PKG_CONFIG_PATH")) |path|
+        b.fmt("{s}{c}{s}", .{ pdf_pkg_config_path, std.fs.path.delimiter, path })
+    else
+        pdf_pkg_config_path;
+    b.graph.environ_map.put("PKG_CONFIG_PATH", pkg_config_path) catch @panic("OOM");
 
     const utils_mod = b.createModule(.{
         .root_source_file = b.path("src/utils/root.zig"),
@@ -292,20 +298,11 @@ pub fn build(b: *std.Build) void {
 }
 
 fn addNativePdfBackend(b: *std.Build, module: *std.Build.Module) void {
-    module.addIncludePath(b.path("src/render"));
-    addLinuxPangoIncludePaths(module);
-    module.addCSourceFile(.{ .file = b.path("src/render/pdf_native_c.c") });
-    module.linkSystemLibrary("librsvg-2.0", .{ .use_pkg_config = .force });
-    module.linkSystemLibrary("pangocairo-1.0", .{ .use_pkg_config = .no });
-    module.linkSystemLibrary("pango-1.0", .{ .use_pkg_config = .no });
-}
-
-fn addLinuxPangoIncludePaths(module: *std.Build.Module) void {
-    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/pango-1.0" });
-    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
-    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/fribidi" });
-    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/libthai" });
-    module.addSystemIncludePath(.{ .cwd_relative = "/usr/include/libdatrie" });
+    module.addIncludePath(b.path("src/render/pdf"));
+    module.addCSourceFile(.{
+        .file = b.path("src/render/pdf/pdf.c"),
+    });
+    module.linkSystemLibrary("ss-pdf", .{ .use_pkg_config = .force });
 }
 
 fn readReleaseVersion(b: *std.Build) ![]const u8 {

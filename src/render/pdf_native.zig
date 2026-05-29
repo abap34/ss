@@ -5,7 +5,7 @@ const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
 
 const c = @cImport({
-    @cInclude("pdf_native_c.h");
+    @cInclude("pdf.h");
 });
 
 const Allocator = std.mem.Allocator;
@@ -2651,7 +2651,6 @@ fn resolveAssetPath(ctx: *DrawContext, rel_path: []const u8) ![]const u8 {
 }
 
 fn rasterToSizedPng(ctx: *DrawContext, source: []const u8, target_width: f32, target_height: f32) ![]const u8 {
-    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) return svgToPng(ctx, source);
     if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".png")) {
         var source_width: f64 = 0;
         var source_height: f64 = 0;
@@ -2679,19 +2678,6 @@ fn rasterToSizedPng(ctx: *DrawContext, source: []const u8, target_width: f32, ta
         rasterTargetPixels(target_height),
     });
     try runChecked(ctx, &.{ "magick", source, "-auto-orient", "-resize", geometry, "-strip", tmp }, .inherit);
-    try validatePng(tmp);
-    try publishCacheFile(ctx, tmp, out);
-    return out;
-}
-
-fn svgToPng(ctx: *DrawContext, source: []const u8) ![]const u8 {
-    const out = try cachedAssetPath(ctx, "svg", source, "png");
-    errdefer ctx.allocator.free(out);
-    if (try cachedPngAvailable(ctx, out)) return out;
-    const tmp = try tempCachePath(ctx, out, "png");
-    defer ctx.allocator.free(tmp);
-    errdefer deleteFileIfExists(ctx, tmp);
-    try runChecked(ctx, &.{ "rsvg-convert", "-f", "png", "-o", tmp, source }, .inherit);
     try validatePng(tmp);
     try publishCacheFile(ctx, tmp, out);
     return out;

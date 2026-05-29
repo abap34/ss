@@ -155,7 +155,6 @@ require_command npm
 require_command pkg-config
 require_command qpdf
 require_command pdftoppm
-require_command rsvg-convert
 require_command pdflatex
 require_command ruby
 if [[ "$skip_docker" != true ]]; then
