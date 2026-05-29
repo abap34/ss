@@ -1,4 +1,4 @@
-#include "pdf_native_c.h"
+#include "pdf.h"
 
 #include <cairo-pdf.h>
 #include <cairo.h>

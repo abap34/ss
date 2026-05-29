@@ -1,5 +1,5 @@
-#ifndef SS_PDF_NATIVE_C_H
-#define SS_PDF_NATIVE_C_H
+#ifndef SS_PDF_H
+#define SS_PDF_H
 
 #ifdef __cplusplus
 extern "C" {
