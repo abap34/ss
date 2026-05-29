@@ -1,0 +1,6 @@
+Name: ss-pdf
+Description: ss native PDF backend dependencies
+Version: 0
+Requires: librsvg-2.0 pangocairo
+Libs:
+Cflags:

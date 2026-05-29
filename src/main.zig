@@ -359,7 +359,6 @@ const DoctorTool = struct {
 const doctor_tools = [_]DoctorTool{
     .{ .name = "qpdf", .purpose = "PDF assembly and normalization", .required = true },
     .{ .name = "magick", .purpose = "raster image conversion and resizing" },
-    .{ .name = "rsvg-convert", .purpose = "SVG asset conversion" },
     .{ .name = "pdftocairo", .purpose = "PDF/vector asset conversion" },
     .{ .name = "pdflatex", .purpose = "LaTeX math rendering" },
 };

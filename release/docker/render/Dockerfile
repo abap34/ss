@@ -64,7 +64,7 @@ RUN set -eu; \
         libcairo2 \
         libpango-1.0-0 \
         libpangocairo-1.0-0 \
-        librsvg2-bin \
+        librsvg2-2 \
         poppler-utils \
         qpdf \
         texlive-full; \
