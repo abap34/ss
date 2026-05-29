@@ -136,12 +136,16 @@ pub fn buildFileWithAssetBaseAndOverlay(
                 },
             });
         } else if (err == error.ImportCycle) {
+            const span = if (program.imports.items.len != 0) blk: {
+                const import_span = program.imports.items[0].span;
+                break :blk error_report.ByteSpan{ .start = import_span.start, .end = import_span.end };
+            } else null;
             error_report.print(.{
                 .path = path,
                 .source = source,
                 .severity = .@"error",
                 .message = "ImportCycle: import graph contains a cycle",
-                .span = null,
+                .span = span,
             });
             return error.DiagnosticsFailed;
         }

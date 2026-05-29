@@ -5,7 +5,6 @@ const doc = @import("document.zig");
 const eval_functions = @import("../eval/functions.zig");
 const eval_value = @import("../eval/value.zig");
 const utils = @import("utils");
-const error_report = utils.err;
 const fs_utils = utils.fs;
 const ast = @import("ast");
 const names = @import("../language/names.zig");
@@ -150,13 +149,11 @@ const DetachedBuilder = struct {
     }
 };
 
-var diagnostic_source: []const u8 = "";
 var diagnostic_path: []const u8 = "";
-var diagnostic_reported = false;
 
 const LowerDiagnostic = struct {
     err: anyerror,
-    span: ?error_report.ByteSpan,
+    origin: ?[]const u8,
     data: Data,
 
     const Data = union(enum) {
@@ -210,16 +207,16 @@ const ScheduleEdge = struct {
 const ScheduleGraph = struct {
     allocator: std.mem.Allocator,
     functions: *const std.StringHashMap(FunctionDecl),
-    document: doc.Document,
+    document: *doc.Document,
     units: std.ArrayList(ScheduledUnit),
     edges: std.ArrayList(ScheduleEdge),
     order: []usize,
 
-    fn build(allocator: std.mem.Allocator, ir: *const core.Ir) !ScheduleGraph {
+    fn build(allocator: std.mem.Allocator, ir: *const core.Ir, document: *doc.Document) !ScheduleGraph {
         var graph = ScheduleGraph{
             .allocator = allocator,
             .functions = &ir.functions,
-            .document = try doc.Document.init(allocator, ir.asset_base_dir),
+            .document = document,
             .units = .empty,
             .edges = .empty,
             .order = &.{},
@@ -229,10 +226,15 @@ const ScheduleGraph = struct {
         var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
         defer collected_modules.deinit();
         var source_order: usize = 0;
-        try collectScheduledUnits(ir, ir.projectModule(), &graph.document, &ir.functions, &graph.units, &collected_modules, &source_order);
-        try validateScheduledUnits(&graph.document, graph.units.items);
+        try collectScheduledUnits(ir, ir.projectModule(), graph.document, &ir.functions, &graph.units, &collected_modules, &source_order);
+        try validateScheduledUnits(graph.document, graph.units.items);
         try buildScheduleEdges(allocator, graph.units.items, &graph.edges);
-        graph.order = try scheduleFromEdges(allocator, graph.units.items, graph.edges.items);
+        graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items) catch |err| {
+            if (err == error.ScheduledDependencyCycle and graph.units.items.len != 0) {
+                try addUnitErrorDiagnostic(graph.document, graph.units.items[0], lowerErrorMessage(err));
+            }
+            return err;
+        };
         return graph;
     }
 
@@ -241,48 +243,50 @@ const ScheduleGraph = struct {
         self.edges.deinit(self.allocator);
         for (self.units.items) |*unit| unit.deinit();
         self.units.deinit(self.allocator);
-        self.document.deinit();
     }
 };
 
-fn reportUnknownFunction(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError(error.UnknownFunction, "function", name, origin);
+fn reportUnknownFunction(ir: *doc.Document, name: []const u8, origin: []const u8) !void {
+    try reportNamedResolutionError(ir, error.UnknownFunction, "function", name, origin);
 }
 
-fn reportUnknownQuery(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError(error.UnknownQuery, "query", name, origin);
+fn reportUnknownQuery(ir: *doc.Document, name: []const u8, origin: []const u8) !void {
+    try reportNamedResolutionError(ir, error.UnknownQuery, "query", name, origin);
 }
 
-fn reportUnknownIdentifier(name: []const u8, origin: []const u8) void {
-    reportNamedResolutionError(error.UnknownIdentifier, "identifier", name, origin);
+fn reportUnknownIdentifier(ir: *doc.Document, name: []const u8, origin: []const u8) !void {
+    try reportNamedResolutionError(ir, error.UnknownIdentifier, "identifier", name, origin);
 }
 
-fn reportNamedResolutionError(err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) void {
-    reportLowerDiagnostic(.{
+fn reportNamedResolutionError(ir: *doc.Document, err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) !void {
+    try reportLowerDiagnostic(ir, .{
         .err = err,
-        .span = error_report.spanFromOrigin(origin),
+        .origin = origin,
         .data = .{ .unknown_name = .{ .kind = kind, .name = name } },
     });
 }
 
-fn reportLowerError(err: anyerror, origin: []const u8) void {
-    if (diagnostic_reported) return;
-    reportLowerDiagnostic(.{
+fn reportLowerError(ir: *doc.Document, err: anyerror, origin: []const u8) !void {
+    try reportLowerDiagnostic(ir, .{
         .err = err,
-        .span = error_report.spanFromOrigin(origin),
+        .origin = origin,
         .data = .generic,
     });
 }
 
-fn reportLowerDiagnostic(diagnostic: LowerDiagnostic) void {
-    diagnostic_reported = true;
+fn reportLowerDiagnostic(ir: *doc.Document, diagnostic: LowerDiagnostic) !void {
     var message_buf: [256]u8 = undefined;
-    error_report.print(.{
-        .path = diagnostic_path,
-        .source = diagnostic_source,
-        .severity = .@"error",
-        .message = formatLowerDiagnostic(&message_buf, diagnostic),
-        .span = diagnostic.span,
+    const message = formatLowerDiagnostic(&message_buf, diagnostic);
+    try ir.addValidationDiagnostic(.@"error", null, null, diagnostic.origin, .{
+        .user_report = .{ .message = try ir.allocator.dupe(u8, message) },
+    });
+}
+
+fn addUnitErrorDiagnostic(ir: *doc.Document, unit: ScheduledUnit, message: []const u8) !void {
+    const origin = try unitOrigin(ir.allocator, unit);
+    defer ir.allocator.free(origin);
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try ir.allocator.dupe(u8, message) },
     });
 }
 
@@ -317,6 +321,12 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.InvalidArity => "InvalidArity: wrong number of arguments",
         error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
         error.RecursiveFunction => "RecursiveFunction: recursive functions are not allowed",
+        error.EmptySelection => "EmptySelection: selection is empty",
+        error.InvalidSelectionSort => "InvalidSelectionSort: selection item kinds do not match",
+        error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
+        error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
+        error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
+        error.ScheduledDependencyCycle => "ScheduledDependencyCycle: document elaboration dependencies contain a cycle",
         error.ExpectedSelection => "ExpectedSelection: expected a selection value",
         error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
         error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
@@ -351,9 +361,14 @@ pub fn elaborateProgram(
 }
 
 pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Document {
-    diagnostic_reported = false;
-    var graph = try ScheduleGraph.build(allocator, ir);
-    errdefer graph.document.deinit();
+    var document = try doc.Document.init(allocator, ir.asset_base_dir);
+    errdefer document.deinit();
+    try elaborateIrInto(allocator, ir, &document);
+    return document;
+}
+
+pub fn elaborateIrInto(allocator: std.mem.Allocator, ir: *const core.Ir, document: *doc.Document) !void {
+    var graph = try ScheduleGraph.build(allocator, ir, document);
     defer {
         graph.allocator.free(graph.order);
         graph.edges.deinit(graph.allocator);
@@ -368,8 +383,7 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
         while (iter.next()) |state| state.deinit(allocator);
         document_states.deinit();
     }
-    for (graph.order) |unit_index| try executeScheduledUnit(&graph.document, &ir.functions, &closures, &document_states, graph.units.items[unit_index]);
-    return graph.document;
+    for (graph.order) |unit_index| try executeScheduledUnit(document, &ir.functions, &closures, &document_states, graph.units.items[unit_index]);
 }
 
 fn collectScheduledUnits(
@@ -472,28 +486,19 @@ fn appendPageUnit(
 fn validateScheduledUnits(ir: *doc.Document, units: []const ScheduledUnit) !void {
     for (units) |unit| {
         if (unit.summary.invalid_selection_mutation) |invalid| {
-            const origin = try unitOrigin(ir.allocator, unit);
-            defer ir.allocator.free(origin);
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated") },
-            });
+            const message = "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated";
+            try addUnitErrorDiagnostic(ir, unit, message);
             _ = invalid;
             return error.InvalidSelectionMutation;
         }
         if (unit.summary.reads_layout and unit.summary.writes_layout_input) {
-            const origin = try unitOrigin(ir.allocator, unit);
-            defer ir.allocator.free(origin);
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once") },
-            });
+            const message = "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once";
+            try addUnitErrorDiagnostic(ir, unit, message);
             return error.LayoutDependencyCycle;
         }
         if (unit.summary.reads_layout) {
-            const origin = try unitOrigin(ir.allocator, unit);
-            defer ir.allocator.free(origin);
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet") },
-            });
+            const message = "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet";
+            try addUnitErrorDiagnostic(ir, unit, message);
             return error.PostLayoutComputationUnsupported;
         }
     }
@@ -677,9 +682,15 @@ fn executeScheduledDocumentStatement(
     state: *DocumentExecutionState,
     stmt: Statement,
 ) !void {
+    const error_count = diagnosticErrorCount(ir);
     const flow = executeStatement(ir, ir.document_id, .document, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
-        const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
-        if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+        var owns_origin = true;
+        const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
+            owns_origin = false;
+            break :blk "bytes:0-1";
+        };
+        defer if (owns_origin) ir.allocator.free(origin);
+        if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
         return err;
     };
     switch (flow) {
@@ -690,6 +701,14 @@ fn executeScheduledDocumentStatement(
             return error.ReturnOutsideFunction;
         },
     }
+}
+
+fn diagnosticErrorCount(ir: *const doc.Document) usize {
+    var count: usize = 0;
+    for (ir.diagnostics.items) |diagnostic| {
+        if (diagnostic.severity == .@"error") count += 1;
+    }
+    return count;
 }
 
 fn unitOrigin(allocator: std.mem.Allocator, unit: ScheduledUnit) ![]const u8 {
@@ -753,15 +772,10 @@ fn executeModuleProgramInSourceOrderWithClosures(
 }
 
 pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *doc.Document, io: std.Io) !void {
-    diagnostic_source = source;
-    diagnostic_path = "";
     return executeProgramWithPath(program, source, "", ir, io);
 }
 
 pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *doc.Document, io: std.Io) !void {
-    diagnostic_source = source;
-    diagnostic_path = path;
-    diagnostic_reported = false;
     var index = try typecheck.loadProgramIndex(ir.allocator, io, ir.asset_base_dir, program);
     defer index.deinit();
     return executeProgramWithIndex(program, source, path, ir, &index);
@@ -785,7 +799,6 @@ pub fn executeProgram(
     functions: *const std.StringHashMap(FunctionDecl),
 ) !void {
     setLowerDiagnosticOrigin(source, path);
-    diagnostic_reported = false;
 
     var closures = ClosureStore.init(ir.allocator);
     defer closures.deinit();
@@ -794,7 +807,7 @@ pub fn executeProgram(
 }
 
 fn setLowerDiagnosticOrigin(source: []const u8, path: []const u8) void {
-    diagnostic_source = source;
+    _ = source;
     diagnostic_path = path;
 }
 
@@ -817,9 +830,15 @@ fn executeDocumentStatementSlice(
     defer deinitValueEnv(ir.allocator, &document_env);
     var document_last_code_like: ?core.NodeId = null;
     for (statements) |stmt| {
+        const error_count = diagnosticErrorCount(ir);
         const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, closures, &document_last_code_like, stmt, null) catch |err| {
-            const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
-            if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+            var owns_origin = true;
+            const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
+                owns_origin = false;
+                break :blk "bytes:0-1";
+            };
+            defer if (owns_origin) ir.allocator.free(origin);
+            if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
             return err;
         };
         switch (flow) {
@@ -855,9 +874,15 @@ fn executePageBody(
     defer deinitValueEnv(ir.allocator, &env);
 
     for (page.statements.items) |stmt| {
+        const error_count = diagnosticErrorCount(ir);
         const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, closures, &last_code_like, stmt, null) catch |err| {
-            const origin = statementOrigin(ir.allocator, stmt.span) catch "bytes:0-1";
-            if (ir.diagnostics.items.len == 0) reportLowerError(err, origin);
+            var owns_origin = true;
+            const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
+                owns_origin = false;
+                break :blk "bytes:0-1";
+            };
+            defer if (owns_origin) ir.allocator.free(origin);
+            if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
             return err;
         };
         switch (flow) {
@@ -894,7 +919,7 @@ fn evalExpr(
                 }
                 break :blk .{ .function = try eval_functions.functionRefFor(ir.allocator, func) };
             }
-            reportUnknownIdentifier(name, current_origin);
+            try reportUnknownIdentifier(ir, name, current_origin);
             break :blk error.UnknownIdentifier;
         },
         .string => |text| .{ .string = text },
@@ -921,7 +946,7 @@ fn evalCall(
         switch (value) {
             .function => |func_ref| {
                 if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-                try validateFixedArity(call.args.items.len, func_ref.param_count, current_origin);
+                try validateFixedArity(ir, call.args.items.len, func_ref.param_count, current_origin);
                 var args = try evalCallArgs(ir, page_id, context, mode, env, functions, closures, current_origin, call.args.items);
                 defer args.deinit(ir.allocator);
                 defer deinitValues(ir.allocator, args.items);
@@ -932,7 +957,7 @@ fn evalCall(
     }
     const sema = SemanticEnv.init(null, null, functions);
     const descriptor = sema.call(call.name) orelse {
-        reportUnknownFunction(call.name, current_origin);
+        try reportUnknownFunction(ir, call.name, current_origin);
         return error.UnknownFunction;
     };
     return switch (descriptor) {
@@ -953,7 +978,7 @@ fn evalCall(
                     defer deinitValues(ir.allocator, args.items);
                     break :blk try invokeFunctionRef(ir, page_id, context, mode, env, functions, closures, function, current_origin, args.items);
                 }
-                reportUnknownFunction(call.name, current_origin);
+                try reportUnknownFunction(ir, call.name, current_origin);
                 return error.UnknownFunction;
             }
             try eval_functions.requireReturnsValue(func);
@@ -1038,7 +1063,7 @@ const BuiltinContext = struct {
     current_origin: []const u8,
 
     pub fn checkArityRange(self: *const BuiltinContext, actual: usize, min: usize, max: usize) !void {
-        try validateArityRange(actual, min, max, self.current_origin);
+        try validateArityRange(self.ir, actual, min, max, self.current_origin);
     }
 
     pub fn currentPageValue(self: *const BuiltinContext) !core.Value {
@@ -1100,7 +1125,7 @@ const BuiltinContext = struct {
 
     pub fn anchorValueForObject(self: *BuiltinContext, node_id: core.NodeId, anchor_name: []const u8) !core.Value {
         const anchor = names.parseAnchorName(anchor_name) orelse {
-            reportNamedResolutionError(error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
+            try reportNamedResolutionError(self.ir, error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
             return error.UnknownAnchor;
         };
         return .{ .anchor = .{ .node = .{ .node_id = node_id, .anchor = anchor } } };
@@ -1108,7 +1133,7 @@ const BuiltinContext = struct {
 
     pub fn pageAnchorValue(self: *BuiltinContext, anchor_name: []const u8) !core.Value {
         const anchor = names.parseAnchorName(anchor_name) orelse {
-            reportNamedResolutionError(error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
+            try reportNamedResolutionError(self.ir, error.UnknownAnchor, "anchor", anchor_name, self.current_origin);
             return error.UnknownAnchor;
         };
         return .{ .anchor = .{ .page = anchor } };
@@ -1413,11 +1438,11 @@ fn evalSelectCall(
     const op_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, 1);
     const sema = SemanticEnv.init(null, null, functions);
     const descriptor = sema.query(op_name) orelse {
-        reportUnknownQuery(op_name, current_origin);
+        try reportUnknownQuery(ir, op_name, current_origin);
         return error.UnknownQuery;
     };
     registry.validateQueryArity(descriptor, call.args.items.len) catch |err| {
-        if (err == error.InvalidArity) try validateFixedArity(call.args.items.len, descriptor.arity, current_origin);
+        if (err == error.InvalidArity) try validateFixedArity(ir, call.args.items.len, descriptor.arity, current_origin);
         return err;
     };
     try contracts.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
@@ -1451,34 +1476,34 @@ fn evalSelectCall(
     }
 }
 
-fn validateFixedArity(actual: usize, expected: usize, origin: []const u8) !void {
+fn validateFixedArity(ir: *doc.Document, actual: usize, expected: usize, origin: []const u8) !void {
     if (actual != expected) {
-        reportLowerDiagnostic(.{
+        try reportLowerDiagnostic(ir, .{
             .err = error.InvalidArity,
-            .span = error_report.spanFromOrigin(origin),
+            .origin = origin,
             .data = .{ .invalid_arity = .{ .actual = actual, .min = expected, .max = expected } },
         });
         return error.InvalidArity;
     }
 }
 
-fn validateUserFunctionArity(actual: usize, func: FunctionDecl, origin: []const u8) !void {
+fn validateUserFunctionArity(ir: *doc.Document, actual: usize, func: FunctionDecl, origin: []const u8) !void {
     const range = eval_functions.arity(func);
     if (actual < range.min or actual > range.max) {
-        reportLowerDiagnostic(.{
+        try reportLowerDiagnostic(ir, .{
             .err = error.InvalidArity,
-            .span = error_report.spanFromOrigin(origin),
+            .origin = origin,
             .data = .{ .invalid_arity = .{ .actual = actual, .min = range.min, .max = range.max } },
         });
         return error.InvalidArity;
     }
 }
 
-fn validateArityRange(actual: usize, min: usize, max: usize, origin: []const u8) !void {
+fn validateArityRange(ir: *doc.Document, actual: usize, min: usize, max: usize, origin: []const u8) !void {
     if (actual < min or actual > max) {
-        reportLowerDiagnostic(.{
+        try reportLowerDiagnostic(ir, .{
             .err = error.InvalidArity,
-            .span = error_report.spanFromOrigin(origin),
+            .origin = origin,
             .data = .{ .invalid_arity = .{ .actual = actual, .min = min, .max = max } },
         });
         return error.InvalidArity;
@@ -1525,7 +1550,7 @@ fn bindUserFunctionValueArgs(
     current_origin: []const u8,
     args: []const core.Value,
 ) !void {
-    try eval_functions.requireArity(args.len, func);
+    try validateUserFunctionArity(ir, args.len, func, current_origin);
     for (func.params.items, 0..) |param, index| {
         const value = if (index < args.len)
             try args[index].clone(ir.allocator)
@@ -1726,7 +1751,7 @@ fn evalCallRoleArg(
 ) anyerror!core.Role {
     const role_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, index);
     return names.parseRoleName(role_name) orelse {
-        reportNamedResolutionError(error.UnknownRole, "role", role_name, current_origin);
+        try reportNamedResolutionError(ir, error.UnknownRole, "role", role_name, current_origin);
         return error.UnknownRole;
     };
 }
@@ -1745,7 +1770,7 @@ fn evalCallPayloadArg(
 ) anyerror!names.ParsedPayload {
     const payload_name = try evalCallStringArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, index);
     return names.parsePayloadName(payload_name) orelse {
-        reportNamedResolutionError(error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
+        try reportNamedResolutionError(ir, error.UnknownPayloadKind, "payload kind", payload_name, current_origin);
         return error.UnknownPayloadKind;
     };
 }
@@ -1805,7 +1830,10 @@ fn executeStatement(
         },
         .return_void => return .{ .returned = .{ .void = {} } },
         .property_set => |property_set| {
-            const base = env.get(property_set.object_name) orelse return error.UnknownIdentifier;
+            const base = env.get(property_set.object_name) orelse {
+                try reportUnknownIdentifier(ir, property_set.object_name, origin);
+                return error.UnknownIdentifier;
+            };
             const object_id = try resolveValueObjectId(ir, mode, base);
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, property_set.value);
             defer {
@@ -1960,7 +1988,7 @@ fn executeCallStatement(
         _ = try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call);
         return;
     };
-    try validateUserFunctionArity(call.args.items.len, func, current_origin);
+    try validateUserFunctionArity(ir, call.args.items.len, func, current_origin);
 
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
@@ -2003,7 +2031,7 @@ fn invokeFunctionRef(
         return try invokeClosureValues(ir, page_id, context, mode, env, functions, closures, closure_id, current_origin, args);
     }
     const func = functions.get(function.name) orelse {
-        reportUnknownFunction(function.name, current_origin);
+        try reportUnknownFunction(ir, function.name, current_origin);
         return error.UnknownFunction;
     };
     return try invokeUserFunctionValues(ir, page_id, context, mode, env, functions, closures, func, current_origin, args);
@@ -2022,8 +2050,11 @@ fn invokeClosureValues(
     args: []const core.Value,
 ) anyerror!core.Value {
     _ = caller_env;
-    const closure = closures.get(closure_id) orelse return error.UnknownFunction;
-    if (args.len != closure.lambda.params.items.len) return error.InvalidArity;
+    const closure = closures.get(closure_id) orelse {
+        try reportUnknownFunction(ir, "#lambda", current_origin);
+        return error.UnknownFunction;
+    };
+    try validateFixedArity(ir, args.len, closure.lambda.params.items.len, current_origin);
 
     var local_env = try cloneValueEnv(ir.allocator, &closure.env);
     defer deinitValueEnv(ir.allocator, &local_env);
@@ -2054,7 +2085,7 @@ fn invokeUserFunctionValue(
     var func_ref = try eval_functions.functionRefFor(ir.allocator, func);
     defer func_ref.deinit(ir.allocator);
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
-    try validateUserFunctionArity(call.args.items.len, func, current_origin);
+    try validateUserFunctionArity(ir, call.args.items.len, func, current_origin);
 
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
@@ -2129,7 +2160,7 @@ fn resolveAnchorRef(
         },
         .node => {
             const value = env.get(anchor_ref.node_name.?) orelse {
-                reportUnknownIdentifier(anchor_ref.node_name.?, current_origin);
+                try reportUnknownIdentifier(ir, anchor_ref.node_name.?, current_origin);
                 return error.UnknownIdentifier;
             };
             const node_id = try resolveValueObjectId(ir, mode, value);

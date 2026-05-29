@@ -32,6 +32,35 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
+fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const overlay_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/bad.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectOverlayDiagnostic(testing.io, allocator, path, source, overlay_path, overlay_source, expected_origin, expected_message);
+}
+
+test "compiler semantics: imported function return inference diagnostics keep callee origin" {
+    try expectOverlayDiagnostic(
+        \\import "lib/bad.ss"
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  text(bad())
+        \\end
+        \\
+    ,
+        \\fn bad() -> string
+        \\  return add(1)
+        \\end
+        \\
+    , "lib/bad.ss:bytes:", "InvalidArity: expected 2, got 1");
+}
+
 test "compiler semantics: default argument effects are checked against function contracts" {
     try expectBuildFails(
         \\import std:themes/default

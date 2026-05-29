@@ -36,7 +36,12 @@ const NormalizeContext = struct {
 };
 
 pub fn lowerToIr(ir: *core.Ir) !void {
-    var code = try elaboration.elaborateIr(ir.allocator, ir);
+    var code = try doc.Document.init(ir.allocator, ir.asset_base_dir);
+    elaboration.elaborateIrInto(ir.allocator, ir, &code) catch |err| {
+        try appendDocumentDiagnosticsWithoutHandles(ir, &code);
+        code.deinit();
+        return err;
+    };
     defer code.deinit();
 
     try normalizeDocumentCode(ir, &code);
@@ -104,6 +109,24 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
         errdefer if (owns_mapped) mapped.deinit(ir.allocator);
         try ir.addDiagnostic(mapped);
         owns_mapped = false;
+    }
+}
+
+fn appendDocumentDiagnosticsWithoutHandles(ir: *core.Ir, code: *const doc.Document) !void {
+    for (code.diagnostics.items) |diagnostic| {
+        const data = try cloneDiagnosticData(ir, diagnostic.data);
+        var copied = core.Diagnostic{
+            .phase = diagnostic.phase,
+            .severity = diagnostic.severity,
+            .page_id = null,
+            .node_id = null,
+            .origin = if (diagnostic.origin) |origin| try ir.allocator.dupe(u8, origin) else null,
+            .data = data,
+        };
+        var owns_copied = true;
+        errdefer if (owns_copied) copied.deinit(ir.allocator);
+        try ir.addDiagnostic(copied);
+        owns_copied = false;
     }
 }
 
