@@ -1,8 +1,30 @@
 const std = @import("std");
 
+const Module = std.Build.Module;
+const Step = std.Build.Step;
+const Import = Module.Import;
+
+const BuildContext = struct {
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+};
+
+const ProjectModules = struct {
+    utils: *Module,
+    model: *Module,
+    language_type: *Module,
+    ast: *Module,
+    stdlib_assets: *Module,
+    project: *Module,
+    core: *Module,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const ctx = BuildContext{ .b = b, .target = target, .optimize = optimize };
+
     const release_version = readReleaseVersion(b) catch @panic("release/VERSION must contain the release version.");
     const default_version = b.fmt("{s}-dev", .{release_version});
     const version = b.option([]const u8, "version", "Version string reported by `ss --version`") orelse default_version;
@@ -14,86 +36,10 @@ pub fn build(b: *std.Build) void {
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
-    const md4c_include = b.path(md4c_src);
-    const pdf_pkg_config_path = b.path("src/render/pdf").getPath(b);
-    const pkg_config_path = if (b.graph.environ_map.get("PKG_CONFIG_PATH")) |path|
-        b.fmt("{s}{c}{s}", .{ pdf_pkg_config_path, std.fs.path.delimiter, path })
-    else
-        pdf_pkg_config_path;
-    b.graph.environ_map.put("PKG_CONFIG_PATH", pkg_config_path) catch @panic("OOM");
+    addPdfPkgConfigPath(b);
 
-    const utils_mod = b.createModule(.{
-        .root_source_file = b.path("src/utils/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const model_mod = b.createModule(.{
-        .root_source_file = b.path("src/core/model.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const language_type_mod = b.createModule(.{
-        .root_source_file = b.path("src/language/type.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    language_type_mod.addImport("model", model_mod);
-
-    const ast_mod = b.createModule(.{
-        .root_source_file = b.path("src/ast.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    ast_mod.addImport("model", model_mod);
-    ast_mod.addImport("language_type", language_type_mod);
-
-    const stdlib_assets_mod = b.createModule(.{
-        .root_source_file = b.path("stdlib/embed.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const project_mod = b.createModule(.{
-        .root_source_file = b.path("src/project.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    project_mod.addImport("utils", utils_mod);
-
-    const core_mod = b.createModule(.{
-        .root_source_file = b.path("src/core.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    core_mod.addImport("utils", utils_mod);
-    core_mod.addImport("ast", ast_mod);
-    core_mod.addImport("model", model_mod);
-    core_mod.addImport("language_type", language_type_mod);
-    core_mod.addIncludePath(md4c_include);
-    core_mod.addCSourceFiles(.{
-        .root = b.path(md4c_src),
-        .files = &.{"md4c.c"},
-    });
-
-    const exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    exe_mod.addImport("core", core_mod);
-    exe_mod.addImport("utils", utils_mod);
-    exe_mod.addImport("ast", ast_mod);
-    exe_mod.addImport("model", model_mod);
-    exe_mod.addImport("language_type", language_type_mod);
-    exe_mod.addImport("stdlib_assets", stdlib_assets_mod);
-    exe_mod.addOptions("build_options", build_options);
-    addNativePdfBackend(b, exe_mod);
-
+    const modules = createProjectModules(ctx, md4c_src, b.path(md4c_src));
+    const exe_mod = createCliModule(ctx, modules, build_options);
     const exe = b.addExecutable(.{
         .name = "ss",
         .root_module = exe_mod,
@@ -106,165 +52,190 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the ss CLI");
     run_step.dependOn(&run_cmd.step);
 
-    const core_tests = b.addTest(.{
-        .root_module = core_mod,
+    addTestStep(ctx, modules, build_options, exe);
+}
+
+fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath) ProjectModules {
+    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{}, null);
+    const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
+    const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
+        import("model", model_mod),
+    }, null);
+    const ast_mod = createModule(ctx, "src/ast.zig", &.{
+        import("model", model_mod),
+        import("language_type", language_type_mod),
+    }, null);
+    const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
+    const project_mod = createModule(ctx, "src/project.zig", &.{
+        import("utils", utils_mod),
+    }, true);
+    const core_mod = createModule(ctx, "src/core.zig", &.{
+        import("utils", utils_mod),
+        import("ast", ast_mod),
+        import("model", model_mod),
+        import("language_type", language_type_mod),
+    }, true);
+    core_mod.addIncludePath(md4c_include);
+    core_mod.addCSourceFiles(.{
+        .root = ctx.b.path(md4c_src),
+        .files = &.{"md4c.c"},
     });
 
-    const parser_tests_mod = b.createModule(.{
-        .root_source_file = b.path("src/syntax.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    parser_tests_mod.addImport("core", core_mod);
-    parser_tests_mod.addImport("utils", utils_mod);
-    parser_tests_mod.addImport("ast", ast_mod);
-    parser_tests_mod.addImport("model", model_mod);
-    parser_tests_mod.addImport("language_type", language_type_mod);
-    parser_tests_mod.addImport("stdlib_assets", stdlib_assets_mod);
-    const parser_tests = b.addTest(.{
-        .root_module = parser_tests_mod,
-    });
+    return .{
+        .utils = utils_mod,
+        .model = model_mod,
+        .language_type = language_type_mod,
+        .ast = ast_mod,
+        .stdlib_assets = stdlib_assets_mod,
+        .project = project_mod,
+        .core = core_mod,
+    };
+}
 
-    const main_tests_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    main_tests_mod.addImport("core", core_mod);
-    main_tests_mod.addImport("utils", utils_mod);
-    main_tests_mod.addImport("ast", ast_mod);
-    main_tests_mod.addImport("model", model_mod);
-    main_tests_mod.addImport("language_type", language_type_mod);
-    main_tests_mod.addImport("stdlib_assets", stdlib_assets_mod);
-    main_tests_mod.addOptions("build_options", build_options);
-    addNativePdfBackend(b, main_tests_mod);
-    const main_tests = b.addTest(.{
-        .root_module = main_tests_mod,
-    });
+fn createCliModule(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options) *Module {
+    const module = createCommonModule(ctx, "src/main.zig", modules, true);
+    module.addOptions("build_options", build_options);
+    addNativePdfBackend(ctx.b, module);
+    return module;
+}
 
-    const syntax_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/syntax_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    syntax_spec_tests_mod.addImport("core", core_mod);
-    syntax_spec_tests_mod.addImport("utils", utils_mod);
-    syntax_spec_tests_mod.addImport("ast", ast_mod);
-    syntax_spec_tests_mod.addImport("model", model_mod);
-    syntax_spec_tests_mod.addImport("language_type", language_type_mod);
-    syntax_spec_tests_mod.addImport("syntax", parser_tests_mod);
-    const syntax_spec_tests = b.addTest(.{
-        .root_module = syntax_spec_tests_mod,
-    });
+fn addTestStep(
+    ctx: BuildContext,
+    modules: ProjectModules,
+    build_options: *Step.Options,
+    exe: *Step.Compile,
+) void {
+    const b = ctx.b;
+    const test_step = b.step("test", "Run ss test targets");
 
-    const language_type_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/language_type_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    language_type_spec_tests_mod.addImport("model", model_mod);
-    language_type_spec_tests_mod.addImport("language_type", language_type_mod);
-    const language_type_spec_tests = b.addTest(.{
-        .root_module = language_type_spec_tests_mod,
-    });
+    addTestModule(b, test_step, modules.core);
 
-    const language_registry_mod = b.createModule(.{
-        .root_source_file = b.path("src/language/registry.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    language_registry_mod.addImport("core", core_mod);
-    language_registry_mod.addImport("language_type", language_type_mod);
+    const syntax_mod = createCommonTestModule(ctx, test_step, "src/syntax.zig", modules, true);
+    const main_tests_mod = createCliModule(ctx, modules, build_options);
+    addTestModule(b, test_step, main_tests_mod);
+    addModuleTest(ctx, test_step, "tests/syntax_spec_tests.zig", &.{
+        import("core", modules.core),
+        import("utils", modules.utils),
+        import("ast", modules.ast),
+        import("model", modules.model),
+        import("language_type", modules.language_type),
+        import("syntax", syntax_mod),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/language_type_spec_tests.zig", &.{
+        import("model", modules.model),
+        import("language_type", modules.language_type),
+    }, null);
 
-    const language_registry_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/language_registry_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    language_registry_spec_tests_mod.addImport("core", core_mod);
-    language_registry_spec_tests_mod.addImport("model", model_mod);
-    language_registry_spec_tests_mod.addImport("language_type", language_type_mod);
-    language_registry_spec_tests_mod.addImport("registry", language_registry_mod);
-    const language_registry_spec_tests = b.addTest(.{
-        .root_module = language_registry_spec_tests_mod,
-    });
+    const registry_mod = createModule(ctx, "src/language/registry.zig", &.{
+        import("core", modules.core),
+        import("language_type", modules.language_type),
+    }, null);
+    addModuleTest(ctx, test_step, "tests/language_registry_spec_tests.zig", &.{
+        import("core", modules.core),
+        import("model", modules.model),
+        import("language_type", modules.language_type),
+        import("registry", registry_mod),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/core_ir_spec_tests.zig", &.{
+        import("core", modules.core),
+        import("utils", modules.utils),
+        import("ast", modules.ast),
+        import("model", modules.model),
+        import("language_type", modules.language_type),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/layout_graph_spec_tests.zig", &.{
+        import("core", modules.core),
+        import("utils", modules.utils),
+        import("ast", modules.ast),
+        import("model", modules.model),
+        import("language_type", modules.language_type),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/project_spec_tests.zig", &.{
+        import("project", modules.project),
+    }, null);
 
-    const core_ir_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/core_ir_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    core_ir_spec_tests_mod.addImport("core", core_mod);
-    core_ir_spec_tests_mod.addImport("utils", utils_mod);
-    core_ir_spec_tests_mod.addImport("ast", ast_mod);
-    core_ir_spec_tests_mod.addImport("model", model_mod);
-    core_ir_spec_tests_mod.addImport("language_type", language_type_mod);
-    const core_ir_spec_tests = b.addTest(.{
-        .root_module = core_ir_spec_tests_mod,
-    });
+    const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
+    const compiler_semantics_support_mod = createModule(ctx, "tests/compiler_semantics_spec_support.zig", &.{
+        import("utils", modules.utils),
+        import("compiler", compiler_mod),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/compiler_semantics_spec_tests.zig", &.{
+        import("compiler_semantics", compiler_semantics_support_mod),
+    }, true);
 
-    const layout_graph_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/layout_graph_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    layout_graph_spec_tests_mod.addImport("core", core_mod);
-    layout_graph_spec_tests_mod.addImport("utils", utils_mod);
-    layout_graph_spec_tests_mod.addImport("ast", ast_mod);
-    layout_graph_spec_tests_mod.addImport("model", model_mod);
-    layout_graph_spec_tests_mod.addImport("language_type", language_type_mod);
-    const layout_graph_spec_tests = b.addTest(.{
-        .root_module = layout_graph_spec_tests_mod,
-    });
+    addSmokeChecks(b, test_step, exe);
+}
 
-    const project_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/project_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
+fn createModule(
+    ctx: BuildContext,
+    root_source_file: []const u8,
+    imports: []const Import,
+    link_libc: ?bool,
+) *Module {
+    return ctx.b.createModule(.{
+        .root_source_file = ctx.b.path(root_source_file),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+        .imports = imports,
+        .link_libc = link_libc,
     });
-    project_spec_tests_mod.addImport("project", project_mod);
-    const project_spec_tests = b.addTest(.{
-        .root_module = project_spec_tests_mod,
-    });
+}
 
-    const compiler_semantics_support_mod = b.createModule(.{
-        .root_source_file = b.path("tests/compiler_semantics_spec_support.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    const compiler_mod = b.createModule(.{
-        .root_source_file = b.path("src/compiler.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    compiler_mod.addImport("core", core_mod);
-    compiler_mod.addImport("utils", utils_mod);
-    compiler_mod.addImport("ast", ast_mod);
-    compiler_mod.addImport("model", model_mod);
-    compiler_mod.addImport("language_type", language_type_mod);
-    compiler_mod.addImport("stdlib_assets", stdlib_assets_mod);
-    compiler_semantics_support_mod.addImport("utils", utils_mod);
-    compiler_semantics_support_mod.addImport("compiler", compiler_mod);
+fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: ProjectModules, link_libc: ?bool) *Module {
+    return createModule(ctx, root_source_file, &.{
+        import("core", modules.core),
+        import("utils", modules.utils),
+        import("ast", modules.ast),
+        import("model", modules.model),
+        import("language_type", modules.language_type),
+        import("stdlib_assets", modules.stdlib_assets),
+    }, link_libc);
+}
 
-    const compiler_semantics_spec_tests_mod = b.createModule(.{
-        .root_source_file = b.path("tests/compiler_semantics_spec_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    compiler_semantics_spec_tests_mod.addImport("compiler_semantics", compiler_semantics_support_mod);
-    const compiler_semantics_spec_tests = b.addTest(.{
-        .root_module = compiler_semantics_spec_tests_mod,
-    });
+fn import(name: []const u8, module: *Module) Import {
+    return .{ .name = name, .module = module };
+}
 
+fn addModuleTest(
+    ctx: BuildContext,
+    test_step: *Step,
+    root_source_file: []const u8,
+    imports: []const Import,
+    link_libc: ?bool,
+) void {
+    _ = createTestModule(ctx, test_step, root_source_file, imports, link_libc);
+}
+
+fn createCommonTestModule(
+    ctx: BuildContext,
+    test_step: *Step,
+    root_source_file: []const u8,
+    modules: ProjectModules,
+    link_libc: ?bool,
+) *Module {
+    const test_mod = createCommonModule(ctx, root_source_file, modules, link_libc);
+    addTestModule(ctx.b, test_step, test_mod);
+    return test_mod;
+}
+
+fn createTestModule(
+    ctx: BuildContext,
+    test_step: *Step,
+    root_source_file: []const u8,
+    imports: []const Import,
+    link_libc: ?bool,
+) *Module {
+    const test_mod = createModule(ctx, root_source_file, imports, link_libc);
+    addTestModule(ctx.b, test_step, test_mod);
+    return test_mod;
+}
+
+fn addTestModule(b: *std.Build, test_step: *Step, module: *Module) void {
+    const test_artifact = b.addTest(.{ .root_module = module });
+    test_step.dependOn(&b.addRunArtifact(test_artifact).step);
+}
+
+fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const smoke_check_files = [_][]const u8{
         "stdlib/core/classes.ss",
         "stdlib/core/components.ss",
@@ -279,17 +250,6 @@ pub fn build(b: *std.Build) void {
         "stdlib/themes/pop.ss",
     };
 
-    const test_step = b.step("test", "Run ss test targets");
-    test_step.dependOn(&b.addRunArtifact(core_tests).step);
-    test_step.dependOn(&b.addRunArtifact(parser_tests).step);
-    test_step.dependOn(&b.addRunArtifact(main_tests).step);
-    test_step.dependOn(&b.addRunArtifact(syntax_spec_tests).step);
-    test_step.dependOn(&b.addRunArtifact(language_type_spec_tests).step);
-    test_step.dependOn(&b.addRunArtifact(language_registry_spec_tests).step);
-    test_step.dependOn(&b.addRunArtifact(core_ir_spec_tests).step);
-    test_step.dependOn(&b.addRunArtifact(layout_graph_spec_tests).step);
-    test_step.dependOn(&b.addRunArtifact(project_spec_tests).step);
-    test_step.dependOn(&b.addRunArtifact(compiler_semantics_spec_tests).step);
     for (smoke_check_files) |path| {
         const smoke_check = b.addRunArtifact(exe);
         smoke_check.addArgs(&.{ "check", path });
@@ -297,7 +257,16 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-fn addNativePdfBackend(b: *std.Build, module: *std.Build.Module) void {
+fn addPdfPkgConfigPath(b: *std.Build) void {
+    const pdf_pkg_config_path = b.path("src/render/pdf").getPath(b);
+    const pkg_config_path = if (b.graph.environ_map.get("PKG_CONFIG_PATH")) |path|
+        b.fmt("{s}{c}{s}", .{ pdf_pkg_config_path, std.fs.path.delimiter, path })
+    else
+        pdf_pkg_config_path;
+    b.graph.environ_map.put("PKG_CONFIG_PATH", pkg_config_path) catch @panic("OOM");
+}
+
+fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     module.addIncludePath(b.path("src/render/pdf"));
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
