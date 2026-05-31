@@ -54,32 +54,32 @@ test "type spec: runtime sort conversion is defined only for runtime semantic so
 }
 
 test "type spec: formatting exposes the source-level type constructor shape" {
-    try expectFormat(Type.number, "number");
-    try expectFormat(Type.objectClass("Text"), "object<Text>");
-    try expectFormat(Type.selectionType(Type.objectClass("Text")), "selection<object<Text>>");
-    try expectFormat(Type.fragment(.page), "fragment<page>");
-    try expectFormat(Type.code(.number), "code<number>");
-    try expectFormat(Type.list(.string), "list<string>");
+    try expectFormat(Type.number, "Number");
+    try expectFormat(Type.objectClass("Text"), "Object<Text>");
+    try expectFormat(Type.selectionType(Type.objectClass("Text")), "Selection<Object<Text>>");
+    try expectFormat(Type.fragment(.page), "Fragment<Page>");
+    try expectFormat(Type.code(.number), "Code<Number>");
+    try expectFormat(Type.list(.string), "List<String>");
 }
 
 test "type spec: function types format as source-level arrows" {
     var unary = try Type.functionType(testing.allocator, &.{Type.page}, Type.object);
     defer unary.deinit(testing.allocator);
-    try expectFormat(unary, "page -> object");
+    try expectFormat(unary, "Page -> Object");
 
     var multi = try Type.functionType(testing.allocator, &.{ Type.page, Type.document }, Type.object);
     defer multi.deinit(testing.allocator);
-    try expectFormat(multi, "(page, document) -> object");
+    try expectFormat(multi, "(Page, Document) -> Object");
 
     var zero = try Type.functionType(testing.allocator, &.{}, Type.number);
     defer zero.deinit(testing.allocator);
-    try expectFormat(zero, "() -> number");
+    try expectFormat(zero, "() -> Number");
 
     var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.object);
     defer callback.deinit(testing.allocator);
     var higher_order = try Type.functionType(testing.allocator, &.{callback}, Type.document);
     defer higher_order.deinit(testing.allocator);
-    try expectFormat(higher_order, "(page -> object) -> document");
+    try expectFormat(higher_order, "(Page -> Object) -> Document");
 }
 
 test "type spec: function acceptance checks parameters and result types" {

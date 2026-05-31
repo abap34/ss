@@ -64,11 +64,11 @@ In ss, this kind of computation can be written naturally:
 ```ss
 import std:themes/default
 
-fn add_pageno() -> void
+fn add_pageno() -> Void
   foreach(
     pages(docctx()),
-    (page: page) |->
-      new(page, str(page_index(page)), "body", "text")
+    (p: Page) |->
+      new(p, str(page_index(p)), "body", "text")
   )
 end
 
@@ -85,7 +85,7 @@ ss analyzes dependencies across the whole program.
 This enables ss to infer that `add_pageno()` depends on the page list,
 so the function is evaluated only after the pages become available.
 
-That means document-wide behavior suchas adding a table of contents or page numbers can be defined in ss itself, not
+That means document-wide behavior such as adding a table of contents or page numbers can be defined in ss itself, not
 bolted on from outside the language. Yes, this is directed at you (and me), the
 person who hand-wrote a ToC and forgot to update it.
 

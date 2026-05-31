@@ -616,22 +616,22 @@ const Parser = struct {
 
     fn parsePrimaryTypeAnnotation(self: *Parser) anyerror!ast.Type {
         const name = try self.parseIdentifier();
-        if (std.mem.eql(u8, name, "document")) return ast.Type.document;
-        if (std.mem.eql(u8, name, "page")) return ast.Type.page;
-        if (std.mem.eql(u8, name, "object")) return try self.parseObjectType(name);
-        if (std.mem.eql(u8, name, "metadata")) return ast.Type.metadata;
-        if (std.mem.eql(u8, name, "anchor")) return ast.Type.anchor;
-        if (std.mem.eql(u8, name, "function")) return self.fail(error.InvalidSemanticSort);
-        if (std.mem.eql(u8, name, "style")) return ast.Type.style;
-        if (std.mem.eql(u8, name, "string")) return ast.Type.string;
-        if (std.mem.eql(u8, name, "number")) return ast.Type.number;
-        if (std.mem.eql(u8, name, "bool") or std.mem.eql(u8, name, "boolean")) return ast.Type.boolean;
-        if (std.mem.eql(u8, name, "constraints")) return ast.Type.constraints;
-        if (std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "Void")) return .{ .tag = .void };
-        if (std.mem.eql(u8, name, "selection")) return ast.Type.selectionType(try self.parseOptionalTypeParam());
-        if (std.mem.eql(u8, name, "fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
-        if (std.mem.eql(u8, name, "code")) return ast.Type.code(try self.parseRequiredTypeParam());
-        if (std.mem.eql(u8, name, "list")) return ast.Type.list(try self.parseRequiredTypeParam());
+        if (std.mem.eql(u8, name, "Document")) return ast.Type.document;
+        if (std.mem.eql(u8, name, "Page")) return ast.Type.page;
+        if (std.mem.eql(u8, name, "Object")) return try self.parseObjectType(name);
+        if (std.mem.eql(u8, name, "Metadata")) return ast.Type.metadata;
+        if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
+        if (std.mem.eql(u8, name, "Function")) return self.fail(error.InvalidSemanticSort);
+        if (std.mem.eql(u8, name, "Style")) return ast.Type.style;
+        if (std.mem.eql(u8, name, "String")) return ast.Type.string;
+        if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
+        if (std.mem.eql(u8, name, "Bool")) return ast.Type.boolean;
+        if (std.mem.eql(u8, name, "Constraints")) return ast.Type.constraints;
+        if (std.mem.eql(u8, name, "Void")) return .{ .tag = .void };
+        if (std.mem.eql(u8, name, "Selection")) return ast.Type.selectionType(try self.parseOptionalTypeParam());
+        if (std.mem.eql(u8, name, "Fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
+        if (std.mem.eql(u8, name, "Code")) return ast.Type.code(try self.parseRequiredTypeParam());
+        if (std.mem.eql(u8, name, "List")) return ast.Type.list(try self.parseRequiredTypeParam());
         return self.fail(error.InvalidSemanticSort);
     }
 

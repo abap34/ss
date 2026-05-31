@@ -52,12 +52,12 @@ pub fn resolveDeclaration(name: []const u8, body: []const u8) ?ValueType {
 }
 
 fn infer(name: []const u8, body: []const u8) ?ValueType {
-    if (std.mem.eql(u8, body, "string")) {
+    if (std.mem.eql(u8, body, "String")) {
         if (std.mem.eql(u8, name, "Color")) return .color_string;
         return .string;
     }
-    if (std.mem.eql(u8, body, "style")) return .style;
-    if (std.mem.eql(u8, body, "string | number")) return .scalar_like;
+    if (std.mem.eql(u8, body, "Style")) return .style;
+    if (std.mem.eql(u8, body, "String | Number")) return .scalar_like;
     if (std.mem.indexOf(u8, body, "\"top\"") != null) return .layout_policy;
     if (std.mem.indexOf(u8, body, "\"vector_math\"") != null) return .render_kind;
     if (std.mem.indexOf(u8, body, "\"on\"") != null and std.mem.indexOf(u8, body, "\"off\"") != null) return .wrap_mode;
@@ -102,9 +102,9 @@ pub fn matches(kind: ValueType, string_literal: ?[]const u8, sort: core.Semantic
 
 pub fn label(kind: ValueType) []const u8 {
     return switch (kind) {
-        .string => "string",
-        .style => "style",
-        .scalar_like => "string or number",
+        .string => "String",
+        .style => "Style",
+        .scalar_like => "String or Number",
         .color_string => "color string",
         .fit_policy => "\"warn\" | \"error\" | \"ignore\"",
         .render_kind => "\"text\" | \"code\" | \"vector_math\" | \"vector_asset\" | \"raster_asset\" | \"chrome\"",

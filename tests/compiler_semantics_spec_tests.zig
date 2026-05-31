@@ -54,7 +54,7 @@ test "compiler semantics: imported function return inference diagnostics keep ca
         \\end
         \\
     ,
-        \\fn bad() -> string
+        \\fn bad() -> String
         \\  return add(1)
         \\end
         \\
@@ -65,7 +65,7 @@ test "compiler semantics: default argument effects are checked against function 
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn creates_by_default(x: object = obj("x", "body", "text")) -> object ! Pure
+        \\fn creates_by_default(x: Object = obj("x", "body", "text")) -> Object ! Pure
         \\  return x
         \\end
         \\
@@ -80,12 +80,12 @@ test "compiler semantics: callback effects are included in higher-order calls" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn touch(o: object) -> string ! WriteProperty
+        \\fn touch(o: Object) -> String ! WriteProperty
         \\  set_prop(o, "text_color", "1,0,0")
         \\  return ""
         \\end
         \\
-        \\fn bad(items: selection) -> string ! Pure
+        \\fn bad(items: Selection) -> String ! Pure
         \\  return join(items, "", touch)
         \\end
         \\
@@ -152,7 +152,7 @@ test "compiler semantics: content mutation helpers are stdlib functions" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn bad(target: object) -> object ! Pure
+        \\fn bad(target: Object) -> Object ! Pure
         \\  clear(target)
         \\  return target
         \\end
@@ -190,7 +190,7 @@ test "compiler semantics: style mutation is stdlib over properties" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn bad(target: object) -> object ! Pure
+        \\fn bad(target: Object) -> Object ! Pure
         \\  sty(target, style("custom"))
         \\  return target
         \\end
@@ -246,7 +246,7 @@ test "compiler semantics: pass annotation is rejected" {
         \\import std:themes/default
         \\
         \\@pass
-        \\fn old_pass(doc: document) -> document
+        \\fn old_pass(doc: Document) -> Document
         \\  return doc
         \\end
         \\
@@ -282,7 +282,7 @@ test "compiler semantics: scheduled document statements share document scope" {
         \\  let label = "from document scope"
         \\  foreach(
         \\    pages(docctx()),
-        \\    (page_value: page) |-> new(page_value, label, "body", "text")
+        \\    (page_value: Page) |-> new(page_value, label, "body", "text")
         \\  )
         \\end
         \\
@@ -296,8 +296,8 @@ test "compiler semantics: void functions may finish without explicit return" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn add_page_text(page: page) -> void
-        \\  new(page, str(page_index(page)), "body", "text")
+        \\fn add_page_text(page_value: Page) -> Void
+        \\  new(page_value, str(page_index(page_value)), "body", "text")
         \\end
         \\
         \\document
@@ -317,7 +317,7 @@ test "compiler semantics: bare return is only valid for void functions" {
     try buildSource(
         \\import std:themes/default
         \\
-        \\fn stop() -> void
+        \\fn stop() -> Void
         \\  return
         \\end
         \\
@@ -333,7 +333,7 @@ test "compiler semantics: bare return is only valid for void functions" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn bad() -> string
+        \\fn bad() -> String
         \\  return
         \\end
         \\
@@ -347,7 +347,7 @@ test "compiler semantics: void results cannot be used as values" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn side_effect() -> void
+        \\fn side_effect() -> Void
         \\end
         \\
         \\page bad
@@ -362,7 +362,7 @@ test "compiler semantics: lambda callbacks can create objs over a document selec
         \\import std:themes/default
         \\
         \\document
-        \\  let add_each = (page_value: page) |-> new(page_value, "lambda", "body", "text")
+        \\  let add_each = (page_value: Page) |-> new(page_value, "lambda", "body", "text")
         \\  foreach(pages(docctx()), add_each)
         \\end
         \\
@@ -376,8 +376,8 @@ test "compiler semantics: functions can return captured function values" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn make_label(text_value: string) -> page -> object
-        \\  return (page_value: page) |-> new(page_value, text_value, "body", "text")
+        \\fn make_label(text_value: String) -> Page -> Object
+        \\  return (page_value: Page) |-> new(page_value, text_value, "body", "text")
         \\end
         \\
         \\document
@@ -394,11 +394,11 @@ test "compiler semantics: function values use ordinary application" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn apply(f: number -> number, x: number) -> number
+        \\fn apply(f: Number -> Number, x: Number) -> Number
         \\  return f(x)
         \\end
         \\
-        \\fn inc(x: number) -> number
+        \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
@@ -414,7 +414,7 @@ test "compiler semantics: direct lambda application works" {
         \\import std:themes/default
         \\
         \\page ok
-        \\  text(str(((x: number) |-> x + 4)(1)))
+        \\  text(str(((x: Number) |-> x + 4)(1)))
         \\end
         \\
     , "5");
@@ -424,7 +424,7 @@ test "compiler semantics: constants can hold function values" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\const plus_one: number -> number = (x: number) |-> x + 1
+        \\const plus_one: Number -> Number = (x: Number) |-> x + 1
         \\
         \\page ok
         \\  text(str(plus_one(2)))
@@ -437,8 +437,8 @@ test "compiler semantics: returned lambdas are directly applicable" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn add_two() -> number -> number
-        \\  return (x: number) |-> x + 2
+        \\fn add_two() -> Number -> Number
+        \\  return (x: Number) |-> x + 2
         \\end
         \\
         \\page ok
@@ -452,15 +452,15 @@ test "compiler semantics: returned named functions flow through branches" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn inc(x: number) -> number
+        \\fn inc(x: Number) -> Number
         \\  return x + 1
         \\end
         \\
-        \\fn dec(x: number) -> number
+        \\fn dec(x: Number) -> Number
         \\  return x - 1
         \\end
         \\
-        \\fn choose(flag: boolean) -> number -> number
+        \\fn choose(flag: Bool) -> Number -> Number
         \\  if flag
         \\    return inc
         \\  else
@@ -480,7 +480,7 @@ test "compiler semantics: join accepts an inline typed lambda" {
         \\import std:themes/default
         \\
         \\page one
-        \\  text(join(pages(docctx()), ",", (page_value: page) |-> str(page_index(page_value))))
+        \\  text(join(pages(docctx()), ",", (page_value: Page) |-> str(page_index(page_value))))
         \\end
         \\
         \\page two
@@ -494,7 +494,7 @@ test "compiler semantics: fold accepts an inline typed lambda" {
         \\import std:themes/default
         \\
         \\page one
-        \\  text(fold(pages(docctx()), "", (acc: string, page_value: page) |-> acc ++ str(page_index(page_value))))
+        \\  text(fold(pages(docctx()), "", (acc: String, page_value: Page) |-> acc ++ str(page_index(page_value))))
         \\end
         \\
         \\page two
@@ -507,12 +507,12 @@ test "compiler semantics: lambda bodies cannot be void" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn side_effect(page_value: page) -> void
+        \\fn side_effect(page_value: Page) -> Void
         \\  new(page_value, "side", "body", "text")
         \\end
         \\
         \\document
-        \\  foreach(pages(docctx()), (page_value: page) |-> side_effect(page_value))
+        \\  foreach(pages(docctx()), (page_value: Page) |-> side_effect(page_value))
         \\end
         \\
         \\page bad
@@ -526,7 +526,7 @@ test "compiler semantics: function value application checks argument types" {
         \\import std:themes/default
         \\
         \\page bad
-        \\  let f = (x: number) |-> x + 1
+        \\  let f = (x: Number) |-> x + 1
         \\  text(str(f("oops")))
         \\end
         \\
@@ -547,8 +547,8 @@ test "compiler semantics: function return annotations are checked for function v
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn bad() -> number -> number
-        \\  return (text_value: string) |-> text_value
+        \\fn bad() -> Number -> Number
+        \\  return (text_value: String) |-> text_value
         \\end
         \\
         \\page bad
@@ -562,7 +562,7 @@ test "compiler semantics: function values cannot be stored as properties" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn id(x: number) -> number
+        \\fn id(x: Number) -> Number
         \\  return x
         \\end
         \\
@@ -578,7 +578,7 @@ test "compiler semantics: function values cannot be stored as metadata content" 
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn id(x: number) -> number
+        \\fn id(x: Number) -> Number
         \\  return x
         \\end
         \\
@@ -596,7 +596,7 @@ test "compiler semantics: function-value recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn bad(x: number) -> number
+        \\fn bad(x: Number) -> Number
         \\  let f = bad
         \\  return f(x)
         \\end
@@ -610,11 +610,11 @@ test "compiler semantics: function-value recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn apply(f: number -> number, x: number) -> number
+        \\fn apply(f: Number -> Number, x: Number) -> Number
         \\  return f(x)
         \\end
         \\
-        \\fn bad(x: number) -> number
+        \\fn bad(x: Number) -> Number
         \\  return apply(bad, x)
         \\end
         \\
@@ -629,11 +629,11 @@ test "compiler semantics: mutual recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn first(x: number) -> number
+        \\fn first(x: Number) -> Number
         \\  return second(x)
         \\end
         \\
-        \\fn second(x: number) -> number
+        \\fn second(x: Number) -> Number
         \\  return first(x)
         \\end
         \\
@@ -648,8 +648,8 @@ test "compiler semantics: function-returning lambda recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn make_bad() -> number -> number
-        \\  return (x: number) |-> make_bad()(x)
+        \\fn make_bad() -> Number -> Number
+        \\  return (x: Number) |-> make_bad()(x)
         \\end
         \\
         \\page bad
@@ -663,7 +663,7 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn duplicate_title(title_obj: object) -> object
+        \\fn duplicate_title(title_obj: Object) -> Object
         \\  let page_value = page_of(title_obj)
         \\  new(page_value, "copy", "title", "text")
         \\  return title_obj
@@ -682,7 +682,7 @@ test "compiler semantics: foreach cannot create pages while iterating pages" {
         \\import std:themes/default
         \\
         \\document
-        \\  foreach(pages(docctx()), (page_value: page) |-> new_page(docctx(), "extra"))
+        \\  foreach(pages(docctx()), (page_value: Page) |-> new_page(docctx(), "extra"))
         \\end
         \\
         \\page bad
@@ -695,7 +695,7 @@ test "compiler semantics: fold cannot mutate the iterated page selection" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn add_page(acc: string, page_value: page) -> string
+        \\fn add_page(acc: String, page_value: Page) -> String
         \\  new_page(docctx(), "extra")
         \\  return acc
         \\end
@@ -711,7 +711,7 @@ test "compiler semantics: join cannot mutate the iterated page selection" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn add_page(page_value: page) -> string
+        \\fn add_page(page_value: Page) -> String
         \\  new_page(docctx(), "extra")
         \\  return str(page_index(page_value))
         \\end
@@ -740,7 +740,7 @@ test "compiler semantics: return type inference sees branch-local bindings" {
     try buildSource(
         \\import std:themes/default
         \\
-        \\fn branch_label(flag: boolean) -> string
+        \\fn branch_label(flag: Bool) -> String
         \\  if flag
         \\    let text_value = "yes"
         \\    return text_value
@@ -798,11 +798,11 @@ test "compiler semantics: duplicate user functions are rejected" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn label() -> string
+        \\fn label() -> String
         \\  return "first"
         \\end
         \\
-        \\fn label() -> string
+        \\fn label() -> String
         \\  return "second"
         \\end
         \\

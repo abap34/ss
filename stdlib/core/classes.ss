@@ -3,20 +3,20 @@ type RenderKind = "text" | "code" | "vector_math" | "vector_asset" | "raster_ass
 type TextParseMode = "none" | "inline" | "block"
 type WrapMode = "on" | "off"
 type FitPolicy = "warn" | "error" | "ignore"
-type Color = string @refine(color)
-type ScalarLike = string | number
+type Color = String @refine(color)
+type ScalarLike = String | Number
 
 type Doc = object {
   layout_v: LayoutPolicy = "top_flow"
   layout_v_center_offset: ScalarLike = "0"
   background_fill: Color = ""
-  pageno_on: string = ""
-  pageno_fmt: string = ""
-  footer_text: string = ""
-  logo_path: string = ""
+  pageno_on: String = ""
+  pageno_fmt: String = ""
+  footer_text: String = ""
+  logo_path: String = ""
   logo_scale: ScalarLike = "1"
-  watermark: string = ""
-  need_titles: string = ""
+  watermark: String = ""
+  need_titles: String = ""
 }
 
 type Page = object {
@@ -32,19 +32,19 @@ type Flow = object {
   layout_spacing_after: ScalarLike = "28"
   layout_x: ScalarLike = "96"
   layout_right_inset: ScalarLike = "96"
-  style: style = "default"
+  style: Style = "default"
   fit: FitPolicy = "warn"
-  link_id: string = ""
+  link_id: String = ""
 }
 
 type Text = object {
   base = Flow
 
   text_parse: TextParseMode = "inline"
-  text_font: string = "Helvetica"
-  text_bold_font: string = "Helvetica-Bold"
-  text_italic_font: string = "Helvetica-Oblique"
-  text_code_font: string = "Courier"
+  text_font: String = "Helvetica"
+  text_bold_font: String = "Helvetica-Bold"
+  text_italic_font: String = "Helvetica-Oblique"
+  text_code_font: String = "Courier"
   text_size: ScalarLike = "20"
   text_line_height: ScalarLike = "28"
   text_color: Color = c"0.08,0.08,0.08"
@@ -180,7 +180,7 @@ type Code = object {
 
   render_kind: RenderKind = "code"
   text_parse: TextParseMode = "none"
-  text_font: string = "Courier"
+  text_font: String = "Courier"
   text_size: ScalarLike = "15"
   text_line_height: ScalarLike = "20"
   text_color: Color = c"0.12,0.12,0.12"
@@ -190,7 +190,7 @@ type Code = object {
   layout_x: ScalarLike = "102"
   layout_right_inset: ScalarLike = "102"
   wrap: WrapMode = "off"
-  language: string = "plain"
+  language: String = "plain"
   code_plain_color: Color = c"0.12,0.12,0.12"
   code_keyword_color: Color = c"0.1725,0.3451,0.7882"
   code_comment_color: Color = c"0.3059,0.5412,0.3608"
@@ -201,7 +201,7 @@ type Math = object {
   base = Text
   roles = ["math"]
 
-  text_font: string = "Courier"
+  text_font: String = "Courier"
   text_size: ScalarLike = "18"
   text_line_height: ScalarLike = "24"
   text_color: Color = c"0,0,0.0353"
@@ -229,7 +229,7 @@ type Fig = object {
   base = Text
   roles = ["figure"]
 
-  text_font: string = "Courier"
+  text_font: String = "Courier"
   text_size: ScalarLike = "16"
   text_line_height: ScalarLike = "20"
   text_color: Color = c"0.18,0.18,0.18"
@@ -283,7 +283,7 @@ type Rule = object {
 
   rule_stroke: Color = ""
   rule_line_width: ScalarLike = "1"
-  rule_dash: string = ""
+  rule_dash: String = ""
 }
 
 type Pageno = object {

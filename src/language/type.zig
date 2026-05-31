@@ -167,8 +167,7 @@ pub const Type = struct {
             }
             return true;
         }
-        return
-            normalizeParam(a.param) == normalizeParam(b.param) and
+        return normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
             optionalStringEql(a.param_class_name, b.param_class_name);
     }
@@ -235,19 +234,19 @@ pub const Type = struct {
     pub fn formatInto(self: Type, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
         switch (self.tag) {
             .selection, .fragment, .code, .list => {
-                try out.appendSlice(allocator, @tagName(self.tag));
+                try out.appendSlice(allocator, displayName(self.tag));
                 try out.append(allocator, '<');
                 if (normalizeParam(self.param) == .object and self.param_class_name != null) {
-                    try out.appendSlice(allocator, "object<");
+                    try out.appendSlice(allocator, "Object<");
                     try out.appendSlice(allocator, self.param_class_name.?);
                     try out.append(allocator, '>');
                 } else {
-                    try out.appendSlice(allocator, @tagName(normalizeParam(self.param)));
+                    try out.appendSlice(allocator, displayName(normalizeParam(self.param)));
                 }
                 try out.append(allocator, '>');
             },
             .object => {
-                try out.appendSlice(allocator, "object");
+                try out.appendSlice(allocator, "Object");
                 if (self.class_name) |class_name| {
                     try out.append(allocator, '<');
                     try out.appendSlice(allocator, class_name);
@@ -256,7 +255,7 @@ pub const Type = struct {
             },
             .function => {
                 if (self.fn_result == null) {
-                    try out.appendSlice(allocator, "function");
+                    try out.appendSlice(allocator, "Function");
                     return;
                 }
                 if (self.fn_params.len == 1) {
@@ -276,12 +275,35 @@ pub const Type = struct {
                 try out.appendSlice(allocator, " -> ");
                 try self.fn_result.?.formatInto(allocator, out);
             },
-            else => try out.appendSlice(allocator, @tagName(self.tag)),
+            else => try out.appendSlice(allocator, displayName(self.tag)),
         }
     }
 
     pub fn label(self: Type) []const u8 {
-        return @tagName(self.tag);
+        return displayName(self.tag);
+    }
+
+    fn displayName(tag: Tag) []const u8 {
+        return switch (tag) {
+            .none => "None",
+            .any => "Any",
+            .document => "Document",
+            .page => "Page",
+            .object => "Object",
+            .metadata => "Metadata",
+            .selection => "Selection",
+            .anchor => "Anchor",
+            .function => "Function",
+            .style => "Style",
+            .string => "String",
+            .number => "Number",
+            .boolean => "Bool",
+            .constraints => "Constraints",
+            .fragment => "Fragment",
+            .code => "Code",
+            .list => "List",
+            .void => "Void",
+        };
     }
 };
 

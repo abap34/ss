@@ -130,9 +130,9 @@ test "syntax spec: explicit reserved page names are rejected" {
 
 test "syntax spec: function signatures enforce semantic result sorts and trailing defaults" {
     var parsed = try parse(
-        \\@host fn external_width(value: number) -> number
+        \\@host fn external_width(value: Number) -> Number
         \\
-        \\fn choose(flag: bool, fallback: string = "no") -> string
+        \\fn choose(flag: Bool, fallback: String = "no") -> String
         \\  if flag
         \\    return "yes"
         \\  else
@@ -161,7 +161,7 @@ test "syntax spec: function signatures enforce semantic result sorts and trailin
 
 test "syntax spec: non-host functions must return on at least one complete path" {
     try expectParseError(error.ExpectedReturn,
-        \\fn bad() -> number
+        \\fn bad() -> Number
         \\  let x = 1
         \\end
         \\
@@ -179,11 +179,11 @@ test "syntax spec: user functions require result annotations" {
 
 test "syntax spec: void functions may omit explicit return values" {
     var parsed = try parse(
-        \\fn noop() -> void
+        \\fn noop() -> Void
         \\  let x = 1
         \\end
         \\
-        \\fn stop() -> void
+        \\fn stop() -> Void
         \\  return
         \\end
         \\
@@ -205,11 +205,11 @@ test "syntax spec: void functions may omit explicit return values" {
 
 test "syntax spec: function types and lambdas are source syntax" {
     var parsed = try parse(
-        \\fn make_label(text_value: string) -> page -> object
-        \\  return (page_value: page) |-> new(page_value, text_value, "body", "text")
+        \\fn make_label(text_value: String) -> Page -> Object
+        \\  return (page_value: Page) |-> new(page_value, text_value, "body", "text")
         \\end
         \\
-        \\fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> number
+        \\fn use(callback: (Page -> Object) -> Document, pair: (Page, Document) -> Object, thunk: () -> Number) -> Number
         \\  return thunk()
         \\end
         \\
@@ -241,7 +241,7 @@ test "syntax spec: function types and lambdas are source syntax" {
 
 test "syntax spec: untyped function sort is not accepted as a surface type" {
     try expectParseError(error.InvalidSemanticSort,
-        \\fn bad(f: function) -> number
+        \\fn bad(f: Function) -> Number
         \\  return 1
         \\end
         \\
@@ -251,7 +251,7 @@ test "syntax spec: untyped function sort is not accepted as a surface type" {
 test "syntax spec: lambda expressions can be used as callees" {
     var parsed = try parse(
         \\page Lambda
-        \\  let value = ((x: number) |-> x + 1)(2)
+        \\  let value = ((x: Number) |-> x + 1)(2)
         \\end
         \\
     );
@@ -278,7 +278,7 @@ test "syntax spec: lambda body may start on a later line" {
         \\page Lambda
         \\  let value = foreach(
         \\    pages(docctx()),
-        \\    (page_value: page)
+        \\    (page_value: Page)
         \\      |->
         \\        new(
         \\          page_value,
@@ -308,7 +308,7 @@ test "syntax spec: lambda body may start on a later line" {
 
 test "syntax spec: required parameters cannot follow defaulted parameters" {
     try expectParseError(error.RequiredParameterAfterDefault,
-        \\fn bad(a: number = 1, b: number) -> number
+        \\fn bad(a: Number = 1, b: Number) -> Number
         \\  return a
         \\end
         \\
@@ -317,7 +317,7 @@ test "syntax spec: required parameters cannot follow defaulted parameters" {
 
 test "syntax spec: list is a type constructor but not a runtime semantic result sort" {
     try expectParseError(error.InvalidSemanticSort,
-        \\fn bad() -> list<number>
+        \\fn bad() -> List<Number>
         \\  return 1
         \\end
         \\
