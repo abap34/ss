@@ -1,63 +1,63 @@
 import std:core/objects
 
-fn compile_math(source: string) -> string ! ExternalProcess | ReadTemp | WriteTemp @host(cache = math_hash(source))
+fn compile_math(source: String) -> String ! ExternalProcess | ReadTemp | WriteTemp @host(cache = math_hash(source))
 
-fn op_text(self: object) -> object ! LowerRender @op(draw_text)
-fn op_code(self: object) -> object ! LowerRender @op(draw_code_highlight)
-fn op_math(self: object) -> object ! LowerRender @op(draw_vector_math)
-fn op_vec(self: object) -> object ! LowerRender @op(draw_vector_asset)
-fn op_img(self: object) -> object ! LowerRender @op(draw_raster_asset)
-fn op_box(self: object) -> object ! LowerRender @op(draw_chrome)
-fn op_rule(self: object) -> object ! LowerRender @op(draw_rule)
+fn op_text(self: Object) -> Object ! LowerRender @op(draw_text)
+fn op_code(self: Object) -> Object ! LowerRender @op(draw_code_highlight)
+fn op_math(self: Object) -> Object ! LowerRender @op(draw_vector_math)
+fn op_vec(self: Object) -> Object ! LowerRender @op(draw_vector_asset)
+fn op_img(self: Object) -> Object ! LowerRender @op(draw_raster_asset)
+fn op_box(self: Object) -> Object ! LowerRender @op(draw_chrome)
+fn op_rule(self: Object) -> Object ! LowerRender @op(draw_rule)
 
-fn sty(obj: object, style_value: style) -> object
+fn sty(obj: Object, style_value: Style) -> Object
   obj.style = style_value
   return obj
 end
 
-fn clear(obj: object) -> object
+fn clear(obj: Object) -> Object
   obj.content = ""
   return obj
 end
 
-fn append(obj: object, text_value: string) -> object
+fn append(obj: Object, text_value: String) -> Object
   obj.content = obj.content ++ text_value
   return obj
 end
 
-fn rewrite(obj: object, old_value: string, new_value: string) -> object
+fn rewrite(obj: Object, old_value: String, new_value: String) -> Object
   obj.content = replace(obj.content, old_value, new_value)
   return obj
 end
 
-fn pkg(name: string) -> void
+fn pkg(name: String) -> Void
   extend_render_env(docctx(), "add", "math.latex.packages", name)
 end
 
-fn page_pkg(name: string) -> void
+fn page_pkg(name: String) -> Void
   extend_render_env(pagectx(), "add", "math.latex.packages", name)
 end
 
-fn obj_pkg(obj: object, name: string) -> object
+fn obj_pkg(obj: Object, name: String) -> Object
   extend_render_env(obj, "add", "math.latex.packages", name)
   return obj
 end
 
-fn link(obj: object, id: string) -> object
+fn link(obj: Object, id: String) -> Object
   obj.link_id = id
   return obj
 end
 
-fn md_link(label: string, href: string) -> string
+fn md_link(label: String, href: String) -> String
   return "[" ++ label ++ "](" ++ href ++ ")"
 end
 
-fn scale(obj: object, factor: number) -> object
+fn scale(obj: Object, factor: Number) -> Object
   obj.asset_scale = str(factor)
   return obj
 end
 
-fn txt_p(obj: object, font_name: string, font_size_name: string, line_height_name: string, color_name: string) -> object
+fn txt_p(obj: Object, font_name: String, font_size_name: String, line_height_name: String, color_name: String) -> Object
   obj.text_font = font_name
   obj.text_size = font_size_name
   obj.text_line_height = line_height_name
@@ -65,23 +65,23 @@ fn txt_p(obj: object, font_name: string, font_size_name: string, line_height_nam
   return obj
 end
 
-fn font(obj: object, family_name: string) -> object
+fn font(obj: Object, family_name: String) -> Object
   obj.text_font = family_name
   obj.text_bold_font = family_name ++ " Bold"
   obj.text_italic_font = family_name ++ " Italic"
   return obj
 end
 
-fn fonts(obj: object, family_stack: string) -> object
+fn fonts(obj: Object, family_stack: String) -> Object
   return font(obj, family_stack)
 end
 
-fn code_font(obj: object, family_name: string) -> object
+fn code_font(obj: Object, family_name: String) -> Object
   obj.text_code_font = family_name
   return obj
 end
 
-fn txt_flow(obj: object, font_size_name: string, line_height_name: string, spacing_after_name: string, left_name: string, right_name: string) -> object
+fn txt_flow(obj: Object, font_size_name: String, line_height_name: String, spacing_after_name: String, left_name: String, right_name: String) -> Object
   obj.layout_font_size = font_size_name
   obj.layout_line_height = line_height_name
   obj.layout_spacing_after = spacing_after_name
@@ -91,13 +91,13 @@ fn txt_flow(obj: object, font_size_name: string, line_height_name: string, spaci
   return obj
 end
 
-fn txt(obj: object, font_name: string, font_size_name: string, line_height_name: string, color_name: string, spacing_after_name: string, left_name: string, right_name: string) -> object
+fn txt(obj: Object, font_name: String, font_size_name: String, line_height_name: String, color_name: String, spacing_after_name: String, left_name: String, right_name: String) -> Object
   txt_p(obj, font_name, font_size_name, line_height_name, color_name)
   txt_flow(obj, font_size_name, line_height_name, spacing_after_name, left_name, right_name)
   return obj
 end
 
-fn md_code(obj: object, font_size_name: string, line_height_name: string, pad_x_name: string, pad_y_name: string, fill_name: string, stroke_name: string, line_width_name: string, radius_name: string) -> object
+fn md_code(obj: Object, font_size_name: String, line_height_name: String, pad_x_name: String, pad_y_name: String, fill_name: String, stroke_name: String, line_width_name: String, radius_name: String) -> Object
   obj.text_markdown_code_font_size = font_size_name
   obj.text_markdown_code_line_height = line_height_name
   obj.text_markdown_code_pad_x = pad_x_name
@@ -109,7 +109,7 @@ fn md_code(obj: object, font_size_name: string, line_height_name: string, pad_x_
   return obj
 end
 
-fn md_table(obj: object, pad_x_name: string, pad_y_name: string, border_name: string, line_width_name: string, header_fill_name: string, alt_row_fill_name: string = "") -> object
+fn md_table(obj: Object, pad_x_name: String, pad_y_name: String, border_name: String, line_width_name: String, header_fill_name: String, alt_row_fill_name: String = "") -> Object
   obj.text_markdown_table_cell_pad_x = pad_x_name
   obj.text_markdown_table_cell_pad_y = pad_y_name
   obj.text_markdown_table_border = border_name
@@ -119,7 +119,7 @@ fn md_table(obj: object, pad_x_name: string, pad_y_name: string, border_name: st
   return obj
 end
 
-fn box(obj: object, fill_name: string, stroke_name: string, line_width_name: string, radius_name: string) -> object
+fn box(obj: Object, fill_name: String, stroke_name: String, line_width_name: String, radius_name: String) -> Object
   obj.chrome_fill = fill_name
   obj.chrome_stroke = stroke_name
   obj.chrome_line_width = line_width_name
@@ -127,72 +127,72 @@ fn box(obj: object, fill_name: string, stroke_name: string, line_width_name: str
   return obj
 end
 
-fn under(obj: object, color_name: string, line_width_name: string, offset_name: string) -> object
+fn under(obj: Object, color_name: String, line_width_name: String, offset_name: String) -> Object
   obj.underline_color = color_name
   obj.underline_width = line_width_name
   obj.underline_offset = offset_name
   return obj
 end
 
-fn rule_l(obj: object, stroke_name: string, line_width_name: string, dash_name: string) -> object
+fn rule_l(obj: Object, stroke_name: String, line_width_name: String, dash_name: String) -> Object
   obj.rule_stroke = stroke_name
   obj.rule_line_width = line_width_name
   obj.rule_dash = dash_name
   return obj
 end
 
-fn fit(obj: object, policy_name: string) -> object
+fn fit(obj: Object, policy_name: String) -> Object
   obj.fit = policy_name
   return obj
 end
 
-fn fit_warn(obj: object) -> object
+fn fit_warn(obj: Object) -> Object
   return fit(obj, "warn")
 end
 
-fn fit_error(obj: object) -> object
+fn fit_error(obj: Object) -> Object
   return fit(obj, "error")
 end
 
-fn fit_ignore(obj: object) -> object
+fn fit_ignore(obj: Object) -> Object
   return fit(obj, "ignore")
 end
 
-fn styled(text_value: string, role_name: string, style_value: style) -> object
+fn styled(text_value: String, role_name: String, style_value: Style) -> Object
   let obj = txt_obj(text_value, role_name)
   sty(obj, style_value)
   return obj
 end
 
-fn title_as(text_value: string, variant_name: string) -> object
+fn title_as(text_value: String, variant_name: String) -> Object
   let obj = title_obj(text_value)
   sty(obj, style(variant_name))
   return obj
 end
 
-fn subtitle_as(text_value: string, variant_name: string) -> object
+fn subtitle_as(text_value: String, variant_name: String) -> Object
   let obj = sub_obj(text_value)
   sty(obj, style(variant_name))
   return obj
 end
 
-fn byline(text_value: string) -> object
+fn byline(text_value: String) -> Object
   return by_obj(text_value)
 end
 
-fn byline_as(text_value: string, variant_name: string) -> object
+fn byline_as(text_value: String, variant_name: String) -> Object
   let obj = by_obj(text_value)
   sty(obj, style(variant_name))
   return obj
 end
 
-fn label(label_style_name: string, text_value: string) -> object
+fn label(label_style_name: String, text_value: String) -> Object
   let obj = lab_obj(text_value)
   sty(obj, style(label_style_name))
   return obj
 end
 
-fn rule(rule_style_name: string) -> object
+fn rule(rule_style_name: String) -> Object
   let obj = rule_obj()
   sty(obj, style(rule_style_name))
   return obj

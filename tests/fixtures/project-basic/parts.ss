@@ -1,3 +1,3 @@
-fn module_label(text_value: string) -> object
+fn module_label(text_value: String) -> Object
   return text(text_value)
 end

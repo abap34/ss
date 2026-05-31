@@ -1,130 +1,130 @@
 import std:core/classes
 
-fn vflow(policy: string, center_offset: number = 0) -> void
+fn vflow(policy: String, center_offset: Number = 0) -> Void
   pagectx().layout_v = policy
   pagectx().layout_v_center_offset = center_offset
 end
 
-fn vflow_doc(policy: string, center_offset: number = 0) -> void
+fn vflow_doc(policy: String, center_offset: Number = 0) -> Void
   docctx().layout_v = policy
   docctx().layout_v_center_offset = center_offset
 end
 
-fn pin_l(node: object, amount: number) -> constraints
+fn pin_l(node: Object, amount: Number) -> Constraints
   return equal(anchor(node, "left"), page_anchor("left"), amount)
 end
 
-fn pin_r(node: object, amount: number) -> constraints
+fn pin_r(node: Object, amount: Number) -> Constraints
   return equal(anchor(node, "right"), page_anchor("right"), neg(amount))
 end
 
-fn pin_t(node: object, amount: number) -> constraints
+fn pin_t(node: Object, amount: Number) -> Constraints
   return equal(anchor(node, "top"), page_anchor("top"), neg(amount))
 end
 
-fn pin_b(node: object, amount: number) -> constraints
+fn pin_b(node: Object, amount: Number) -> Constraints
   return equal(anchor(node, "bottom"), page_anchor("bottom"), amount)
 end
 
-fn same_l(target: object, source: object, delta: number) -> constraints
+fn same_l(target: Object, source: Object, delta: Number) -> Constraints
   return equal(anchor(target, "left"), anchor(source, "left"), delta)
 end
 
-fn same_r(target: object, source: object, delta: number) -> constraints
+fn same_r(target: Object, source: Object, delta: Number) -> Constraints
   return equal(anchor(target, "right"), anchor(source, "right"), delta)
 end
 
-fn same_t(target: object, source: object, delta: number) -> constraints
+fn same_t(target: Object, source: Object, delta: Number) -> Constraints
   return equal(anchor(target, "top"), anchor(source, "top"), delta)
 end
 
-fn same_b(target: object, source: object, delta: number) -> constraints
+fn same_b(target: Object, source: Object, delta: Number) -> Constraints
   return equal(anchor(target, "bottom"), anchor(source, "bottom"), delta)
 end
 
-fn below(target: object, source: object, gap: number) -> constraints
+fn below(target: Object, source: Object, gap: Number) -> Constraints
   return equal(anchor(target, "top"), anchor(source, "bottom"), neg(gap))
 end
 
-fn fix_w(node: object, value: number) -> constraints
+fn fix_w(node: Object, value: Number) -> Constraints
   return equal(anchor(node, "right"), anchor(node, "left"), value)
 end
 
-fn fix_h(node: object, value: number) -> constraints
+fn fix_h(node: Object, value: Number) -> Constraints
   return equal(anchor(node, "top"), anchor(node, "bottom"), value)
 end
 
-fn inset_x(node: object, left: number, right: number) -> constraints
+fn inset_x(node: Object, left: Number, right: Number) -> Constraints
   return constraints(
     pin_l(node, left),
     pin_r(node, right)
   )
 end
 
-fn inset(node: object, left: number, right: number) -> object
+fn inset(node: Object, left: Number, right: Number) -> Object
   inset_x(node, left, right)
   return node
 end
 
-fn flow(node: object, left: string, right: string) -> object
+fn flow(node: Object, left: String, right: String) -> Object
   node.layout_x = left
   node.layout_right_inset = right
   node.wrap = "on"
   return node
 end
 
-fn tl(node: object, left: number, top: number) -> object
+fn tl(node: Object, left: Number, top: Number) -> Object
   pin_l(node, left)
   pin_t(node, top)
   return node
 end
 
-fn tr(node: object, right: number, top: number) -> object
+fn tr(node: Object, right: Number, top: Number) -> Object
   pin_r(node, right)
   pin_t(node, top)
   return node
 end
 
-fn tspan(node: object, left: number, right: number, top: number) -> object
+fn tspan(node: Object, left: Number, right: Number, top: Number) -> Object
   inset_x(node, left, right)
   pin_t(node, top)
   return node
 end
 
-fn below_l(target: object, source: object, left_delta: number, gap: number) -> object
+fn below_l(target: Object, source: Object, left_delta: Number, gap: Number) -> Object
   same_l(target, source, left_delta)
   below(target, source, gap)
   return target
 end
 
-fn below_r(target: object, source: object, right_delta: number, gap: number) -> object
+fn below_r(target: Object, source: Object, right_delta: Number, gap: Number) -> Object
   same_r(target, source, right_delta)
   below(target, source, gap)
   return target
 end
 
-fn same_tr(node: object, source: object, right: number, top_delta: number) -> object
+fn same_tr(node: Object, source: Object, right: Number, top_delta: Number) -> Object
   pin_r(node, right)
   same_t(node, source, top_delta)
   return node
 end
 
-fn cols2c(left: object, right: object, gap: number) -> constraints
+fn cols2c(left: Object, right: Object, gap: Number) -> Constraints
   return constraints(
     equal(anchor(right, "left"), anchor(left, "right"), gap)
   )
 end
 
-fn cols2g(left: object, right: object, gap: number) -> object
+fn cols2g(left: Object, right: Object, gap: Number) -> Object
   cols2c(left, right, gap)
   return group(left, right)
 end
 
-fn cols2(left: object, right: object) -> object
+fn cols2(left: Object, right: Object) -> Object
   return cols2g(left, right, 30)
 end
 
-fn surround(panel: object, inner: object, pad_x: number, pad_y: number) -> constraints
+fn surround(panel: Object, inner: Object, pad_x: Number, pad_y: Number) -> Constraints
   return constraints(
     equal(anchor(panel, "left"), anchor(inner, "left"), neg(pad_x)),
     equal(anchor(panel, "right"), anchor(inner, "right"), pad_x),

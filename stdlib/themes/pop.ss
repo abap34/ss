@@ -1,19 +1,19 @@
 import std:themes/base
 
-fn h1(title_text: string) -> object
+fn h1(title_text: String) -> Object
   let title_style = style("pop")
   let title = styled(title_text, "title", title_style)
   txt(title, "Helvetica-Bold", "36", "42", "1,0.3765,0.5098", "46", "72", "72")
   return title
 end
 
-fn h2(subtitle_text: string) -> object
+fn h2(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
   txt(subtitle, "Helvetica", "22", "30", "0.1569,0.1333,0.2196", "22", "78", "78")
   return subtitle
 end
 
-fn head(title_text: string) -> object
+fn head(title_text: String) -> Object
   let chip_style = style("pop_chip")
   let title_style = style("pop")
   let chip = styled(title_text, "label", chip_style)
@@ -25,7 +25,7 @@ fn head(title_text: string) -> object
   return title
 end
 
-fn subhead(subtitle_text: string) -> object
+fn subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 110, 110, 150)
   txt(subtitle, "Helvetica-Bold", "22", "30", "0.1569,0.1333,0.2196", "22", "78", "78")
   subtitle.text_cjk_bold_passes = "3"
@@ -33,11 +33,11 @@ fn subhead(subtitle_text: string) -> object
   return subtitle
 end
 
-fn text(text_value: string) -> object
+fn text(text_value: String) -> Object
   return body_obj(text_value)
 end
 
-fn tex(text_value: string, scale: number = 1) -> object
+fn tex(text_value: String, scale: Number = 1) -> Object
   let obj = frame(text_value, "math", "math_tex", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16")
   obj.render_kind = "vector_math"
   obj.text_parse = "none"
@@ -45,11 +45,11 @@ fn tex(text_value: string, scale: number = 1) -> object
   return obj
 end
 
-fn figure(text_value: string) -> object
+fn figure(text_value: String) -> Object
   return frame(text_value, "figure", "figure_text", "108", "108", 14, 12, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16")
 end
 
-fn image(path_value: string, factor: number = 1) -> object
+fn image(path_value: String, factor: Number = 1) -> Object
   let obj = img_obj(path_value)
   flow(obj, "108", "108")
   let chrome = panel(style("custom"))
@@ -60,7 +60,7 @@ fn image(path_value: string, factor: number = 1) -> object
   return obj
 end
 
-fn pdf(path_value: string, factor: number = 1) -> object
+fn pdf(path_value: String, factor: Number = 1) -> Object
   let obj = pdf_obj(path_value)
   flow(obj, "108", "108")
   let chrome = panel(style("custom"))
@@ -71,15 +71,15 @@ fn pdf(path_value: string, factor: number = 1) -> object
   return obj
 end
 
-fn code(text_value: string, language_name: string = "python") -> object
+fn code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, "108", "108", 18, 14, "1,0.9647,0.9294", "1,0.7373,0.3843", "1.4", "16")
 end
 
-fn note(text_value: string) -> object
+fn note(text_value: String) -> Object
   return inset(note_obj(text_value), 124, 124)
 end
 
-fn toc(title_text: string) -> object
+fn toc(title_text: String) -> Object
   head(title_text)
   let list = toc_obj()
   let chrome = panel(style("pop"))
@@ -89,7 +89,7 @@ fn toc(title_text: string) -> object
   return list
 end
 
-fn cover(title_text: string, subtitle_text: string, author_name: string) -> object
+fn cover(title_text: String, subtitle_text: String, author_name: String) -> Object
   let hero = style("pop_hero")
   let author_style = style("pop")
   let title = tl(styled(title_text, "title", hero), 72, 152)

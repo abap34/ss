@@ -1,18 +1,18 @@
 import std:themes/base
 
-fn h1(title_text: string) -> object
+fn h1(title_text: String) -> Object
   let title = title_obj(title_text)
   txt(title, "Helvetica", "34", "40", "0,0,0.0353", "54", "72", "72")
   return title
 end
 
-fn h2(subtitle_text: string) -> object
+fn h2(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
   txt(subtitle, "Helvetica", "18", "24", "0,0,0.0353", "34", "96", "96")
   return subtitle
 end
 
-fn head(title_text: string) -> object
+fn head(title_text: String) -> Object
   let rule = rule("page_header")
   let label = label("page_section", title_text)
   let title = tl(title_obj(title_text), 72, 100)
@@ -26,7 +26,7 @@ fn head(title_text: string) -> object
   return title
 end
 
-fn subhead(subtitle_text: string) -> object
+fn subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 142)
   txt(subtitle, "Helvetica-Bold", "18", "24", "0,0,0.0353", "34", "96", "96")
   subtitle.text_cjk_bold_passes = "3"
@@ -34,7 +34,7 @@ fn subhead(subtitle_text: string) -> object
   return subtitle
 end
 
-fn tex(text_value: string, scale: number = 1) -> object
+fn tex(text_value: String, scale: Number = 1) -> Object
   let obj = frame(text_value, "math", "math_tex", "102", "102", 8, 8, "1,1,1", "0.9,0.92,0.96", "0.8", "10")
   obj.render_kind = "vector_math"
   obj.text_parse = "none"
@@ -42,11 +42,11 @@ fn tex(text_value: string, scale: number = 1) -> object
   return obj
 end
 
-fn code(text_value: string, language_name: string = "python") -> object
+fn code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, "102", "102", 12, 10, "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "10")
 end
 
-fn toc(title_text: string) -> object
+fn toc(title_text: String) -> Object
   head(title_text)
   let list = toc_obj()
   let chrome = panel(style("toc"))
@@ -56,7 +56,7 @@ fn toc(title_text: string) -> object
   return list
 end
 
-fn cover(title_text: string, subtitle_text: string, author_name: string) -> object
+fn cover(title_text: String, subtitle_text: String, author_name: String) -> Object
   let hero = style("hero")
   let title = tl(styled(title_text, "title", hero), 72, 150)
   let subtitle = styled(subtitle_text, "subtitle", hero)

@@ -664,7 +664,7 @@ fn validateSetPropCall(
         try addUserReport(
             ir,
             origin,
-            "InvalidProperty: set_prop target must be document, page, object, or selection<object>; got {s}",
+            "InvalidProperty: set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
             .{@tagName(target_info.sort)},
         );
         return error.InvalidSemanticSort;
@@ -697,7 +697,7 @@ fn validateExtendRenderEnvCall(
         try addUserReport(
             ir,
             origin,
-            "InvalidRenderEnv: extend_render_env target must be document, page, object, or selection<object>; got {s}",
+            "InvalidRenderEnv: extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
             .{@tagName(target_info.sort)},
         );
         return error.InvalidSemanticSort;
