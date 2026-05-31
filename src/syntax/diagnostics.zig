@@ -12,6 +12,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.ExpectedString => "string or page name",
         error.ExpectedIdentifier => "identifier",
+        error.ReservedIdentifier => "non-keyword identifier",
         error.ExpectedKeyword => "keyword",
         error.ExpectedChar => "punctuation",
         error.ExpectedLineBreak => "line break after block header",

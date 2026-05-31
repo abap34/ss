@@ -514,3 +514,12 @@ test "syntax spec: bare assignment must say let and page dimensions are not targ
         \\
     );
 }
+
+test "syntax spec: grammar keywords are rejected as identifiers" {
+    try expectParseError(error.ReservedIdentifier,
+        \\fn bad(let: Number) -> Number
+        \\  return let
+        \\end
+        \\
+    );
+}

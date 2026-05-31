@@ -1472,7 +1472,30 @@ const Parser = struct {
         while (!self.eof() and source_utils.isIdentifierContinue(self.source[self.pos])) {
             self.pos += 1;
         }
-        return self.allocator.dupe(u8, self.source[start..self.pos]);
+        const ident = self.source[start..self.pos];
+        if (isReservedKeyword(ident)) return self.fail(error.ReservedIdentifier);
+        return self.allocator.dupe(u8, ident);
+    }
+
+    fn isReservedKeyword(ident: []const u8) bool {
+        const reserved = [_][]const u8{
+            "import",
+            "fn",
+            "const",
+            "type",
+            "protocol",
+            "extend",
+            "if",
+            "else",
+            "end",
+            "return",
+            "let",
+            "bind",
+        };
+        inline for (reserved) |keyword| {
+            if (std.mem.eql(u8, ident, keyword)) return true;
+        }
+        return false;
     }
 
     fn expectKeyword(self: *Parser, keyword: []const u8) !void {
