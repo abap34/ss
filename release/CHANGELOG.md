@@ -4,6 +4,16 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-05-31
+
+### Changed
+
+- Switched surface type notation to uppercase constructors, including parser
+  acceptance, type formatting labels, stdlib signatures, fixtures, tests, and
+  README examples.
+- Reserved grammar keywords as invalid identifiers in the surface parser and
+  added a syntax regression test for the restriction.
+
 ## [0.1.8] - 2026-05-29
 
 ### Changed
