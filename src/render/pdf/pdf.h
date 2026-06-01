@@ -45,6 +45,8 @@ void ss_pdf_fill_stroke_rounded_rect(
     double stroke_b,
     double line_width
 );
+void ss_pdf_push_clip_rect(SsPdf *pdf, double x, double y, double width, double height);
+void ss_pdf_pop_clip(SsPdf *pdf);
 int ss_pdf_draw_text(
     SsPdf *pdf,
     double x,
