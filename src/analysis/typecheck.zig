@@ -18,9 +18,9 @@ const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 pub const VariableInfo = semantic_types.TypeInfo;
 const ensureType = semantic_types.ensureType;
-const infoFromSort = semantic_types.infoFromSort;
+const infoFromValueTag = semantic_types.infoFromValueTag;
 const inferExprInfo = infer.exprInfo;
-pub const expectedPrimitiveArgSort = infer.expectedPrimitiveArgSort;
+pub const expectedPrimitiveArgType = infer.expectedPrimitiveArgType;
 
 pub const FunctionMetadata = core.FunctionMetadata;
 
@@ -359,14 +359,14 @@ pub fn collectVariableTypesFromProgram(
     allocator: std.mem.Allocator,
     functions: *const std.StringHashMap(ast.FunctionDecl),
     program: ast.Program,
-) !std.StringHashMap(core.SemanticSort) {
+) !std.StringHashMap(core.ValueTag) {
     var infos = try collectVariableInfoFromProgram(allocator, functions, program, null);
     defer infos.deinit();
-    var variables = std.StringHashMap(core.SemanticSort).init(allocator);
+    var variables = std.StringHashMap(core.ValueTag).init(allocator);
     errdefer variables.deinit();
     var iterator = infos.iterator();
     while (iterator.next()) |entry| {
-        try variables.put(entry.key_ptr.*, entry.value_ptr.sort);
+        try variables.put(entry.key_ptr.*, entry.value_ptr.value_tag);
     }
     return variables;
 }
@@ -392,8 +392,8 @@ pub fn collectVariableInfoFromProgram(
                 const info = try inferExprInfo(allocator, diagnostic_ir, &sema, &env, default_value.*, origin);
                 try ensureType(diagnostic_ir, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
-            try env.put(param.name, .{ .ty = param.ty, .sort = param.sort });
-            try variables.put(param.name, .{ .ty = param.ty, .sort = param.sort });
+            try env.put(param.name, .{ .ty = param.ty, .value_tag = param.value_tag });
+            try variables.put(param.name, .{ .ty = param.ty, .value_tag = param.value_tag });
         }
 
         for (func.statements.items) |stmt| {
@@ -484,7 +484,7 @@ pub fn buildIrWithOptions(
             printIrDiagnosticsOrFallback(&ir, err);
             return error.DiagnosticsFailed;
         }
-        break :blk std.StringHashMap(core.SemanticSort).init(allocator);
+        break :blk std.StringHashMap(core.ValueTag).init(allocator);
     };
     try editor.populateIrAnalysis(allocator, &ir);
     return ir;
@@ -495,14 +495,14 @@ fn collectVariableTypesFromProgramWithDiagnostics(
     functions: *const std.StringHashMap(ast.FunctionDecl),
     program: ast.Program,
     diagnostic_ir: *core.Ir,
-) !std.StringHashMap(core.SemanticSort) {
+) !std.StringHashMap(core.ValueTag) {
     var infos = try collectVariableInfoFromProgram(allocator, functions, program, diagnostic_ir);
     defer infos.deinit();
-    var variables = std.StringHashMap(core.SemanticSort).init(allocator);
+    var variables = std.StringHashMap(core.ValueTag).init(allocator);
     errdefer variables.deinit();
     var iterator = infos.iterator();
     while (iterator.next()) |entry| {
-        try variables.put(entry.key_ptr.*, entry.value_ptr.sort);
+        try variables.put(entry.key_ptr.*, entry.value_ptr.value_tag);
     }
     return variables;
 }
@@ -571,7 +571,7 @@ pub fn collectVariableTypesForProgram(
     io: std.Io,
     input_path: []const u8,
     program: ast.Program,
-) !std.StringHashMap(core.SemanticSort) {
+) !std.StringHashMap(core.ValueTag) {
     var index = try loadProgramIndexForPath(allocator, io, input_path, program);
     defer index.deinit();
     return try collectVariableTypesFromProgram(allocator, &index.functions, program);

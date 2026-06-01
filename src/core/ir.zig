@@ -19,8 +19,8 @@ const FragmentRoot = model.FragmentRoot;
 const Fragment = model.Fragment;
 const ConstraintSource = model.ConstraintSource;
 const Selection = model.Selection;
-const SelectionItemSort = model.SelectionItemSort;
-const SemanticSort = model.SemanticSort;
+const SelectionItemTag = model.SelectionItemTag;
+const ValueTag = model.ValueTag;
 const Value = model.Value;
 const Query = model.Query;
 const PageLayout = model.PageLayout;
@@ -111,7 +111,7 @@ pub const Ir = struct {
     project_module_id: SourceModuleId,
     functions: std.StringHashMap(ast.FunctionDecl),
     function_metadata: std.StringHashMap(FunctionMetadata),
-    variable_types: std.StringHashMap(SemanticSort),
+    variable_types: std.StringHashMap(ValueTag),
     definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
@@ -128,13 +128,13 @@ pub const Ir = struct {
     next_metadata_id: MetadataId,
     document_id: NodeId,
 
-	    pub fn init(
-	        allocator: Allocator,
-	        asset_base_dir: []u8,
-	        project_path: []u8,
-	        project_source: []u8,
-	        project_program: ast.Program,
-	    ) !Ir {
+    pub fn init(
+        allocator: Allocator,
+        asset_base_dir: []u8,
+        project_path: []u8,
+        project_source: []u8,
+        project_program: ast.Program,
+    ) !Ir {
         var ir = Ir{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
@@ -143,7 +143,7 @@ pub const Ir = struct {
             .project_module_id = 0,
             .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
             .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
-            .variable_types = std.StringHashMap(SemanticSort).init(allocator),
+            .variable_types = std.StringHashMap(ValueTag).init(allocator),
             .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
@@ -158,55 +158,55 @@ pub const Ir = struct {
             .runtime_strings = .empty,
             .next_id = 1,
             .next_metadata_id = 1,
-	            .document_id = 0,
-	        };
-	        errdefer ir.deinitPartial();
+            .document_id = 0,
+        };
+        errdefer ir.deinitPartial();
 
-	        const project_spec = try allocator.dupe(u8, project_path);
-	        errdefer allocator.free(project_spec);
+        const project_spec = try allocator.dupe(u8, project_path);
+        errdefer allocator.free(project_spec);
 
-	        const doc_id = try ir.freshId();
-	        try ir.nodes.append(allocator, .{
-	            .id = doc_id,
-	            .kind = .document,
+        const doc_id = try ir.freshId();
+        try ir.nodes.append(allocator, .{
+            .id = doc_id,
+            .kind = .document,
             .name = "document",
             .attached = true,
-	        });
-	        ir.document_id = doc_id;
+        });
+        ir.document_id = doc_id;
 
-	        try ir.modules.append(allocator, .{
-	            .id = 0,
-	            .kind = .project,
-	            .spec = project_spec,
-	            .path = project_path,
-	            .source = project_source,
-	            .program = project_program,
-	            .resolved_import_ids = .empty,
-	        });
+        try ir.modules.append(allocator, .{
+            .id = 0,
+            .kind = .project,
+            .spec = project_spec,
+            .path = project_path,
+            .source = project_source,
+            .program = project_program,
+            .resolved_import_ids = .empty,
+        });
 
-	        return ir;
-	    }
+        return ir;
+    }
 
-	    fn deinitPartial(self: *Ir) void {
-	        self.modules.deinit(self.allocator);
-	        self.module_order.deinit(self.allocator);
-	        self.functions.deinit();
-	        self.function_metadata.deinit();
-	        self.variable_types.deinit();
-	        self.definitions.deinit(self.allocator);
-	        self.hints.deinit(self.allocator);
-	        self.contains.deinit();
-	        for (self.nodes.items) |*node| node.deinit(self.allocator);
-	        self.nodes.deinit(self.allocator);
-	        for (self.metadata.items) |*metadata| metadata.deinit(self.allocator);
-	        self.metadata.deinit(self.allocator);
-	        self.page_order.deinit(self.allocator);
-	        self.constraints.deinit(self.allocator);
-	        self.diagnostics.deinit(self.allocator);
-	        self.constraint_failures.deinit(self.allocator);
-	        self.fragments.deinit(self.allocator);
-	        self.runtime_strings.deinit(self.allocator);
-	    }
+    fn deinitPartial(self: *Ir) void {
+        self.modules.deinit(self.allocator);
+        self.module_order.deinit(self.allocator);
+        self.functions.deinit();
+        self.function_metadata.deinit();
+        self.variable_types.deinit();
+        self.definitions.deinit(self.allocator);
+        self.hints.deinit(self.allocator);
+        self.contains.deinit();
+        for (self.nodes.items) |*node| node.deinit(self.allocator);
+        self.nodes.deinit(self.allocator);
+        for (self.metadata.items) |*metadata| metadata.deinit(self.allocator);
+        self.metadata.deinit(self.allocator);
+        self.page_order.deinit(self.allocator);
+        self.constraints.deinit(self.allocator);
+        self.diagnostics.deinit(self.allocator);
+        self.constraint_failures.deinit(self.allocator);
+        self.fragments.deinit(self.allocator);
+        self.runtime_strings.deinit(self.allocator);
+    }
 
     pub fn deinit(self: *Ir) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
@@ -251,19 +251,19 @@ pub const Ir = struct {
         self.runtime_strings.deinit(self.allocator);
     }
 
-	    pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
-	        errdefer self.allocator.free(text);
-	        try self.runtime_strings.append(self.allocator, text);
-	        return text;
-	    }
+    pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
+        errdefer self.allocator.free(text);
+        try self.runtime_strings.append(self.allocator, text);
+        return text;
+    }
 
-	    pub fn copyString(self: *Ir, text: []const u8) ![]const u8 {
-	        return self.ownString(try self.allocator.dupe(u8, text));
-	    }
+    pub fn copyString(self: *Ir, text: []const u8) ![]const u8 {
+        return self.ownString(try self.allocator.dupe(u8, text));
+    }
 
-	    fn copyOptionalString(self: *Ir, text: ?[]const u8) !?[]const u8 {
-	        return if (text) |value| try self.copyString(value) else null;
-	    }
+    fn copyOptionalString(self: *Ir, text: ?[]const u8) !?[]const u8 {
+        return if (text) |value| try self.copyString(value) else null;
+    }
 
     pub fn projectPath(self: *const Ir) []const u8 {
         return self.projectModule().path orelse "";
@@ -341,17 +341,17 @@ pub const Ir = struct {
         try self.addContainment(parent, child);
     }
 
-	    pub fn addPage(self: *Ir, name: []const u8) !NodeId {
-	        const page_id = try self.freshId();
-	        const index = self.page_order.items.len + 1;
-	        const owned_name = try self.copyString(name);
-	        try self.nodes.append(self.allocator, .{
-	            .id = page_id,
-	            .kind = .page,
-	            .name = owned_name,
-	            .attached = true,
-	            .page_index = index,
-	        });
+    pub fn addPage(self: *Ir, name: []const u8) !NodeId {
+        const page_id = try self.freshId();
+        const index = self.page_order.items.len + 1;
+        const owned_name = try self.copyString(name);
+        try self.nodes.append(self.allocator, .{
+            .id = page_id,
+            .kind = .page,
+            .name = owned_name,
+            .attached = true,
+            .page_index = index,
+        });
         try self.page_order.append(self.allocator, page_id);
         try self.addContainment(self.document_id, page_id);
         return page_id;
@@ -484,9 +484,9 @@ pub const Ir = struct {
                 .document => null,
                 .page => |id| id,
                 .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-                else => return error.InvalidSemanticSort,
+                else => return error.InvalidValueTag,
             },
-            else => return error.InvalidSemanticSort,
+            else => return error.InvalidValueTag,
         };
         return try self.addMetadata(kind, value, page_id, origin);
     }
@@ -528,34 +528,34 @@ pub const Ir = struct {
         return (self.metadataById(id) orelse return error.UnknownMetadata).page_id orelse return error.MissingParentPage;
     }
 
-	    fn makeNodeWithOrigin(
-	        self: *Ir,
-	        page_id: NodeId,
-	        attached: bool,
-	        kind: NodeKind,
+    fn makeNodeWithOrigin(
+        self: *Ir,
+        page_id: NodeId,
+        attached: bool,
+        kind: NodeKind,
         name: []const u8,
         role: ?Role,
         object_kind: ObjectKind,
         payload_kind: PayloadKind,
         content: ?[]const u8,
-	        origin: ?[]const u8,
-	    ) !NodeId {
-	        const obj_id = try self.freshId();
-	        const owned_name = try self.copyString(name);
-	        const owned_role = try self.copyOptionalString(role);
-	        const owned_content = try self.copyOptionalString(content);
-	        const owned_origin = try self.copyOptionalString(origin);
-	        try self.nodes.append(self.allocator, .{
-	            .id = obj_id,
-	            .kind = kind,
-	            .name = owned_name,
-	            .attached = attached,
-	            .role = owned_role,
-	            .object_kind = object_kind,
-	            .payload_kind = payload_kind,
-	            .content = owned_content,
-	            .origin = owned_origin,
-	        });
+        origin: ?[]const u8,
+    ) !NodeId {
+        const obj_id = try self.freshId();
+        const owned_name = try self.copyString(name);
+        const owned_role = try self.copyOptionalString(role);
+        const owned_content = try self.copyOptionalString(content);
+        const owned_origin = try self.copyOptionalString(origin);
+        try self.nodes.append(self.allocator, .{
+            .id = obj_id,
+            .kind = kind,
+            .name = owned_name,
+            .attached = attached,
+            .role = owned_role,
+            .object_kind = object_kind,
+            .payload_kind = payload_kind,
+            .content = owned_content,
+            .origin = owned_origin,
+        });
         if (attached) try self.addContainment(page_id, obj_id);
         return obj_id;
     }
@@ -771,10 +771,10 @@ pub const Ir = struct {
         return null;
     }
 
-    fn ensureSort(self: *Ir, value: Value, expected: SemanticSort, context: []const u8) !void {
+    fn ensureValueTag(self: *Ir, value: Value, expected: ValueTag, context: []const u8) !void {
         _ = self;
-        const actual: SemanticSort = switch (value) {
-            .code => |code| code.sort(),
+        const actual: ValueTag = switch (value) {
+            .code => |code| code.value_tag(),
             .document => .document,
             .page => .page,
             .object => .object,
@@ -791,24 +791,24 @@ pub const Ir = struct {
             .void => .void,
         };
         if (actual != expected) {
-            std.debug.print("sort mismatch in {s}: expected {s}, got {s}\n", .{
+            std.debug.print("value type mismatch in {s}: expected {s}, got {s}\n", .{
                 context,
                 @tagName(expected),
                 @tagName(actual),
             });
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
     }
 
     fn singletonSelection(
         self: *Ir,
         allocator: Allocator,
-        item_sort: SelectionItemSort,
+        item_tag: SelectionItemTag,
         provenance: []const u8,
         id: NodeId,
     ) !Selection {
         _ = self;
-        var selection = Selection.init(item_sort, provenance);
+        var selection = Selection.init(item_tag, provenance);
         try selection.ids.append(allocator, id);
         return selection;
     }
@@ -902,7 +902,7 @@ pub const Ir = struct {
     }
 
     pub fn select(self: *Ir, allocator: Allocator, base: Value, query: Query) !Value {
-        try self.ensureSort(base, query.input, query.name);
+        try self.ensureValueTag(base, query.input, query.name);
 
         return switch (query.op) {
             .self_object => .{
@@ -932,7 +932,7 @@ pub const Ir = struct {
         };
     }
 
-    pub fn fragmentRootSort(self: *Ir, fragment: *const Fragment) SemanticSort {
+    pub fn fragmentRootValueTag(self: *Ir, fragment: *const Fragment) ValueTag {
         _ = self;
         const root = fragment.root orelse unreachable;
         return switch (root) {

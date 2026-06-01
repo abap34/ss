@@ -6,10 +6,10 @@ pub const FunctionContract = struct {
     min_param_count: usize,
     max_param_count: usize,
     returns_value: bool,
-    result_sort: core.SemanticSort,
+    result_tag: core.ValueTag,
 };
 
-pub fn valueSort(value: core.Value) core.SemanticSort {
+pub fn valueTag(value: core.Value) core.ValueTag {
     return switch (value) {
         .code => .code,
         .document => .document,
@@ -29,49 +29,49 @@ pub fn valueSort(value: core.Value) core.SemanticSort {
     };
 }
 
-pub fn ensureValueSort(
+pub fn ensureValueType(
     ir: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
-    expected: core.SemanticSort,
+    expected: core.ValueTag,
     origin: []const u8,
 ) !void {
-    return ensureValueSortWithCode(ir, page_id, value, expected, origin, .UnmatchedArgumentType);
+    return ensureValueTypeWithCode(ir, page_id, value, expected, origin, .UnmatchedArgumentType);
 }
 
-pub fn ensureValueSortWithCode(
+pub fn ensureValueTypeWithCode(
     ir: anytype,
     page_id: ?core.NodeId,
     value: core.Value,
-    expected: core.SemanticSort,
+    expected: core.ValueTag,
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
-    const actual = valueSort(value);
+    const actual = valueTag(value);
     if (actual == .code) {
         const code_value = value.code;
-        if (expected == .code or code_value.sort() == expected) return;
+        if (expected == .code or code_value.valueTag() == expected) return;
     }
     if (actual != expected) {
         try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
         });
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 }
 
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
     const contract = functionContract(func);
-    const param_sorts = try allocator.alloc(core.SemanticSort, func.params.items.len);
+    const param_tags = try allocator.alloc(core.ValueTag, func.params.items.len);
     for (func.params.items, 0..) |param, index| {
-        param_sorts[index] = param.sort;
+        param_tags[index] = param.value_tag;
     }
     return .{
         .name = func.name,
         .param_count = contract.max_param_count,
-        .param_sorts = param_sorts,
+        .param_tags = param_tags,
         .returns_value = contract.returns_value,
-        .result_sort = contract.result_sort,
+        .result_tag = contract.result_tag,
         .effect = .unknown,
     };
 }
@@ -81,7 +81,7 @@ pub fn functionContract(func: ast.FunctionDecl) FunctionContract {
         .min_param_count = requiredParamCount(func),
         .max_param_count = func.params.items.len,
         .returns_value = functionReturnsValue(func),
-        .result_sort = func.result_sort,
+        .result_tag = func.result_tag,
     };
 }
 
@@ -94,7 +94,7 @@ pub fn requiredParamCount(func: ast.FunctionDecl) usize {
 }
 
 pub fn functionReturnsValue(func: ast.FunctionDecl) bool {
-    return func.result_sort != .void;
+    return func.result_tag != .void;
 }
 
 pub fn functionBodyReturns(statements: []const ast.Statement) bool {

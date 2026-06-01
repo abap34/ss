@@ -74,7 +74,7 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
         const result_label = try func.result_type.formatAlloc(allocator);
         defer allocator.free(result_label);
         try item.stringField("resultType", result_label);
-        try item.enumTagField("resultSort", func.result_sort);
+        try item.enumTagField("resultValueType", func.result_tag);
         try item.optionalStringField("effects", func.effects);
         var annotations = try item.arrayField("annotations");
         for (func.annotations.items) |annotation| try writeAnnotation(&annotations, annotation);
@@ -86,7 +86,7 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
             const param_label = try param.ty.formatAlloc(allocator);
             defer allocator.free(param_label);
             try param_item.stringField("type", param_label);
-            try param_item.enumTagField("runtimeSort", param.sort);
+            try param_item.enumTagField("runtimeValueType", param.value_tag);
             try param_item.end();
         }
         try params.end();

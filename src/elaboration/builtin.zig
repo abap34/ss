@@ -95,7 +95,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             for (snapshot.ids.items) |id| {
                 var args = std.ArrayList(core.Value).empty;
                 defer args.deinit(ctx.ir.allocator);
-                try args.append(ctx.ir.allocator, itemValue(snapshot.item_sort, id));
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_tag, id));
                 try args.appendSlice(ctx.ir.allocator, extras.items);
                 var result = try ctx.invokeCallback(callback, args.items);
                 defer result.deinit(ctx.ir.allocator);
@@ -121,7 +121,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 var args = std.ArrayList(core.Value).empty;
                 defer args.deinit(ctx.ir.allocator);
                 try args.append(ctx.ir.allocator, .{ .string = accumulator });
-                try args.append(ctx.ir.allocator, itemValue(snapshot.item_sort, id));
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_tag, id));
                 try args.appendSlice(ctx.ir.allocator, extras.items);
                 var result = try ctx.invokeCallback(callback, args.items);
                 defer result.deinit(ctx.ir.allocator);
@@ -152,7 +152,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             for (snapshot.ids.items, 0..) |id, index| {
                 var args = std.ArrayList(core.Value).empty;
                 defer args.deinit(ctx.ir.allocator);
-                try args.append(ctx.ir.allocator, itemValue(snapshot.item_sort, id));
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_tag, id));
                 try args.appendSlice(ctx.ir.allocator, extras.items);
                 var result = try ctx.invokeCallback(callback, args.items);
                 defer result.deinit(ctx.ir.allocator);
@@ -168,7 +168,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .first => blk: {
             const selection = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             break :blk switch (selection) {
-                .selection => |sel| switch (sel.item_sort) {
+                .selection => |sel| switch (sel.item_tag) {
                     .object => .{ .object = sel.first() orelse return error.EmptySelection },
                     .page => .{ .page = sel.first() orelse return error.EmptySelection },
                     .metadata => .{ .metadata = sel.first() orelse return error.EmptySelection },
@@ -189,8 +189,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 .selection => |selection| selection,
                 else => return error.ExpectedSelection,
             };
-            if (left.item_sort != right.item_sort) return error.InvalidSelectionSort;
-            var result = core.Selection.init(left.item_sort, descriptor.name);
+            if (left.item_tag != right.item_tag) return error.InvalidSelectionItemType;
+            var result = core.Selection.init(left.item_tag, descriptor.name);
             errdefer result.deinit(ctx.ir.allocator);
             switch (descriptor.op) {
                 .selection_union => {
@@ -338,7 +338,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 .selection => |sel| sel,
                 else => return error.ExpectedSelection,
             };
-            if (selection.item_sort != .object) return error.InvalidSelectionSort;
+            if (selection.item_tag != .object) return error.InvalidSelectionItemType;
             break :blk .{ .object = try ctx.makeGroupOnPage(page_id, selection.ids.items) };
         },
         .set_prop => blk: {
@@ -363,16 +363,16 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     break :blk2 mutationResult(raw_target, .{ .object = id });
                 },
                 .selection => |sel| blk2: {
-                    if (sel.item_sort != .object) {
+                    if (sel.item_tag != .object) {
                         target.deinit(ctx.ir.allocator);
-                        return error.InvalidSelectionSort;
+                        return error.InvalidSelectionItemType;
                     }
                     for (sel.ids.items) |id| try ctx.setNodeProperty(id, key, value);
                     break :blk2 target;
                 },
                 else => {
                     target.deinit(ctx.ir.allocator);
-                    return error.InvalidSemanticSort;
+                    return error.InvalidValueTag;
                 },
             };
         },
@@ -404,16 +404,16 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     break :blk2 mutationResult(raw_target, .{ .object = id });
                 },
                 .selection => |sel| blk2: {
-                    if (sel.item_sort != .object) {
+                    if (sel.item_tag != .object) {
                         target.deinit(ctx.ir.allocator);
-                        return error.InvalidSelectionSort;
+                        return error.InvalidSelectionItemType;
                     }
                     for (sel.ids.items) |id| try ctx.extendRenderEnv(id, op, key, value);
                     break :blk2 target;
                 },
                 else => {
                     target.deinit(ctx.ir.allocator);
-                    return error.InvalidSemanticSort;
+                    return error.InvalidValueTag;
                 },
             };
         },
@@ -467,8 +467,8 @@ fn replaceAll(allocator: std.mem.Allocator, text: []const u8, old: []const u8, n
     return try out.toOwnedSlice(allocator);
 }
 
-fn itemValue(sort: core.SelectionItemSort, id: core.NodeId) core.Value {
-    return switch (sort) {
+fn itemValue(tag: core.SelectionItemTag, id: core.NodeId) core.Value {
+    return switch (tag) {
         .page => .{ .page = id },
         .object => .{ .object = id },
         .metadata => .{ .metadata = id },
@@ -487,7 +487,7 @@ fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.Functio
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .function => |function| try function.clone(ctx.ir.allocator),
-        else => error.InvalidSemanticSort,
+        else => error.InvalidValueTag,
     };
 }
 
@@ -498,9 +498,9 @@ fn evalPageArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId {
         .page => |id| id,
         .code => |code| switch (code.root) {
             .page => |id| id,
-            else => error.InvalidSemanticSort,
+            else => error.InvalidValueTag,
         },
-        else => error.InvalidSemanticSort,
+        else => error.InvalidValueTag,
     };
 }
 
@@ -511,9 +511,9 @@ fn evalDocumentArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId 
         .document => |id| id,
         .code => |code| switch (code.root) {
             .document => |id| id,
-            else => error.InvalidSemanticSort,
+            else => error.InvalidValueTag,
         },
-        else => error.InvalidSemanticSort,
+        else => error.InvalidValueTag,
     };
 }
 
@@ -522,7 +522,7 @@ fn evalMetadataArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.Metadat
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .metadata => |id| id,
-        else => error.InvalidSemanticSort,
+        else => error.InvalidValueTag,
     };
 }
 

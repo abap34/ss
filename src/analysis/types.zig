@@ -6,7 +6,7 @@ const Type = ast.Type;
 
 pub const TypeInfo = struct {
     ty: Type = Type.any,
-    sort: core.SemanticSort,
+    value_tag: core.ValueTag,
     object_class: ?[]const u8 = null,
     string_literal: ?[]const u8 = null,
     function_labels: []const []const u8 = &.{},
@@ -14,20 +14,20 @@ pub const TypeInfo = struct {
 
 pub const TypeEnv = std.StringHashMap(TypeInfo);
 
-pub fn infoFromSort(sort: core.SemanticSort) TypeInfo {
-    return .{ .ty = Type.fromSort(sort), .sort = sort };
+pub fn infoFromValueTag(value_tag: core.ValueTag) TypeInfo {
+    return .{ .ty = Type.fromValueTag(value_tag), .value_tag = value_tag };
 }
 
 pub fn infoFromType(ty: Type) TypeInfo {
     return .{
         .ty = ty,
-        .sort = ty.toRuntimeSort() orelse .fragment,
+        .value_tag = ty.toValueTag() orelse .fragment,
         .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
     };
 }
 
-pub fn infoForSelectionItem(sort: core.SelectionItemSort) TypeInfo {
-    return infoFromType(Type.fromSelectionItemSort(sort));
+pub fn infoForSelectionItem(tag: core.SelectionItemTag) TypeInfo {
+    return infoFromType(Type.fromSelectionItemTag(tag));
 }
 
 pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
@@ -37,7 +37,7 @@ pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
 pub fn mergeTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !TypeInfo {
     return .{
         .ty = a.ty,
-        .sort = a.sort,
+        .value_tag = a.value_tag,
         .object_class = mergeObjectClass(a.object_class, b.object_class),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
         .function_labels = try mergeFunctionLabels(allocator, a.function_labels, b.function_labels),
@@ -121,10 +121,10 @@ pub fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
     };
 }
 
-pub fn ensureSort(
+pub fn ensureValueTag(
     ir: ?*core.Ir,
-    actual: core.SemanticSort,
-    expected: core.SemanticSort,
+    actual: core.ValueTag,
+    expected: core.ValueTag,
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
@@ -134,7 +134,7 @@ pub fn ensureSort(
                 .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
             });
         }
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 }
 
@@ -147,8 +147,8 @@ pub fn ensureType(
     code: core.TypeMismatchCode,
 ) !void {
     if (Type.accepts(expected, actual.ty)) return;
-    const expected_sort = expected.toRuntimeSort() orelse actual.sort;
-    if (expected_sort != actual.sort) return ensureSort(ir, actual.sort, expected_sort, origin, code);
+    const expected_tag = expected.toValueTag() orelse actual.value_tag;
+    if (expected_tag != actual.value_tag) return ensureValueTag(ir, actual.value_tag, expected_tag, origin, code);
     if (ir) |sink| {
         const actual_label = try typeLabelAlloc(allocator, actual.ty);
         defer allocator.free(actual_label);
@@ -159,5 +159,5 @@ pub fn ensureType(
             .user_report = .{ .message = message },
         });
     }
-    return error.InvalidSemanticSort;
+    return error.InvalidValueTag;
 }

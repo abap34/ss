@@ -166,7 +166,7 @@ pub const Metadata = struct {
     }
 };
 
-pub const SemanticSort = enum {
+pub const ValueTag = enum {
     code,
     document,
     page,
@@ -184,20 +184,20 @@ pub const SemanticSort = enum {
     void,
 };
 
-pub const SelectionItemSort = enum {
+pub const SelectionItemTag = enum {
     page,
     object,
     metadata,
 };
 
 pub const Selection = struct {
-    item_sort: SelectionItemSort,
+    item_tag: SelectionItemTag,
     provenance: []const u8,
     ids: std.ArrayList(NodeId),
 
-    pub fn init(item_sort: SelectionItemSort, provenance: []const u8) Selection {
+    pub fn init(item_tag: SelectionItemTag, provenance: []const u8) Selection {
         return .{
-            .item_sort = item_sort,
+            .item_tag = item_tag,
             .provenance = provenance,
             .ids = std.ArrayList(NodeId).empty,
         };
@@ -208,7 +208,7 @@ pub const Selection = struct {
     }
 
     pub fn clone(self: Selection, allocator: Allocator) !Selection {
-        var copied = Selection.init(self.item_sort, self.provenance);
+        var copied = Selection.init(self.item_tag, self.provenance);
         errdefer copied.deinit(allocator);
         try copied.ids.appendSlice(allocator, self.ids.items);
         return copied;
@@ -255,13 +255,13 @@ pub const FunctionRef = struct {
     name: []const u8,
     closure_id: ?usize = null,
     param_count: usize,
-    param_sorts: []const SemanticSort = &.{},
+    param_tags: []const ValueTag = &.{},
     returns_value: bool,
-    result_sort: SemanticSort,
+    result_tag: ValueTag,
     effect: FunctionEffect = .unknown,
 
     pub fn deinit(self: *FunctionRef, allocator: Allocator) void {
-        if (self.param_sorts.len != 0) allocator.free(self.param_sorts);
+        if (self.param_tags.len != 0) allocator.free(self.param_tags);
     }
 
     pub fn clone(self: FunctionRef, allocator: Allocator) !FunctionRef {
@@ -269,9 +269,9 @@ pub const FunctionRef = struct {
             .name = self.name,
             .closure_id = self.closure_id,
             .param_count = self.param_count,
-            .param_sorts = try allocator.dupe(SemanticSort, self.param_sorts),
+            .param_tags = try allocator.dupe(ValueTag, self.param_tags),
             .returns_value = self.returns_value,
-            .result_sort = self.result_sort,
+            .result_tag = self.result_tag,
             .effect = self.effect,
         };
     }
@@ -291,7 +291,7 @@ pub const CodeRoot = union(enum) {
     object: NodeId,
     selection: Selection,
 
-    pub fn sort(self: CodeRoot) SemanticSort {
+    pub fn valueTag(self: CodeRoot) ValueTag {
         return switch (self) {
             .document => .document,
             .page => .page,
@@ -329,8 +329,8 @@ pub const CodeRoot = union(enum) {
 pub const CodeValue = struct {
     root: CodeRoot,
 
-    pub fn sort(self: CodeValue) SemanticSort {
-        return self.root.sort();
+    pub fn valueTag(self: CodeValue) ValueTag {
+        return self.root.valueTag();
     }
 
     pub fn firstId(self: CodeValue) ?NodeId {
@@ -526,7 +526,7 @@ pub const Fragment = struct {
     }
 };
 
-pub const Value = union(SemanticSort) {
+pub const Value = union(ValueTag) {
     code: CodeValue,
     document: NodeId,
     page: NodeId,
@@ -641,8 +641,8 @@ pub const Diagnostic = struct {
         },
         type_mismatch: struct {
             code: TypeMismatchCode,
-            expected: SemanticSort,
-            actual: SemanticSort,
+            expected: ValueTag,
+            actual: ValueTag,
         },
         recursive_function: struct {
             function_name: []const u8,
@@ -703,8 +703,8 @@ pub fn nodePropertyEq(node: *const Node, key: []const u8, expected: []const u8) 
 }
 
 pub const Query = struct {
-    input: SemanticSort,
-    output: SemanticSort,
+    input: ValueTag,
+    output: ValueTag,
     name: []const u8,
     op: Op,
 

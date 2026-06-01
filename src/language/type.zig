@@ -112,8 +112,8 @@ pub const Type = struct {
         return if (param == .none) .any else param;
     }
 
-    pub fn fromSort(sort: model.SemanticSort) Type {
-        return switch (sort) {
+    pub fn fromValueTag(tag: model.ValueTag) Type {
+        return switch (tag) {
             .code => code(.any),
             .document => .document,
             .page => .page,
@@ -132,7 +132,7 @@ pub const Type = struct {
         };
     }
 
-    pub fn toRuntimeSort(self: Type) ?model.SemanticSort {
+    pub fn toValueTag(self: Type) ?model.ValueTag {
         return switch (self.tag) {
             .document => .document,
             .page => .page,
@@ -196,16 +196,16 @@ pub const Type = struct {
         return true;
     }
 
-    pub fn fromSelectionItemSort(sort: model.SelectionItemSort) Type {
-        return switch (sort) {
+    pub fn fromSelectionItemTag(tag: model.SelectionItemTag) Type {
+        return switch (tag) {
             .page => selection(.page),
             .object => selection(.object),
             .metadata => selection(.metadata),
         };
     }
 
-    pub fn scalarTagFromSort(sort: model.SemanticSort) Tag {
-        return switch (sort) {
+    pub fn scalarTagFromValueTag(tag: model.ValueTag) Tag {
+        return switch (tag) {
             .document => .document,
             .page => .page,
             .object => .object,

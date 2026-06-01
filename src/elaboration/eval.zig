@@ -166,9 +166,9 @@ const LowerDiagnostic = struct {
             min: usize,
             max: usize,
         },
-        invalid_sort: struct {
-            expected: core.SemanticSort,
-            actual: core.SemanticSort,
+        invalid_value_tag: struct {
+            expected: core.ValueTag,
+            actual: core.ValueTag,
         },
         generic: void,
     };
@@ -299,7 +299,7 @@ fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
             }
             break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch lowerErrorMessage(diagnostic.err);
         },
-        .invalid_sort => |data| std.fmt.bufPrint(buf, "InvalidSemanticSort: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
+        .invalid_value_tag => |data| std.fmt.bufPrint(buf, "InvalidValueTag: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
         .generic => lowerErrorMessage(diagnostic.err),
     };
 }
@@ -319,10 +319,10 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.InvalidLibraryModule => "InvalidLibraryModule: imported modules must contain functions, constants, and imports only",
         error.FunctionDoesNotReturnValue => "FunctionDoesNotReturnValue: function used as a value does not return anything",
         error.InvalidArity => "InvalidArity: wrong number of arguments",
-        error.InvalidSemanticSort => "InvalidSemanticSort: value has the wrong semantic kind",
+        error.InvalidValueTag => "InvalidValueTag: value has the wrong semantic kind",
         error.RecursiveFunction => "RecursiveFunction: recursive functions are not allowed",
         error.EmptySelection => "EmptySelection: selection is empty",
-        error.InvalidSelectionSort => "InvalidSelectionSort: selection item kinds do not match",
+        error.InvalidSelectionItemType => "InvalidSelectionItemType: selection item kinds do not match",
         error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
         error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
@@ -963,7 +963,7 @@ fn evalCall(
     return switch (descriptor) {
         .function => |func| blk: {
             if (func.kind == .constant) {
-                if (func.result_sort == .function) {
+                if (func.result_tag == .function) {
                     var const_value = try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, closures, func, current_origin, .{
                         .name = call.name,
                         .args = std.ArrayList(Expr).empty,
@@ -971,7 +971,7 @@ fn evalCall(
                     defer const_value.deinit(ir.allocator);
                     const function = switch (const_value) {
                         .function => |function| function,
-                        else => return error.InvalidSemanticSort,
+                        else => return error.InvalidValueTag,
                     };
                     var args = try evalCallArgs(ir, page_id, context, mode, env, functions, closures, current_origin, call.args.items);
                     defer args.deinit(ir.allocator);
@@ -995,15 +995,15 @@ fn evalLambda(
     lambda: ast.LambdaExpr,
 ) !core.Value {
     const id = try closures.add(lambda, env);
-    const param_sorts = try ir.allocator.alloc(core.SemanticSort, lambda.params.items.len);
-    for (lambda.params.items, 0..) |param, index| param_sorts[index] = param.sort;
+    const param_tags = try ir.allocator.alloc(core.ValueTag, lambda.params.items.len);
+    for (lambda.params.items, 0..) |param, index| param_tags[index] = param.value_tag;
     return .{ .function = .{
         .name = "#lambda",
         .closure_id = id,
         .param_count = lambda.params.items.len,
-        .param_sorts = param_sorts,
+        .param_tags = param_tags,
         .returns_value = true,
-        .result_sort = .fragment,
+        .result_tag = .fragment,
     } };
 }
 
@@ -1022,7 +1022,7 @@ fn evalApply(
     defer callee.deinit(ir.allocator);
     const function = switch (callee) {
         .function => |function| function,
-        else => return error.InvalidSemanticSort,
+        else => return error.InvalidValueTag,
     };
     var args = try evalCallArgs(ir, page_id, context, mode, env, functions, closures, current_origin, apply.args.items);
     defer args.deinit(ir.allocator);
@@ -1445,7 +1445,7 @@ fn evalSelectCall(
         if (err == error.InvalidArity) try validateFixedArity(ir, call.args.items.len, descriptor.arity, current_origin);
         return err;
     };
-    try contracts.ensureValueSortWithCode(ir, null, base, descriptor.input_sort, current_origin, .UnmatchedInputType);
+    try contracts.ensureValueTypeWithCode(ir, null, base, descriptor.input_tag, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {
             return try ir.select(ir.allocator, base, core.Query.selfObject());
@@ -1528,7 +1528,7 @@ fn bindUserFunctionArgs(
             try evalExpr(ir, page_id, context, mode, caller_env, functions, closures, current_origin, call.args.items[index])
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+        contracts.ensureValueTypeWithCode(ir, page_id, value, param.value_tag, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1556,7 +1556,7 @@ fn bindUserFunctionValueArgs(
             try args[index].clone(ir.allocator)
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+        contracts.ensureValueTypeWithCode(ir, page_id, value, param.value_tag, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -2002,17 +2002,17 @@ fn executeCallStatement(
                     var owned = value;
                     owned.deinit(ir.allocator);
                 }
-                if (func.result_sort == .void) {
-                    try contracts.ensureValueSortWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
+                if (func.result_tag == .void) {
+                    try contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
                 } else {
-                    try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                    try contracts.ensureValueTypeWithCode(ir, page_id, value, func.result_tag, current_origin, .UnmatchedReturnType);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
                 return;
             },
         }
     }
-    if (func.result_sort != .void) return error.FunctionDidNotReturnValue;
+    if (func.result_tag != .void) return error.FunctionDidNotReturnValue;
 }
 
 fn invokeFunctionRef(
@@ -2060,7 +2060,7 @@ fn invokeClosureValues(
     defer deinitValueEnv(ir.allocator, &local_env);
     for (closure.lambda.params.items, 0..) |param, index| {
         const value = try args[index].clone(ir.allocator);
-        contracts.ensureValueSortWithCode(ir, page_id, value, param.sort, current_origin, .UnmatchedArgumentType) catch |err| {
+        contracts.ensureValueTypeWithCode(ir, page_id, value, param.value_tag, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -2097,7 +2097,7 @@ fn invokeUserFunctionValue(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueTypeWithCode(ir, page_id, value, func.result_tag, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
@@ -2128,13 +2128,13 @@ fn invokeUserFunctionValues(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try contracts.ensureValueSortWithCode(ir, page_id, value, func.result_sort, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueTypeWithCode(ir, page_id, value, func.result_tag, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
     }
 
-    if (func.result_sort == .void) return .{ .void = {} };
+    if (func.result_tag == .void) return .{ .void = {} };
     return error.FunctionDidNotReturnValue;
 }
 

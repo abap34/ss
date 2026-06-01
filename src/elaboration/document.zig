@@ -346,9 +346,9 @@ pub const Document = struct {
                 .document => null,
                 .page => |id| id,
                 .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-                else => return error.InvalidSemanticSort,
+                else => return error.InvalidValueTag,
             },
-            else => return error.InvalidSemanticSort,
+            else => return error.InvalidValueTag,
         };
         return try self.addMetadata(kind, value, page_id, origin);
     }
@@ -466,16 +466,16 @@ pub const Document = struct {
         return null;
     }
 
-    fn ensureSort(self: *Document, value: core.Value, expected: core.SemanticSort, context: []const u8) !void {
+    fn ensureValueTag(self: *Document, value: core.Value, expected: core.ValueTag, context: []const u8) !void {
         _ = self;
-        const actual = valueSort(value);
+        const actual = valueTag(value);
         if (actual != expected) {
-            std.debug.print("sort mismatch in {s}: expected {s}, got {s}\n", .{ context, @tagName(expected), @tagName(actual) });
-            return error.InvalidSemanticSort;
+            std.debug.print("value type mismatch in {s}: expected {s}, got {s}\n", .{ context, @tagName(expected), @tagName(actual) });
+            return error.InvalidValueTag;
         }
     }
 
-    fn valueSort(value: core.Value) core.SemanticSort {
+    fn valueTag(value: core.Value) core.ValueTag {
         return switch (value) {
             .code => .code,
             .document => .document,
@@ -495,9 +495,9 @@ pub const Document = struct {
         };
     }
 
-    fn singletonSelection(self: *Document, allocator: Allocator, item_sort: core.SelectionItemSort, provenance: []const u8, id: HandleId) !core.Selection {
+    fn singletonSelection(self: *Document, allocator: Allocator, item_tag: core.SelectionItemTag, provenance: []const u8, id: HandleId) !core.Selection {
         _ = self;
-        var selection = core.Selection.init(item_sort, provenance);
+        var selection = core.Selection.init(item_tag, provenance);
         try selection.ids.append(allocator, id);
         return selection;
     }
@@ -597,7 +597,7 @@ pub const Document = struct {
     }
 
     pub fn select(self: *Document, allocator: Allocator, base: core.Value, query: core.Query) !core.Value {
-        try self.ensureSort(base, query.input, query.name);
+        try self.ensureValueTag(base, query.input, query.name);
         return switch (query.op) {
             .self_object => .{ .selection = try self.singletonSelection(allocator, .object, query.name, base.object) },
             .previous_page => .{ .page = self.previousPageOf(base.page) orelse return error.NoPreviousPage },

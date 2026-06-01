@@ -9,7 +9,7 @@ const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 const ensureType = semantic_types.ensureType;
-const infoFromSort = semantic_types.infoFromSort;
+const infoFromValueTag = semantic_types.infoFromValueTag;
 const infoFromType = semantic_types.infoFromType;
 const inferExprInfo = infer.exprInfo;
 const validatePropertySetStatement = infer.validatePropertySetStatement;
@@ -78,7 +78,7 @@ pub fn checkFunction(
             try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
         var param_info = infoFromType(param.ty);
-        param_info.sort = param.sort;
+        param_info.value_tag = param.value_tag;
         try env.put(param.name, param_info);
     }
 
@@ -177,9 +177,9 @@ fn checkTopLevelStatement(
 }
 
 fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const u8) !void {
-    if (info.sort != .void) return;
+    if (info.value_tag != .void) return;
     try addUserReport(ir, origin, "VoidValue: void results can only be used as statements", .{});
-    return error.InvalidSemanticSort;
+    return error.InvalidValueTag;
 }
 
 fn rejectPageOnlyExpr(
@@ -243,7 +243,7 @@ fn isObjectLike(info: semantic_types.TypeInfo) bool {
     return switch (info.ty.tag) {
         .object => true,
         .code => info.ty.param == .object,
-        else => info.sort == .object,
+        else => info.value_tag == .object,
     };
 }
 

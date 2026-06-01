@@ -15,7 +15,7 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir:
         const type_label = try entry.value_ptr.ty.formatAlloc(allocator);
         defer allocator.free(type_label);
         try item.stringField("type", type_label);
-        try item.enumTagField("runtimeSort", entry.value_ptr.sort);
+        try item.enumTagField("runtimeValueType", entry.value_ptr.value_tag);
         try item.optionalStringField("objectClass", entry.value_ptr.object_class);
         try item.end();
     }

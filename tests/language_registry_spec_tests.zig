@@ -26,7 +26,7 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
     try testing.expect(fold.callback != null);
     try testing.expectEqual(@as(usize, 2), fold.callback.?.function_arg_index);
     try testing.expectEqual(@as(usize, 2), fold.callback.?.supplied_arg_count);
-    try testing.expectEqual(core.SemanticSort.string, fold.callback.?.expected_result_sort.?);
+    try testing.expectEqual(core.ValueTag.string, fold.callback.?.expected_result_tag.?);
 
     const set_content = registry.lookupPrimitiveCall("set_content").?;
     try testing.expect(registry.primitiveEffects(set_content).contains(.WriteContent));
