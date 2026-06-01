@@ -244,6 +244,7 @@ fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "stdlib/core/objects.ss",
         "stdlib/core/render.ss",
         "stdlib/core/selectors.ss",
+        "stdlib/core/utils.ss",
         "stdlib/themes/academic.ss",
         "stdlib/themes/base.ss",
         "stdlib/themes/default.ss",

@@ -13,6 +13,7 @@ const Color = core.render_policy.Color;
 const Frame = core.Frame;
 const PageLayout = core.PageLayout;
 const RenderKind = core.render_policy.RenderKind;
+const HorizontalAlign = core.render_policy.HorizontalAlign;
 const ResolvedRender = core.render_policy.ResolvedRender;
 const TextPaint = core.render_policy.TextPaint;
 const CodePaint = core.render_policy.CodePaint;
@@ -585,6 +586,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashF32(hasher, text.inline_math_height_factor);
         hashF32(hasher, text.inline_math_spacing);
         hashF32(hasher, text.display_math_height_factor);
+        hashHorizontalAlign(hasher, text.math_align);
         hashF32(hasher, text.emoji_spacing);
         hashF32(hasher, text.markdown_block_gap);
         hashF32(hasher, text.markdown_list_inset);
@@ -616,6 +618,7 @@ fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
         hashF32(hasher, math.block_min_height);
         hashF32(hasher, math.block_vertical_padding);
         hashF32(hasher, math.scale);
+        hashHorizontalAlign(hasher, math.horizontal_align);
         hashColor(hasher, math.color);
     }
 }
@@ -673,6 +676,11 @@ fn hashColor(hasher: *std.hash.Wyhash, color: Color) void {
     hashF32(hasher, color.r);
     hashF32(hasher, color.g);
     hashF32(hasher, color.b);
+}
+
+fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
+    const normalized: u32 = @intFromEnum(value);
+    hashU32(hasher, normalized);
 }
 
 fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
@@ -2004,7 +2012,7 @@ fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32,
     const block_top = baseline_bl + text.font_size;
     const block_bottom = block_top - block_height;
     const draw_frame = Frame{
-        .x = x + @max((width - fitted.width) / 2, 0),
+        .x = alignedX(x, width, fitted.width, text.math_align),
         .y = block_bottom + @max((block_height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
@@ -2389,8 +2397,9 @@ fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame
     const svg = try renderMathToSvg(ctx, content, env.math_latex_packages.items, .block);
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, content, math);
+    const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
-        .x = frame.x + @max((frame.width - fitted.width) / 2, 0),
+        .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
         .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
@@ -2403,8 +2412,9 @@ fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: 
     const svg = try renderMathToSvg(ctx, op.content, op.math_packages, .block);
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
+    const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
-        .x = frame.x + @max((frame.width - fitted.width) / 2, 0),
+        .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
         .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
@@ -2872,6 +2882,7 @@ fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_h
         .block_min_height = 30,
         .block_vertical_padding = 2,
         .scale = 1,
+        .horizontal_align = .center,
         .color = .{ .r = 0, .g = 0, .b = 0 },
     };
     const target_height = @max(
@@ -2880,6 +2891,15 @@ fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_h
     ) * paint.scale;
     const scale = @min(@min(max_width / source_width, max_height / source_height), target_height / source_height);
     return .{ .width = source_width * scale, .height = source_height * scale };
+}
+
+fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: HorizontalAlign) f32 {
+    const slack = @max(width - content_width, 0);
+    return switch (horizontal_align) {
+        .left => x,
+        .center => x + slack / 2,
+        .right => x + slack,
+    };
 }
 
 fn mathVisualLineCount(source_text: []const u8) usize {
