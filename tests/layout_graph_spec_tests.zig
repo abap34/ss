@@ -365,6 +365,60 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
     try expectFloat(34, content.height);
 }
 
+test "layout solver: group chrome padding expands tight group bounds" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const child = try ir.makeObject(page, "child", null, .text, .text, "Hello");
+    const group = try ir.makeGroupWithOrigin(page, true, &.{child}, "group");
+    try ir.setNodeProperty(group, "chrome_pad_x", "12");
+    try ir.setNodeProperty(group, "chrome_pad_y", "8");
+
+    try ir.addAnchorConstraint(child, .left, .{ .page = .left }, 100, "child-left");
+    try ir.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 200, "child-width");
+    try ir.addAnchorConstraint(child, .bottom, .{ .page = .bottom }, 100, "child-bottom");
+    try ir.addAnchorConstraint(child, .top, .{ .node = .{ .node_id = child, .anchor = .bottom } }, 40, "child-height");
+
+    try solver.solveLayout(&ir);
+
+    const group_node = ir.getNode(group).?;
+    try expectFloat(88, group_node.frame.x);
+    try expectFloat(92, group_node.frame.y);
+    try expectFloat(224, group_node.frame.width);
+    try expectFloat(56, group_node.frame.height);
+}
+
+test "layout solver: target group width leaves room for chrome padding" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const child = try ir.makeObject(
+        page,
+        "child",
+        null,
+        .text,
+        .text,
+        "this sentence is intentionally long enough to wrap when the group width is constrained",
+    );
+    try ir.setNodeProperty(child, "wrap", "on");
+    const group = try ir.makeGroupWithOrigin(page, true, &.{child}, "group");
+    try ir.setNodeProperty(group, "chrome_pad_x", "10");
+
+    try ir.addAnchorConstraint(group, .left, .{ .page = .left }, 100, "group-left");
+    try ir.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 220, "group-width");
+
+    try solver.solveLayout(&ir);
+
+    const group_node = ir.getNode(group).?;
+    const child_node = ir.getNode(child).?;
+    try expectFloat(100, group_node.frame.x);
+    try expectFloat(220, group_node.frame.width);
+    try expectFloat(110, child_node.frame.x);
+    try expectFloat(200, child_node.frame.width);
+}
+
 test "layout diagnostics: fixed-height object reports content overflow" {
     var ir = try initEmptyIr();
     defer ir.deinit();

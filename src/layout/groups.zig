@@ -39,7 +39,7 @@ pub fn propagateTargetedWidths(ir: anytype, workspace: *const graph.AxisWorkspac
         if (!workspace.graph.hasTargetConstraint(ir, group_id, .horizontal, workspace.soft_constraints)) continue;
         const group_left = h_state.start orelse continue;
         const group_width = h_state.size orelse continue;
-        const group_right = group_left + group_width;
+        const group_right = group_left + group_width - metrics.chromePadX(ir, node);
         const children = ir.childrenOf(group_id) orelse continue;
         for (children) |child_id| {
             try propagateWidthCapToSubtree(ir, child_id, group_right);
@@ -60,13 +60,24 @@ fn computeTightGroupAxisState(ir: anytype, workspace: *const graph.AxisWorkspace
     }
 
     if (start == null or end == null) return .{};
-    const size = end.? - start.?;
+    const pad = groupAxisPadding(ir, workspace, node_id);
+    const padded_start = start.? - pad;
+    const padded_end = end.? + pad;
+    const size = padded_end - padded_start;
     return .{
-        .start = start,
-        .end = end,
-        .center = start.? + size / 2,
+        .start = padded_start,
+        .end = padded_end,
+        .center = padded_start + size / 2,
         .size = size,
         .size_is_default = false,
+    };
+}
+
+fn groupAxisPadding(ir: anytype, workspace: *const graph.AxisWorkspace, node_id: NodeId) f32 {
+    const node = ir.getNode(node_id) orelse return 0;
+    return switch (workspace.axis) {
+        .horizontal => metrics.chromePadX(ir, node),
+        .vertical => metrics.chromePadY(ir, node),
     };
 }
 
