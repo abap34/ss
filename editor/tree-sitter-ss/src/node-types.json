@@ -747,6 +747,22 @@
     }
   },
   {
+    "type": "enum_type",
+    "named": true,
+    "fields": {
+      "case": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "expression_statement",
     "named": true,
     "fields": {},
@@ -2790,40 +2806,6 @@
     }
   },
   {
-    "type": "type_alias",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "type_term",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "type_alias_declaration",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "annotation",
-          "named": true
-        },
-        {
-          "type": "type_alias",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "type_declaration",
     "named": true,
     "fields": {
@@ -2843,34 +2825,11 @@
       "required": true,
       "types": [
         {
+          "type": "enum_type",
+          "named": true
+        },
+        {
           "type": "object_type",
-          "named": true
-        },
-        {
-          "type": "type_alias_declaration",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "type_term",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "color_string",
-          "named": true
-        },
-        {
-          "type": "string",
-          "named": true
-        },
-        {
-          "type": "type",
           "named": true
         }
       ]

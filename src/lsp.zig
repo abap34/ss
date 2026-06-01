@@ -568,7 +568,7 @@ fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     };
     if (objectFieldObject(&root, "declarations")) |decls| {
         const fields = [_]struct { key: []const u8, kind: usize }{
-            .{ .key = "valueDomains", .kind = 25 },
+            .{ .key = "types", .kind = 25 },
             .{ .key = "classes", .kind = 7 },
             .{ .key = "roles", .kind = 20 },
             .{ .key = "fields", .kind = 10 },

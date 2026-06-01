@@ -62,12 +62,10 @@ module.exports = grammar({
       "type",
       field("name", $.type_identifier),
       "=",
-      choice($.object_type, $.type_alias_declaration),
+      choice($.object_type, $.enum_type),
     ),
 
-    type_alias_declaration: $ => seq($.type_alias, optional($.annotation), $._terminator),
-    type_alias: $ => seq($.type_term, repeat(seq("|", $.type_term))),
-    type_term: $ => choice($.type, $.string, $.color_string),
+    enum_type: $ => seq(field("case", $.identifier), repeat(seq("|", field("case", $.identifier))), $._terminator),
 
     type: $ => choice(
       $.function_type,
