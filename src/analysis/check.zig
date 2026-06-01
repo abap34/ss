@@ -242,7 +242,6 @@ fn validateAnchorRef(
 fn isObjectLike(info: semantic_types.TypeInfo) bool {
     return switch (info.ty.tag) {
         .object => true,
-        .code => info.ty.param == .object,
         else => info.value_tag == .object,
     };
 }

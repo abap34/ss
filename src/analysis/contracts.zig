@@ -11,7 +11,6 @@ pub const FunctionContract = struct {
 
 pub fn valueTag(value: core.Value) core.ValueTag {
     return switch (value) {
-        .code => .code,
         .document => .document,
         .page => .page,
         .object => .object,
@@ -24,7 +23,6 @@ pub fn valueTag(value: core.Value) core.ValueTag {
         .number => .number,
         .boolean => .boolean,
         .constraints => .constraints,
-        .fragment => .fragment,
         .void => .void,
     };
 }
@@ -48,10 +46,6 @@ pub fn ensureValueTypeWithCode(
     code: core.TypeMismatchCode,
 ) !void {
     const actual = valueTag(value);
-    if (actual == .code) {
-        const code_value = value.code;
-        if (expected == .code or code_value.valueTag() == expected) return;
-    }
     if (actual != expected) {
         try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
             .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
@@ -61,17 +55,12 @@ pub fn ensureValueTypeWithCode(
 }
 
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
+    _ = allocator;
     const contract = functionContract(func);
-    const param_tags = try allocator.alloc(core.ValueTag, func.params.items.len);
-    for (func.params.items, 0..) |param, index| {
-        param_tags[index] = param.value_tag;
-    }
     return .{
         .name = func.name,
         .param_count = contract.max_param_count,
-        .param_tags = param_tags,
         .returns_value = contract.returns_value,
-        .result_tag = contract.result_tag,
         .effect = .unknown,
     };
 }

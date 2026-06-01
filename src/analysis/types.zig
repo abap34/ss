@@ -21,7 +21,7 @@ pub fn infoFromValueTag(value_tag: core.ValueTag) TypeInfo {
 pub fn infoFromType(ty: Type) TypeInfo {
     return .{
         .ty = ty,
-        .value_tag = ty.toValueTag() orelse .fragment,
+        .value_tag = ty.toValueTag() orelse .void,
         .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
     };
 }
@@ -97,10 +97,6 @@ pub fn isPropertyTarget(info: TypeInfo) bool {
     return switch (info.ty.tag) {
         .document, .page, .object => true,
         .selection => info.ty.param == .object or info.ty.param == .any,
-        .code => switch (info.ty.param) {
-            .document, .page, .object => true,
-            else => false,
-        },
         else => false,
     };
 }
@@ -111,12 +107,6 @@ pub fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
         .page => "Page",
         .object => info.object_class,
         .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
-        .code => switch (info.ty.param) {
-            .document => "Doc",
-            .page => "Page",
-            .object => info.object_class,
-            else => null,
-        },
         else => null,
     };
 }

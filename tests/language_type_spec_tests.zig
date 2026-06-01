@@ -18,13 +18,6 @@ test "type spec: any is the explicit wildcard in acceptance checks" {
     try testing.expect(!Type.accepts(Type.selection(.page), Type.selection(.object)));
 }
 
-test "type spec: residual code values are consumable at their inner value tag" {
-    try testing.expect(Type.accepts(Type.number, Type.code(.number)));
-    try testing.expect(Type.accepts(Type.page, Type.code(.page)));
-    try testing.expect(!Type.accepts(Type.string, Type.code(.number)));
-    try testing.expect(!Type.accepts(Type.number, Type.code(.any)));
-}
-
 test "type spec: object class names refine only when both sides specify a class" {
     const text = Type.objectClass("Text");
     const image = Type.objectClass("Image");
@@ -46,20 +39,20 @@ test "type spec: selection item class names follow object class refinement" {
     try testing.expect(Type.accepts(unclassified_object_selection, image_selection));
 }
 
-test "type spec: value tag conversion is defined only for concrete value types" {
+test "type spec: value tag conversion covers concrete value types" {
+    try testing.expectEqual(.document, Type.document.toValueTag().?);
+    try testing.expectEqual(.page, Type.page.toValueTag().?);
+    try testing.expectEqual(.object, Type.object.toValueTag().?);
+    try testing.expectEqual(.selection, Type.selection(.object).toValueTag().?);
     try testing.expectEqual(.number, Type.number.toValueTag().?);
-    try testing.expectEqual(.fragment, Type.fragment(.page).toValueTag().?);
+    try testing.expectEqual(.void, (Type{ .tag = .void }).toValueTag().?);
     try testing.expectEqual(@as(?model.ValueTag, null), Type.any.toValueTag());
-    try testing.expectEqual(@as(?model.ValueTag, null), Type.list(.number).toValueTag());
 }
 
 test "type spec: formatting exposes the source-level type constructor shape" {
     try expectFormat(Type.number, "Number");
     try expectFormat(Type.objectClass("Text"), "Object<Text>");
     try expectFormat(Type.selectionType(Type.objectClass("Text")), "Selection<Object<Text>>");
-    try expectFormat(Type.fragment(.page), "Fragment<Page>");
-    try expectFormat(Type.code(.number), "Code<Number>");
-    try expectFormat(Type.list(.string), "List<String>");
 }
 
 test "type spec: function types format as source-level arrows" {

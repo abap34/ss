@@ -28,9 +28,8 @@ const ExecFlow = union(enum) {
     returned: core.Value,
 };
 
-const EvalMode = union(enum) {
+const EvalMode = enum {
     attached,
-    detached: *DetachedBuilder,
 };
 
 const EvalContext = enum {
@@ -104,50 +103,6 @@ fn putEnvValue(allocator: std.mem.Allocator, env: *std.StringHashMap(core.Value)
 fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
     for (values) |*value| value.deinit(allocator);
 }
-
-const DetachedBuilder = struct {
-    page_id: core.NodeId,
-    node_ids: std.ArrayList(core.NodeId),
-    constraints: core.ConstraintSet,
-    deps: std.ArrayList(*core.Fragment),
-
-    fn init(page_id: core.NodeId) DetachedBuilder {
-        return .{
-            .page_id = page_id,
-            .node_ids = std.ArrayList(core.NodeId).empty,
-            .constraints = core.ConstraintSet.init(),
-            .deps = std.ArrayList(*core.Fragment).empty,
-        };
-    }
-
-    fn deinit(self: *DetachedBuilder, allocator: std.mem.Allocator) void {
-        self.node_ids.deinit(allocator);
-        self.constraints.deinit(allocator);
-        self.deps.deinit(allocator);
-    }
-
-    fn trackNode(self: *DetachedBuilder, allocator: std.mem.Allocator, node_id: core.NodeId) !void {
-        for (self.node_ids.items) |existing| {
-            if (existing == node_id) return;
-        }
-        try self.node_ids.append(allocator, node_id);
-    }
-
-    fn appendConstraintSet(self: *DetachedBuilder, allocator: std.mem.Allocator, constraints: core.ConstraintSet) !void {
-        try self.constraints.items.appendSlice(allocator, constraints.items.items);
-    }
-
-    fn trackFragment(self: *DetachedBuilder, allocator: std.mem.Allocator, fragment: *core.Fragment) !void {
-        for (self.deps.items) |existing| {
-            if (existing == fragment) return;
-        }
-        try self.deps.append(allocator, fragment);
-    }
-
-    fn isEmpty(self: *const DetachedBuilder) bool {
-        return self.node_ids.items.len == 0 and self.constraints.items.items.len == 0 and self.deps.items.len == 0;
-    }
-};
 
 var diagnostic_path: []const u8 = "";
 
@@ -339,7 +294,6 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
-        error.UnsupportedFragmentRoot => "UnsupportedFragmentRoot: unsupported fragment root",
         error.UnsupportedScheduledPrimitive => "UnsupportedScheduledPrimitive: this operation is not valid during document elaboration",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => @errorName(err),
@@ -927,7 +881,7 @@ fn evalExpr(
         .boolean => |value| .{ .boolean = value },
         .call => |call| try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call),
         .apply => |apply| try evalApply(ir, page_id, context, mode, env, functions, closures, current_origin, apply),
-        .lambda => |lambda| try evalLambda(ir, env, closures, lambda),
+        .lambda => |lambda| try evalLambda(env, closures, lambda),
     };
 }
 
@@ -989,21 +943,16 @@ fn evalCall(
 }
 
 fn evalLambda(
-    ir: *doc.Document,
     env: *std.StringHashMap(core.Value),
     closures: *ClosureStore,
     lambda: ast.LambdaExpr,
 ) !core.Value {
     const id = try closures.add(lambda, env);
-    const param_tags = try ir.allocator.alloc(core.ValueTag, lambda.params.items.len);
-    for (lambda.params.items, 0..) |param, index| param_tags[index] = param.value_tag;
     return .{ .function = .{
         .name = "#lambda",
         .closure_id = id,
         .param_count = lambda.params.items.len,
-        .param_tags = param_tags,
         .returns_value = true,
-        .result_tag = .fragment,
     } };
 }
 
@@ -1148,26 +1097,12 @@ const BuiltinContext = struct {
         content: []const u8,
     ) !core.NodeId {
         if (self.eval_context != .page) return error.NoCurrentPage;
-        return switch (self.mode) {
-            .attached => try self.ir.makeObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.makeDetachedObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
+        return try self.ir.makeObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
     }
 
     pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
         if (self.eval_context != .page) return error.NoCurrentPage;
-        return switch (self.mode) {
-            .attached => try self.ir.makeGroupWithOrigin(self.page_id, true, child_ids, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.makeGroupWithOrigin(self.page_id, false, child_ids, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
+        return try self.ir.makeGroupWithOrigin(self.page_id, true, child_ids, self.current_origin);
     }
 
     pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
@@ -1183,25 +1118,11 @@ const BuiltinContext = struct {
         payload_kind: core.PayloadKind,
         content: []const u8,
     ) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.makeObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.makeDetachedObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
+        return try self.ir.makeObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
     }
 
     pub fn makeGroupOnPage(self: *BuiltinContext, page_id: core.NodeId, child_ids: []const core.NodeId) !core.NodeId {
-        return switch (self.mode) {
-            .attached => try self.ir.makeGroupWithOrigin(page_id, true, child_ids, self.current_origin),
-            .detached => |builder| blk: {
-                const id = try self.ir.makeGroupWithOrigin(page_id, false, child_ids, self.current_origin);
-                try builder.trackNode(self.ir.allocator, id);
-                break :blk id;
-            },
-        };
+        return try self.ir.makeGroupWithOrigin(page_id, true, child_ids, self.current_origin);
     }
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
@@ -1566,48 +1487,10 @@ fn bindUserFunctionValueArgs(
     _ = caller_env;
 }
 
-fn fragmentRootToValue(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.Value {
-    const root = fragment.root orelse unreachable;
-    return switch (root) {
-        .document => |id| .{ .document = id },
-        .page => |id| .{ .page = id },
-        .object => |id| .{ .object = id },
-        .selection => |selection| .{ .selection = try selection.clone(allocator) },
-        .anchor => |anchor| .{ .anchor = anchor },
-        .function => |function| .{ .function = try function.clone(allocator) },
-        .style => |style| .{ .style = style },
-        .string => |text| .{ .string = text },
-        .number => |number| .{ .number = number },
-        .boolean => |boolean| .{ .boolean = boolean },
-        .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
-    };
-}
-
-fn fragmentRootCloneFromFragment(allocator: std.mem.Allocator, fragment: *const core.Fragment) !core.FragmentRoot {
-    const root = fragment.root orelse unreachable;
-    return try root.clone(allocator);
-}
-
 fn normalizeForUse(ir: *doc.Document, mode: EvalMode, value: core.Value) !core.Value {
-    return switch (value) {
-        .code => |code| switch (code.root) {
-            .document => |id| .{ .document = id },
-            .page => |id| .{ .page = id },
-            .object => |id| .{ .object = id },
-            .selection => |selection| .{ .selection = try selection.clone(ir.allocator) },
-        },
-        .fragment => |fragment| switch (mode) {
-            .attached => blk: {
-                try ir.materializeFragment(fragment);
-                break :blk try fragmentRootToValue(ir.allocator, fragment);
-            },
-            .detached => |builder| blk: {
-                try builder.trackFragment(ir.allocator, fragment);
-                break :blk try fragmentRootToValue(ir.allocator, fragment);
-            },
-        },
-        else => value,
-    };
+    _ = ir;
+    _ = mode;
+    return value;
 }
 
 fn resolveValueString(value: core.Value) ![]const u8 {
@@ -1866,15 +1749,7 @@ fn executeStatement(
                 const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
                 break :blk try resolveValueNumber(value);
             } else 0;
-            switch (mode) {
-                .attached => try ir.addAnchorConstraint(target.node_id, target.anchor, source, offset, origin),
-                .detached => |builder| try builder.constraints.items.append(ir.allocator, .{
-                    .target_node = target.node_id,
-                    .target_anchor = target.anchor,
-                    .source = source,
-                    .offset = offset,
-                }),
-            }
+            try ir.addAnchorConstraint(target.node_id, target.anchor, source, offset, origin);
         },
         .expr_stmt => |expr| switch (expr) {
             .call => |call| {
@@ -1897,79 +1772,12 @@ fn executeStatement(
 }
 
 fn materializeStatementValue(ir: *doc.Document, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
-    switch (mode) {
-        .attached => switch (value) {
-            .code => |code| switch (code.root) {
-                .object => |id| last_code_like.* = id,
-                else => {},
-            },
-            .fragment => |fragment| {
-                try ir.materializeFragment(fragment);
-                if (fragment.root) |root| {
-                    switch (root) {
-                        .object => |id| last_code_like.* = id,
-                        .constraints => {},
-                        else => {},
-                    }
-                }
-            },
-            .constraints => |constraints| try ir.addConstraintSet(constraints),
-            .object => |id| last_code_like.* = id,
-            else => {},
-        },
-        .detached => |builder| switch (value) {
-            .code => |code| switch (code.root) {
-                .object => |id| {
-                    last_code_like.* = id;
-                    try builder.trackNode(ir.allocator, id);
-                },
-                else => {},
-            },
-            .constraints => |constraints| try builder.appendConstraintSet(ir.allocator, constraints),
-            .object => |id| {
-                last_code_like.* = id;
-                try builder.trackNode(ir.allocator, id);
-            },
-            .fragment => |fragment| {
-                try builder.trackFragment(ir.allocator, fragment);
-                if (fragment.root) |root| {
-                    switch (root) {
-                        .object => |id| last_code_like.* = id,
-                        else => {},
-                    }
-                }
-            },
-            else => {},
-        },
+    _ = mode;
+    switch (value) {
+        .constraints => |constraints| try ir.addConstraintSet(constraints),
+        .object => |id| last_code_like.* = id,
+        else => {},
     }
-}
-
-fn fragmentRootFromValue(allocator: std.mem.Allocator, value: core.Value) !core.FragmentRoot {
-    return switch (value) {
-        .code => |code| try fragmentRootFromCodeRoot(code.root),
-        .document => |id| .{ .document = id },
-        .page => |id| .{ .page = id },
-        .object => |id| .{ .object = id },
-        .metadata => error.UnsupportedFragmentRoot,
-        .selection => |selection| .{ .selection = try selection.clone(allocator) },
-        .anchor => |anchor| .{ .anchor = anchor },
-        .function => |function| .{ .function = try function.clone(allocator) },
-        .style => |style| .{ .style = style },
-        .string => |text| .{ .string = text },
-        .number => |number| .{ .number = number },
-        .boolean => |boolean| .{ .boolean = boolean },
-        .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
-        .fragment => error.UnsupportedFragmentRoot,
-    };
-}
-
-fn fragmentRootFromCodeRoot(root: core.CodeRoot) !core.FragmentRoot {
-    return switch (root) {
-        .document => |id| .{ .document = id },
-        .page => |id| .{ .page = id },
-        .object => |id| .{ .object = id },
-        .selection => |selection| .{ .selection = selection },
-    };
 }
 
 fn executeCallStatement(

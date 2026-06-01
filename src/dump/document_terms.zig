@@ -64,21 +64,6 @@ fn writeDocTerm(terms: *json.Array, term: elaboration.Term) !void {
             try item.stringField("kind", "add_constraints");
             try writeDocConstraint(&item, constraint);
         },
-        .materialize_fragment => |fragment| {
-            try item.stringField("kind", "materialize_fragment");
-            try item.intField("page", fragment.page_id);
-            try item.boolField("materialized", fragment.materialized);
-            if (fragment.root) |root| {
-                try item.stringField("root_kind", @tagName(root));
-                try item.optionalIntField("root_handle", root.firstId());
-            } else {
-                try item.nullField("root_kind");
-                try item.nullField("root_handle");
-            }
-            var nodes = try item.arrayField("nodes");
-            for (fragment.node_ids.items) |node_id| try nodes.intItem(node_id);
-            try nodes.end();
-        },
     }
     try item.end();
 }

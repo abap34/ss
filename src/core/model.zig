@@ -167,7 +167,6 @@ pub const Metadata = struct {
 };
 
 pub const ValueTag = enum {
-    code,
     document,
     page,
     object,
@@ -180,7 +179,6 @@ pub const ValueTag = enum {
     number,
     boolean,
     constraints,
-    fragment,
     void,
 };
 
@@ -255,23 +253,21 @@ pub const FunctionRef = struct {
     name: []const u8,
     closure_id: ?usize = null,
     param_count: usize,
-    param_tags: []const ValueTag = &.{},
     returns_value: bool,
-    result_tag: ValueTag,
     effect: FunctionEffect = .unknown,
 
     pub fn deinit(self: *FunctionRef, allocator: Allocator) void {
-        if (self.param_tags.len != 0) allocator.free(self.param_tags);
+        _ = self;
+        _ = allocator;
     }
 
     pub fn clone(self: FunctionRef, allocator: Allocator) !FunctionRef {
+        _ = allocator;
         return .{
             .name = self.name,
             .closure_id = self.closure_id,
             .param_count = self.param_count,
-            .param_tags = try allocator.dupe(ValueTag, self.param_tags),
             .returns_value = self.returns_value,
-            .result_tag = self.result_tag,
             .effect = self.effect,
         };
     }
@@ -283,76 +279,6 @@ pub const FunctionEffect = enum {
     builds_graph,
     adds_constraints,
     reports_diagnostics,
-};
-
-pub const CodeRoot = union(enum) {
-    document: NodeId,
-    page: NodeId,
-    object: NodeId,
-    selection: Selection,
-
-    pub fn valueTag(self: CodeRoot) ValueTag {
-        return switch (self) {
-            .document => .document,
-            .page => .page,
-            .object => .object,
-            .selection => .selection,
-        };
-    }
-
-    pub fn firstId(self: CodeRoot) ?NodeId {
-        return switch (self) {
-            .document => |id| id,
-            .page => |id| id,
-            .object => |id| id,
-            .selection => |selection| selection.first(),
-        };
-    }
-
-    pub fn deinit(self: *CodeRoot, allocator: Allocator) void {
-        switch (self.*) {
-            .selection => |*selection| selection.deinit(allocator),
-            else => {},
-        }
-    }
-
-    pub fn clone(self: CodeRoot, allocator: Allocator) !CodeRoot {
-        return switch (self) {
-            .document => |id| .{ .document = id },
-            .page => |id| .{ .page = id },
-            .object => |id| .{ .object = id },
-            .selection => |selection| .{ .selection = try selection.clone(allocator) },
-        };
-    }
-};
-
-pub const CodeValue = struct {
-    root: CodeRoot,
-
-    pub fn valueTag(self: CodeValue) ValueTag {
-        return self.root.valueTag();
-    }
-
-    pub fn firstId(self: CodeValue) ?NodeId {
-        return self.root.firstId();
-    }
-
-    pub fn deinit(self: *CodeValue, allocator: Allocator) void {
-        self.root.deinit(allocator);
-    }
-
-    pub fn clone(self: CodeValue, allocator: Allocator) !CodeValue {
-        return .{ .root = try self.root.clone(allocator) };
-    }
-
-    pub fn toRootValue(self: CodeValue) Value {
-        return switch (self.root) {
-            .document => |id| .{ .document = id },
-            .page => |id| .{ .page = id },
-            .object => |id| .{ .object = id },
-            .selection => |selection| .{ .selection = selection },
-        };
-    }
 };
 
 pub const Effect = enum(u5) {
@@ -450,84 +376,7 @@ pub const StyleRef = struct {
     name: []const u8,
 };
 
-pub const FragmentRoot = union(enum) {
-    document: NodeId,
-    page: NodeId,
-    object: NodeId,
-    selection: Selection,
-    anchor: AnchorValue,
-    function: FunctionRef,
-    style: StyleRef,
-    string: []const u8,
-    number: f32,
-    boolean: bool,
-    constraints: ConstraintSet,
-
-    pub fn deinit(self: *FragmentRoot, allocator: Allocator) void {
-        switch (self.*) {
-            .selection => |*selection| selection.deinit(allocator),
-            .function => |*function| function.deinit(allocator),
-            .constraints => |*constraints| constraints.deinit(allocator),
-            else => {},
-        }
-    }
-
-    pub fn clone(self: FragmentRoot, allocator: Allocator) !FragmentRoot {
-        return switch (self) {
-            .document => |id| .{ .document = id },
-            .page => |id| .{ .page = id },
-            .object => |id| .{ .object = id },
-            .selection => |selection| .{ .selection = try selection.clone(allocator) },
-            .anchor => |anchor| .{ .anchor = anchor },
-            .function => |function| .{ .function = try function.clone(allocator) },
-            .style => |style| .{ .style = style },
-            .string => |text| .{ .string = text },
-            .number => |number| .{ .number = number },
-            .boolean => |boolean| .{ .boolean = boolean },
-            .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
-        };
-    }
-
-    pub fn firstId(self: FragmentRoot) ?NodeId {
-        return switch (self) {
-            .document => |id| id,
-            .page => |id| id,
-            .object => |id| id,
-            .selection => |selection| selection.first(),
-            .anchor, .function, .style, .string, .number, .boolean, .constraints => null,
-        };
-    }
-};
-
-pub const Fragment = struct {
-    page_id: NodeId,
-    root: ?FragmentRoot = null,
-    node_ids: std.ArrayList(NodeId),
-    constraints: ConstraintSet,
-    deps: std.ArrayList(*Fragment),
-    materialized: bool = false,
-
-    pub fn init(page_id: NodeId) Fragment {
-        return .{
-            .page_id = page_id,
-            .node_ids = std.ArrayList(NodeId).empty,
-            .constraints = ConstraintSet.init(),
-            .deps = std.ArrayList(*Fragment).empty,
-        };
-    }
-
-    pub fn deinit(self: *Fragment, allocator: Allocator) void {
-        if (self.root) |*root| {
-            root.deinit(allocator);
-        }
-        self.node_ids.deinit(allocator);
-        self.constraints.deinit(allocator);
-        self.deps.deinit(allocator);
-    }
-};
-
 pub const Value = union(ValueTag) {
-    code: CodeValue,
     document: NodeId,
     page: NodeId,
     object: NodeId,
@@ -540,12 +389,10 @@ pub const Value = union(ValueTag) {
     number: f32,
     boolean: bool,
     constraints: ConstraintSet,
-    fragment: *Fragment,
     void: void,
 
     pub fn deinit(self: *Value, allocator: Allocator) void {
         switch (self.*) {
-            .code => |*code| code.deinit(allocator),
             .selection => |*selection| selection.deinit(allocator),
             .function => |*function| function.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
@@ -555,7 +402,6 @@ pub const Value = union(ValueTag) {
 
     pub fn clone(self: Value, allocator: Allocator) !Value {
         return switch (self) {
-            .code => |code| .{ .code = try code.clone(allocator) },
             .document => |id| .{ .document = id },
             .page => |id| .{ .page = id },
             .object => |id| .{ .object = id },
@@ -568,20 +414,17 @@ pub const Value = union(ValueTag) {
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
-            .fragment => |fragment| .{ .fragment = fragment },
             .void => .{ .void = {} },
         };
     }
 
     pub fn firstId(self: Value) ?NodeId {
         return switch (self) {
-            .code => |code| code.firstId(),
             .document => |id| id,
             .page => |id| id,
             .object => |id| id,
             .metadata => |id| id,
             .selection => |selection| selection.first(),
-            .fragment => |fragment| if (fragment.root) |root| root.firstId() else null,
             .anchor, .function, .style, .string, .number, .boolean, .constraints, .void => null,
         };
     }
