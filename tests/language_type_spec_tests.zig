@@ -18,7 +18,7 @@ test "type spec: any is the explicit wildcard in acceptance checks" {
     try testing.expect(!Type.accepts(Type.selection(.page), Type.selection(.object)));
 }
 
-test "type spec: residual code values are consumable at their inner runtime sort" {
+test "type spec: residual code values are consumable at their inner value tag" {
     try testing.expect(Type.accepts(Type.number, Type.code(.number)));
     try testing.expect(Type.accepts(Type.page, Type.code(.page)));
     try testing.expect(!Type.accepts(Type.string, Type.code(.number)));
@@ -46,11 +46,11 @@ test "type spec: selection item class names follow object class refinement" {
     try testing.expect(Type.accepts(unclassified_object_selection, image_selection));
 }
 
-test "type spec: runtime sort conversion is defined only for runtime semantic sorts" {
-    try testing.expectEqual(.number, Type.number.toRuntimeSort().?);
-    try testing.expectEqual(.fragment, Type.fragment(.page).toRuntimeSort().?);
-    try testing.expectEqual(@as(?model.SemanticSort, null), Type.any.toRuntimeSort());
-    try testing.expectEqual(@as(?model.SemanticSort, null), Type.list(.number).toRuntimeSort());
+test "type spec: value tag conversion is defined only for concrete value types" {
+    try testing.expectEqual(.number, Type.number.toValueTag().?);
+    try testing.expectEqual(.fragment, Type.fragment(.page).toValueTag().?);
+    try testing.expectEqual(@as(?model.ValueTag, null), Type.any.toValueTag());
+    try testing.expectEqual(@as(?model.ValueTag, null), Type.list(.number).toValueTag());
 }
 
 test "type spec: formatting exposes the source-level type constructor shape" {

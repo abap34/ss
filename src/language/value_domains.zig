@@ -66,16 +66,16 @@ fn infer(name: []const u8, body: []const u8) ?ValueType {
     return parse(body);
 }
 
-pub fn matches(kind: ValueType, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
+pub fn matches(kind: ValueType, string_literal: ?[]const u8, value_tag: core.ValueTag) bool {
     return switch (kind) {
-        .string => sort == .string,
-        .style => sort == .style or sort == .string,
-        .scalar_like => sort == .string or sort == .number,
-        .color_string => if (string_literal) |text| text.len == 0 or color_utils.parse(text) != null else sort == .string,
+        .string => value_tag == .string,
+        .style => value_tag == .style or value_tag == .string,
+        .scalar_like => value_tag == .string or value_tag == .number,
+        .color_string => if (string_literal) |text| text.len == 0 or color_utils.parse(text) != null else value_tag == .string,
         .fit_policy => if (string_literal) |text|
             std.mem.eql(u8, text, "warn") or std.mem.eql(u8, text, "error") or std.mem.eql(u8, text, "ignore")
         else
-            sort == .string,
+            value_tag == .string,
         .render_kind => if (string_literal) |text|
             std.mem.eql(u8, text, "text") or
                 std.mem.eql(u8, text, "code") or
@@ -85,18 +85,18 @@ pub fn matches(kind: ValueType, string_literal: ?[]const u8, sort: core.Semantic
                 std.mem.eql(u8, text, "chrome") or
                 std.mem.eql(u8, text, "chrome_only")
         else
-            sort == .string,
+            value_tag == .string,
         .wrap_mode => if (string_literal) |text|
             std.mem.eql(u8, text, "on") or std.mem.eql(u8, text, "off")
         else
-            sort == .string,
+            value_tag == .string,
         .layout_policy => if (string_literal) |text|
             std.mem.eql(u8, text, "top") or
                 std.mem.eql(u8, text, "top_flow") or
                 std.mem.eql(u8, text, "center") or
                 std.mem.eql(u8, text, "center_stack")
         else
-            sort == .string,
+            value_tag == .string,
     };
 }
 
@@ -113,9 +113,9 @@ pub fn label(kind: ValueType) []const u8 {
     };
 }
 
-pub fn nameMatches(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8, string_literal: ?[]const u8, sort: core.SemanticSort) bool {
+pub fn nameMatches(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8, string_literal: ?[]const u8, value_tag: core.ValueTag) bool {
     const value_type = resolve(ir, module_id, name) orelse return false;
-    return matches(value_type, string_literal, sort);
+    return matches(value_type, string_literal, value_tag);
 }
 
 pub fn nameLabel(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) []const u8 {

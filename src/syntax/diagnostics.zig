@@ -23,7 +23,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.InvalidEscape => "valid escape sequence",
         error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
-        error.InvalidSemanticSort => "semantic sort",
+        error.InvalidValueTag => "value type",
         error.ExpectedTypeAnnotation => "type annotation",
         error.AssignmentRequiresLet => "'let name = expr' for variable bindings",
         error.BindRemoved => "'let name = expr' for lexical bindings; 'bind' was removed",

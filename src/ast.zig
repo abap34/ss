@@ -129,7 +129,7 @@ pub const FunctionDecl = struct {
     span: Span,
     params: std.ArrayList(ParamDecl),
     result_type: Type,
-    result_sort: core.SemanticSort,
+    result_tag: core.ValueTag,
     effects: ?[]const u8 = null,
     annotations: std.ArrayList(Annotation),
     statements: std.ArrayList(Statement),
@@ -197,7 +197,7 @@ pub const AnnotationValue = union(enum) {
 pub const ParamDecl = struct {
     name: []const u8,
     ty: Type,
-    sort: core.SemanticSort,
+    value_tag: core.ValueTag,
     default_value: ?*Expr = null,
 
     pub fn deinit(self: *ParamDecl, allocator: Allocator) void {

@@ -135,10 +135,10 @@ pub const SemanticEnv = struct {
         module_id: core.SourceModuleId,
         name: []const u8,
         string_literal: ?[]const u8,
-        sort: core.SemanticSort,
+        value_tag: core.ValueTag,
     ) bool {
         const value_type = self.valueDomain(module_id, name) orelse return false;
-        return value_domains.matches(value_type, string_literal, sort);
+        return value_domains.matches(value_type, string_literal, value_tag);
     }
 
     pub fn valueLabel(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) []const u8 {

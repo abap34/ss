@@ -320,9 +320,9 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownProperty,
         error.FunctionDoesNotReturnValue,
         error.InvalidArity,
-        error.InvalidSemanticSort,
+        error.InvalidValueTag,
         error.EmptySelection,
-        error.InvalidSelectionSort,
+        error.InvalidSelectionItemType,
         error.UnknownImport,
         error.RecursiveFunction,
         error.ExpectedSelection,
@@ -385,7 +385,7 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
         error.BindRemoved => "BindRemoved",
         error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens",
         error.ExpectedReturn => "ExpectedReturn",
-        error.InvalidSemanticSort => "InvalidSemanticSort",
+        error.InvalidValueTag => "InvalidValueTag",
         else => @errorName(err),
     };
 }

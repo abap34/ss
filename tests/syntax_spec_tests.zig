@@ -128,7 +128,7 @@ test "syntax spec: explicit reserved page names are rejected" {
     );
 }
 
-test "syntax spec: function signatures enforce semantic result sorts and trailing defaults" {
+test "syntax spec: function signatures enforce result value tags and trailing defaults" {
     var parsed = try parse(
         \\@host fn external_width(value: Number) -> Number
         \\
@@ -239,8 +239,8 @@ test "syntax spec: function types and lambdas are source syntax" {
     try testing.expectEqual(@as(usize, 0), use.params.items[2].ty.fn_params.len);
 }
 
-test "syntax spec: untyped function sort is not accepted as a surface type" {
-    try expectParseError(error.InvalidSemanticSort,
+test "syntax spec: untyped value tag is not accepted as a surface type" {
+    try expectParseError(error.InvalidValueTag,
         \\fn bad(f: Function) -> Number
         \\  return 1
         \\end
@@ -315,8 +315,8 @@ test "syntax spec: required parameters cannot follow defaulted parameters" {
     );
 }
 
-test "syntax spec: list is a type constructor but not a runtime semantic result sort" {
-    try expectParseError(error.InvalidSemanticSort,
+test "syntax spec: list is a type constructor but not a runtime value tag" {
+    try expectParseError(error.InvalidValueTag,
         \\fn bad() -> List<Number>
         \\  return 1
         \\end

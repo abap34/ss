@@ -38,7 +38,7 @@ fn checkObjectNamesUnique(
             const origin = try statementOrigin(allocator, origin_path, object_decl.span);
             defer allocator.free(origin);
             try addUserReport(ir, origin, "DuplicateObjectClass: object class '{s}' is already defined in this module", .{object_decl.name});
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
         try names.put(object_decl.name, {});
     }
@@ -57,7 +57,7 @@ fn checkObjectDeclaration(
     if (object_decl.base) |base| {
         if (!sema.classExists(base)) {
             try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
     }
     try checkObjectFields(allocator, ir, sema, module_id, origin_path, object_decl.fields.items);
@@ -75,12 +75,12 @@ fn checkObjectExtension(
     defer allocator.free(origin);
     if (!sema.classExists(extension.target)) {
         try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
     if (extension.implements) |implements| {
         if (!sema.classExists(implements)) {
             try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
     }
     try checkObjectFields(allocator, ir, sema, module_id, origin_path, extension.fields.items);
@@ -99,7 +99,7 @@ fn checkObjectFields(
         const origin = try statementOrigin(allocator, origin_path, field.span);
         defer allocator.free(origin);
         try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 }
 
@@ -122,7 +122,7 @@ fn checkRolesUnique(
                 "DuplicateRole: role '{s}' is already provided by {s}",
                 .{ role_name, existing_class },
             );
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
         try roles.put(role_name, class_name);
     }

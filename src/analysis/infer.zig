@@ -11,9 +11,9 @@ const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 const TypeInfo = semantic_types.TypeInfo;
-const ensureSort = semantic_types.ensureSort;
+const ensureValueTag = semantic_types.ensureValueTag;
 const ensureType = semantic_types.ensureType;
-const infoFromSort = semantic_types.infoFromSort;
+const infoFromValueTag = semantic_types.infoFromValueTag;
 const infoFromType = semantic_types.infoFromType;
 const isPropertyTarget = semantic_types.isPropertyTarget;
 const mergeObjectClass = semantic_types.mergeObjectClass;
@@ -55,15 +55,15 @@ fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: 
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-pub fn exprSort(
+pub fn exprValueTag(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
     origin: []const u8,
-) anyerror!core.SemanticSort {
-    return (try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, .{})).sort;
+) anyerror!core.ValueTag {
+    return (try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, .{})).value_tag;
 }
 
 pub fn exprInfo(
@@ -88,12 +88,12 @@ fn exprInfoWithOptions(
 ) anyerror!TypeInfo {
     return switch (expr) {
         .string => |text| blk: {
-            var info = infoFromSort(.string);
+            var info = infoFromValueTag(.string);
             info.string_literal = text;
             break :blk info;
         },
-        .number => infoFromSort(.number),
-        .boolean => infoFromSort(.boolean),
+        .number => infoFromValueTag(.number),
+        .boolean => infoFromValueTag(.boolean),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
             if (sema.function(name)) |func| {
@@ -138,13 +138,13 @@ fn inferLambdaInfo(
     for (lambda.params.items, 0..) |param, index| {
         param_types[index] = param.ty;
         var param_info = infoFromType(param.ty);
-        param_info.sort = param.sort;
+        param_info.value_tag = param.value_tag;
         try local_env.put(param.name, param_info);
     }
     const body_info = try exprInfoWithOptions(allocator, ir, sema, &local_env, lambda.body.*, origin, options);
-    if (body_info.sort == .void) {
+    if (body_info.value_tag == .void) {
         try addUserReport(ir, origin, "VoidValue: lambda bodies must produce a value", .{});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
     var info = infoFromType(try Type.functionType(allocator, param_types, body_info.ty));
     info.function_labels = try singleFunctionLabel(allocator, try lambdaLabel(allocator, lambda));
@@ -209,8 +209,8 @@ fn inferFunctionValueCallInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     if (callee_info.ty.tag != .function or callee_info.ty.fn_result == null) {
-        try ensureSort(ir, callee_info.sort, .function, origin, .UnmatchedArgumentType);
-        return error.InvalidSemanticSort;
+        try ensureValueTag(ir, callee_info.value_tag, .function, origin, .UnmatchedArgumentType);
+        return error.InvalidValueTag;
     }
     if (args.len != callee_info.ty.fn_params.len) {
         try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
@@ -344,7 +344,7 @@ fn inferUserFunctionReturnInfoInner(
             try exprInfoWithOptions(allocator, ir, sema, &env, default_value.*, origin, options)
         else blk: {
             var param_info = infoFromType(param.ty);
-            param_info.sort = param.sort;
+            param_info.value_tag = param.value_tag;
             break :blk param_info;
         };
         try env.put(param.name, info);
@@ -362,7 +362,7 @@ fn inferUserFunctionReturnInfoInner(
         &result,
     );
     result.ty = func.result_type;
-    result.sort = func.result_sort;
+    result.value_tag = func.result_tag;
     if (func.result_type.class_name) |class_name| result.object_class = class_name;
     return result;
 }
@@ -438,7 +438,7 @@ fn primitiveResultTypeInfo(
                 callback.function_arg_index,
                 selection_info,
                 callback.supplied_arg_count,
-                callback.expected_result_sort,
+                callback.expected_result_tag,
                 options,
             );
         }
@@ -446,15 +446,15 @@ fn primitiveResultTypeInfo(
 
     switch (descriptor.result_policy) {
         .first_selection_item => {
-            if (call.args.items.len == 0) return infoFromSort(.object);
+            if (call.args.items.len == 0) return infoFromValueTag(.object);
             const selection_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             var info = switch (selection_info.ty.param) {
-                .page => infoFromSort(.page),
-                .metadata => infoFromSort(.metadata),
-                .object, .any, .none => infoFromSort(.object),
-                else => infoFromSort(selection_info.sort),
+                .page => infoFromValueTag(.page),
+                .metadata => infoFromValueTag(.metadata),
+                .object, .any, .none => infoFromValueTag(.object),
+                else => infoFromValueTag(selection_info.value_tag),
             };
-            if (info.sort == .object) {
+            if (info.value_tag == .object) {
                 info.object_class = selection_info.object_class;
                 info.ty.class_name = selection_info.object_class;
             }
@@ -467,7 +467,7 @@ fn primitiveResultTypeInfo(
         .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin, options),
         .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin, options),
         .target_arg => {
-            if (call.args.items.len == 0) return infoFromSort(.object);
+            if (call.args.items.len == 0) return infoFromValueTag(.object);
             const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             if (target_info.ty.tag == .code) return target_info;
             return .{
@@ -475,8 +475,8 @@ fn primitiveResultTypeInfo(
                     .document, .page, .object, .selection => target_info.ty,
                     else => Type.object,
                 },
-                .sort = switch (target_info.sort) {
-                    .document, .page, .object, .selection => target_info.sort,
+                .value_tag = switch (target_info.value_tag) {
+                    .document, .page, .object, .selection => target_info.value_tag,
                     else => .object,
                 },
                 .object_class = target_info.object_class,
@@ -509,14 +509,14 @@ fn validateCallbackShape(
     function_arg_index: usize,
     selection_info: TypeInfo,
     supplied_arg_count: usize,
-    expected_result_sort: ?core.SemanticSort,
+    expected_result_tag: ?core.ValueTag,
     options: InferenceOptions,
 ) !void {
     if (call.args.items.len <= function_arg_index) return;
     const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index], origin, options);
     if (callback_info.ty.tag != .function or callback_info.ty.fn_result == null) {
         try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
     const extra_count = if (call.args.items.len > function_arg_index + 1) call.args.items.len - function_arg_index - 1 else 0;
     const expected_arg_count = supplied_arg_count + extra_count;
@@ -545,9 +545,9 @@ fn validateCallbackShape(
         const param_index = supplied_arg_count + extra_index;
         try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
-    if (expected_result_sort) |result_sort| {
-        const actual_sort = callback_info.ty.fn_result.?.toRuntimeSort() orelse .fragment;
-        try ensureSort(ir, actual_sort, result_sort, origin, .UnmatchedReturnType);
+    if (expected_result_tag) |result_tag| {
+        const actual_tag = callback_info.ty.fn_result.?.toValueTag() orelse .fragment;
+        try ensureValueTag(ir, actual_tag, result_tag, origin, .UnmatchedReturnType);
     }
 }
 
@@ -577,7 +577,7 @@ fn inferSelectionAlgebraInfo(
             "InvalidSelectionAlgebra: cannot combine {s} and {s}",
             .{ left_label, right_label },
         );
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 
     const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
@@ -608,11 +608,11 @@ fn inferSelectCallInfo(
     }
     const base = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
     try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
-    for (query.extra_arg_sorts, 0..) |_, extra_index| {
+    for (query.extra_arg_tags, 0..) |_, extra_index| {
         const arg_index = 2 + extra_index;
         if (arg_index >= call.args.items.len) break;
         const actual = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[arg_index], origin, options);
-        if (registry.argSortType(query.extra_arg_sorts[extra_index])) |expected| {
+        if (registry.argType(query.extra_arg_tags[extra_index])) |expected| {
             try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
@@ -665,15 +665,15 @@ fn validateSetPropCall(
             ir,
             origin,
             "InvalidProperty: set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
-            .{@tagName(target_info.sort)},
+            .{@tagName(target_info.value_tag)},
         );
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 
     const value_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[2], origin);
     if (value_info.ty.tag == .function) {
         try addUserReport(ir, origin, "InvalidProperty: function values cannot be stored as properties", .{});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
         try validateFieldValue(ir, sema, field, key, value_info, origin);
@@ -681,7 +681,7 @@ fn validateSetPropCall(
     }
 
     try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
-    return error.InvalidSemanticSort;
+    return error.InvalidValueTag;
 }
 
 fn validateExtendRenderEnvCall(
@@ -698,9 +698,9 @@ fn validateExtendRenderEnvCall(
             ir,
             origin,
             "InvalidRenderEnv: extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
-            .{@tagName(target_info.sort)},
+            .{@tagName(target_info.value_tag)},
         );
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 
     const op = resolveStringLiteral(env, call.args.items[1]);
@@ -708,24 +708,24 @@ fn validateExtendRenderEnvCall(
     if (op) |literal| {
         if (!std.mem.eql(u8, literal, core.render_env.OpAdd)) {
             try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
     }
     if (key) |literal| {
         if (!std.mem.eql(u8, literal, core.render_env.KeyMathLatexPackages)) {
             try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
-            return error.InvalidSemanticSort;
+            return error.InvalidValueTag;
         }
     }
     if (op != null and key != null and !core.render_env.isSupported(op.?, key.?)) {
         try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
     if (key != null and std.mem.eql(u8, key.?, core.render_env.KeyMathLatexPackages)) {
         if (resolveStringLiteral(env, call.args.items[3])) |package| {
             if (!core.render_env.isValidLatexPackageName(package)) {
                 try addUserReport(ir, origin, "InvalidRenderEnv: invalid LaTeX package name: {s}", .{package});
-                return error.InvalidSemanticSort;
+                return error.InvalidValueTag;
             }
         }
     }
@@ -749,14 +749,14 @@ fn validateFieldValue(
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    if (!sema.valueMatches(field.module_id, field.value_type, value_info.string_literal, value_info.sort)) {
+    if (!sema.valueMatches(field.module_id, field.value_type, value_info.string_literal, value_info.value_tag)) {
         try addUserReport(
             ir,
             origin,
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
-            .{ key, sema.valueLabel(field.module_id, field.value_type), @tagName(value_info.sort) },
+            .{ key, sema.valueLabel(field.module_id, field.value_type), @tagName(value_info.value_tag) },
         );
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 }
 
@@ -788,7 +788,7 @@ fn validatePropertySetStatementWithOptions(
         try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{object_name});
         return error.UnknownIdentifier;
     };
-    try ensureSort(ir, object_info.sort, .object, origin, .UnmatchedArgumentType);
+    try ensureValueTag(ir, object_info.value_tag, .object, origin, .UnmatchedArgumentType);
     const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
     if (!options.validate_contracts) return;
     if (ir) |sink| {
@@ -797,19 +797,19 @@ fn validatePropertySetStatementWithOptions(
             return;
         }
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
-        return error.InvalidSemanticSort;
+        return error.InvalidValueTag;
     }
 }
 
-pub fn expectedPrimitiveArgSort(descriptor: registry.PrimitiveDescriptor, index: usize) ?core.SemanticSort {
-    const arg_sort = if (descriptor.arg_sorts.len == 0)
+pub fn expectedPrimitiveArgType(descriptor: registry.PrimitiveDescriptor, index: usize) ?core.ValueTag {
+    const arg_tag = if (descriptor.arg_tags.len == 0)
         return null
-    else if (index < descriptor.arg_sorts.len)
-        descriptor.arg_sorts[index]
+    else if (index < descriptor.arg_tags.len)
+        descriptor.arg_tags[index]
     else
-        descriptor.arg_sorts[descriptor.arg_sorts.len - 1];
+        descriptor.arg_tags[descriptor.arg_tags.len - 1];
 
-    return switch (arg_sort) {
+    return switch (arg_tag) {
         .any => null,
         .document => .document,
         .page => .page,

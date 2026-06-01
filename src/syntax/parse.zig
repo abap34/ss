@@ -146,7 +146,7 @@ const Parser = struct {
             self.pos += 1;
             self.skipInlineSpaces();
             const param_type = try self.parseTypeAnnotation();
-            const param_sort = try self.runtimeSortForType(param_type);
+            const param_value_tag = try self.valueTagForType(param_type);
             self.skipInlineSpaces();
             var default_value: ?*Expr = null;
             if (!self.eof() and self.source[self.pos] == '=') {
@@ -162,7 +162,7 @@ const Parser = struct {
             try params.append(self.allocator, .{
                 .name = param_name,
                 .ty = param_type,
-                .sort = param_sort,
+                .value_tag = param_value_tag,
                 .default_value = default_value,
             });
             self.skipTrivia();
@@ -179,7 +179,7 @@ const Parser = struct {
         self.pos += 2;
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
-        const result_sort = try self.runtimeSortForType(result_type);
+        const result_tag = try self.valueTagForType(result_type);
         const effects = try self.parseOptionalEffectClause();
         var annotations = prefix_annotations;
         errdefer {
@@ -197,9 +197,9 @@ const Parser = struct {
             try self.consumeStatementTerminator();
         } else {
             statements = try self.parseBodyStatements();
-            if (result_sort != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+            if (result_tag != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         }
-        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_sort = result_sort, .effects = effects, .annotations = annotations, .statements = statements };
+        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_tag = result_tag, .effects = effects, .annotations = annotations, .statements = statements };
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
@@ -209,7 +209,7 @@ const Parser = struct {
         self.pos += 1;
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
-        const result_sort = try self.runtimeSortForType(result_type);
+        const result_tag = try self.valueTagForType(result_type);
         self.skipTrivia();
         try self.expectChar('=');
         const expr_start = self.pos;
@@ -229,7 +229,7 @@ const Parser = struct {
             .span = .{ .start = start, .end = self.pos },
             .params = std.ArrayList(ast.ParamDecl).empty,
             .result_type = result_type,
-            .result_sort = result_sort,
+            .result_tag = result_tag,
             .annotations = std.ArrayList(ast.Annotation).empty,
             .statements = statements,
         };
@@ -621,7 +621,7 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "Object")) return try self.parseObjectType(name);
         if (std.mem.eql(u8, name, "Metadata")) return ast.Type.metadata;
         if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
-        if (std.mem.eql(u8, name, "Function")) return self.fail(error.InvalidSemanticSort);
+        if (std.mem.eql(u8, name, "Function")) return self.fail(error.InvalidValueTag);
         if (std.mem.eql(u8, name, "Style")) return ast.Type.style;
         if (std.mem.eql(u8, name, "String")) return ast.Type.string;
         if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
@@ -632,7 +632,7 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "Fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
         if (std.mem.eql(u8, name, "Code")) return ast.Type.code(try self.parseRequiredTypeParam());
         if (std.mem.eql(u8, name, "List")) return ast.Type.list(try self.parseRequiredTypeParam());
-        return self.fail(error.InvalidSemanticSort);
+        return self.fail(error.InvalidValueTag);
     }
 
     fn parseObjectType(self: *Parser, object_name: []const u8) anyerror!ast.Type {
@@ -664,8 +664,8 @@ const Parser = struct {
         return inner;
     }
 
-    fn runtimeSortForType(self: *Parser, ty: ast.Type) anyerror!core.SemanticSort {
-        return ty.toRuntimeSort() orelse self.fail(error.InvalidSemanticSort);
+    fn valueTagForType(self: *Parser, ty: ast.Type) anyerror!core.ValueTag {
+        return ty.toValueTag() orelse self.fail(error.InvalidValueTag);
     }
 
     fn parsePage(self: *Parser) !PageDecl {
@@ -1080,11 +1080,11 @@ const Parser = struct {
             self.pos += 1;
             self.skipInlineSpaces();
             const param_type = try self.parseTypeAnnotation();
-            const param_sort = try self.runtimeSortForType(param_type);
+            const param_value_tag = try self.valueTagForType(param_type);
             try params.append(self.allocator, .{
                 .name = param_name,
                 .ty = param_type,
-                .sort = param_sort,
+                .value_tag = param_value_tag,
                 .default_value = null,
             });
             self.skipTrivia();
