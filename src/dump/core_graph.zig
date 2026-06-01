@@ -212,6 +212,7 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");
     try text.floatField("inline_math_spacing", text_spec.inline_math_spacing, "{d:.4}");
     try text.floatField("display_math_height_factor", text_spec.display_math_height_factor, "{d:.4}");
+    try text.enumTagField("math_align", text_spec.math_align);
     try text.floatField("emoji_spacing", text_spec.emoji_spacing, "{d:.4}");
     try text.floatField("markdown_block_gap", text_spec.markdown_block_gap, "{d:.4}");
     try text.floatField("markdown_list_inset", text_spec.markdown_list_inset, "{d:.4}");
@@ -247,6 +248,7 @@ fn writeOptionalMathPaint(object: *json.Object, maybe_math: ?core.render_policy.
     try math.floatField("block_min_height", math_spec.block_min_height, "{d:.1}");
     try math.floatField("block_vertical_padding", math_spec.block_vertical_padding, "{d:.1}");
     try math.floatField("scale", math_spec.scale, "{d:.4}");
+    try math.enumTagField("align", math_spec.horizontal_align);
     try math.end();
 }
 

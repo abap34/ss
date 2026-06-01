@@ -58,6 +58,7 @@ const embedded_modules = [_]EmbeddedModule{
     .{ .spec = "std:core/objects", .source = stdlib_assets.core_objects },
     .{ .spec = "std:core/render", .source = stdlib_assets.core_render },
     .{ .spec = "std:core/selectors", .source = stdlib_assets.core_selectors },
+    .{ .spec = "std:core/utils", .source = stdlib_assets.core_utils },
     .{ .spec = "std:core/generated", .source = stdlib_assets.core_generated },
     .{ .spec = "std:core/components", .source = stdlib_assets.core_components },
     .{ .spec = "std:themes/base", .source = stdlib_assets.themes_base },

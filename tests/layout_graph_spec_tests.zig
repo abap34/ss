@@ -522,3 +522,26 @@ test "render policy: invalid numeric properties fall back before rendering" {
     try expectFloat(0, resolved.rule.line_width);
     try testing.expect(resolved.rule.dash == null);
 }
+
+test "render policy: math alignment applies to markdown and vector math" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const text_object = try ir.makeObject(page, "body", null, .text, .text, "$$x^2$$");
+    try ir.setNodeProperty(text_object, "math_align", "left");
+
+    var resolved_text = core.render_policy.resolve(&ir, ir.getNode(text_object).?);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_text.text.?.math_align);
+
+    try ir.setNodeProperty(text_object, "math_align", "sideways");
+    resolved_text = core.render_policy.resolve(&ir, ir.getNode(text_object).?);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_text.text.?.math_align);
+
+    const math_object = try ir.makeObject(page, "math_tex", null, .text, .text, "\\int_0^1 x^2 \\, dx");
+    try ir.setNodeProperty(math_object, "render_kind", "vector_math");
+    try ir.setNodeProperty(math_object, "math_align", "right");
+
+    const resolved_math = core.render_policy.resolve(&ir, ir.getNode(math_object).?);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_math.math.?.horizontal_align);
+}

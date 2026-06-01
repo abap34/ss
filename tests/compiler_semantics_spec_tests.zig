@@ -32,6 +32,17 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
+fn expectObjectProperty(source: []const u8, expected_content: []const u8, key: []const u8, expected_value: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectProperty(testing.io, allocator, path, source, expected_content, key, expected_value);
+}
+
 fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -212,6 +223,90 @@ test "compiler semantics: style mutation is stdlib over properties" {
         \\end
         \\
     );
+}
+
+test "compiler semantics: math alignment helpers are stdlib functions" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  left_math(text("$$x^2$$"))
+        \\  math_align(tex("x^2 + y^2 = z^2"), "right")
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: string literal value domains can type function parameters" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\type Mode = "alpha" | "beta"
+        \\
+        \\fn label_mode(mode: Mode) -> String
+        \\  return mode
+        \\end
+        \\
+        \\page ok
+        \\  text(label_mode("alpha"))
+        \\end
+        \\
+    , "alpha");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = "alpha" | "beta"
+        \\
+        \\fn label_mode(mode: Mode) -> String
+        \\  return mode
+        \\end
+        \\
+        \\page bad
+        \\  text(label_mode("gamma"))
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected \"alpha\" | \"beta\", got String");
+}
+
+test "compiler semantics: document math alignment helpers update text and math objects" {
+    const source =
+        \\import std:themes/default
+        \\
+        \\document
+        \\  left_math_all()
+        \\end
+        \\
+        \\page ok
+        \\  text("body $$x^2$$")
+        \\  tex("z^2")
+        \\end
+        \\
+    ;
+
+    try expectObjectProperty(source, "body $$x^2$$", "math_align", "left");
+    try expectObjectProperty(source, "z^2", "math_align", "left");
+}
+
+test "compiler semantics: math alignment rejects unknown literals" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("$$x^2$$")
+        \\  body.math_align = "sideways"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects \"left\" | \"center\" | \"right\", got string");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  math_align(text("$$x^2$$"), "sideways")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected \"left\" | \"center\" | \"right\", got String");
 }
 
 test "compiler semantics: member sugar reads and writes properties and content" {

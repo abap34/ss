@@ -3,6 +3,7 @@ type RenderKind = "text" | "code" | "vector_math" | "vector_asset" | "raster_ass
 type TextParseMode = "none" | "inline" | "block"
 type WrapMode = "on" | "off"
 type FitPolicy = "warn" | "error" | "ignore"
+type Align = "left" | "center" | "right"
 type Color = String @refine(color)
 type ScalarLike = String | Number
 
@@ -54,6 +55,7 @@ type Text = object {
   text_inline_math_height_factor: ScalarLike = "1.02"
   text_inline_math_spacing: ScalarLike = "0.08"
   text_display_math_height_factor: ScalarLike = "2"
+  math_align: Align = "center"
   text_emoji_spacing: ScalarLike = "0.12"
   text_markdown_block_gap: ScalarLike = "8"
   text_markdown_list_inset: ScalarLike = "8"
