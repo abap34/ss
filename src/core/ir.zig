@@ -15,8 +15,6 @@ const PayloadKind = model.PayloadKind;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSet = model.ConstraintSet;
-const FragmentRoot = model.FragmentRoot;
-const Fragment = model.Fragment;
 const ConstraintSource = model.ConstraintSource;
 const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
@@ -122,7 +120,6 @@ pub const Ir = struct {
     diagnostics: std.ArrayList(Diagnostic),
     last_constraint_failure: ?ConstraintFailure,
     constraint_failures: std.ArrayList(ConstraintFailure),
-    fragments: std.ArrayList(*Fragment),
     runtime_strings: std.ArrayList([]u8),
     next_id: NodeId,
     next_metadata_id: MetadataId,
@@ -154,7 +151,6 @@ pub const Ir = struct {
             .diagnostics = .empty,
             .last_constraint_failure = null,
             .constraint_failures = .empty,
-            .fragments = .empty,
             .runtime_strings = .empty,
             .next_id = 1,
             .next_metadata_id = 1,
@@ -204,7 +200,6 @@ pub const Ir = struct {
         self.constraints.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.constraint_failures.deinit(self.allocator);
-        self.fragments.deinit(self.allocator);
         self.runtime_strings.deinit(self.allocator);
     }
 
@@ -242,11 +237,6 @@ pub const Ir = struct {
         self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.constraint_failures.deinit(self.allocator);
-        for (self.fragments.items) |fragment| {
-            fragment.deinit(self.allocator);
-            self.allocator.destroy(fragment);
-        }
-        self.fragments.deinit(self.allocator);
         for (self.runtime_strings.items) |text| self.allocator.free(text);
         self.runtime_strings.deinit(self.allocator);
     }
@@ -382,19 +372,6 @@ pub const Ir = struct {
         return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
-    pub fn makeDetachedObjectWithOrigin(
-        self: *Ir,
-        page_id: NodeId,
-        name: []const u8,
-        role: ?Role,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: ?[]const u8,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, false, .object, name, role, object_kind, payload_kind, content, origin);
-    }
-
     pub fn makeGroupWithOrigin(
         self: *Ir,
         page_id: NodeId,
@@ -480,12 +457,6 @@ pub const Ir = struct {
             .document => null,
             .page => |id| id,
             .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-            .code => |code| switch (code.root) {
-                .document => null,
-                .page => |id| id,
-                .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-                else => return error.InvalidValueTag,
-            },
             else => return error.InvalidValueTag,
         };
         return try self.addMetadata(kind, value, page_id, origin);
@@ -573,48 +544,6 @@ pub const Ir = struct {
         origin: ?[]const u8,
     ) !NodeId {
         return self.makeNodeWithOrigin(page_id, attached, kind, name, role, object_kind, payload_kind, content, origin);
-    }
-
-    pub fn createFragment(
-        self: *Ir,
-        page_id: NodeId,
-        root: FragmentRoot,
-        node_ids: std.ArrayList(NodeId),
-        constraints: ConstraintSet,
-        deps: std.ArrayList(*Fragment),
-    ) !*Fragment {
-        const fragment = try self.allocator.create(Fragment);
-        fragment.* = .{
-            .page_id = page_id,
-            .root = root,
-            .node_ids = node_ids,
-            .constraints = constraints,
-            .deps = deps,
-            .materialized = false,
-        };
-        try self.fragments.append(self.allocator, fragment);
-        return fragment;
-    }
-
-    pub fn materializeFragment(self: *Ir, fragment: *Fragment) !void {
-        if (fragment.materialized) return;
-
-        for (fragment.deps.items) |dep| {
-            try self.materializeFragment(dep);
-        }
-        for (fragment.node_ids.items) |node_id| {
-            const node = self.getNode(node_id) orelse return error.UnknownNode;
-            if (!node.attached) {
-                node.attached = true;
-                try self.addContainment(fragment.page_id, node_id);
-            }
-        }
-        try self.constraints.appendSlice(self.allocator, fragment.constraints.items.items);
-        if (fragment.root) |root| switch (root) {
-            .constraints => |constraints| try self.constraints.appendSlice(self.allocator, constraints.items.items),
-            else => {},
-        };
-        fragment.materialized = true;
     }
 
     pub fn addConstraint(self: *Ir, expr: []const u8) !void {
@@ -774,7 +703,6 @@ pub const Ir = struct {
     fn ensureValueTag(self: *Ir, value: Value, expected: ValueTag, context: []const u8) !void {
         _ = self;
         const actual: ValueTag = switch (value) {
-            .code => |code| code.value_tag(),
             .document => .document,
             .page => .page,
             .object => .object,
@@ -787,7 +715,6 @@ pub const Ir = struct {
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
-            .fragment => .fragment,
             .void => .void,
         };
         if (actual != expected) {
@@ -929,24 +856,6 @@ pub const Ir = struct {
             .document_pages => .{
                 .selection = try self.selectDocumentPages(allocator, query.name),
             },
-        };
-    }
-
-    pub fn fragmentRootValueTag(self: *Ir, fragment: *const Fragment) ValueTag {
-        _ = self;
-        const root = fragment.root orelse unreachable;
-        return switch (root) {
-            .document => .document,
-            .page => .page,
-            .object => .object,
-            .selection => .selection,
-            .anchor => .anchor,
-            .function => .function,
-            .style => .style,
-            .string => .string,
-            .number => .number,
-            .boolean => .boolean,
-            .constraints => .constraints,
         };
     }
 

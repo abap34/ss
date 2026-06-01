@@ -352,15 +352,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk switch (target) {
                 .document => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
-                    break :blk2 mutationResult(raw_target, .{ .document = id });
+                    break :blk2 .{ .document = id };
                 },
                 .page => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
-                    break :blk2 mutationResult(raw_target, .{ .page = id });
+                    break :blk2 .{ .page = id };
                 },
                 .object => |id| blk2: {
                     try ctx.setNodeProperty(id, key, value);
-                    break :blk2 mutationResult(raw_target, .{ .object = id });
+                    break :blk2 .{ .object = id };
                 },
                 .selection => |sel| blk2: {
                     if (sel.item_tag != .object) {
@@ -393,15 +393,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk switch (target) {
                 .document => |id| blk2: {
                     try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 mutationResult(raw_target, .{ .document = id });
+                    break :blk2 .{ .document = id };
                 },
                 .page => |id| blk2: {
                     try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 mutationResult(raw_target, .{ .page = id });
+                    break :blk2 .{ .page = id };
                 },
                 .object => |id| blk2: {
                     try ctx.extendRenderEnv(id, op, key, value);
-                    break :blk2 mutationResult(raw_target, .{ .object = id });
+                    break :blk2 .{ .object = id };
                 },
                 .selection => |sel| blk2: {
                     if (sel.item_tag != .object) {
@@ -475,13 +475,6 @@ fn itemValue(tag: core.SelectionItemTag, id: core.NodeId) core.Value {
     };
 }
 
-fn mutationResult(raw_target: core.Value, fallback: core.Value) core.Value {
-    return switch (raw_target) {
-        .code => raw_target,
-        else => fallback,
-    };
-}
-
 fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.FunctionRef {
     var value = try ctx.evalExprValue(call.args.items[index]);
     defer value.deinit(ctx.ir.allocator);
@@ -496,10 +489,6 @@ fn evalPageArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId {
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .page => |id| id,
-        .code => |code| switch (code.root) {
-            .page => |id| id,
-            else => error.InvalidValueTag,
-        },
         else => error.InvalidValueTag,
     };
 }
@@ -509,10 +498,6 @@ fn evalDocumentArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId 
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .document => |id| id,
-        .code => |code| switch (code.root) {
-            .document => |id| id,
-            else => error.InvalidValueTag,
-        },
         else => error.InvalidValueTag,
     };
 }

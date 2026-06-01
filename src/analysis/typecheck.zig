@@ -104,6 +104,7 @@ pub fn typecheckProgram(
 
     try checkDuplicateFunctionDeclarations(allocator, ir);
     try fields.checkObjectDeclarations(allocator, ir, &sema);
+    try checkTypeAnnotations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
     try checkAnnotationContracts(allocator, ir, &declaration_index);
@@ -112,6 +113,114 @@ pub fn typecheckProgram(
         const module = ir.moduleById(module_id) orelse continue;
         try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
     }
+}
+
+fn checkTypeAnnotations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+) !void {
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        const origin_path = checker.originPathForModule(module);
+
+        for (module.program.functions.items) |func| {
+            const origin = try originForModuleSpan(allocator, origin_path, func.span);
+            defer allocator.free(origin);
+            for (func.params.items) |param| {
+                try checkTypeAnnotation(ir, sema, param.ty, origin);
+                if (param.default_value) |default_value| {
+                    try checkExprTypeAnnotations(allocator, ir, sema, origin_path, default_value.*);
+                }
+            }
+            try checkTypeAnnotation(ir, sema, func.result_type, origin);
+        }
+
+        for (module.program.document_statements.items) |stmt| {
+            try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, stmt);
+        }
+        for (module.program.pages.items) |page| {
+            for (page.statements.items) |stmt| {
+                try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, stmt);
+            }
+        }
+    }
+}
+
+fn checkStatementTypeAnnotations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    origin_path: []const u8,
+    stmt: ast.Statement,
+) !void {
+    switch (stmt.kind) {
+        .let_binding => |binding| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, binding.expr),
+        .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, expr),
+        .return_void => {},
+        .property_set => |property_set| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, property_set.value),
+        .if_stmt => |if_stmt| {
+            try checkExprTypeAnnotations(allocator, ir, sema, origin_path, if_stmt.condition);
+            for (if_stmt.then_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, nested);
+            for (if_stmt.else_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, nested);
+        },
+        .expr_stmt => |expr| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, expr),
+        .constrain => |constraint| {
+            if (constraint.offset) |expr| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, expr);
+        },
+    }
+}
+
+fn checkExprTypeAnnotations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    origin_path: []const u8,
+    expr: ast.Expr,
+) !void {
+    switch (expr) {
+        .ident, .string, .number, .boolean => {},
+        .call => |call| {
+            for (call.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, arg);
+        },
+        .apply => |apply| {
+            try checkExprTypeAnnotations(allocator, ir, sema, origin_path, apply.callee.*);
+            for (apply.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, arg);
+        },
+        .lambda => |lambda| {
+            const origin = try originForModuleSpan(allocator, origin_path, lambda.span);
+            defer allocator.free(origin);
+            for (lambda.params.items) |param| {
+                try checkTypeAnnotation(ir, sema, param.ty, origin);
+            }
+            try checkExprTypeAnnotations(allocator, ir, sema, origin_path, lambda.body.*);
+        },
+    }
+}
+
+fn checkTypeAnnotation(
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    ty: ast.Type,
+    origin: []const u8,
+) !void {
+    if (ty.class_name) |class_name| {
+        if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
+    }
+    if (ty.param_class_name) |class_name| {
+        if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
+    }
+    if (ty.tag == .function) {
+        for (ty.fn_params) |param| try checkTypeAnnotation(ir, sema, param, origin);
+        if (ty.fn_result) |result| try checkTypeAnnotation(ir, sema, result.*, origin);
+    }
+}
+
+fn reportUnknownType(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnknownType: unknown type: {s}", .{type_name}) },
+    });
+    return error.UnknownType;
 }
 
 fn checkDuplicateFunctionDeclarations(

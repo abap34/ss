@@ -24,9 +24,6 @@ pub const Type = struct {
         number,
         boolean,
         constraints,
-        fragment,
-        code,
-        list,
         void,
     };
 
@@ -56,18 +53,6 @@ pub const Type = struct {
             .param = normalizeParam(item.tag),
             .param_class_name = if (item.tag == .object) item.class_name else null,
         };
-    }
-
-    pub fn fragment(root: Tag) Type {
-        return .{ .tag = .fragment, .param = normalizeParam(root) };
-    }
-
-    pub fn code(inner: Tag) Type {
-        return .{ .tag = .code, .param = normalizeParam(inner) };
-    }
-
-    pub fn list(inner: Tag) Type {
-        return .{ .tag = .list, .param = normalizeParam(inner) };
     }
 
     pub fn functionType(allocator: std.mem.Allocator, params: []const Type, result: Type) anyerror!Type {
@@ -114,7 +99,6 @@ pub const Type = struct {
 
     pub fn fromValueTag(tag: model.ValueTag) Type {
         return switch (tag) {
-            .code => code(.any),
             .document => .document,
             .page => .page,
             .object => .object,
@@ -127,7 +111,6 @@ pub const Type = struct {
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
-            .fragment => fragment(.any),
             .void => .{ .tag = .void },
         };
     }
@@ -146,10 +129,8 @@ pub const Type = struct {
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
-            .fragment => .fragment,
-            .code => .code,
             .void => .void,
-            .none, .any, .list => null,
+            .none, .any => null,
         };
     }
 
@@ -174,7 +155,6 @@ pub const Type = struct {
 
     pub fn accepts(expected: Type, actual: Type) bool {
         if (expected.tag == .any or actual.tag == .any) return true;
-        if (actual.tag == .code and expected.tag == normalizeParam(actual.param)) return true;
         if (expected.tag != actual.tag) return false;
         if (expected.tag == .function) {
             if (expected.fn_result == null or actual.fn_result == null) return false;
@@ -218,8 +198,6 @@ pub const Type = struct {
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
-            .fragment => .fragment,
-            .code => .code,
             .void => .void,
         };
     }
@@ -233,7 +211,7 @@ pub const Type = struct {
 
     pub fn formatInto(self: Type, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
         switch (self.tag) {
-            .selection, .fragment, .code, .list => {
+            .selection => {
                 try out.appendSlice(allocator, displayName(self.tag));
                 try out.append(allocator, '<');
                 if (normalizeParam(self.param) == .object and self.param_class_name != null) {
@@ -299,9 +277,6 @@ pub const Type = struct {
             .number => "Number",
             .boolean => "Bool",
             .constraints => "Constraints",
-            .fragment => "Fragment",
-            .code => "Code",
-            .list => "List",
             .void => "Void",
         };
     }

@@ -24,6 +24,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
         error.InvalidValueTag => "value type",
+        error.InvalidTypeAnnotation => "type annotation",
         error.ExpectedTypeAnnotation => "type annotation",
         error.AssignmentRequiresLet => "'let name = expr' for variable bindings",
         error.BindRemoved => "'let name = expr' for lexical bindings; 'bind' was removed",

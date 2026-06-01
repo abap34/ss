@@ -616,32 +616,65 @@ const Parser = struct {
 
     fn parsePrimaryTypeAnnotation(self: *Parser) anyerror!ast.Type {
         const name = try self.parseIdentifier();
-        if (std.mem.eql(u8, name, "Document")) return ast.Type.document;
-        if (std.mem.eql(u8, name, "Page")) return ast.Type.page;
+        if (std.mem.eql(u8, name, "Document")) {
+            self.allocator.free(name);
+            return ast.Type.document;
+        }
+        if (std.mem.eql(u8, name, "Page")) {
+            self.allocator.free(name);
+            return ast.Type.page;
+        }
         if (std.mem.eql(u8, name, "Object")) return try self.parseObjectType(name);
-        if (std.mem.eql(u8, name, "Metadata")) return ast.Type.metadata;
-        if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
-        if (std.mem.eql(u8, name, "Function")) return self.fail(error.InvalidValueTag);
-        if (std.mem.eql(u8, name, "Style")) return ast.Type.style;
-        if (std.mem.eql(u8, name, "String")) return ast.Type.string;
-        if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
-        if (std.mem.eql(u8, name, "Bool")) return ast.Type.boolean;
-        if (std.mem.eql(u8, name, "Constraints")) return ast.Type.constraints;
-        if (std.mem.eql(u8, name, "Void")) return .{ .tag = .void };
-        if (std.mem.eql(u8, name, "Selection")) return ast.Type.selectionType(try self.parseOptionalTypeParam());
-        if (std.mem.eql(u8, name, "Fragment")) return ast.Type.fragment((try self.parseOptionalTypeParam()).tag);
-        if (std.mem.eql(u8, name, "Code")) return ast.Type.code(try self.parseRequiredTypeParam());
-        if (std.mem.eql(u8, name, "List")) return ast.Type.list(try self.parseRequiredTypeParam());
-        return self.fail(error.InvalidValueTag);
+        if (std.mem.eql(u8, name, "Metadata")) {
+            self.allocator.free(name);
+            return ast.Type.metadata;
+        }
+        if (std.mem.eql(u8, name, "Anchor")) {
+            self.allocator.free(name);
+            return ast.Type.anchor;
+        }
+        if (std.mem.eql(u8, name, "Function")) {
+            self.allocator.free(name);
+            return self.fail(error.InvalidTypeAnnotation);
+        }
+        if (std.mem.eql(u8, name, "Style")) {
+            self.allocator.free(name);
+            return ast.Type.style;
+        }
+        if (std.mem.eql(u8, name, "String")) {
+            self.allocator.free(name);
+            return ast.Type.string;
+        }
+        if (std.mem.eql(u8, name, "Number")) {
+            self.allocator.free(name);
+            return ast.Type.number;
+        }
+        if (std.mem.eql(u8, name, "Bool")) {
+            self.allocator.free(name);
+            return ast.Type.boolean;
+        }
+        if (std.mem.eql(u8, name, "Constraints")) {
+            self.allocator.free(name);
+            return ast.Type.constraints;
+        }
+        if (std.mem.eql(u8, name, "Void")) {
+            self.allocator.free(name);
+            return .{ .tag = .void };
+        }
+        if (std.mem.eql(u8, name, "Selection")) {
+            self.allocator.free(name);
+            return ast.Type.selectionType(try self.parseOptionalTypeParam());
+        }
+        return ast.Type.objectClass(name);
     }
 
     fn parseObjectType(self: *Parser, object_name: []const u8) anyerror!ast.Type {
+        defer self.allocator.free(object_name);
         self.skipInlineSpaces();
         if (self.eof() or self.source[self.pos] != '<') return ast.Type.object;
         try self.expectChar('<');
         const class_name = try self.parseIdentifier();
         try self.expectChar('>');
-        self.allocator.free(object_name);
         return ast.Type.objectClass(class_name);
     }
 
@@ -649,12 +682,6 @@ const Parser = struct {
         self.skipInlineSpaces();
         if (self.eof() or self.source[self.pos] != '<') return ast.Type.any;
         return try self.parseTypeParam();
-    }
-
-    fn parseRequiredTypeParam(self: *Parser) anyerror!ast.Type.Tag {
-        self.skipInlineSpaces();
-        if (self.eof() or self.source[self.pos] != '<') return self.fail(error.ExpectedTypeAnnotation);
-        return (try self.parseTypeParam()).tag;
     }
 
     fn parseTypeParam(self: *Parser) anyerror!ast.Type {
@@ -665,7 +692,7 @@ const Parser = struct {
     }
 
     fn valueTagForType(self: *Parser, ty: ast.Type) anyerror!core.ValueTag {
-        return ty.toValueTag() orelse self.fail(error.InvalidValueTag);
+        return ty.toValueTag() orelse self.fail(error.InvalidTypeAnnotation);
     }
 
     fn parsePage(self: *Parser) !PageDecl {

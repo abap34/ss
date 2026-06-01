@@ -469,7 +469,6 @@ fn primitiveResultTypeInfo(
         .target_arg => {
             if (call.args.items.len == 0) return infoFromValueTag(.object);
             const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
-            if (target_info.ty.tag == .code) return target_info;
             return .{
                 .ty = switch (target_info.ty.tag) {
                     .document, .page, .object, .selection => target_info.ty,
@@ -546,7 +545,7 @@ fn validateCallbackShape(
         try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
     if (expected_result_tag) |result_tag| {
-        const actual_tag = callback_info.ty.fn_result.?.toValueTag() orelse .fragment;
+        const actual_tag = callback_info.ty.fn_result.?.toValueTag() orelse .void;
         try ensureValueTag(ir, actual_tag, result_tag, origin, .UnmatchedReturnType);
     }
 }

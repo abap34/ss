@@ -99,7 +99,6 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
             .add_constraint => |constraint| {
                 try ir.constraints.append(ir.allocator, try mapConstraint(ir, &ctx, constraint));
             },
-            .materialize_fragment => {},
         }
     }
 

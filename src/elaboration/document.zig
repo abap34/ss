@@ -48,7 +48,6 @@ pub const Term = union(enum) {
         origin: ?[]const u8,
     },
     add_constraint: core.Constraint,
-    materialize_fragment: *core.Fragment,
 };
 
 pub const Document = struct {
@@ -62,7 +61,6 @@ pub const Document = struct {
     contains: std.AutoHashMap(HandleId, std.ArrayList(HandleId)),
     constraints: std.ArrayList(core.Constraint),
     diagnostics: std.ArrayList(core.Diagnostic),
-    fragments: std.ArrayList(*core.Fragment),
     terms: std.ArrayList(Term),
     runtime_strings: std.ArrayList([]u8),
     next_metadata_id: core.MetadataId,
@@ -80,7 +78,6 @@ pub const Document = struct {
             .contains = std.AutoHashMap(HandleId, std.ArrayList(HandleId)).init(allocator),
             .constraints = .empty,
             .diagnostics = .empty,
-            .fragments = .empty,
             .terms = .empty,
             .runtime_strings = .empty,
             .next_metadata_id = 1,
@@ -100,11 +97,6 @@ pub const Document = struct {
         self.terms.deinit(self.allocator);
         for (self.runtime_strings.items) |text| self.allocator.free(text);
         self.runtime_strings.deinit(self.allocator);
-        for (self.fragments.items) |fragment| {
-            fragment.deinit(self.allocator);
-            self.allocator.destroy(fragment);
-        }
-        self.fragments.deinit(self.allocator);
         for (self.diagnostics.items) |*diagnostic| diagnostic.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
@@ -194,19 +186,6 @@ pub const Document = struct {
         origin: ?[]const u8,
     ) !HandleId {
         return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
-    }
-
-    pub fn makeDetachedObjectWithOrigin(
-        self: *Document,
-        page_id: HandleId,
-        name: []const u8,
-        role: ?core.Role,
-        object_kind: core.ObjectKind,
-        payload_kind: core.PayloadKind,
-        content: ?[]const u8,
-        origin: ?[]const u8,
-    ) !HandleId {
-        return self.makeNodeWithOrigin(page_id, false, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn makeGroupWithOrigin(
@@ -342,12 +321,6 @@ pub const Document = struct {
             .document => null,
             .page => |id| id,
             .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-            .code => |code| switch (code.root) {
-                .document => null,
-                .page => |id| id,
-                .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-                else => return error.InvalidValueTag,
-            },
             else => return error.InvalidValueTag,
         };
         return try self.addMetadata(kind, value, page_id, origin);
@@ -477,7 +450,6 @@ pub const Document = struct {
 
     fn valueTag(value: core.Value) core.ValueTag {
         return switch (value) {
-            .code => .code,
             .document => .document,
             .page => .page,
             .object => .object,
@@ -490,7 +462,6 @@ pub const Document = struct {
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
-            .fragment => .fragment,
             .void => .void,
         };
     }
@@ -608,45 +579,5 @@ pub const Document = struct {
             .document_objects_by_role => |role| .{ .selection = try self.selectDocumentObjectsByRole(allocator, role, query.name) },
             .document_pages => .{ .selection = try self.selectDocumentPages(allocator, query.name) },
         };
-    }
-
-    pub fn createFragment(
-        self: *Document,
-        page_id: HandleId,
-        root: core.FragmentRoot,
-        node_ids: std.ArrayList(HandleId),
-        constraints: core.ConstraintSet,
-        deps: std.ArrayList(*core.Fragment),
-    ) !*core.Fragment {
-        const fragment = try self.allocator.create(core.Fragment);
-        fragment.* = .{
-            .page_id = page_id,
-            .root = root,
-            .node_ids = node_ids,
-            .constraints = constraints,
-            .deps = deps,
-            .materialized = false,
-        };
-        try self.fragments.append(self.allocator, fragment);
-        return fragment;
-    }
-
-    pub fn materializeFragment(self: *Document, fragment: *core.Fragment) !void {
-        if (fragment.materialized) return;
-        for (fragment.deps.items) |dep| try self.materializeFragment(dep);
-        for (fragment.node_ids.items) |node_id| {
-            const node = self.getNode(node_id) orelse return error.UnknownNode;
-            if (!node.attached) {
-                node.attached = true;
-                try self.addContainment(fragment.page_id, node_id);
-            }
-        }
-        try self.addConstraintSet(fragment.constraints);
-        if (fragment.root) |root| switch (root) {
-            .constraints => |constraints| try self.addConstraintSet(constraints),
-            else => {},
-        };
-        fragment.materialized = true;
-        try self.terms.append(self.allocator, .{ .materialize_fragment = fragment });
     }
 };

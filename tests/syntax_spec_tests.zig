@@ -240,12 +240,28 @@ test "syntax spec: function types and lambdas are source syntax" {
 }
 
 test "syntax spec: untyped value tag is not accepted as a surface type" {
-    try expectParseError(error.InvalidValueTag,
+    try expectParseError(error.InvalidTypeAnnotation,
         \\fn bad(f: Function) -> Number
         \\  return 1
         \\end
         \\
     );
+}
+
+test "syntax spec: bare user type names parse as object class annotations" {
+    var parsed = try parse(
+        \\fn keep(value: Text) -> Text
+        \\  return value
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const keep = parsed.program.functions.items[0];
+    try testing.expectEqual(Type.Tag.object, keep.params.items[0].ty.tag);
+    try testing.expectEqualStrings("Text", keep.params.items[0].ty.class_name.?);
+    try testing.expectEqual(Type.Tag.object, keep.result_type.tag);
+    try testing.expectEqualStrings("Text", keep.result_type.class_name.?);
 }
 
 test "syntax spec: lambda expressions can be used as callees" {
@@ -310,15 +326,6 @@ test "syntax spec: required parameters cannot follow defaulted parameters" {
     try expectParseError(error.RequiredParameterAfterDefault,
         \\fn bad(a: Number = 1, b: Number) -> Number
         \\  return a
-        \\end
-        \\
-    );
-}
-
-test "syntax spec: list is a type constructor but not a runtime value tag" {
-    try expectParseError(error.InvalidValueTag,
-        \\fn bad() -> List<Number>
-        \\  return 1
         \\end
         \\
     );
