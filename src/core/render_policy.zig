@@ -139,7 +139,7 @@ pub fn resolveWithEnv(ir: anytype, node: *const Node, sema: anytype) ResolvedRen
     return .{
         .kind = kind,
         .text = resolveTextWithEnv(ir, node, kind, sema),
-        .math = resolveMathWithEnv(node, kind, sema),
+        .math = resolveMathWithEnv(ir, node, kind, sema),
         .code = resolveCodeWithEnv(node, kind, sema),
         .chrome = resolveChromeWithEnv(node, sema),
         .underline = resolveUnderlineWithEnv(node, sema),
@@ -191,7 +191,7 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .inline_math_height_factor = positiveFloatProperty(ir, node, "text_inline_math_height_factor") orelse 1,
         .inline_math_spacing = nonNegativeFloatProperty(ir, node, "text_inline_math_spacing") orelse 0,
         .display_math_height_factor = positiveFloatProperty(ir, node, "text_display_math_height_factor") orelse 2,
-        .math_align = parseHorizontalAlignProperty(ir, node, "math_align") orelse .center,
+        .math_align = inheritedHorizontalAlignProperty(ir, node, "math_align") orelse .center,
         .emoji_spacing = nonNegativeFloatProperty(ir, node, "text_emoji_spacing") orelse 0,
         .markdown_block_gap = nonNegativeFloatProperty(ir, node, "text_markdown_block_gap") orelse 0,
         .markdown_list_inset = nonNegativeFloatProperty(ir, node, "text_markdown_list_inset") orelse 0,
@@ -223,7 +223,7 @@ fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
         .block_min_height = positiveFloatProperty(ir, node, "math_block_min_height") orelse 30,
         .block_vertical_padding = nonNegativeFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
         .scale = positiveFloatProperty(ir, node, "math_scale") orelse 1,
-        .horizontal_align = parseHorizontalAlignProperty(ir, node, "math_align") orelse .center,
+        .horizontal_align = inheritedHorizontalAlignProperty(ir, node, "math_align") orelse .center,
         .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
     };
 }
@@ -262,7 +262,7 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
         .inline_math_height_factor = positiveFloatPropertyWithEnv(node, "text_inline_math_height_factor", sema) orelse 1,
         .inline_math_spacing = nonNegativeFloatPropertyWithEnv(node, "text_inline_math_spacing", sema) orelse 0,
         .display_math_height_factor = positiveFloatPropertyWithEnv(node, "text_display_math_height_factor", sema) orelse 2,
-        .math_align = parseHorizontalAlignPropertyWithEnv(node, "math_align", sema) orelse .center,
+        .math_align = inheritedHorizontalAlignPropertyWithEnv(ir, node, "math_align", sema) orelse .center,
         .emoji_spacing = nonNegativeFloatPropertyWithEnv(node, "text_emoji_spacing", sema) orelse 0,
         .markdown_block_gap = nonNegativeFloatPropertyWithEnv(node, "text_markdown_block_gap", sema) orelse 0,
         .markdown_list_inset = nonNegativeFloatPropertyWithEnv(node, "text_markdown_list_inset", sema) orelse 0,
@@ -287,14 +287,14 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
     };
 }
 
-fn resolveMathWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?MathPaint {
+fn resolveMathWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
         .block_line_height = positiveFloatPropertyWithEnv(node, "math_block_line_height", sema) orelse 22,
         .block_min_height = positiveFloatPropertyWithEnv(node, "math_block_min_height", sema) orelse 30,
         .block_vertical_padding = nonNegativeFloatPropertyWithEnv(node, "math_block_vertical_padding", sema) orelse 2,
         .scale = positiveFloatPropertyWithEnv(node, "math_scale", sema) orelse 1,
-        .horizontal_align = parseHorizontalAlignPropertyWithEnv(node, "math_align", sema) orelse .center,
+        .horizontal_align = inheritedHorizontalAlignPropertyWithEnv(ir, node, "math_align", sema) orelse .center,
         .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
     };
 }
@@ -398,6 +398,45 @@ fn parseHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const u8)
 
 fn parseHorizontalAlignPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?HorizontalAlign {
     const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    return parseHorizontalAlign(value);
+}
+
+fn inheritedHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {
+    if (explicitHorizontalAlignProperty(node, key)) |value| return value;
+    if (node.kind == .object) {
+        if (ir.parentPageOf(node.id)) |page_id| {
+            if (ir.getNode(page_id)) |page| {
+                if (explicitHorizontalAlignProperty(page, key)) |value| return value;
+            }
+        }
+    }
+    if (node.kind == .object or node.kind == .page) {
+        if (ir.getNode(ir.document_id)) |document| {
+            if (explicitHorizontalAlignProperty(document, key)) |value| return value;
+        }
+    }
+    return parseHorizontalAlignProperty(ir, node, key);
+}
+
+fn inheritedHorizontalAlignPropertyWithEnv(ir: anytype, node: *const Node, key: []const u8, sema: anytype) ?HorizontalAlign {
+    if (explicitHorizontalAlignProperty(node, key)) |value| return value;
+    if (node.kind == .object) {
+        if (ir.parentPageOf(node.id)) |page_id| {
+            if (ir.getNode(page_id)) |page| {
+                if (explicitHorizontalAlignProperty(page, key)) |value| return value;
+            }
+        }
+    }
+    if (node.kind == .object or node.kind == .page) {
+        if (ir.getNode(ir.document_id)) |document| {
+            if (explicitHorizontalAlignProperty(document, key)) |value| return value;
+        }
+    }
+    return parseHorizontalAlignPropertyWithEnv(node, key, sema);
+}
+
+fn explicitHorizontalAlignProperty(node: *const Node, key: []const u8) ?HorizontalAlign {
+    const value = model.nodeProperty(node, key) orelse return null;
     return parseHorizontalAlign(value);
 }
 
