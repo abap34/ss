@@ -14,6 +14,18 @@ fn buildSource(source: []const u8) !void {
     try compiler_semantics.buildSource(testing.io, allocator, path, source);
 }
 
+fn buildSourceWithOverlay(source: []const u8, overlay_source: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const overlay_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/types.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.buildSourceWithOverlay(testing.io, allocator, path, source, overlay_path, overlay_source);
+}
+
 fn expectBuildFails(source: []const u8) !void {
     buildSource(source) catch {
         return;
@@ -30,6 +42,17 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
 
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
+}
+
+fn expectObjectProperty(source: []const u8, key: []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectProperty(testing.io, allocator, path, source, key, expected);
 }
 
 fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
@@ -220,42 +243,1148 @@ test "compiler semantics: math alignment helpers are stdlib functions" {
         \\
         \\page ok
         \\  left_math(text("$$x^2$$"))
-        \\  math_align(tex("x^2 + y^2 = z^2"), "right")
+        \\  math_align(tex("x^2 + y^2 = z^2"), Align.right)
         \\end
         \\
     );
 }
 
-test "compiler semantics: string literal value domains can type function parameters" {
-    try expectObjectContent(
+test "compiler semantics: enum cases type function parameters" {
+    try buildSource(
         \\import std:themes/default
         \\
-        \\type Mode = "alpha" | "beta"
+        \\type Mode = alpha | Beta | READY
         \\
-        \\fn label_mode(mode: Mode) -> String
+        \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
         \\end
         \\
         \\page ok
-        \\  text(label_mode("alpha"))
+        \\  let mode = keep_mode(Mode.Beta)
+        \\  let ready = keep_mode(Mode.READY)
         \\end
         \\
-    , "alpha");
+    );
 
     try expectDiagnostic(
         \\import std:themes/default
         \\
-        \\type Mode = "alpha" | "beta"
+        \\type Mode = alpha | beta
         \\
-        \\fn label_mode(mode: Mode) -> String
+        \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
         \\end
         \\
         \\page bad
-        \\  text(label_mode("gamma"))
+        \\  let mode = keep_mode("alpha")
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected \"alpha\" | \"beta\", got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Mode, got String");
+}
+
+test "compiler semantics: enum types resolve through imported modules" {
+    try buildSourceWithOverlay(
+        \\import "lib/types.ss"
+        \\import std:themes/default
+        \\
+        \\fn keep_mode(mode: Mode) -> Mode
+        \\  return mode
+        \\end
+        \\
+        \\fn keep_maybe(mode: Mode?) -> Mode
+        \\  return mode ?? Mode.alpha
+        \\end
+        \\
+        \\page ok
+        \\  let first = keep_mode(Mode.beta)
+        \\  let second = keep_maybe(none)
+        \\end
+        \\
+    ,
+        \\type Mode = alpha | beta
+        \\
+    );
+}
+
+test "compiler semantics: enum properties serialize as case names" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  custom_mode: Mode = Mode.alpha
+        \\}
+        \\
+        \\page ok
+        \\  let card = obj("card", "card", "text")
+        \\  card.custom_mode = Mode.beta
+        \\  if prop_eq(card, "custom_mode", "beta")
+        \\    text("enum-ok")
+        \\  end
+        \\end
+        \\
+    , "enum-ok");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  custom_mode: Mode = Mode.alpha
+        \\}
+        \\
+        \\page bad
+        \\  let card = obj("card", "card", "text")
+        \\  card.custom_mode = "beta"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'custom_mode' expects Mode, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Other = beta
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  custom_mode: Mode = Mode.alpha
+        \\}
+        \\
+        \\page bad
+        \\  let card = obj("card", "card", "text")
+        \\  card.custom_mode = Other.beta
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'custom_mode' expects Mode, got Other");
+}
+
+test "compiler semantics: type names share one namespace" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Color = accent
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateType: type 'Color' conflicts with a built-in type");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha
+        \\type Mode = object {
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateType: object type 'Mode' is already defined in this module");
+
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\type Scalar = Number | String
+        \\
+        \\fn keep_scalar(value: Scalar) -> Scalar
+        \\  return value
+        \\end
+        \\
+        \\page ok
+        \\  let number_case = keep_scalar(Scalar.Number)
+        \\  let string_case = keep_scalar(Scalar.String)
+        \\end
+        \\
+    );
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha |
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidTypeDeclaration: expected enum cases in type Mode");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta | alpha
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateEnumCase: enum 'Mode' already has case 'alpha'");
+
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\type Mode = Alpha | beta
+        \\
+        \\page ok
+        \\  let mode = Mode.Alpha
+        \\end
+        \\
+    );
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type String = object {
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateType: type 'String' conflicts with a built-in type");
+
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\}
+        \\type Mode = Card | local
+        \\
+        \\page ok
+        \\  let card_case = Mode.Card
+        \\end
+        \\
+    );
+
+    try buildSourceWithOverlay(
+        \\import "lib/types.ss"
+        \\import std:themes/default
+        \\
+        \\type Mode = RemoteType | local
+        \\
+        \\page ok
+        \\  let remote_case = Mode.RemoteType
+        \\end
+        \\
+    ,
+        \\type RemoteType = object {
+        \\}
+        \\
+    );
+}
+
+test "compiler semantics: Color is a static type" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\fn keep_color(value: Color) -> Color
+        \\  return value
+        \\end
+        \\
+        \\page ok
+        \\  let body = text("ok")
+        \\  body.text_color = keep_color(c"0.1,0.2,0.3")
+        \\end
+        \\
+    );
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn keep_color(value: Color) -> Color
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_color = keep_color("0.1,0.2,0.3")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
+
+    try expectObjectProperty(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let body = text("color")
+        \\  body.text_color = c"#334455"
+        \\end
+        \\
+    , "text_color", "0.2,0.26666668,0.33333334");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_markdown_code_fill = "red"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got String");
+}
+
+test "compiler semantics: optional fields accept none and coalesce" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\fn fallback(value: Color?) -> Color
+        \\  return value ?? c"0,0,0"
+        \\end
+        \\
+        \\page ok
+        \\  let body = text("ok")
+        \\  body.text_markdown_code_fill = none
+        \\  body.text_color = fallback(body.text_markdown_code_fill)
+        \\end
+        \\
+    );
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn id(c: Color?) -> Color
+        \\  return c
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_color = none
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn name(value: None) -> String
+        \\  return "none"
+        \\end
+        \\
+        \\page ok
+        \\  text(name(none))
+        \\end
+        \\
+    , "none");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let body = text("body")
+        \\  body.text_markdown_code_fill = c"1,0,0"
+        \\  body.text_markdown_code_fill = none
+        \\  if body.text_markdown_code_fill?
+        \\    text("still-set")
+        \\  else
+        \\    text("unset")
+        \\  end
+        \\end
+        \\
+    , "unset");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let color = c"1,0,0"
+        \\  if color?
+        \\    text("bad")
+        \\  end
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: '?' expects an optional value");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let color = c"1,0,0"
+        \\  let value = color ?? c"0,0,0"
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: '??' expects an optional value");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn fallback(value: Color?) -> Color
+        \\  return value ?? "black"
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
+}
+
+test "compiler semantics: optional values are checked at function boundaries" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn take_color(value: Color) -> Color
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_color = take_color(body.text_markdown_code_fill)
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn take_maybe(value: Color?) -> Color?
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_markdown_code_fill = take_maybe("red")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad_return(value: Color?) -> Color
+        \\  if true
+        \\    return value
+        \\  else
+        \\    return c"0,0,0"
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad_optional_return() -> Color?
+        \\  return 1
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad_default(value: Color = "red") -> Color
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad_optional_default(value: Color? = "red") -> Color?
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
+}
+
+test "compiler semantics: optional values stay checked through multi-step flows" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn may_be_none(target: Body, prefer_markup: Bool) -> Color?
+        \\  if prefer_markup
+        \\    return target.text_markdown_code_fill
+        \\  else
+        \\    if target.link_id?
+        \\      return c"0.1,0.2,0.3"
+        \\    else
+        \\      return none
+        \\    end
+        \\  end
+        \\end
+        \\
+        \\fn must_call_by_notnone(color: Color) -> Color
+        \\  return color
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("report")
+        \\  body.text_markdown_code_fill = none
+        \\  let x = may_be_none(body, true)
+        \\  let y = must_call_by_notnone(x)
+        \\  body.text_color = y
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_color(primary: Color?, fallback: Color?, use_primary: Bool, allow_fallback: Bool) -> Color
+        \\  let chosen = primary
+        \\  if use_primary
+        \\    if chosen?
+        \\      return chosen
+        \\    else
+        \\      return c"0,0,0"
+        \\    end
+        \\  else
+        \\    if allow_fallback
+        \\      return fallback ?? c"0.2,0.2,0.2"
+        \\    else
+        \\      return c"0.8,0.8,0.8"
+        \\    end
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn apply_palette(target: Body, primary: Color?, secondary: Color?) -> Void
+        \\  let chosen = primary
+        \\  if target.link_id?
+        \\    target.text_color = chosen
+        \\  else
+        \\    target.text_markdown_code_fill = secondary
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("body")
+        \\  apply_palette(body, none, c"0.3,0.3,0.3")
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Status = draft | reviewing | ready
+        \\
+        \\fn maybe_status(has_owner: Bool, has_review: Bool) -> Status?
+        \\  if has_owner
+        \\    if has_review
+        \\      return Status.ready
+        \\    else
+        \\      return Status.reviewing
+        \\    end
+        \\  else
+        \\    return none
+        \\  end
+        \\end
+        \\
+        \\fn publish(status: Status) -> Status
+        \\  return status
+        \\end
+        \\
+        \\page bad
+        \\  let status = maybe_status(true, false)
+        \\  if status?
+        \\    let published = publish(status)
+        \\  else
+        \\    text("missing")
+        \\  end
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Status, got Status?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Status = draft | reviewing | ready
+        \\type OtherStatus = draft | reviewing | ready
+        \\
+        \\fn normalize_status(status: Status?, fallback: OtherStatus, force_fallback: Bool) -> Status
+        \\  if force_fallback
+        \\    return fallback
+        \\  else
+        \\    if status?
+        \\      return status ?? Status.draft
+        \\    else
+        \\      return Status.reviewing
+        \\    end
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Status, got OtherStatus");
+}
+
+test "compiler semantics: mismatched if branches are rejected statically" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_text_color(use_theme: Bool) -> Color
+        \\  if use_theme
+        \\    return c"0.1,0.1,0.1"
+        \\  else
+        \\    return "black"
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn maybe_accent(target: Body, use_saved: Bool, force_number: Bool) -> Color?
+        \\  if use_saved
+        \\    return target.text_markdown_code_fill
+        \\  else
+        \\    if force_number
+        \\      return 1
+        \\    else
+        \\      return none
+        \\    end
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_from_branch_local(target: Body, maybe_color: Color?, prefer_saved: Bool) -> Color
+        \\  if prefer_saved
+        \\    let chosen = maybe_color
+        \\    return chosen
+        \\  else
+        \\    let chosen = target.text_color
+        \\    return chosen
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn paint_target(target: Body, maybe_color: Color?, use_optional: Bool) -> Void
+        \\  if use_optional
+        \\    target.text_color = maybe_color
+        \\  else
+        \\    target.text_color = c"0.1,0.1,0.1"
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("body")
+        \\  paint_target(body, none, true)
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Status = draft | ready
+        \\type OtherStatus = draft | ready
+        \\
+        \\fn choose_status(primary: Status, fallback: OtherStatus, use_primary: Bool) -> Status
+        \\  if use_primary
+        \\    return primary
+        \\  else
+        \\    return fallback
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Status, got OtherStatus");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn choose_card(card_value: Card, body_value: Body, use_card: Bool) -> Card
+        \\  if use_card
+        \\    return card_value
+        \\  else
+        \\    return body_value
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+}
+
+test "compiler semantics: if branch checks do not depend on optional types" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_score(use_score: Bool) -> Number
+        \\  if use_score
+        \\    return 1
+        \\  else
+        \\    return "missing"
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnmatchedReturnType: expected number, got string");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_score(use_score: Bool) -> Number
+        \\  if use_score
+        \\    if "enabled"
+        \\      return 1
+        \\    else
+        \\      return 2
+        \\    end
+        \\  else
+        \\    return 3
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnmatchedArgumentType: expected boolean, got string");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_score(use_score: Bool) -> Number
+        \\  if use_score
+        \\    return 1
+        \\  else
+        \\    return true
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnmatchedReturnType: expected number, got boolean");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn configure_text(target: Body, compact: Bool) -> Void
+        \\  if compact
+        \\    target.text_size = "small"
+        \\  else
+        \\    target.text_size = 24
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  let body = text("body")
+        \\  configure_text(body, true)
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_size' expects Number, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn choose_selection(use_pages: Bool) -> Selection<Page>
+        \\  if use_pages
+        \\    return pages(docctx())
+        \\  else
+        \\    return objs_here("body")
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Selection<Page>, got Selection<Object>");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn inc(x: Number) -> Number
+        \\  return x + 1
+        \\end
+        \\
+        \\fn label(x: String) -> String
+        \\  return x ++ "!"
+        \\end
+        \\
+        \\fn choose_mapper(use_number: Bool) -> Number -> Number
+        \\  if use_number
+        \\    return inc
+        \\  else
+        \\    return label
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Number -> Number, got String -> String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad_void_branch(write_number: Bool) -> Void
+        \\  if write_number
+        \\    return 1
+        \\  else
+        \\    return
+        \\  end
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnmatchedReturnType: expected void, got number");
+}
+
+test "compiler semantics: enum optional values reject strings and other enums" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\
+        \\fn take_mode(value: Mode) -> Mode
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  let mode = take_mode(none)
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Mode, got None");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\
+        \\fn take_maybe(value: Mode?) -> Mode?
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  let mode = take_maybe("alpha")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Mode?, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Other = alpha | beta
+        \\
+        \\fn take_maybe(value: Mode?) -> Mode?
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  let mode = take_maybe(Other.alpha)
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Mode?, got Other");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Other = alpha | beta
+        \\
+        \\fn bad_return() -> Mode
+        \\  return Other.alpha
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Other = alpha | beta
+        \\
+        \\fn bad_coalesce(value: Mode?) -> Mode
+        \\  return value ?? Other.alpha
+        \\end
+        \\
+        \\page bad
+        \\  text("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
+}
+
+test "compiler semantics: properties require known fields" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  let key = "text_color"
+        \\  set_prop(body, key, c"1,0,0")
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.no_such_field = "x"
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownField: unknown field: no_such_field");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  let key = "text_color"
+        \\  text(prop(body, key, "missing"))
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  has_prop(body, "no_such_field")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownField: unknown field: no_such_field");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_color = 1
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Number");
+}
+
+test "compiler semantics: typed properties reject optional and wrong static values" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  set_prop(body, "text_color", body.text_markdown_code_fill)
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  docctx().background_fill = "white"
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'background_fill' expects Color?, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  text("body")
+        \\  objs_here("body").text_color = none
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_markdown_code_fill = 1
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got Number");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  set_prop(body, "text_markdown_code_fill", "red")
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got String");
+}
+
+test "compiler semantics: object field defaults are statically typed" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  accent: Color = "red"
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Color");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  accent: Color = none
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Color");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  accent: Color? = "red"
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Card = object {
+        \\  mode: Mode = "alpha"
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Mode");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Other = alpha | beta
+        \\type Card = object {
+        \\  mode: Mode = Other.alpha
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Mode");
+}
+
+test "compiler semantics: document page and selection properties are typed" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  docctx().math_align = Align.left
+        \\end
+        \\
+        \\page ok
+        \\  text(prop(docctx(), "math_align", "missing"))
+        \\  text("body")
+        \\  objs_here("body").wrap = WrapMode.off
+        \\end
+        \\
+    , "left");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  docctx().math_align = "left"
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects Align, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  text("body")
+        \\  objs_here("body").wrap = "off"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'wrap' expects WrapMode, got String");
 }
 
 test "compiler semantics: document math alignment helpers update the document setting" {
@@ -282,16 +1411,16 @@ test "compiler semantics: math alignment rejects unknown literals" {
         \\  body.math_align = "sideways"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects \"left\" | \"center\" | \"right\", got string");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects Align, got String");
 
     try expectDiagnostic(
         \\import std:themes/default
         \\
         \\page bad
-        \\  math_align(text("$$x^2$$"), "sideways")
+        \\  math_align(text("$$x^2$$"), Align.sideways)
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected \"left\" | \"center\" | \"right\", got String");
+    , "case.ss:bytes:", "UnknownEnumCase: enum 'Align' has no case 'sideways'");
 }
 
 test "compiler semantics: member sugar reads and writes properties and content" {
@@ -310,9 +1439,9 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\
         \\page ok
         \\  let target = text("styled")
-        \\  target.style = style("custom")
-        \\  if target.style?
-        \\    text(target.style ?? "missing")
+        \\  target.link_id = "custom"
+        \\  if target.link_id?
+        \\    text(target.link_id ?? "missing")
         \\  end
         \\end
         \\
@@ -972,6 +2101,95 @@ test "compiler semantics: object class mismatches report concrete type labels" {
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+}
+
+test "compiler semantics: object class optional and selection mismatches are rejected" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn bad_return(value: Body) -> Card
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn bad_optional_return(value: Card?) -> Card
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Card>?");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn bad_selection(items: Selection<Body>) -> Selection<Card>
+        \\  return items
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Selection<Object<Card>>, got Selection<Object<Body>>");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn keep_body(items: Selection<Body>) -> Selection<Body>
+        \\  return items
+        \\end
+        \\
+        \\fn first_card(items: Selection<Card>) -> Card
+        \\  return first(items)
+        \\end
+        \\
+        \\page bad
+        \\  text("body")
+        \\  first_card(keep_body(objs_here("body")))
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Selection<Object<Card>>, got Selection<Object<Body>>");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn take_card(value: Card?) -> Card?
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  take_card(new(pagectx(), "not a card", "body", "text"))
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>?, got Object<Body>");
 }
 
 test "compiler semantics: selection item class annotations resolve class names" {

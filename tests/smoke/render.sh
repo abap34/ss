@@ -45,12 +45,12 @@ fn main() void {
 }
 ```
 >>
-body.text_size = "12"
-body.text_line_height = "18"
-body.layout_font_size = "12"
-body.layout_line_height = "18"
-body.text_markdown_block_gap = "8"
-md_code(body, "16", "22", "12", "10", "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "8")
+body.text_size = 12
+body.text_line_height = 18
+body.layout_font_size = 12
+body.layout_line_height = 18
+body.text_markdown_block_gap = 8
+md_code(body, 16, 22, 12, 10, c"0.9725,0.9843,1", c"0.82,0.84,0.88", 1.0, 8)
 ~ body.top == title.bottom - 28
 ~ body.left == page.left + 110
 ~ body.width == 1120

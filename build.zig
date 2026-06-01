@@ -125,6 +125,10 @@ fn addTestStep(
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, null);
+    const type_defs_mod = createModule(ctx, "src/language/type_defs.zig", &.{}, null);
+    addModuleTest(ctx, test_step, "tests/language_type_defs_spec_tests.zig", &.{
+        import("type_defs", type_defs_mod),
+    }, null);
 
     const registry_mod = createModule(ctx, "src/language/registry.zig", &.{
         import("core", modules.core),

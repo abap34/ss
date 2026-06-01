@@ -138,7 +138,9 @@ pub fn ensureType(
 ) !void {
     if (Type.accepts(expected, actual.ty)) return;
     const expected_tag = expected.toValueTag() orelse actual.value_tag;
-    if (expected_tag != actual.value_tag) return ensureValueTag(ir, actual.value_tag, expected_tag, origin, code);
+    if (expected_tag != actual.value_tag and !needsStaticTypeLabel(expected, actual.ty)) {
+        return ensureValueTag(ir, actual.value_tag, expected_tag, origin, code);
+    }
     if (ir) |sink| {
         const actual_label = try typeLabelAlloc(allocator, actual.ty);
         defer allocator.free(actual_label);
@@ -150,4 +152,18 @@ pub fn ensureType(
         });
     }
     return error.InvalidValueTag;
+}
+
+fn needsStaticTypeLabel(expected: Type, actual: Type) bool {
+    return isSourceLevelRefinement(expected) or isSourceLevelRefinement(actual);
+}
+
+fn isSourceLevelRefinement(ty: Type) bool {
+    return switch (ty.tag) {
+        .color, .enum_type, .optional => true,
+        .object => ty.class_name != null,
+        .selection => ty.param_class_name != null,
+        .function => true,
+        else => false,
+    };
 }
