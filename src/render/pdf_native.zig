@@ -2061,9 +2061,9 @@ fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
 }
 
 fn displayMathTargetHeight(source: []const u8, text: TextPaint) f32 {
-    const visual_lines = @as(f32, @floatFromInt(mathVisualLineCount(source)));
-    const base = @max(@max(text.line_height, text.font_size * 1.35), visual_lines * text.line_height);
-    return base * text.display_math_height_factor;
+    const visual_lines = @as(f32, @floatFromInt(@max(mathVisualLineCount(source), 1)));
+    const line_height = @max(text.line_height, text.font_size * text.display_math_height_factor);
+    return visual_lines * line_height;
 }
 
 fn displayMathBlockHeight(source: []const u8, text: TextPaint) f32 {
