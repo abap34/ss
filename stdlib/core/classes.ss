@@ -18,6 +18,7 @@ type Doc = object {
   logo_scale: ScalarLike = "1"
   watermark: String = ""
   need_titles: String = ""
+  math_align: Align = "center"
 }
 
 type Page = object {
