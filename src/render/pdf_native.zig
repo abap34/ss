@@ -1825,7 +1825,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
     const table = block.table orelse return baseline_bl;
     const columns = @max(table.columns, 1);
     const column_width = width / @as(f32, @floatFromInt(columns));
-    var cursor_top_bl = baseline_bl + text.font_size + text.markdown_table_cell_pad_y;
+    var cursor_top_bl = baseline_bl + text.font_size - text.markdown_table_line_width * 0.5;
     var body_row_index: usize = 0;
 
     for (table.rows.items) |row| {
@@ -1880,7 +1880,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         }
         cursor_top_bl = row_bottom;
     }
-    return cursor_top_bl;
+    return cursor_top_bl - text.font_size;
 }
 
 fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
