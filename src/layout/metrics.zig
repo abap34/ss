@@ -367,7 +367,7 @@ fn displayMathRunLineCount(runs: []const markdown.Run) usize {
 
 fn displayMathBlockHeightForLines(style: TextStyle, visual_lines: usize, height_factor: f32) f32 {
     const line_count = @as(f32, @floatFromInt(@max(visual_lines, 1)));
-    const target_height = @max(@max(style.line_height, style.font_size * 1.35), line_count * style.line_height) * height_factor;
+    const target_height = line_count * @max(style.line_height, style.font_size * height_factor);
     return target_height + @max(style.line_height * 0.2, 2.0) * 2.0;
 }
 
