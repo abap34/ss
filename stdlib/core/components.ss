@@ -45,6 +45,7 @@ fn frame(text_value: String, role_name: String, payload_name: String, left: Stri
   flow(inner, left, right)
   let chrome = panel(style("custom"))
   box(chrome, fill_name, stroke_name, line_width_name, radius_name)
+  chrome.layout_spacing_after = "34"
   surround(chrome, inner, pad_x, pad_y)
   return inner
 end
@@ -84,7 +85,9 @@ end
 
 fn code_panel(text_value: String, language_name: String, panel_style_name: String, left: String, right: String, pad_x: Number, pad_y: Number) -> Object
   let code = code_in(text_value, language_name, left, right)
-  surround_s(panel_style_name, code, pad_x, pad_y)
+  let chrome = panel(style(panel_style_name))
+  chrome.layout_spacing_after = "34"
+  surround(chrome, code, pad_x, pad_y)
   return code
 end
 
@@ -92,6 +95,7 @@ fn code_box(text_value: String, language_name: String, left: String, right: Stri
   let code = code_in(text_value, language_name, left, right)
   let chrome = panel(style("custom"))
   box(chrome, fill_name, stroke_name, line_width_name, radius_name)
+  chrome.layout_spacing_after = "34"
   surround(chrome, code, pad_x, pad_y)
   return code
 end
