@@ -479,6 +479,21 @@ test "layout diagnostics: one-pixel text reports content overflow" {
     try testing.expect(found);
 }
 
+test "layout metrics use enlarged rendered text size" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
+    try ir.setNodeProperty(object, "layout_font_size", "20");
+    try ir.setNodeProperty(object, "layout_line_height", "28");
+    try ir.setNodeProperty(object, "text_size", "30");
+    try ir.setNodeProperty(object, "text_line_height", "45");
+
+    const node = ir.getNode(object).?;
+    try expectFloat(90, metrics.intrinsicHeight(&ir, node));
+}
+
 test "render policy: invalid numeric properties fall back before rendering" {
     var ir = try initEmptyIr();
     defer ir.deinit();

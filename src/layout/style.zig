@@ -35,8 +35,15 @@ pub fn parseNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?
 
 fn overrideTextStyleFromProperties(ir: anytype, node: *const Node, base: TextStyle) TextStyle {
     var style = base;
-    if (positiveNodeFloatProperty(ir, node, "layout_font_size") orelse positiveNodeFloatProperty(ir, node, "text_size")) |value| style.font_size = value;
-    if (positiveNodeFloatProperty(ir, node, "layout_line_height") orelse positiveNodeFloatProperty(ir, node, "text_line_height")) |value| style.line_height = value;
+    const text_size = positiveNodeFloatProperty(ir, node, "text_size");
+    const layout_font_size = positiveNodeFloatProperty(ir, node, "layout_font_size");
+    if (layout_font_size orelse text_size) |value| style.font_size = value;
+    if (text_size) |value| style.font_size = @max(style.font_size, value);
+
+    const text_line_height = positiveNodeFloatProperty(ir, node, "text_line_height");
+    const layout_line_height = positiveNodeFloatProperty(ir, node, "layout_line_height");
+    if (layout_line_height orelse text_line_height) |value| style.line_height = value;
+    if (text_line_height) |value| style.line_height = @max(style.line_height, value);
     if (nonNegativeNodeFloatProperty(ir, node, "layout_spacing_after")) |value| style.spacing_after = value;
     if (parseNodeFloatProperty(ir, node, "layout_x")) |value| style.default_x = value;
     if (nonNegativeNodeFloatProperty(ir, node, "layout_right_inset")) |value| style.default_right_inset = value;
