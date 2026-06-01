@@ -4,6 +4,25 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-01
+
+### Added
+
+- Added object class annotation coverage for ordinary values, selections,
+  default arguments, and unknown type diagnostics.
+
+### Changed
+
+- Renamed internal and dump value-kind terminology from semantic sort to value
+  tag.
+- Removed the residual `Code`, `Fragment`, and `List` type/value constructs
+  from the core type system and elaboration pipeline.
+
+### Fixed
+
+- Fixed enlarged text layout metrics so scaled text contributes its actual
+  bounds during layout.
+
 ## [0.1.10] - 2026-06-01
 
 ### Changed

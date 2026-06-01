@@ -1,6 +1,6 @@
 {
   "name": "tree-sitter-ss",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "description": "Tree-sitter grammar for the ss slide language.",
   "main": "grammar.js",
   "scripts": {
