@@ -33,7 +33,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v5";
+const page_pdf_cache_version = "ss-native-page-pdf-v8";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -1052,6 +1052,8 @@ fn drawRenderPage(ctx: *DrawContext, page: *const RenderPage) !void {
 fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
     drawObjectChrome(ctx.pdf, op.frame, op.render);
     const content_frame = contentFrameForRender(op.frame, op.render);
+    pushClipRect(ctx.pdf, content_frame);
+    defer popClip(ctx.pdf);
     switch (op.render.kind) {
         .text => if (op.render.text) |text| try drawTextOp(ctx, op, content_frame, text),
         .code => if (op.render.text) |text| {
@@ -1557,6 +1559,8 @@ fn clampWorkerCount(value: usize, task_count: usize) usize {
 fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, render: ResolvedRender) !void {
     drawObjectChrome(ctx.pdf, node.frame, render);
     const content_frame = contentFrameForRender(node.frame, render);
+    pushClipRect(ctx.pdf, content_frame);
+    defer popClip(ctx.pdf);
     switch (render.kind) {
         .text => if (render.text) |text| try drawTextNode(ctx, ir, node, content_frame, text),
         .code => if (render.text) |text| {
@@ -1569,6 +1573,14 @@ fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, r
         .vector_asset => try drawVectorAsset(ctx, content_frame, node.content orelse ""),
         .raster_asset => try drawRasterAsset(ctx, content_frame, node.content orelse ""),
     }
+}
+
+fn pushClipRect(pdf: *c.SsPdf, frame: Frame) void {
+    c.ss_pdf_push_clip_rect(pdf, frame.x, topOf(frame), frame.width, frame.height);
+}
+
+fn popClip(pdf: *c.SsPdf) void {
+    c.ss_pdf_pop_clip(pdf);
 }
 
 fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {

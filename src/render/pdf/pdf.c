@@ -152,6 +152,18 @@ void ss_pdf_fill_stroke_rounded_rect(
     }
 }
 
+void ss_pdf_push_clip_rect(SsPdf *pdf, double x, double y, double width, double height) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_save(pdf->cr);
+    cairo_rectangle(pdf->cr, x, y, width, height);
+    cairo_clip(pdf->cr);
+}
+
+void ss_pdf_pop_clip(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_restore(pdf->cr);
+}
+
 int ss_pdf_draw_text(
     SsPdf *pdf,
     double x,
