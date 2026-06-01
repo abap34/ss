@@ -2,8 +2,8 @@ import std:core/render
 import std:core/selectors
 
 fn pageno_s(page_no: Object) -> Object
-  txt(page_no, "Helvetica", "13", "16", "0.5,0.5,0.5", "0", "60", "24")
-  page_no.wrap = "off"
+  txt(page_no, "Helvetica", 13, 16, c"0.5,0.5,0.5", 0, 60, 24)
+  page_no.wrap = WrapMode.off
   fit_error(page_no)
   pin_r(page_no, 24)
   pin_b(page_no, 20)
@@ -15,7 +15,7 @@ fn pageno_obj() -> Object
 end
 
 fn pagenos(format: String = "") -> Void
-  docctx().pageno_on = "true"
+  docctx().pageno_on = true
   docctx().pageno_fmt = format
   mk_pagenos(docctx())
   set_pagenos(docctx())
@@ -38,7 +38,7 @@ fn watermark(text_value: String) -> Void
 end
 
 fn need_titles() -> Void
-  docctx().need_titles = "true"
+  docctx().need_titles = true
   chk_titles(docctx())
 end
 
@@ -88,8 +88,8 @@ end
 fn mk_footer(page_value: Page, doc: Document) -> Page
   if selection_empty(objs(page_value, "footer"))
     let footer = new(page_value, doc.footer_text ?? "", "footer", "text")
-    txt(footer, "Helvetica", "12", "15", "0.42,0.42,0.42", "0", "72", "160")
-    footer.wrap = "off"
+    txt(footer, "Helvetica", 12, 15, c"0.42,0.42,0.42", 0, 72, 160)
+    footer.wrap = WrapMode.off
     pin_l(footer, 72)
     pin_b(footer, 20)
   end
@@ -108,9 +108,9 @@ end
 fn mk_logo(page_value: Page, doc: Document) -> Page
   if selection_empty(objs(page_value, "logo"))
     let logo = new(page_value, doc.logo_path ?? "", "logo", "image_ref")
-    logo.render_kind = "raster_asset"
-    logo.asset_scale = doc.logo_scale ?? "1"
-    logo.wrap = "off"
+    logo.render_kind = RenderKind.raster_asset
+    logo.asset_scale = doc.logo_scale ?? 1
+    logo.wrap = WrapMode.off
     fix_w(logo, 96)
     fix_h(logo, 40)
     pin_r(logo, 72)
@@ -131,8 +131,8 @@ end
 fn mk_mark(page_value: Page, doc: Document) -> Page
   if selection_empty(objs(page_value, "watermark"))
     let mark = new(page_value, doc.watermark ?? "", "watermark", "text")
-    txt(mark, "Helvetica", "72", "80", "0.85,0.85,0.85", "0", "0", "0")
-    mark.wrap = "off"
+    txt(mark, "Helvetica", 72, 80, c"0.85,0.85,0.85", 0, 0, 0)
+    mark.wrap = WrapMode.off
     fix_w(mark, 800)
     fix_h(mark, 90)
     equal(anchor(mark, "center_x"), page_anchor("center_x"), 0)
@@ -143,7 +143,7 @@ end
 
 fn toc_obj() -> Object
   let toc = obj("", "toc", "text")
-  txt(toc, "Helvetica", "18", "24", "0,0,0.0353", "24", "96", "96")
+  txt(toc, "Helvetica", 18, 24, c"0,0,0.0353", 24, 96, 96)
   set_toc(toc, docctx())
   return toc
 end
