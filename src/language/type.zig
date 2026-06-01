@@ -6,7 +6,10 @@ pub const Type = struct {
     param: Tag = .none,
     class_name: ?[]const u8 = null,
     param_class_name: ?[]const u8 = null,
-    fn_params: []const Type = &.{},
+    value_domain_name: ?[]const u8 = null,
+    value_domain_body: ?[]const u8 = null,
+    value_domain_tag: ?model.ValueTag = null,
+    fn_params: []Type = &.{},
     fn_result: ?*Type = null,
 
     pub const Tag = enum {
@@ -24,6 +27,7 @@ pub const Type = struct {
         number,
         boolean,
         constraints,
+        value_domain,
         void,
     };
 
@@ -41,6 +45,10 @@ pub const Type = struct {
 
     pub fn objectClass(name: []const u8) Type {
         return .{ .tag = .object, .class_name = name };
+    }
+
+    pub fn valueDomain(name: []const u8, body: []const u8, value_tag: model.ValueTag) Type {
+        return .{ .tag = .value_domain, .value_domain_name = name, .value_domain_body = body, .value_domain_tag = value_tag };
     }
 
     pub fn selection(item: Tag) Type {
@@ -129,6 +137,7 @@ pub const Type = struct {
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
+            .value_domain => self.value_domain_tag,
             .void => .void,
             .none, .any => null,
         };
@@ -150,11 +159,24 @@ pub const Type = struct {
         }
         return normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
-            optionalStringEql(a.param_class_name, b.param_class_name);
+            optionalStringEql(a.param_class_name, b.param_class_name) and
+            optionalStringEql(a.value_domain_name, b.value_domain_name) and
+            optionalStringEql(a.value_domain_body, b.value_domain_body) and
+            a.value_domain_tag == b.value_domain_tag;
     }
 
     pub fn accepts(expected: Type, actual: Type) bool {
         if (expected.tag == .any or actual.tag == .any) return true;
+        if (expected.tag == .value_domain) {
+            const expected_tag = expected.toValueTag() orelse return true;
+            const actual_tag = actual.toValueTag() orelse return false;
+            return expected_tag == actual_tag;
+        }
+        if (actual.tag == .value_domain) {
+            const expected_tag = expected.toValueTag() orelse return false;
+            const actual_tag = actual.toValueTag() orelse return false;
+            return expected_tag == actual_tag;
+        }
         if (expected.tag != actual.tag) return false;
         if (expected.tag == .function) {
             if (expected.fn_result == null or actual.fn_result == null) return false;
@@ -253,6 +275,10 @@ pub const Type = struct {
                 try out.appendSlice(allocator, " -> ");
                 try self.fn_result.?.formatInto(allocator, out);
             },
+            .value_domain => if (self.value_domain_name) |name|
+                try out.appendSlice(allocator, name)
+            else
+                try out.appendSlice(allocator, displayName(self.tag)),
             else => try out.appendSlice(allocator, displayName(self.tag)),
         }
     }
@@ -277,6 +303,7 @@ pub const Type = struct {
             .number => "Number",
             .boolean => "Bool",
             .constraints => "Constraints",
+            .value_domain => "ValueDomain",
             .void => "Void",
         };
     }

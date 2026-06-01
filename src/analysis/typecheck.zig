@@ -10,6 +10,7 @@ const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
 const registry = @import("../language/registry.zig");
+const value_domains = @import("../language/value_domains.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
 const utils = @import("utils");
@@ -102,6 +103,8 @@ pub fn typecheckProgram(
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
+    try resolveValueDomainTypeAnnotations(allocator, ir, &sema);
+    try rebuildFunctionDeclarations(allocator, ir);
     try checkDuplicateFunctionDeclarations(allocator, ir);
     try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checkTypeAnnotations(allocator, ir, &sema);
@@ -128,22 +131,155 @@ fn checkTypeAnnotations(
             const origin = try originForModuleSpan(allocator, origin_path, func.span);
             defer allocator.free(origin);
             for (func.params.items) |param| {
-                try checkTypeAnnotation(ir, sema, param.ty, origin);
+                try checkTypeAnnotation(ir, sema, module_id, param.ty, origin);
                 if (param.default_value) |default_value| {
-                    try checkExprTypeAnnotations(allocator, ir, sema, origin_path, default_value.*);
+                    try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, default_value.*);
                 }
             }
-            try checkTypeAnnotation(ir, sema, func.result_type, origin);
+            try checkTypeAnnotation(ir, sema, module_id, func.result_type, origin);
         }
 
         for (module.program.document_statements.items) |stmt| {
-            try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, stmt);
+            try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt);
         }
         for (module.program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, stmt);
+                try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt);
             }
         }
+    }
+}
+
+fn resolveValueDomainTypeAnnotations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+) !void {
+    _ = allocator;
+    for (ir.modules.items) |*module| {
+        try resolveProgramValueDomainTypes(&module.program, module.id, sema);
+    }
+}
+
+fn resolveProgramValueDomainTypes(
+    program: *ast.Program,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+) !void {
+    for (program.functions.items) |*func| {
+        try resolveFunctionValueDomainTypes(func, module_id, sema);
+    }
+    for (program.document_statements.items) |*stmt| {
+        try resolveStatementValueDomainTypes(stmt, module_id, sema);
+    }
+    for (program.pages.items) |*page| {
+        for (page.statements.items) |*stmt| {
+            try resolveStatementValueDomainTypes(stmt, module_id, sema);
+        }
+    }
+}
+
+fn resolveFunctionValueDomainTypes(
+    func: *ast.FunctionDecl,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+) !void {
+    for (func.params.items) |*param| {
+        try resolveParamValueDomainType(param, module_id, sema);
+        if (param.default_value) |default_value| try resolveExprValueDomainTypes(default_value, module_id, sema);
+    }
+    try resolveTypeValueDomain(&func.result_type, module_id, sema);
+    func.result_tag = func.result_type.toValueTag() orelse func.result_tag;
+    for (func.statements.items) |*stmt| {
+        try resolveStatementValueDomainTypes(stmt, module_id, sema);
+    }
+}
+
+fn resolveStatementValueDomainTypes(
+    stmt: *ast.Statement,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+) !void {
+    switch (stmt.kind) {
+        .let_binding => |*binding| try resolveExprValueDomainTypes(&binding.expr, module_id, sema),
+        .return_expr => |*expr| try resolveExprValueDomainTypes(expr, module_id, sema),
+        .return_void => {},
+        .constrain => |*constraint| {
+            if (constraint.offset) |*offset| try resolveExprValueDomainTypes(offset, module_id, sema);
+        },
+        .property_set => |*property_set| try resolveExprValueDomainTypes(&property_set.value, module_id, sema),
+        .if_stmt => |*if_stmt| {
+            try resolveExprValueDomainTypes(&if_stmt.condition, module_id, sema);
+            for (if_stmt.then_statements.items) |*nested| try resolveStatementValueDomainTypes(nested, module_id, sema);
+            for (if_stmt.else_statements.items) |*nested| try resolveStatementValueDomainTypes(nested, module_id, sema);
+        },
+        .expr_stmt => |*expr| try resolveExprValueDomainTypes(expr, module_id, sema),
+    }
+}
+
+fn resolveExprValueDomainTypes(
+    expr: *ast.Expr,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+) !void {
+    switch (expr.*) {
+        .ident, .string, .number, .boolean => {},
+        .call => |*call| {
+            for (call.args.items) |*arg| try resolveExprValueDomainTypes(arg, module_id, sema);
+        },
+        .apply => |*apply| {
+            try resolveExprValueDomainTypes(apply.callee, module_id, sema);
+            for (apply.args.items) |*arg| try resolveExprValueDomainTypes(arg, module_id, sema);
+        },
+        .lambda => |*lambda| {
+            for (lambda.params.items) |*param| try resolveParamValueDomainType(param, module_id, sema);
+            try resolveExprValueDomainTypes(lambda.body, module_id, sema);
+        },
+    }
+}
+
+fn resolveParamValueDomainType(
+    param: *ast.ParamDecl,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+) !void {
+    try resolveTypeValueDomain(&param.ty, module_id, sema);
+    param.value_tag = param.ty.toValueTag() orelse param.value_tag;
+}
+
+fn resolveTypeValueDomain(
+    ty: *ast.Type,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+) !void {
+    switch (ty.tag) {
+        .object => if (ty.class_name) |name| {
+            if (!sema.classExists(name)) {
+                if (sema.declaredValueDomain(module_id, name)) |domain| {
+                    if (value_domains.runtimeValueTag(domain)) |value_tag| {
+                        ty.* = ast.Type.valueDomain(name, domain.body, value_tag);
+                    }
+                }
+            }
+        },
+        .function => {
+            for (ty.fn_params) |*param| try resolveTypeValueDomain(param, module_id, sema);
+            if (ty.fn_result) |result| try resolveTypeValueDomain(result, module_id, sema);
+        },
+        else => {},
+    }
+}
+
+fn rebuildFunctionDeclarations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+) !void {
+    _ = allocator;
+    ir.functions.clearRetainingCapacity();
+    ir.function_metadata.clearRetainingCapacity();
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        try appendFunctionDeclarations(&ir.functions, &ir.function_metadata, module.program, module.id);
     }
 }
 
@@ -151,22 +287,23 @@ fn checkStatementTypeAnnotations(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
     origin_path: []const u8,
     stmt: ast.Statement,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, binding.expr),
-        .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, expr),
+        .let_binding => |binding| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, binding.expr),
+        .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
         .return_void => {},
-        .property_set => |property_set| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, property_set.value),
+        .property_set => |property_set| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.value),
         .if_stmt => |if_stmt| {
-            try checkExprTypeAnnotations(allocator, ir, sema, origin_path, if_stmt.condition);
-            for (if_stmt.then_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, nested);
-            for (if_stmt.else_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, origin_path, nested);
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, if_stmt.condition);
+            for (if_stmt.then_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested);
+            for (if_stmt.else_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested);
         },
-        .expr_stmt => |expr| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, expr),
+        .expr_stmt => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
         .constrain => |constraint| {
-            if (constraint.offset) |expr| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, expr);
+            if (constraint.offset) |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr);
         },
     }
 }
@@ -175,25 +312,26 @@ fn checkExprTypeAnnotations(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
     origin_path: []const u8,
     expr: ast.Expr,
 ) !void {
     switch (expr) {
         .ident, .string, .number, .boolean => {},
         .call => |call| {
-            for (call.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, arg);
+            for (call.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg);
         },
         .apply => |apply| {
-            try checkExprTypeAnnotations(allocator, ir, sema, origin_path, apply.callee.*);
-            for (apply.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, origin_path, arg);
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, apply.callee.*);
+            for (apply.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg);
         },
         .lambda => |lambda| {
             const origin = try originForModuleSpan(allocator, origin_path, lambda.span);
             defer allocator.free(origin);
             for (lambda.params.items) |param| {
-                try checkTypeAnnotation(ir, sema, param.ty, origin);
+                try checkTypeAnnotation(ir, sema, module_id, param.ty, origin);
             }
-            try checkExprTypeAnnotations(allocator, ir, sema, origin_path, lambda.body.*);
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, lambda.body.*);
         },
     }
 }
@@ -201,24 +339,39 @@ fn checkExprTypeAnnotations(
 fn checkTypeAnnotation(
     ir: *core.Ir,
     sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
     ty: ast.Type,
     origin: []const u8,
 ) !void {
+    if (ty.tag == .value_domain) return;
     if (ty.class_name) |class_name| {
-        if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
+        if (!sema.classExists(class_name)) {
+            if (sema.declaredValueDomain(module_id, class_name)) |domain| {
+                if (value_domains.runtimeValueTag(domain) == null) return reportUnsupportedValueDomainType(ir, origin, class_name);
+                return;
+            }
+            return reportUnknownType(ir, origin, class_name);
+        }
     }
     if (ty.param_class_name) |class_name| {
         if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
     }
     if (ty.tag == .function) {
-        for (ty.fn_params) |param| try checkTypeAnnotation(ir, sema, param, origin);
-        if (ty.fn_result) |result| try checkTypeAnnotation(ir, sema, result.*, origin);
+        for (ty.fn_params) |param| try checkTypeAnnotation(ir, sema, module_id, param, origin);
+        if (ty.fn_result) |result| try checkTypeAnnotation(ir, sema, module_id, result.*, origin);
     }
 }
 
 fn reportUnknownType(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnknownType: unknown type: {s}", .{type_name}) },
+    });
+    return error.UnknownType;
+}
+
+fn reportUnsupportedValueDomainType(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnsupportedType: value domain cannot be used as a function type: {s}", .{type_name}) },
     });
     return error.UnknownType;
 }
@@ -587,6 +740,13 @@ pub fn buildIrWithOptions(
     index.modules = .empty;
     if (ir.module_order.items.len == 0 or ir.module_order.items[ir.module_order.items.len - 1] != ir.project_module_id) {
         try ir.module_order.append(allocator, ir.project_module_id);
+    }
+    {
+        var declaration_index = try declarations.build(allocator, &ir);
+        defer declaration_index.deinit();
+        const sema = SemanticEnv.init(&ir, &declaration_index, &ir.functions);
+        try resolveValueDomainTypeAnnotations(allocator, &ir, &sema);
+        try rebuildFunctionDeclarations(allocator, &ir);
     }
     ir.variable_types = collectVariableTypesFromProgramWithDiagnostics(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {
         if (!options.allow_diagnostics) {

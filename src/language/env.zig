@@ -103,7 +103,14 @@ pub const SemanticEnv = struct {
     ) ?value_domains.ValueType {
         if (value_domains.parse(name)) |value_type| return value_type;
         if (value_domains.resolveDeclaration("", name)) |value_type| return value_type;
+        return self.declaredValueDomain(module_id, name);
+    }
 
+    pub fn declaredValueDomain(
+        self: *const SemanticEnv,
+        module_id: core.SourceModuleId,
+        name: []const u8,
+    ) ?value_domains.ValueType {
         if (self.declarations) |index| {
             if (resolveValueDomainInModule(index, module_id, name)) |value_type| return value_type;
             if (self.ir) |ir| {
@@ -126,7 +133,7 @@ pub const SemanticEnv = struct {
             return null;
         }
 
-        if (self.ir) |ir| return value_domains.resolve(ir, module_id, name);
+        if (self.ir) |ir| return value_domains.resolveDeclared(ir, module_id, name);
         return null;
     }
 
