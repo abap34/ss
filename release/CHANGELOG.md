@@ -4,6 +4,24 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-06-01
+
+### Changed
+
+- Simplified the default theme and increased the default vertical spacing used
+  by flow, body, code, math, figures, and framed components.
+- Centered Markdown display math blocks and made their layout and rendering use
+  the same font-size-based height target.
+
+### Fixed
+
+- Accounted for chrome padding when computing group bounds.
+- Clipped rendered PDF object contents to their frames.
+- Preserved code block indentation and aligned code block drawing with its
+  measured frame.
+- Fixed Markdown table block placement so header rows are not clipped and
+  following paragraphs start below the table.
+
 ## [0.1.9] - 2026-05-31
 
 ### Changed
