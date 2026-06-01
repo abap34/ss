@@ -44,6 +44,17 @@ fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expec
     try compiler_semantics.expectOverlayDiagnostic(testing.io, allocator, path, source, overlay_path, overlay_source, expected_origin, expected_message);
 }
 
+fn expectDiagnostic(source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, expected_message);
+}
+
 test "compiler semantics: imported function return inference diagnostics keep callee origin" {
     try expectOverlayDiagnostic(
         \\import "lib/bad.ss"
@@ -826,4 +837,101 @@ test "compiler semantics: duplicate object classes are rejected" {
         \\end
         \\
     );
+}
+
+test "compiler semantics: user object class names can be used as annotations" {
+    try buildSource(
+        \\type Card = object {
+        \\}
+        \\
+        \\fn keep(value: Card) -> Card
+        \\  return value
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: object class annotations are checked through selections" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn first_card(items: Selection<Card>) -> Card
+        \\  return first(items)
+        \\end
+        \\
+        \\page ok
+        \\  obj("A", "card", "text")
+        \\  let card_obj = first_card(objs_here("card"))
+        \\  text(content(card_obj))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: object class mismatches report concrete type labels" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn keep_card(value: Card) -> Card
+        \\  return value
+        \\end
+        \\
+        \\page bad
+        \\  keep_card(new(pagectx(), "not a card", "body", "text"))
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
+}
+
+test "compiler semantics: selection item class annotations resolve class names" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn count_missing(items: Selection<Missing>) -> Number
+        \\  return selection_count(items)
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownType: unknown type: Missing");
+}
+
+test "compiler semantics: default argument expressions are checked for nested type annotations" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn label(callback: Card -> String = (item: Missing) |-> "missing") -> String
+        \\  return "ok"
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownType: unknown type: Missing");
+}
+
+test "compiler semantics: unknown annotation types report UnknownType" {
+    try expectDiagnostic(
+        \\const bad: string = "x"
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownType: unknown type: string");
 }
