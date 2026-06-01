@@ -20,6 +20,7 @@ const MathPaint = core.render_policy.MathPaint;
 const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
 const Block = core.markdown.Block;
+const Run = core.markdown.Run;
 
 const NativePdfError = error{
     CairoCreateFailed,
@@ -583,6 +584,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashF32(hasher, text.link_underline_offset);
         hashF32(hasher, text.inline_math_height_factor);
         hashF32(hasher, text.inline_math_spacing);
+        hashF32(hasher, text.display_math_height_factor);
         hashF32(hasher, text.emoji_spacing);
         hashF32(hasher, text.markdown_block_gap);
         hashF32(hasher, text.markdown_list_inset);
@@ -801,18 +803,36 @@ fn collectLinePreloadsForPlan(
     page_deps: *std.ArrayList(usize),
 ) !void {
     for (lines) |line| {
-        for (line.runs.items) |run| {
+        const runs = line.runs.items;
+        var index: usize = 0;
+        while (index < runs.len) {
+            const run = runs[index];
             switch (run.kind) {
-                .math, .display_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                .display_math => {
+                    const start = index;
+                    while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
+                    const source = try displayMathSource(ctx.allocator, runs[start..index]);
+                    defer ctx.allocator.free(source);
+                    if (source.len > 0) {
+                        try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                            .source = try ctx.allocator.dupe(u8, source),
+                            .packages = try clonePackageSlice(ctx.allocator, packages),
+                            .kind = .display,
+                        } });
+                    }
+                    continue;
+                },
+                .math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, run.text),
                     .packages = try clonePackageSlice(ctx.allocator, packages),
-                    .kind = if (run.kind == .display_math) .display else .inline_math,
+                    .kind = .inline_math,
                 } }),
                 .icon => if (run.icon) |source| try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{
                     .icon = try ctx.allocator.dupe(u8, source),
                 }),
                 else => {},
             }
+            index += 1;
         }
     }
 }
@@ -1221,9 +1241,26 @@ fn collectLinePreloads(
     seen: *std.StringHashMap(void),
 ) !void {
     for (lines) |line| {
-        for (line.runs.items) |run| {
+        const runs = line.runs.items;
+        var index: usize = 0;
+        while (index < runs.len) {
+            const run = runs[index];
             switch (run.kind) {
-                .math, .display_math => try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
+                .display_math => {
+                    const start = index;
+                    while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
+                    const source = try displayMathSource(ctx.allocator, runs[start..index]);
+                    defer ctx.allocator.free(source);
+                    if (source.len > 0) {
+                        try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
+                            .source = try ctx.allocator.dupe(u8, source),
+                            .packages = try clonePackageSlice(ctx.allocator, packages),
+                            .kind = .display,
+                        } });
+                    }
+                    continue;
+                },
+                .math => try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, run.text),
                     .packages = try clonePackageSlice(ctx.allocator, packages),
                     .kind = .inline_math,
@@ -1233,6 +1270,7 @@ fn collectLinePreloads(
                 }),
                 else => {},
             }
+            index += 1;
         }
     }
 }
@@ -1855,6 +1893,9 @@ fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, text
 }
 
 fn markdownTableLineVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+    if (lineContainsDisplayMath(line)) {
+        return try lineWithDisplayMathVisualLineCount(ctx, line, text, max_width, packages);
+    }
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
@@ -1865,6 +1906,10 @@ fn markdownTableLineVisualLineCount(ctx: *DrawContext, line: Line, text: TextPai
 fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
     var cursor_bl = baseline_bl;
     for (lines) |line| {
+        if (lineContainsDisplayMath(line)) {
+            cursor_bl = try drawLineWithDisplayMath(ctx, x, cursor_bl, width, line, text, wrap, packages);
+            continue;
+        }
         var atoms = std.ArrayList(Atom).empty;
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
@@ -1876,7 +1921,11 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
 }
 
 fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, packages: []const []const u8, atoms: *std.ArrayList(Atom)) !void {
-    for (line.runs.items) |run| {
+    try layoutRunAtoms(ctx, line.runs.items, text, packages, atoms);
+}
+
+fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, packages: []const []const u8, atoms: *std.ArrayList(Atom)) !void {
+    for (runs) |run| {
         switch (run.kind) {
             .math, .display_math => {
                 try appendMathAtom(ctx, atoms, run.text, text, packages, if (run.kind == .display_math) .display else .inline_math);
@@ -1889,6 +1938,136 @@ fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, packages: []const
             .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size),
         }
     }
+}
+
+fn lineContainsDisplayMath(line: Line) bool {
+    for (line.runs.items) |run| {
+        if (run.kind == .display_math) return true;
+    }
+    return false;
+}
+
+fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
+    const runs = line.runs.items;
+    var cursor_bl = baseline_bl;
+    var segment_start: usize = 0;
+    var index: usize = 0;
+    while (index < runs.len) {
+        if (runs[index].kind != .display_math) {
+            index += 1;
+            continue;
+        }
+
+        if (segment_start < index) {
+            cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, packages);
+        }
+
+        const display_start = index;
+        while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
+        const source = try displayMathSource(ctx.allocator, runs[display_start..index]);
+        defer ctx.allocator.free(source);
+        if (source.len > 0) {
+            cursor_bl = try drawDisplayMathBlock(ctx, x, cursor_bl, width, source, text, packages);
+        }
+        segment_start = index;
+    }
+
+    if (segment_start < runs.len) {
+        cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, packages);
+    }
+    return cursor_bl;
+}
+
+fn drawInlineRunSlice(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
+    var atoms = std.ArrayList(Atom).empty;
+    defer atoms.deinit(ctx.allocator);
+    defer freeAtoms(ctx.allocator, atoms.items);
+    try layoutRunAtoms(ctx, runs, text, packages, &atoms);
+    if (atoms.items.len == 0) return baseline_bl;
+    return try drawAtoms(ctx, x, baseline_bl, width, atoms.items, atomPaint(text), wrap);
+}
+
+fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, packages: []const []const u8) !f32 {
+    const svg = try renderMathToSvg(ctx, source, packages, .display);
+    defer ctx.allocator.free(svg.path);
+
+    const block_height = displayMathBlockHeight(source, text);
+    const target_height = displayMathTargetHeight(source, text);
+    const scale = if (svg.width > 0 and svg.height > 0)
+        @min(width / svg.width, target_height / svg.height)
+    else
+        1;
+    const fitted = Size{
+        .width = @max(svg.width * scale, 1),
+        .height = @max(svg.height * scale, 1),
+    };
+    const block_top = baseline_bl + text.font_size;
+    const block_bottom = block_top - block_height;
+    const draw_frame = Frame{
+        .x = x + @max((width - fitted.width) / 2, 0),
+        .y = block_bottom + @max((block_height - fitted.height) / 2, 0),
+        .width = fitted.width,
+        .height = fitted.height,
+    };
+    try drawSvgFrameTinted(ctx, draw_frame, svg.path, text.color);
+    return block_bottom - text.font_size;
+}
+
+fn lineWithDisplayMathVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+    const runs = line.runs.items;
+    var total: usize = 0;
+    var segment_start: usize = 0;
+    var index: usize = 0;
+    while (index < runs.len) {
+        if (runs[index].kind != .display_math) {
+            index += 1;
+            continue;
+        }
+        if (segment_start < index) {
+            total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..index], text, max_width, packages);
+        }
+        const display_start = index;
+        while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
+        const source = try displayMathSource(ctx.allocator, runs[display_start..index]);
+        defer ctx.allocator.free(source);
+        if (source.len > 0) {
+            total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(displayMathBlockHeight(source, text) / @max(text.line_height, 1)))));
+        }
+        segment_start = index;
+    }
+    if (segment_start < runs.len) {
+        total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..], text, max_width, packages);
+    }
+    return @max(total, 1);
+}
+
+fn inlineRunSliceVisualLineCount(ctx: *DrawContext, runs: []const Run, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+    var atoms = std.ArrayList(Atom).empty;
+    defer atoms.deinit(ctx.allocator);
+    defer freeAtoms(ctx.allocator, atoms.items);
+    try layoutRunAtoms(ctx, runs, text, packages, &atoms);
+    if (atoms.items.len == 0) return 0;
+    return atomVisualLineCount(atoms.items, atomPaint(text), max_width);
+}
+
+fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
+    var joined = std.ArrayList(u8).empty;
+    defer joined.deinit(allocator);
+    for (runs) |run| {
+        try joined.appendSlice(allocator, run.text);
+    }
+    const trimmed = std.mem.trim(u8, joined.items, " \t\r\n");
+    return allocator.dupe(u8, trimmed);
+}
+
+fn displayMathTargetHeight(source: []const u8, text: TextPaint) f32 {
+    const visual_lines = @as(f32, @floatFromInt(mathVisualLineCount(source)));
+    const base = @max(@max(text.line_height, text.font_size * 1.35), visual_lines * text.line_height);
+    return base * text.display_math_height_factor;
+}
+
+fn displayMathBlockHeight(source: []const u8, text: TextPaint) f32 {
+    return displayMathTargetHeight(source, text) + @max(text.line_height * 0.2, 2.0) * 2.0;
 }
 
 fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
@@ -2211,7 +2390,7 @@ fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, content, math);
     const draw_frame = Frame{
-        .x = frame.x,
+        .x = frame.x + @max((frame.width - fitted.width) / 2, 0),
         .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
@@ -2225,7 +2404,7 @@ fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: 
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
     const draw_frame = Frame{
-        .x = frame.x,
+        .x = frame.x + @max((frame.width - fitted.width) / 2, 0),
         .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
         .width = fitted.width,
         .height = fitted.height,
