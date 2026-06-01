@@ -205,7 +205,7 @@ pub const Analyzer = struct {
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
-            .ident, .string, .number, .boolean => AccessSummary.init(self.allocator),
+            .ident, .string, .color, .number, .boolean, .none => AccessSummary.init(self.allocator),
             .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
             .apply => |apply| blk: {
                 var summary = try self.analyzeExpr(apply.callee.*);
@@ -215,6 +215,21 @@ pub const Analyzer = struct {
                     defer nested.deinit();
                     try summary.merge(nested);
                 }
+                break :blk summary;
+            },
+            .member => |member| blk: {
+                var summary = try self.analyzeExpr(member.target.*);
+                errdefer summary.deinit();
+                try summary.addRead(Resource.property(member.name));
+                break :blk summary;
+            },
+            .optional_check => |check| try self.analyzeExpr(check.target.*),
+            .coalesce => |coalesce| blk: {
+                var summary = try self.analyzeExpr(coalesce.target.*);
+                errdefer summary.deinit();
+                var fallback = try self.analyzeExpr(coalesce.fallback.*);
+                defer fallback.deinit();
+                try summary.merge(fallback);
                 break :blk summary;
             },
             .call => |call| try self.analyzeCall(call),
@@ -443,6 +458,7 @@ fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) ?[]const 
 fn literalStringExpr(self: *Analyzer, expr: ast.Expr) ?[]const u8 {
     return switch (expr) {
         .string => |value| value,
+        .color => |value| value,
         .ident => |name| self.string_bindings.get(name),
         else => null,
     };

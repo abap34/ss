@@ -247,6 +247,10 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "string");
             try object.stringField("value", text);
         },
+        .color => |text| {
+            try object.stringField("exprKind", "color");
+            try object.stringField("value", text);
+        },
         .number => |number| {
             try object.stringField("exprKind", "number");
             try object.floatField("value", number, "{d:.4}");
@@ -254,6 +258,9 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         .boolean => |boolean| {
             try object.stringField("exprKind", "boolean");
             try object.boolField("value", boolean);
+        },
+        .none => {
+            try object.stringField("exprKind", "none");
         },
         .call => |call| {
             try object.stringField("exprKind", "call");
@@ -268,6 +275,16 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         .lambda => |lambda| {
             try object.stringField("exprKind", "lambda");
             try object.intField("paramCount", lambda.params.items.len);
+        },
+        .member => |member| {
+            try object.stringField("exprKind", "member");
+            try object.stringField("name", member.name);
+        },
+        .optional_check => {
+            try object.stringField("exprKind", "optional_check");
+        },
+        .coalesce => {
+            try object.stringField("exprKind", "coalesce");
         },
     }
 }
@@ -359,6 +376,10 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             try item.stringField("kind", "string");
             try item.stringField("value", text);
         },
+        .color => |text| {
+            try item.stringField("kind", "color");
+            try item.stringField("value", text);
+        },
         .number => |value| {
             try item.stringField("kind", "number");
             try item.floatField("value", value, "{d:.4}");
@@ -366,6 +387,9 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
         .boolean => |value| {
             try item.stringField("kind", "boolean");
             try item.boolField("value", value);
+        },
+        .none => {
+            try item.stringField("kind", "none");
         },
         .call => |call| {
             try item.stringField("kind", "call");
@@ -394,6 +418,20 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             }
             try params.end();
             try writeExpr(allocator, item, "body", lambda.body.*);
+        },
+        .member => |member| {
+            try item.stringField("kind", "member");
+            try item.stringField("name", member.name);
+            try writeExpr(allocator, item, "target", member.target.*);
+        },
+        .optional_check => |check| {
+            try item.stringField("kind", "optional_check");
+            try writeExpr(allocator, item, "target", check.target.*);
+        },
+        .coalesce => |coalesce| {
+            try item.stringField("kind", "coalesce");
+            try writeExpr(allocator, item, "target", coalesce.target.*);
+            try writeExpr(allocator, item, "fallback", coalesce.fallback.*);
         },
     }
 }

@@ -412,6 +412,18 @@ pub const Ir = struct {
         });
     }
 
+    pub fn unsetNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.properties.items, 0..) |property, index| {
+            if (std.mem.eql(u8, property.key, key)) {
+                self.allocator.free(property.key);
+                self.allocator.free(property.value);
+                _ = node.properties.orderedRemove(index);
+                return;
+            }
+        }
+    }
+
     pub fn extendRenderEnv(self: *Ir, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.render_env.items) |entry| {
@@ -703,6 +715,7 @@ pub const Ir = struct {
     fn ensureValueTag(self: *Ir, value: Value, expected: ValueTag, context: []const u8) !void {
         _ = self;
         const actual: ValueTag = switch (value) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,

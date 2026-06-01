@@ -11,6 +11,7 @@ pub const FunctionContract = struct {
 
 pub fn valueTag(value: core.Value) core.ValueTag {
     return switch (value) {
+        .none => .none,
         .document => .document,
         .page => .page,
         .object => .object,
@@ -52,6 +53,50 @@ pub fn ensureValueTypeWithCode(
         });
         return error.InvalidValueTag;
     }
+}
+
+pub fn ensureValueConformsToType(
+    ir: anytype,
+    page_id: ?core.NodeId,
+    value: core.Value,
+    expected: ast.Type,
+    origin: []const u8,
+    code: core.TypeMismatchCode,
+) !void {
+    if (valueConformsToType(value, expected)) return;
+
+    const actual = valueTag(value);
+    if (expected.toValueTag()) |expected_tag| {
+        try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
+            .type_mismatch = .{ .code = code, .expected = expected_tag, .actual = actual },
+        });
+    } else {
+        try ir.addValidationDiagnostic(.@"error", page_id, null, origin, .{
+            .user_report = .{
+                .message = try std.fmt.allocPrint(
+                    ir.allocator,
+                    "TypeMismatch: expected {s}, got {s}",
+                    .{ expectedRuntimeLabel(expected), @tagName(actual) },
+                ),
+            },
+        });
+    }
+    return error.InvalidValueTag;
+}
+
+pub fn valueConformsToType(value: core.Value, expected: ast.Type) bool {
+    if (expected.tag == .any) return true;
+    if (expected.tag == .optional) {
+        if (valueTag(value) == .none) return true;
+        const child = expected.optional_child orelse return false;
+        return valueConformsToType(value, child.*);
+    }
+    const expected_tag = expected.toValueTag() orelse return false;
+    return valueTag(value) == expected_tag;
+}
+
+fn expectedRuntimeLabel(expected: ast.Type) []const u8 {
+    return expected.label();
 }
 
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {

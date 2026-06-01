@@ -244,6 +244,38 @@ pub const LambdaExpr = struct {
     }
 };
 
+pub const MemberExpr = struct {
+    target: *Expr,
+    name: []const u8,
+
+    pub fn deinit(self: *MemberExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+        allocator.free(self.name);
+    }
+};
+
+pub const OptionalCheckExpr = struct {
+    target: *Expr,
+
+    pub fn deinit(self: *OptionalCheckExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+    }
+};
+
+pub const CoalesceExpr = struct {
+    target: *Expr,
+    fallback: *Expr,
+
+    pub fn deinit(self: *CoalesceExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+        self.fallback.deinit(allocator);
+        allocator.destroy(self.fallback);
+    }
+};
+
 pub const Span = struct {
     start: usize,
     end: usize,
@@ -252,17 +284,26 @@ pub const Span = struct {
 pub const Expr = union(enum) {
     ident: []const u8,
     string: []const u8,
+    color: []const u8,
     number: f32,
     boolean: bool,
+    none,
     call: CallExpr,
     apply: ApplyExpr,
     lambda: LambdaExpr,
+    member: MemberExpr,
+    optional_check: OptionalCheckExpr,
+    coalesce: CoalesceExpr,
 
     pub fn deinit(self: *Expr, allocator: Allocator) void {
         switch (self.*) {
+            .ident, .string, .color => |text| allocator.free(text),
             .call => |*call| call.deinit(allocator),
             .apply => |*apply| apply.deinit(allocator),
             .lambda => |*lambda| lambda.deinit(allocator),
+            .member => |*member| member.deinit(allocator),
+            .optional_check => |*check| check.deinit(allocator),
+            .coalesce => |*coalesce| coalesce.deinit(allocator),
             else => {},
         }
     }

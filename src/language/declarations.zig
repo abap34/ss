@@ -48,16 +48,15 @@ pub const RenderOpDescriptor = struct {
     module_id: core.SourceModuleId,
 };
 
-pub const ValueDomainDescriptor = struct {
+pub const TypeDescriptor = struct {
     name: []const u8,
     body: []const u8,
-    refinement: ?[]const u8,
     module_id: core.SourceModuleId,
 };
 
 pub const DeclarationIndex = struct {
     allocator: std.mem.Allocator,
-    value_domains: std.ArrayList(ValueDomainDescriptor),
+    types: std.ArrayList(TypeDescriptor),
     classes: std.ArrayList(ClassDescriptor),
     roles: std.ArrayList(RoleDescriptor),
     fields: std.ArrayList(FieldDescriptor),
@@ -70,7 +69,7 @@ pub const DeclarationIndex = struct {
     pub fn init(allocator: std.mem.Allocator) DeclarationIndex {
         return .{
             .allocator = allocator,
-            .value_domains = .empty,
+            .types = .empty,
             .classes = .empty,
             .roles = .empty,
             .fields = .empty,
@@ -83,7 +82,7 @@ pub const DeclarationIndex = struct {
     }
 
     pub fn deinit(self: *DeclarationIndex) void {
-        self.value_domains.deinit(self.allocator);
+        self.types.deinit(self.allocator);
         self.classes.deinit(self.allocator);
         self.roles.deinit(self.allocator);
         self.fields.deinit(self.allocator);
@@ -116,6 +115,16 @@ pub const DeclarationIndex = struct {
     pub fn roleClass(self: *const DeclarationIndex, name: []const u8) ?[]const u8 {
         const role = self.roleByName(name) orelse return null;
         return role.class_name;
+    }
+
+    pub fn typeByName(self: *const DeclarationIndex, name: []const u8) ?TypeDescriptor {
+        var index = self.types.items.len;
+        while (index > 0) {
+            index -= 1;
+            const descriptor = self.types.items[index];
+            if (std.mem.eql(u8, descriptor.name, name)) return descriptor;
+        }
+        return null;
     }
 
     pub fn field(self: *const DeclarationIndex, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
@@ -262,10 +271,9 @@ fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []co
 
 fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void {
     for (module.program.types.items) |decl| {
-        try index.value_domains.append(index.allocator, .{
+        try index.types.append(index.allocator, .{
             .name = decl.name,
             .body = decl.body,
-            .refinement = decl.refinement,
             .module_id = module.id,
         });
     }

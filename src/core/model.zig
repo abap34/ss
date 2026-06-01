@@ -167,6 +167,7 @@ pub const Metadata = struct {
 };
 
 pub const ValueTag = enum {
+    none,
     document,
     page,
     object,
@@ -377,6 +378,7 @@ pub const StyleRef = struct {
 };
 
 pub const Value = union(ValueTag) {
+    none: void,
     document: NodeId,
     page: NodeId,
     object: NodeId,
@@ -402,6 +404,7 @@ pub const Value = union(ValueTag) {
 
     pub fn clone(self: Value, allocator: Allocator) !Value {
         return switch (self) {
+            .none => .{ .none = {} },
             .document => |id| .{ .document = id },
             .page => |id| .{ .page = id },
             .object => |id| .{ .object = id },
@@ -425,7 +428,7 @@ pub const Value = union(ValueTag) {
             .object => |id| id,
             .metadata => |id| id,
             .selection => |selection| selection.first(),
-            .anchor, .function, .style, .string, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .style, .string, .number, .boolean, .constraints, .void => null,
         };
     }
 };

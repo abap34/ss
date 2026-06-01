@@ -101,8 +101,10 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
     return switch (expr) {
         .ident => |name| allocator.dupe(u8, name),
         .string => |text| std.fmt.allocPrint(allocator, "\"{s}\"", .{text}),
+        .color => |text| std.fmt.allocPrint(allocator, "c\"{s}\"", .{text}),
         .number => |value| std.fmt.allocPrint(allocator, "{d}", .{value}),
         .boolean => |value| allocator.dupe(u8, if (value) "true" else "false"),
+        .none => allocator.dupe(u8, "none"),
         .call => |call| blk: {
             var args = std.ArrayList(u8).empty;
             defer args.deinit(allocator);
@@ -128,6 +130,23 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ callee, args.items });
         },
         .lambda => allocator.dupe(u8, "<lambda>"),
+        .member => |member| blk: {
+            const target = try formatExpr(allocator, member.target.*);
+            defer allocator.free(target);
+            break :blk std.fmt.allocPrint(allocator, "{s}.{s}", .{ target, member.name });
+        },
+        .optional_check => |check| blk: {
+            const target = try formatExpr(allocator, check.target.*);
+            defer allocator.free(target);
+            break :blk std.fmt.allocPrint(allocator, "{s}?", .{target});
+        },
+        .coalesce => |coalesce| blk: {
+            const target = try formatExpr(allocator, coalesce.target.*);
+            defer allocator.free(target);
+            const fallback = try formatExpr(allocator, coalesce.fallback.*);
+            defer allocator.free(fallback);
+            break :blk std.fmt.allocPrint(allocator, "{s} ?? {s}", .{ target, fallback });
+        },
     };
 }
 
@@ -301,6 +320,12 @@ fn collectExprHints(
             for (apply.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
         },
         .lambda => |lambda| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, lambda.body.*),
+        .member => |member| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, member.target.*),
+        .optional_check => |check| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, check.target.*),
+        .coalesce => |coalesce| {
+            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, coalesce.target.*);
+            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
+        },
         else => {},
     }
 }

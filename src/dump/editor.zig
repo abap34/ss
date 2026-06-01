@@ -6,7 +6,7 @@ const json = @import("utils").json;
 
 pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var variables = try root.arrayField("variables");
-    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), null);
+    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), ir);
     defer variable_infos.deinit();
     var variable_iterator = variable_infos.iterator();
     while (variable_iterator.next()) |entry| {

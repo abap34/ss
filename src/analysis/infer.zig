@@ -92,8 +92,15 @@ fn exprInfoWithOptions(
             info.string_literal = text;
             break :blk info;
         },
+        .color => |text| blk: {
+            var info = infoFromType(Type.color);
+            info.value_tag = .string;
+            info.string_literal = text;
+            break :blk info;
+        },
         .number => infoFromValueTag(.number),
         .boolean => infoFromValueTag(.boolean),
+        .none => infoFromType(Type.none),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
             if (sema.function(name)) |func| {
@@ -108,7 +115,93 @@ fn exprInfoWithOptions(
         .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin, options),
         .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin, options),
         .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin, options),
+        .member => |member| try inferMemberInfo(allocator, ir, sema, env, member, origin, options),
+        .optional_check => |check| try inferOptionalCheckInfo(allocator, ir, sema, env, check.target.*, origin, options),
+        .coalesce => |coalesce| try inferCoalesceInfo(allocator, ir, sema, env, coalesce, origin, options),
     };
+}
+
+fn inferMemberInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    member: ast.MemberExpr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !TypeInfo {
+    if (member.target.* == .ident) {
+        const enum_name = member.target.ident;
+        if (sema.enumHasCaseAny(enum_name, member.name)) {
+            var info = infoFromType(Type.enumType(enum_name));
+            info.value_tag = .string;
+            info.string_literal = member.name;
+            return info;
+        }
+        if (sema.enumExistsAny(enum_name)) {
+            try addUserReport(ir, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
+            return error.InvalidValueTag;
+        }
+    }
+
+    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, member.target.*, origin, options);
+    if (!isPropertyTarget(target_info)) {
+        try addUserReport(ir, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
+        return error.InvalidValueTag;
+    }
+    if (std.mem.eql(u8, member.name, "content")) return infoFromType(Type.string);
+    const field = lookupFieldForTarget(sema, target_info, member.name) orelse {
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member.name});
+        return error.InvalidValueTag;
+    };
+    var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
+        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+        return error.InvalidValueTag;
+    };
+    defer field_type.deinit(allocator);
+    var result_type = if (field_type.tag == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
+    errdefer result_type.deinit(allocator);
+    return infoFromType(result_type);
+}
+
+fn inferOptionalCheckInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    target: ast.Expr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !TypeInfo {
+    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, target, origin, options);
+    if (target_info.ty.tag != .optional) {
+        try addUserReport(ir, origin, "TypeMismatch: '?' expects an optional value", .{});
+        return error.InvalidValueTag;
+    }
+    return infoFromType(Type.boolean);
+}
+
+fn inferCoalesceInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    coalesce: ast.CoalesceExpr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !TypeInfo {
+    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.target.*, origin, options);
+    if (target_info.ty.tag != .optional) {
+        try addUserReport(ir, origin, "TypeMismatch: '??' expects an optional value", .{});
+        return error.InvalidValueTag;
+    }
+    const child = target_info.ty.optional_child orelse {
+        try addUserReport(ir, origin, "TypeMismatch: invalid optional type", .{});
+        return error.InvalidValueTag;
+    };
+    const fallback_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.fallback.*, origin, options);
+    try ensureType(ir, allocator, fallback_info, child.*, origin, .UnmatchedArgumentType);
+    return infoFromType(child.*);
 }
 
 fn functionTypeForDecl(allocator: std.mem.Allocator, func: ast.FunctionDecl) !Type {
@@ -283,12 +376,35 @@ fn inferPrimitiveCallInfo(
     const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin, options);
     if (ir != null and options.validate_contracts) {
         switch (descriptor.op) {
+            .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(ir.?, call, env, sema, origin),
             .set_prop => try validateSetPropCall(ir.?, call, env, sema, origin),
             .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, sema, origin),
             else => {},
         }
     }
     return info;
+}
+
+fn validateKnownPropertyKeyCall(
+    ir: *core.Ir,
+    call: ast.CallExpr,
+    env: *const TypeEnv,
+    sema: *const SemanticEnv,
+    origin: []const u8,
+) !void {
+    if (call.args.items.len < 2) return;
+    const key = switch (call.args.items[1]) {
+        .string => |text| text,
+        else => {
+            try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
+            return error.InvalidValueTag;
+        },
+    };
+    const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    if (lookupFieldForTarget(sema, target_info, key) == null) {
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
+        return error.InvalidValueTag;
+    }
 }
 
 fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: usize) bool {
@@ -327,6 +443,7 @@ fn inferUserFunctionReturnInfoInner(
     options: InferenceOptions,
     visiting: *std.StringHashMap(void),
 ) !TypeInfo {
+    _ = caller_env;
     if (visiting.contains(func.name)) {
         var info = infoFromType(func.result_type);
         info.object_class = func.result_type.class_name;
@@ -338,16 +455,17 @@ fn inferUserFunctionReturnInfoInner(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
     for (func.params.items, 0..) |param, index| {
-        const info: TypeInfo = if (index < call.args.items.len)
-            try exprInfoWithOptions(allocator, ir, sema, caller_env, call.args.items[index], origin, options)
-        else if (param.default_value) |default_value|
-            try exprInfoWithOptions(allocator, ir, sema, &env, default_value.*, origin, options)
-        else blk: {
-            var param_info = infoFromType(param.ty);
-            param_info.value_tag = param.value_tag;
-            break :blk param_info;
-        };
-        try env.put(param.name, info);
+        if (index >= call.args.items.len) {
+            if (param.default_value) |default_value| {
+                const default_info = try exprInfoWithOptions(allocator, ir, sema, &env, default_value.*, origin, options);
+                try ensureType(ir, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
+            }
+        }
+        var param_info = infoFromType(param.ty);
+        param_info.value_tag = param.value_tag;
+        if (param.ty.tag == .object) param_info.object_class = param.ty.class_name;
+        if (param.ty.tag == .selection and param.ty.param == .object) param_info.object_class = param.ty.param_class_name;
+        try env.put(param.name, param_info);
     }
 
     var result = infoFromType(func.result_type);
@@ -656,7 +774,10 @@ fn validateSetPropCall(
     if (call.args.items.len < 3) return;
     const key = switch (call.args.items[1]) {
         .string => |text| text,
-        else => return,
+        else => {
+            try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
+            return error.InvalidValueTag;
+        },
     };
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
     if (!isPropertyTarget(target_info)) {
@@ -748,12 +869,21 @@ fn validateFieldValue(
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    if (!sema.valueMatches(field.module_id, field.value_type, value_info.string_literal, value_info.value_tag)) {
+    var expected = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse {
+        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+        return error.InvalidValueTag;
+    };
+    defer expected.deinit(ir.allocator);
+    if (!Type.accepts(expected, value_info.ty)) {
+        const expected_label = try expected.formatAlloc(ir.allocator);
+        defer ir.allocator.free(expected_label);
+        const actual_label = try value_info.ty.formatAlloc(ir.allocator);
+        defer ir.allocator.free(actual_label);
         try addUserReport(
             ir,
             origin,
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
-            .{ key, sema.valueLabel(field.module_id, field.value_type), @tagName(value_info.value_tag) },
+            .{ key, expected_label, actual_label },
         );
         return error.InvalidValueTag;
     }

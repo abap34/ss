@@ -41,6 +41,11 @@ fn writeDocTerm(terms: *json.Array, term: elaboration.Term) !void {
             try item.stringField("key", property.key);
             try item.stringField("value", property.value);
         },
+        .unset_property => |property| {
+            try item.stringField("kind", "unset_prop");
+            try item.intField("node", property.node);
+            try item.stringField("key", property.key);
+        },
         .extend_render_env => |entry| {
             try item.stringField("kind", "extend_render_env");
             try item.intField("node", entry.node);

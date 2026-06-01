@@ -258,16 +258,10 @@ const Parser = struct {
         }
         const body = trimRightSpaces(self.source[body_start..self.pos]);
         if (body.len == 0) return self.fail(error.ExpectedTypeAnnotation);
-        var annotations = try self.parseAnnotations();
-        defer {
-            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
-            annotations.deinit(self.allocator);
-        }
-        const refinement = try self.refinementFromAnnotations(annotations.items);
         return .{ .alias = .{
             .name = name,
             .body = try self.allocator.dupe(u8, body),
-            .refinement = refinement,
+            .refinement = null,
             .span = .{ .start = start, .end = self.pos },
         } };
     }
@@ -504,6 +498,7 @@ const Parser = struct {
         return switch (expr) {
             .ident => |name| .{ .ident = name },
             .string => |text| .{ .string = text },
+            .color => |text| .{ .string = text },
             else => .{ .expr = expr },
         };
     }
@@ -550,7 +545,16 @@ const Parser = struct {
     }
 
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
-        return try self.parseFunctionTypeAnnotation();
+        var ty = try self.parseFunctionTypeAnnotation();
+        errdefer ty.deinit(self.allocator);
+        self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '?') {
+            self.pos += 1;
+            const optional_ty = try ast.Type.optional(self.allocator, ty);
+            ty.deinit(self.allocator);
+            return optional_ty;
+        }
+        return ty;
     }
 
     fn parseFunctionTypeAnnotation(self: *Parser) anyerror!ast.Type {
@@ -645,6 +649,10 @@ const Parser = struct {
             self.allocator.free(name);
             return ast.Type.string;
         }
+        if (std.mem.eql(u8, name, "Color")) {
+            self.allocator.free(name);
+            return ast.Type.color;
+        }
         if (std.mem.eql(u8, name, "Number")) {
             self.allocator.free(name);
             return ast.Type.number;
@@ -660,6 +668,10 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "Void")) {
             self.allocator.free(name);
             return .{ .tag = .void };
+        }
+        if (std.mem.eql(u8, name, "None")) {
+            self.allocator.free(name);
+            return ast.Type.none;
         }
         if (std.mem.eql(u8, name, "Selection")) {
             self.allocator.free(name);
@@ -692,7 +704,9 @@ const Parser = struct {
     }
 
     fn valueTagForType(self: *Parser, ty: ast.Type) anyerror!core.ValueTag {
-        return ty.toValueTag() orelse self.fail(error.InvalidTypeAnnotation);
+        if (ty.toValueTag()) |tag| return tag;
+        if (ty.tag == .optional) return .none;
+        return self.fail(error.InvalidTypeAnnotation);
     }
 
     fn parsePage(self: *Parser) !PageDecl {
@@ -984,9 +998,19 @@ const Parser = struct {
         while (true) {
             self.skipInlineSpaces();
             if (self.eof()) return expr;
+            if (self.startsWith("??")) {
+                self.pos += 2;
+                const fallback = try self.parseExpr();
+                expr = try self.makeCoalesceExpr(expr, fallback);
+                return expr;
+            }
             switch (self.source[self.pos]) {
                 '(' => expr = try self.parseApplyAfterCallee(expr),
                 '.' => expr = try self.parseMemberExprAfterTarget(expr),
+                '?' => {
+                    self.pos += 1;
+                    expr = try self.makeOptionalCheckExpr(expr);
+                },
                 else => return expr,
             }
         }
@@ -1024,7 +1048,7 @@ const Parser = struct {
             return expr;
         }
         if (self.startsColorLiteral()) {
-            return .{ .string = try self.parseColorLiteralString() };
+            return .{ .color = try self.parseColorLiteralString() };
         }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .string = try self.parseString() };
@@ -1037,6 +1061,12 @@ const Parser = struct {
         }
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
+        if (std.mem.eql(u8, name, "none")) {
+            if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
+                self.allocator.free(name);
+                return .none;
+            }
+        }
         if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
                 const value = std.mem.eql(u8, name, "true");
@@ -1220,20 +1250,27 @@ const Parser = struct {
     fn parseMemberExprAfterTarget(self: *Parser, target: Expr) !Expr {
         try self.expectChar('.');
         const member_name = try self.parseIdentifier();
-        self.skipInlineSpaces();
-        if (self.startsWith("??")) {
-            self.pos += 2;
-            const fallback = try self.parseExpr();
-            return .{ .call = try self.makeCall3("prop", target, .{ .string = member_name }, fallback) };
-        }
-        if (!self.startsWith("??") and !self.eof() and self.source[self.pos] == '?') {
-            self.pos += 1;
-            return .{ .call = try self.makeCall2("has_prop", target, .{ .string = member_name }) };
-        }
-        if (std.mem.eql(u8, member_name, "content")) {
-            return .{ .call = try self.makeCall1("content", target) };
-        }
-        return .{ .call = try self.makeCall3("prop", target, .{ .string = member_name }, .{ .string = "" }) };
+        const target_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target_ptr);
+        target_ptr.* = target;
+        return .{ .member = .{ .target = target_ptr, .name = member_name } };
+    }
+
+    fn makeOptionalCheckExpr(self: *Parser, target: Expr) !Expr {
+        const target_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target_ptr);
+        target_ptr.* = target;
+        return .{ .optional_check = .{ .target = target_ptr } };
+    }
+
+    fn makeCoalesceExpr(self: *Parser, target: Expr, fallback: Expr) !Expr {
+        const target_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target_ptr);
+        const fallback_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(fallback_ptr);
+        target_ptr.* = target;
+        fallback_ptr.* = fallback;
+        return .{ .coalesce = .{ .target = target_ptr, .fallback = fallback_ptr } };
     }
 
     fn makeCall1(self: *Parser, name: []const u8, arg0: Expr) !ast.CallExpr {

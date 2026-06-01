@@ -95,12 +95,76 @@ fn checkObjectFields(
     fields: []const ast.ObjectFieldDecl,
 ) !void {
     for (fields) |field| {
-        if (sema.valueDomain(module_id, field.value_type) != null) continue;
         const origin = try statementOrigin(allocator, origin_path, field.span);
         defer allocator.free(origin);
-        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidValueTag;
+        var field_type = (try sema.resolveTypeText(allocator, module_id, field.value_type)) orelse {
+            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+            return error.InvalidValueTag;
+        };
+        defer field_type.deinit(allocator);
+        if (field.default_value) |default_value| {
+            try checkFieldDefault(allocator, ir, sema, module_id, origin, field_type, default_value);
+        }
     }
+}
+
+fn checkFieldDefault(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
+    origin: []const u8,
+    ty: ast.Type,
+    default_value: []const u8,
+) !void {
+    const value = std.mem.trim(u8, default_value, " \t\r\n");
+    if (ty.tag == .optional) {
+        if (std.mem.eql(u8, value, "none")) return;
+        const child = ty.optional_child orelse return;
+        return checkFieldDefault(allocator, ir, sema, module_id, origin, child.*, value);
+    }
+    switch (ty.tag) {
+        .string => if (isStringDefault(value)) return,
+        .color => if (isColorDefault(value)) return,
+        .number => if (std.fmt.parseFloat(f32, value) catch null) |_| return,
+        .boolean => if (std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "false")) return,
+        .style => if (isStringDefault(value)) return,
+        .enum_type => if (ty.enum_name) |name| {
+            if (enumDefaultMatches(sema, module_id, name, value)) return;
+        },
+        .none => if (std.mem.eql(u8, value, "none")) return,
+        else => return,
+    }
+    try addUserReport(ir, origin, "InvalidFieldDefault: default value does not match field type {s}", .{fieldTypeLabel(ty)});
+    return error.InvalidValueTag;
+}
+
+fn isStringDefault(value: []const u8) bool {
+    return value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"';
+}
+
+fn isColorDefault(value: []const u8) bool {
+    return value.len >= 3 and value[0] == 'c' and value[1] == '"' and value[value.len - 1] == '"';
+}
+
+fn enumDefaultMatches(sema: *const SemanticEnv, module_id: core.SourceModuleId, enum_name: []const u8, value: []const u8) bool {
+    if (!std.mem.startsWith(u8, value, enum_name)) return false;
+    if (value.len <= enum_name.len + 1 or value[enum_name.len] != '.') return false;
+    return sema.enumHasCase(module_id, enum_name, value[enum_name.len + 1 ..]);
+}
+
+fn fieldTypeLabel(ty: ast.Type) []const u8 {
+    return switch (ty.tag) {
+        .string => "String",
+        .color => "Color",
+        .number => "Number",
+        .boolean => "Bool",
+        .style => "Style",
+        .enum_type => ty.enum_name orelse "enum",
+        .optional => "optional",
+        .none => "None",
+        else => "type",
+    };
 }
 
 fn checkRolesUnique(

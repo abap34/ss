@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
-const value_domains = @import("../language/value_domains.zig");
 
 const Type = ast.Type;
 
@@ -22,7 +21,7 @@ pub fn infoFromValueTag(value_tag: core.ValueTag) TypeInfo {
 pub fn infoFromType(ty: Type) TypeInfo {
     return .{
         .ty = ty,
-        .value_tag = ty.toValueTag() orelse .void,
+        .value_tag = ty.toValueTag() orelse if (ty.tag == .optional) .none else .void,
         .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
     };
 }
@@ -105,7 +104,7 @@ pub fn isPropertyTarget(info: TypeInfo) bool {
 pub fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
     return switch (info.ty.tag) {
         .document => "Doc",
-        .page => "Page",
+        .page => "PageContext",
         .object => info.object_class,
         .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
         else => null,
@@ -137,7 +136,6 @@ pub fn ensureType(
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
-    if (expected.tag == .value_domain) return ensureValueDomainType(ir, allocator, actual, expected, origin, code);
     if (Type.accepts(expected, actual.ty)) return;
     const expected_tag = expected.toValueTag() orelse actual.value_tag;
     if (expected_tag != actual.value_tag) return ensureValueTag(ir, actual.value_tag, expected_tag, origin, code);
@@ -147,37 +145,6 @@ pub fn ensureType(
         const expected_label = try typeLabelAlloc(allocator, expected);
         defer allocator.free(expected_label);
         const message = try std.fmt.allocPrint(sink.allocator, "TypeMismatch: expected {s}, got {s}", .{ expected_label, actual_label });
-        try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = message },
-        });
-    }
-    return error.InvalidValueTag;
-}
-
-fn ensureValueDomainType(
-    ir: ?*core.Ir,
-    allocator: std.mem.Allocator,
-    actual: TypeInfo,
-    expected: Type,
-    origin: []const u8,
-    code: core.TypeMismatchCode,
-) !void {
-    const name = expected.value_domain_name orelse "value domain";
-    const body = expected.value_domain_body orelse "";
-    const value_type = value_domains.resolveDeclaration(name, body) orelse {
-        const expected_tag = expected.toValueTag() orelse .string;
-        return ensureValueTag(ir, actual.value_tag, expected_tag, origin, code);
-    };
-    if (value_domains.matches(value_type, actual.string_literal, actual.value_tag)) return;
-
-    if (ir) |sink| {
-        const actual_label = try typeLabelAlloc(allocator, actual.ty);
-        defer allocator.free(actual_label);
-        const message = try std.fmt.allocPrint(
-            sink.allocator,
-            "TypeMismatch: expected {s}, got {s}",
-            .{ value_domains.label(value_type), actual_label },
-        );
         try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .message = message },
         });

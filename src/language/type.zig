@@ -6,9 +6,8 @@ pub const Type = struct {
     param: Tag = .none,
     class_name: ?[]const u8 = null,
     param_class_name: ?[]const u8 = null,
-    value_domain_name: ?[]const u8 = null,
-    value_domain_body: ?[]const u8 = null,
-    value_domain_tag: ?model.ValueTag = null,
+    enum_name: ?[]const u8 = null,
+    optional_child: ?*Type = null,
     fn_params: []Type = &.{},
     fn_result: ?*Type = null,
 
@@ -24,13 +23,16 @@ pub const Type = struct {
         function,
         style,
         string,
+        color,
         number,
         boolean,
         constraints,
-        value_domain,
+        enum_type,
+        optional,
         void,
     };
 
+    pub const none = Type{ .tag = .none };
     pub const any = Type{ .tag = .any };
     pub const document = Type{ .tag = .document };
     pub const page = Type{ .tag = .page };
@@ -39,6 +41,7 @@ pub const Type = struct {
     pub const anchor = Type{ .tag = .anchor };
     pub const style = Type{ .tag = .style };
     pub const string = Type{ .tag = .string };
+    pub const color = Type{ .tag = .color };
     pub const number = Type{ .tag = .number };
     pub const boolean = Type{ .tag = .boolean };
     pub const constraints = Type{ .tag = .constraints };
@@ -47,8 +50,15 @@ pub const Type = struct {
         return .{ .tag = .object, .class_name = name };
     }
 
-    pub fn valueDomain(name: []const u8, body: []const u8, value_tag: model.ValueTag) Type {
-        return .{ .tag = .value_domain, .value_domain_name = name, .value_domain_body = body, .value_domain_tag = value_tag };
+    pub fn enumType(name: []const u8) Type {
+        return .{ .tag = .enum_type, .enum_name = name };
+    }
+
+    pub fn optional(allocator: std.mem.Allocator, child: Type) !Type {
+        const copied = try allocator.create(Type);
+        errdefer allocator.destroy(copied);
+        copied.* = try child.clone(allocator);
+        return .{ .tag = .optional, .optional_child = copied };
     }
 
     pub fn selection(item: Tag) Type {
@@ -81,24 +91,43 @@ pub const Type = struct {
     }
 
     pub fn deinit(self: *Type, allocator: std.mem.Allocator) void {
-        if (self.tag != .function) return;
-        for (self.fn_params) |param| {
-            var owned = param;
-            owned.deinit(allocator);
+        switch (self.tag) {
+            .function => {
+                for (self.fn_params) |param| {
+                    var owned = param;
+                    owned.deinit(allocator);
+                }
+                if (self.fn_params.len != 0) allocator.free(self.fn_params);
+                if (self.fn_result) |result| {
+                    result.deinit(allocator);
+                    allocator.destroy(result);
+                }
+                self.fn_params = &.{};
+                self.fn_result = null;
+            },
+            .optional => {
+                if (self.optional_child) |child| {
+                    child.deinit(allocator);
+                    allocator.destroy(child);
+                }
+                self.optional_child = null;
+            },
+            else => {},
         }
-        if (self.fn_params.len != 0) allocator.free(self.fn_params);
-        if (self.fn_result) |result| {
-            result.deinit(allocator);
-            allocator.destroy(result);
-        }
-        self.fn_params = &.{};
-        self.fn_result = null;
     }
 
     pub fn clone(self: Type, allocator: std.mem.Allocator) anyerror!Type {
-        if (self.tag != .function) return self;
-        const result = self.fn_result orelse return self;
-        return try functionType(allocator, self.fn_params, result.*);
+        return switch (self.tag) {
+            .function => blk: {
+                const result = self.fn_result orelse break :blk self;
+                break :blk try functionType(allocator, self.fn_params, result.*);
+            },
+            .optional => blk: {
+                const child = self.optional_child orelse break :blk self;
+                break :blk try optional(allocator, child.*);
+            },
+            else => self,
+        };
     }
 
     fn normalizeParam(param: Tag) Tag {
@@ -107,6 +136,7 @@ pub const Type = struct {
 
     pub fn fromValueTag(tag: model.ValueTag) Type {
         return switch (tag) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,
@@ -125,6 +155,7 @@ pub const Type = struct {
 
     pub fn toValueTag(self: Type) ?model.ValueTag {
         return switch (self.tag) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,
@@ -134,12 +165,13 @@ pub const Type = struct {
             .function => .function,
             .style => .style,
             .string => .string,
+            .color => .string,
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
-            .value_domain => self.value_domain_tag,
+            .enum_type => .string,
             .void => .void,
-            .none, .any => null,
+            .optional, .any => null,
         };
     }
 
@@ -157,25 +189,39 @@ pub const Type = struct {
             }
             return true;
         }
+        if (a.tag == .optional) {
+            if ((a.optional_child == null) != (b.optional_child == null)) return false;
+            if (a.optional_child) |a_child| {
+                const b_child = b.optional_child orelse return false;
+                return eql(a_child.*, b_child.*);
+            }
+            return true;
+        }
         return normalizeParam(a.param) == normalizeParam(b.param) and
             optionalStringEql(a.class_name, b.class_name) and
             optionalStringEql(a.param_class_name, b.param_class_name) and
-            optionalStringEql(a.value_domain_name, b.value_domain_name) and
-            optionalStringEql(a.value_domain_body, b.value_domain_body) and
-            a.value_domain_tag == b.value_domain_tag;
+            optionalStringEql(a.enum_name, b.enum_name);
     }
 
     pub fn accepts(expected: Type, actual: Type) bool {
         if (expected.tag == .any or actual.tag == .any) return true;
-        if (expected.tag == .value_domain) {
-            const expected_tag = expected.toValueTag() orelse return true;
-            const actual_tag = actual.toValueTag() orelse return false;
-            return expected_tag == actual_tag;
+        if (expected.tag == .optional) {
+            if (actual.tag == .none) return true;
+            const child = expected.optional_child orelse return false;
+            if (actual.tag == .optional) {
+                const actual_child = actual.optional_child orelse return false;
+                return accepts(child.*, actual_child.*);
+            }
+            return accepts(child.*, actual);
         }
-        if (actual.tag == .value_domain) {
-            const expected_tag = expected.toValueTag() orelse return false;
-            const actual_tag = actual.toValueTag() orelse return false;
-            return expected_tag == actual_tag;
+        if (actual.tag == .optional) return false;
+        if (expected.tag == .color or actual.tag == .color) {
+            return expected.tag == .color and actual.tag == .color;
+        }
+        if (expected.tag == .enum_type or actual.tag == .enum_type) {
+            return expected.tag == .enum_type and
+                actual.tag == .enum_type and
+                optionalStringEql(expected.enum_name, actual.enum_name);
         }
         if (expected.tag != actual.tag) return false;
         if (expected.tag == .function) {
@@ -208,6 +254,7 @@ pub const Type = struct {
 
     pub fn scalarTagFromValueTag(tag: model.ValueTag) Tag {
         return switch (tag) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,
@@ -275,7 +322,18 @@ pub const Type = struct {
                 try out.appendSlice(allocator, " -> ");
                 try self.fn_result.?.formatInto(allocator, out);
             },
-            .value_domain => if (self.value_domain_name) |name|
+            .optional => {
+                if (self.optional_child) |child| {
+                    const needs_parens = child.tag == .function;
+                    if (needs_parens) try out.append(allocator, '(');
+                    try child.formatInto(allocator, out);
+                    if (needs_parens) try out.append(allocator, ')');
+                } else {
+                    try out.appendSlice(allocator, "Any");
+                }
+                try out.append(allocator, '?');
+            },
+            .enum_type => if (self.enum_name) |name|
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.tag)),
@@ -300,10 +358,12 @@ pub const Type = struct {
             .function => "Function",
             .style => "Style",
             .string => "String",
+            .color => "Color",
             .number => "Number",
             .boolean => "Bool",
             .constraints => "Constraints",
-            .value_domain => "ValueDomain",
+            .enum_type => "Enum",
+            .optional => "Optional",
             .void => "Void",
         };
     }

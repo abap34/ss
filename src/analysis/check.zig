@@ -203,6 +203,12 @@ fn rejectPageOnlyExpr(
             for (apply.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
         },
         .lambda => |lambda| try rejectPageOnlyExpr(allocator, ir, context, origin, lambda.body.*),
+        .member => |member| try rejectPageOnlyExpr(allocator, ir, context, origin, member.target.*),
+        .optional_check => |check| try rejectPageOnlyExpr(allocator, ir, context, origin, check.target.*),
+        .coalesce => |coalesce| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, coalesce.target.*);
+            try rejectPageOnlyExpr(allocator, ir, context, origin, coalesce.fallback.*);
+        },
         else => {},
     }
 }

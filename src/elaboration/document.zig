@@ -31,6 +31,10 @@ pub const Term = union(enum) {
         key: []const u8,
         value: []const u8,
     },
+    unset_property: struct {
+        node: HandleId,
+        key: []const u8,
+    },
     extend_render_env: struct {
         node: HandleId,
         op: []const u8,
@@ -122,6 +126,7 @@ pub const Document = struct {
                 allocator.free(property.key);
                 allocator.free(property.value);
             },
+            .unset_property => |property| allocator.free(property.key),
             .extend_render_env => |entry| {
                 allocator.free(entry.op);
                 allocator.free(entry.key);
@@ -256,6 +261,22 @@ pub const Document = struct {
             .value = try self.allocator.dupe(u8, value),
         });
         try self.appendSetPropertyTerm(node_id, key, value);
+    }
+
+    pub fn unsetNodeProperty(self: *Document, node_id: HandleId, key: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.properties.items, 0..) |property, index| {
+            if (std.mem.eql(u8, property.key, key)) {
+                self.allocator.free(property.key);
+                self.allocator.free(property.value);
+                _ = node.properties.orderedRemove(index);
+                break;
+            }
+        }
+        try self.terms.append(self.allocator, .{ .unset_property = .{
+            .node = node_id,
+            .key = try self.allocator.dupe(u8, key),
+        } });
     }
 
     pub fn extendRenderEnv(self: *Document, node_id: HandleId, op: []const u8, key: []const u8, value: []const u8) !void {
@@ -450,6 +471,7 @@ pub const Document = struct {
 
     fn valueTag(value: core.Value) core.ValueTag {
         return switch (value) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,

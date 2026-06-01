@@ -10,9 +10,9 @@ const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
 const registry = @import("../language/registry.zig");
-const value_domains = @import("../language/value_domains.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
+const type_defs = @import("../language/type_defs.zig");
 const utils = @import("utils");
 const SemanticEnv = semantic_env.SemanticEnv;
 
@@ -103,7 +103,8 @@ pub fn typecheckProgram(
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
-    try resolveValueDomainTypeAnnotations(allocator, ir, &sema);
+    try checkTypeDeclarations(allocator, ir);
+    try resolveTypeReferences(allocator, ir, &sema);
     try rebuildFunctionDeclarations(allocator, ir);
     try checkDuplicateFunctionDeclarations(allocator, ir);
     try fields.checkObjectDeclarations(allocator, ir, &sema);
@@ -116,6 +117,89 @@ pub fn typecheckProgram(
         const module = ir.moduleById(module_id) orelse continue;
         try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
     }
+}
+
+fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        const origin_path = checker.originPathForModule(module);
+        var names = std.StringHashMap([]const u8).init(allocator);
+        defer names.deinit();
+
+        for (module.program.objects.items) |object_decl| {
+            if (isBuiltinTypeName(object_decl.name)) {
+                const origin = try originForModuleSpan(allocator, origin_path, object_decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{object_decl.name}) },
+                });
+                return error.UnknownType;
+            }
+            if (names.get(object_decl.name)) |existing_kind| {
+                const origin = try originForModuleSpan(allocator, origin_path, object_decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
+                });
+                return error.UnknownType;
+            }
+            try names.put(object_decl.name, "object");
+        }
+
+        for (module.program.types.items) |decl| {
+            if (isBuiltinTypeName(decl.name)) {
+                const origin = try originForModuleSpan(allocator, origin_path, decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{decl.name}) },
+                });
+                return error.UnknownType;
+            }
+            if (names.get(decl.name)) |existing_kind| {
+                const origin = try originForModuleSpan(allocator, origin_path, decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, decl.name }) },
+                });
+                return error.UnknownType;
+            }
+            try names.put(decl.name, "enum");
+            if (type_defs.isEnumBody(decl.body)) {
+                if (try type_defs.duplicateEnumCase(allocator, decl.body)) |case_name| {
+                    const origin = try originForModuleSpan(allocator, origin_path, decl.span);
+                    defer allocator.free(origin);
+                    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateEnumCase: enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
+                    });
+                    return error.UnknownType;
+                }
+                continue;
+            }
+            const origin = try originForModuleSpan(allocator, origin_path, decl.span);
+            defer allocator.free(origin);
+            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "InvalidTypeDeclaration: expected enum cases in type {s}", .{decl.name}) },
+            });
+            return error.UnknownType;
+        }
+    }
+}
+
+fn isBuiltinTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "Any") or
+        std.mem.eql(u8, name, "Document") or
+        std.mem.eql(u8, name, "Page") or
+        std.mem.eql(u8, name, "Object") or
+        std.mem.eql(u8, name, "Metadata") or
+        std.mem.eql(u8, name, "Anchor") or
+        std.mem.eql(u8, name, "Style") or
+        std.mem.eql(u8, name, "String") or
+        std.mem.eql(u8, name, "Color") or
+        std.mem.eql(u8, name, "Number") or
+        std.mem.eql(u8, name, "Bool") or
+        std.mem.eql(u8, name, "Constraints") or
+        std.mem.eql(u8, name, "Void") or
+        std.mem.eql(u8, name, "None");
 }
 
 fn checkTypeAnnotations(
@@ -150,104 +234,110 @@ fn checkTypeAnnotations(
     }
 }
 
-fn resolveValueDomainTypeAnnotations(
+fn resolveTypeReferences(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
 ) !void {
     _ = allocator;
     for (ir.modules.items) |*module| {
-        try resolveProgramValueDomainTypes(&module.program, module.id, sema);
+        try resolveProgramTypeReferences(&module.program, module.id, sema);
     }
 }
 
-fn resolveProgramValueDomainTypes(
+fn resolveProgramTypeReferences(
     program: *ast.Program,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     for (program.functions.items) |*func| {
-        try resolveFunctionValueDomainTypes(func, module_id, sema);
+        try resolveFunctionTypeReferences(func, module_id, sema);
     }
     for (program.document_statements.items) |*stmt| {
-        try resolveStatementValueDomainTypes(stmt, module_id, sema);
+        try resolveStatementTypeReferences(stmt, module_id, sema);
     }
     for (program.pages.items) |*page| {
         for (page.statements.items) |*stmt| {
-            try resolveStatementValueDomainTypes(stmt, module_id, sema);
+            try resolveStatementTypeReferences(stmt, module_id, sema);
         }
     }
 }
 
-fn resolveFunctionValueDomainTypes(
+fn resolveFunctionTypeReferences(
     func: *ast.FunctionDecl,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     for (func.params.items) |*param| {
-        try resolveParamValueDomainType(param, module_id, sema);
-        if (param.default_value) |default_value| try resolveExprValueDomainTypes(default_value, module_id, sema);
+        try resolveParamTypeReference(param, module_id, sema);
+        if (param.default_value) |default_value| try resolveExprTypeReferences(default_value, module_id, sema);
     }
-    try resolveTypeValueDomain(&func.result_type, module_id, sema);
+    try resolveTypeReference(&func.result_type, module_id, sema);
     func.result_tag = func.result_type.toValueTag() orelse func.result_tag;
     for (func.statements.items) |*stmt| {
-        try resolveStatementValueDomainTypes(stmt, module_id, sema);
+        try resolveStatementTypeReferences(stmt, module_id, sema);
     }
 }
 
-fn resolveStatementValueDomainTypes(
+fn resolveStatementTypeReferences(
     stmt: *ast.Statement,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |*binding| try resolveExprValueDomainTypes(&binding.expr, module_id, sema),
-        .return_expr => |*expr| try resolveExprValueDomainTypes(expr, module_id, sema),
+        .let_binding => |*binding| try resolveExprTypeReferences(&binding.expr, module_id, sema),
+        .return_expr => |*expr| try resolveExprTypeReferences(expr, module_id, sema),
         .return_void => {},
         .constrain => |*constraint| {
-            if (constraint.offset) |*offset| try resolveExprValueDomainTypes(offset, module_id, sema);
+            if (constraint.offset) |*offset| try resolveExprTypeReferences(offset, module_id, sema);
         },
-        .property_set => |*property_set| try resolveExprValueDomainTypes(&property_set.value, module_id, sema),
+        .property_set => |*property_set| try resolveExprTypeReferences(&property_set.value, module_id, sema),
         .if_stmt => |*if_stmt| {
-            try resolveExprValueDomainTypes(&if_stmt.condition, module_id, sema);
-            for (if_stmt.then_statements.items) |*nested| try resolveStatementValueDomainTypes(nested, module_id, sema);
-            for (if_stmt.else_statements.items) |*nested| try resolveStatementValueDomainTypes(nested, module_id, sema);
+            try resolveExprTypeReferences(&if_stmt.condition, module_id, sema);
+            for (if_stmt.then_statements.items) |*nested| try resolveStatementTypeReferences(nested, module_id, sema);
+            for (if_stmt.else_statements.items) |*nested| try resolveStatementTypeReferences(nested, module_id, sema);
         },
-        .expr_stmt => |*expr| try resolveExprValueDomainTypes(expr, module_id, sema),
+        .expr_stmt => |*expr| try resolveExprTypeReferences(expr, module_id, sema),
     }
 }
 
-fn resolveExprValueDomainTypes(
+fn resolveExprTypeReferences(
     expr: *ast.Expr,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     switch (expr.*) {
-        .ident, .string, .number, .boolean => {},
+        .ident, .string, .color, .number, .boolean, .none => {},
         .call => |*call| {
-            for (call.args.items) |*arg| try resolveExprValueDomainTypes(arg, module_id, sema);
+            for (call.args.items) |*arg| try resolveExprTypeReferences(arg, module_id, sema);
         },
         .apply => |*apply| {
-            try resolveExprValueDomainTypes(apply.callee, module_id, sema);
-            for (apply.args.items) |*arg| try resolveExprValueDomainTypes(arg, module_id, sema);
+            try resolveExprTypeReferences(apply.callee, module_id, sema);
+            for (apply.args.items) |*arg| try resolveExprTypeReferences(arg, module_id, sema);
         },
         .lambda => |*lambda| {
-            for (lambda.params.items) |*param| try resolveParamValueDomainType(param, module_id, sema);
-            try resolveExprValueDomainTypes(lambda.body, module_id, sema);
+            for (lambda.params.items) |*param| try resolveParamTypeReference(param, module_id, sema);
+            try resolveExprTypeReferences(lambda.body, module_id, sema);
+        },
+        .member => |*member| try resolveExprTypeReferences(member.target, module_id, sema),
+        .optional_check => |*check| try resolveExprTypeReferences(check.target, module_id, sema),
+        .coalesce => |*coalesce| {
+            try resolveExprTypeReferences(coalesce.target, module_id, sema);
+            try resolveExprTypeReferences(coalesce.fallback, module_id, sema);
         },
     }
 }
 
-fn resolveParamValueDomainType(
+fn resolveParamTypeReference(
     param: *ast.ParamDecl,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
-    try resolveTypeValueDomain(&param.ty, module_id, sema);
+    try resolveTypeReference(&param.ty, module_id, sema);
     param.value_tag = param.ty.toValueTag() orelse param.value_tag;
 }
 
-fn resolveTypeValueDomain(
+fn resolveTypeReference(
     ty: *ast.Type,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
@@ -255,17 +345,14 @@ fn resolveTypeValueDomain(
     switch (ty.tag) {
         .object => if (ty.class_name) |name| {
             if (!sema.classExists(name)) {
-                if (sema.declaredValueDomain(module_id, name)) |domain| {
-                    if (value_domains.runtimeValueTag(domain)) |value_tag| {
-                        ty.* = ast.Type.valueDomain(name, domain.body, value_tag);
-                    }
-                }
+                if (sema.enumDescriptor(module_id, name) != null) ty.* = ast.Type.enumType(name);
             }
         },
         .function => {
-            for (ty.fn_params) |*param| try resolveTypeValueDomain(param, module_id, sema);
-            if (ty.fn_result) |result| try resolveTypeValueDomain(result, module_id, sema);
+            for (ty.fn_params) |*param| try resolveTypeReference(param, module_id, sema);
+            if (ty.fn_result) |result| try resolveTypeReference(result, module_id, sema);
         },
+        .optional => if (ty.optional_child) |child| try resolveTypeReference(child, module_id, sema),
         else => {},
     }
 }
@@ -317,7 +404,7 @@ fn checkExprTypeAnnotations(
     expr: ast.Expr,
 ) !void {
     switch (expr) {
-        .ident, .string, .number, .boolean => {},
+        .ident, .string, .color, .number, .boolean, .none => {},
         .call => |call| {
             for (call.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg);
         },
@@ -333,6 +420,12 @@ fn checkExprTypeAnnotations(
             }
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, lambda.body.*);
         },
+        .member => |member| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, member.target.*),
+        .optional_check => |check| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, check.target.*),
+        .coalesce => |coalesce| {
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, coalesce.target.*);
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, coalesce.fallback.*);
+        },
     }
 }
 
@@ -343,13 +436,13 @@ fn checkTypeAnnotation(
     ty: ast.Type,
     origin: []const u8,
 ) !void {
-    if (ty.tag == .value_domain) return;
+    if (ty.tag == .enum_type or ty.tag == .color or ty.tag == .none) return;
+    if (ty.tag == .optional) {
+        if (ty.optional_child) |child| try checkTypeAnnotation(ir, sema, module_id, child.*, origin);
+        return;
+    }
     if (ty.class_name) |class_name| {
         if (!sema.classExists(class_name)) {
-            if (sema.declaredValueDomain(module_id, class_name)) |domain| {
-                if (value_domains.runtimeValueTag(domain) == null) return reportUnsupportedValueDomainType(ir, origin, class_name);
-                return;
-            }
             return reportUnknownType(ir, origin, class_name);
         }
     }
@@ -365,13 +458,6 @@ fn checkTypeAnnotation(
 fn reportUnknownType(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnknownType: unknown type: {s}", .{type_name}) },
-    });
-    return error.UnknownType;
-}
-
-fn reportUnsupportedValueDomainType(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
-    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnsupportedType: value domain cannot be used as a function type: {s}", .{type_name}) },
     });
     return error.UnknownType;
 }
@@ -496,11 +582,18 @@ fn inferExprEffects(
     visiting: *std.StringHashMap(void),
 ) anyerror!core.EffectSet {
     return switch (expr) {
-        .ident, .string, .number, .boolean => core.EffectSet.empty(),
+        .ident, .string, .color, .number, .boolean, .none => core.EffectSet.empty(),
         .lambda => |lambda| try inferExprEffects(sema, lambda.body.*, visiting),
         .apply => |apply| blk: {
             var set = try inferExprEffects(sema, apply.callee.*, visiting);
             for (apply.args.items) |arg| set.unionWith(try inferExprEffects(sema, arg, visiting));
+            break :blk set;
+        },
+        .member => |member| try inferExprEffects(sema, member.target.*, visiting),
+        .optional_check => |check| try inferExprEffects(sema, check.target.*, visiting),
+        .coalesce => |coalesce| blk: {
+            var set = try inferExprEffects(sema, coalesce.target.*, visiting);
+            set.unionWith(try inferExprEffects(sema, coalesce.fallback.*, visiting));
             break :blk set;
         },
         .call => |call| try inferCallEffects(sema, call, visiting),
@@ -745,7 +838,7 @@ pub fn buildIrWithOptions(
         var declaration_index = try declarations.build(allocator, &ir);
         defer declaration_index.deinit();
         const sema = SemanticEnv.init(&ir, &declaration_index, &ir.functions);
-        try resolveValueDomainTypeAnnotations(allocator, &ir, &sema);
+        try resolveTypeReferences(allocator, &ir, &sema);
         try rebuildFunctionDeclarations(allocator, &ir);
     }
     ir.variable_types = collectVariableTypesFromProgramWithDiagnostics(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {

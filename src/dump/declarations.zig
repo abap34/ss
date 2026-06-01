@@ -11,16 +11,15 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
 
     var object = try root.objectField("declarations");
 
-    var value_domains = try object.arrayField("valueDomains");
-    for (index.value_domains.items) |domain| {
-        var item = try value_domains.objectItem();
-        try item.stringField("name", domain.name);
-        try item.stringField("body", domain.body);
-        try item.optionalStringField("refinement", domain.refinement);
-        try item.intField("moduleId", domain.module_id);
+    var types = try object.arrayField("types");
+    for (index.types.items) |ty| {
+        var item = try types.objectItem();
+        try item.stringField("name", ty.name);
+        try item.stringField("body", ty.body);
+        try item.intField("moduleId", ty.module_id);
         try item.end();
     }
-    try value_domains.end();
+    try types.end();
 
     var classes = try object.arrayField("classes");
     for (index.classes.items) |class| {
@@ -177,6 +176,10 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "string");
             try object.stringField("value", text);
         },
+        .color => |text| {
+            try object.stringField("exprKind", "color");
+            try object.stringField("value", text);
+        },
         .number => |number| {
             try object.stringField("exprKind", "number");
             try object.floatField("value", number, "{d:.4}");
@@ -184,6 +187,9 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         .boolean => |boolean| {
             try object.stringField("exprKind", "boolean");
             try object.boolField("value", boolean);
+        },
+        .none => {
+            try object.stringField("exprKind", "none");
         },
         .call => |call| {
             try object.stringField("exprKind", "call");
@@ -195,6 +201,16 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         .lambda => |lambda| {
             try object.stringField("exprKind", "lambda");
             try object.intField("paramCount", lambda.params.items.len);
+        },
+        .member => |member| {
+            try object.stringField("exprKind", "member");
+            try object.stringField("name", member.name);
+        },
+        .optional_check => {
+            try object.stringField("exprKind", "optional_check");
+        },
+        .coalesce => {
+            try object.stringField("exprKind", "coalesce");
         },
     }
 }
