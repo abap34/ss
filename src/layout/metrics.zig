@@ -152,6 +152,10 @@ fn markdownCodePadY(ir: anytype, node: *const Node) f32 {
     return nonNegativeNodeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 10.0;
 }
 
+fn displayMathHeightFactor(ir: anytype, node: *const Node) f32 {
+    return positiveNodeFloatProperty(ir, node, "text_display_math_height_factor") orelse 2.0;
+}
+
 fn markdownBlocksHeight(ir: anytype, node: *const Node, style: TextStyle, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
     if (blocks.len == 0) return style.line_height;
 
@@ -165,7 +169,7 @@ fn markdownBlocksHeight(ir: anytype, node: *const Node, style: TextStyle, blocks
 
 fn markdownBlockHeight(ir: anytype, node: *const Node, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     return switch (block.kind) {
-        .paragraph => markdownLinesHeight(style, block.paragraph.?.lines.items, max_width),
+        .paragraph => markdownLinesHeight(ir, node, style, block.paragraph.?.lines.items, max_width),
         .code_block => blk: {
             const lines = markdown.codeBlockPhysicalLineCount(block);
             break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(ir, node) + 2.0 * markdownCodePadY(ir, node);
@@ -236,7 +240,7 @@ fn markdownTableHeight(ir: anytype, node: *const Node, style: TextStyle, block: 
     for (table.rows.items) |row| {
         var row_content_height = style.line_height;
         for (row.cells.items) |cell| {
-            row_content_height = @max(row_content_height, markdownLinesHeight(style, cell.lines.items, content_width));
+            row_content_height = @max(row_content_height, markdownLinesHeight(ir, node, style, cell.lines.items, content_width));
         }
         total += row_content_height + 2.0 * pad_y + line_width;
     }
@@ -251,24 +255,58 @@ fn markdownTableColumnCount(table: markdown.TableData) usize {
     return @max(@as(usize, 1), columns);
 }
 
-fn markdownLinesHeight(style: TextStyle, lines: []const markdown.Line, max_width: f32) f32 {
-    const count = markdownWrappedLineCount(style, lines, max_width);
+fn markdownLinesHeight(ir: anytype, node: *const Node, style: TextStyle, lines: []const markdown.Line, max_width: f32) f32 {
+    const count = markdownWrappedLineCount(ir, node, style, lines, max_width);
     return @as(f32, @floatFromInt(count)) * style.line_height;
 }
 
-fn markdownWrappedLineCount(style: TextStyle, lines: []const markdown.Line, max_width: f32) usize {
+fn markdownWrappedLineCount(ir: anytype, node: *const Node, style: TextStyle, lines: []const markdown.Line, max_width: f32) usize {
     if (lines.len == 0) return 1;
     var total: usize = 0;
     for (lines) |line| {
-        const width = markdownLineAdvance(style, line);
-        if (width <= 0) {
-            total += 1;
-            continue;
-        }
-        const available = @max(@as(f32, 1.0), max_width);
-        total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(width / available))));
+        total += markdownLineVisualLineCount(ir, node, style, line, max_width);
     }
     return total;
+}
+
+fn markdownLineVisualLineCount(ir: anytype, node: *const Node, style: TextStyle, line: markdown.Line, max_width: f32) usize {
+    if (!markdownLineContainsDisplayMath(line)) {
+        const width = markdownLineAdvance(style, line);
+        if (width <= 0) return 1;
+        return wrappedAdvanceLineCount(width, max_width);
+    }
+
+    const runs = line.runs.items;
+    var total: usize = 0;
+    var inline_width: f32 = 0;
+    var index: usize = 0;
+    while (index < runs.len) {
+        if (runs[index].kind != .display_math) {
+            inline_width += markdownRunAdvance(style, runs[index]);
+            index += 1;
+            continue;
+        }
+
+        total += wrappedAdvanceLineCount(inline_width, max_width);
+        inline_width = 0;
+
+        const display_start = index;
+        while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
+        const visual_lines = displayMathRunLineCount(runs[display_start..index]);
+        if (visual_lines > 0) {
+            const block_height = displayMathBlockHeightForLines(style, visual_lines, displayMathHeightFactor(ir, node));
+            total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(block_height / @max(style.line_height, 1)))));
+        }
+    }
+
+    total += wrappedAdvanceLineCount(inline_width, max_width);
+    return @max(total, 1);
+}
+
+fn wrappedAdvanceLineCount(width: f32, max_width: f32) usize {
+    if (width <= 0) return 0;
+    const available = @max(@as(f32, 1.0), max_width);
+    return @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(width / available))));
 }
 
 fn markdownLineAdvance(style: TextStyle, line: markdown.Line) f32 {
@@ -287,6 +325,50 @@ fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
             break :blk @as(f32, @floatFromInt(codepointCount(run.text))) * advance;
         },
     };
+}
+
+fn markdownLineContainsDisplayMath(line: markdown.Line) bool {
+    for (line.runs.items) |run| {
+        if (run.kind == .display_math) return true;
+    }
+    return false;
+}
+
+fn displayMathRunLineCount(runs: []const markdown.Run) usize {
+    var count: usize = 0;
+    var line_has_content = false;
+    for (runs) |run| {
+        var index: usize = 0;
+        while (index < run.text.len) {
+            const byte = run.text[index];
+            if (byte == '\n') {
+                if (line_has_content) {
+                    count += 1;
+                    line_has_content = false;
+                }
+                index += 1;
+                continue;
+            }
+            if (byte == '\\' and index + 1 < run.text.len and run.text[index + 1] == '\\') {
+                count += 1;
+                line_has_content = false;
+                index += 2;
+                continue;
+            }
+            if (!(byte == ' ' or byte == '\t' or byte == '\r')) {
+                line_has_content = true;
+            }
+            index += 1;
+        }
+    }
+    if (line_has_content) count += 1;
+    return count;
+}
+
+fn displayMathBlockHeightForLines(style: TextStyle, visual_lines: usize, height_factor: f32) f32 {
+    const line_count = @as(f32, @floatFromInt(@max(visual_lines, 1)));
+    const target_height = @max(@max(style.line_height, style.font_size * 1.35), line_count * style.line_height) * height_factor;
+    return target_height + @max(style.line_height * 0.2, 2.0) * 2.0;
 }
 
 fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) bool {
