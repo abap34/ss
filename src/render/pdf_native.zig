@@ -1712,10 +1712,8 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
 
 fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
     const lines = block.paragraph.?.lines.items;
-    const line_count: f32 = @floatFromInt(core.markdown.codeBlockPhysicalLineCount(block));
-    const box_height = line_count * text.markdown_code_line_height + text.markdown_code_pad_y * 2;
-    const box_bottom = baseline_bl - (line_count * text.markdown_code_line_height - text.markdown_code_font_size) - text.markdown_code_pad_y;
-    const frame = Frame{ .x = x, .y = box_bottom, .width = width, .height = box_height };
+    const placement = markdownCodeBlockPlacement(x, baseline_bl, width, core.markdown.codeBlockPhysicalLineCount(block), text);
+    const frame = placement.frame;
 
     c.ss_pdf_fill_stroke_rounded_rect(
         ctx.pdf,
@@ -1735,7 +1733,7 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         text.markdown_code_line_width,
     );
 
-    var cursor_bl = baseline_bl;
+    var cursor_bl = placement.first_baseline_bl;
     for (lines) |line| {
         var plain = std.ArrayList(u8).empty;
         defer plain.deinit(ctx.allocator);
@@ -1748,11 +1746,29 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         var physical = std.mem.splitScalar(u8, plain.items, '\n');
         while (physical.next()) |segment| {
             if (segment.len == 0 and physical.index == null and plain.items[plain.items.len - 1] == '\n') break;
-            _ = try drawPlainTextAtTop(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, text.color, false, text.emoji_spacing);
+            _ = try drawCodeTextAtTop(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, text.color, text.emoji_spacing);
             cursor_bl -= text.markdown_code_line_height;
         }
     }
-    return baseline_bl - box_height;
+    return placement.next_baseline_bl;
+}
+
+const MarkdownCodeBlockPlacement = struct {
+    frame: Frame,
+    first_baseline_bl: f32,
+    next_baseline_bl: f32,
+};
+
+fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, physical_line_count: usize, text: TextPaint) MarkdownCodeBlockPlacement {
+    const line_count: f32 = @floatFromInt(physical_line_count);
+    const box_height = line_count * text.markdown_code_line_height + text.markdown_code_pad_y * 2;
+    const box_top = baseline_bl + text.font_size;
+    const box_bottom = box_top - box_height;
+    return .{
+        .frame = .{ .x = x, .y = box_bottom, .width = width, .height = box_height },
+        .first_baseline_bl = box_top - text.markdown_code_pad_y - text.markdown_code_font_size,
+        .next_baseline_bl = box_bottom - text.font_size,
+    };
 }
 
 fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, packages: []const []const u8) !f32 {
@@ -1934,14 +1950,27 @@ fn atomPaint(text: TextPaint) AtomPaint {
 }
 
 fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, paint: AtomPaint, wrap: bool) !f32 {
+    return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false);
+}
+
+fn drawAtomsWithOptions(
+    ctx: *DrawContext,
+    x: f32,
+    baseline_bl: f32,
+    width: f32,
+    atoms: []const Atom,
+    paint: AtomPaint,
+    wrap: bool,
+    preserve_leading_space: bool,
+) !f32 {
     var cursor_bl = baseline_bl;
     var cursor_x = x;
     for (atoms, 0..) |atom, index| {
-        if (atom.is_space and cursor_x == x) continue;
+        if (atom.is_space and cursor_x == x and !preserve_leading_space) continue;
         if (wrap and cursor_x > x and cursor_x + atom.width > x + width) {
             cursor_bl -= paint.line_height;
             cursor_x = x;
-            if (atom.is_space) continue;
+            if (atom.is_space and !preserve_leading_space) continue;
         }
         switch (atom.kind) {
             .text => {
@@ -2016,6 +2045,38 @@ fn drawPlainTextAtTop(
     wrap: bool,
     emoji_spacing: f32,
 ) !f32 {
+    return drawPlainTextAtTopWithOptions(ctx, x, y_top, width, line_height, content, font, font_size, color, wrap, emoji_spacing, false);
+}
+
+fn drawCodeTextAtTop(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    width: f32,
+    line_height: f32,
+    content: []const u8,
+    font: []const u8,
+    font_size: f32,
+    color: Color,
+    emoji_spacing: f32,
+) !f32 {
+    return drawPlainTextAtTopWithOptions(ctx, x, y_top, width, line_height, content, font, font_size, color, false, emoji_spacing, true);
+}
+
+fn drawPlainTextAtTopWithOptions(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    width: f32,
+    line_height: f32,
+    content: []const u8,
+    font: []const u8,
+    font_size: f32,
+    color: Color,
+    wrap: bool,
+    emoji_spacing: f32,
+    preserve_leading_space: bool,
+) !f32 {
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
@@ -2027,7 +2088,7 @@ fn drawPlainTextAtTop(
         .inline_math_spacing = 0,
     };
     const baseline_bl = PageLayout.height - (y_top + font_size);
-    _ = try drawAtoms(ctx, x, baseline_bl, width, atoms.items, paint, wrap);
+    _ = try drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms.items, paint, wrap, preserve_leading_space);
     return atomLineAdvance(atoms.items, paint);
 }
 
@@ -2060,7 +2121,7 @@ fn drawCodeLine(
     emoji_spacing: f32,
 ) !void {
     if (code.language == null or !std.ascii.eqlIgnoreCase(code.language.?, "python")) {
-        _ = try drawPlainTextAtTop(ctx, x, y_top, width, line_height, line, font, font_size, code.plain, false, emoji_spacing);
+        _ = try drawCodeTextAtTop(ctx, x, y_top, width, line_height, line, font, font_size, code.plain, emoji_spacing);
         return;
     }
 
@@ -2092,7 +2153,7 @@ fn drawCodeLine(
 
 fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []const u8, font: []const u8, font_size: f32, line_height: f32, color: Color, emoji_spacing: f32) !void {
     if (segment.len == 0) return;
-    const segment_width = try drawPlainTextAtTop(ctx, cursor_x.*, y_top, 1, line_height, segment, font, font_size, color, false, emoji_spacing);
+    const segment_width = try drawCodeTextAtTop(ctx, cursor_x.*, y_top, 1, line_height, segment, font, font_size, color, emoji_spacing);
     cursor_x.* += segment_width;
 }
 

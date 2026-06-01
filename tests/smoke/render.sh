@@ -37,7 +37,20 @@ let title = head "Native renderer smoke"
 let body = text <<
 - Bullets must not overlap.
 - Japanese text should render: 日本語の本文。
+
+```zig
+fn main() void {
+    const greeting = "こんにちは";
+    std.debug.print("{s}\n", .{greeting});
+}
+```
 >>
+body.text_size = "12"
+body.text_line_height = "18"
+body.layout_font_size = "12"
+body.layout_line_height = "18"
+body.text_markdown_block_gap = "8"
+md_code(body, "16", "22", "12", "10", "0.9725,0.9843,1", "0.82,0.84,0.88", "1.0", "8")
 ~ body.top == title.bottom - 28
 ~ body.left == page.left + 110
 ~ body.width == 1120
@@ -56,6 +69,9 @@ SS
 "$ss_bin" render "$work_dir/smoke.ss" "$work_dir/smoke-cold.pdf"
 qpdf --check "$work_dir/smoke-cold.pdf" >/dev/null
 pdftoppm -png -f 1 -singlefile "$work_dir/smoke-cold.pdf" "$work_dir/smoke-page1" >/dev/null
+pdftotext -layout -nopgbrk "$work_dir/smoke-cold.pdf" "$work_dir/smoke-text.txt"
+grep -F '    const greeting = "こんにちは";' "$work_dir/smoke-text.txt" >/dev/null
+grep -F '    std.debug.print("{s}\n", .{greeting});' "$work_dir/smoke-text.txt" >/dev/null
 test -s "$work_dir/smoke-cold.pdf"
 test -s "$work_dir/smoke-page1.png"
 
