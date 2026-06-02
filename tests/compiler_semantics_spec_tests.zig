@@ -95,40 +95,6 @@ test "compiler semantics: imported function return inference diagnostics keep ca
     , "lib/bad.ss:bytes:", "InvalidArity: expected 2, got 1");
 }
 
-test "compiler semantics: default argument effects are checked against function contracts" {
-    try expectBuildFails(
-        \\import std:themes/default
-        \\
-        \\fn creates_by_default(x: Object = obj("x", "body", "text")) -> Object ! Pure
-        \\  return x
-        \\end
-        \\
-        \\page bad
-        \\  let x = creates_by_default()
-        \\end
-        \\
-    );
-}
-
-test "compiler semantics: callback effects are included in higher-order calls" {
-    try expectBuildFails(
-        \\import std:themes/default
-        \\
-        \\fn touch(o: Object) -> String ! WriteProperty
-        \\  set_prop(o, "text_color", "1,0,0")
-        \\  return ""
-        \\end
-        \\
-        \\fn bad(items: Selection) -> String ! Pure
-        \\  return join(items, "", touch)
-        \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    );
-}
-
 test "compiler semantics: branch-local let bindings do not escape their branch" {
     try buildSource(
         \\import std:themes/default
@@ -183,20 +149,6 @@ test "compiler semantics: content mutation helpers are stdlib functions" {
         \\
     , "hello world!");
 
-    try expectBuildFails(
-        \\import std:themes/default
-        \\
-        \\fn bad(target: Object) -> Object ! Pure
-        \\  clear(target)
-        \\  return target
-        \\end
-        \\
-        \\page bad
-        \\  let target = text("bad")
-        \\  bad(target)
-        \\end
-        \\
-    );
 }
 
 test "compiler semantics: style mutation is stdlib over properties" {
@@ -221,20 +173,6 @@ test "compiler semantics: style mutation is stdlib over properties" {
         \\
     );
 
-    try expectBuildFails(
-        \\import std:themes/default
-        \\
-        \\fn bad(target: Object) -> Object ! Pure
-        \\  sty(target, style("custom"))
-        \\  return target
-        \\end
-        \\
-        \\page bad
-        \\  let target = text("bad")
-        \\  bad(target)
-        \\end
-        \\
-    );
 }
 
 test "compiler semantics: math alignment helpers are stdlib functions" {
@@ -977,7 +915,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  text("bad")
         \\end
         \\
-    , "case.ss:bytes:", "UnmatchedReturnType: expected number, got string");
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 
     try expectDiagnostic(
         \\import std:themes/default
@@ -998,7 +936,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  text("bad")
         \\end
         \\
-    , "case.ss:bytes:", "UnmatchedArgumentType: expected boolean, got string");
+    , "case.ss:bytes:", "TypeMismatch: expected Bool, got String");
 
     try expectDiagnostic(
         \\import std:themes/default
@@ -1015,7 +953,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  text("bad")
         \\end
         \\
-    , "case.ss:bytes:", "UnmatchedReturnType: expected number, got boolean");
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got Bool");
 
     try expectDiagnostic(
         \\import std:themes/default
@@ -1092,7 +1030,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  text("bad")
         \\end
         \\
-    , "case.ss:bytes:", "UnmatchedReturnType: expected void, got number");
+    , "case.ss:bytes:", "TypeMismatch: expected Void, got Number");
 }
 
 test "compiler semantics: enum optional values reject strings and other enums" {
@@ -2082,6 +2020,24 @@ test "compiler semantics: object class annotations are checked through selection
         \\end
         \\
     );
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\}
+        \\
+        \\fn accept_body(item: Body) -> Object
+        \\  return item
+        \\end
+        \\
+        \\page bad
+        \\  obj("A", "card", "text")
+        \\  foreach(select(pagectx(), "page_objects_by_role", "card"), accept_body)
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
 }
 
 test "compiler semantics: object class mismatches report concrete type labels" {

@@ -1,5 +1,4 @@
 const std = @import("std");
-const core = @import("core");
 const registry = @import("registry");
 const Type = @import("language_type").Type;
 
@@ -26,17 +25,17 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
     try testing.expect(fold.callback != null);
     try testing.expectEqual(@as(usize, 2), fold.callback.?.function_arg_index);
     try testing.expectEqual(@as(usize, 2), fold.callback.?.supplied_arg_count);
-    try testing.expectEqual(core.ValueTag.string, fold.callback.?.expected_result_tag.?);
+    try testing.expect(Type.eql(Type.string, fold.callback.?.expected_result_type.?));
 
     const set_content = registry.lookupPrimitiveCall("set_content").?;
-    try testing.expect(registry.primitiveEffects(set_content).contains(.WriteContent));
+    try testing.expect(Type.eql(Type.object, registry.primitiveResultType(set_content).?));
     try testing.expectEqual(registry.PrimitiveResultPolicy.first_arg, set_content.result_policy);
 
     const page_index = registry.lookupPrimitiveCall("page_index").?;
-    try testing.expect(registry.primitiveEffects(page_index).contains(.ReadGraph));
+    try testing.expect(Type.eql(Type.page, registry.primitiveArgType(page_index, 0).?));
 
     const frame_height = registry.lookupPrimitiveCall("frame_height").?;
-    try testing.expect(registry.primitiveEffects(frame_height).contains(.ReadLayout));
+    try testing.expect(Type.eql(Type.number, registry.primitiveResultType(frame_height).?));
 }
 
 test "language registry spec: query output types are declared in the registry" {

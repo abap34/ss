@@ -138,10 +138,8 @@ test "syntax spec: explicit reserved page names are rejected" {
     );
 }
 
-test "syntax spec: function signatures enforce result value tags and trailing defaults" {
+test "syntax spec: function signatures preserve types and trailing defaults" {
     var parsed = try parse(
-        \\@host fn external_width(value: Number) -> Number
-        \\
         \\fn choose(flag: Bool, fallback: String = "no") -> String
         \\  if flag
         \\    return "yes"
@@ -154,18 +152,13 @@ test "syntax spec: function signatures enforce result value tags and trailing de
     defer parsed.deinit();
     const program = &parsed.program;
 
-    try testing.expectEqual(@as(usize, 2), program.functions.items.len);
-    try testing.expectEqual(ast.FunctionDecl.Kind.function, program.functions.items[0].kind);
-    try testing.expectEqualStrings("external_width", program.functions.items[0].name);
-    try testing.expectEqual(@as(usize, 1), program.functions.items[0].annotations.items.len);
-    try testing.expectEqualStrings("host", program.functions.items[0].annotations.items[0].name);
-    try testing.expectEqual(@as(usize, 0), program.functions.items[0].statements.items.len);
-
-    const choose = program.functions.items[1];
+    try testing.expectEqual(@as(usize, 1), program.functions.items.len);
+    const choose = program.functions.items[0];
+    try testing.expectEqual(ast.FunctionDecl.Kind.function, choose.kind);
     try testing.expectEqualStrings("choose", choose.name);
     try testing.expectEqual(@as(usize, 2), choose.params.items.len);
-    try testing.expectEqual(Type.boolean.tag, choose.params.items[0].ty.tag);
-    try testing.expectEqual(Type.string.tag, choose.params.items[1].ty.tag);
+    try testing.expectEqual(Type.boolean.kind, choose.params.items[0].ty.kind);
+    try testing.expectEqual(Type.string.kind, choose.params.items[1].ty.kind);
     try testing.expect(choose.params.items[1].default_value != null);
 }
 
@@ -201,11 +194,11 @@ test "syntax spec: void functions may omit explicit return values" {
     defer parsed.deinit();
 
     const noop = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.void, noop.result_type.tag);
+    try testing.expectEqual(Type.Kind.void, noop.result_type.kind);
     try testing.expectEqual(@as(usize, 1), noop.statements.items.len);
 
     const stop = parsed.program.functions.items[1];
-    try testing.expectEqual(Type.Tag.void, stop.result_type.tag);
+    try testing.expectEqual(Type.Kind.void, stop.result_type.kind);
     try testing.expectEqual(@as(usize, 1), stop.statements.items.len);
     switch (stop.statements.items[0].kind) {
         .return_void => {},
@@ -227,29 +220,29 @@ test "syntax spec: function types and lambdas are source syntax" {
     defer parsed.deinit();
 
     const make_label = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.function, make_label.result_type.tag);
+    try testing.expectEqual(Type.Kind.function, make_label.result_type.kind);
     try testing.expectEqual(@as(usize, 1), make_label.result_type.fn_params.len);
-    try testing.expectEqual(Type.Tag.page, make_label.result_type.fn_params[0].tag);
+    try testing.expectEqual(Type.Kind.page, make_label.result_type.fn_params[0].kind);
     try testing.expect(make_label.result_type.fn_result != null);
-    try testing.expectEqual(Type.Tag.object, make_label.result_type.fn_result.?.tag);
+    try testing.expectEqual(Type.Kind.object, make_label.result_type.fn_result.?.kind);
     switch (make_label.statements.items[0].kind.return_expr) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
-            try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
+            try testing.expectEqual(Type.Kind.page, lambda.params.items[0].ty.kind);
         },
         else => return error.ExpectedLambdaExpr,
     }
 
     const use = parsed.program.functions.items[1];
-    try testing.expectEqual(Type.Tag.function, use.params.items[0].ty.tag);
-    try testing.expectEqual(Type.Tag.function, use.params.items[0].ty.fn_params[0].tag);
-    try testing.expectEqual(Type.Tag.function, use.params.items[1].ty.tag);
+    try testing.expectEqual(Type.Kind.function, use.params.items[0].ty.kind);
+    try testing.expectEqual(Type.Kind.function, use.params.items[0].ty.fn_params[0].kind);
+    try testing.expectEqual(Type.Kind.function, use.params.items[1].ty.kind);
     try testing.expectEqual(@as(usize, 2), use.params.items[1].ty.fn_params.len);
-    try testing.expectEqual(Type.Tag.function, use.params.items[2].ty.tag);
+    try testing.expectEqual(Type.Kind.function, use.params.items[2].ty.kind);
     try testing.expectEqual(@as(usize, 0), use.params.items[2].ty.fn_params.len);
 }
 
-test "syntax spec: untyped value tag is not accepted as a surface type" {
+test "syntax spec: incomplete function type is not accepted as a surface type" {
     try expectParseError(error.InvalidTypeAnnotation,
         \\fn bad(f: Function) -> Number
         \\  return 1
@@ -268,9 +261,9 @@ test "syntax spec: bare user type names parse as object class annotations" {
     defer parsed.deinit();
 
     const keep = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.object, keep.params.items[0].ty.tag);
+    try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
     try testing.expectEqualStrings("Text", keep.params.items[0].ty.class_name.?);
-    try testing.expectEqual(Type.Tag.object, keep.result_type.tag);
+    try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
     try testing.expectEqualStrings("Text", keep.result_type.class_name.?);
 }
 
@@ -290,11 +283,11 @@ test "syntax spec: enum declarations and optional types parse" {
     try testing.expectEqualStrings("left | center | right", parsed.program.types.items[0].body);
 
     const keep = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.optional, keep.params.items[0].ty.tag);
-    try testing.expectEqual(Type.Tag.color, keep.params.items[0].ty.optional_child.?.tag);
-    try testing.expectEqual(Type.Tag.none, keep.params.items[1].ty.tag);
-    try testing.expectEqual(Type.Tag.optional, keep.result_type.tag);
-    try testing.expectEqual(Type.Tag.color, keep.result_type.optional_child.?.tag);
+    try testing.expectEqual(Type.Kind.optional, keep.params.items[0].ty.kind);
+    try testing.expectEqual(Type.Kind.color, keep.params.items[0].ty.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.none, keep.params.items[1].ty.kind);
+    try testing.expectEqual(Type.Kind.optional, keep.result_type.kind);
+    try testing.expectEqual(Type.Kind.color, keep.result_type.optional_child.?.kind);
 }
 
 test "syntax spec: optional types compose with functions and selections" {
@@ -307,20 +300,20 @@ test "syntax spec: optional types compose with functions and selections" {
 
     const keep = parsed.program.functions.items[0];
     const callback = keep.params.items[0].ty;
-    try testing.expectEqual(Type.Tag.optional, callback.tag);
-    try testing.expectEqual(Type.Tag.function, callback.optional_child.?.tag);
-    try testing.expectEqual(Type.Tag.page, callback.optional_child.?.fn_params[0].tag);
-    try testing.expectEqual(Type.Tag.object, callback.optional_child.?.fn_result.?.tag);
+    try testing.expectEqual(Type.Kind.optional, callback.kind);
+    try testing.expectEqual(Type.Kind.function, callback.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.page, callback.optional_child.?.fn_params[0].kind);
+    try testing.expectEqual(Type.Kind.object, callback.optional_child.?.fn_result.?.kind);
 
     const maker = keep.params.items[1].ty;
-    try testing.expectEqual(Type.Tag.function, maker.tag);
-    try testing.expectEqual(Type.Tag.optional, maker.fn_result.?.tag);
-    try testing.expectEqual(Type.Tag.object, maker.fn_result.?.optional_child.?.tag);
+    try testing.expectEqual(Type.Kind.function, maker.kind);
+    try testing.expectEqual(Type.Kind.optional, maker.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.object, maker.fn_result.?.optional_child.?.kind);
 
     const items = keep.params.items[2].ty;
-    try testing.expectEqual(Type.Tag.optional, items.tag);
-    try testing.expectEqual(Type.Tag.selection, items.optional_child.?.tag);
-    try testing.expectEqual(Type.Tag.object, items.optional_child.?.param);
+    try testing.expectEqual(Type.Kind.optional, items.kind);
+    try testing.expectEqual(Type.Kind.selection, items.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.object, items.optional_child.?.param);
     try testing.expectEqualStrings("Text", items.optional_child.?.param_class_name.?);
 }
 
@@ -407,7 +400,7 @@ test "syntax spec: lambda expressions can be used as callees" {
             switch (apply.callee.*) {
                 .lambda => |lambda| {
                     try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
-                    try testing.expectEqual(Type.Tag.number, lambda.params.items[0].ty.tag);
+                    try testing.expectEqual(Type.Kind.number, lambda.params.items[0].ty.kind);
                 },
                 else => return error.ExpectedLambdaExpr,
             }
@@ -439,7 +432,7 @@ test "syntax spec: lambda body may start on a later line" {
     switch (expr.call.args.items[1]) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
-            try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
+            try testing.expectEqual(Type.Kind.page, lambda.params.items[0].ty.kind);
             switch (lambda.body.*) {
                 .call => |call| try testing.expectEqualStrings("new", call.name),
                 else => return error.ExpectedCallExpr,

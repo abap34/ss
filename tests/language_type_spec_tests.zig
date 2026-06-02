@@ -1,5 +1,4 @@
 const std = @import("std");
-const model = @import("model");
 const Type = @import("language_type").Type;
 
 const testing = std.testing;
@@ -37,19 +36,6 @@ test "type spec: selection item class names follow object class refinement" {
     try testing.expect(!Type.accepts(text_selection, image_selection));
     try testing.expect(Type.accepts(text_selection, unclassified_object_selection));
     try testing.expect(Type.accepts(unclassified_object_selection, image_selection));
-}
-
-test "type spec: value tag conversion covers concrete value types" {
-    try testing.expectEqual(.document, Type.document.toValueTag().?);
-    try testing.expectEqual(.page, Type.page.toValueTag().?);
-    try testing.expectEqual(.object, Type.object.toValueTag().?);
-    try testing.expectEqual(.selection, Type.selection(.object).toValueTag().?);
-    try testing.expectEqual(.number, Type.number.toValueTag().?);
-    try testing.expectEqual(.string, Type.color.toValueTag().?);
-    try testing.expectEqual(.string, Type.enumType("Align").toValueTag().?);
-    try testing.expectEqual(.none, Type.none.toValueTag().?);
-    try testing.expectEqual(.void, (Type{ .tag = .void }).toValueTag().?);
-    try testing.expectEqual(@as(?model.ValueTag, null), Type.any.toValueTag());
 }
 
 test "type spec: formatting exposes the source-level type constructor shape" {
