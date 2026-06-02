@@ -429,23 +429,22 @@ pub const Analyzer = struct {
             try summary.addSelectionRead(Resource.graphObjects(null));
             return;
         };
-        if (std.mem.eql(u8, query_name, "document_pages")) {
-            try summary.addSelectionRead(Resource.graphPages());
-        } else if (std.mem.eql(u8, query_name, "page_objects_by_role") or
-            std.mem.eql(u8, query_name, "document_objects_by_role"))
-        {
-            try summary.addSelectionRead(Resource.graphObjects(literalStringArg(self, call, 2)));
-        } else if (std.mem.eql(u8, query_name, "children") or
-            std.mem.eql(u8, query_name, "descendants") or
-            std.mem.eql(u8, query_name, "self_object"))
-        {
-            try summary.addSelectionRead(Resource.graphObjects(null));
-        } else if (std.mem.eql(u8, query_name, "previous_page") or
-            std.mem.eql(u8, query_name, "parent_page"))
-        {
-            try summary.addRead(Resource.graphPages());
-        } else {
+        const query = registry.lookupQueryOp(query_name) orelse {
             try summary.addRead(Resource.graphObjects(null));
+            return;
+        };
+        switch (query.op) {
+            .document_pages => try summary.addSelectionRead(Resource.graphPages()),
+            .page_objects_by_role,
+            .document_objects_by_role,
+            => try summary.addSelectionRead(Resource.graphObjects(literalStringArg(self, call, 2))),
+            .children,
+            .descendants,
+            .self_object,
+            => try summary.addSelectionRead(Resource.graphObjects(null)),
+            .previous_page,
+            .parent_page,
+            => try summary.addRead(Resource.graphPages()),
         }
     }
 };
