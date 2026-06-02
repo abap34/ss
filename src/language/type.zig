@@ -1,9 +1,8 @@
 const std = @import("std");
-const model = @import("model");
 
 pub const Type = struct {
-    tag: Tag,
-    param: Tag = .none,
+    kind: Kind,
+    param: Kind = .none,
     class_name: ?[]const u8 = null,
     param_class_name: ?[]const u8 = null,
     enum_name: ?[]const u8 = null,
@@ -11,7 +10,7 @@ pub const Type = struct {
     fn_params: []Type = &.{},
     fn_result: ?*Type = null,
 
-    pub const Tag = enum {
+    pub const Kind = enum {
         none,
         any,
         document,
@@ -32,44 +31,45 @@ pub const Type = struct {
         void,
     };
 
-    pub const none = Type{ .tag = .none };
-    pub const any = Type{ .tag = .any };
-    pub const document = Type{ .tag = .document };
-    pub const page = Type{ .tag = .page };
-    pub const object = Type{ .tag = .object };
-    pub const metadata = Type{ .tag = .metadata };
-    pub const anchor = Type{ .tag = .anchor };
-    pub const style = Type{ .tag = .style };
-    pub const string = Type{ .tag = .string };
-    pub const color = Type{ .tag = .color };
-    pub const number = Type{ .tag = .number };
-    pub const boolean = Type{ .tag = .boolean };
-    pub const constraints = Type{ .tag = .constraints };
+    pub const none = Type{ .kind = .none };
+    pub const any = Type{ .kind = .any };
+    pub const document = Type{ .kind = .document };
+    pub const page = Type{ .kind = .page };
+    pub const object = Type{ .kind = .object };
+    pub const metadata = Type{ .kind = .metadata };
+    pub const anchor = Type{ .kind = .anchor };
+    pub const function = Type{ .kind = .function };
+    pub const style = Type{ .kind = .style };
+    pub const string = Type{ .kind = .string };
+    pub const color = Type{ .kind = .color };
+    pub const number = Type{ .kind = .number };
+    pub const boolean = Type{ .kind = .boolean };
+    pub const constraints = Type{ .kind = .constraints };
 
     pub fn objectClass(name: []const u8) Type {
-        return .{ .tag = .object, .class_name = name };
+        return .{ .kind = .object, .class_name = name };
     }
 
     pub fn enumType(name: []const u8) Type {
-        return .{ .tag = .enum_type, .enum_name = name };
+        return .{ .kind = .enum_type, .enum_name = name };
     }
 
     pub fn optional(allocator: std.mem.Allocator, child: Type) !Type {
         const copied = try allocator.create(Type);
         errdefer allocator.destroy(copied);
         copied.* = try child.clone(allocator);
-        return .{ .tag = .optional, .optional_child = copied };
+        return .{ .kind = .optional, .optional_child = copied };
     }
 
-    pub fn selection(item: Tag) Type {
-        return .{ .tag = .selection, .param = normalizeParam(item) };
+    pub fn selection(item: Kind) Type {
+        return .{ .kind = .selection, .param = normalizeParam(item) };
     }
 
     pub fn selectionType(item: Type) Type {
         return .{
-            .tag = .selection,
-            .param = normalizeParam(item.tag),
-            .param_class_name = if (item.tag == .object) item.class_name else null,
+            .kind = .selection,
+            .param = normalizeParam(item.kind),
+            .param_class_name = if (item.kind == .object) item.class_name else null,
         };
     }
 
@@ -84,14 +84,14 @@ pub const Type = struct {
         errdefer allocator.destroy(copied_result);
         copied_result.* = try result.clone(allocator);
         return .{
-            .tag = .function,
+            .kind = .function,
             .fn_params = copied_params,
             .fn_result = copied_result,
         };
     }
 
     pub fn deinit(self: *Type, allocator: std.mem.Allocator) void {
-        switch (self.tag) {
+        switch (self.kind) {
             .function => {
                 for (self.fn_params) |param| {
                     var owned = param;
@@ -117,7 +117,7 @@ pub const Type = struct {
     }
 
     pub fn clone(self: Type, allocator: std.mem.Allocator) anyerror!Type {
-        return switch (self.tag) {
+        return switch (self.kind) {
             .function => blk: {
                 const result = self.fn_result orelse break :blk self;
                 break :blk try functionType(allocator, self.fn_params, result.*);
@@ -130,54 +130,13 @@ pub const Type = struct {
         };
     }
 
-    fn normalizeParam(param: Tag) Tag {
+    fn normalizeParam(param: Kind) Kind {
         return if (param == .none) .any else param;
     }
 
-    pub fn fromValueTag(tag: model.ValueTag) Type {
-        return switch (tag) {
-            .none => .none,
-            .document => .document,
-            .page => .page,
-            .object => .object,
-            .metadata => .metadata,
-            .selection => selection(.any),
-            .anchor => .anchor,
-            .function => .{ .tag = .function },
-            .style => .style,
-            .string => .string,
-            .number => .number,
-            .boolean => .boolean,
-            .constraints => .constraints,
-            .void => .{ .tag = .void },
-        };
-    }
-
-    pub fn toValueTag(self: Type) ?model.ValueTag {
-        return switch (self.tag) {
-            .none => .none,
-            .document => .document,
-            .page => .page,
-            .object => .object,
-            .metadata => .metadata,
-            .selection => .selection,
-            .anchor => .anchor,
-            .function => .function,
-            .style => .style,
-            .string => .string,
-            .color => .string,
-            .number => .number,
-            .boolean => .boolean,
-            .constraints => .constraints,
-            .enum_type => .string,
-            .void => .void,
-            .optional, .any => null,
-        };
-    }
-
     pub fn eql(a: Type, b: Type) bool {
-        if (a.tag != b.tag) return false;
-        if (a.tag == .function) {
+        if (a.kind != b.kind) return false;
+        if (a.kind == .function) {
             if ((a.fn_result == null) != (b.fn_result == null)) return false;
             if (a.fn_params.len != b.fn_params.len) return false;
             for (a.fn_params, 0..) |param, index| {
@@ -189,7 +148,7 @@ pub const Type = struct {
             }
             return true;
         }
-        if (a.tag == .optional) {
+        if (a.kind == .optional) {
             if ((a.optional_child == null) != (b.optional_child == null)) return false;
             if (a.optional_child) |a_child| {
                 const b_child = b.optional_child orelse return false;
@@ -204,27 +163,27 @@ pub const Type = struct {
     }
 
     pub fn accepts(expected: Type, actual: Type) bool {
-        if (expected.tag == .any or actual.tag == .any) return true;
-        if (expected.tag == .optional) {
-            if (actual.tag == .none) return true;
+        if (expected.kind == .any or actual.kind == .any) return true;
+        if (expected.kind == .optional) {
+            if (actual.kind == .none) return true;
             const child = expected.optional_child orelse return false;
-            if (actual.tag == .optional) {
+            if (actual.kind == .optional) {
                 const actual_child = actual.optional_child orelse return false;
                 return accepts(child.*, actual_child.*);
             }
             return accepts(child.*, actual);
         }
-        if (actual.tag == .optional) return false;
-        if (expected.tag == .color or actual.tag == .color) {
-            return expected.tag == .color and actual.tag == .color;
+        if (actual.kind == .optional) return false;
+        if (expected.kind == .color or actual.kind == .color) {
+            return expected.kind == .color and actual.kind == .color;
         }
-        if (expected.tag == .enum_type or actual.tag == .enum_type) {
-            return expected.tag == .enum_type and
-                actual.tag == .enum_type and
+        if (expected.kind == .enum_type or actual.kind == .enum_type) {
+            return expected.kind == .enum_type and
+                actual.kind == .enum_type and
                 optionalStringEql(expected.enum_name, actual.enum_name);
         }
-        if (expected.tag != actual.tag) return false;
-        if (expected.tag == .function) {
+        if (expected.kind != actual.kind) return false;
+        if (expected.kind == .function) {
             if (expected.fn_result == null or actual.fn_result == null) return false;
             if (expected.fn_params.len != actual.fn_params.len) return false;
             for (expected.fn_params, 0..) |expected_param, index| {
@@ -232,7 +191,7 @@ pub const Type = struct {
             }
             return accepts(expected.fn_result.?.*, actual.fn_result.?.*);
         }
-        if (expected.tag == .object and expected.class_name != null and actual.class_name != null) {
+        if (expected.kind == .object and expected.class_name != null and actual.class_name != null) {
             if (!std.mem.eql(u8, expected.class_name.?, actual.class_name.?)) return false;
         }
         const expected_param = normalizeParam(expected.param);
@@ -244,33 +203,6 @@ pub const Type = struct {
         return true;
     }
 
-    pub fn fromSelectionItemTag(tag: model.SelectionItemTag) Type {
-        return switch (tag) {
-            .page => selection(.page),
-            .object => selection(.object),
-            .metadata => selection(.metadata),
-        };
-    }
-
-    pub fn scalarTagFromValueTag(tag: model.ValueTag) Tag {
-        return switch (tag) {
-            .none => .none,
-            .document => .document,
-            .page => .page,
-            .object => .object,
-            .metadata => .metadata,
-            .selection => .selection,
-            .anchor => .anchor,
-            .function => .function,
-            .style => .style,
-            .string => .string,
-            .number => .number,
-            .boolean => .boolean,
-            .constraints => .constraints,
-            .void => .void,
-        };
-    }
-
     pub fn formatAlloc(self: Type, allocator: std.mem.Allocator) ![]const u8 {
         var text = std.ArrayList(u8).empty;
         errdefer text.deinit(allocator);
@@ -279,9 +211,9 @@ pub const Type = struct {
     }
 
     pub fn formatInto(self: Type, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
-        switch (self.tag) {
+        switch (self.kind) {
             .selection => {
-                try out.appendSlice(allocator, displayName(self.tag));
+                try out.appendSlice(allocator, displayName(self.kind));
                 try out.append(allocator, '<');
                 if (normalizeParam(self.param) == .object and self.param_class_name != null) {
                     try out.appendSlice(allocator, "Object<");
@@ -307,7 +239,7 @@ pub const Type = struct {
                 }
                 if (self.fn_params.len == 1) {
                     const param = self.fn_params[0];
-                    const needs_parens = param.tag == .function;
+                    const needs_parens = param.kind == .function;
                     if (needs_parens) try out.append(allocator, '(');
                     try param.formatInto(allocator, out);
                     if (needs_parens) try out.append(allocator, ')');
@@ -324,7 +256,7 @@ pub const Type = struct {
             },
             .optional => {
                 if (self.optional_child) |child| {
-                    const needs_parens = child.tag == .function;
+                    const needs_parens = child.kind == .function;
                     if (needs_parens) try out.append(allocator, '(');
                     try child.formatInto(allocator, out);
                     if (needs_parens) try out.append(allocator, ')');
@@ -336,17 +268,17 @@ pub const Type = struct {
             .enum_type => if (self.enum_name) |name|
                 try out.appendSlice(allocator, name)
             else
-                try out.appendSlice(allocator, displayName(self.tag)),
-            else => try out.appendSlice(allocator, displayName(self.tag)),
+                try out.appendSlice(allocator, displayName(self.kind)),
+            else => try out.appendSlice(allocator, displayName(self.kind)),
         }
     }
 
     pub fn label(self: Type) []const u8 {
-        return displayName(self.tag);
+        return displayName(self.kind);
     }
 
-    fn displayName(tag: Tag) []const u8 {
-        return switch (tag) {
+    fn displayName(kind: Kind) []const u8 {
+        return switch (kind) {
             .none => "None",
             .any => "Any",
             .document => "Document",

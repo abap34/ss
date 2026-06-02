@@ -55,13 +55,11 @@ pub const ImportDecl = struct {
 pub const TypeDecl = struct {
     name: []const u8,
     body: []const u8,
-    refinement: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: TypeDecl, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.body);
-        if (self.refinement) |refinement| allocator.free(refinement);
     }
 };
 
@@ -129,75 +127,20 @@ pub const FunctionDecl = struct {
     span: Span,
     params: std.ArrayList(ParamDecl),
     result_type: Type,
-    result_tag: core.ValueTag,
-    effects: ?[]const u8 = null,
-    annotations: std.ArrayList(Annotation),
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
         self.result_type.deinit(allocator);
-        if (self.effects) |effects| allocator.free(effects);
-        for (self.annotations.items) |*annotation| annotation.deinit(allocator);
-        self.annotations.deinit(allocator);
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
-    }
-};
-
-pub const Annotation = struct {
-    name: []const u8,
-    args: std.ArrayList(AnnotationArg),
-    span: Span,
-
-    pub fn deinit(self: *Annotation, allocator: Allocator) void {
-        allocator.free(self.name);
-        for (self.args.items) |*arg| arg.deinit(allocator);
-        self.args.deinit(allocator);
-    }
-};
-
-pub const AnnotationArg = union(enum) {
-    positional: AnnotationValue,
-    named: struct {
-        name: []const u8,
-        value: AnnotationValue,
-    },
-
-    pub fn deinit(self: *AnnotationArg, allocator: Allocator) void {
-        switch (self.*) {
-            .positional => |*value| value.deinit(allocator),
-            .named => |*named| {
-                allocator.free(named.name);
-                named.value.deinit(allocator);
-            },
-        }
-    }
-};
-
-pub const AnnotationValue = union(enum) {
-    ident: []const u8,
-    string: []const u8,
-    expr: Expr,
-    list: std.ArrayList(AnnotationValue),
-
-    pub fn deinit(self: *AnnotationValue, allocator: Allocator) void {
-        switch (self.*) {
-            .ident, .string => |text| allocator.free(text),
-            .expr => |*expr| expr.deinit(allocator),
-            .list => |*items| {
-                for (items.items) |*item| item.deinit(allocator);
-                items.deinit(allocator);
-            },
-        }
     }
 };
 
 pub const ParamDecl = struct {
     name: []const u8,
     ty: Type,
-    value_tag: core.ValueTag,
     default_value: ?*Expr = null,
 
     pub fn deinit(self: *ParamDecl, allocator: Allocator) void {

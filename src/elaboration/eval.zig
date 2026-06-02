@@ -888,11 +888,11 @@ fn evalExpr(
         .optional_check => |check| blk: {
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, check.target.*);
             defer value.deinit(ir.allocator);
-            break :blk .{ .boolean = contracts.valueTag(value) != .none };
+            break :blk .{ .boolean = contracts.runtimeKind(value) != .none };
         },
         .coalesce => |coalesce| blk: {
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.target.*);
-            if (contracts.valueTag(value) != .none) break :blk value;
+            if (contracts.runtimeKind(value) != .none) break :blk value;
             value.deinit(ir.allocator);
             break :blk try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.fallback.*);
         },
@@ -965,7 +965,7 @@ fn evalCall(
     return switch (descriptor) {
         .function => |func| blk: {
             if (func.kind == .constant) {
-                if (func.result_tag == .function) {
+                if (func.result_type.kind == .function) {
                     var const_value = try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, closures, func, current_origin, .{
                         .name = call.name,
                         .args = std.ArrayList(Expr).empty,
@@ -1418,7 +1418,7 @@ fn evalSelectCall(
         if (err == error.InvalidArity) try validateFixedArity(ir, call.args.items.len, descriptor.arity, current_origin);
         return err;
     };
-    try contracts.ensureValueTypeWithCode(ir, null, base, descriptor.input_tag, current_origin, .UnmatchedInputType);
+    try contracts.ensureValueConformsToType(ir, null, base, descriptor.input_type, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {
             return try ir.select(ir.allocator, base, core.Query.selfObject());
@@ -1869,7 +1869,7 @@ fn executeCallStatement(
                     var owned = value;
                     owned.deinit(ir.allocator);
                 }
-                if (func.result_tag == .void) {
+                if (func.result_type.kind == .void) {
                     try contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
                 } else {
                     try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
@@ -1879,7 +1879,7 @@ fn executeCallStatement(
             },
         }
     }
-    if (func.result_tag != .void) return error.FunctionDidNotReturnValue;
+    if (func.result_type.kind != .void) return error.FunctionDidNotReturnValue;
 }
 
 fn invokeFunctionRef(
@@ -2001,7 +2001,7 @@ fn invokeUserFunctionValues(
         }
     }
 
-    if (func.result_tag == .void) return .{ .void = {} };
+    if (func.result_type.kind == .void) return .{ .void = {} };
     return error.FunctionDidNotReturnValue;
 }
 

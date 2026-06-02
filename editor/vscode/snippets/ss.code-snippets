@@ -27,13 +27,6 @@
     ],
     "description": "Create an ss function"
   },
-  "annotated function": {
-    "prefix": "ss-fn-ann",
-    "body": [
-      "fn ${1:op_text}(${2:self}: object<${3:Text}>) -> object ! LowerRender @op(${4:draw_text})"
-    ],
-    "description": "Create an annotated function declaration"
-  },
   "constant": {
     "prefix": "ss-const",
     "body": [
@@ -73,20 +66,12 @@
     ],
     "description": "Insert a color literal"
   },
-  "value domain": {
+  "enum type": {
     "prefix": "ss-type",
     "body": [
-      "type ${1:MyDomain} = \"${2:a}\" | \"${3:b}\""
+      "type ${1:MyEnum} = ${2:left} | ${3:center} | ${4:right}"
     ],
-    "description": "Declare a value-domain alias"
-  },
-  "host capability": {
-    "prefix": "ss-host",
-    "body": [
-      "@host(effects = [${5:ExternalProcess}], cache = ${6:hash_key})",
-      "fn ${1:compile_asset}(${2:source}: ${3:string}) -> ${4:string}"
-    ],
-    "description": "Declare a host capability boundary"
+    "description": "Declare an enum type"
   },
   "text block": {
     "prefix": "ss-text",

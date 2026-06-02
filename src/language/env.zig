@@ -52,16 +52,6 @@ pub const SemanticEnv = struct {
         return registry.lookupQueryOp(name);
     }
 
-    pub fn hostCapabilities(self: *const SemanticEnv) []const declarations.HostCapabilityDescriptor {
-        const index = self.declarations orelse return &.{};
-        return index.host_capabilities.items;
-    }
-
-    pub fn renderOps(self: *const SemanticEnv) []const declarations.RenderOpDescriptor {
-        const index = self.declarations orelse return &.{};
-        return index.render_ops.items;
-    }
-
     pub fn class(self: *const SemanticEnv, name: []const u8) ?declarations.ClassDescriptor {
         if (self.declarations) |index| return index.classByName(name);
         if (self.ir) |ir| {
@@ -264,7 +254,7 @@ fn builtinType(name: []const u8) ?ast.Type {
     if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
     if (std.mem.eql(u8, name, "Bool")) return ast.Type.boolean;
     if (std.mem.eql(u8, name, "Constraints")) return ast.Type.constraints;
-    if (std.mem.eql(u8, name, "Void")) return .{ .tag = .void };
+    if (std.mem.eql(u8, name, "Void")) return .{ .kind = .void };
     if (std.mem.eql(u8, name, "None")) return ast.Type.none;
     return null;
 }

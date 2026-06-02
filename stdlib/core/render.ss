@@ -1,15 +1,5 @@
 import std:core/objects
 
-fn compile_math(source: String) -> String ! ExternalProcess | ReadTemp | WriteTemp @host(cache = math_hash(source))
-
-fn op_text(self: Object) -> Object ! LowerRender @op(draw_text)
-fn op_code(self: Object) -> Object ! LowerRender @op(draw_code_highlight)
-fn op_math(self: Object) -> Object ! LowerRender @op(draw_vector_math)
-fn op_vec(self: Object) -> Object ! LowerRender @op(draw_vector_asset)
-fn op_img(self: Object) -> Object ! LowerRender @op(draw_raster_asset)
-fn op_box(self: Object) -> Object ! LowerRender @op(draw_chrome)
-fn op_rule(self: Object) -> Object ! LowerRender @op(draw_rule)
-
 fn sty(obj: Object, style_value: Style) -> Object
   obj.style = style_value
   return obj

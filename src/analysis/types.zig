@@ -6,7 +6,6 @@ const Type = ast.Type;
 
 pub const TypeInfo = struct {
     ty: Type = Type.any,
-    value_tag: core.ValueTag,
     object_class: ?[]const u8 = null,
     string_literal: ?[]const u8 = null,
     function_labels: []const []const u8 = &.{},
@@ -14,20 +13,23 @@ pub const TypeInfo = struct {
 
 pub const TypeEnv = std.StringHashMap(TypeInfo);
 
-pub fn infoFromValueTag(value_tag: core.ValueTag) TypeInfo {
-    return .{ .ty = Type.fromValueTag(value_tag), .value_tag = value_tag };
-}
-
 pub fn infoFromType(ty: Type) TypeInfo {
     return .{
         .ty = ty,
-        .value_tag = ty.toValueTag() orelse if (ty.tag == .optional) .none else .void,
-        .object_class = if (ty.tag == .object) ty.class_name else if (ty.tag == .selection and ty.param == .object) ty.param_class_name else null,
+        .object_class = if (ty.kind == .object) ty.class_name else if (ty.kind == .selection and ty.param == .object) ty.param_class_name else null,
     };
 }
 
-pub fn infoForSelectionItem(tag: core.SelectionItemTag) TypeInfo {
-    return infoFromType(Type.fromSelectionItemTag(tag));
+pub fn infoForSelectionItem(kind: core.SelectionItemTag) TypeInfo {
+    return infoFromType(syntheticSelectionType(kind));
+}
+
+fn syntheticSelectionType(kind: core.SelectionItemTag) Type {
+    return switch (kind) {
+        .page => Type.selection(.page),
+        .object => Type.selection(.object),
+        .metadata => Type.selection(.metadata),
+    };
 }
 
 pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
@@ -37,7 +39,6 @@ pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
 pub fn mergeTypeInfo(allocator: std.mem.Allocator, a: TypeInfo, b: TypeInfo) !TypeInfo {
     return .{
         .ty = a.ty,
-        .value_tag = a.value_tag,
         .object_class = mergeObjectClass(a.object_class, b.object_class),
         .string_literal = mergeStringLiteral(a.string_literal, b.string_literal),
         .function_labels = try mergeFunctionLabels(allocator, a.function_labels, b.function_labels),
@@ -94,7 +95,7 @@ pub fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
 }
 
 pub fn isPropertyTarget(info: TypeInfo) bool {
-    return switch (info.ty.tag) {
+    return switch (info.ty.kind) {
         .document, .page, .object => true,
         .selection => info.ty.param == .object or info.ty.param == .any,
         else => false,
@@ -102,30 +103,13 @@ pub fn isPropertyTarget(info: TypeInfo) bool {
 }
 
 pub fn targetClassForInfo(info: TypeInfo) ?[]const u8 {
-    return switch (info.ty.tag) {
+    return switch (info.ty.kind) {
         .document => "Doc",
         .page => "PageContext",
         .object => info.object_class,
         .selection => if (info.ty.param == .object or info.ty.param == .any) info.object_class else null,
         else => null,
     };
-}
-
-pub fn ensureValueTag(
-    ir: ?*core.Ir,
-    actual: core.ValueTag,
-    expected: core.ValueTag,
-    origin: []const u8,
-    code: core.TypeMismatchCode,
-) !void {
-    if (actual != expected) {
-        if (ir) |sink| {
-            try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .type_mismatch = .{ .code = code, .expected = expected, .actual = actual },
-            });
-        }
-        return error.InvalidValueTag;
-    }
 }
 
 pub fn ensureType(
@@ -136,11 +120,8 @@ pub fn ensureType(
     origin: []const u8,
     code: core.TypeMismatchCode,
 ) !void {
+    _ = code;
     if (Type.accepts(expected, actual.ty)) return;
-    const expected_tag = expected.toValueTag() orelse actual.value_tag;
-    if (expected_tag != actual.value_tag and !needsStaticTypeLabel(expected, actual.ty)) {
-        return ensureValueTag(ir, actual.value_tag, expected_tag, origin, code);
-    }
     if (ir) |sink| {
         const actual_label = try typeLabelAlloc(allocator, actual.ty);
         defer allocator.free(actual_label);
@@ -151,19 +132,5 @@ pub fn ensureType(
             .user_report = .{ .message = message },
         });
     }
-    return error.InvalidValueTag;
-}
-
-fn needsStaticTypeLabel(expected: Type, actual: Type) bool {
-    return isSourceLevelRefinement(expected) or isSourceLevelRefinement(actual);
-}
-
-fn isSourceLevelRefinement(ty: Type) bool {
-    return switch (ty.tag) {
-        .color, .enum_type, .optional => true,
-        .object => ty.class_name != null,
-        .selection => ty.param_class_name != null,
-        .function => true,
-        else => false,
-    };
+    return error.InvalidType;
 }

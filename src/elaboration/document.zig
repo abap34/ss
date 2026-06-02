@@ -462,14 +462,14 @@ pub const Document = struct {
 
     fn ensureValueTag(self: *Document, value: core.Value, expected: core.ValueTag, context: []const u8) !void {
         _ = self;
-        const actual = valueTag(value);
+        const actual = runtimeKind(value);
         if (actual != expected) {
             std.debug.print("value type mismatch in {s}: expected {s}, got {s}\n", .{ context, @tagName(expected), @tagName(actual) });
             return error.InvalidValueTag;
         }
     }
 
-    fn valueTag(value: core.Value) core.ValueTag {
+    fn runtimeKind(value: core.Value) core.ValueTag {
         return switch (value) {
             .none => .none,
             .document => .document,

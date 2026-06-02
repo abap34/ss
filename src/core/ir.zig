@@ -109,7 +109,6 @@ pub const Ir = struct {
     project_module_id: SourceModuleId,
     functions: std.StringHashMap(ast.FunctionDecl),
     function_metadata: std.StringHashMap(FunctionMetadata),
-    variable_types: std.StringHashMap(ValueTag),
     definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
@@ -140,7 +139,6 @@ pub const Ir = struct {
             .project_module_id = 0,
             .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
             .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
-            .variable_types = std.StringHashMap(ValueTag).init(allocator),
             .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
@@ -188,7 +186,6 @@ pub const Ir = struct {
         self.module_order.deinit(self.allocator);
         self.functions.deinit();
         self.function_metadata.deinit();
-        self.variable_types.deinit();
         self.definitions.deinit(self.allocator);
         self.hints.deinit(self.allocator);
         self.contains.deinit();
@@ -209,7 +206,6 @@ pub const Ir = struct {
         self.module_order.deinit(self.allocator);
         self.functions.deinit();
         self.function_metadata.deinit();
-        self.variable_types.deinit();
         for (self.definitions.items) |definition| {
             self.allocator.free(definition.name);
             if (definition.file) |file| self.allocator.free(file);

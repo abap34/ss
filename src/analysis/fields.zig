@@ -38,7 +38,7 @@ fn checkObjectNamesUnique(
             const origin = try statementOrigin(allocator, origin_path, object_decl.span);
             defer allocator.free(origin);
             try addUserReport(ir, origin, "DuplicateObjectClass: object class '{s}' is already defined in this module", .{object_decl.name});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
         try names.put(object_decl.name, {});
     }
@@ -57,7 +57,7 @@ fn checkObjectDeclaration(
     if (object_decl.base) |base| {
         if (!sema.classExists(base)) {
             try addUserReport(ir, origin, "InvalidObjectDeclaration: unknown base object class: {s}", .{base});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
     }
     try checkObjectFields(allocator, ir, sema, module_id, origin_path, object_decl.fields.items);
@@ -75,12 +75,12 @@ fn checkObjectExtension(
     defer allocator.free(origin);
     if (!sema.classExists(extension.target)) {
         try addUserReport(ir, origin, "InvalidObjectExtension: unknown object class: {s}", .{extension.target});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     if (extension.implements) |implements| {
         if (!sema.classExists(implements)) {
             try addUserReport(ir, origin, "InvalidObjectExtension: unknown protocol: {s}", .{implements});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
     }
     try checkObjectFields(allocator, ir, sema, module_id, origin_path, extension.fields.items);
@@ -99,7 +99,7 @@ fn checkObjectFields(
         defer allocator.free(origin);
         var field_type = (try sema.resolveTypeText(allocator, module_id, field.value_type)) orelse {
             try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         };
         defer field_type.deinit(allocator);
         if (field.default_value) |default_value| {
@@ -118,12 +118,12 @@ fn checkFieldDefault(
     default_value: []const u8,
 ) !void {
     const value = std.mem.trim(u8, default_value, " \t\r\n");
-    if (ty.tag == .optional) {
+    if (ty.kind == .optional) {
         if (std.mem.eql(u8, value, "none")) return;
         const child = ty.optional_child orelse return;
         return checkFieldDefault(allocator, ir, sema, module_id, origin, child.*, value);
     }
-    switch (ty.tag) {
+    switch (ty.kind) {
         .string => if (isStringDefault(value)) return,
         .color => if (isColorDefault(value)) return,
         .number => if (std.fmt.parseFloat(f32, value) catch null) |_| return,
@@ -136,7 +136,7 @@ fn checkFieldDefault(
         else => return,
     }
     try addUserReport(ir, origin, "InvalidFieldDefault: default value does not match field type {s}", .{fieldTypeLabel(ty)});
-    return error.InvalidValueTag;
+    return error.InvalidType;
 }
 
 fn isStringDefault(value: []const u8) bool {
@@ -154,7 +154,7 @@ fn enumDefaultMatches(sema: *const SemanticEnv, module_id: core.SourceModuleId, 
 }
 
 fn fieldTypeLabel(ty: ast.Type) []const u8 {
-    return switch (ty.tag) {
+    return switch (ty.kind) {
         .string => "String",
         .color => "Color",
         .number => "Number",
@@ -186,7 +186,7 @@ fn checkRolesUnique(
                 "DuplicateRole: role '{s}' is already provided by {s}",
                 .{ role_name, existing_class },
             );
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
         try roles.put(role_name, class_name);
     }

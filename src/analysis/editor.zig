@@ -49,7 +49,12 @@ pub fn formatPrimitiveSignature(
         defer allocator.free(label);
         try params.appendSlice(allocator, label);
     }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ descriptor.name, params.items, resultText(descriptor.result_tag) });
+    const result_label = if (registry.primitiveResultType(descriptor)) |result_type|
+        try result_type.formatAlloc(allocator)
+    else
+        try allocator.dupe(u8, "dependent");
+    defer allocator.free(result_label);
+    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ descriptor.name, params.items, result_label });
 }
 
 pub fn formatPrimitiveParam(
@@ -148,10 +153,6 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             break :blk std.fmt.allocPrint(allocator, "{s} ?? {s}", .{ target, fallback });
         },
     };
-}
-
-pub fn resultText(result_tag: ?core.ValueTag) []const u8 {
-    return if (result_tag) |tag| @tagName(tag) else "unknown";
 }
 
 fn collectDefinitionsFromProgram(

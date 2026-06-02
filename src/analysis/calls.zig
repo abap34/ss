@@ -248,7 +248,7 @@ const Analyzer = struct {
             .function => |func| {
                 const label = try self.namedLabel(call.name);
                 const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-                if (func.kind == .constant and func.result_type.tag == .function) {
+                if (func.kind == .constant and func.result_type.kind == .function) {
                     const const_labels = try self.invokeNamed(label, func, &.{});
                     return try self.invokeLabels(const_labels, arg_labels.items, owner);
                 }
@@ -353,7 +353,7 @@ const Analyzer = struct {
     fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const LabelSet) !void {
         var index: usize = 0;
         while (index < params.len and index < args.len) : (index += 1) {
-            if (params[index].ty.tag == .function) {
+            if (params[index].ty.kind == .function) {
                 try env.set(self.allocator, params[index].name, args[index]);
             }
         }

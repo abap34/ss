@@ -22,32 +22,6 @@ pub const FieldDescriptor = struct {
     module_id: core.SourceModuleId,
 };
 
-pub const FunctionAnnotationDescriptor = struct {
-    function_name: []const u8,
-    annotation_name: []const u8,
-    args: []const ast.AnnotationArg,
-    module_id: core.SourceModuleId,
-};
-
-pub const HostCapabilityDescriptor = struct {
-    function_name: []const u8,
-    annotation_name: []const u8,
-    args: []const ast.AnnotationArg,
-    effects_text: ?[]const u8 = null,
-    effects: ?core.EffectSet = null,
-    cache: ?ast.AnnotationValue = null,
-    module_id: core.SourceModuleId,
-};
-
-pub const RenderOpDescriptor = struct {
-    function_name: []const u8,
-    annotation_name: []const u8,
-    args: []const ast.AnnotationArg,
-    effects_text: ?[]const u8 = null,
-    effects: ?core.EffectSet = null,
-    module_id: core.SourceModuleId,
-};
-
 pub const TypeDescriptor = struct {
     name: []const u8,
     body: []const u8,
@@ -60,9 +34,6 @@ pub const DeclarationIndex = struct {
     classes: std.ArrayList(ClassDescriptor),
     roles: std.ArrayList(RoleDescriptor),
     fields: std.ArrayList(FieldDescriptor),
-    function_annotations: std.ArrayList(FunctionAnnotationDescriptor),
-    host_capabilities: std.ArrayList(HostCapabilityDescriptor),
-    render_ops: std.ArrayList(RenderOpDescriptor),
     class_by_name: std.StringHashMap(usize),
     role_by_name: std.StringHashMap(usize),
 
@@ -73,9 +44,6 @@ pub const DeclarationIndex = struct {
             .classes = .empty,
             .roles = .empty,
             .fields = .empty,
-            .function_annotations = .empty,
-            .host_capabilities = .empty,
-            .render_ops = .empty,
             .class_by_name = std.StringHashMap(usize).init(allocator),
             .role_by_name = std.StringHashMap(usize).init(allocator),
         };
@@ -86,9 +54,6 @@ pub const DeclarationIndex = struct {
         self.classes.deinit(self.allocator);
         self.roles.deinit(self.allocator);
         self.fields.deinit(self.allocator);
-        self.function_annotations.deinit(self.allocator);
-        self.host_capabilities.deinit(self.allocator);
-        self.render_ops.deinit(self.allocator);
         self.class_by_name.deinit();
         self.role_by_name.deinit();
     }
@@ -295,114 +260,6 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         try appendFields(index, module.id, extension.target, extension.fields.items);
     }
 
-    for (module.program.functions.items) |func| {
-        for (func.annotations.items) |annotation| {
-            const descriptor = FunctionAnnotationDescriptor{
-                .function_name = func.name,
-                .annotation_name = annotation.name,
-                .args = annotation.args.items,
-                .module_id = module.id,
-            };
-            try index.function_annotations.append(index.allocator, descriptor);
-            if (std.mem.eql(u8, annotation.name, "host")) {
-                const effects_text = func.effects orelse annotationArgValue(annotation.args.items, "effects");
-                try index.host_capabilities.append(index.allocator, .{
-                    .function_name = func.name,
-                    .annotation_name = annotation.name,
-                    .args = annotation.args.items,
-                    .effects_text = effects_text,
-                    .effects = parseEffectSetMaybe(effects_text),
-                    .cache = annotationNamedValue(annotation.args.items, "cache"),
-                    .module_id = module.id,
-                });
-            } else if (std.mem.eql(u8, annotation.name, "op")) {
-                try index.render_ops.append(index.allocator, .{
-                    .function_name = func.name,
-                    .annotation_name = annotation.name,
-                    .args = annotation.args.items,
-                    .effects_text = func.effects,
-                    .effects = parseEffectSetMaybe(func.effects),
-                    .module_id = module.id,
-                });
-            }
-        }
-    }
-}
-
-fn annotationArgValue(args: []const ast.AnnotationArg, key: []const u8) ?[]const u8 {
-    for (args) |arg| {
-        switch (arg) {
-            .named => |named| {
-                if (std.mem.eql(u8, named.name, key)) return annotationValueScalar(named.value);
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-pub fn annotationPositionalArg(args: []const ast.AnnotationArg, ordinal: usize) ?[]const u8 {
-    var position: usize = 0;
-    for (args) |arg| {
-        switch (arg) {
-            .positional => |value| {
-                if (position == ordinal) return annotationValueScalar(value);
-                position += 1;
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-pub fn parseEffectSet(text: []const u8) !core.EffectSet {
-    var set = core.EffectSet.empty();
-    var index: usize = 0;
-    while (index < text.len) {
-        while (index < text.len and (std.ascii.isWhitespace(text[index]) or text[index] == '|' or text[index] == ',' or text[index] == '[' or text[index] == ']')) : (index += 1) {}
-        const start = index;
-        while (index < text.len and (std.ascii.isAlphanumeric(text[index]) or text[index] == '_')) : (index += 1) {}
-        if (start == index) {
-            if (index < text.len) index += 1;
-            continue;
-        }
-        const effect = parseEffectName(text[start..index]) orelse return error.UnknownEffect;
-        set.insert(effect);
-    }
-    if (set.isEmpty()) return error.UnknownEffect;
-    return set;
-}
-
-fn parseEffectSetMaybe(text: ?[]const u8) ?core.EffectSet {
-    const effect_text = text orelse return null;
-    return parseEffectSet(effect_text) catch null;
-}
-
-pub fn parseEffectName(name: []const u8) ?core.Effect {
-    inline for (@typeInfo(core.Effect).@"enum".fields) |field| {
-        if (std.mem.eql(u8, name, field.name)) return @enumFromInt(field.value);
-    }
-    return null;
-}
-
-fn annotationNamedValue(args: []const ast.AnnotationArg, key: []const u8) ?ast.AnnotationValue {
-    for (args) |arg| {
-        switch (arg) {
-            .named => |named| {
-                if (std.mem.eql(u8, named.name, key)) return named.value;
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn annotationValueScalar(value: ast.AnnotationValue) ?[]const u8 {
-    return switch (value) {
-        .ident, .string => |text| text,
-        .expr => null,
-        .list => null,
-    };
 }
 
 fn appendRoles(index: *DeclarationIndex, module_id: core.SourceModuleId, class_name: []const u8, roles: []const []const u8) !void {

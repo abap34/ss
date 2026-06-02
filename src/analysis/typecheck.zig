@@ -19,7 +19,6 @@ const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 pub const VariableInfo = semantic_types.TypeInfo;
 const ensureType = semantic_types.ensureType;
-const infoFromValueTag = semantic_types.infoFromValueTag;
 const inferExprInfo = infer.exprInfo;
 pub const expectedPrimitiveArgType = infer.expectedPrimitiveArgType;
 
@@ -111,8 +110,6 @@ pub fn typecheckProgram(
     try checkTypeAnnotations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
-    try checkAnnotationContracts(allocator, ir, &declaration_index);
-    try checkOrdinaryFunctionEffectContracts(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
@@ -273,7 +270,6 @@ fn resolveFunctionTypeReferences(
         if (param.default_value) |default_value| try resolveExprTypeReferences(default_value, module_id, sema);
     }
     try resolveTypeReference(&func.result_type, module_id, sema);
-    func.result_tag = func.result_type.toValueTag() orelse func.result_tag;
     for (func.statements.items) |*stmt| {
         try resolveStatementTypeReferences(stmt, module_id, sema);
     }
@@ -334,7 +330,6 @@ fn resolveParamTypeReference(
     sema: *const SemanticEnv,
 ) !void {
     try resolveTypeReference(&param.ty, module_id, sema);
-    param.value_tag = param.ty.toValueTag() orelse param.value_tag;
 }
 
 fn resolveTypeReference(
@@ -342,7 +337,7 @@ fn resolveTypeReference(
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
-    switch (ty.tag) {
+    switch (ty.kind) {
         .object => if (ty.class_name) |name| {
             if (!sema.classExists(name)) {
                 if (sema.enumDescriptor(module_id, name) != null) ty.* = ast.Type.enumType(name);
@@ -436,8 +431,8 @@ fn checkTypeAnnotation(
     ty: ast.Type,
     origin: []const u8,
 ) !void {
-    if (ty.tag == .enum_type or ty.tag == .color or ty.tag == .none) return;
-    if (ty.tag == .optional) {
+    if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none) return;
+    if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(ir, sema, module_id, child.*, origin);
         return;
     }
@@ -449,7 +444,7 @@ fn checkTypeAnnotation(
     if (ty.param_class_name) |class_name| {
         if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
     }
-    if (ty.tag == .function) {
+    if (ty.kind == .function) {
         for (ty.fn_params) |param| try checkTypeAnnotation(ir, sema, module_id, param, origin);
         if (ty.fn_result) |result| try checkTypeAnnotation(ir, sema, module_id, result.*, origin);
     }
@@ -492,205 +487,6 @@ fn originForModuleSpan(allocator: std.mem.Allocator, origin_path: []const u8, sp
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn checkOrdinaryFunctionEffectContracts(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    sema: *const SemanticEnv,
-) !void {
-    var it = sema.functions.iterator();
-    while (it.next()) |entry| {
-        const func = entry.value_ptr.*;
-        if (func.effects == null) continue;
-        if (hasAnnotation(func, "host") or hasAnnotation(func, "op")) continue;
-        const origin = try functionOriginForDecl(allocator, ir, func);
-        defer allocator.free(origin);
-        const declared = declarations.parseEffectSet(func.effects.?) catch {
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: function declares an unknown effect") },
-            });
-            return error.UnknownEffect;
-        };
-        var visiting = std.StringHashMap(void).init(allocator);
-        defer visiting.deinit();
-        const inferred = try inferFunctionEffects(sema, func, &visiting);
-        const required = inferred.withoutPure();
-        if (!declared.containsAll(required)) {
-            const missing = required.difference(declared);
-            const missing_text = try missing.formatAlloc(allocator);
-            defer allocator.free(missing_text);
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "MissingEffects: function body uses effects not listed in its signature: {s}", .{missing_text}) },
-            });
-            return error.MissingEffects;
-        }
-    }
-}
-
-fn inferFunctionEffects(
-    sema: *const SemanticEnv,
-    func: ast.FunctionDecl,
-    visiting: *std.StringHashMap(void),
-) anyerror!core.EffectSet {
-    if (visiting.contains(func.name)) {
-        if (func.effects) |effects| return declarations.parseEffectSet(effects) catch core.EffectSet.empty();
-        return core.EffectSet.empty();
-    }
-    try visiting.put(func.name, {});
-    defer _ = visiting.remove(func.name);
-
-    var set = core.EffectSet.empty();
-    for (func.params.items) |param| {
-        if (param.default_value) |default_expr| {
-            set.unionWith(try inferExprEffects(sema, default_expr.*, visiting));
-        }
-    }
-    for (func.statements.items) |stmt| set.unionWith(try inferStatementEffects(sema, stmt, visiting));
-    return set;
-}
-
-fn inferStatementEffects(
-    sema: *const SemanticEnv,
-    stmt: ast.Statement,
-    visiting: *std.StringHashMap(void),
-) anyerror!core.EffectSet {
-    var set = core.EffectSet.empty();
-    switch (stmt.kind) {
-        .let_binding => |binding| set.unionWith(try inferExprEffects(sema, binding.expr, visiting)),
-        .return_expr => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
-        .return_void => {},
-        .property_set => |property| {
-            set.insert(.WriteProperty);
-            set.unionWith(try inferExprEffects(sema, property.value, visiting));
-        },
-        .if_stmt => |if_stmt| {
-            set.unionWith(try inferExprEffects(sema, if_stmt.condition, visiting));
-            for (if_stmt.then_statements.items) |nested| set.unionWith(try inferStatementEffects(sema, nested, visiting));
-            for (if_stmt.else_statements.items) |nested| set.unionWith(try inferStatementEffects(sema, nested, visiting));
-        },
-        .expr_stmt => |expr| set.unionWith(try inferExprEffects(sema, expr, visiting)),
-        .constrain => |decl| {
-            set.insert(.WriteConstraint);
-            if (decl.offset) |expr| set.unionWith(try inferExprEffects(sema, expr, visiting));
-        },
-    }
-    return set;
-}
-
-fn inferExprEffects(
-    sema: *const SemanticEnv,
-    expr: ast.Expr,
-    visiting: *std.StringHashMap(void),
-) anyerror!core.EffectSet {
-    return switch (expr) {
-        .ident, .string, .color, .number, .boolean, .none => core.EffectSet.empty(),
-        .lambda => |lambda| try inferExprEffects(sema, lambda.body.*, visiting),
-        .apply => |apply| blk: {
-            var set = try inferExprEffects(sema, apply.callee.*, visiting);
-            for (apply.args.items) |arg| set.unionWith(try inferExprEffects(sema, arg, visiting));
-            break :blk set;
-        },
-        .member => |member| try inferExprEffects(sema, member.target.*, visiting),
-        .optional_check => |check| try inferExprEffects(sema, check.target.*, visiting),
-        .coalesce => |coalesce| blk: {
-            var set = try inferExprEffects(sema, coalesce.target.*, visiting);
-            set.unionWith(try inferExprEffects(sema, coalesce.fallback.*, visiting));
-            break :blk set;
-        },
-        .call => |call| try inferCallEffects(sema, call, visiting),
-    };
-}
-
-fn inferCallEffects(
-    sema: *const SemanticEnv,
-    call: ast.CallExpr,
-    visiting: *std.StringHashMap(void),
-) anyerror!core.EffectSet {
-    var set = core.EffectSet.empty();
-    for (call.args.items) |arg| set.unionWith(try inferExprEffects(sema, arg, visiting));
-    const descriptor = sema.call(call.name) orelse return set;
-    switch (descriptor) {
-        .primitive => |primitive| {
-            set.unionWith(registry.primitiveEffects(primitive));
-            if (primitive.callback) |callback_spec| {
-                const index = callback_spec.function_arg_index;
-                if (call.args.items.len > index) switch (call.args.items[index]) {
-                    .ident => |callback_name| if (sema.function(callback_name)) |callback| {
-                        set.unionWith(try inferFunctionEffects(sema, callback, visiting));
-                    },
-                    .lambda => |lambda| set.unionWith(try inferExprEffects(sema, lambda.body.*, visiting)),
-                    else => {},
-                };
-            }
-        },
-        .function => |callee| set.unionWith(try inferFunctionEffects(sema, callee, visiting)),
-    }
-    return set;
-}
-
-fn hasAnnotation(func: ast.FunctionDecl, name: []const u8) bool {
-    for (func.annotations.items) |annotation| {
-        if (std.mem.eql(u8, annotation.name, name)) return true;
-    }
-    return false;
-}
-
-fn functionOriginForDecl(
-    allocator: std.mem.Allocator,
-    ir: *const core.Ir,
-    func: ast.FunctionDecl,
-) ![]const u8 {
-    if (ir.function_metadata.get(func.name)) |metadata| {
-        return functionOrigin(allocator, ir, metadata.module_id, func.name);
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
-}
-
-fn checkAnnotationContracts(
-    allocator: std.mem.Allocator,
-    ir: *core.Ir,
-    index: *const declarations.DeclarationIndex,
-) !void {
-    for (index.function_annotations.items) |annotation| {
-        if (std.mem.eql(u8, annotation.annotation_name, "host") or std.mem.eql(u8, annotation.annotation_name, "op")) continue;
-        const origin = try functionOrigin(allocator, ir, annotation.module_id, annotation.function_name);
-        defer allocator.free(origin);
-        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnknownAnnotation: function annotation '@{s}' is not supported", .{annotation.annotation_name}) },
-        });
-        return error.UnknownAnnotation;
-    }
-    for (index.host_capabilities.items) |capability| {
-        if (capability.effects != null) continue;
-        const origin = try functionOrigin(allocator, ir, capability.module_id, capability.function_name);
-        defer allocator.free(origin);
-        if (capability.effects_text != null) {
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: @host declares an unknown effect") },
-            });
-            return error.UnknownEffect;
-        }
-        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try ir.allocator.dupe(u8, "@host functions must declare effects with '! Effect | Effect'") },
-        });
-        return error.MissingEffects;
-    }
-    for (index.render_ops.items) |op| {
-        if (op.effects != null) continue;
-        const origin = try functionOrigin(allocator, ir, op.module_id, op.function_name);
-        defer allocator.free(origin);
-        if (op.effects_text != null) {
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try ir.allocator.dupe(u8, "UnknownEffect: @op declares an unknown effect") },
-            });
-            return error.UnknownEffect;
-        }
-        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try ir.allocator.dupe(u8, "@op functions must declare effects with '! Effect | Effect'") },
-        });
-        return error.MissingEffects;
-    }
-}
-
 fn functionOrigin(
     allocator: std.mem.Allocator,
     ir: *const core.Ir,
@@ -708,22 +504,6 @@ fn functionOrigin(
     }
     if (path.len == 0) return std.fmt.allocPrint(allocator, "function:{s}", .{function_name});
     return std.fmt.allocPrint(allocator, "path:{s}", .{path});
-}
-
-pub fn collectVariableTypesFromProgram(
-    allocator: std.mem.Allocator,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
-    program: ast.Program,
-) !std.StringHashMap(core.ValueTag) {
-    var infos = try collectVariableInfoFromProgram(allocator, functions, program, null);
-    defer infos.deinit();
-    var variables = std.StringHashMap(core.ValueTag).init(allocator);
-    errdefer variables.deinit();
-    var iterator = infos.iterator();
-    while (iterator.next()) |entry| {
-        try variables.put(entry.key_ptr.*, entry.value_ptr.value_tag);
-    }
-    return variables;
 }
 
 pub fn collectVariableInfoFromProgram(
@@ -747,8 +527,9 @@ pub fn collectVariableInfoFromProgram(
                 const info = try inferExprInfo(allocator, diagnostic_ir, &sema, &env, default_value.*, origin);
                 try ensureType(diagnostic_ir, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
-            try env.put(param.name, .{ .ty = param.ty, .value_tag = param.value_tag });
-            try variables.put(param.name, .{ .ty = param.ty, .value_tag = param.value_tag });
+            const info = semantic_types.infoFromType(param.ty);
+            try env.put(param.name, info);
+            try variables.put(param.name, info);
         }
 
         for (func.statements.items) |stmt| {
@@ -841,32 +622,16 @@ pub fn buildIrWithOptions(
         try resolveTypeReferences(allocator, &ir, &sema);
         try rebuildFunctionDeclarations(allocator, &ir);
     }
-    ir.variable_types = collectVariableTypesFromProgramWithDiagnostics(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {
+    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {
         if (!options.allow_diagnostics) {
             printIrDiagnosticsOrFallback(&ir, err);
             return error.DiagnosticsFailed;
         }
-        break :blk std.StringHashMap(core.ValueTag).init(allocator);
+        break :blk null;
     };
+    if (variable_infos) |*infos| infos.deinit();
     try editor.populateIrAnalysis(allocator, &ir);
     return ir;
-}
-
-fn collectVariableTypesFromProgramWithDiagnostics(
-    allocator: std.mem.Allocator,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
-    program: ast.Program,
-    diagnostic_ir: *core.Ir,
-) !std.StringHashMap(core.ValueTag) {
-    var infos = try collectVariableInfoFromProgram(allocator, functions, program, diagnostic_ir);
-    defer infos.deinit();
-    var variables = std.StringHashMap(core.ValueTag).init(allocator);
-    errdefer variables.deinit();
-    var iterator = infos.iterator();
-    while (iterator.next()) |entry| {
-        try variables.put(entry.key_ptr.*, entry.value_ptr.value_tag);
-    }
-    return variables;
 }
 
 fn printIrDiagnosticsOrFallback(ir: *core.Ir, err: anyerror) void {
@@ -926,17 +691,6 @@ pub fn loadProgramIndexForPath(
 ) !ProgramIndex {
     const base_dir = std.fs.path.dirname(input_path) orelse ".";
     return loadProgramIndex(allocator, io, base_dir, project_program);
-}
-
-pub fn collectVariableTypesForProgram(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    input_path: []const u8,
-    program: ast.Program,
-) !std.StringHashMap(core.ValueTag) {
-    var index = try loadProgramIndexForPath(allocator, io, input_path, program);
-    defer index.deinit();
-    return try collectVariableTypesFromProgram(allocator, &index.functions, program);
 }
 
 fn collectVariableTypesFromStatement(

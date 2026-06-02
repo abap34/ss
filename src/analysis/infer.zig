@@ -11,9 +11,7 @@ const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 const TypeInfo = semantic_types.TypeInfo;
-const ensureValueTag = semantic_types.ensureValueTag;
 const ensureType = semantic_types.ensureType;
-const infoFromValueTag = semantic_types.infoFromValueTag;
 const infoFromType = semantic_types.infoFromType;
 const isPropertyTarget = semantic_types.isPropertyTarget;
 const mergeObjectClass = semantic_types.mergeObjectClass;
@@ -55,17 +53,6 @@ fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: 
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-pub fn exprValueTag(
-    allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
-    sema: *const SemanticEnv,
-    env: *const TypeEnv,
-    expr: ast.Expr,
-    origin: []const u8,
-) anyerror!core.ValueTag {
-    return (try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, .{})).value_tag;
-}
-
 pub fn exprInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
@@ -88,18 +75,17 @@ fn exprInfoWithOptions(
 ) anyerror!TypeInfo {
     return switch (expr) {
         .string => |text| blk: {
-            var info = infoFromValueTag(.string);
+            var info = infoFromType(Type.string);
             info.string_literal = text;
             break :blk info;
         },
         .color => |text| blk: {
             var info = infoFromType(Type.color);
-            info.value_tag = .string;
             info.string_literal = text;
             break :blk info;
         },
-        .number => infoFromValueTag(.number),
-        .boolean => infoFromValueTag(.boolean),
+        .number => infoFromType(Type.number),
+        .boolean => infoFromType(Type.boolean),
         .none => infoFromType(Type.none),
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
@@ -134,32 +120,31 @@ fn inferMemberInfo(
         const enum_name = member.target.ident;
         if (sema.enumHasCaseAny(enum_name, member.name)) {
             var info = infoFromType(Type.enumType(enum_name));
-            info.value_tag = .string;
             info.string_literal = member.name;
             return info;
         }
         if (sema.enumExistsAny(enum_name)) {
             try addUserReport(ir, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
     }
 
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, member.target.*, origin, options);
     if (!isPropertyTarget(target_info)) {
         try addUserReport(ir, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     if (std.mem.eql(u8, member.name, "content")) return infoFromType(Type.string);
     const field = lookupFieldForTarget(sema, target_info, member.name) orelse {
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member.name});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     };
     var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
         try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     };
     defer field_type.deinit(allocator);
-    var result_type = if (field_type.tag == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
+    var result_type = if (field_type.kind == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
     errdefer result_type.deinit(allocator);
     return infoFromType(result_type);
 }
@@ -174,9 +159,9 @@ fn inferOptionalCheckInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, target, origin, options);
-    if (target_info.ty.tag != .optional) {
+    if (target_info.ty.kind != .optional) {
         try addUserReport(ir, origin, "TypeMismatch: '?' expects an optional value", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     return infoFromType(Type.boolean);
 }
@@ -191,13 +176,13 @@ fn inferCoalesceInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.target.*, origin, options);
-    if (target_info.ty.tag != .optional) {
+    if (target_info.ty.kind != .optional) {
         try addUserReport(ir, origin, "TypeMismatch: '??' expects an optional value", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     const child = target_info.ty.optional_child orelse {
         try addUserReport(ir, origin, "TypeMismatch: invalid optional type", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     };
     const fallback_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.fallback.*, origin, options);
     try ensureType(ir, allocator, fallback_info, child.*, origin, .UnmatchedArgumentType);
@@ -230,14 +215,12 @@ fn inferLambdaInfo(
     defer allocator.free(param_types);
     for (lambda.params.items, 0..) |param, index| {
         param_types[index] = param.ty;
-        var param_info = infoFromType(param.ty);
-        param_info.value_tag = param.value_tag;
-        try local_env.put(param.name, param_info);
+        try local_env.put(param.name, infoFromType(param.ty));
     }
     const body_info = try exprInfoWithOptions(allocator, ir, sema, &local_env, lambda.body.*, origin, options);
-    if (body_info.value_tag == .void) {
+    if (body_info.ty.kind == .void) {
         try addUserReport(ir, origin, "VoidValue: lambda bodies must produce a value", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     var info = infoFromType(try Type.functionType(allocator, param_types, body_info.ty));
     info.function_labels = try singleFunctionLabel(allocator, try lambdaLabel(allocator, lambda));
@@ -254,12 +237,12 @@ fn inferCallInfo(
     options: InferenceOptions,
 ) anyerror!TypeInfo {
     if (env.get(call.name)) |callee_info| {
-        if (callee_info.ty.tag == .function and callee_info.ty.fn_result != null) {
+        if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
             return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin, options);
         }
     }
     if (sema.function(call.name)) |func| {
-        if (isConst(func) and func.result_type.tag == .function and func.result_type.fn_result != null) {
+        if (isConst(func) and func.result_type.kind == .function and func.result_type.fn_result != null) {
             const const_info = try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, .{
                 .name = call.name,
                 .args = std.ArrayList(ast.Expr).empty,
@@ -301,9 +284,11 @@ fn inferFunctionValueCallInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
-    if (callee_info.ty.tag != .function or callee_info.ty.fn_result == null) {
-        try ensureValueTag(ir, callee_info.value_tag, .function, origin, .UnmatchedArgumentType);
-        return error.InvalidValueTag;
+    if (callee_info.ty.kind != .function or callee_info.ty.fn_result == null) {
+        const actual_label = try typeLabelAlloc(allocator, callee_info.ty);
+        defer allocator.free(actual_label);
+        try addUserReport(ir, origin, "TypeMismatch: expected Function, got {s}", .{actual_label});
+        return error.InvalidType;
     }
     if (args.len != callee_info.ty.fn_params.len) {
         try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
@@ -397,13 +382,13 @@ fn validateKnownPropertyKeyCall(
         .string => |text| text,
         else => {
             try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         },
     };
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
     if (lookupFieldForTarget(sema, target_info, key) == null) {
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
 }
 
@@ -461,11 +446,7 @@ fn inferUserFunctionReturnInfoInner(
                 try ensureType(ir, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
             }
         }
-        var param_info = infoFromType(param.ty);
-        param_info.value_tag = param.value_tag;
-        if (param.ty.tag == .object) param_info.object_class = param.ty.class_name;
-        if (param.ty.tag == .selection and param.ty.param == .object) param_info.object_class = param.ty.param_class_name;
-        try env.put(param.name, param_info);
+        try env.put(param.name, infoFromType(param.ty));
     }
 
     var result = infoFromType(func.result_type);
@@ -480,7 +461,6 @@ fn inferUserFunctionReturnInfoInner(
         &result,
     );
     result.ty = func.result_type;
-    result.value_tag = func.result_tag;
     if (func.result_type.class_name) |class_name| result.object_class = class_name;
     return result;
 }
@@ -556,7 +536,7 @@ fn primitiveResultTypeInfo(
                 callback.function_arg_index,
                 selection_info,
                 callback.supplied_arg_count,
-                callback.expected_result_tag,
+                callback.expected_result_type,
                 options,
             );
         }
@@ -564,15 +544,15 @@ fn primitiveResultTypeInfo(
 
     switch (descriptor.result_policy) {
         .first_selection_item => {
-            if (call.args.items.len == 0) return infoFromValueTag(.object);
+            if (call.args.items.len == 0) return infoFromType(Type.object);
             const selection_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             var info = switch (selection_info.ty.param) {
-                .page => infoFromValueTag(.page),
-                .metadata => infoFromValueTag(.metadata),
-                .object, .any, .none => infoFromValueTag(.object),
-                else => infoFromValueTag(selection_info.value_tag),
+                .page => infoFromType(Type.page),
+                .metadata => infoFromType(Type.metadata),
+                .object, .any, .none => infoFromType(Type.object),
+                else => infoFromType(Type.object),
             };
-            if (info.value_tag == .object) {
+            if (info.ty.kind == .object) {
                 info.object_class = selection_info.object_class;
                 info.ty.class_name = selection_info.object_class;
             }
@@ -585,16 +565,12 @@ fn primitiveResultTypeInfo(
         .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin, options),
         .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin, options),
         .target_arg => {
-            if (call.args.items.len == 0) return infoFromValueTag(.object);
+            if (call.args.items.len == 0) return infoFromType(Type.object);
             const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             return .{
-                .ty = switch (target_info.ty.tag) {
+                .ty = switch (target_info.ty.kind) {
                     .document, .page, .object, .selection => target_info.ty,
                     else => Type.object,
-                },
-                .value_tag = switch (target_info.value_tag) {
-                    .document, .page, .object, .selection => target_info.value_tag,
-                    else => .object,
                 },
                 .object_class = target_info.object_class,
             };
@@ -604,7 +580,7 @@ fn primitiveResultTypeInfo(
     }
 
     const result_type = registry.primitiveResultType(descriptor) orelse Type.object;
-    if (result_type.tag != .object) return infoFromType(result_type);
+    if (result_type.kind != .object) return infoFromType(result_type);
 
     var info = infoFromType(result_type);
     info.object_class = switch (descriptor.result_policy) {
@@ -626,14 +602,14 @@ fn validateCallbackShape(
     function_arg_index: usize,
     selection_info: TypeInfo,
     supplied_arg_count: usize,
-    expected_result_tag: ?core.ValueTag,
+    expected_result_type: ?Type,
     options: InferenceOptions,
 ) !void {
     if (call.args.items.len <= function_arg_index) return;
     const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index], origin, options);
-    if (callback_info.ty.tag != .function or callback_info.ty.fn_result == null) {
+    if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
         try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     const extra_count = if (call.args.items.len > function_arg_index + 1) call.args.items.len - function_arg_index - 1 else 0;
     const expected_arg_count = supplied_arg_count + extra_count;
@@ -647,7 +623,8 @@ fn validateCallbackShape(
     const item_type = switch (selection_info.ty.param) {
         .page => Type.page,
         .metadata => Type.metadata,
-        .object, .any, .none => Type.object,
+        .object => if (selection_info.object_class orelse selection_info.ty.param_class_name) |class_name| Type.objectClass(class_name) else Type.object,
+        .any, .none => Type.object,
         else => Type.any,
     };
     if (supplied_arg_count == 1) {
@@ -662,9 +639,8 @@ fn validateCallbackShape(
         const param_index = supplied_arg_count + extra_index;
         try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
-    if (expected_result_tag) |result_tag| {
-        const actual_tag = callback_info.ty.fn_result.?.toValueTag() orelse .void;
-        try ensureValueTag(ir, actual_tag, result_tag, origin, .UnmatchedReturnType);
+    if (expected_result_type) |result_type| {
+        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin, .UnmatchedReturnType);
     }
 }
 
@@ -694,7 +670,7 @@ fn inferSelectionAlgebraInfo(
             "InvalidSelectionAlgebra: cannot combine {s} and {s}",
             .{ left_label, right_label },
         );
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
 
     const item_tag = if (left.ty.param != .any) left.ty.param else right.ty.param;
@@ -725,17 +701,15 @@ fn inferSelectCallInfo(
     }
     const base = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
     try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
-    for (query.extra_arg_tags, 0..) |_, extra_index| {
+    for (query.extra_arg_types, 0..) |expected, extra_index| {
         const arg_index = 2 + extra_index;
         if (arg_index >= call.args.items.len) break;
         const actual = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[arg_index], origin, options);
-        if (registry.argType(query.extra_arg_tags[extra_index])) |expected| {
-            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
-        }
+        try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
     var info = infoFromType(registry.queryOutputType(query));
     info.object_class = inferQueryOutputClass(sema, env, query, call, base);
-    if (info.ty.tag == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
+    if (info.ty.kind == .selection and info.ty.param == .object) info.ty.param_class_name = info.object_class;
     return info;
 }
 
@@ -776,24 +750,26 @@ fn validateSetPropCall(
         .string => |text| text,
         else => {
             try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         },
     };
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
     if (!isPropertyTarget(target_info)) {
+        const actual_label = try typeLabelAlloc(ir.allocator, target_info.ty);
+        defer ir.allocator.free(actual_label);
         try addUserReport(
             ir,
             origin,
             "InvalidProperty: set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
-            .{@tagName(target_info.value_tag)},
+            .{actual_label},
         );
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
 
     const value_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[2], origin);
-    if (value_info.ty.tag == .function) {
+    if (value_info.ty.kind == .function) {
         try addUserReport(ir, origin, "InvalidProperty: function values cannot be stored as properties", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
         try validateFieldValue(ir, sema, field, key, value_info, origin);
@@ -801,7 +777,7 @@ fn validateSetPropCall(
     }
 
     try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
-    return error.InvalidValueTag;
+    return error.InvalidType;
 }
 
 fn validateExtendRenderEnvCall(
@@ -814,13 +790,15 @@ fn validateExtendRenderEnvCall(
     if (call.args.items.len < 4) return;
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
     if (!isPropertyTarget(target_info)) {
+        const actual_label = try typeLabelAlloc(ir.allocator, target_info.ty);
+        defer ir.allocator.free(actual_label);
         try addUserReport(
             ir,
             origin,
             "InvalidRenderEnv: extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
-            .{@tagName(target_info.value_tag)},
+            .{actual_label},
         );
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
 
     const op = resolveStringLiteral(env, call.args.items[1]);
@@ -828,24 +806,24 @@ fn validateExtendRenderEnvCall(
     if (op) |literal| {
         if (!std.mem.eql(u8, literal, core.render_env.OpAdd)) {
             try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
     }
     if (key) |literal| {
         if (!std.mem.eql(u8, literal, core.render_env.KeyMathLatexPackages)) {
             try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
-            return error.InvalidValueTag;
+            return error.InvalidType;
         }
     }
     if (op != null and key != null and !core.render_env.isSupported(op.?, key.?)) {
         try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
     if (key != null and std.mem.eql(u8, key.?, core.render_env.KeyMathLatexPackages)) {
         if (resolveStringLiteral(env, call.args.items[3])) |package| {
             if (!core.render_env.isValidLatexPackageName(package)) {
                 try addUserReport(ir, origin, "InvalidRenderEnv: invalid LaTeX package name: {s}", .{package});
-                return error.InvalidValueTag;
+                return error.InvalidType;
             }
         }
     }
@@ -855,7 +833,7 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
     if (targetClassForInfo(target_info)) |class_name| {
         return sema.field(class_name, key);
     }
-    if (target_info.ty.tag == .object or (target_info.ty.tag == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {
+    if (target_info.ty.kind == .object or (target_info.ty.kind == .selection and (target_info.ty.param == .object or target_info.ty.param == .any))) {
         return sema.fieldByName(key);
     }
     return null;
@@ -871,7 +849,7 @@ fn validateFieldValue(
 ) !void {
     var expected = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse {
         try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     };
     defer expected.deinit(ir.allocator);
     if (!Type.accepts(expected, value_info.ty)) {
@@ -885,7 +863,7 @@ fn validateFieldValue(
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
             .{ key, expected_label, actual_label },
         );
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
 }
 
@@ -917,7 +895,12 @@ fn validatePropertySetStatementWithOptions(
         try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{object_name});
         return error.UnknownIdentifier;
     };
-    try ensureValueTag(ir, object_info.value_tag, .object, origin, .UnmatchedArgumentType);
+    if (!isPropertyTarget(object_info)) {
+        const actual_label = try typeLabelAlloc(allocator, object_info.ty);
+        defer allocator.free(actual_label);
+        try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+        return error.InvalidType;
+    }
     const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
     if (!options.validate_contracts) return;
     if (ir) |sink| {
@@ -926,31 +909,10 @@ fn validatePropertySetStatementWithOptions(
             return;
         }
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
-        return error.InvalidValueTag;
+        return error.InvalidType;
     }
 }
 
-pub fn expectedPrimitiveArgType(descriptor: registry.PrimitiveDescriptor, index: usize) ?core.ValueTag {
-    const arg_tag = if (descriptor.arg_tags.len == 0)
-        return null
-    else if (index < descriptor.arg_tags.len)
-        descriptor.arg_tags[index]
-    else
-        descriptor.arg_tags[descriptor.arg_tags.len - 1];
-
-    return switch (arg_tag) {
-        .any => null,
-        .document => .document,
-        .page => .page,
-        .object => .object,
-        .metadata => .metadata,
-        .selection => .selection,
-        .anchor => .anchor,
-        .function => .function,
-        .style => .style,
-        .string => .string,
-        .number => .number,
-        .boolean => .boolean,
-        .constraints => .constraints,
-    };
+pub fn expectedPrimitiveArgType(descriptor: registry.PrimitiveDescriptor, index: usize) ?Type {
+    return registry.primitiveArgType(descriptor, index);
 }

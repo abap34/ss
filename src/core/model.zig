@@ -255,7 +255,6 @@ pub const FunctionRef = struct {
     closure_id: ?usize = null,
     param_count: usize,
     returns_value: bool,
-    effect: FunctionEffect = .unknown,
 
     pub fn deinit(self: *FunctionRef, allocator: Allocator) void {
         _ = self;
@@ -269,107 +268,7 @@ pub const FunctionRef = struct {
             .closure_id = self.closure_id,
             .param_count = self.param_count,
             .returns_value = self.returns_value,
-            .effect = self.effect,
         };
-    }
-};
-
-pub const FunctionEffect = enum {
-    unknown,
-    pure,
-    builds_graph,
-    adds_constraints,
-    reports_diagnostics,
-};
-
-pub const Effect = enum(u5) {
-    Pure,
-    ReadGraph,
-    ReadMetadata,
-    CreatePage,
-    CreateNode,
-    EmitMetadata,
-    WriteContent,
-    WriteProperty,
-    WriteConstraint,
-    ReadLayout,
-    WriteRenderPolicy,
-    EmitDiagnostics,
-    ExternalProcess,
-    ReadTemp,
-    WriteTemp,
-    LowerRender,
-};
-
-pub const EffectSet = struct {
-    bits: u32 = 0,
-
-    pub fn empty() EffectSet {
-        return .{};
-    }
-
-    pub fn pure() EffectSet {
-        var set = EffectSet.empty();
-        set.insert(.Pure);
-        return set;
-    }
-
-    pub fn single(effect: Effect) EffectSet {
-        var set = EffectSet.empty();
-        set.insert(effect);
-        return set;
-    }
-
-    pub fn insert(self: *EffectSet, effect: Effect) void {
-        self.bits |= bit(effect);
-    }
-
-    pub fn remove(self: *EffectSet, effect: Effect) void {
-        self.bits &= ~bit(effect);
-    }
-
-    pub fn unionWith(self: *EffectSet, other: EffectSet) void {
-        self.bits |= other.bits;
-    }
-
-    pub fn contains(self: EffectSet, effect: Effect) bool {
-        return (self.bits & bit(effect)) != 0;
-    }
-
-    pub fn containsAll(self: EffectSet, other: EffectSet) bool {
-        return (self.bits & other.bits) == other.bits;
-    }
-
-    pub fn difference(self: EffectSet, other: EffectSet) EffectSet {
-        return .{ .bits = self.bits & ~other.bits };
-    }
-
-    pub fn withoutPure(self: EffectSet) EffectSet {
-        var copy = self;
-        copy.remove(.Pure);
-        return copy;
-    }
-
-    pub fn isEmpty(self: EffectSet) bool {
-        return self.bits == 0;
-    }
-
-    fn bit(effect: Effect) u32 {
-        return @as(u32, 1) << @intFromEnum(effect);
-    }
-
-    pub fn formatAlloc(self: EffectSet, allocator: Allocator) ![]const u8 {
-        var out = std.ArrayList(u8).empty;
-        errdefer out.deinit(allocator);
-        var index: usize = 0;
-        while (index < @typeInfo(Effect).@"enum".fields.len) : (index += 1) {
-            const effect: Effect = @enumFromInt(index);
-            if (!self.contains(effect)) continue;
-            if (out.items.len != 0) try out.appendSlice(allocator, " | ");
-            try out.appendSlice(allocator, @tagName(effect));
-        }
-        if (out.items.len == 0) try out.appendSlice(allocator, "(none)");
-        return try out.toOwnedSlice(allocator);
     }
 };
 
