@@ -3023,10 +3023,6 @@
     "named": false
   },
   {
-    "type": "code",
-    "named": false
-  },
-  {
     "type": "color_string",
     "named": true
   },
@@ -3072,10 +3068,6 @@
     "named": false
   },
   {
-    "type": "fragment",
-    "named": false
-  },
-  {
     "type": "identifier",
     "named": true
   },
@@ -3108,20 +3100,16 @@
     "named": true
   },
   {
-    "type": "list",
-    "named": false
-  },
-  {
     "type": "metadata",
     "named": false
   },
   {
     "type": "number",
-    "named": false
+    "named": true
   },
   {
     "type": "number",
-    "named": true
+    "named": false
   },
   {
     "type": "object",
@@ -3153,14 +3141,10 @@
   },
   {
     "type": "string",
-    "named": false
-  },
-  {
-    "type": "string",
     "named": true
   },
   {
-    "type": "style",
+    "type": "string",
     "named": false
   },
   {
