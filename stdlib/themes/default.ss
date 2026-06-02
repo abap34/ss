@@ -13,7 +13,7 @@ fn h2(subtitle_text: String) -> Object
 end
 
 fn head(title_text: String) -> Object
-  let rule = rule("page_header")
+  let rule = rule()
   let title = tl(title_obj(title_text), 72, 62)
   txt(title, "Helvetica-Bold", 28, 34, c"0.07,0.08,0.10", 28, 72, 72)
   rule_l(rule, c"0.66,0.70,0.76", 0.9, "")
@@ -53,7 +53,7 @@ end
 fn toc(title_text: String) -> Object
   head(title_text)
   let list = toc_obj()
-  let chrome = panel(style("toc"))
+  let chrome = panel()
   box(chrome, c"1,1,1", c"0.84,0.86,0.90", 0.8, 6)
   surround(chrome, list, 10, 8)
   pageno()

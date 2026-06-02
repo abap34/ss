@@ -13,7 +13,6 @@ pub fn propertyString(allocator: std.mem.Allocator, value: core.Value) ![]const 
         .string => |text| text,
         .number => |number_value| std.fmt.allocPrint(allocator, "{d}", .{number_value}),
         .boolean => |boolean_value| if (boolean_value) "true" else "false",
-        .style => |style| style.name,
         else => error.ExpectedStringArgument,
     };
 }

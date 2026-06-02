@@ -25,9 +25,11 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const offset: f32 = if (call.args.items.len == 3) try ctx.evalNumberArg(call, 2) else 0;
             break :blk .{ .constraints = try ctx.equalAnchorConstraintSet(target, source, offset) };
         },
-        .style => blk: {
-            const style_name = try ctx.evalStringArg(call, 0);
-            break :blk .{ .style = .{ .name = style_name } };
+        .logical_not => blk: {
+            var value = try ctx.evalExprValue(call.args.items[0]);
+            defer value.deinit(ctx.ir.allocator);
+            const boolean = try eval_value.boolean(value);
+            break :blk .{ .boolean = !boolean };
         },
         .neg => blk: {
             const value = try ctx.evalNumberArg(call, 0);

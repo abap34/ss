@@ -1,5 +1,5 @@
 type LayoutPolicy = top | top_flow | center | center_stack
-type RenderKind = text | code | vector_math | vector_asset | raster_asset | chrome | chrome_only
+type RenderKind = text | code | vector_math | vector_asset | raster_asset | chrome_only
 type TextParseMode = none | inline | block
 type WrapMode = on | off
 type FitPolicy = warn | error | ignore
@@ -9,13 +9,11 @@ type Doc = object {
   layout_v: LayoutPolicy = LayoutPolicy.top_flow
   layout_v_center_offset: Number = 0
   background_fill: Color? = none
-  pageno_on: Bool = false
   pageno_fmt: String? = none
   footer_text: String? = none
   logo_path: String? = none
   logo_scale: Number = 1
   watermark: String? = none
-  need_titles: Bool = false
   math_align: Align = Align.center
 }
 
@@ -32,7 +30,6 @@ type Flow = object {
   layout_spacing_after: Number = 32
   layout_x: Number = 96
   layout_right_inset: Number = 96
-  style: Style = "default"
   fit: FitPolicy = FitPolicy.warn
   link_id: String = ""
 }
@@ -264,7 +261,7 @@ type Panel = object {
   base = Flow
   roles = ["panel"]
 
-  render_kind: RenderKind = RenderKind.chrome
+  render_kind: RenderKind = RenderKind.chrome_only
   layout_font_size: Number = 4
   layout_line_height: Number = 4
   layout_spacing_after: Number = 0

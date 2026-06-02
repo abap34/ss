@@ -183,20 +183,7 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
 }
 
 fn isBuiltinTypeName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "Any") or
-        std.mem.eql(u8, name, "Document") or
-        std.mem.eql(u8, name, "Page") or
-        std.mem.eql(u8, name, "Object") or
-        std.mem.eql(u8, name, "Metadata") or
-        std.mem.eql(u8, name, "Anchor") or
-        std.mem.eql(u8, name, "Style") or
-        std.mem.eql(u8, name, "String") or
-        std.mem.eql(u8, name, "Color") or
-        std.mem.eql(u8, name, "Number") or
-        std.mem.eql(u8, name, "Bool") or
-        std.mem.eql(u8, name, "Constraints") or
-        std.mem.eql(u8, name, "Void") or
-        std.mem.eql(u8, name, "None");
+    return semantic_env.isBuiltinTypeName(name);
 }
 
 fn checkTypeAnnotations(

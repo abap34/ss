@@ -308,22 +308,21 @@ const Parser = struct {
             }
             const type_text = trimRightSpaces(self.source[type_start..self.pos]);
             if (type_text.len == 0) return self.fail(error.ExpectedTypeAnnotation);
-            var default_value: ?[]const u8 = null;
+            var default_value: ?*Expr = null;
+            var default_property_value: ?[]const u8 = null;
             self.skipInlineSpaces();
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
-                const default_start = self.pos;
-                while (!self.eof() and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
-                    if (self.lineCommentStart()) break;
-                    self.pos += 1;
-                }
-                const default_text = trimRightSpaces(trimLeftSpaces(self.source[default_start..self.pos]));
-                default_value = try self.allocator.dupe(u8, default_text);
+                self.skipInlineSpaces();
+                const parsed_default = try self.parseObjectFieldDefault();
+                default_value = parsed_default.expr;
+                default_property_value = parsed_default.property_value;
             }
             try fields.append(self.allocator, .{
                 .name = name,
                 .value_type = try self.allocator.dupe(u8, type_text),
                 .default_value = default_value,
+                .default_property_value = default_property_value,
                 .span = .{ .start = member_start, .end = self.pos },
             });
             try self.consumeStatementTerminator();
@@ -331,6 +330,46 @@ const Parser = struct {
         }
         try self.expectChar('}');
         try self.consumeStatementTerminator();
+    }
+
+    const ParsedObjectFieldDefault = struct {
+        expr: *Expr,
+        property_value: ?[]const u8,
+    };
+
+    fn parseObjectFieldDefault(self: *Parser) !ParsedObjectFieldDefault {
+        const expr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(expr);
+        expr.* = try self.parseExpr();
+        errdefer expr.deinit(self.allocator);
+        return .{
+            .expr = expr,
+            .property_value = try self.objectFieldDefaultPropertyValue(expr.*),
+        };
+    }
+
+    fn objectFieldDefaultPropertyValue(self: *Parser, expr: Expr) !?[]const u8 {
+        return switch (expr) {
+            .string => |text| try self.allocator.dupe(u8, text),
+            .color => |text| try self.allocator.dupe(u8, text),
+            .number => |value| try std.fmt.allocPrint(self.allocator, "{d}", .{value}),
+            .boolean => |value| try self.allocator.dupe(u8, if (value) "true" else "false"),
+            .none => try self.allocator.dupe(u8, "none"),
+            .call => |call| try self.numericUnaryDefaultPropertyValue(call),
+            .member => |member| switch (member.target.*) {
+                .ident => try self.allocator.dupe(u8, member.name),
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn numericUnaryDefaultPropertyValue(self: *Parser, call: ast.CallExpr) !?[]const u8 {
+        if (!std.mem.eql(u8, call.name, "neg") or call.args.items.len != 1) return null;
+        return switch (call.args.items[0]) {
+            .number => |value| try std.fmt.allocPrint(self.allocator, "-{d}", .{value}),
+            else => null,
+        };
     }
 
     fn parseStringListInto(self: *Parser, out: *std.ArrayList([]const u8)) !void {
@@ -452,10 +491,6 @@ const Parser = struct {
         if (std.mem.eql(u8, name, "Function")) {
             self.allocator.free(name);
             return self.fail(error.InvalidTypeAnnotation);
-        }
-        if (std.mem.eql(u8, name, "Style")) {
-            self.allocator.free(name);
-            return ast.Type.style;
         }
         if (std.mem.eql(u8, name, "String")) {
             self.allocator.free(name);
@@ -788,6 +823,13 @@ const Parser = struct {
 
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
         self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '!') {
+            self.pos += 1;
+            var args = std.ArrayList(Expr).empty;
+            errdefer args.deinit(self.allocator);
+            try args.append(self.allocator, try self.parseUnaryExpr());
+            return .{ .call = .{ .name = "not", .args = args } };
+        }
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
             var args = std.ArrayList(Expr).empty;

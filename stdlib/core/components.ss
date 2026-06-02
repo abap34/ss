@@ -22,10 +22,8 @@ fn mathtex(text_value: String) -> Object
   return tex_obj(text_value)
 end
 
-fn panel(style_value: Style) -> Object
-  let panel = panel_obj()
-  sty(panel, style_value)
-  return panel
+fn panel() -> Object
+  return panel_obj()
 end
 
 fn page_bg(fill_name: Color?) -> Void
@@ -36,23 +34,23 @@ fn doc_bg(fill_name: Color?) -> Void
   docctx().background_fill = fill_name
 end
 
-fn frame_s(inner: Object, panel_style_name: String, pad_x: Number, pad_y: Number) -> Object
-  surround_s(panel_style_name, inner, pad_x, pad_y)
+fn frame_s(inner: Object, pad_x: Number, pad_y: Number) -> Object
+  surround_s(inner, pad_x, pad_y)
   return inner
 end
 
 fn frame(text_value: String, role_name: String, payload_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
   let inner = raw_obj(text_value, role_name, payload_name)
   flow(inner, left, right)
-  let chrome = panel(style("custom"))
+  let chrome = panel()
   box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout_spacing_after = 34
   surround(chrome, inner, pad_x, pad_y)
   return inner
 end
 
-fn surround_s(panel_style_name: String, inner: Object, pad_x: Number, pad_y: Number) -> Object
-  let chrome = panel(style(panel_style_name))
+fn surround_s(inner: Object, pad_x: Number, pad_y: Number) -> Object
+  let chrome = panel()
   surround(chrome, inner, pad_x, pad_y)
   return inner
 end
@@ -84,9 +82,9 @@ fn code_in(text_value: String, language_name: String, left: Number, right: Numbe
   return code
 end
 
-fn code_panel(text_value: String, language_name: String, panel_style_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number) -> Object
+fn code_panel(text_value: String, language_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number) -> Object
   let code = code_in(text_value, language_name, left, right)
-  let chrome = panel(style(panel_style_name))
+  let chrome = panel()
   chrome.layout_spacing_after = 34
   surround(chrome, code, pad_x, pad_y)
   return code
@@ -94,7 +92,7 @@ end
 
 fn code_box(text_value: String, language_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
   let code = code_in(text_value, language_name, left, right)
-  let chrome = panel(style("custom"))
+  let chrome = panel()
   box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout_spacing_after = 34
   surround(chrome, code, pad_x, pad_y)

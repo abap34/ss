@@ -66,13 +66,18 @@ pub const TypeDecl = struct {
 pub const ObjectFieldDecl = struct {
     name: []const u8,
     value_type: []const u8,
-    default_value: ?[]const u8 = null,
+    default_value: ?*Expr = null,
+    default_property_value: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: *ObjectFieldDecl, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.value_type);
-        if (self.default_value) |default_value| allocator.free(default_value);
+        if (self.default_value) |expr| {
+            expr.deinit(allocator);
+            allocator.destroy(expr);
+        }
+        if (self.default_property_value) |value| allocator.free(value);
     }
 };
 

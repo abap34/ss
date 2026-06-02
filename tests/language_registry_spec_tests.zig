@@ -36,6 +36,10 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
 
     const frame_height = registry.lookupPrimitiveCall("frame_height").?;
     try testing.expect(Type.eql(Type.number, registry.primitiveResultType(frame_height).?));
+
+    const logical_not = registry.lookupPrimitiveCall("not").?;
+    try testing.expect(Type.eql(Type.boolean, registry.primitiveArgType(logical_not, 0).?));
+    try testing.expect(Type.eql(Type.boolean, registry.primitiveResultType(logical_not).?));
 }
 
 test "language registry spec: query output types are declared in the registry" {

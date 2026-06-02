@@ -248,7 +248,6 @@ fn builtinType(name: []const u8) ?ast.Type {
     if (std.mem.eql(u8, name, "Object")) return ast.Type.object;
     if (std.mem.eql(u8, name, "Metadata")) return ast.Type.metadata;
     if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
-    if (std.mem.eql(u8, name, "Style")) return ast.Type.style;
     if (std.mem.eql(u8, name, "String")) return ast.Type.string;
     if (std.mem.eql(u8, name, "Color")) return ast.Type.color;
     if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
@@ -257,6 +256,10 @@ fn builtinType(name: []const u8) ?ast.Type {
     if (std.mem.eql(u8, name, "Void")) return .{ .kind = .void };
     if (std.mem.eql(u8, name, "None")) return ast.Type.none;
     return null;
+}
+
+pub fn isBuiltinTypeName(name: []const u8) bool {
+    return builtinType(name) != null;
 }
 
 fn parseTypeConstructorArg(text: []const u8, constructor: []const u8) ?[]const u8 {

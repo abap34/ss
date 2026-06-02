@@ -64,6 +64,27 @@ fn expectString(expr: ast.Expr, expected: []const u8) !void {
     }
 }
 
+fn expectBoolean(expr: ast.Expr, expected: bool) !void {
+    switch (expr) {
+        .boolean => |actual| try testing.expectEqual(expected, actual),
+        else => return error.ExpectedBooleanExpr,
+    }
+}
+
+fn expectColor(expr: ast.Expr, expected: []const u8) !void {
+    switch (expr) {
+        .color => |actual| try testing.expectEqualStrings(expected, actual),
+        else => return error.ExpectedColorExpr,
+    }
+}
+
+fn expectNone(expr: ast.Expr) !void {
+    switch (expr) {
+        .none => {},
+        else => return error.ExpectedNoneExpr,
+    }
+}
+
 fn expectMember(expr: ast.Expr, name: []const u8) !ast.MemberExpr {
     switch (expr) {
         .member => |member| {
@@ -344,6 +365,49 @@ test "syntax spec: enum values color literals and none stay explicit in the AST"
     }
 }
 
+test "syntax spec: object field defaults are parsed as expressions" {
+    var parsed = try parse(
+        \\type Align = left | center | right
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  size: Number = 1.02
+        \\  offset: Number = -1.5
+        \\  align: Align = Align.center
+        \\  fill: Color = c"#334455"
+        \\  maybe_fill: Color? = none
+        \\  enabled: Bool = true
+        \\  label: String = "caption"
+        \\}
+        \\
+    );
+    defer parsed.deinit();
+
+    const card = parsed.program.objects.items[0];
+    try testing.expectEqual(@as(usize, 7), card.fields.items.len);
+    try expectNumber(card.fields.items[0].default_value.?.*, 1.02);
+    try testing.expectEqualStrings("1.02", card.fields.items[0].default_property_value.?);
+
+    const neg = try expectCall(card.fields.items[1].default_value.?.*, "neg", 1);
+    try expectNumber(neg.args.items[0], 1.5);
+    try testing.expectEqualStrings("-1.5", card.fields.items[1].default_property_value.?);
+
+    const enum_member = try expectMember(card.fields.items[2].default_value.?.*, "center");
+    switch (enum_member.target.*) {
+        .ident => |name| try testing.expectEqualStrings("Align", name),
+        else => return error.ExpectedIdentifier,
+    }
+    try testing.expectEqualStrings("center", card.fields.items[2].default_property_value.?);
+
+    try expectColor(card.fields.items[3].default_value.?.*, "0.2,0.26666668,0.33333334");
+    try testing.expectEqualStrings("0.2,0.26666668,0.33333334", card.fields.items[3].default_property_value.?);
+    try expectNone(card.fields.items[4].default_value.?.*);
+    try testing.expectEqualStrings("none", card.fields.items[4].default_property_value.?);
+    try expectBoolean(card.fields.items[5].default_value.?.*, true);
+    try testing.expectEqualStrings("true", card.fields.items[5].default_property_value.?);
+    try expectString(card.fields.items[6].default_value.?.*, "caption");
+    try testing.expectEqualStrings("caption", card.fields.items[6].default_property_value.?);
+}
+
 test "syntax spec: member optional and coalesce keep nested targets" {
     var parsed = try parse(
         \\page Members
@@ -456,6 +520,7 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
         \\page Expr
         \\  let value = 1 + 2 * -3
         \\  let text = "a" ++ "b" ++ "c"
+        \\  let flag = !false
         \\end
         \\
     );
@@ -476,6 +541,10 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
     try expectString(inner_concat.args.items[0], "a");
     try expectString(inner_concat.args.items[1], "b");
     try expectString(outer_concat.args.items[1], "c");
+
+    const flag = program.pages.items[0].statements.items[2].kind.let_binding.expr;
+    const logical_not = try expectCall(flag, "not", 1);
+    try expectBoolean(logical_not.args.items[0], false);
 }
 
 test "syntax spec: call sugar is explicit about text-bearing and zero-argument calls" {

@@ -1,10 +1,5 @@
 import std:core/objects
 
-fn sty(obj: Object, style_value: Style) -> Object
-  obj.style = style_value
-  return obj
-end
-
 fn clear(obj: Object) -> Object
   obj.content = ""
   return obj
@@ -148,42 +143,14 @@ fn fit_ignore(obj: Object) -> Object
   return fit(obj, FitPolicy.ignore)
 end
 
-fn styled(text_value: String, role_name: String, style_value: Style) -> Object
-  let obj = txt_obj(text_value, role_name)
-  sty(obj, style_value)
-  return obj
-end
-
-fn title_as(text_value: String, variant_name: String) -> Object
-  let obj = title_obj(text_value)
-  sty(obj, style(variant_name))
-  return obj
-end
-
-fn subtitle_as(text_value: String, variant_name: String) -> Object
-  let obj = sub_obj(text_value)
-  sty(obj, style(variant_name))
-  return obj
-end
-
 fn byline(text_value: String) -> Object
   return by_obj(text_value)
 end
 
-fn byline_as(text_value: String, variant_name: String) -> Object
-  let obj = by_obj(text_value)
-  sty(obj, style(variant_name))
-  return obj
+fn label(text_value: String) -> Object
+  return lab_obj(text_value)
 end
 
-fn label(label_style_name: String, text_value: String) -> Object
-  let obj = lab_obj(text_value)
-  sty(obj, style(label_style_name))
-  return obj
-end
-
-fn rule(rule_style_name: String) -> Object
-  let obj = rule_obj()
-  sty(obj, style(rule_style_name))
-  return obj
+fn rule() -> Object
+  return rule_obj()
 end

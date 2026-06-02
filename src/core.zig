@@ -23,7 +23,6 @@ pub const SelectionItemTag = model.SelectionItemTag;
 pub const Selection = model.Selection;
 pub const ConstraintSet = model.ConstraintSet;
 pub const FunctionRef = model.FunctionRef;
-pub const StyleRef = model.StyleRef;
 pub const Value = model.Value;
 pub const PageLayout = model.PageLayout;
 pub const TextStyle = model.TextStyle;

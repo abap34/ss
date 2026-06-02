@@ -46,7 +46,7 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
         try item.stringField("name", field.name);
         try item.stringField("class", field.class_name);
         try item.stringField("type", field.value_type);
-        try item.optionalStringField("default", field.default_value);
+        try item.optionalStringField("defaultProperty", field.default_property_value);
         try item.intField("moduleId", field.module_id);
         try item.end();
     }

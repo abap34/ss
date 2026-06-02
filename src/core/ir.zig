@@ -719,7 +719,6 @@ pub const Ir = struct {
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
-            .style => .style,
             .string => .string,
             .number => .number,
             .boolean => .boolean,

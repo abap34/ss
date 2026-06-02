@@ -55,6 +55,28 @@ fn expectObjectProperty(source: []const u8, key: []const u8, expected: []const u
     try compiler_semantics.expectObjectProperty(testing.io, allocator, path, source, key, expected);
 }
 
+fn expectClassDefaultProperty(source: []const u8, role: []const u8, key: []const u8, expected: ?[]const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectClassDefaultProperty(testing.io, allocator, path, source, role, key, expected);
+}
+
+fn expectBodyTextDefaults(source: []const u8, expected: compiler_semantics.BodyTextDefaults) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectBodyTextDefaults(testing.io, allocator, path, source, expected);
+}
+
 fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -148,31 +170,6 @@ test "compiler semantics: content mutation helpers are stdlib functions" {
         \\end
         \\
     , "hello world!");
-
-}
-
-test "compiler semantics: style mutation is stdlib over properties" {
-    try expectObjectContent(
-        \\import std:themes/default
-        \\
-        \\page ok
-        \\  let target = sty(text("styled"), style("custom"))
-        \\  text(prop(target, "style", "missing"))
-        \\end
-        \\
-    , "custom");
-
-    try buildSource(
-        \\import std:themes/default
-        \\
-        \\page ok
-        \\  text("a")
-        \\  text("b")
-        \\  style_all(objs(pagectx(), "body"), style("custom"))
-        \\end
-        \\
-    );
-
 }
 
 test "compiler semantics: math alignment helpers are stdlib functions" {
@@ -192,14 +189,20 @@ test "compiler semantics: enum cases type function parameters" {
         \\import std:themes/default
         \\
         \\type Mode = alpha | Beta | READY
+        \\type Any = String | Number
         \\
         \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
         \\end
         \\
+        \\fn keep_any(value: Any) -> Any
+        \\  return value
+        \\end
+        \\
         \\page ok
         \\  let mode = keep_mode(Mode.Beta)
         \\  let ready = keep_mode(Mode.READY)
+        \\  let named_any = keep_any(Any.String)
         \\end
         \\
     );
@@ -1222,6 +1225,50 @@ test "compiler semantics: typed properties reject optional and wrong static valu
 }
 
 test "compiler semantics: object field defaults are statically typed" {
+    const defaults_source =
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  size: Number = 1.02
+        \\  offset: Number = -1.5
+        \\  accent: Color = c"#334455"
+        \\  optional_accent: Color? = none
+        \\  mode: Mode = Mode.beta
+        \\  enabled: Bool = true
+        \\  label: String = "default label"
+        \\}
+        \\
+        \\page ok
+        \\  let card = obj("card", "card", "text")
+        \\end
+        \\
+    ;
+    try expectClassDefaultProperty(defaults_source, "card", "size", "1.02");
+    try expectClassDefaultProperty(defaults_source, "card", "offset", "-1.5");
+    try expectClassDefaultProperty(defaults_source, "card", "accent", "0.2,0.26666668,0.33333334");
+    try expectClassDefaultProperty(defaults_source, "card", "optional_accent", null);
+    try expectClassDefaultProperty(defaults_source, "card", "mode", "beta");
+    try expectClassDefaultProperty(defaults_source, "card", "enabled", "true");
+    try expectClassDefaultProperty(defaults_source, "card", "label", "default label");
+
+    try expectBodyTextDefaults(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  text("body")
+        \\end
+        \\
+    , .{
+        .link_underline_width = 0.8,
+        .link_underline_offset = -1.5,
+        .inline_math_height_factor = 1.02,
+        .inline_math_spacing = 0.08,
+        .markdown_table_line_width = 0.8,
+        .cjk_bold_dx = 0.05,
+    });
+
     try expectDiagnostic(
         \\import std:themes/default
         \\
@@ -1257,6 +1304,30 @@ test "compiler semantics: object field defaults are statically typed" {
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldDefault");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  count: Number = 1 + 2
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Number");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\type Card = object {
+        \\  label: String = "a" ++ "b"
+        \\}
+        \\
+        \\page bad
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type String");
 
     try expectDiagnostic(
         \\import std:themes/default
@@ -1397,6 +1468,163 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\end
         \\
     , "footer");
+}
+
+test "compiler semantics: member reads materialize typed property values" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn wrap_label(value: WrapMode) -> String
+        \\  return "wrap"
+        \\end
+        \\
+        \\fn link_label(value: String) -> String
+        \\  return value
+        \\end
+        \\
+        \\fn render_label(value: RenderKind) -> String
+        \\  return "render"
+        \\end
+        \\
+        \\page ok
+        \\  let target = text("typed")
+        \\  target.wrap = WrapMode.off
+        \\  target.text_size = 24
+        \\  target.link_id = "custom"
+        \\  target.text_markdown_code_fill = c"0.1,0.2,0.3"
+        \\  let panel_obj = panel()
+        \\  let other = text("color")
+        \\  other.text_color = target.text_markdown_code_fill ?? c"0,0,0"
+        \\  text(wrap_label(target.wrap ?? WrapMode.on) ++ ":" ++ str(target.text_size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
+        \\  text(render_label(panel_obj.render_kind ?? RenderKind.text))
+        \\end
+        \\
+    , "wrap:24:custom");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn render_label(value: RenderKind) -> String
+        \\  return "render"
+        \\end
+        \\
+        \\page ok
+        \\  let panel_obj = panel()
+        \\  text(render_label(panel_obj.render_kind ?? RenderKind.text))
+        \\end
+        \\
+    , "render");
+}
+
+test "compiler semantics: logical not inverts optional presence checks" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn optional_color_label(target: Body) -> String
+        \\  if !target.text_markdown_code_fill?
+        \\    return "none"
+        \\  else
+        \\    return "some"
+        \\  end
+        \\end
+        \\
+        \\page ok
+        \\  let unset = body_obj("unset")
+        \\  let set = body_obj("set")
+        \\  set.text_markdown_code_fill = c"0.1,0.2,0.3"
+        \\  text(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
+        \\end
+        \\
+    , "none:some");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn none_label(value: Bool?) -> String
+        \\  if !value?
+        \\    return "none"
+        \\  else
+        \\    return "some"
+        \\  end
+        \\end
+        \\
+        \\page ok
+        \\  text(none_label(none) ++ ":" ++ none_label(false) ++ ":" ++ none_label(true))
+        \\end
+        \\
+    , "none:some:some");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn none_label(value: String?) -> String
+        \\  if !value?
+        \\    return "none"
+        \\  else
+        \\    return "some"
+        \\  end
+        \\end
+        \\
+        \\page ok
+        \\  text(none_label(none) ++ ":" ++ none_label("") ++ ":" ++ none_label("value"))
+        \\end
+        \\
+    , "none:some:some");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  if !1
+        \\    text("bad")
+        \\  end
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Bool, got Number");
+}
+
+test "compiler semantics: generated page numbers keep optional format semantics" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  pagenos(none)
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+        \\page two
+        \\end
+        \\
+    , "1/2");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  pagenos("{page} of {total}")
+        \\end
+        \\
+        \\page one
+        \\end
+        \\
+        \\page two
+        \\end
+        \\
+    , "1 of 2");
+}
+
+test "compiler semantics: removed render kind chrome case is rejected" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let panel_obj = panel()
+        \\  panel_obj.render_kind = RenderKind.chrome
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownEnumCase: enum 'RenderKind' has no case 'chrome'");
 }
 
 test "compiler semantics: pass annotation is rejected" {

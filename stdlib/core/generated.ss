@@ -14,8 +14,7 @@ fn pageno_obj() -> Object
   return pageno_s(obj("", "pageno", "text"))
 end
 
-fn pagenos(format: String = "") -> Void
-  docctx().pageno_on = true
+fn pagenos(format: String? = none) -> Void
   docctx().pageno_fmt = format
   mk_pagenos(docctx())
   set_pagenos(docctx())
@@ -38,14 +37,11 @@ fn watermark(text_value: String) -> Void
 end
 
 fn need_titles() -> Void
-  docctx().need_titles = true
   chk_titles(docctx())
 end
 
 fn mk_pagenos(doc: Document) -> Void
-  if prop_eq(doc, "pageno_on", "true")
-    foreach(pages(doc), mk_pageno)
-  end
+  foreach(pages(doc), mk_pageno)
 end
 
 fn mk_pageno(page_value: Page) -> Page
@@ -65,13 +61,13 @@ end
 
 fn set_pageno(page_no: Object, doc: Document) -> Object
   let page_value = page_of(page_no)
-  if prop_eq(doc, "pageno_fmt", "")
-    page_no.content = str(page_index(page_value)) ++ "/" ++ str(page_count(doc))
-  else
+  if doc.pageno_fmt?
     let format = doc.pageno_fmt ?? ""
     let page_text = replace(format, "{page}", str(page_index(page_value)))
     let text = replace(page_text, "{total}", str(page_count(doc)))
     page_no.content = text
+  else
+    page_no.content = str(page_index(page_value)) ++ "/" ++ str(page_count(doc))
   end
   return page_no
 end
@@ -178,9 +174,7 @@ fn set_toc(toc: Object, doc: Document) -> Object
 end
 
 fn chk_titles(doc: Document) -> Void
-  if prop_eq(doc, "need_titles", "true")
-    foreach(pages(doc), warn_title)
-  end
+  foreach(pages(doc), warn_title)
 end
 
 fn warn_title(page_value: Page) -> Page

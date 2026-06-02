@@ -20,7 +20,6 @@ pub const Type = struct {
         selection,
         anchor,
         function,
-        style,
         string,
         color,
         number,
@@ -39,7 +38,6 @@ pub const Type = struct {
     pub const metadata = Type{ .kind = .metadata };
     pub const anchor = Type{ .kind = .anchor };
     pub const function = Type{ .kind = .function };
-    pub const style = Type{ .kind = .style };
     pub const string = Type{ .kind = .string };
     pub const color = Type{ .kind = .color };
     pub const number = Type{ .kind = .number };
@@ -288,7 +286,6 @@ pub const Type = struct {
             .selection => "Selection",
             .anchor => "Anchor",
             .function => "Function",
-            .style => "Style",
             .string => "String",
             .color => "Color",
             .number => "Number",

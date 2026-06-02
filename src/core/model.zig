@@ -175,7 +175,6 @@ pub const ValueTag = enum {
     selection,
     anchor,
     function,
-    style,
     string,
     number,
     boolean,
@@ -272,10 +271,6 @@ pub const FunctionRef = struct {
     }
 };
 
-pub const StyleRef = struct {
-    name: []const u8,
-};
-
 pub const Value = union(ValueTag) {
     none: void,
     document: NodeId,
@@ -285,7 +280,6 @@ pub const Value = union(ValueTag) {
     selection: Selection,
     anchor: AnchorValue,
     function: FunctionRef,
-    style: StyleRef,
     string: []const u8,
     number: f32,
     boolean: bool,
@@ -311,7 +305,6 @@ pub const Value = union(ValueTag) {
             .selection => |selection| .{ .selection = try selection.clone(allocator) },
             .anchor => |anchor| .{ .anchor = anchor },
             .function => |function| .{ .function = try function.clone(allocator) },
-            .style => |style| .{ .style = style },
             .string => |text| .{ .string = text },
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
@@ -327,7 +320,7 @@ pub const Value = union(ValueTag) {
             .object => |id| id,
             .metadata => |id| id,
             .selection => |selection| selection.first(),
-            .none, .anchor, .function, .style, .string, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .string, .number, .boolean, .constraints, .void => null,
         };
     }
 };

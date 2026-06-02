@@ -68,6 +68,7 @@ pub const Document = struct {
     terms: std.ArrayList(Term),
     runtime_strings: std.ArrayList([]u8),
     next_metadata_id: core.MetadataId,
+    type_source: ?*const core.Ir,
 
     pub fn init(allocator: Allocator, asset_base_dir: []const u8) !Document {
         const document_id: HandleId = 1;
@@ -85,6 +86,7 @@ pub const Document = struct {
             .terms = .empty,
             .runtime_strings = .empty,
             .next_metadata_id = 1,
+            .type_source = null,
         };
         errdefer doc.deinit();
         try doc.nodes.append(allocator, .{
@@ -479,7 +481,6 @@ pub const Document = struct {
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
-            .style => .style,
             .string => .string,
             .number => .number,
             .boolean => .boolean,

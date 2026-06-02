@@ -133,7 +133,14 @@ fn writeObjectFieldsField(object: *json.Object, fields: []const ast.ObjectFieldD
         var item = try array.objectItem();
         try item.stringField("name", field.name);
         try item.stringField("type", field.value_type);
-        try item.optionalStringField("default", field.default_value);
+        if (field.default_value) |default_value| {
+            var default_object = try item.objectField("default");
+            try writeExprValue(&default_object, default_value.*);
+            try default_object.end();
+        } else {
+            try item.nullField("default");
+        }
+        try item.optionalStringField("defaultProperty", field.default_property_value);
         try writeSpan(&item, field.span);
         try item.end();
     }

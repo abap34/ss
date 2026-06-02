@@ -286,7 +286,6 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
         error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
         error.ExpectedNumberArgument => "ExpectedNumberArgument: expected a number argument",
-        error.ExpectedStyleArgument => "ExpectedStyleArgument: expected a style argument",
         error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
         error.ExpectedObject => "ExpectedObject: expected an object argument",
         error.NoCurrentPage => "NoCurrentPage: this operation is only valid inside a page block",
@@ -322,6 +321,7 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
 }
 
 pub fn elaborateIrInto(allocator: std.mem.Allocator, ir: *const core.Ir, document: *doc.Document) !void {
+    document.type_source = ir;
     var graph = try ScheduleGraph.build(allocator, ir, document);
     defer {
         graph.allocator.free(graph.order);
@@ -926,11 +926,36 @@ fn evalMember(
         else => return error.InvalidValueTag,
     };
     const node = ir.getNode(node_id) orelse return error.UnknownNode;
-    return if (core.nodeProperty(node, member.name)) |value| .{ .string = value } else .{ .none = {} };
+    const value = core.nodeProperty(node, member.name) orelse return .{ .none = {} };
+    const type_source = ir.type_source orelse return .{ .string = value };
+    const sema = SemanticEnv.init(type_source, null, functions);
+    const class_name = core.class_fields.classNameForNodeWithEnv(node, &sema) orelse return .{ .string = value };
+    const field = sema.field(class_name, member.name) orelse return .{ .string = value };
+    var field_type = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse return .{ .string = value };
+    defer field_type.deinit(ir.allocator);
+    return typedPropertyValue(value, field_type);
 }
 
 fn startsUpper(name: []const u8) bool {
     return name.len != 0 and name[0] >= 'A' and name[0] <= 'Z';
+}
+
+fn typedPropertyValue(value: []const u8, ty: ast.Type) !core.Value {
+    if (ty.kind == .optional) {
+        const child = ty.optional_child orelse return .{ .string = value };
+        return typedPropertyValue(value, child.*);
+    }
+    return switch (ty.kind) {
+        .none => .{ .none = {} },
+        .string, .color, .enum_type => .{ .string = value },
+        .number => .{ .number = std.fmt.parseFloat(f32, value) catch return error.InvalidValueTag },
+        .boolean => blk: {
+            if (std.mem.eql(u8, value, "true")) break :blk .{ .boolean = true };
+            if (std.mem.eql(u8, value, "false")) break :blk .{ .boolean = false };
+            return error.InvalidValueTag;
+        },
+        else => .{ .string = value },
+    };
 }
 
 fn evalCall(
@@ -1106,10 +1131,6 @@ const BuiltinContext = struct {
 
     pub fn evalPayloadArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!names.ParsedPayload {
         return try evalCallPayloadArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.closures, self.current_origin, call, index);
-    }
-
-    pub fn evalStyleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.StyleRef {
-        return try evalCallStyleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.closures, self.current_origin, call, index);
     }
 
     pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
@@ -1561,13 +1582,6 @@ fn resolveValueBoolean(value: core.Value) !bool {
     return eval_value.boolean(value);
 }
 
-fn resolveValueStyle(value: core.Value) !core.StyleRef {
-    return switch (value) {
-        .style => |style| style,
-        else => return error.ExpectedStyleArgument,
-    };
-}
-
 fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
     return switch (value) {
         .anchor => |anchor| anchor,
@@ -1655,21 +1669,6 @@ fn evalCallAnchorArg(
     index: usize,
 ) anyerror!core.AnchorValue {
     return try resolveValueAnchor(try evalCallArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, index));
-}
-
-fn evalCallStyleArg(
-    ir: *doc.Document,
-    page_id: core.NodeId,
-    context: EvalContext,
-    mode: EvalMode,
-    env: *std.StringHashMap(core.Value),
-    functions: *const std.StringHashMap(FunctionDecl),
-    closures: *ClosureStore,
-    current_origin: []const u8,
-    call: CallExpr,
-    index: usize,
-) anyerror!core.StyleRef {
-    return try resolveValueStyle(try evalCallArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, index));
 }
 
 fn evalCallRoleArg(

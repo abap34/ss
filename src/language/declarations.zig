@@ -18,7 +18,8 @@ pub const FieldDescriptor = struct {
     name: []const u8,
     class_name: []const u8,
     value_type: []const u8,
-    default_value: ?[]const u8,
+    default_value: ?*const ast.Expr,
+    default_property_value: ?[]const u8,
     module_id: core.SourceModuleId,
 };
 
@@ -170,14 +171,14 @@ pub fn findFieldByName(ir: *const core.Ir, field_name: []const u8) ?FieldDescrip
         for (module.program.object_extensions.items) |extension| {
             for (extension.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
-                    return .{ .name = field.name, .class_name = extension.target, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                    return .{ .name = field.name, .class_name = extension.target, .value_type = field.value_type, .default_value = field.default_value, .default_property_value = field.default_property_value, .module_id = module.id };
                 }
             }
         }
         for (module.program.objects.items) |decl| {
             for (decl.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
-                    return .{ .name = field.name, .class_name = decl.name, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                    return .{ .name = field.name, .class_name = decl.name, .value_type = field.value_type, .default_value = field.default_value, .default_property_value = field.default_property_value, .module_id = module.id };
                 }
             }
         }
@@ -218,7 +219,7 @@ fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []co
             if (!std.mem.eql(u8, extension.target, class_name)) continue;
             for (extension.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
-                    return .{ .name = field.name, .class_name = class_name, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                    return .{ .name = field.name, .class_name = class_name, .value_type = field.value_type, .default_value = field.default_value, .default_property_value = field.default_property_value, .module_id = module.id };
                 }
             }
         }
@@ -226,7 +227,7 @@ fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []co
             if (!std.mem.eql(u8, decl.name, class_name)) continue;
             for (decl.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
-                    return .{ .name = field.name, .class_name = class_name, .value_type = field.value_type, .default_value = field.default_value, .module_id = module.id };
+                    return .{ .name = field.name, .class_name = class_name, .value_type = field.value_type, .default_value = field.default_value, .default_property_value = field.default_property_value, .module_id = module.id };
                 }
             }
         }
@@ -281,6 +282,7 @@ fn appendFields(index: *DeclarationIndex, module_id: core.SourceModuleId, class_
             .class_name = class_name,
             .value_type = field.value_type,
             .default_value = field.default_value,
+            .default_property_value = field.default_property_value,
             .module_id = module_id,
         });
     }
