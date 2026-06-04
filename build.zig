@@ -157,6 +157,12 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/project_spec_tests.zig", &.{
         import("project", modules.project),
     }, null);
+    const lsp_scope_mod = createModule(ctx, "src/lsp/scope.zig", &.{
+        import("utils", modules.utils),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/lsp_scope_spec_tests.zig", &.{
+        import("lsp_scope", lsp_scope_mod),
+    }, true);
 
     const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
     const compiler_semantics_support_mod = createModule(ctx, "tests/compiler_semantics_spec_support.zig", &.{

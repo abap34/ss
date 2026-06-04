@@ -9,10 +9,12 @@ const module_loader = @import("modules/loader.zig");
 const project = @import("project.zig");
 const dump = @import("dump.zig");
 const utils = @import("utils");
+const lsp_scope = @import("lsp/scope.zig");
 
 const JsonValue = std.json.Value;
 const JsonObject = std.json.ObjectMap;
 const JsonArray = std.json.Array;
+const RequestContext = lsp_scope.RequestContext;
 
 const Snapshot = struct {
     entry_path: []u8,
@@ -539,23 +541,6 @@ fn jsonLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return allocator.dupe(u8, text);
 }
 
-const RequestContext = struct {
-    target: []u8,
-    doc_path: []u8,
-    source: []const u8,
-    offset: usize,
-
-    fn deinit(self: *RequestContext, allocator: std.mem.Allocator) void {
-        allocator.free(self.target);
-        allocator.free(self.doc_path);
-    }
-};
-
-const SourceScope = struct {
-    kind: []const u8,
-    name: ?[]const u8 = null,
-};
-
 fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     const allocator = server.allocator;
@@ -583,8 +568,8 @@ fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     };
     if (arrayFieldObject(&root, "variables")) |variables| for (variables.items) |*item| if (item.* == .object) {
         if (context) |ctx| {
-            if (!variableVisibleAt(allocator, &root, &item.object, ctx)) continue;
-            if (!isBestVisibleVariable(allocator, &root, &item.object, ctx)) continue;
+            if (!lsp_scope.variableVisibleAt(allocator, &root, &item.object, ctx)) continue;
+            if (!lsp_scope.isBestVisibleVariable(allocator, &root, &item.object, ctx)) continue;
         }
         const label = stringField(&item.object, "name") orelse continue;
         try appendCompletion(allocator, out, first, label, 6, stringField(&item.object, "type"), null);
@@ -641,7 +626,7 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
 
 fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) !?[]u8 {
     const target = context.target;
-    if (bestVisibleVariable(allocator, root, target, context)) |item| {
+    if (lsp_scope.bestVisibleVariable(allocator, root, target, context)) |item| {
         return try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ target, stringField(item, "type") orelse "unknown" });
     }
     if (arrayFieldObject(root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
@@ -672,7 +657,7 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
         errdefer out.deinit(server.allocator);
         try out.append(server.allocator, '[');
         var first = true;
-        if (bestVisibleDefinition(server.allocator, &root, context.target, &context)) |definition| {
+        if (lsp_scope.bestVisibleDefinition(server.allocator, &root, context.target, &context)) |definition| {
             try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
             try out.append(server.allocator, ']');
             return out.toOwnedSlice(server.allocator);
@@ -1481,120 +1466,6 @@ fn definitionPath(allocator: std.mem.Allocator, root: *const JsonObject, item: *
     return null;
 }
 
-fn bestVisibleVariable(allocator: std.mem.Allocator, root: *const JsonObject, target: []const u8, context: *const RequestContext) ?*const JsonObject {
-    var best: ?*const JsonObject = null;
-    var best_rank: usize = 0;
-    if (arrayFieldObject(root, "variables")) |variables| for (variables.items) |*item| if (item.* == .object) {
-        const object = &item.object;
-        if (!std.mem.eql(u8, stringField(object, "name") orelse "", target)) continue;
-        if (!variableVisibleAt(allocator, root, object, context)) continue;
-        const rank = visibleRank(object);
-        if (best == null or rank >= best_rank) {
-            best = object;
-            best_rank = rank;
-        }
-    };
-    return best;
-}
-
-fn isBestVisibleVariable(allocator: std.mem.Allocator, root: *const JsonObject, item: *const JsonObject, context: *const RequestContext) bool {
-    const name = stringField(item, "name") orelse return false;
-    const best = bestVisibleVariable(allocator, root, name, context) orelse return false;
-    return best == item;
-}
-
-fn variableVisibleAt(allocator: std.mem.Allocator, root: *const JsonObject, item: *const JsonObject, context: *const RequestContext) bool {
-    return itemMatchesRequest(allocator, root, item, context) and scopeMatchesRequest(allocator, root, item, context) and itemRangeContains(item, context.offset);
-}
-
-fn bestVisibleDefinition(allocator: std.mem.Allocator, root: *const JsonObject, target: []const u8, context: *const RequestContext) ?*const JsonObject {
-    var best: ?*const JsonObject = null;
-    var best_rank: usize = 0;
-    if (arrayFieldObject(root, "definitions")) |definitions| for (definitions.items) |*item| if (item.* == .object) {
-        const object = &item.object;
-        if (!std.mem.eql(u8, stringField(object, "kind") orelse "", "variable")) continue;
-        if (!std.mem.eql(u8, stringField(object, "name") orelse "", target)) continue;
-        if (!variableVisibleAt(allocator, root, object, context)) continue;
-        const rank = visibleRank(object);
-        if (best == null or rank >= best_rank) {
-            best = object;
-            best_rank = rank;
-        }
-    };
-    return best;
-}
-
-fn itemRangeContains(item: *const JsonObject, offset: usize) bool {
-    const start = usizeField(item, "visibleStart") orelse 0;
-    const end = usizeField(item, "visibleEnd") orelse std.math.maxInt(usize);
-    return offset >= start and offset <= end;
-}
-
-fn visibleRank(item: *const JsonObject) usize {
-    return usizeField(item, "spanStart") orelse usizeField(item, "visibleStart") orelse 0;
-}
-
-fn usizeField(object: *const JsonObject, key: []const u8) ?usize {
-    const value = intField(object, key) orelse return null;
-    if (value < 0) return null;
-    return @intCast(value);
-}
-
-fn itemMatchesRequest(allocator: std.mem.Allocator, root: *const JsonObject, item: *const JsonObject, context: *const RequestContext) bool {
-    if (stringField(item, "file")) |file| return samePath(allocator, file, context.doc_path);
-    const module_id = intField(item, "moduleId") orelse return true;
-    if (arrayFieldObject(root, "modules")) |modules| for (modules.items) |module| if (module == .object) {
-        if ((intField(&module.object, "id") orelse -1) != module_id) continue;
-        const path = stringField(&module.object, "path") orelse return true;
-        return samePath(allocator, path, context.doc_path);
-    };
-    return true;
-}
-
-fn scopeMatchesRequest(allocator: std.mem.Allocator, root: *const JsonObject, item: *const JsonObject, context: *const RequestContext) bool {
-    const item_kind = stringField(item, "scopeKind") orelse return true;
-    const request_scope = requestScope(allocator, root, context);
-    if (!std.mem.eql(u8, item_kind, request_scope.kind)) return false;
-    const item_name = stringField(item, "scopeName");
-    if (request_scope.name) |name| return std.mem.eql(u8, item_name orelse @as([]const u8, ""), name);
-    return item_name == null;
-}
-
-fn requestScope(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) SourceScope {
-    const module = requestModule(allocator, root, context) orelse return .{ .kind = "document" };
-    const program = objectFieldObject(module, "program") orelse return .{ .kind = "document" };
-    if (arrayFieldObject(program, "functions")) |functions| for (functions.items) |item| if (item == .object) {
-        if (!spanContains(&item.object, context.offset)) continue;
-        return .{
-            .kind = "function",
-            .name = stringField(&item.object, "name"),
-        };
-    };
-    if (arrayFieldObject(program, "pages")) |pages| for (pages.items) |item| if (item == .object) {
-        if (!spanContains(&item.object, context.offset)) continue;
-        return .{
-            .kind = "page",
-            .name = stringField(&item.object, "name"),
-        };
-    };
-    return .{ .kind = "document" };
-}
-
-fn requestModule(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?*const JsonObject {
-    if (arrayFieldObject(root, "modules")) |modules| for (modules.items) |*module| if (module.* == .object) {
-        const path = stringField(&module.object, "path") orelse continue;
-        if (samePath(allocator, path, context.doc_path)) return &module.object;
-    };
-    return null;
-}
-
-fn spanContains(item: *const JsonObject, offset: usize) bool {
-    const span = objectFieldObject(item, "span") orelse return false;
-    const start = usizeField(span, "start") orelse return false;
-    const end = usizeField(span, "end") orelse return false;
-    return offset >= start and offset <= end;
-}
-
 fn symbolName(line: []const u8) ?[]const u8 {
     var it = std.mem.tokenizeAny(u8, line, " \t(:=");
     _ = it.next() orelse return null;
@@ -1668,111 +1539,4 @@ fn trimRight(text: []const u8, values: []const u8) []const u8 {
     var end = text.len;
     while (end > 0 and std.mem.indexOfScalar(u8, values, text[end - 1]) != null) : (end -= 1) {}
     return text[0..end];
-}
-
-test "lsp visible variables select nearest binding in current file" {
-    const allocator = std.testing.allocator;
-    const json_text =
-        \\{
-        \\  "modules": [
-        \\    {
-        \\      "id": 0,
-        \\      "path": "/tmp/deck.ss",
-        \\      "program": {
-        \\        "functions": [],
-        \\        "pages": [
-        \\          {"name": "first", "span": {"start": 40, "end": 90}}
-        \\        ]
-        \\      }
-        \\    },
-        \\    {"id": 1, "path": "/tmp/other.ss", "program": {"functions": [], "pages": []}}
-        \\  ],
-        \\  "variables": [
-        \\    {"name": "x", "type": "String", "moduleId": 0, "scopeKind": "document", "scopeName": null, "spanStart": 10, "visibleStart": 10, "visibleEnd": 200},
-        \\    {"name": "x", "type": "Number", "moduleId": 0, "scopeKind": "page", "scopeName": "first", "spanStart": 50, "visibleStart": 50, "visibleEnd": 80},
-        \\    {"name": "x", "type": "Bool", "moduleId": 1, "scopeKind": "document", "scopeName": null, "spanStart": 70, "visibleStart": 0, "visibleEnd": 200}
-        \\  ],
-        \\  "definitions": [
-        \\    {"name": "x", "kind": "variable", "moduleId": 0, "scopeKind": "document", "scopeName": null, "line": 1, "column": 4, "length": 1, "spanStart": 10, "visibleStart": 10, "visibleEnd": 200},
-        \\    {"name": "x", "kind": "variable", "moduleId": 0, "scopeKind": "page", "scopeName": "first", "line": 3, "column": 4, "length": 1, "spanStart": 50, "visibleStart": 50, "visibleEnd": 80},
-        \\    {"name": "x", "kind": "variable", "moduleId": 1, "scopeKind": "document", "scopeName": null, "line": 5, "column": 4, "length": 1, "spanStart": 70, "visibleStart": 0, "visibleEnd": 200}
-        \\  ]
-        \\}
-    ;
-    var parsed = try std.json.parseFromSlice(JsonValue, allocator, json_text, .{});
-    defer parsed.deinit();
-    const root = parsed.value.object;
-
-    var context = RequestContext{
-        .target = try allocator.dupe(u8, "x"),
-        .doc_path = try allocator.dupe(u8, "/tmp/deck.ss"),
-        .source = "",
-        .offset = 60,
-    };
-    defer context.deinit(allocator);
-
-    context.offset = 45;
-    try std.testing.expect(bestVisibleVariable(allocator, &root, "x", &context) == null);
-
-    context.offset = 60;
-    const inner = bestVisibleVariable(allocator, &root, "x", &context) orelse return error.ExpectedVariable;
-    try std.testing.expectEqualStrings("Number", stringField(inner, "type") orelse @as([]const u8, ""));
-    const inner_definition = bestVisibleDefinition(allocator, &root, "x", &context) orelse return error.ExpectedDefinition;
-    try std.testing.expectEqual(@as(i64, 50), intField(inner_definition, "spanStart") orelse -1);
-
-    context.offset = 95;
-    const outer = bestVisibleVariable(allocator, &root, "x", &context) orelse return error.ExpectedVariable;
-    try std.testing.expectEqualStrings("String", stringField(outer, "type") orelse @as([]const u8, ""));
-    const outer_definition = bestVisibleDefinition(allocator, &root, "x", &context) orelse return error.ExpectedDefinition;
-    try std.testing.expectEqual(@as(i64, 10), intField(outer_definition, "spanStart") orelse -1);
-}
-
-test "lsp completion deduplicates shadowed variables" {
-    const allocator = std.testing.allocator;
-    const json_text =
-        \\{
-        \\  "modules": [
-        \\    {
-        \\      "id": 0,
-        \\      "path": "/tmp/deck.ss",
-        \\      "program": {
-        \\        "functions": [],
-        \\        "pages": [
-        \\          {"name": "first", "span": {"start": 40, "end": 90}}
-        \\        ]
-        \\      }
-        \\    },
-        \\    {"id": 1, "path": "/tmp/other.ss", "program": {"functions": [], "pages": []}}
-        \\  ],
-        \\  "variables": [
-        \\    {"name": "x", "type": "String", "moduleId": 0, "scopeKind": "document", "scopeName": null, "spanStart": 10, "visibleStart": 10, "visibleEnd": 200},
-        \\    {"name": "x", "type": "Number", "moduleId": 0, "scopeKind": "page", "scopeName": "first", "spanStart": 50, "visibleStart": 50, "visibleEnd": 80},
-        \\    {"name": "x", "type": "Bool", "moduleId": 1, "scopeKind": "document", "scopeName": null, "spanStart": 70, "visibleStart": 0, "visibleEnd": 200}
-        \\  ]
-        \\}
-    ;
-    var context = RequestContext{
-        .target = try allocator.dupe(u8, "x"),
-        .doc_path = try allocator.dupe(u8, "/tmp/deck.ss"),
-        .source = "",
-        .offset = 60,
-    };
-    defer context.deinit(allocator);
-
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(allocator);
-    var first = true;
-    context.offset = 45;
-    try appendDumpCompletions(allocator, &out, &first, json_text, &context);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"label\":\"x\"") == null);
-
-    out.clearRetainingCapacity();
-    first = true;
-    context.offset = 60;
-    try appendDumpCompletions(allocator, &out, &first, json_text, &context);
-
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"label\":\"x\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"detail\":\"Number\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"detail\":\"String\"") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\"detail\":\"Bool\"") == null);
 }
