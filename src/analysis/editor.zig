@@ -169,21 +169,21 @@ fn collectDefinitionsFromProgram(
         const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
         if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, kind, module_id, file, .module, null);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, 0, source.len, kind, module_id, file, .module, null);
         }
         if (include_variables) {
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .function, func.name);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .function, func.name, func.span.end);
             }
         }
     }
     if (include_variables) {
         for (program.document_statements.items) |stmt| {
-            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .document, null);
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .document, null, source.len);
         }
         for (program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .page, page.name);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .page, page.name, page.span.end);
             }
         }
     }
@@ -197,15 +197,23 @@ fn collectDefinitionsFromStatement(
     definitions: *std.ArrayList(core.Definition),
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]const u8,
+    visible_end: usize,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name),
+        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name, visible_end),
         .if_stmt => |if_stmt| {
-            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name);
-            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name);
+            const then_end = statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
+            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, then_end);
+            const else_end = statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
+            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, else_end);
         },
         else => {},
     }
+}
+
+fn statementsVisibleEnd(statements: []const ast.Statement, fallback: usize) usize {
+    if (statements.len == 0) return fallback;
+    return statements[statements.len - 1].span.end;
 }
 
 fn putStatementDefinition(
@@ -218,10 +226,11 @@ fn putStatementDefinition(
     definitions: *std.ArrayList(core.Definition),
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]const u8,
+    visible_end: usize,
 ) !void {
     if (findIdentifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
         const loc = utils.err.computeLineColumn(source, location.offset);
-        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.offset, location.length, .variable, module_id, null, scope_kind, scope_name);
+        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.offset, location.length, stmt.span.start, visible_end, .variable, module_id, null, scope_kind, scope_name);
     }
 }
 
@@ -233,6 +242,8 @@ fn putDefinition(
     column: usize,
     span_start: usize,
     length: usize,
+    visible_start: usize,
+    visible_end: usize,
     kind: core.DefinitionKind,
     module_id: core.SourceModuleId,
     file: ?[]const u8,
@@ -246,6 +257,8 @@ fn putDefinition(
         .length = length,
         .span_start = span_start,
         .span_end = span_start + length,
+        .visible_start = visible_start,
+        .visible_end = visible_end,
         .kind = kind,
         .module_id = module_id,
         .file = if (file) |path| try allocator.dupe(u8, path) else null,

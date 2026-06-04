@@ -80,6 +80,8 @@ pub const Definition = struct {
     length: usize,
     span_start: usize,
     span_end: usize,
+    visible_start: usize = 0,
+    visible_end: usize = std.math.maxInt(usize),
     kind: DefinitionKind,
     module_id: SourceModuleId,
     file: ?[]const u8 = null,

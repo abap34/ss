@@ -6,16 +6,22 @@ const json = @import("utils").json;
 
 pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var variables = try root.arrayField("variables");
-    var variable_infos = try typecheck.collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), ir);
-    defer variable_infos.deinit();
-    var variable_iterator = variable_infos.iterator();
-    while (variable_iterator.next()) |entry| {
+    var variable_infos = try typecheck.collectScopedVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), ir.project_module_id, ir.projectSource().len, ir);
+    defer variable_infos.deinit(allocator);
+    for (variable_infos.items) |entry| {
         var item = try variables.objectItem();
-        try item.stringField("name", entry.key_ptr.*);
-        const type_label = try entry.value_ptr.ty.formatAlloc(allocator);
+        try item.stringField("name", entry.name);
+        const type_label = try entry.info.ty.formatAlloc(allocator);
         defer allocator.free(type_label);
         try item.stringField("type", type_label);
-        try item.optionalStringField("objectClass", entry.value_ptr.object_class);
+        try item.optionalStringField("objectClass", entry.info.object_class);
+        try item.intField("moduleId", entry.module_id);
+        try item.enumTagField("scopeKind", entry.scope_kind);
+        try item.optionalStringField("scopeName", entry.scope_name);
+        try item.intField("spanStart", entry.span_start);
+        try item.intField("spanEnd", entry.span_end);
+        try item.intField("visibleStart", entry.visible_start);
+        try item.intField("visibleEnd", entry.visible_end);
         try item.end();
     }
     try variables.end();
@@ -32,6 +38,8 @@ pub fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
         try item.intField("length", definition.length);
         try item.intField("spanStart", definition.span_start);
         try item.intField("spanEnd", definition.span_end);
+        try item.intField("visibleStart", definition.visible_start);
+        try item.intField("visibleEnd", definition.visible_end);
         try item.intField("moduleId", definition.module_id);
         if (ir.moduleById(definition.module_id)) |module| {
             try item.stringField("moduleSpec", module.spec);

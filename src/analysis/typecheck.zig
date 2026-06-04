@@ -18,6 +18,17 @@ const SemanticEnv = semantic_env.SemanticEnv;
 
 const TypeEnv = semantic_types.TypeEnv;
 pub const VariableInfo = semantic_types.TypeInfo;
+pub const ScopedVariableInfo = struct {
+    name: []const u8,
+    info: VariableInfo,
+    module_id: core.SourceModuleId,
+    scope_kind: core.DefinitionScopeKind,
+    scope_name: ?[]const u8,
+    span_start: usize,
+    span_end: usize,
+    visible_start: usize,
+    visible_end: usize,
+};
 const ensureType = semantic_types.ensureType;
 const inferExprInfo = infer.exprInfo;
 pub const expectedPrimitiveArgType = infer.expectedPrimitiveArgType;
@@ -544,6 +555,59 @@ pub fn collectVariableInfoFromProgram(
     return variables;
 }
 
+pub fn collectScopedVariableInfoFromProgram(
+    allocator: std.mem.Allocator,
+    functions: *const std.StringHashMap(ast.FunctionDecl),
+    program: ast.Program,
+    module_id: core.SourceModuleId,
+    source_len: usize,
+    diagnostic_ir: ?*core.Ir,
+) !std.ArrayList(ScopedVariableInfo) {
+    const sema = SemanticEnv.init(diagnostic_ir, null, functions);
+    var variables = std.ArrayList(ScopedVariableInfo).empty;
+    errdefer variables.deinit(allocator);
+
+    for (program.functions.items) |func| {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+
+        for (func.params.items) |param| {
+            if (param.default_value) |default_value| {
+                const origin = try statementOrigin(allocator, func.span);
+                defer allocator.free(origin);
+                const info = try inferExprInfo(allocator, diagnostic_ir, &sema, &env, default_value.*, origin);
+                try ensureType(diagnostic_ir, allocator, info, param.ty, origin, .UnmatchedArgumentType);
+            }
+            const info = semantic_types.infoFromType(param.ty);
+            try env.put(param.name, info);
+            try appendScopedVariable(allocator, &variables, param.name, info, module_id, .function, func.name, func.span.start, func.span.start, func.span.start, func.span.end);
+        }
+
+        for (func.statements.items) |stmt| {
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, .function, func.name, func.span.end);
+        }
+    }
+
+    {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (program.document_statements.items) |stmt| {
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, .document, null, source_len);
+        }
+    }
+
+    for (program.pages.items) |page| {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+
+        for (page.statements.items) |stmt| {
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, .page, page.name, page.span.end);
+        }
+    }
+
+    return variables;
+}
+
 fn appendFunctionDeclarations(
     functions: *std.StringHashMap(ast.FunctionDecl),
     metadata: *std.StringHashMap(FunctionMetadata),
@@ -726,6 +790,91 @@ fn collectVariableTypesFromStatement(
             }
         },
     }
+}
+
+fn collectScopedVariableTypesFromStatement(
+    allocator: std.mem.Allocator,
+    diagnostic_ir: ?*core.Ir,
+    env: *TypeEnv,
+    sema: *const SemanticEnv,
+    stmt: ast.Statement,
+    variables: *std.ArrayList(ScopedVariableInfo),
+    module_id: core.SourceModuleId,
+    scope_kind: core.DefinitionScopeKind,
+    scope_name: ?[]const u8,
+    visible_end: usize,
+) !void {
+    const origin = try statementOrigin(allocator, stmt.span);
+    defer allocator.free(origin);
+    switch (stmt.kind) {
+        .let_binding => |binding| {
+            const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            try env.put(binding.name, info);
+            try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope_kind, scope_name, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
+        },
+        .return_expr => |expr| {
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
+        },
+        .return_void => {},
+        .property_set => |property_set| {
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
+        },
+        .if_stmt => |if_stmt| {
+            const condition = try inferExprInfo(allocator, diagnostic_ir, sema, env, if_stmt.condition, origin);
+            try semantic_types.ensureType(diagnostic_ir, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
+            var then_env = try env.clone();
+            defer then_env.deinit();
+            const then_end = scopedStatementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
+            for (if_stmt.then_statements.items) |nested| {
+                try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &then_env, sema, nested, variables, module_id, scope_kind, scope_name, then_end);
+            }
+            var else_env = try env.clone();
+            defer else_env.deinit();
+            const else_end = scopedStatementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
+            for (if_stmt.else_statements.items) |nested| {
+                try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &else_env, sema, nested, variables, module_id, scope_kind, scope_name, else_end);
+            }
+        },
+        .expr_stmt => |expr| {
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
+        },
+        .constrain => |decl| {
+            if (decl.offset) |expr| {
+                _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
+            }
+        },
+    }
+}
+
+fn scopedStatementsVisibleEnd(statements: []const ast.Statement, fallback: usize) usize {
+    if (statements.len == 0) return fallback;
+    return statements[statements.len - 1].span.end;
+}
+
+fn appendScopedVariable(
+    allocator: std.mem.Allocator,
+    variables: *std.ArrayList(ScopedVariableInfo),
+    name: []const u8,
+    info: VariableInfo,
+    module_id: core.SourceModuleId,
+    scope_kind: core.DefinitionScopeKind,
+    scope_name: ?[]const u8,
+    span_start: usize,
+    span_end: usize,
+    visible_start: usize,
+    visible_end: usize,
+) !void {
+    try variables.append(allocator, .{
+        .name = name,
+        .info = info,
+        .module_id = module_id,
+        .scope_kind = scope_kind,
+        .scope_name = scope_name,
+        .span_start = span_start,
+        .span_end = span_end,
+        .visible_start = visible_start,
+        .visible_end = visible_end,
+    });
 }
 
 fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {

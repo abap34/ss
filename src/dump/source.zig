@@ -98,6 +98,7 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.pages.items) |page| {
         var item = try pages.objectItem();
         try item.stringField("name", page.name);
+        try writeSpan(&item, page.span);
         var statements = try item.arrayField("statements");
         for (page.statements.items) |stmt| try writeStatement(allocator, &statements, stmt);
         try statements.end();
