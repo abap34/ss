@@ -732,21 +732,6 @@
     }
   },
   {
-    "type": "effect_clause",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "identifier",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "enum_type",
     "named": true,
     "fields": {
@@ -1026,10 +1011,6 @@
         },
         {
           "type": "constrain_statement",
-          "named": true
-        },
-        {
-          "type": "effect_clause",
           "named": true
         },
         {
@@ -3105,11 +3086,11 @@
   },
   {
     "type": "number",
-    "named": true
+    "named": false
   },
   {
     "type": "number",
-    "named": false
+    "named": true
   },
   {
     "type": "object",

@@ -49,14 +49,12 @@ module.exports = grammar({
       $.parameters,
       "->",
       field("result", $.type),
-      optional($.effect_clause),
       repeat(seq($.annotation, optional($._terminator))),
       $._body,
     ),
 
     parameters: $ => seq("(", optional(commaSepNewline($, $.parameter)), ")"),
     parameter: $ => seq(field("name", $.identifier), ":", field("type", $.type), optional(seq("=", $._expression))),
-    effect_clause: $ => seq("!", $.identifier, repeat(seq("|", $.identifier))),
 
     type_declaration: $ => seq(
       "type",
@@ -174,7 +172,7 @@ module.exports = grammar({
       prec.left(PREC.concat, seq($._expression, "++", $._expression)),
     ),
 
-    unary_expression: $ => prec(PREC.unary, seq("-", $._expression)),
+    unary_expression: $ => prec(PREC.unary, seq(choice("-", "!"), $._expression)),
     text_call_expression: $ => prec(PREC.call, seq(
       field("function", $.identifier),
       field("text", choice($.string, $.block_text)),

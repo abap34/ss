@@ -20,6 +20,7 @@ page Lambda
   title.text_color = c"#334455"
   docctx().footer_text = title.content ?? "footer"
   let has_color = title.text_color?
+  let missing_color = !has_color
   let sample = code """
 fn sample() -> number
   return 1
@@ -154,6 +155,10 @@ end
         (member_expression
           (identifier)
           (identifier))))
+    (let_statement
+      (identifier)
+      (unary_expression
+        (identifier)))
     (let_statement
       (identifier)
       (text_call_expression
