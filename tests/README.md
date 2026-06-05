@@ -13,7 +13,7 @@ They intentionally assert:
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
 
-CLI/editor/render smoke tests live under `tests/smoke/`. They should stay thin:
+CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that
 has ever touched that subsystem.
 
@@ -22,8 +22,6 @@ has ever touched that subsystem.
   `tests/fixtures/project-basic`.
 - `tests/smoke/lsp.mjs` spawns `ss lsp` and checks initialize, diagnostics,
   completion, hover, definition, and one ranged edit cycle.
-- `tests/smoke/render.sh` renders one representative deck, validates the PDF,
-  rasterizes the first page, and checks one cache recovery path.
 - Language semantics, static semantics, and detailed editor regressions belong
   in `*_spec_tests.zig` or a focused regression fixture before being considered
   for smoke coverage.

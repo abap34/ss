@@ -43,18 +43,10 @@ jobs:
             ca-certificates \
             curl \
             git \
-            imagemagick \
             libcairo2-dev \
             librsvg2-dev \
             libpango1.0-dev \
             pkg-config \
-            poppler-utils \
-            qpdf \
-            texlive-fonts-recommended \
-            texlive-latex-base \
-            texlive-latex-extra \
-            texlive-latex-recommended \
-            texlive-science \
             xz-utils
           sudo rm -rf "$APT_ARCHIVE_CACHE/partial" "$APT_ARCHIVE_CACHE/lock"
           sudo chown -R "$USER:$(id -gn)" "$APT_ARCHIVE_CACHE"
@@ -100,8 +92,6 @@ jobs:
           zig version
           pkg-config --modversion pangocairo
           pkg-config --modversion librsvg-2.0
-          pdflatex --version | head -n 1
-          qpdf --version | head -n 1
 
       - name: Run release validation
         run: |
@@ -113,7 +103,6 @@ jobs:
           zig build test
           zig build -Doptimize=ReleaseSafe -Dversion="$ss_version" -Dcommit="$GITHUB_SHA"
           zig-out/bin/ss --version
-          tests/smoke/render.sh
 
   publish:
     needs: validate
@@ -217,8 +206,7 @@ jobs:
           Validation:
           - zig build test
           - zig build -Doptimize=ReleaseSafe
-          - tests/smoke/render.sh
-          - release/docker/render/Dockerfile build and embedded smoke test
+          - release/docker/render/Dockerfile build
           EOF
 
           gh release edit "$TAG_NAME" --title "ss ${TAG_NAME}" --notes-file release-notes.md

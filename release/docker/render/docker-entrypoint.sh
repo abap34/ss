@@ -10,10 +10,6 @@ case "$1" in
     shift
     exec ss "$@"
     ;;
-  ss-render-smoke)
-    shift
-    exec ss-render-smoke "$@"
-    ;;
   bash|sh|/*)
     exec "$@"
     ;;

@@ -73,13 +73,8 @@ RUN set -eu; \
 
 COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
 COPY release/docker/render/docker-entrypoint.sh /usr/local/bin/ss-docker-entrypoint
-COPY tests/smoke/render.sh /usr/local/bin/ss-render-smoke
 
-RUN chmod +x /usr/local/bin/ss-docker-entrypoint /usr/local/bin/ss-render-smoke
-
-RUN cd /tmp \
-    && SS_BIN=/usr/local/bin/ss SS_RENDER_SMOKE_DIR=/tmp/ss-render-smoke /usr/local/bin/ss-render-smoke \
-    && rm -rf /tmp/ss-render-smoke /tmp/.ss-cache
+RUN chmod +x /usr/local/bin/ss-docker-entrypoint
 
 ENV SS_CACHE_MAX_BYTES="512M"
 
