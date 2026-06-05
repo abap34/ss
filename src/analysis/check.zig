@@ -3,6 +3,7 @@ const ast = @import("ast");
 const core = @import("core");
 const semantic_env = @import("../language/env.zig");
 const infer = @import("infer.zig");
+const registry = @import("../language/registry.zig");
 const semantic_types = @import("types.zig");
 
 const Type = ast.Type;
@@ -16,6 +17,174 @@ const validatePropertySetStatement = infer.validatePropertySetStatement;
 const StatementContext = enum {
     document,
     page,
+};
+
+const NameScope = struct {
+    allocator: std.mem.Allocator,
+    names: std.StringHashMap(void),
+
+    fn init(allocator: std.mem.Allocator) NameScope {
+        return .{
+            .allocator = allocator,
+            .names = std.StringHashMap(void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *NameScope) void {
+        self.names.deinit();
+    }
+
+    fn clone(self: *const NameScope) !NameScope {
+        return .{
+            .allocator = self.allocator,
+            .names = try self.names.clone(),
+        };
+    }
+
+    fn put(self: *NameScope, name: []const u8) !void {
+        try self.names.put(name, {});
+    }
+
+    fn contains(self: *const NameScope, name: []const u8) bool {
+        return self.names.contains(name);
+    }
+};
+
+const PageContextRequirement = struct {
+    const Requirement = union(enum) {
+        primitive: registry.PrimitiveDescriptor,
+        function: ast.FunctionDecl,
+
+        fn displayName(self: Requirement) []const u8 {
+            return switch (self) {
+                .primitive => |descriptor| descriptor.name,
+                .function => |func| func.name,
+            };
+        }
+    };
+
+    allocator: std.mem.Allocator,
+    sema: *const SemanticEnv,
+    memo: std.StringHashMap(bool),
+    visiting: std.StringHashMap(void),
+
+    fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) PageContextRequirement {
+        return .{
+            .allocator = allocator,
+            .sema = sema,
+            .memo = std.StringHashMap(bool).init(allocator),
+            .visiting = std.StringHashMap(void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *PageContextRequirement) void {
+        self.memo.deinit();
+        self.visiting.deinit();
+    }
+
+    fn exprRequirement(self: *PageContextRequirement, scope: *const NameScope, expr: ast.Expr) anyerror!?Requirement {
+        return switch (expr) {
+            .ident => |name| blk: {
+                if (scope.contains(name)) break :blk null;
+                const func = self.sema.function(name) orelse break :blk null;
+                break :blk if (try self.functionRequiresPage(name, func)) .{ .function = func } else null;
+            },
+            .string, .color, .number, .boolean, .none, .enum_case => null,
+            .call => |call| blk: {
+                if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
+                    if (descriptor.context == .page) break :blk .{ .primitive = descriptor };
+                }
+                if (self.sema.function(call.name)) |func| {
+                    if (try self.functionRequiresPage(call.name, func)) break :blk .{ .function = func };
+                }
+                for (call.args.items) |arg| {
+                    if (try self.exprRequirement(scope, arg)) |requirement| break :blk requirement;
+                }
+                break :blk null;
+            },
+            .apply => |apply| blk: {
+                if (try self.exprRequirement(scope, apply.callee.*)) |requirement| break :blk requirement;
+                for (apply.args.items) |arg| {
+                    if (try self.exprRequirement(scope, arg)) |requirement| break :blk requirement;
+                }
+                break :blk null;
+            },
+            .lambda => |lambda| try self.lambdaRequirement(scope, lambda),
+            .member => |member| try self.exprRequirement(scope, member.target.*),
+            .optional_check => |check| try self.exprRequirement(scope, check.target.*),
+            .coalesce => |coalesce| blk: {
+                if (try self.exprRequirement(scope, coalesce.target.*)) |requirement| break :blk requirement;
+                break :blk try self.exprRequirement(scope, coalesce.fallback.*);
+            },
+        };
+    }
+
+    fn lambdaRequirement(self: *PageContextRequirement, scope: *const NameScope, lambda: ast.LambdaExpr) anyerror!?Requirement {
+        var local_scope = try scope.clone();
+        defer local_scope.deinit();
+        for (lambda.params.items) |param| {
+            if (param.default_value) |default_value| {
+                if (try self.exprRequirement(&local_scope, default_value.*)) |requirement| return requirement;
+            }
+            try local_scope.put(param.name);
+        }
+        return try self.exprRequirement(&local_scope, lambda.body.*);
+    }
+
+    fn functionRequiresPage(self: *PageContextRequirement, name: []const u8, func: ast.FunctionDecl) anyerror!bool {
+        if (self.memo.get(name)) |cached| return cached;
+        if (self.visiting.contains(name)) return false;
+        try self.visiting.put(name, {});
+        defer _ = self.visiting.remove(name);
+
+        const requires = try self.functionBodyRequiresPage(func);
+        try self.memo.put(name, requires);
+        return requires;
+    }
+
+    fn functionBodyRequiresPage(self: *PageContextRequirement, func: ast.FunctionDecl) anyerror!bool {
+        var scope = NameScope.init(self.allocator);
+        defer scope.deinit();
+        for (func.params.items) |param| {
+            if (param.default_value) |default_value| {
+                if ((try self.exprRequirement(&scope, default_value.*)) != null) return true;
+            }
+            try scope.put(param.name);
+        }
+        for (func.statements.items) |stmt| {
+            if (try self.statementRequiresPage(&scope, stmt)) return true;
+        }
+        return false;
+    }
+
+    fn statementRequiresPage(self: *PageContextRequirement, scope: *NameScope, stmt: ast.Statement) anyerror!bool {
+        return switch (stmt.kind) {
+            .let_binding => |binding| blk: {
+                if ((try self.exprRequirement(scope, binding.expr)) != null) break :blk true;
+                try scope.put(binding.name);
+                break :blk false;
+            },
+            .return_expr => |expr| (try self.exprRequirement(scope, expr)) != null,
+            .return_void => false,
+            .property_set => |property_set| (try self.exprRequirement(scope, property_set.value)) != null,
+            .constrain => |constraint| if (constraint.offset) |offset| (try self.exprRequirement(scope, offset)) != null else false,
+            .expr_stmt => |expr| (try self.exprRequirement(scope, expr)) != null,
+            .if_stmt => |if_stmt| blk: {
+                if ((try self.exprRequirement(scope, if_stmt.condition)) != null) break :blk true;
+                var then_scope = try scope.clone();
+                defer then_scope.deinit();
+                for (if_stmt.then_statements.items) |nested| {
+                    if (try self.statementRequiresPage(&then_scope, nested)) break :blk true;
+                }
+                var else_scope = try scope.clone();
+                defer else_scope.deinit();
+                for (if_stmt.else_statements.items) |nested| {
+                    if (try self.statementRequiresPage(&else_scope, nested)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
 };
 
 pub fn originPathForModule(module: *const core.SourceModule) []const u8 {
@@ -91,19 +260,26 @@ pub fn checkPageStatements(
     origin_path: []const u8,
     program: ast.Program,
 ) !void {
+    var page_context = PageContextRequirement.init(allocator, sema);
+    defer page_context.deinit();
+
     {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
+        var scope = NameScope.init(allocator);
+        defer scope.deinit();
         for (program.document_statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, origin_path, .document, &env, stmt);
+            try checkTopLevelStatement(allocator, ir, sema, origin_path, .document, &env, &scope, &page_context, stmt);
         }
     }
     for (program.pages.items) |page| {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
+        var scope = NameScope.init(allocator);
+        defer scope.deinit();
 
         for (page.statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, origin_path, .page, &env, stmt);
+            try checkTopLevelStatement(allocator, ir, sema, origin_path, .page, &env, &scope, &page_context, stmt);
         }
     }
 }
@@ -115,16 +291,19 @@ fn checkTopLevelStatement(
     origin_path: []const u8,
     context: StatementContext,
     env: *TypeEnv,
+    scope: *NameScope,
+    page_context: *PageContextRequirement,
     stmt: ast.Statement,
 ) !void {
     const origin = try statementOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
-            try rejectPageOnlyExpr(allocator, ir, context, origin, binding.expr);
+            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, binding.expr);
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try rejectVoidValue(ir, info, origin);
             try env.put(binding.name, info);
+            try scope.put(binding.name);
         },
         .return_expr => {
             try addUserReport(ir, origin, "ReturnOutsideFunction: return is only valid inside a function", .{});
@@ -135,26 +314,30 @@ fn checkTopLevelStatement(
             return error.ReturnOutsideFunction;
         },
         .property_set => |property_set| {
-            try rejectPageOnlyExpr(allocator, ir, context, origin, property_set.value);
+            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, property_set.value);
             try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
-            try rejectPageOnlyExpr(allocator, ir, context, origin, if_stmt.condition);
+            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, if_stmt.condition);
             const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);
             try ensureType(ir, allocator, condition, Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
+            var then_scope = try scope.clone();
+            defer then_scope.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &then_env, nested);
+                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &then_env, &then_scope, page_context, nested);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
+            var else_scope = try scope.clone();
+            defer else_scope.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &else_env, nested);
+                try checkTopLevelStatement(allocator, ir, sema, origin_path, context, &else_env, &else_scope, page_context, nested);
             }
         },
         .expr_stmt => |expr| {
-            try rejectPageOnlyExpr(allocator, ir, context, origin, expr);
+            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, expr);
             _ = try inferExprInfo(allocator, ir, sema, env, expr, origin);
         },
         .constrain => |decl| {
@@ -165,7 +348,7 @@ fn checkTopLevelStatement(
             try validateAnchorRef(allocator, ir, env, origin, decl.target, true);
             try validateAnchorRef(allocator, ir, env, origin, decl.source, false);
             if (decl.offset) |expr| {
-                try rejectPageOnlyExpr(allocator, ir, context, origin, expr);
+                try rejectPageOnlyExpr(ir, context, origin, page_context, scope, expr);
                 const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
                 try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
@@ -180,40 +363,18 @@ fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const 
 }
 
 fn rejectPageOnlyExpr(
-    allocator: std.mem.Allocator,
     ir: *core.Ir,
     context: StatementContext,
     origin: []const u8,
+    page_context: *PageContextRequirement,
+    scope: *const NameScope,
     expr: ast.Expr,
 ) !void {
     if (context == .page) return;
-    switch (expr) {
-        .call => |call| {
-            if (isPageOnlyCall(call.name)) {
-                try addUserReport(ir, origin, "NoCurrentPage: '{s}' is only valid inside a page block", .{call.name});
-                return error.NoCurrentPage;
-            }
-            for (call.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
-        },
-        .apply => |apply| {
-            try rejectPageOnlyExpr(allocator, ir, context, origin, apply.callee.*);
-            for (apply.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
-        },
-        .lambda => |lambda| try rejectPageOnlyExpr(allocator, ir, context, origin, lambda.body.*),
-        .member => |member| try rejectPageOnlyExpr(allocator, ir, context, origin, member.target.*),
-        .optional_check => |check| try rejectPageOnlyExpr(allocator, ir, context, origin, check.target.*),
-        .coalesce => |coalesce| {
-            try rejectPageOnlyExpr(allocator, ir, context, origin, coalesce.target.*);
-            try rejectPageOnlyExpr(allocator, ir, context, origin, coalesce.fallback.*);
-        },
-        else => {},
+    if (try page_context.exprRequirement(scope, expr)) |requirement| {
+        try addUserReport(ir, origin, "NoCurrentPage: '{s}' is only valid inside a page block", .{requirement.displayName()});
+        return error.NoCurrentPage;
     }
-}
-
-fn isPageOnlyCall(name: []const u8) bool {
-    return std.mem.eql(u8, name, "pagectx") or
-        std.mem.eql(u8, name, "object") or
-        std.mem.eql(u8, name, "group");
 }
 
 fn validateAnchorRef(

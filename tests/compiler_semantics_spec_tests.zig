@@ -2233,7 +2233,7 @@ test "compiler semantics: return type inference sees branch-local bindings" {
 }
 
 test "compiler semantics: page-only primitives are rejected in document context" {
-    try expectBuildFails(
+    try expectDiagnostic(
         \\import std:themes/default
         \\
         \\document
@@ -2243,7 +2243,87 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\page ok
         \\end
         \\
-    );
+    , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  title("bad")
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "NoCurrentPage: 'title' is only valid inside a page block");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  foreach(pages(docctx()), title)
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "NoCurrentPage: 'title' is only valid inside a page block");
+}
+
+test "compiler semantics: document callbacks may use explicit pages without current page" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn decorate(page_value: Page) -> Object
+        \\  let item = new(page_value, "explicit", "body", "text")
+        \\  pin_l(item, 72)
+        \\  return item
+        \\end
+        \\
+        \\document
+        \\  foreach(pages(docctx()), decorate)
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "explicit");
+}
+
+test "compiler semantics: document callbacks reject current page access" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  foreach(
+        \\    pages(docctx()),
+        \\    (page_value: Page) |-> pagectx()
+        \\  )
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn make_implicit() -> Object
+        \\  return title("bad")
+        \\end
+        \\
+        \\document
+        \\  foreach(
+        \\    pages(docctx()),
+        \\    (page_value: Page) |-> make_implicit()
+        \\  )
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "NoCurrentPage: 'make_implicit' is only valid inside a page block");
 }
 
 test "compiler semantics: page anchors cannot be constraint targets" {
