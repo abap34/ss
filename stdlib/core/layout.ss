@@ -1,11 +1,11 @@
 import std:core/classes
 
-fn vflow(policy: String, center_offset: Number = 0) -> Void
+fn vflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   pagectx().layout_v = policy
   pagectx().layout_v_center_offset = center_offset
 end
 
-fn vflow_doc(policy: String, center_offset: Number = 0) -> Void
+fn vflow_doc(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   docctx().layout_v = policy
   docctx().layout_v_center_offset = center_offset
 end
@@ -66,10 +66,10 @@ fn inset(node: Object, left: Number, right: Number) -> Object
   return node
 end
 
-fn flow(node: Object, left: String, right: String) -> Object
+fn flow(node: Object, left: Number, right: Number) -> Object
   node.layout_x = left
   node.layout_right_inset = right
-  node.wrap = "on"
+  node.wrap = WrapMode.on
   return node
 end
 

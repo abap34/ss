@@ -55,26 +55,29 @@ pub const ImportDecl = struct {
 pub const TypeDecl = struct {
     name: []const u8,
     body: []const u8,
-    refinement: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: TypeDecl, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.body);
-        if (self.refinement) |refinement| allocator.free(refinement);
     }
 };
 
 pub const ObjectFieldDecl = struct {
     name: []const u8,
     value_type: []const u8,
-    default_value: ?[]const u8 = null,
+    default_value: ?*Expr = null,
+    default_property_value: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: *ObjectFieldDecl, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.value_type);
-        if (self.default_value) |default_value| allocator.free(default_value);
+        if (self.default_value) |expr| {
+            expr.deinit(allocator);
+            allocator.destroy(expr);
+        }
+        if (self.default_property_value) |value| allocator.free(value);
     }
 };
 
@@ -129,75 +132,20 @@ pub const FunctionDecl = struct {
     span: Span,
     params: std.ArrayList(ParamDecl),
     result_type: Type,
-    result_tag: core.ValueTag,
-    effects: ?[]const u8 = null,
-    annotations: std.ArrayList(Annotation),
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
         self.result_type.deinit(allocator);
-        if (self.effects) |effects| allocator.free(effects);
-        for (self.annotations.items) |*annotation| annotation.deinit(allocator);
-        self.annotations.deinit(allocator);
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
-    }
-};
-
-pub const Annotation = struct {
-    name: []const u8,
-    args: std.ArrayList(AnnotationArg),
-    span: Span,
-
-    pub fn deinit(self: *Annotation, allocator: Allocator) void {
-        allocator.free(self.name);
-        for (self.args.items) |*arg| arg.deinit(allocator);
-        self.args.deinit(allocator);
-    }
-};
-
-pub const AnnotationArg = union(enum) {
-    positional: AnnotationValue,
-    named: struct {
-        name: []const u8,
-        value: AnnotationValue,
-    },
-
-    pub fn deinit(self: *AnnotationArg, allocator: Allocator) void {
-        switch (self.*) {
-            .positional => |*value| value.deinit(allocator),
-            .named => |*named| {
-                allocator.free(named.name);
-                named.value.deinit(allocator);
-            },
-        }
-    }
-};
-
-pub const AnnotationValue = union(enum) {
-    ident: []const u8,
-    string: []const u8,
-    expr: Expr,
-    list: std.ArrayList(AnnotationValue),
-
-    pub fn deinit(self: *AnnotationValue, allocator: Allocator) void {
-        switch (self.*) {
-            .ident, .string => |text| allocator.free(text),
-            .expr => |*expr| expr.deinit(allocator),
-            .list => |*items| {
-                for (items.items) |*item| item.deinit(allocator);
-                items.deinit(allocator);
-            },
-        }
     }
 };
 
 pub const ParamDecl = struct {
     name: []const u8,
     ty: Type,
-    value_tag: core.ValueTag,
     default_value: ?*Expr = null,
 
     pub fn deinit(self: *ParamDecl, allocator: Allocator) void {
@@ -244,6 +192,38 @@ pub const LambdaExpr = struct {
     }
 };
 
+pub const MemberExpr = struct {
+    target: *Expr,
+    name: []const u8,
+
+    pub fn deinit(self: *MemberExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+        allocator.free(self.name);
+    }
+};
+
+pub const OptionalCheckExpr = struct {
+    target: *Expr,
+
+    pub fn deinit(self: *OptionalCheckExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+    }
+};
+
+pub const CoalesceExpr = struct {
+    target: *Expr,
+    fallback: *Expr,
+
+    pub fn deinit(self: *CoalesceExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+        self.fallback.deinit(allocator);
+        allocator.destroy(self.fallback);
+    }
+};
+
 pub const Span = struct {
     start: usize,
     end: usize,
@@ -252,17 +232,26 @@ pub const Span = struct {
 pub const Expr = union(enum) {
     ident: []const u8,
     string: []const u8,
+    color: []const u8,
     number: f32,
     boolean: bool,
+    none,
     call: CallExpr,
     apply: ApplyExpr,
     lambda: LambdaExpr,
+    member: MemberExpr,
+    optional_check: OptionalCheckExpr,
+    coalesce: CoalesceExpr,
 
     pub fn deinit(self: *Expr, allocator: Allocator) void {
         switch (self.*) {
+            .ident, .string, .color => |text| allocator.free(text),
             .call => |*call| call.deinit(allocator),
             .apply => |*apply| apply.deinit(allocator),
             .lambda => |*lambda| lambda.deinit(allocator),
+            .member => |*member| member.deinit(allocator),
+            .optional_check => |*check| check.deinit(allocator),
+            .coalesce => |*coalesce| coalesce.deinit(allocator),
             else => {},
         }
     }

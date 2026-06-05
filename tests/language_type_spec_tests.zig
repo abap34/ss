@@ -1,5 +1,4 @@
 const std = @import("std");
-const model = @import("model");
 const Type = @import("language_type").Type;
 
 const testing = std.testing;
@@ -39,20 +38,43 @@ test "type spec: selection item class names follow object class refinement" {
     try testing.expect(Type.accepts(unclassified_object_selection, image_selection));
 }
 
-test "type spec: value tag conversion covers concrete value types" {
-    try testing.expectEqual(.document, Type.document.toValueTag().?);
-    try testing.expectEqual(.page, Type.page.toValueTag().?);
-    try testing.expectEqual(.object, Type.object.toValueTag().?);
-    try testing.expectEqual(.selection, Type.selection(.object).toValueTag().?);
-    try testing.expectEqual(.number, Type.number.toValueTag().?);
-    try testing.expectEqual(.void, (Type{ .tag = .void }).toValueTag().?);
-    try testing.expectEqual(@as(?model.ValueTag, null), Type.any.toValueTag());
-}
-
 test "type spec: formatting exposes the source-level type constructor shape" {
+    var maybe_color = try Type.optional(testing.allocator, Type.color);
+    defer maybe_color.deinit(testing.allocator);
+
     try expectFormat(Type.number, "Number");
+    try expectFormat(Type.color, "Color");
+    try expectFormat(Type.none, "None");
+    try expectFormat(Type.enumType("Align"), "Align");
+    try expectFormat(maybe_color, "Color?");
     try expectFormat(Type.objectClass("Text"), "Object<Text>");
     try expectFormat(Type.selectionType(Type.objectClass("Text")), "Selection<Object<Text>>");
+}
+
+test "type spec: optional acceptance covers none and the child type" {
+    var maybe_color = try Type.optional(testing.allocator, Type.color);
+    defer maybe_color.deinit(testing.allocator);
+    var maybe_align = try Type.optional(testing.allocator, Type.enumType("Align"));
+    defer maybe_align.deinit(testing.allocator);
+
+    try testing.expect(Type.accepts(maybe_color, Type.none));
+    try testing.expect(Type.accepts(maybe_color, Type.color));
+    try testing.expect(Type.accepts(maybe_color, maybe_color));
+    try testing.expect(!Type.accepts(Type.color, Type.none));
+    try testing.expect(!Type.accepts(maybe_color, Type.string));
+    try testing.expect(Type.accepts(maybe_align, Type.none));
+    try testing.expect(Type.accepts(maybe_align, Type.enumType("Align")));
+    try testing.expect(!Type.accepts(maybe_align, Type.enumType("Other")));
+    try testing.expect(!Type.accepts(Type.enumType("Align"), maybe_align));
+}
+
+test "type spec: enum and color are not plain strings statically" {
+    try testing.expect(Type.accepts(Type.color, Type.color));
+    try testing.expect(!Type.accepts(Type.color, Type.string));
+    try testing.expect(!Type.accepts(Type.string, Type.color));
+    try testing.expect(Type.accepts(Type.enumType("Align"), Type.enumType("Align")));
+    try testing.expect(!Type.accepts(Type.enumType("Align"), Type.enumType("Mode")));
+    try testing.expect(!Type.accepts(Type.string, Type.enumType("Align")));
 }
 
 test "type spec: function types format as source-level arrows" {
@@ -89,4 +111,16 @@ test "type spec: function acceptance checks parameters and result types" {
     try testing.expect(!Type.accepts(number_to_number, number_to_string));
     try testing.expect(!Type.accepts(number_to_number, string_to_number));
     try testing.expect(!Type.accepts(number_to_number, binary_number));
+}
+
+test "type spec: optional function types preserve their child shape" {
+    var callback = try Type.functionType(testing.allocator, &.{Type.page}, Type.objectClass("Text"));
+    defer callback.deinit(testing.allocator);
+    var maybe_callback = try Type.optional(testing.allocator, callback);
+    defer maybe_callback.deinit(testing.allocator);
+
+    try expectFormat(maybe_callback, "(Page -> Object<Text>)?");
+    try testing.expect(Type.accepts(maybe_callback, Type.none));
+    try testing.expect(Type.accepts(maybe_callback, callback));
+    try testing.expect(!Type.accepts(callback, maybe_callback));
 }

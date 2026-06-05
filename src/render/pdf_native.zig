@@ -257,7 +257,6 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
     var declaration_index = try declarations.build(allocator, ir);
     defer declaration_index.deinit();
     const sema = semantic_env.SemanticEnv.init(ir, &declaration_index, &ir.functions);
-    try validateRenderCapabilities(&sema);
 
     var plan = try buildRenderPlan(&ctx, ir, &sema, options);
     defer {
@@ -280,42 +279,6 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
 
     const result_pdf_path = if (plan.document_cache_hit) plan.document_cache_path else plan.final_pdf_path;
     return try std.Io.Dir.cwd().readFileAlloc(io, result_pdf_path, allocator, .unlimited);
-}
-
-fn validateRenderCapabilities(sema: *const semantic_env.SemanticEnv) !void {
-    var host_allowed = core.EffectSet.empty();
-    host_allowed.insert(.ExternalProcess);
-    host_allowed.insert(.ReadTemp);
-    host_allowed.insert(.WriteTemp);
-
-    var op_allowed = core.EffectSet.empty();
-    op_allowed.insert(.LowerRender);
-
-    for (sema.hostCapabilities()) |capability| {
-        const effects = (capability.effects orelse return error.MissingEffects).withoutPure();
-        if (!host_allowed.containsAll(effects)) {
-            std.debug.print("native pdf: @host {s} has non-render effects: ", .{capability.function_name});
-            const text = try effects.difference(host_allowed).formatAlloc(std.heap.smp_allocator);
-            defer std.heap.smp_allocator.free(text);
-            std.debug.print("{s}\n", .{text});
-            return error.InvalidRenderEffects;
-        }
-        if (effects.contains(.ExternalProcess) and capability.cache == null) {
-            std.debug.print("native pdf: @host {s} uses ExternalProcess without a deterministic cache key\n", .{capability.function_name});
-            return error.MissingRenderCacheKey;
-        }
-    }
-
-    for (sema.renderOps()) |op| {
-        const effects = (op.effects orelse return error.MissingEffects).withoutPure();
-        if (!op_allowed.containsAll(effects)) {
-            std.debug.print("native pdf: @op {s} has non-render effects: ", .{op.function_name});
-            const text = try effects.difference(op_allowed).formatAlloc(std.heap.smp_allocator);
-            defer std.heap.smp_allocator.free(text);
-            std.debug.print("{s}\n", .{text});
-            return error.InvalidRenderEffects;
-        }
-    }
 }
 
 fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: RenderOptions) !RenderPlan {

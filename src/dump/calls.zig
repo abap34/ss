@@ -37,13 +37,9 @@ pub fn writeQueryContractsField(allocator: std.mem.Allocator, root: *json.Object
         for (descriptor.extra_arg_names, 0..) |name, index| {
             var arg = try args.objectItem();
             try arg.stringField("name", name);
-            if (registry.argType(descriptor.extra_arg_tags[index])) |ty| {
-                const label = try ty.formatAlloc(allocator);
-                defer allocator.free(label);
-                try arg.stringField("type", label);
-            } else {
-                try arg.stringField("type", "any");
-            }
+            const label = try descriptor.extra_arg_types[index].formatAlloc(allocator);
+            defer allocator.free(label);
+            try arg.stringField("type", label);
             try arg.end();
         }
         try args.end();
@@ -66,7 +62,6 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
     } else {
         try item.stringField("resultType", "dependent");
     }
-    try item.stringField("resultValueType", editor.resultText(descriptor.result_tag));
     try item.stringField("source", "primitive");
     try item.stringField("summary", descriptor.summary);
     var params = try item.arrayField("params");
@@ -97,7 +92,6 @@ fn writeUserFunction(
     const result_label = try func.result_type.formatAlloc(allocator);
     defer allocator.free(result_label);
     try item.stringField("resultType", result_label);
-    try item.enumTagField("resultValueType", func.result_tag);
     if (ir.moduleById(metadata.module_id)) |module| {
         try item.enumTagField("source", module.kind);
         try item.intField("moduleId", module.id);

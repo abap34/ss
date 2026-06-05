@@ -167,6 +167,7 @@ pub const Metadata = struct {
 };
 
 pub const ValueTag = enum {
+    none,
     document,
     page,
     object,
@@ -174,7 +175,6 @@ pub const ValueTag = enum {
     selection,
     anchor,
     function,
-    style,
     string,
     number,
     boolean,
@@ -254,7 +254,6 @@ pub const FunctionRef = struct {
     closure_id: ?usize = null,
     param_count: usize,
     returns_value: bool,
-    effect: FunctionEffect = .unknown,
 
     pub fn deinit(self: *FunctionRef, allocator: Allocator) void {
         _ = self;
@@ -268,115 +267,12 @@ pub const FunctionRef = struct {
             .closure_id = self.closure_id,
             .param_count = self.param_count,
             .returns_value = self.returns_value,
-            .effect = self.effect,
         };
     }
 };
 
-pub const FunctionEffect = enum {
-    unknown,
-    pure,
-    builds_graph,
-    adds_constraints,
-    reports_diagnostics,
-};
-
-pub const Effect = enum(u5) {
-    Pure,
-    ReadGraph,
-    ReadMetadata,
-    CreatePage,
-    CreateNode,
-    EmitMetadata,
-    WriteContent,
-    WriteProperty,
-    WriteConstraint,
-    ReadLayout,
-    WriteRenderPolicy,
-    EmitDiagnostics,
-    ExternalProcess,
-    ReadTemp,
-    WriteTemp,
-    LowerRender,
-};
-
-pub const EffectSet = struct {
-    bits: u32 = 0,
-
-    pub fn empty() EffectSet {
-        return .{};
-    }
-
-    pub fn pure() EffectSet {
-        var set = EffectSet.empty();
-        set.insert(.Pure);
-        return set;
-    }
-
-    pub fn single(effect: Effect) EffectSet {
-        var set = EffectSet.empty();
-        set.insert(effect);
-        return set;
-    }
-
-    pub fn insert(self: *EffectSet, effect: Effect) void {
-        self.bits |= bit(effect);
-    }
-
-    pub fn remove(self: *EffectSet, effect: Effect) void {
-        self.bits &= ~bit(effect);
-    }
-
-    pub fn unionWith(self: *EffectSet, other: EffectSet) void {
-        self.bits |= other.bits;
-    }
-
-    pub fn contains(self: EffectSet, effect: Effect) bool {
-        return (self.bits & bit(effect)) != 0;
-    }
-
-    pub fn containsAll(self: EffectSet, other: EffectSet) bool {
-        return (self.bits & other.bits) == other.bits;
-    }
-
-    pub fn difference(self: EffectSet, other: EffectSet) EffectSet {
-        return .{ .bits = self.bits & ~other.bits };
-    }
-
-    pub fn withoutPure(self: EffectSet) EffectSet {
-        var copy = self;
-        copy.remove(.Pure);
-        return copy;
-    }
-
-    pub fn isEmpty(self: EffectSet) bool {
-        return self.bits == 0;
-    }
-
-    fn bit(effect: Effect) u32 {
-        return @as(u32, 1) << @intFromEnum(effect);
-    }
-
-    pub fn formatAlloc(self: EffectSet, allocator: Allocator) ![]const u8 {
-        var out = std.ArrayList(u8).empty;
-        errdefer out.deinit(allocator);
-        var index: usize = 0;
-        while (index < @typeInfo(Effect).@"enum".fields.len) : (index += 1) {
-            const effect: Effect = @enumFromInt(index);
-            if (!self.contains(effect)) continue;
-            if (out.items.len != 0) try out.appendSlice(allocator, " | ");
-            try out.appendSlice(allocator, @tagName(effect));
-        }
-        if (out.items.len == 0) try out.appendSlice(allocator, "(none)");
-        return try out.toOwnedSlice(allocator);
-    }
-};
-
-pub const StyleRef = struct {
-    name: []const u8,
-};
-
 pub const Value = union(ValueTag) {
+    none: void,
     document: NodeId,
     page: NodeId,
     object: NodeId,
@@ -384,7 +280,6 @@ pub const Value = union(ValueTag) {
     selection: Selection,
     anchor: AnchorValue,
     function: FunctionRef,
-    style: StyleRef,
     string: []const u8,
     number: f32,
     boolean: bool,
@@ -402,6 +297,7 @@ pub const Value = union(ValueTag) {
 
     pub fn clone(self: Value, allocator: Allocator) !Value {
         return switch (self) {
+            .none => .{ .none = {} },
             .document => |id| .{ .document = id },
             .page => |id| .{ .page = id },
             .object => |id| .{ .object = id },
@@ -409,7 +305,6 @@ pub const Value = union(ValueTag) {
             .selection => |selection| .{ .selection = try selection.clone(allocator) },
             .anchor => |anchor| .{ .anchor = anchor },
             .function => |function| .{ .function = try function.clone(allocator) },
-            .style => |style| .{ .style = style },
             .string => |text| .{ .string = text },
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
@@ -425,7 +320,7 @@ pub const Value = union(ValueTag) {
             .object => |id| id,
             .metadata => |id| id,
             .selection => |selection| selection.first(),
-            .anchor, .function, .style, .string, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .string, .number, .boolean, .constraints, .void => null,
         };
     }
 };

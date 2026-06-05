@@ -18,7 +18,3 @@
 
 !stdlib
 !stdlib/**
-
-!tests
-!tests/smoke
-!tests/smoke/render.sh

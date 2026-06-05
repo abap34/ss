@@ -4,7 +4,7 @@ const core = @import("core");
 
 const declarations = @import("declarations.zig");
 const registry = @import("registry.zig");
-const value_domains = @import("value_domains.zig");
+const type_defs = @import("type_defs.zig");
 
 pub const CallDescriptor = union(enum) {
     function: ast.FunctionDecl,
@@ -52,16 +52,6 @@ pub const SemanticEnv = struct {
         return registry.lookupQueryOp(name);
     }
 
-    pub fn hostCapabilities(self: *const SemanticEnv) []const declarations.HostCapabilityDescriptor {
-        const index = self.declarations orelse return &.{};
-        return index.host_capabilities.items;
-    }
-
-    pub fn renderOps(self: *const SemanticEnv) []const declarations.RenderOpDescriptor {
-        const index = self.declarations orelse return &.{};
-        return index.render_ops.items;
-    }
-
     pub fn class(self: *const SemanticEnv, name: []const u8) ?declarations.ClassDescriptor {
         if (self.declarations) |index| return index.classByName(name);
         if (self.ir) |ir| {
@@ -96,61 +86,113 @@ pub const SemanticEnv = struct {
         return null;
     }
 
-    pub fn valueDomain(
+    pub fn typeDescriptor(
         self: *const SemanticEnv,
         module_id: core.SourceModuleId,
         name: []const u8,
-    ) ?value_domains.ValueType {
-        if (value_domains.parse(name)) |value_type| return value_type;
-        if (value_domains.resolveDeclaration("", name)) |value_type| return value_type;
-        return self.declaredValueDomain(module_id, name);
-    }
-
-    pub fn declaredValueDomain(
-        self: *const SemanticEnv,
-        module_id: core.SourceModuleId,
-        name: []const u8,
-    ) ?value_domains.ValueType {
+    ) ?declarations.TypeDescriptor {
         if (self.declarations) |index| {
-            if (resolveValueDomainInModule(index, module_id, name)) |value_type| return value_type;
+            if (resolveTypeInModule(index, module_id, name)) |descriptor| return descriptor;
             if (self.ir) |ir| {
                 var order_index = ir.module_order.items.len;
                 while (order_index > 0) {
                     order_index -= 1;
                     const current_id = ir.module_order.items[order_index];
                     if (current_id == module_id) continue;
-                    if (resolveValueDomainInModule(index, current_id, name)) |value_type| return value_type;
+                    if (resolveTypeInModule(index, current_id, name)) |descriptor| return descriptor;
                 }
             } else {
-                var descriptor_index = index.value_domains.items.len;
-                while (descriptor_index > 0) {
-                    descriptor_index -= 1;
-                    const descriptor = index.value_domains.items[descriptor_index];
-                    if (!std.mem.eql(u8, descriptor.name, name)) continue;
-                    if (value_domains.resolveDeclaration(descriptor.name, descriptor.body)) |value_type| return value_type;
-                }
+                return index.typeByName(name);
             }
             return null;
         }
 
-        if (self.ir) |ir| return value_domains.resolveDeclared(ir, module_id, name);
+        if (self.ir) |ir| return findTypeDescriptor(ir, module_id, name);
         return null;
     }
 
-    pub fn valueMatches(
+    pub fn enumDescriptor(
         self: *const SemanticEnv,
         module_id: core.SourceModuleId,
         name: []const u8,
-        string_literal: ?[]const u8,
-        value_tag: core.ValueTag,
-    ) bool {
-        const value_type = self.valueDomain(module_id, name) orelse return false;
-        return value_domains.matches(value_type, string_literal, value_tag);
+    ) ?declarations.TypeDescriptor {
+        const descriptor = self.typeDescriptor(module_id, name) orelse return null;
+        return if (type_defs.isEnumBody(descriptor.body)) descriptor else null;
     }
 
-    pub fn valueLabel(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) []const u8 {
-        const value_type = self.valueDomain(module_id, name) orelse return "known value type";
-        return value_domains.label(value_type);
+    pub fn enumHasCase(
+        self: *const SemanticEnv,
+        module_id: core.SourceModuleId,
+        name: []const u8,
+        case_name: []const u8,
+    ) bool {
+        const descriptor = self.enumDescriptor(module_id, name) orelse return false;
+        return type_defs.enumContains(descriptor.body, case_name);
+    }
+
+    pub fn enumHasCaseAny(self: *const SemanticEnv, name: []const u8, case_name: []const u8) bool {
+        if (self.declarations) |index| {
+            const descriptor = index.typeByName(name) orelse return false;
+            return type_defs.isEnumBody(descriptor.body) and type_defs.enumContains(descriptor.body, case_name);
+        }
+        if (self.ir) |ir| {
+            var index = ir.module_order.items.len;
+            while (index > 0) {
+                index -= 1;
+                const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+                for (module.program.types.items) |decl| {
+                    if (!std.mem.eql(u8, decl.name, name)) continue;
+                    return type_defs.isEnumBody(decl.body) and type_defs.enumContains(decl.body, case_name);
+                }
+            }
+        }
+        return false;
+    }
+
+    pub fn enumExistsAny(self: *const SemanticEnv, name: []const u8) bool {
+        if (self.declarations) |index| {
+            const descriptor = index.typeByName(name) orelse return false;
+            return type_defs.isEnumBody(descriptor.body);
+        }
+        if (self.ir) |ir| {
+            var index = ir.module_order.items.len;
+            while (index > 0) {
+                index -= 1;
+                const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+                for (module.program.types.items) |decl| {
+                    if (std.mem.eql(u8, decl.name, name) and type_defs.isEnumBody(decl.body)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    pub fn resolveTypeName(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
+        if (builtinType(name)) |ty| return ty;
+        if (self.classExists(name)) return ast.Type.objectClass(name);
+        if (self.enumDescriptor(module_id, name) != null) return ast.Type.enumType(name);
+        return null;
+    }
+
+    pub fn resolveTypeText(self: *const SemanticEnv, allocator: std.mem.Allocator, module_id: core.SourceModuleId, text: []const u8) !?ast.Type {
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len == 0) return null;
+        if (trimmed[trimmed.len - 1] == '?') {
+            const inner = (try self.resolveTypeText(allocator, module_id, trimmed[0 .. trimmed.len - 1])) orelse return null;
+            const optional_ty = try ast.Type.optional(allocator, inner);
+            var owned_inner = inner;
+            owned_inner.deinit(allocator);
+            return optional_ty;
+        }
+        if (parseTypeConstructorArg(trimmed, "Selection")) |inner_text| {
+            const inner = (try self.resolveTypeText(allocator, module_id, inner_text)) orelse return null;
+            return ast.Type.selectionType(inner);
+        }
+        if (parseTypeConstructorArg(trimmed, "Object")) |inner_text| {
+            const class_name = std.mem.trim(u8, inner_text, " \t\r\n");
+            return if (self.classExists(class_name)) ast.Type.objectClass(class_name) else null;
+        }
+        return self.resolveTypeName(module_id, trimmed);
     }
 
     pub fn callParamName(self: *const SemanticEnv, call_name: []const u8, index: usize) ?[]const u8 {
@@ -166,15 +208,65 @@ pub const SemanticEnv = struct {
     }
 };
 
-fn resolveValueDomainInModule(
+fn resolveTypeInModule(
     index: *const declarations.DeclarationIndex,
     module_id: core.SourceModuleId,
     name: []const u8,
-) ?value_domains.ValueType {
-    for (index.value_domains.items) |descriptor| {
+) ?declarations.TypeDescriptor {
+    for (index.types.items) |descriptor| {
         if (descriptor.module_id != module_id) continue;
         if (!std.mem.eql(u8, descriptor.name, name)) continue;
-        return value_domains.resolveDeclaration(descriptor.name, descriptor.body);
+        return descriptor;
     }
     return null;
+}
+
+fn findTypeDescriptor(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
+    if (findTypeInModule(ir, module_id, name)) |descriptor| return descriptor;
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const current_id = ir.module_order.items[index];
+        if (current_id == module_id) continue;
+        if (findTypeInModule(ir, current_id, name)) |descriptor| return descriptor;
+    }
+    return null;
+}
+
+fn findTypeInModule(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
+    const module = ir.moduleById(module_id) orelse return null;
+    for (module.program.types.items) |decl| {
+        if (!std.mem.eql(u8, decl.name, name)) continue;
+        return .{ .name = decl.name, .body = decl.body, .module_id = module.id };
+    }
+    return null;
+}
+
+fn builtinType(name: []const u8) ?ast.Type {
+    if (std.mem.eql(u8, name, "Document")) return ast.Type.document;
+    if (std.mem.eql(u8, name, "Page")) return ast.Type.page;
+    if (std.mem.eql(u8, name, "Object")) return ast.Type.object;
+    if (std.mem.eql(u8, name, "Metadata")) return ast.Type.metadata;
+    if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
+    if (std.mem.eql(u8, name, "String")) return ast.Type.string;
+    if (std.mem.eql(u8, name, "Color")) return ast.Type.color;
+    if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
+    if (std.mem.eql(u8, name, "Bool")) return ast.Type.boolean;
+    if (std.mem.eql(u8, name, "Constraints")) return ast.Type.constraints;
+    if (std.mem.eql(u8, name, "Void")) return .{ .kind = .void };
+    if (std.mem.eql(u8, name, "None")) return ast.Type.none;
+    return null;
+}
+
+pub fn isBuiltinTypeName(name: []const u8) bool {
+    return builtinType(name) != null;
+}
+
+fn parseTypeConstructorArg(text: []const u8, constructor: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, text, constructor)) return null;
+    var pos = constructor.len;
+    while (pos < text.len and std.ascii.isWhitespace(text[pos])) : (pos += 1) {}
+    if (pos >= text.len or text[pos] != '<') return null;
+    if (text[text.len - 1] != '>') return null;
+    return text[pos + 1 .. text.len - 1];
 }

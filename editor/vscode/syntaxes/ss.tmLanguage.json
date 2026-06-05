@@ -82,7 +82,7 @@
         },
         {
           "name": "storage.type.ss",
-          "match": "\\b(?:document|page|object|selection|metadata|anchor|style|string|number|bool|boolean|void|Void|constraints|fragment|code|list)\\b"
+          "match": "\\b(?:document|page|object|selection|metadata|anchor|string|number|bool|boolean|void|Void|constraints)\\b"
         },
         {
           "name": "constant.language.boolean.ss",

@@ -31,6 +31,10 @@ pub const Term = union(enum) {
         key: []const u8,
         value: []const u8,
     },
+    unset_property: struct {
+        node: HandleId,
+        key: []const u8,
+    },
     extend_render_env: struct {
         node: HandleId,
         op: []const u8,
@@ -64,6 +68,7 @@ pub const Document = struct {
     terms: std.ArrayList(Term),
     runtime_strings: std.ArrayList([]u8),
     next_metadata_id: core.MetadataId,
+    type_source: ?*const core.Ir,
 
     pub fn init(allocator: Allocator, asset_base_dir: []const u8) !Document {
         const document_id: HandleId = 1;
@@ -81,6 +86,7 @@ pub const Document = struct {
             .terms = .empty,
             .runtime_strings = .empty,
             .next_metadata_id = 1,
+            .type_source = null,
         };
         errdefer doc.deinit();
         try doc.nodes.append(allocator, .{
@@ -122,6 +128,7 @@ pub const Document = struct {
                 allocator.free(property.key);
                 allocator.free(property.value);
             },
+            .unset_property => |property| allocator.free(property.key),
             .extend_render_env => |entry| {
                 allocator.free(entry.op);
                 allocator.free(entry.key);
@@ -256,6 +263,22 @@ pub const Document = struct {
             .value = try self.allocator.dupe(u8, value),
         });
         try self.appendSetPropertyTerm(node_id, key, value);
+    }
+
+    pub fn unsetNodeProperty(self: *Document, node_id: HandleId, key: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.properties.items, 0..) |property, index| {
+            if (std.mem.eql(u8, property.key, key)) {
+                self.allocator.free(property.key);
+                self.allocator.free(property.value);
+                _ = node.properties.orderedRemove(index);
+                break;
+            }
+        }
+        try self.terms.append(self.allocator, .{ .unset_property = .{
+            .node = node_id,
+            .key = try self.allocator.dupe(u8, key),
+        } });
     }
 
     pub fn extendRenderEnv(self: *Document, node_id: HandleId, op: []const u8, key: []const u8, value: []const u8) !void {
@@ -441,15 +464,16 @@ pub const Document = struct {
 
     fn ensureValueTag(self: *Document, value: core.Value, expected: core.ValueTag, context: []const u8) !void {
         _ = self;
-        const actual = valueTag(value);
+        const actual = runtimeKind(value);
         if (actual != expected) {
             std.debug.print("value type mismatch in {s}: expected {s}, got {s}\n", .{ context, @tagName(expected), @tagName(actual) });
             return error.InvalidValueTag;
         }
     }
 
-    fn valueTag(value: core.Value) core.ValueTag {
+    fn runtimeKind(value: core.Value) core.ValueTag {
         return switch (value) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,
@@ -457,7 +481,6 @@ pub const Document = struct {
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
-            .style => .style,
             .string => .string,
             .number => .number,
             .boolean => .boolean,

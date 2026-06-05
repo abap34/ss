@@ -64,16 +64,6 @@ fn page_of(obj: Object) -> Page
   return select(obj, "parent_page")
 end
 
-fn prop_all(items: Selection<Object>, key_name: String, value_name: String) -> Selection<Object>
-  set_prop(items, key_name, value_name)
-  return items
-end
-
-fn style_all(items: Selection<Object>, style_value: Style) -> Selection<Object>
-  items.style = style_value
-  return items
-end
-
 fn union(left: Selection<Object>, right: Selection<Object>) -> Selection<Object>
   return selection_union(left, right)
 end
@@ -84,16 +74,4 @@ end
 
 fn diff(left: Selection<Object>, right: Selection<Object>) -> Selection<Object>
   return selection_difference(left, right)
-end
-
-fn prop_except(items: Selection<Object>, excluded: Selection<Object>, key_name: String, value_name: String) -> Selection<Object>
-  let targets = diff(items, excluded)
-  set_prop(targets, key_name, value_name)
-  return targets
-end
-
-fn style_except(items: Selection<Object>, excluded: Selection<Object>, style_value: Style) -> Selection<Object>
-  let targets = diff(items, excluded)
-  targets.style = style_value
-  return targets
 end

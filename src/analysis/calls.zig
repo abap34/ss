@@ -23,6 +23,10 @@ const LabelSet = struct {
         try self.labels.put(label, {});
     }
 
+    fn deinit(self: *LabelSet) void {
+        self.labels.deinit();
+    }
+
     fn unionWith(self: *LabelSet, other: LabelSet) !void {
         var iterator = other.labels.keyIterator();
         while (iterator.next()) |label| try self.add(label.*);
@@ -204,7 +208,7 @@ const Analyzer = struct {
                 }
                 return LabelSet.init(self.allocator);
             },
-            .string, .number, .boolean => return LabelSet.init(self.allocator),
+            .string, .color, .number, .boolean, .none => return LabelSet.init(self.allocator),
             .lambda => |lambda| {
                 const label = try self.registerLambda(lambda, env);
                 return try LabelSet.singleton(self.allocator, label);
@@ -214,6 +218,16 @@ const Analyzer = struct {
                 const callee_labels = try self.exprLabels(apply.callee.*, env, owner);
                 const arg_labels = try self.argumentLabelSets(apply.args.items, env, owner);
                 return try self.invokeLabels(callee_labels, arg_labels.items, owner);
+            },
+            .member => |member| return try self.exprLabels(member.target.*, env, owner),
+            .optional_check => |check| return try self.exprLabels(check.target.*, env, owner),
+            .coalesce => |coalesce| {
+                var target = try self.exprLabels(coalesce.target.*, env, owner);
+                errdefer target.deinit();
+                var fallback = try self.exprLabels(coalesce.fallback.*, env, owner);
+                defer fallback.deinit();
+                try target.unionWith(fallback);
+                return target;
             },
         }
     }
@@ -234,7 +248,7 @@ const Analyzer = struct {
             .function => |func| {
                 const label = try self.namedLabel(call.name);
                 const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-                if (func.kind == .constant and func.result_type.tag == .function) {
+                if (func.kind == .constant and func.result_type.kind == .function) {
                     const const_labels = try self.invokeNamed(label, func, &.{});
                     return try self.invokeLabels(const_labels, arg_labels.items, owner);
                 }
@@ -339,7 +353,7 @@ const Analyzer = struct {
     fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const LabelSet) !void {
         var index: usize = 0;
         while (index < params.len and index < args.len) : (index += 1) {
-            if (params[index].ty.tag == .function) {
+            if (params[index].ty.kind == .function) {
                 try env.set(self.allocator, params[index].name, args[index]);
             }
         }

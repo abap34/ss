@@ -6,15 +6,15 @@ fn math_align(obj: Object, align_name: Align) -> Object
 end
 
 fn left_math(obj: Object) -> Object
-  return math_align(obj, "left")
+  return math_align(obj, Align.left)
 end
 
 fn center_math(obj: Object) -> Object
-  return math_align(obj, "center")
+  return math_align(obj, Align.center)
 end
 
 fn right_math(obj: Object) -> Object
-  return math_align(obj, "right")
+  return math_align(obj, Align.right)
 end
 
 fn math_align_all(align_name: Align) -> Void
@@ -22,15 +22,15 @@ fn math_align_all(align_name: Align) -> Void
 end
 
 fn left_math_all() -> Void
-  math_align_all("left")
+  math_align_all(Align.left)
 end
 
 fn center_math_all() -> Void
-  math_align_all("center")
+  math_align_all(Align.center)
 end
 
 fn right_math_all() -> Void
-  math_align_all("right")
+  math_align_all(Align.right)
 end
 
 fn math_align_objects(items: Selection<Object>, align_name: Align) -> Selection<Object>

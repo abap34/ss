@@ -205,7 +205,7 @@ pub const Analyzer = struct {
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
-            .ident, .string, .number, .boolean => AccessSummary.init(self.allocator),
+            .ident, .string, .color, .number, .boolean, .none => AccessSummary.init(self.allocator),
             .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
             .apply => |apply| blk: {
                 var summary = try self.analyzeExpr(apply.callee.*);
@@ -215,6 +215,21 @@ pub const Analyzer = struct {
                     defer nested.deinit();
                     try summary.merge(nested);
                 }
+                break :blk summary;
+            },
+            .member => |member| blk: {
+                var summary = try self.analyzeExpr(member.target.*);
+                errdefer summary.deinit();
+                try summary.addRead(Resource.property(member.name));
+                break :blk summary;
+            },
+            .optional_check => |check| try self.analyzeExpr(check.target.*),
+            .coalesce => |coalesce| blk: {
+                var summary = try self.analyzeExpr(coalesce.target.*);
+                errdefer summary.deinit();
+                var fallback = try self.analyzeExpr(coalesce.fallback.*);
+                defer fallback.deinit();
+                try summary.merge(fallback);
                 break :blk summary;
             },
             .call => |call| try self.analyzeCall(call),
@@ -414,23 +429,22 @@ pub const Analyzer = struct {
             try summary.addSelectionRead(Resource.graphObjects(null));
             return;
         };
-        if (std.mem.eql(u8, query_name, "document_pages")) {
-            try summary.addSelectionRead(Resource.graphPages());
-        } else if (std.mem.eql(u8, query_name, "page_objects_by_role") or
-            std.mem.eql(u8, query_name, "document_objects_by_role"))
-        {
-            try summary.addSelectionRead(Resource.graphObjects(literalStringArg(self, call, 2)));
-        } else if (std.mem.eql(u8, query_name, "children") or
-            std.mem.eql(u8, query_name, "descendants") or
-            std.mem.eql(u8, query_name, "self_object"))
-        {
-            try summary.addSelectionRead(Resource.graphObjects(null));
-        } else if (std.mem.eql(u8, query_name, "previous_page") or
-            std.mem.eql(u8, query_name, "parent_page"))
-        {
-            try summary.addRead(Resource.graphPages());
-        } else {
+        const query = registry.lookupQueryOp(query_name) orelse {
             try summary.addRead(Resource.graphObjects(null));
+            return;
+        };
+        switch (query.op) {
+            .document_pages => try summary.addSelectionRead(Resource.graphPages()),
+            .page_objects_by_role,
+            .document_objects_by_role,
+            => try summary.addSelectionRead(Resource.graphObjects(literalStringArg(self, call, 2))),
+            .children,
+            .descendants,
+            .self_object,
+            => try summary.addSelectionRead(Resource.graphObjects(null)),
+            .previous_page,
+            .parent_page,
+            => try summary.addRead(Resource.graphPages()),
         }
     }
 };
@@ -443,6 +457,7 @@ fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) ?[]const 
 fn literalStringExpr(self: *Analyzer, expr: ast.Expr) ?[]const u8 {
     return switch (expr) {
         .string => |value| value,
+        .color => |value| value,
         .ident => |name| self.string_bindings.get(name),
         else => null,
     };

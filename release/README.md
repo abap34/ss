@@ -36,9 +36,9 @@ release/tools/preflight.py vX.Y.Z
 release/tools/changelog-section.py vX.Y.Z
 ```
 
-`pre-release-check.sh` runs the metadata checks, Zig tests, smoke tests, editor
-package checks, Homebrew formula rendering, and the render Docker image build
-with its embedded and direct CLI smoke tests. Do not tag a release until
+`pre-release-check.sh` runs the metadata checks, Zig tests, project and LSP
+smoke tests, editor package checks, Homebrew formula rendering, and the render
+Docker image build with one direct CLI render check. Do not tag a release until
 this script passes locally.
 
 After local and CI validation pass, create and push the tag:

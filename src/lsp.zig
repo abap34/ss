@@ -9,10 +9,12 @@ const module_loader = @import("modules/loader.zig");
 const project = @import("project.zig");
 const dump = @import("dump.zig");
 const utils = @import("utils");
+const lsp_scope = @import("lsp/scope.zig");
 
 const JsonValue = std.json.Value;
 const JsonObject = std.json.ObjectMap;
 const JsonArray = std.json.Array;
+const RequestContext = lsp_scope.RequestContext;
 
 const Snapshot = struct {
     entry_path: []u8,
@@ -460,7 +462,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
     }
 
     if (std.mem.eql(u8, method, "textDocument/completion")) {
-        const result = try completionResult(server);
+        const result = try completionResult(server, params);
         defer server.allocator.free(result);
         try respond(server.allocator, id, result);
         return;
@@ -539,21 +541,23 @@ fn jsonLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return allocator.dupe(u8, text);
 }
 
-fn completionResult(server: *Server) ![]const u8 {
+fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     const allocator = server.allocator;
+    var context = try requestContext(server, params);
+    defer if (context) |*ctx| ctx.deinit(allocator);
     try out.appendSlice(allocator, "{\"isIncomplete\":false,\"items\":[");
     var first = true;
     const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
     for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
-        try appendDumpCompletions(allocator, &out, &first, json_text);
+        try appendDumpCompletions(allocator, &out, &first, json_text, if (context) |*ctx| ctx else null);
     };
     try out.appendSlice(allocator, "]}");
     return out.toOwnedSlice(allocator);
 }
 
-fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, json_text: []const u8) !void {
+fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, json_text: []const u8, context: ?*const RequestContext) !void {
     var parsed = std.json.parseFromSlice(JsonValue, allocator, json_text, .{}) catch return;
     defer parsed.deinit();
     const root = parsed.value.object;
@@ -562,13 +566,17 @@ fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         const detail = stringField(&item.object, "signature");
         try appendCompletion(allocator, out, first, label, 3, detail, stringField(&item.object, "summary"));
     };
-    if (arrayFieldObject(&root, "variables")) |variables| for (variables.items) |item| if (item == .object) {
+    if (arrayFieldObject(&root, "variables")) |variables| for (variables.items) |*item| if (item.* == .object) {
+        if (context) |ctx| {
+            if (!lsp_scope.variableVisibleAt(allocator, &root, &item.object, ctx)) continue;
+            if (!lsp_scope.isBestVisibleVariable(allocator, &root, &item.object, ctx)) continue;
+        }
         const label = stringField(&item.object, "name") orelse continue;
         try appendCompletion(allocator, out, first, label, 6, stringField(&item.object, "type"), null);
     };
     if (objectFieldObject(&root, "declarations")) |decls| {
         const fields = [_]struct { key: []const u8, kind: usize }{
-            .{ .key = "valueDomains", .kind = 25 },
+            .{ .key = "types", .kind = 25 },
             .{ .key = "classes", .kind = 7 },
             .{ .key = "roles", .kind = 20 },
             .{ .key = "fields", .kind = 10 },
@@ -599,13 +607,13 @@ fn appendCompletion(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first
 }
 
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const target = try wordAtRequest(server, params) orelse return try jsonLiteral(server.allocator, "null");
-    defer server.allocator.free(target);
+    var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
+    defer context.deinit(server.allocator);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
-        const markdown = try hoverMarkdown(server.allocator, &root, target) orelse return try jsonLiteral(server.allocator, "null");
+        const markdown = try hoverMarkdown(server.allocator, &root, &context) orelse return try jsonLiteral(server.allocator, "null");
         defer server.allocator.free(markdown);
         var out = std.ArrayList(u8).empty;
         try out.appendSlice(server.allocator, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
@@ -616,16 +624,16 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
     return try jsonLiteral(server.allocator, "null");
 }
 
-fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, target: []const u8) !?[]u8 {
+fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) !?[]u8 {
+    const target = context.target;
+    if (lsp_scope.bestVisibleVariable(allocator, root, target, context)) |item| {
+        return try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ target, stringField(item, "type") orelse "unknown" });
+    }
     if (arrayFieldObject(root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
         if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
         const signature = stringField(&item.object, "signature") orelse target;
         const summary = stringField(&item.object, "summary") orelse "";
         return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
-    };
-    if (arrayFieldObject(root, "variables")) |variables| for (variables.items) |item| if (item == .object) {
-        if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
-        return try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ target, stringField(&item.object, "type") orelse "unknown" });
     };
     if (objectFieldObject(root, "declarations")) |decls| {
         if (arrayFieldObject(decls, "classes")) |classes| for (classes.items) |item| if (item == .object and std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) {
@@ -639,8 +647,8 @@ fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, target: 
 }
 
 fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const target = try wordAtRequest(server, params) orelse return try jsonLiteral(server.allocator, "null");
-    defer server.allocator.free(target);
+    var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
+    defer context.deinit(server.allocator);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
@@ -649,24 +657,42 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
         errdefer out.deinit(server.allocator);
         try out.append(server.allocator, '[');
         var first = true;
+        if (lsp_scope.bestVisibleDefinition(server.allocator, &root, context.target, &context)) |definition| {
+            try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
+            try out.append(server.allocator, ']');
+            return out.toOwnedSlice(server.allocator);
+        }
         if (arrayFieldObject(&root, "definitions")) |defs| for (defs.items) |item| if (item == .object) {
-            if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
-            const path = definitionPath(server.allocator, &root, &item.object) catch null;
-            defer if (path) |p| server.allocator.free(p);
-            const uri = try uriFromPath(server.allocator, path orelse snapshot.entry_path);
-            defer server.allocator.free(uri);
-            const line: usize = @intCast(@max(0, (intField(&item.object, "line") orelse 1) - 1));
-            const column: usize = @intCast(@max(0, (intField(&item.object, "column") orelse 1) - 1));
-            const length: usize = @intCast(@max(1, intField(&item.object, "length") orelse @as(i64, @intCast(target.len))));
-            if (!first) try out.append(server.allocator, ',');
-            first = false;
-            try appendLocationObject(server.allocator, &out, uri, line, column, line, column + length);
+            if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", context.target)) continue;
+            if (std.mem.eql(u8, stringField(&item.object, "kind") orelse "", "variable")) continue;
+            try appendDefinitionLocation(server.allocator, &out, &root, &item.object, snapshot.entry_path, &first);
         };
         if (first) return try jsonLiteral(server.allocator, "null");
         try out.append(server.allocator, ']');
         return out.toOwnedSlice(server.allocator);
     };
     return try jsonLiteral(server.allocator, "null");
+}
+
+fn appendDefinitionLocation(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    root: *const JsonObject,
+    item: *const JsonObject,
+    fallback_path: []const u8,
+    first: *bool,
+) !void {
+    const path = definitionPath(allocator, root, item) catch null;
+    defer if (path) |p| allocator.free(p);
+    const uri = try uriFromPath(allocator, path orelse fallback_path);
+    defer allocator.free(uri);
+    const line: usize = @intCast(@max(0, (intField(item, "line") orelse 1) - 1));
+    const column: usize = @intCast(@max(0, (intField(item, "column") orelse 1) - 1));
+    const fallback_length: i64 = @intCast((stringField(item, "name") orelse @as([]const u8, "")).len);
+    const length: usize = @intCast(@max(1, intField(item, "length") orelse fallback_length));
+    if (!first.*) try out.append(allocator, ',');
+    first.* = false;
+    try appendLocationObject(allocator, out, uri, line, column, line, column + length);
 }
 
 fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
@@ -902,7 +928,7 @@ fn isKeyword(word: []const u8) bool {
 }
 
 fn isBuiltinType(word: []const u8) bool {
-    const types = [_][]const u8{ "document", "page", "object", "selection", "metadata", "anchor", "style", "string", "number", "bool", "boolean", "constraints", "void", "Void" };
+    const types = [_][]const u8{ "document", "page", "object", "selection", "metadata", "anchor", "string", "number", "bool", "boolean", "constraints", "void", "Void" };
     for (types) |name| if (std.mem.eql(u8, word, name)) return true;
     return false;
 }
@@ -1243,15 +1269,30 @@ fn docPathFromParams(allocator: std.mem.Allocator, params: ?JsonValue) !?[]u8 {
     return try pathFromUri(allocator, uri);
 }
 
-fn wordAtRequest(server: *Server, params: ?JsonValue) !?[]u8 {
+fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
     const p = params orelse return null;
     const doc_path = try docPathFromParams(server.allocator, params) orelse return null;
-    defer server.allocator.free(doc_path);
-    const pos_obj = objectField(p, "position") orelse return null;
+    errdefer server.allocator.free(doc_path);
+    const pos_obj = objectField(p, "position") orelse {
+        server.allocator.free(doc_path);
+        return null;
+    };
     const line: usize = @intCast(@max(0, intField(pos_obj, "line") orelse 0));
     const character: usize = @intCast(@max(0, intField(pos_obj, "character") orelse 0));
-    const source = server.sourceForPath(doc_path) orelse return null;
-    return try wordAt(server.allocator, source, line, character);
+    const source = server.sourceForPath(doc_path) orelse {
+        server.allocator.free(doc_path);
+        return null;
+    };
+    const target = try wordAt(server.allocator, source, line, character) orelse {
+        server.allocator.free(doc_path);
+        return null;
+    };
+    return .{
+        .target = target,
+        .doc_path = doc_path,
+        .source = source,
+        .offset = positionOffset(source, line, character),
+    };
 }
 
 fn wordAt(allocator: std.mem.Allocator, source: []const u8, target_line: usize, character: usize) !?[]u8 {

@@ -80,6 +80,8 @@ pub const Definition = struct {
     length: usize,
     span_start: usize,
     span_end: usize,
+    visible_start: usize = 0,
+    visible_end: usize = std.math.maxInt(usize),
     kind: DefinitionKind,
     module_id: SourceModuleId,
     file: ?[]const u8 = null,
@@ -109,7 +111,6 @@ pub const Ir = struct {
     project_module_id: SourceModuleId,
     functions: std.StringHashMap(ast.FunctionDecl),
     function_metadata: std.StringHashMap(FunctionMetadata),
-    variable_types: std.StringHashMap(ValueTag),
     definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
@@ -140,7 +141,6 @@ pub const Ir = struct {
             .project_module_id = 0,
             .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
             .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
-            .variable_types = std.StringHashMap(ValueTag).init(allocator),
             .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
@@ -188,7 +188,6 @@ pub const Ir = struct {
         self.module_order.deinit(self.allocator);
         self.functions.deinit();
         self.function_metadata.deinit();
-        self.variable_types.deinit();
         self.definitions.deinit(self.allocator);
         self.hints.deinit(self.allocator);
         self.contains.deinit();
@@ -209,7 +208,6 @@ pub const Ir = struct {
         self.module_order.deinit(self.allocator);
         self.functions.deinit();
         self.function_metadata.deinit();
-        self.variable_types.deinit();
         for (self.definitions.items) |definition| {
             self.allocator.free(definition.name);
             if (definition.file) |file| self.allocator.free(file);
@@ -410,6 +408,18 @@ pub const Ir = struct {
             .key = try self.allocator.dupe(u8, key),
             .value = try self.allocator.dupe(u8, value),
         });
+    }
+
+    pub fn unsetNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        for (node.properties.items, 0..) |property, index| {
+            if (std.mem.eql(u8, property.key, key)) {
+                self.allocator.free(property.key);
+                self.allocator.free(property.value);
+                _ = node.properties.orderedRemove(index);
+                return;
+            }
+        }
     }
 
     pub fn extendRenderEnv(self: *Ir, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
@@ -703,6 +713,7 @@ pub const Ir = struct {
     fn ensureValueTag(self: *Ir, value: Value, expected: ValueTag, context: []const u8) !void {
         _ = self;
         const actual: ValueTag = switch (value) {
+            .none => .none,
             .document => .document,
             .page => .page,
             .object => .object,
@@ -710,7 +721,6 @@ pub const Ir = struct {
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
-            .style => .style,
             .string => .string,
             .number => .number,
             .boolean => .boolean,
