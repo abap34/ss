@@ -20,18 +20,6 @@ pub fn infoFromType(ty: Type) TypeInfo {
     };
 }
 
-pub fn infoForSelectionItem(kind: core.SelectionItemTag) TypeInfo {
-    return infoFromType(syntheticSelectionType(kind));
-}
-
-fn syntheticSelectionType(kind: core.SelectionItemTag) Type {
-    return switch (kind) {
-        .page => Type.selection(.page),
-        .object => Type.selection(.object),
-        .metadata => Type.selection(.metadata),
-    };
-}
-
 pub fn typeLabelAlloc(allocator: std.mem.Allocator, ty: Type) ![]const u8 {
     return ty.formatAlloc(allocator);
 }
