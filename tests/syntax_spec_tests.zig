@@ -100,6 +100,10 @@ test "syntax spec: imports and pages preserve source order" {
         \\// Leading trivia is not part of the AST.
         \\import core
         \\
+        \\document
+        \\  let deck_title = "Intro"
+        \\end
+        \\
         \\page Intro
         \\  title Hello
         \\end
@@ -117,15 +121,20 @@ test "syntax spec: imports and pages preserve source order" {
     try testing.expectEqual(@as(usize, 2), program.imports.items.len);
     try testing.expectEqualStrings("core", program.imports.items[0].spec);
     try testing.expectEqualStrings("themes/default", program.imports.items[1].spec);
+    try testing.expectEqual(@as(usize, 1), program.document_blocks.items.len);
+    try testing.expectEqual(@as(usize, 1), program.document_statements.items.len);
+    try testing.expectEqual(@as(usize, 0), program.document_blocks.items[0].statement_start);
+    try testing.expectEqual(@as(usize, 1), program.document_blocks.items[0].statement_count);
     try testing.expectEqual(@as(usize, 2), program.pages.items.len);
     try testing.expectEqualStrings("Intro", program.pages.items[0].name);
     try testing.expectEqualStrings("Two Words", program.pages.items[1].name);
 
-    try testing.expectEqual(@as(usize, 4), program.top_level_items.items.len);
+    try testing.expectEqual(@as(usize, 5), program.top_level_items.items.len);
     try testing.expectEqual(@as(usize, 0), program.top_level_items.items[0].import);
-    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[1].page);
-    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[2].import);
-    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[3].page);
+    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[1].document);
+    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[2].page);
+    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[3].import);
+    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[4].page);
 }
 
 test "syntax spec: page name underscore generates an internal reserved name" {

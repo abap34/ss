@@ -46,6 +46,27 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     }
     try imports.end();
 
+    var top_level_items = try program_object.arrayField("topLevelItems");
+    for (program.top_level_items.items) |top_level_item| {
+        var item = try top_level_items.objectItem();
+        switch (top_level_item) {
+            .import => |index| {
+                try item.stringField("kind", "import");
+                try item.intField("index", index);
+            },
+            .document => |index| {
+                try item.stringField("kind", "document");
+                try item.intField("index", index);
+            },
+            .page => |index| {
+                try item.stringField("kind", "page");
+                try item.intField("index", index);
+            },
+        }
+        try item.end();
+    }
+    try top_level_items.end();
+
     var types = try program_object.arrayField("types");
     for (program.types.items) |type_decl| {
         var item = try types.objectItem();
@@ -93,6 +114,16 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     var document_statements = try program_object.arrayField("documentStatements");
     for (program.document_statements.items) |stmt| try writeStatement(allocator, &document_statements, stmt);
     try document_statements.end();
+
+    var document_blocks = try program_object.arrayField("documentBlocks");
+    for (program.document_blocks.items) |block| {
+        var item = try document_blocks.objectItem();
+        try item.intField("statementStart", block.statement_start);
+        try item.intField("statementCount", block.statement_count);
+        try writeSpan(&item, block.span);
+        try item.end();
+    }
+    try document_blocks.end();
 
     var pages = try program_object.arrayField("pages");
     for (program.pages.items) |page| {

@@ -100,8 +100,23 @@ const Parser = struct {
                 try program.object_extensions.append(self.allocator, extension);
             } else if (try self.consumeKeyword("document")) {
                 var statements = try self.parseBodyStatements();
+                var moved_statements = false;
+                defer statements.deinit(self.allocator);
+                errdefer {
+                    if (!moved_statements) {
+                        for (statements.items) |*stmt| stmt.deinit(self.allocator);
+                    }
+                }
+                const statement_start = program.document_statements.items.len;
                 try program.document_statements.appendSlice(self.allocator, statements.items);
-                statements.deinit(self.allocator);
+                moved_statements = true;
+                const document_index = program.document_blocks.items.len;
+                try program.document_blocks.append(self.allocator, .{
+                    .statement_start = statement_start,
+                    .statement_count = statements.items.len,
+                    .span = .{ .start = item_start, .end = self.pos },
+                });
+                try program.top_level_items.append(self.allocator, .{ .document = document_index });
             } else {
                 const page = try self.parsePage();
                 const page_index = program.pages.items.len;
