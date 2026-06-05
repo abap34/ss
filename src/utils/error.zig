@@ -331,7 +331,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.ExpectedConstraintSet,
         error.ExpectedStringArgument,
         error.ExpectedNumberArgument,
-        error.ExpectedStyleArgument,
         error.ExpectedAnchor,
         error.ExpectedObject,
         error.UnknownRole,

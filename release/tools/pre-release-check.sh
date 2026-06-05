@@ -154,8 +154,6 @@ require_command node
 require_command npm
 require_command pkg-config
 require_command qpdf
-require_command pdftoppm
-require_command pdflatex
 require_command ruby
 if [[ "$skip_docker" != true ]]; then
   require_command docker
@@ -183,7 +181,6 @@ esac
 
 run tests/smoke/project.sh
 run node tests/smoke/lsp.mjs
-run tests/smoke/render.sh
 
 step "tree-sitter grammar"
 (

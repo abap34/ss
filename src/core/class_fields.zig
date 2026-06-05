@@ -16,20 +16,22 @@ pub fn propertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?[]con
 pub fn defaultProperty(ir: anytype, node: *const Node, key: []const u8) ?[]const u8 {
     const class_name = classNameForNode(ir, node) orelse return null;
     const value = fieldDefault(ir, class_name, key) orelse return null;
-    return unquoteDefault(value);
+    if (isNoneDefault(value)) return null;
+    return value;
 }
 
 pub fn defaultPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?[]const u8 {
     const class_name = classNameForNodeWithEnv(node, sema) orelse return null;
     const field = sema.field(class_name, key) orelse return null;
-    const value = field.default_value orelse return null;
-    return unquoteDefault(value);
+    const value = field.default_property_value orelse return null;
+    if (isNoneDefault(value)) return null;
+    return value;
 }
 
 pub fn classNameForNode(ir: anytype, node: *const Node) ?[]const u8 {
     return switch (node.kind) {
         .document => "Doc",
-        .page => "Page",
+        .page => "PageContext",
         .object => if (node.role) |role| roleClass(ir, role) else null,
     };
 }
@@ -37,7 +39,7 @@ pub fn classNameForNode(ir: anytype, node: *const Node) ?[]const u8 {
 pub fn classNameForNodeWithEnv(node: *const Node, sema: anytype) ?[]const u8 {
     return switch (node.kind) {
         .document => "Doc",
-        .page => "Page",
+        .page => "PageContext",
         .object => if (node.role) |role| sema.roleClass(role) else null,
     };
 }
@@ -78,13 +80,13 @@ fn fieldDefaultInClass(ir: anytype, class_name: []const u8, field_name: []const 
         for (module.program.object_extensions.items) |extension| {
             if (!std.mem.eql(u8, extension.target, class_name)) continue;
             for (extension.fields.items) |field| {
-                if (std.mem.eql(u8, field.name, field_name)) return field.default_value;
+                if (std.mem.eql(u8, field.name, field_name)) return field.default_property_value;
             }
         }
         for (module.program.objects.items) |decl| {
             if (!std.mem.eql(u8, decl.name, class_name)) continue;
             for (decl.fields.items) |field| {
-                if (std.mem.eql(u8, field.name, field_name)) return field.default_value;
+                if (std.mem.eql(u8, field.name, field_name)) return field.default_property_value;
             }
         }
     }
@@ -103,10 +105,6 @@ fn classBase(ir: anytype, class_name: []const u8) ?[]const u8 {
     return null;
 }
 
-fn unquoteDefault(value: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, value, " \t\r\n");
-    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
-        return trimmed[1 .. trimmed.len - 1];
-    }
-    return trimmed;
+fn isNoneDefault(value: []const u8) bool {
+    return std.mem.eql(u8, std.mem.trim(u8, value, " \t\r\n"), "none");
 }

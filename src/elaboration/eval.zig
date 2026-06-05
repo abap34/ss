@@ -286,7 +286,6 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
         error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
         error.ExpectedNumberArgument => "ExpectedNumberArgument: expected a number argument",
-        error.ExpectedStyleArgument => "ExpectedStyleArgument: expected a style argument",
         error.ExpectedAnchor => "ExpectedAnchor: expected an anchor argument",
         error.ExpectedObject => "ExpectedObject: expected an object argument",
         error.NoCurrentPage => "NoCurrentPage: this operation is only valid inside a page block",
@@ -322,6 +321,7 @@ pub fn elaborateIr(allocator: std.mem.Allocator, ir: *const core.Ir) !doc.Docume
 }
 
 pub fn elaborateIrInto(allocator: std.mem.Allocator, ir: *const core.Ir, document: *doc.Document) !void {
+    document.type_source = ir;
     var graph = try ScheduleGraph.build(allocator, ir, document);
     defer {
         graph.allocator.free(graph.order);
@@ -877,11 +877,84 @@ fn evalExpr(
             break :blk error.UnknownIdentifier;
         },
         .string => |text| .{ .string = text },
+        .color => |text| .{ .string = text },
         .number => |value| .{ .number = value },
         .boolean => |value| .{ .boolean = value },
+        .none => .{ .none = {} },
         .call => |call| try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call),
         .apply => |apply| try evalApply(ir, page_id, context, mode, env, functions, closures, current_origin, apply),
         .lambda => |lambda| try evalLambda(env, closures, lambda),
+        .member => |member| try evalMember(ir, page_id, context, mode, env, functions, closures, current_origin, member),
+        .optional_check => |check| blk: {
+            var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, check.target.*);
+            defer value.deinit(ir.allocator);
+            break :blk .{ .boolean = contracts.runtimeKind(value) != .none };
+        },
+        .coalesce => |coalesce| blk: {
+            var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.target.*);
+            if (contracts.runtimeKind(value) != .none) break :blk value;
+            value.deinit(ir.allocator);
+            break :blk try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.fallback.*);
+        },
+    };
+}
+
+fn evalMember(
+    ir: *doc.Document,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const std.StringHashMap(FunctionDecl),
+    closures: *ClosureStore,
+    current_origin: []const u8,
+    member: ast.MemberExpr,
+) !core.Value {
+    if (member.target.* == .ident and startsUpper(member.target.ident)) {
+        return .{ .string = member.name };
+    }
+    var target = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, member.target.*);
+    defer target.deinit(ir.allocator);
+    if (std.mem.eql(u8, member.name, "content")) {
+        const object_id = try resolveValueObjectId(ir, mode, target);
+        return .{ .string = ir.getNode(object_id).?.content orelse "" };
+    }
+    const node_id = switch (target) {
+        .document => |id| id,
+        .page => |id| id,
+        .object => |id| id,
+        else => return error.InvalidValueTag,
+    };
+    const node = ir.getNode(node_id) orelse return error.UnknownNode;
+    const value = core.nodeProperty(node, member.name) orelse return .{ .none = {} };
+    const type_source = ir.type_source orelse return .{ .string = value };
+    const sema = SemanticEnv.init(type_source, null, functions);
+    const class_name = core.class_fields.classNameForNodeWithEnv(node, &sema) orelse return .{ .string = value };
+    const field = sema.field(class_name, member.name) orelse return .{ .string = value };
+    var field_type = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse return .{ .string = value };
+    defer field_type.deinit(ir.allocator);
+    return typedPropertyValue(value, field_type);
+}
+
+fn startsUpper(name: []const u8) bool {
+    return name.len != 0 and name[0] >= 'A' and name[0] <= 'Z';
+}
+
+fn typedPropertyValue(value: []const u8, ty: ast.Type) !core.Value {
+    if (ty.kind == .optional) {
+        const child = ty.optional_child orelse return .{ .string = value };
+        return typedPropertyValue(value, child.*);
+    }
+    return switch (ty.kind) {
+        .none => .{ .none = {} },
+        .string, .color, .enum_type => .{ .string = value },
+        .number => .{ .number = std.fmt.parseFloat(f32, value) catch return error.InvalidValueTag },
+        .boolean => blk: {
+            if (std.mem.eql(u8, value, "true")) break :blk .{ .boolean = true };
+            if (std.mem.eql(u8, value, "false")) break :blk .{ .boolean = false };
+            return error.InvalidValueTag;
+        },
+        else => .{ .string = value },
     };
 }
 
@@ -917,7 +990,7 @@ fn evalCall(
     return switch (descriptor) {
         .function => |func| blk: {
             if (func.kind == .constant) {
-                if (func.result_tag == .function) {
+                if (func.result_type.kind == .function) {
                     var const_value = try invokeUserFunctionValue(ir, page_id, context, mode, env, functions, closures, func, current_origin, .{
                         .name = call.name,
                         .args = std.ArrayList(Expr).empty,
@@ -1060,10 +1133,6 @@ const BuiltinContext = struct {
         return try evalCallPayloadArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.closures, self.current_origin, call, index);
     }
 
-    pub fn evalStyleArg(self: *BuiltinContext, call: CallExpr, index: usize) anyerror!core.StyleRef {
-        return try evalCallStyleArg(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.closures, self.current_origin, call, index);
-    }
-
     pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
         return try self.ir.ownString(text);
     }
@@ -1127,6 +1196,10 @@ const BuiltinContext = struct {
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
         try self.ir.setNodeProperty(object_id, key, value);
+    }
+
+    pub fn unsetNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8) !void {
+        try self.ir.unsetNodeProperty(object_id, key);
     }
 
     pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
@@ -1366,7 +1439,7 @@ fn evalSelectCall(
         if (err == error.InvalidArity) try validateFixedArity(ir, call.args.items.len, descriptor.arity, current_origin);
         return err;
     };
-    try contracts.ensureValueTypeWithCode(ir, null, base, descriptor.input_tag, current_origin, .UnmatchedInputType);
+    try contracts.ensureValueConformsToType(ir, null, base, descriptor.input_type, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {
             return try ir.select(ir.allocator, base, core.Query.selfObject());
@@ -1449,7 +1522,7 @@ fn bindUserFunctionArgs(
             try evalExpr(ir, page_id, context, mode, caller_env, functions, closures, current_origin, call.args.items[index])
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        contracts.ensureValueTypeWithCode(ir, page_id, value, param.value_tag, current_origin, .UnmatchedArgumentType) catch |err| {
+        contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1477,7 +1550,7 @@ fn bindUserFunctionValueArgs(
             try args[index].clone(ir.allocator)
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        contracts.ensureValueTypeWithCode(ir, page_id, value, param.value_tag, current_origin, .UnmatchedArgumentType) catch |err| {
+        contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1507,13 +1580,6 @@ fn resolveValueNumber(value: core.Value) !f32 {
 
 fn resolveValueBoolean(value: core.Value) !bool {
     return eval_value.boolean(value);
-}
-
-fn resolveValueStyle(value: core.Value) !core.StyleRef {
-    return switch (value) {
-        .style => |style| style,
-        else => return error.ExpectedStyleArgument,
-    };
 }
 
 fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
@@ -1603,21 +1669,6 @@ fn evalCallAnchorArg(
     index: usize,
 ) anyerror!core.AnchorValue {
     return try resolveValueAnchor(try evalCallArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, index));
-}
-
-fn evalCallStyleArg(
-    ir: *doc.Document,
-    page_id: core.NodeId,
-    context: EvalContext,
-    mode: EvalMode,
-    env: *std.StringHashMap(core.Value),
-    functions: *const std.StringHashMap(FunctionDecl),
-    closures: *ClosureStore,
-    current_origin: []const u8,
-    call: CallExpr,
-    index: usize,
-) anyerror!core.StyleRef {
-    return try resolveValueStyle(try evalCallArg(ir, page_id, context, mode, env, functions, closures, current_origin, call, index));
 }
 
 fn evalCallRoleArg(
@@ -1723,6 +1774,13 @@ fn executeStatement(
                 var owned = value;
                 owned.deinit(ir.allocator);
             }
+            switch (value) {
+                .none => {
+                    try ir.unsetNodeProperty(object_id, property_set.property_name);
+                    return .none;
+                },
+                else => {},
+            }
             const text = try resolveValuePropertyString(ir.allocator, value);
             defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
             try ir.setNodeProperty(object_id, property_set.property_name, text);
@@ -1810,17 +1868,17 @@ fn executeCallStatement(
                     var owned = value;
                     owned.deinit(ir.allocator);
                 }
-                if (func.result_tag == .void) {
+                if (func.result_type.kind == .void) {
                     try contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
                 } else {
-                    try contracts.ensureValueTypeWithCode(ir, page_id, value, func.result_tag, current_origin, .UnmatchedReturnType);
+                    try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
                 return;
             },
         }
     }
-    if (func.result_tag != .void) return error.FunctionDidNotReturnValue;
+    if (func.result_type.kind != .void) return error.FunctionDidNotReturnValue;
 }
 
 fn invokeFunctionRef(
@@ -1868,7 +1926,7 @@ fn invokeClosureValues(
     defer deinitValueEnv(ir.allocator, &local_env);
     for (closure.lambda.params.items, 0..) |param, index| {
         const value = try args[index].clone(ir.allocator);
-        contracts.ensureValueTypeWithCode(ir, page_id, value, param.value_tag, current_origin, .UnmatchedArgumentType) catch |err| {
+        contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1905,7 +1963,7 @@ fn invokeUserFunctionValue(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try contracts.ensureValueTypeWithCode(ir, page_id, value, func.result_tag, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
@@ -1936,13 +1994,13 @@ fn invokeUserFunctionValues(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try contracts.ensureValueTypeWithCode(ir, page_id, value, func.result_tag, current_origin, .UnmatchedReturnType);
+                try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
     }
 
-    if (func.result_tag == .void) return .{ .void = {} };
+    if (func.result_type.kind == .void) return .{ .void = {} };
     return error.FunctionDidNotReturnValue;
 }
 

@@ -172,6 +172,22 @@ directory when omitted.
 
 ## Installation
 
+### Dependency Overview
+
+Dependencies:
+
+| Dependency | Purpose |
+| ---------- | ------- |
+| Cairo headers and library | Native PDF drawing. |
+| Pango headers and library | Text shaping and layout. |
+| librsvg headers and library | SVG rendering. |
+| `qpdf` | PDF assembly and normalization. |
+| `magick` | Raster image conversion, when raster assets need conversion or resizing. |
+| `pdftocairo` | PDF/vector asset conversion, including rendered LaTeX math conversion. |
+| `pdflatex` | LaTeX math rendering, when math objects are used. |
+
+Run `ss doctor` to check the tools available in the current environment.
+
 ### Homebrew
 
 On macOS, Homebrew is the recommended install path:
@@ -181,9 +197,10 @@ brew tap abap34/ss
 brew install ss
 ```
 
-The formula builds ss from the GitHub Release source archive, installs the CLI,
-and pulls the native rendering dependencies. LaTeX math rendering still needs a
-TeX distribution such as MacTeX or BasicTeX.
+The Homebrew formula builds ss from the GitHub Release source archive and
+installs the CLI. It installs the native PDF dependencies, `qpdf`, ImageMagick,
+and Poppler. LaTeX math rendering still needs a TeX distribution such as MacTeX
+or BasicTeX.
 
 ### GitHub Release
 
@@ -197,7 +214,8 @@ keep `ss` on `PATH` or set the extension's `ss.cli.path` setting.
 
 ### Build From Source
 
-Install Zig 0.16 and the native PDF dependencies, then build:
+Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
+set up MD4C, and build:
 
 ```sh
 scripts/setup-md4c.sh
@@ -205,13 +223,13 @@ zig build -Doptimize=ReleaseSafe
 zig build -Doptimize=ReleaseSafe install --prefix ~/.local
 ```
 
-Useful macOS packages:
+Example Homebrew command for the non-TeX dependencies:
 
 ```sh
-brew install zig pkgconf cairo pango librsvg qpdf poppler imagemagick
+brew install pkgconf cairo pango librsvg qpdf poppler imagemagick
 ```
 
-Useful Ubuntu/Debian packages:
+Example apt command for the non-TeX dependencies on Ubuntu/Debian:
 
 ```sh
 sudo apt-get install -y \
@@ -219,7 +237,8 @@ sudo apt-get install -y \
   qpdf poppler-utils imagemagick
 ```
 
-Install a TeX distribution when you render LaTeX math.
+Install a TeX distribution only when you render LaTeX math. Install fonts for
+the scripts you use in slide text; the Docker image includes CJK and emoji fonts.
 
 ### Container and GitHub Actions
 

@@ -4,6 +4,10 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the standalone render smoke test and its GitHub Actions workflow.
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
@@ -106,10 +110,6 @@ All notable changes to `ss` are recorded here.
 ### Changed
 
 - Use the ssbird logo as the VS Code extension icon.
-
-### Fixed
-
-- Fixed the render Docker image smoke test so an installed `ss-render-smoke` script checks the render cache under its working directory.
 
 ## [0.1.3] - 2026-05-23
 

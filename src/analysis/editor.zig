@@ -49,7 +49,12 @@ pub fn formatPrimitiveSignature(
         defer allocator.free(label);
         try params.appendSlice(allocator, label);
     }
-    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ descriptor.name, params.items, resultText(descriptor.result_tag) });
+    const result_label = if (registry.primitiveResultType(descriptor)) |result_type|
+        try result_type.formatAlloc(allocator)
+    else
+        try allocator.dupe(u8, "dependent");
+    defer allocator.free(result_label);
+    return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ descriptor.name, params.items, result_label });
 }
 
 pub fn formatPrimitiveParam(
@@ -101,8 +106,10 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
     return switch (expr) {
         .ident => |name| allocator.dupe(u8, name),
         .string => |text| std.fmt.allocPrint(allocator, "\"{s}\"", .{text}),
+        .color => |text| std.fmt.allocPrint(allocator, "c\"{s}\"", .{text}),
         .number => |value| std.fmt.allocPrint(allocator, "{d}", .{value}),
         .boolean => |value| allocator.dupe(u8, if (value) "true" else "false"),
+        .none => allocator.dupe(u8, "none"),
         .call => |call| blk: {
             var args = std.ArrayList(u8).empty;
             defer args.deinit(allocator);
@@ -128,11 +135,24 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ callee, args.items });
         },
         .lambda => allocator.dupe(u8, "<lambda>"),
+        .member => |member| blk: {
+            const target = try formatExpr(allocator, member.target.*);
+            defer allocator.free(target);
+            break :blk std.fmt.allocPrint(allocator, "{s}.{s}", .{ target, member.name });
+        },
+        .optional_check => |check| blk: {
+            const target = try formatExpr(allocator, check.target.*);
+            defer allocator.free(target);
+            break :blk std.fmt.allocPrint(allocator, "{s}?", .{target});
+        },
+        .coalesce => |coalesce| blk: {
+            const target = try formatExpr(allocator, coalesce.target.*);
+            defer allocator.free(target);
+            const fallback = try formatExpr(allocator, coalesce.fallback.*);
+            defer allocator.free(fallback);
+            break :blk std.fmt.allocPrint(allocator, "{s} ?? {s}", .{ target, fallback });
+        },
     };
-}
-
-pub fn resultText(result_tag: ?core.ValueTag) []const u8 {
-    return if (result_tag) |tag| @tagName(tag) else "unknown";
 }
 
 fn collectDefinitionsFromProgram(
@@ -149,21 +169,21 @@ fn collectDefinitionsFromProgram(
         const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
         if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, kind, module_id, file, .module, null);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, 0, source.len, kind, module_id, file, .module, null);
         }
         if (include_variables) {
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .function, func.name);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .function, func.name, func.span.end);
             }
         }
     }
     if (include_variables) {
         for (program.document_statements.items) |stmt| {
-            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .document, null);
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .document, null, source.len);
         }
         for (program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .page, page.name);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .page, page.name, page.span.end);
             }
         }
     }
@@ -177,15 +197,23 @@ fn collectDefinitionsFromStatement(
     definitions: *std.ArrayList(core.Definition),
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]const u8,
+    visible_end: usize,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name),
+        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name, visible_end),
         .if_stmt => |if_stmt| {
-            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name);
-            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name);
+            const then_end = statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
+            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, then_end);
+            const else_end = statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
+            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, else_end);
         },
         else => {},
     }
+}
+
+fn statementsVisibleEnd(statements: []const ast.Statement, fallback: usize) usize {
+    if (statements.len == 0) return fallback;
+    return statements[statements.len - 1].span.end;
 }
 
 fn putStatementDefinition(
@@ -198,10 +226,11 @@ fn putStatementDefinition(
     definitions: *std.ArrayList(core.Definition),
     scope_kind: core.DefinitionScopeKind,
     scope_name: ?[]const u8,
+    visible_end: usize,
 ) !void {
     if (findIdentifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
         const loc = utils.err.computeLineColumn(source, location.offset);
-        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.offset, location.length, .variable, module_id, null, scope_kind, scope_name);
+        try putDefinition(allocator, definitions, name, loc.line, loc.column, location.offset, location.length, stmt.span.start, visible_end, .variable, module_id, null, scope_kind, scope_name);
     }
 }
 
@@ -213,6 +242,8 @@ fn putDefinition(
     column: usize,
     span_start: usize,
     length: usize,
+    visible_start: usize,
+    visible_end: usize,
     kind: core.DefinitionKind,
     module_id: core.SourceModuleId,
     file: ?[]const u8,
@@ -226,6 +257,8 @@ fn putDefinition(
         .length = length,
         .span_start = span_start,
         .span_end = span_start + length,
+        .visible_start = visible_start,
+        .visible_end = visible_end,
         .kind = kind,
         .module_id = module_id,
         .file = if (file) |path| try allocator.dupe(u8, path) else null,
@@ -301,6 +334,12 @@ fn collectExprHints(
             for (apply.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
         },
         .lambda => |lambda| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, lambda.body.*),
+        .member => |member| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, member.target.*),
+        .optional_check => |check| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, check.target.*),
+        .coalesce => |coalesce| {
+            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, coalesce.target.*);
+            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
+        },
         else => {},
     }
 }

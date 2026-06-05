@@ -25,9 +25,11 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const offset: f32 = if (call.args.items.len == 3) try ctx.evalNumberArg(call, 2) else 0;
             break :blk .{ .constraints = try ctx.equalAnchorConstraintSet(target, source, offset) };
         },
-        .style => blk: {
-            const style_name = try ctx.evalStringArg(call, 0);
-            break :blk .{ .style = .{ .name = style_name } };
+        .logical_not => blk: {
+            var value = try ctx.evalExprValue(call.args.items[0]);
+            defer value.deinit(ctx.ir.allocator);
+            const boolean = try eval_value.boolean(value);
+            break :blk .{ .boolean = !boolean };
         },
         .neg => blk: {
             const value = try ctx.evalNumberArg(call, 0);
@@ -347,6 +349,35 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const key = try ctx.evalStringArg(call, 1);
             var value_arg = try ctx.evalExprValue(call.args.items[2]);
             defer value_arg.deinit(ctx.ir.allocator);
+            switch (value_arg) {
+                .none => break :blk switch (target) {
+                    .document => |id| blk2: {
+                        try ctx.unsetNodeProperty(id, key);
+                        break :blk2 .{ .document = id };
+                    },
+                    .page => |id| blk2: {
+                        try ctx.unsetNodeProperty(id, key);
+                        break :blk2 .{ .page = id };
+                    },
+                    .object => |id| blk2: {
+                        try ctx.unsetNodeProperty(id, key);
+                        break :blk2 .{ .object = id };
+                    },
+                    .selection => |sel| blk2: {
+                        if (sel.item_tag != .object) {
+                            target.deinit(ctx.ir.allocator);
+                            return error.InvalidSelectionItemType;
+                        }
+                        for (sel.ids.items) |id| try ctx.unsetNodeProperty(id, key);
+                        break :blk2 target;
+                    },
+                    else => {
+                        target.deinit(ctx.ir.allocator);
+                        return error.InvalidValueTag;
+                    },
+                },
+                else => {},
+            }
             const value = try eval_value.propertyString(ctx.ir.allocator, value_arg);
             defer if (eval_value.propertyStringNeedsFree(value_arg)) ctx.ir.allocator.free(value);
             break :blk switch (target) {

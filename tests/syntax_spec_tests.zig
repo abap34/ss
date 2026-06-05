@@ -64,6 +64,37 @@ fn expectString(expr: ast.Expr, expected: []const u8) !void {
     }
 }
 
+fn expectBoolean(expr: ast.Expr, expected: bool) !void {
+    switch (expr) {
+        .boolean => |actual| try testing.expectEqual(expected, actual),
+        else => return error.ExpectedBooleanExpr,
+    }
+}
+
+fn expectColor(expr: ast.Expr, expected: []const u8) !void {
+    switch (expr) {
+        .color => |actual| try testing.expectEqualStrings(expected, actual),
+        else => return error.ExpectedColorExpr,
+    }
+}
+
+fn expectNone(expr: ast.Expr) !void {
+    switch (expr) {
+        .none => {},
+        else => return error.ExpectedNoneExpr,
+    }
+}
+
+fn expectMember(expr: ast.Expr, name: []const u8) !ast.MemberExpr {
+    switch (expr) {
+        .member => |member| {
+            try testing.expectEqualStrings(name, member.name);
+            return member;
+        },
+        else => return error.ExpectedMemberExpr,
+    }
+}
+
 test "syntax spec: imports and pages preserve source order" {
     var parsed = try parse(
         \\// Leading trivia is not part of the AST.
@@ -128,10 +159,8 @@ test "syntax spec: explicit reserved page names are rejected" {
     );
 }
 
-test "syntax spec: function signatures enforce result value tags and trailing defaults" {
+test "syntax spec: function signatures preserve types and trailing defaults" {
     var parsed = try parse(
-        \\@host fn external_width(value: Number) -> Number
-        \\
         \\fn choose(flag: Bool, fallback: String = "no") -> String
         \\  if flag
         \\    return "yes"
@@ -144,18 +173,13 @@ test "syntax spec: function signatures enforce result value tags and trailing de
     defer parsed.deinit();
     const program = &parsed.program;
 
-    try testing.expectEqual(@as(usize, 2), program.functions.items.len);
-    try testing.expectEqual(ast.FunctionDecl.Kind.function, program.functions.items[0].kind);
-    try testing.expectEqualStrings("external_width", program.functions.items[0].name);
-    try testing.expectEqual(@as(usize, 1), program.functions.items[0].annotations.items.len);
-    try testing.expectEqualStrings("host", program.functions.items[0].annotations.items[0].name);
-    try testing.expectEqual(@as(usize, 0), program.functions.items[0].statements.items.len);
-
-    const choose = program.functions.items[1];
+    try testing.expectEqual(@as(usize, 1), program.functions.items.len);
+    const choose = program.functions.items[0];
+    try testing.expectEqual(ast.FunctionDecl.Kind.function, choose.kind);
     try testing.expectEqualStrings("choose", choose.name);
     try testing.expectEqual(@as(usize, 2), choose.params.items.len);
-    try testing.expectEqual(Type.boolean.tag, choose.params.items[0].ty.tag);
-    try testing.expectEqual(Type.string.tag, choose.params.items[1].ty.tag);
+    try testing.expectEqual(Type.boolean.kind, choose.params.items[0].ty.kind);
+    try testing.expectEqual(Type.string.kind, choose.params.items[1].ty.kind);
     try testing.expect(choose.params.items[1].default_value != null);
 }
 
@@ -191,11 +215,11 @@ test "syntax spec: void functions may omit explicit return values" {
     defer parsed.deinit();
 
     const noop = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.void, noop.result_type.tag);
+    try testing.expectEqual(Type.Kind.void, noop.result_type.kind);
     try testing.expectEqual(@as(usize, 1), noop.statements.items.len);
 
     const stop = parsed.program.functions.items[1];
-    try testing.expectEqual(Type.Tag.void, stop.result_type.tag);
+    try testing.expectEqual(Type.Kind.void, stop.result_type.kind);
     try testing.expectEqual(@as(usize, 1), stop.statements.items.len);
     switch (stop.statements.items[0].kind) {
         .return_void => {},
@@ -217,29 +241,29 @@ test "syntax spec: function types and lambdas are source syntax" {
     defer parsed.deinit();
 
     const make_label = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.function, make_label.result_type.tag);
+    try testing.expectEqual(Type.Kind.function, make_label.result_type.kind);
     try testing.expectEqual(@as(usize, 1), make_label.result_type.fn_params.len);
-    try testing.expectEqual(Type.Tag.page, make_label.result_type.fn_params[0].tag);
+    try testing.expectEqual(Type.Kind.page, make_label.result_type.fn_params[0].kind);
     try testing.expect(make_label.result_type.fn_result != null);
-    try testing.expectEqual(Type.Tag.object, make_label.result_type.fn_result.?.tag);
+    try testing.expectEqual(Type.Kind.object, make_label.result_type.fn_result.?.kind);
     switch (make_label.statements.items[0].kind.return_expr) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
-            try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
+            try testing.expectEqual(Type.Kind.page, lambda.params.items[0].ty.kind);
         },
         else => return error.ExpectedLambdaExpr,
     }
 
     const use = parsed.program.functions.items[1];
-    try testing.expectEqual(Type.Tag.function, use.params.items[0].ty.tag);
-    try testing.expectEqual(Type.Tag.function, use.params.items[0].ty.fn_params[0].tag);
-    try testing.expectEqual(Type.Tag.function, use.params.items[1].ty.tag);
+    try testing.expectEqual(Type.Kind.function, use.params.items[0].ty.kind);
+    try testing.expectEqual(Type.Kind.function, use.params.items[0].ty.fn_params[0].kind);
+    try testing.expectEqual(Type.Kind.function, use.params.items[1].ty.kind);
     try testing.expectEqual(@as(usize, 2), use.params.items[1].ty.fn_params.len);
-    try testing.expectEqual(Type.Tag.function, use.params.items[2].ty.tag);
+    try testing.expectEqual(Type.Kind.function, use.params.items[2].ty.kind);
     try testing.expectEqual(@as(usize, 0), use.params.items[2].ty.fn_params.len);
 }
 
-test "syntax spec: untyped value tag is not accepted as a surface type" {
+test "syntax spec: incomplete function type is not accepted as a surface type" {
     try expectParseError(error.InvalidTypeAnnotation,
         \\fn bad(f: Function) -> Number
         \\  return 1
@@ -258,10 +282,170 @@ test "syntax spec: bare user type names parse as object class annotations" {
     defer parsed.deinit();
 
     const keep = parsed.program.functions.items[0];
-    try testing.expectEqual(Type.Tag.object, keep.params.items[0].ty.tag);
+    try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
     try testing.expectEqualStrings("Text", keep.params.items[0].ty.class_name.?);
-    try testing.expectEqual(Type.Tag.object, keep.result_type.tag);
+    try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
     try testing.expectEqualStrings("Text", keep.result_type.class_name.?);
+}
+
+test "syntax spec: enum declarations and optional types parse" {
+    var parsed = try parse(
+        \\type Align = left | center | right
+        \\
+        \\fn keep(value: Color?, missing: None) -> Color?
+        \\  return value
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 1), parsed.program.types.items.len);
+    try testing.expectEqualStrings("Align", parsed.program.types.items[0].name);
+    try testing.expectEqualStrings("left | center | right", parsed.program.types.items[0].body);
+
+    const keep = parsed.program.functions.items[0];
+    try testing.expectEqual(Type.Kind.optional, keep.params.items[0].ty.kind);
+    try testing.expectEqual(Type.Kind.color, keep.params.items[0].ty.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.none, keep.params.items[1].ty.kind);
+    try testing.expectEqual(Type.Kind.optional, keep.result_type.kind);
+    try testing.expectEqual(Type.Kind.color, keep.result_type.optional_child.?.kind);
+}
+
+test "syntax spec: optional types compose with functions and selections" {
+    var parsed = try parse(
+        \\fn keep(callback: (Page -> Object)?, maker: Page -> Object?, items: Selection<Text>?) -> Void
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const keep = parsed.program.functions.items[0];
+    const callback = keep.params.items[0].ty;
+    try testing.expectEqual(Type.Kind.optional, callback.kind);
+    try testing.expectEqual(Type.Kind.function, callback.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.page, callback.optional_child.?.fn_params[0].kind);
+    try testing.expectEqual(Type.Kind.object, callback.optional_child.?.fn_result.?.kind);
+
+    const maker = keep.params.items[1].ty;
+    try testing.expectEqual(Type.Kind.function, maker.kind);
+    try testing.expectEqual(Type.Kind.optional, maker.fn_result.?.kind);
+    try testing.expectEqual(Type.Kind.object, maker.fn_result.?.optional_child.?.kind);
+
+    const items = keep.params.items[2].ty;
+    try testing.expectEqual(Type.Kind.optional, items.kind);
+    try testing.expectEqual(Type.Kind.selection, items.optional_child.?.kind);
+    try testing.expectEqual(Type.Kind.object, items.optional_child.?.param);
+    try testing.expectEqualStrings("Text", items.optional_child.?.param_class_name.?);
+}
+
+test "syntax spec: enum values color literals and none stay explicit in the AST" {
+    var parsed = try parse(
+        \\page Values
+        \\  let align = Align.left
+        \\  let color = c"0.1,0.2,0.3"
+        \\  let missing = none
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    const member = try expectMember(statements[0].kind.let_binding.expr, "left");
+    switch (member.target.*) {
+        .ident => |name| try testing.expectEqualStrings("Align", name),
+        else => return error.ExpectedIdentifier,
+    }
+    switch (statements[1].kind.let_binding.expr) {
+        .color => |value| try testing.expectEqualStrings("0.1,0.2,0.3", value),
+        else => return error.ExpectedColorExpr,
+    }
+    switch (statements[2].kind.let_binding.expr) {
+        .none => {},
+        else => return error.ExpectedNoneExpr,
+    }
+}
+
+test "syntax spec: object field defaults are parsed as expressions" {
+    var parsed = try parse(
+        \\type Align = left | center | right
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  size: Number = 1.02
+        \\  offset: Number = -1.5
+        \\  align: Align = Align.center
+        \\  fill: Color = c"#334455"
+        \\  maybe_fill: Color? = none
+        \\  enabled: Bool = true
+        \\  label: String = "caption"
+        \\}
+        \\
+    );
+    defer parsed.deinit();
+
+    const card = parsed.program.objects.items[0];
+    try testing.expectEqual(@as(usize, 7), card.fields.items.len);
+    try expectNumber(card.fields.items[0].default_value.?.*, 1.02);
+    try testing.expectEqualStrings("1.02", card.fields.items[0].default_property_value.?);
+
+    const neg = try expectCall(card.fields.items[1].default_value.?.*, "neg", 1);
+    try expectNumber(neg.args.items[0], 1.5);
+    try testing.expectEqualStrings("-1.5", card.fields.items[1].default_property_value.?);
+
+    const enum_member = try expectMember(card.fields.items[2].default_value.?.*, "center");
+    switch (enum_member.target.*) {
+        .ident => |name| try testing.expectEqualStrings("Align", name),
+        else => return error.ExpectedIdentifier,
+    }
+    try testing.expectEqualStrings("center", card.fields.items[2].default_property_value.?);
+
+    try expectColor(card.fields.items[3].default_value.?.*, "0.2,0.26666668,0.33333334");
+    try testing.expectEqualStrings("0.2,0.26666668,0.33333334", card.fields.items[3].default_property_value.?);
+    try expectNone(card.fields.items[4].default_value.?.*);
+    try testing.expectEqualStrings("none", card.fields.items[4].default_property_value.?);
+    try expectBoolean(card.fields.items[5].default_value.?.*, true);
+    try testing.expectEqualStrings("true", card.fields.items[5].default_property_value.?);
+    try expectString(card.fields.items[6].default_value.?.*, "caption");
+    try testing.expectEqualStrings("caption", card.fields.items[6].default_property_value.?);
+}
+
+test "syntax spec: member optional and coalesce keep nested targets" {
+    var parsed = try parse(
+        \\page Members
+        \\  let footer = docctx().footer_text ?? "missing"
+        \\  let has_footer = docctx().footer_text?
+        \\  let color = text("x").text_markdown_code_fill ?? c"0,0,0"
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    switch (statements[0].kind.let_binding.expr) {
+        .coalesce => |coalesce| {
+            const footer = try expectMember(coalesce.target.*, "footer_text");
+            _ = try expectCall(footer.target.*, "docctx", 0);
+            try expectString(coalesce.fallback.*, "missing");
+        },
+        else => return error.ExpectedCoalesceExpr,
+    }
+    switch (statements[1].kind.let_binding.expr) {
+        .optional_check => |optional_check| {
+            const footer = try expectMember(optional_check.target.*, "footer_text");
+            _ = try expectCall(footer.target.*, "docctx", 0);
+        },
+        else => return error.ExpectedOptionalCheckExpr,
+    }
+    switch (statements[2].kind.let_binding.expr) {
+        .coalesce => |coalesce| {
+            const fill = try expectMember(coalesce.target.*, "text_markdown_code_fill");
+            _ = try expectCall(fill.target.*, "text", 1);
+            switch (coalesce.fallback.*) {
+                .color => |value| try testing.expectEqualStrings("0,0,0", value),
+                else => return error.ExpectedColorExpr,
+            }
+        },
+        else => return error.ExpectedCoalesceExpr,
+    }
 }
 
 test "syntax spec: lambda expressions can be used as callees" {
@@ -280,7 +464,7 @@ test "syntax spec: lambda expressions can be used as callees" {
             switch (apply.callee.*) {
                 .lambda => |lambda| {
                     try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
-                    try testing.expectEqual(Type.Tag.number, lambda.params.items[0].ty.tag);
+                    try testing.expectEqual(Type.Kind.number, lambda.params.items[0].ty.kind);
                 },
                 else => return error.ExpectedLambdaExpr,
             }
@@ -312,7 +496,7 @@ test "syntax spec: lambda body may start on a later line" {
     switch (expr.call.args.items[1]) {
         .lambda => |lambda| {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
-            try testing.expectEqual(Type.Tag.page, lambda.params.items[0].ty.tag);
+            try testing.expectEqual(Type.Kind.page, lambda.params.items[0].ty.kind);
             switch (lambda.body.*) {
                 .call => |call| try testing.expectEqualStrings("new", call.name),
                 else => return error.ExpectedCallExpr,
@@ -336,6 +520,7 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
         \\page Expr
         \\  let value = 1 + 2 * -3
         \\  let text = "a" ++ "b" ++ "c"
+        \\  let flag = !false
         \\end
         \\
     );
@@ -356,6 +541,10 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
     try expectString(inner_concat.args.items[0], "a");
     try expectString(inner_concat.args.items[1], "b");
     try expectString(outer_concat.args.items[1], "c");
+
+    const flag = program.pages.items[0].statements.items[2].kind.let_binding.expr;
+    const logical_not = try expectCall(flag, "not", 1);
+    try expectBoolean(logical_not.args.items[0], false);
 }
 
 test "syntax spec: call sugar is explicit about text-bearing and zero-argument calls" {
@@ -443,7 +632,7 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     );
 }
 
-test "syntax spec: member sugar lowers to primitive calls" {
+test "syntax spec: member expressions stay in the AST" {
     var parsed = try parse(
         \\page Members
         \\  let target = text("hello")
@@ -463,7 +652,7 @@ test "syntax spec: member sugar lowers to primitive calls" {
         else => return error.ExpectedIdentifier,
     }
     const concat = try expectCall(content_set.args.items[1], "concat", 2);
-    _ = try expectCall(concat.args.items[0], "content", 1);
+    _ = try expectMember(concat.args.items[0], "content");
     try expectString(concat.args.items[1], "!");
 
     const doc_prop = try expectCall(statements[2].kind.expr_stmt, "set_prop", 3);
@@ -471,12 +660,18 @@ test "syntax spec: member sugar lowers to primitive calls" {
     try expectString(doc_prop.args.items[1], "footer_text");
     try expectString(doc_prop.args.items[2], "footer");
 
-    const prop = try expectCall(statements[3].kind.let_binding.expr, "prop", 3);
-    try expectString(prop.args.items[1], "text_color");
-    try expectString(prop.args.items[2], "black");
+    switch (statements[3].kind.let_binding.expr) {
+        .coalesce => |coalesce| {
+            _ = try expectMember(coalesce.target.*, "text_color");
+            try expectString(coalesce.fallback.*, "black");
+        },
+        else => return error.ExpectedCoalesceExpr,
+    }
 
-    const has_prop = try expectCall(statements[4].kind.let_binding.expr, "has_prop", 2);
-    try expectString(has_prop.args.items[1], "text_color");
+    switch (statements[4].kind.let_binding.expr) {
+        .optional_check => |optional_check| _ = try expectMember(optional_check.target.*, "text_color"),
+        else => return error.ExpectedOptionalCheckExpr,
+    }
 }
 
 test "syntax spec: place is an ordinary identifier and bind is removed" {

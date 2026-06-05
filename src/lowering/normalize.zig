@@ -82,6 +82,9 @@ pub fn normalizeDocumentCode(ir: *core.Ir, code: *doc.Document) !void {
             .set_property => |property| {
                 try ir.setNodeProperty(try ctx.node(property.node), property.key, property.value);
             },
+            .unset_property => |property| {
+                try ir.unsetNodeProperty(try ctx.node(property.node), property.key);
+            },
             .extend_render_env => |entry| {
                 try ir.extendRenderEnv(try ctx.node(entry.node), entry.op, entry.key, entry.value);
             },

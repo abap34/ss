@@ -9,7 +9,6 @@ const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 const ensureType = semantic_types.ensureType;
-const infoFromValueTag = semantic_types.infoFromValueTag;
 const infoFromType = semantic_types.infoFromType;
 const inferExprInfo = infer.exprInfo;
 const validatePropertySetStatement = infer.validatePropertySetStatement;
@@ -77,9 +76,7 @@ pub fn checkFunction(
             const info = try inferExprInfo(allocator, ir, sema, &env, default_value.*, func_origin);
             try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
         }
-        var param_info = infoFromType(param.ty);
-        param_info.value_tag = param.value_tag;
-        try env.put(param.name, param_info);
+        try env.put(param.name, infoFromType(param.ty));
     }
 
     for (func.statements.items) |stmt| {
@@ -177,9 +174,9 @@ fn checkTopLevelStatement(
 }
 
 fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const u8) !void {
-    if (info.value_tag != .void) return;
+    if (info.ty.kind != .void) return;
     try addUserReport(ir, origin, "VoidValue: void results can only be used as statements", .{});
-    return error.InvalidValueTag;
+    return error.InvalidType;
 }
 
 fn rejectPageOnlyExpr(
@@ -203,6 +200,12 @@ fn rejectPageOnlyExpr(
             for (apply.args.items) |arg| try rejectPageOnlyExpr(allocator, ir, context, origin, arg);
         },
         .lambda => |lambda| try rejectPageOnlyExpr(allocator, ir, context, origin, lambda.body.*),
+        .member => |member| try rejectPageOnlyExpr(allocator, ir, context, origin, member.target.*),
+        .optional_check => |check| try rejectPageOnlyExpr(allocator, ir, context, origin, check.target.*),
+        .coalesce => |coalesce| {
+            try rejectPageOnlyExpr(allocator, ir, context, origin, coalesce.target.*);
+            try rejectPageOnlyExpr(allocator, ir, context, origin, coalesce.fallback.*);
+        },
         else => {},
     }
 }
@@ -240,9 +243,9 @@ fn validateAnchorRef(
 }
 
 fn isObjectLike(info: semantic_types.TypeInfo) bool {
-    return switch (info.ty.tag) {
+    return switch (info.ty.kind) {
         .object => true,
-        else => info.value_tag == .object,
+        else => false,
     };
 }
 
@@ -268,8 +271,8 @@ fn checkStatement(
             try ensureType(ir, allocator, actual, result_type, origin, .UnmatchedReturnType);
         },
         .return_void => {
-            if (result_type.tag != .void) {
-                try ensureType(ir, allocator, infoFromType(.{ .tag = .void }), result_type, origin, .UnmatchedReturnType);
+            if (result_type.kind != .void) {
+                try ensureType(ir, allocator, infoFromType(.{ .kind = .void }), result_type, origin, .UnmatchedReturnType);
             }
         },
         .property_set => |property_set| {

@@ -69,20 +69,7 @@ const Parser = struct {
         self.skipTrivia();
         while (!self.eof()) {
             const item_start = self.pos;
-            var prefix_annotations = std.ArrayList(ast.Annotation).empty;
-            var has_prefix_annotations = false;
-            if (self.source[self.pos] == '@') {
-                prefix_annotations = try self.parseAnnotations();
-                has_prefix_annotations = true;
-                self.skipTrivia();
-            }
-            errdefer {
-                if (has_prefix_annotations) {
-                    for (prefix_annotations.items) |*annotation| annotation.deinit(self.allocator);
-                    prefix_annotations.deinit(self.allocator);
-                }
-            }
-            if (has_prefix_annotations and !(try self.peekKeyword("fn"))) return self.fail(error.ExpectedKeyword);
+            if (self.source[self.pos] == '@') return self.fail(error.ExpectedKeyword);
 
             if (try self.consumeKeyword("import")) {
                 const spec = try self.parseImportSpec();
@@ -94,8 +81,7 @@ const Parser = struct {
                 });
                 try program.top_level_items.append(self.allocator, .{ .import = import_index });
             } else if (try self.consumeKeyword("fn")) {
-                has_prefix_annotations = false;
-                const func = try self.parseFunctionAfterKeyword(item_start, prefix_annotations);
+                const func = try self.parseFunctionAfterKeyword(item_start);
                 try program.functions.append(self.allocator, func);
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
@@ -127,7 +113,7 @@ const Parser = struct {
         return program;
     }
 
-    fn parseFunctionAfterKeyword(self: *Parser, start: usize, prefix_annotations: std.ArrayList(ast.Annotation)) !FunctionDecl {
+    fn parseFunctionAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
         try self.expectChar('(');
@@ -146,7 +132,6 @@ const Parser = struct {
             self.pos += 1;
             self.skipInlineSpaces();
             const param_type = try self.parseTypeAnnotation();
-            const param_value_tag = try self.valueTagForType(param_type);
             self.skipInlineSpaces();
             var default_value: ?*Expr = null;
             if (!self.eof() and self.source[self.pos] == '=') {
@@ -162,7 +147,6 @@ const Parser = struct {
             try params.append(self.allocator, .{
                 .name = param_name,
                 .ty = param_type,
-                .value_tag = param_value_tag,
                 .default_value = default_value,
             });
             self.skipTrivia();
@@ -179,27 +163,9 @@ const Parser = struct {
         self.pos += 2;
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
-        const result_tag = try self.valueTagForType(result_type);
-        const effects = try self.parseOptionalEffectClause();
-        var annotations = prefix_annotations;
-        errdefer {
-            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
-            annotations.deinit(self.allocator);
-            if (effects) |text| self.allocator.free(text);
-        }
-        var suffix_annotations = try self.parseAnnotations();
-        defer suffix_annotations.deinit(self.allocator);
-        try annotations.appendSlice(self.allocator, suffix_annotations.items);
-
-        const bodyless = annotationsAllowBodyless(annotations.items);
-        var statements = std.ArrayList(Statement).empty;
-        if (bodyless and self.atStatementBoundary()) {
-            try self.consumeStatementTerminator();
-        } else {
-            statements = try self.parseBodyStatements();
-            if (result_tag != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
-        }
-        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .result_tag = result_tag, .effects = effects, .annotations = annotations, .statements = statements };
+        const statements = try self.parseBodyStatements();
+        if (result_type.kind != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
+        return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .statements = statements };
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
@@ -209,7 +175,6 @@ const Parser = struct {
         self.pos += 1;
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
-        const result_tag = try self.valueTagForType(result_type);
         self.skipTrivia();
         try self.expectChar('=');
         const expr_start = self.pos;
@@ -229,8 +194,6 @@ const Parser = struct {
             .span = .{ .start = start, .end = self.pos },
             .params = std.ArrayList(ast.ParamDecl).empty,
             .result_type = result_type,
-            .result_tag = result_tag,
-            .annotations = std.ArrayList(ast.Annotation).empty,
             .statements = statements,
         };
     }
@@ -258,16 +221,9 @@ const Parser = struct {
         }
         const body = trimRightSpaces(self.source[body_start..self.pos]);
         if (body.len == 0) return self.fail(error.ExpectedTypeAnnotation);
-        var annotations = try self.parseAnnotations();
-        defer {
-            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
-            annotations.deinit(self.allocator);
-        }
-        const refinement = try self.refinementFromAnnotations(annotations.items);
         return .{ .alias = .{
             .name = name,
             .body = try self.allocator.dupe(u8, body),
-            .refinement = refinement,
             .span = .{ .start = start, .end = self.pos },
         } };
     }
@@ -352,22 +308,21 @@ const Parser = struct {
             }
             const type_text = trimRightSpaces(self.source[type_start..self.pos]);
             if (type_text.len == 0) return self.fail(error.ExpectedTypeAnnotation);
-            var default_value: ?[]const u8 = null;
+            var default_value: ?*Expr = null;
+            var default_property_value: ?[]const u8 = null;
             self.skipInlineSpaces();
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
-                const default_start = self.pos;
-                while (!self.eof() and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
-                    if (self.lineCommentStart()) break;
-                    self.pos += 1;
-                }
-                const default_text = trimRightSpaces(trimLeftSpaces(self.source[default_start..self.pos]));
-                default_value = try self.allocator.dupe(u8, default_text);
+                self.skipInlineSpaces();
+                const parsed_default = try self.parseObjectFieldDefault();
+                default_value = parsed_default.expr;
+                default_property_value = parsed_default.property_value;
             }
             try fields.append(self.allocator, .{
                 .name = name,
                 .value_type = try self.allocator.dupe(u8, type_text),
                 .default_value = default_value,
+                .default_property_value = default_property_value,
                 .span = .{ .start = member_start, .end = self.pos },
             });
             try self.consumeStatementTerminator();
@@ -375,6 +330,46 @@ const Parser = struct {
         }
         try self.expectChar('}');
         try self.consumeStatementTerminator();
+    }
+
+    const ParsedObjectFieldDefault = struct {
+        expr: *Expr,
+        property_value: ?[]const u8,
+    };
+
+    fn parseObjectFieldDefault(self: *Parser) !ParsedObjectFieldDefault {
+        const expr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(expr);
+        expr.* = try self.parseExpr();
+        errdefer expr.deinit(self.allocator);
+        return .{
+            .expr = expr,
+            .property_value = try self.objectFieldDefaultPropertyValue(expr.*),
+        };
+    }
+
+    fn objectFieldDefaultPropertyValue(self: *Parser, expr: Expr) !?[]const u8 {
+        return switch (expr) {
+            .string => |text| try self.allocator.dupe(u8, text),
+            .color => |text| try self.allocator.dupe(u8, text),
+            .number => |value| try std.fmt.allocPrint(self.allocator, "{d}", .{value}),
+            .boolean => |value| try self.allocator.dupe(u8, if (value) "true" else "false"),
+            .none => try self.allocator.dupe(u8, "none"),
+            .call => |call| try self.numericUnaryDefaultPropertyValue(call),
+            .member => |member| switch (member.target.*) {
+                .ident => try self.allocator.dupe(u8, member.name),
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    fn numericUnaryDefaultPropertyValue(self: *Parser, call: ast.CallExpr) !?[]const u8 {
+        if (!std.mem.eql(u8, call.name, "neg") or call.args.items.len != 1) return null;
+        return switch (call.args.items[0]) {
+            .number => |value| try std.fmt.allocPrint(self.allocator, "-{d}", .{value}),
+            else => null,
+        };
     }
 
     fn parseStringListInto(self: *Parser, out: *std.ArrayList([]const u8)) !void {
@@ -394,163 +389,23 @@ const Parser = struct {
         try self.expectChar(']');
     }
 
-    fn parseAnnotations(self: *Parser) !std.ArrayList(ast.Annotation) {
-        var annotations = std.ArrayList(ast.Annotation).empty;
-        errdefer {
-            for (annotations.items) |*annotation| annotation.deinit(self.allocator);
-            annotations.deinit(self.allocator);
-        }
-        while (true) {
-            self.skipInlineSpaces();
-            if (self.eof() or self.source[self.pos] != '@') break;
-            const start = self.pos;
-            self.pos += 1;
-            const name = try self.parseIdentifier();
-            self.skipInlineSpaces();
-            var args = std.ArrayList(ast.AnnotationArg).empty;
-            if (!self.eof() and self.source[self.pos] == '(') {
-                args = try self.parseAnnotationArgs();
-            }
-            try annotations.append(self.allocator, .{
-                .name = name,
-                .args = args,
-                .span = .{ .start = start, .end = self.pos },
-            });
-        }
-        return annotations;
-    }
-
     fn peekKeyword(self: *Parser, keyword: []const u8) !bool {
         const saved = self.pos;
         defer self.pos = saved;
         return try self.consumeKeyword(keyword);
     }
 
-    fn parseAnnotationArgs(self: *Parser) !std.ArrayList(ast.AnnotationArg) {
-        try self.expectChar('(');
-        var args = std.ArrayList(ast.AnnotationArg).empty;
-        errdefer {
-            for (args.items) |*arg| arg.deinit(self.allocator);
-            args.deinit(self.allocator);
-        }
-        while (true) {
-            self.skipInlineSpaces();
-            if (!self.eof() and self.source[self.pos] == ')') {
-                self.pos += 1;
-                return args;
-            }
-            try args.append(self.allocator, try self.parseAnnotationArg());
-            self.skipInlineSpaces();
-            if (!self.eof() and self.source[self.pos] == ',') {
-                self.pos += 1;
-                continue;
-            }
-            if (!self.eof() and self.source[self.pos] == ')') {
-                self.pos += 1;
-                return args;
-            }
-            return self.fail(error.ExpectedChar);
-        }
-    }
-
-    fn parseAnnotationArg(self: *Parser) !ast.AnnotationArg {
-        const saved = self.pos;
-        if (!self.eof() and source_utils.isIdentifierStart(self.source[self.pos])) {
-            const name = try self.parseIdentifier();
-            self.skipInlineSpaces();
-            if (!self.eof() and self.source[self.pos] == '=') {
-                self.pos += 1;
-                self.skipInlineSpaces();
-                return .{ .named = .{ .name = name, .value = try self.parseAnnotationValue() } };
-            }
-            self.allocator.free(name);
-            self.pos = saved;
-        }
-        return .{ .positional = try self.parseAnnotationValue() };
-    }
-
-    fn parseAnnotationValue(self: *Parser) !ast.AnnotationValue {
-        self.skipInlineSpaces();
-        if (!self.eof() and self.source[self.pos] == '[') {
-            self.pos += 1;
-            var items = std.ArrayList(ast.AnnotationValue).empty;
-            errdefer {
-                for (items.items) |*item| item.deinit(self.allocator);
-                items.deinit(self.allocator);
-            }
-            while (true) {
-                self.skipInlineSpaces();
-                if (!self.eof() and self.source[self.pos] == ']') {
-                    self.pos += 1;
-                    return .{ .list = items };
-                }
-                try items.append(self.allocator, try self.parseAnnotationValue());
-                self.skipInlineSpaces();
-                if (!self.eof() and self.source[self.pos] == ',') {
-                    self.pos += 1;
-                    continue;
-                }
-                if (!self.eof() and self.source[self.pos] == ']') {
-                    self.pos += 1;
-                    return .{ .list = items };
-                }
-                return self.fail(error.ExpectedChar);
-            }
-        }
-        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
-            return .{ .string = try self.parseString() };
-        }
-        const expr = try self.parseExpr();
-        return switch (expr) {
-            .ident => |name| .{ .ident = name },
-            .string => |text| .{ .string = text },
-            else => .{ .expr = expr },
-        };
-    }
-
-    fn parseOptionalEffectClause(self: *Parser) !?[]const u8 {
-        const saved = self.pos;
-        var probe = self.pos;
-        scanner.skipTrivia(self.source, &probe);
-        if (probe >= self.source.len or self.source[probe] != '!') {
-            self.pos = saved;
-            return null;
-        }
-        self.pos = probe + 1;
-        const start = self.pos;
-        while (!self.eof()) {
-            const ch = self.source[self.pos];
-            if (ch == '@' or ch == '\n') break;
-            self.pos += 1;
-        }
-        const raw = trimRightSpaces(trimLeftSpaces(self.source[start..self.pos]));
-        if (raw.len == 0) return self.fail(error.ExpectedIdentifier);
-        return try self.allocator.dupe(u8, raw);
-    }
-
-    fn refinementFromAnnotations(self: *Parser, annotations: []const ast.Annotation) !?[]const u8 {
-        for (annotations) |annotation| {
-            if (!std.mem.eql(u8, annotation.name, "refine")) continue;
-            if (annotation.args.items.len == 0) return try self.allocator.dupe(u8, "");
-            return try self.annotationValueText(annotation.args.items[0]);
-        }
-        return null;
-    }
-
-    fn annotationValueText(self: *Parser, arg: ast.AnnotationArg) ![]const u8 {
-        const value = switch (arg) {
-            .positional => |value| value,
-            .named => |named| named.value,
-        };
-        return switch (value) {
-            .ident, .string => |text| try self.allocator.dupe(u8, text),
-            .expr => try self.allocator.dupe(u8, ""),
-            .list => try self.allocator.dupe(u8, ""),
-        };
-    }
-
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
-        return try self.parseFunctionTypeAnnotation();
+        var ty = try self.parseFunctionTypeAnnotation();
+        errdefer ty.deinit(self.allocator);
+        self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '?') {
+            self.pos += 1;
+            const optional_ty = try ast.Type.optional(self.allocator, ty);
+            ty.deinit(self.allocator);
+            return optional_ty;
+        }
+        return ty;
     }
 
     fn parseFunctionTypeAnnotation(self: *Parser) anyerror!ast.Type {
@@ -637,13 +492,13 @@ const Parser = struct {
             self.allocator.free(name);
             return self.fail(error.InvalidTypeAnnotation);
         }
-        if (std.mem.eql(u8, name, "Style")) {
-            self.allocator.free(name);
-            return ast.Type.style;
-        }
         if (std.mem.eql(u8, name, "String")) {
             self.allocator.free(name);
             return ast.Type.string;
+        }
+        if (std.mem.eql(u8, name, "Color")) {
+            self.allocator.free(name);
+            return ast.Type.color;
         }
         if (std.mem.eql(u8, name, "Number")) {
             self.allocator.free(name);
@@ -659,7 +514,11 @@ const Parser = struct {
         }
         if (std.mem.eql(u8, name, "Void")) {
             self.allocator.free(name);
-            return .{ .tag = .void };
+            return .{ .kind = .void };
+        }
+        if (std.mem.eql(u8, name, "None")) {
+            self.allocator.free(name);
+            return ast.Type.none;
         }
         if (std.mem.eql(u8, name, "Selection")) {
             self.allocator.free(name);
@@ -689,10 +548,6 @@ const Parser = struct {
         const inner = try self.parseTypeAnnotation();
         try self.expectChar('>');
         return inner;
-    }
-
-    fn valueTagForType(self: *Parser, ty: ast.Type) anyerror!core.ValueTag {
-        return ty.toValueTag() orelse self.fail(error.InvalidTypeAnnotation);
     }
 
     fn parsePage(self: *Parser) !PageDecl {
@@ -968,6 +823,13 @@ const Parser = struct {
 
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
         self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '!') {
+            self.pos += 1;
+            var args = std.ArrayList(Expr).empty;
+            errdefer args.deinit(self.allocator);
+            try args.append(self.allocator, try self.parseUnaryExpr());
+            return .{ .call = .{ .name = "not", .args = args } };
+        }
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
             var args = std.ArrayList(Expr).empty;
@@ -984,9 +846,19 @@ const Parser = struct {
         while (true) {
             self.skipInlineSpaces();
             if (self.eof()) return expr;
+            if (self.startsWith("??")) {
+                self.pos += 2;
+                const fallback = try self.parseExpr();
+                expr = try self.makeCoalesceExpr(expr, fallback);
+                return expr;
+            }
             switch (self.source[self.pos]) {
                 '(' => expr = try self.parseApplyAfterCallee(expr),
                 '.' => expr = try self.parseMemberExprAfterTarget(expr),
+                '?' => {
+                    self.pos += 1;
+                    expr = try self.makeOptionalCheckExpr(expr);
+                },
                 else => return expr,
             }
         }
@@ -1024,7 +896,7 @@ const Parser = struct {
             return expr;
         }
         if (self.startsColorLiteral()) {
-            return .{ .string = try self.parseColorLiteralString() };
+            return .{ .color = try self.parseColorLiteralString() };
         }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .string = try self.parseString() };
@@ -1037,6 +909,12 @@ const Parser = struct {
         }
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
+        if (std.mem.eql(u8, name, "none")) {
+            if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
+                self.allocator.free(name);
+                return .none;
+            }
+        }
         if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
                 const value = std.mem.eql(u8, name, "true");
@@ -1107,11 +985,9 @@ const Parser = struct {
             self.pos += 1;
             self.skipInlineSpaces();
             const param_type = try self.parseTypeAnnotation();
-            const param_value_tag = try self.valueTagForType(param_type);
             try params.append(self.allocator, .{
                 .name = param_name,
                 .ty = param_type,
-                .value_tag = param_value_tag,
                 .default_value = null,
             });
             self.skipTrivia();
@@ -1220,20 +1096,27 @@ const Parser = struct {
     fn parseMemberExprAfterTarget(self: *Parser, target: Expr) !Expr {
         try self.expectChar('.');
         const member_name = try self.parseIdentifier();
-        self.skipInlineSpaces();
-        if (self.startsWith("??")) {
-            self.pos += 2;
-            const fallback = try self.parseExpr();
-            return .{ .call = try self.makeCall3("prop", target, .{ .string = member_name }, fallback) };
-        }
-        if (!self.startsWith("??") and !self.eof() and self.source[self.pos] == '?') {
-            self.pos += 1;
-            return .{ .call = try self.makeCall2("has_prop", target, .{ .string = member_name }) };
-        }
-        if (std.mem.eql(u8, member_name, "content")) {
-            return .{ .call = try self.makeCall1("content", target) };
-        }
-        return .{ .call = try self.makeCall3("prop", target, .{ .string = member_name }, .{ .string = "" }) };
+        const target_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target_ptr);
+        target_ptr.* = target;
+        return .{ .member = .{ .target = target_ptr, .name = member_name } };
+    }
+
+    fn makeOptionalCheckExpr(self: *Parser, target: Expr) !Expr {
+        const target_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target_ptr);
+        target_ptr.* = target;
+        return .{ .optional_check = .{ .target = target_ptr } };
+    }
+
+    fn makeCoalesceExpr(self: *Parser, target: Expr, fallback: Expr) !Expr {
+        const target_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target_ptr);
+        const fallback_ptr = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(fallback_ptr);
+        target_ptr.* = target;
+        fallback_ptr.* = fallback;
+        return .{ .coalesce = .{ .target = target_ptr, .fallback = fallback_ptr } };
     }
 
     fn makeCall1(self: *Parser, name: []const u8, arg0: Expr) !ast.CallExpr {
@@ -1705,13 +1588,6 @@ fn statementReturns(stmt: Statement) bool {
         .if_stmt => |if_stmt| functionBodyReturns(if_stmt.then_statements.items) and functionBodyReturns(if_stmt.else_statements.items),
         else => false,
     };
-}
-
-fn annotationsAllowBodyless(annotations: []const ast.Annotation) bool {
-    for (annotations) |annotation| {
-        if (std.mem.eql(u8, annotation.name, "host") or std.mem.eql(u8, annotation.name, "op")) return true;
-    }
-    return false;
 }
 
 fn normalizeBlockString(raw: []const u8) []const u8 {

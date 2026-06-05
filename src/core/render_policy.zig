@@ -372,7 +372,7 @@ fn parseRenderKindProperty(ir: anytype, node: *const Node) ?RenderKind {
     if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
     if (std.mem.eql(u8, value, "vector_asset")) return .vector_asset;
     if (std.mem.eql(u8, value, "raster_asset")) return .raster_asset;
-    if (std.mem.eql(u8, value, "chrome") or std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
+    if (std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
     return null;
 }
 
@@ -387,7 +387,7 @@ fn parseRenderKind(value: []const u8) ?RenderKind {
     if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
     if (std.mem.eql(u8, value, "vector_asset")) return .vector_asset;
     if (std.mem.eql(u8, value, "raster_asset")) return .raster_asset;
-    if (std.mem.eql(u8, value, "chrome") or std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
+    if (std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
     return null;
 }
 
