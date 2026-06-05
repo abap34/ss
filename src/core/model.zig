@@ -176,6 +176,7 @@ pub const ValueTag = enum {
     anchor,
     function,
     string,
+    enum_case,
     number,
     boolean,
     constraints,
@@ -271,6 +272,11 @@ pub const FunctionRef = struct {
     }
 };
 
+pub const EnumCaseValue = struct {
+    enum_name: []const u8,
+    case_name: []const u8,
+};
+
 pub const Value = union(ValueTag) {
     none: void,
     document: NodeId,
@@ -281,6 +287,7 @@ pub const Value = union(ValueTag) {
     anchor: AnchorValue,
     function: FunctionRef,
     string: []const u8,
+    enum_case: EnumCaseValue,
     number: f32,
     boolean: bool,
     constraints: ConstraintSet,
@@ -306,6 +313,7 @@ pub const Value = union(ValueTag) {
             .anchor => |anchor| .{ .anchor = anchor },
             .function => |function| .{ .function = try function.clone(allocator) },
             .string => |text| .{ .string = text },
+            .enum_case => |enum_case| .{ .enum_case = enum_case },
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
@@ -320,7 +328,7 @@ pub const Value = union(ValueTag) {
             .object => |id| id,
             .metadata => |id| id,
             .selection => |selection| selection.first(),
-            .none, .anchor, .function, .string, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .string, .enum_case, .number, .boolean, .constraints, .void => null,
         };
     }
 };

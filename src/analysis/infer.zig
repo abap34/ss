@@ -87,6 +87,11 @@ fn exprInfoWithOptions(
         .number => infoFromType(Type.number),
         .boolean => infoFromType(Type.boolean),
         .none => infoFromType(Type.none),
+        .enum_case => |case| blk: {
+            var info = infoFromType(Type.enumType(case.enum_name));
+            info.string_literal = case.case_name;
+            break :blk info;
+        },
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
             if (sema.function(name)) |func| {
@@ -118,14 +123,11 @@ fn inferMemberInfo(
 ) !TypeInfo {
     if (member.target.* == .ident) {
         const enum_name = member.target.ident;
-        if (sema.enumHasCaseAny(enum_name, member.name)) {
-            var info = infoFromType(Type.enumType(enum_name));
-            info.string_literal = member.name;
-            return info;
-        }
-        if (sema.enumExistsAny(enum_name)) {
-            try addUserReport(ir, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
-            return error.InvalidType;
+        if (env.get(enum_name) == null and sema.function(enum_name) == null) {
+            if (sema.enumExistsAny(enum_name)) {
+                try addUserReport(ir, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
+                return error.InvalidType;
+            }
         }
     }
 

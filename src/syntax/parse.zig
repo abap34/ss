@@ -89,7 +89,7 @@ const Parser = struct {
             } else if (try self.consumeKeyword("type")) {
                 const type_item = try self.parseTypeItemAfterKeyword(item_start);
                 switch (type_item) {
-                    .alias => |type_decl| {
+                    .enum_decl => |type_decl| {
                         try self.consumeStatementTerminator();
                         try program.types.append(self.allocator, type_decl);
                     },
@@ -199,7 +199,7 @@ const Parser = struct {
     }
 
     const TypeItem = union(enum) {
-        alias: TypeDecl,
+        enum_decl: TypeDecl,
         object: ObjectDecl,
     };
 
@@ -214,16 +214,30 @@ const Parser = struct {
         if (try self.consumeKeyword("protocol")) {
             return .{ .object = try self.parseObjectDeclBody(start, name) };
         }
-        const body_start = self.pos;
-        while (!self.eof() and self.source[self.pos] != '\n' and self.source[self.pos] != '@') {
-            if (self.lineCommentStart()) break;
-            self.pos += 1;
+        var cases = std.ArrayList([]const u8).empty;
+        var needs_case = true;
+        errdefer {
+            for (cases.items) |case_name| self.allocator.free(case_name);
+            cases.deinit(self.allocator);
         }
-        const body = trimRightSpaces(self.source[body_start..self.pos]);
-        if (body.len == 0) return self.fail(error.ExpectedTypeAnnotation);
-        return .{ .alias = .{
+        while (true) {
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or self.lineCommentStart()) {
+                if (needs_case) return self.fail(error.ExpectedTypeAnnotation);
+                break;
+            }
+            try cases.append(self.allocator, try self.parseIdentifier());
+            needs_case = false;
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or self.lineCommentStart()) break;
+            if (self.source[self.pos] != '|') return self.fail(error.ExpectedTypeAnnotation);
+            self.pos += 1;
+            needs_case = true;
+        }
+        if (cases.items.len == 0) return self.fail(error.ExpectedTypeAnnotation);
+        return .{ .enum_decl = .{
             .name = name,
-            .body = try self.allocator.dupe(u8, body),
+            .cases = cases,
             .span = .{ .start = start, .end = self.pos },
         } };
     }
@@ -344,31 +358,7 @@ const Parser = struct {
         errdefer expr.deinit(self.allocator);
         return .{
             .expr = expr,
-            .property_value = try self.objectFieldDefaultPropertyValue(expr.*),
-        };
-    }
-
-    fn objectFieldDefaultPropertyValue(self: *Parser, expr: Expr) !?[]const u8 {
-        return switch (expr) {
-            .string => |text| try self.allocator.dupe(u8, text),
-            .color => |text| try self.allocator.dupe(u8, text),
-            .number => |value| try std.fmt.allocPrint(self.allocator, "{d}", .{value}),
-            .boolean => |value| try self.allocator.dupe(u8, if (value) "true" else "false"),
-            .none => try self.allocator.dupe(u8, "none"),
-            .call => |call| try self.numericUnaryDefaultPropertyValue(call),
-            .member => |member| switch (member.target.*) {
-                .ident => try self.allocator.dupe(u8, member.name),
-                else => null,
-            },
-            else => null,
-        };
-    }
-
-    fn numericUnaryDefaultPropertyValue(self: *Parser, call: ast.CallExpr) !?[]const u8 {
-        if (!std.mem.eql(u8, call.name, "neg") or call.args.items.len != 1) return null;
-        return switch (call.args.items[0]) {
-            .number => |value| try std.fmt.allocPrint(self.allocator, "-{d}", .{value}),
-            else => null,
+            .property_value = null,
         };
     }
 

@@ -111,10 +111,15 @@ pub fn typecheckProgram(
 ) !void {
     var declaration_index = try declarations.build(allocator, ir);
     defer declaration_index.deinit();
-    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
+    var sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
     try checkTypeDeclarations(allocator, ir);
     try resolveTypeReferences(allocator, ir, &sema);
+    try resolveEnumCaseExpressionsAndDefaults(allocator, ir, &sema);
+    const next_declaration_index = try declarations.build(allocator, ir);
+    declaration_index.deinit();
+    declaration_index = next_declaration_index;
+    sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
     try rebuildFunctionDeclarations(allocator, ir);
     try checkDuplicateFunctionDeclarations(allocator, ir);
     try fields.checkObjectDeclarations(allocator, ir, &sema);
@@ -172,23 +177,14 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
                 return error.UnknownType;
             }
             try names.put(decl.name, "enum");
-            if (type_defs.isEnumBody(decl.body)) {
-                if (try type_defs.duplicateEnumCase(allocator, decl.body)) |case_name| {
-                    const origin = try originForModuleSpan(allocator, origin_path, decl.span);
-                    defer allocator.free(origin);
-                    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateEnumCase: enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
-                    });
-                    return error.UnknownType;
-                }
-                continue;
+            if (try type_defs.duplicateEnumCase(allocator, decl.cases.items)) |case_name| {
+                const origin = try originForModuleSpan(allocator, origin_path, decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateEnumCase: enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
+                });
+                return error.UnknownType;
             }
-            const origin = try originForModuleSpan(allocator, origin_path, decl.span);
-            defer allocator.free(origin);
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "InvalidTypeDeclaration: expected enum cases in type {s}", .{decl.name}) },
-            });
-            return error.UnknownType;
         }
     }
 }
@@ -301,7 +297,7 @@ fn resolveExprTypeReferences(
     sema: *const SemanticEnv,
 ) !void {
     switch (expr.*) {
-        .ident, .string, .color, .number, .boolean, .none => {},
+        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
             for (call.args.items) |*arg| try resolveExprTypeReferences(arg, module_id, sema);
         },
@@ -319,6 +315,207 @@ fn resolveExprTypeReferences(
             try resolveExprTypeReferences(coalesce.target, module_id, sema);
             try resolveExprTypeReferences(coalesce.fallback, module_id, sema);
         },
+    }
+}
+
+fn resolveEnumCaseExpressionsAndDefaults(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+) !void {
+    for (ir.modules.items) |*module| {
+        try resolveProgramEnumCasesAndDefaults(allocator, module.id, sema, &module.program);
+    }
+}
+
+fn resolveProgramEnumCasesAndDefaults(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    program: *ast.Program,
+) !void {
+    for (program.objects.items) |*object_decl| {
+        try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, object_decl.fields.items);
+    }
+    for (program.object_extensions.items) |*extension| {
+        try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, extension.fields.items);
+    }
+    for (program.functions.items) |*func| {
+        try resolveFunctionEnumCases(allocator, module_id, sema, func);
+    }
+    {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (program.document_statements.items) |*stmt| {
+            try resolveStatementEnumCases(allocator, module_id, sema, &env, stmt);
+        }
+    }
+    for (program.pages.items) |*page| {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        for (page.statements.items) |*stmt| {
+            try resolveStatementEnumCases(allocator, module_id, sema, &env, stmt);
+        }
+    }
+}
+
+fn resolveObjectFieldEnumCasesAndDefaults(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    fields_list: []ast.ObjectFieldDecl,
+) !void {
+    for (fields_list) |*field| {
+        const default_value = field.default_value orelse {
+            try setDefaultPropertyValue(allocator, field, null);
+            continue;
+        };
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        try resolveExprEnumCases(allocator, module_id, sema, &env, default_value);
+        try setDefaultPropertyValue(allocator, field, try staticDefaultPropertyValue(allocator, default_value.*));
+    }
+}
+
+fn setDefaultPropertyValue(
+    allocator: std.mem.Allocator,
+    field: *ast.ObjectFieldDecl,
+    maybe_value: ?[]const u8,
+) !void {
+    if (field.default_property_value) |value| allocator.free(value);
+    field.default_property_value = maybe_value;
+}
+
+fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]const u8 {
+    return switch (expr) {
+        .string => |text| try allocator.dupe(u8, text),
+        .color => |text| try allocator.dupe(u8, text),
+        .number => |value| try std.fmt.allocPrint(allocator, "{d}", .{value}),
+        .boolean => |value| try allocator.dupe(u8, if (value) "true" else "false"),
+        .none => try allocator.dupe(u8, "none"),
+        .enum_case => |case| try allocator.dupe(u8, case.case_name),
+        .call => |call| try staticNumericDefaultPropertyValue(allocator, call),
+        else => null,
+    };
+}
+
+fn staticNumericDefaultPropertyValue(allocator: std.mem.Allocator, call: ast.CallExpr) !?[]const u8 {
+    if (!std.mem.eql(u8, call.name, "neg") or call.args.items.len != 1) return null;
+    return switch (call.args.items[0]) {
+        .number => |value| try std.fmt.allocPrint(allocator, "-{d}", .{value}),
+        else => null,
+    };
+}
+
+fn resolveFunctionEnumCases(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    func: *ast.FunctionDecl,
+) !void {
+    var env = TypeEnv.init(allocator);
+    defer env.deinit();
+    for (func.params.items) |*param| {
+        if (param.default_value) |default_value| {
+            try resolveExprEnumCases(allocator, module_id, sema, &env, default_value);
+        }
+        try env.put(param.name, semantic_types.infoFromType(param.ty));
+    }
+    for (func.statements.items) |*stmt| {
+        try resolveStatementEnumCases(allocator, module_id, sema, &env, stmt);
+    }
+}
+
+fn resolveStatementEnumCases(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    env: *TypeEnv,
+    stmt: *ast.Statement,
+) !void {
+    switch (stmt.kind) {
+        .let_binding => |*binding| {
+            try resolveExprEnumCases(allocator, module_id, sema, env, &binding.expr);
+            try env.put(binding.name, semantic_types.infoFromType(ast.Type.any));
+        },
+        .return_expr => |*expr| try resolveExprEnumCases(allocator, module_id, sema, env, expr),
+        .return_void => {},
+        .constrain => |*constraint| {
+            if (constraint.offset) |*offset| try resolveExprEnumCases(allocator, module_id, sema, env, offset);
+        },
+        .property_set => |*property_set| try resolveExprEnumCases(allocator, module_id, sema, env, &property_set.value),
+        .if_stmt => |*if_stmt| {
+            try resolveExprEnumCases(allocator, module_id, sema, env, &if_stmt.condition);
+            var then_env = try env.clone();
+            defer then_env.deinit();
+            for (if_stmt.then_statements.items) |*nested| try resolveStatementEnumCases(allocator, module_id, sema, &then_env, nested);
+            var else_env = try env.clone();
+            defer else_env.deinit();
+            for (if_stmt.else_statements.items) |*nested| try resolveStatementEnumCases(allocator, module_id, sema, &else_env, nested);
+        },
+        .expr_stmt => |*expr| try resolveExprEnumCases(allocator, module_id, sema, env, expr),
+    }
+}
+
+fn resolveExprEnumCases(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    env: *TypeEnv,
+    expr: *ast.Expr,
+) !void {
+    switch (expr.*) {
+        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .call => |*call| {
+            for (call.args.items) |*arg| try resolveExprEnumCases(allocator, module_id, sema, env, arg);
+        },
+        .apply => |*apply| {
+            try resolveExprEnumCases(allocator, module_id, sema, env, apply.callee);
+            for (apply.args.items) |*arg| try resolveExprEnumCases(allocator, module_id, sema, env, arg);
+        },
+        .lambda => |*lambda| {
+            var local_env = try env.clone();
+            defer local_env.deinit();
+            for (lambda.params.items) |*param| {
+                if (param.default_value) |default_value| try resolveExprEnumCases(allocator, module_id, sema, &local_env, default_value);
+                try local_env.put(param.name, semantic_types.infoFromType(param.ty));
+            }
+            try resolveExprEnumCases(allocator, module_id, sema, &local_env, lambda.body);
+        },
+        .member => |*member| {
+            if (try resolveMemberAsEnumCase(allocator, module_id, sema, env, expr, member)) return;
+            try resolveExprEnumCases(allocator, module_id, sema, env, member.target);
+        },
+        .optional_check => |*check| try resolveExprEnumCases(allocator, module_id, sema, env, check.target),
+        .coalesce => |*coalesce| {
+            try resolveExprEnumCases(allocator, module_id, sema, env, coalesce.target);
+            try resolveExprEnumCases(allocator, module_id, sema, env, coalesce.fallback);
+        },
+    }
+}
+
+fn resolveMemberAsEnumCase(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    expr: *ast.Expr,
+    member: *ast.MemberExpr,
+) !bool {
+    switch (member.target.*) {
+        .ident => |enum_name| {
+            if (env.get(enum_name) != null or sema.function(enum_name) != null) return false;
+            if (!sema.enumHasCase(module_id, enum_name, member.name)) return false;
+            const target = member.target;
+            const case_name = member.name;
+            allocator.destroy(target);
+            expr.* = .{ .enum_case = .{
+                .enum_name = enum_name,
+                .case_name = case_name,
+            } };
+            return true;
+        },
+        else => return false,
     }
 }
 
@@ -397,7 +594,7 @@ fn checkExprTypeAnnotations(
     expr: ast.Expr,
 ) !void {
     switch (expr) {
-        .ident, .string, .color, .number, .boolean, .none => {},
+        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |call| {
             for (call.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg);
         },
@@ -671,6 +868,7 @@ pub fn buildIrWithOptions(
         defer declaration_index.deinit();
         const sema = SemanticEnv.init(&ir, &declaration_index, &ir.functions);
         try resolveTypeReferences(allocator, &ir, &sema);
+        try resolveEnumCaseExpressionsAndDefaults(allocator, &ir, &sema);
         try rebuildFunctionDeclarations(allocator, &ir);
     }
     var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {

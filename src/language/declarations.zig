@@ -25,7 +25,7 @@ pub const FieldDescriptor = struct {
 
 pub const TypeDescriptor = struct {
     name: []const u8,
-    body: []const u8,
+    cases: []const []const u8,
     module_id: core.SourceModuleId,
 };
 
@@ -239,7 +239,7 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
     for (module.program.types.items) |decl| {
         try index.types.append(index.allocator, .{
             .name = decl.name,
-            .body = decl.body,
+            .cases = decl.cases.items,
             .module_id = module.id,
         });
     }

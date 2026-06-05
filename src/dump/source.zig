@@ -50,7 +50,7 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.types.items) |type_decl| {
         var item = try types.objectItem();
         try item.stringField("name", type_decl.name);
-        try item.stringField("body", type_decl.body);
+        try writeStringArrayField(&item, "cases", type_decl.cases.items);
         try writeSpan(&item, type_decl.span);
         try item.end();
     }
@@ -197,6 +197,11 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "member");
             try object.stringField("name", member.name);
         },
+        .enum_case => |case| {
+            try object.stringField("exprKind", "enum_case");
+            try object.stringField("enum", case.enum_name);
+            try object.stringField("case", case.case_name);
+        },
         .optional_check => {
             try object.stringField("exprKind", "optional_check");
         },
@@ -340,6 +345,11 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             try item.stringField("kind", "member");
             try item.stringField("name", member.name);
             try writeExpr(allocator, item, "target", member.target.*);
+        },
+        .enum_case => |case| {
+            try item.stringField("kind", "enum_case");
+            try item.stringField("enum", case.enum_name);
+            try item.stringField("case", case.case_name);
         },
         .optional_check => |check| {
             try item.stringField("kind", "optional_check");

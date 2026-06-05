@@ -208,7 +208,7 @@ const Analyzer = struct {
                 }
                 return LabelSet.init(self.allocator);
             },
-            .string, .color, .number, .boolean, .none => return LabelSet.init(self.allocator),
+            .string, .color, .number, .boolean, .none, .enum_case => return LabelSet.init(self.allocator),
             .lambda => |lambda| {
                 const label = try self.registerLambda(lambda, env);
                 return try LabelSet.singleton(self.allocator, label);

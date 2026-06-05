@@ -301,7 +301,10 @@ test "syntax spec: enum declarations and optional types parse" {
 
     try testing.expectEqual(@as(usize, 1), parsed.program.types.items.len);
     try testing.expectEqualStrings("Align", parsed.program.types.items[0].name);
-    try testing.expectEqualStrings("left | center | right", parsed.program.types.items[0].body);
+    try testing.expectEqual(@as(usize, 3), parsed.program.types.items[0].cases.items.len);
+    try testing.expectEqualStrings("left", parsed.program.types.items[0].cases.items[0]);
+    try testing.expectEqualStrings("center", parsed.program.types.items[0].cases.items[1]);
+    try testing.expectEqualStrings("right", parsed.program.types.items[0].cases.items[2]);
 
     const keep = parsed.program.functions.items[0];
     try testing.expectEqual(Type.Kind.optional, keep.params.items[0].ty.kind);
@@ -309,6 +312,16 @@ test "syntax spec: enum declarations and optional types parse" {
     try testing.expectEqual(Type.Kind.none, keep.params.items[1].ty.kind);
     try testing.expectEqual(Type.Kind.optional, keep.result_type.kind);
     try testing.expectEqual(Type.Kind.color, keep.result_type.optional_child.?.kind);
+}
+
+test "syntax spec: incomplete enum declarations are rejected while parsing" {
+    try expectParseError(error.ExpectedTypeAnnotation,
+        \\type Mode = alpha |
+        \\
+        \\page bad
+        \\end
+        \\
+    );
 }
 
 test "syntax spec: optional types compose with functions and selections" {
@@ -385,27 +398,27 @@ test "syntax spec: object field defaults are parsed as expressions" {
     const card = parsed.program.objects.items[0];
     try testing.expectEqual(@as(usize, 7), card.fields.items.len);
     try expectNumber(card.fields.items[0].default_value.?.*, 1.02);
-    try testing.expectEqualStrings("1.02", card.fields.items[0].default_property_value.?);
+    try testing.expect(card.fields.items[0].default_property_value == null);
 
     const neg = try expectCall(card.fields.items[1].default_value.?.*, "neg", 1);
     try expectNumber(neg.args.items[0], 1.5);
-    try testing.expectEqualStrings("-1.5", card.fields.items[1].default_property_value.?);
+    try testing.expect(card.fields.items[1].default_property_value == null);
 
     const enum_member = try expectMember(card.fields.items[2].default_value.?.*, "center");
     switch (enum_member.target.*) {
         .ident => |name| try testing.expectEqualStrings("Align", name),
         else => return error.ExpectedIdentifier,
     }
-    try testing.expectEqualStrings("center", card.fields.items[2].default_property_value.?);
+    try testing.expect(card.fields.items[2].default_property_value == null);
 
     try expectColor(card.fields.items[3].default_value.?.*, "0.2,0.26666668,0.33333334");
-    try testing.expectEqualStrings("0.2,0.26666668,0.33333334", card.fields.items[3].default_property_value.?);
+    try testing.expect(card.fields.items[3].default_property_value == null);
     try expectNone(card.fields.items[4].default_value.?.*);
-    try testing.expectEqualStrings("none", card.fields.items[4].default_property_value.?);
+    try testing.expect(card.fields.items[4].default_property_value == null);
     try expectBoolean(card.fields.items[5].default_value.?.*, true);
-    try testing.expectEqualStrings("true", card.fields.items[5].default_property_value.?);
+    try testing.expect(card.fields.items[5].default_property_value == null);
     try expectString(card.fields.items[6].default_value.?.*, "caption");
-    try testing.expectEqualStrings("caption", card.fields.items[6].default_property_value.?);
+    try testing.expect(card.fields.items[6].default_property_value == null);
 }
 
 test "syntax spec: member optional and coalesce keep nested targets" {

@@ -11,6 +11,7 @@ pub fn string(value: core.Value) ![]const u8 {
 pub fn propertyString(allocator: std.mem.Allocator, value: core.Value) ![]const u8 {
     return switch (value) {
         .string => |text| text,
+        .enum_case => |case| case.case_name,
         .number => |number_value| std.fmt.allocPrint(allocator, "{d}", .{number_value}),
         .boolean => |boolean_value| if (boolean_value) "true" else "false",
         else => error.ExpectedStringArgument,
