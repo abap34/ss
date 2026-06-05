@@ -4,9 +4,19 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-05
+
+### Added
+
+- Added math alignment controls for individual objects and document-wide
+  defaults.
+
 ### Changed
 
+- Simplified static type handling around a unified `Type` model, enum values,
+  optional values, and typed object properties.
 - Removed the standalone render smoke test and its GitHub Actions workflow.
+- Clarified README installation dependency guidance.
 
 ## [0.2.0] - 2026-06-01
 
