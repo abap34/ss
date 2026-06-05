@@ -11,7 +11,7 @@ const names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const dependencies = @import("../analysis/dependencies.zig");
-const contracts = @import("../analysis/contracts.zig");
+const value_contracts = @import("value_contracts.zig");
 const typecheck = @import("../analysis/typecheck.zig");
 
 const Program = ast.Program;
@@ -892,11 +892,11 @@ fn evalExpr(
         .optional_check => |check| blk: {
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, check.target.*);
             defer value.deinit(ir.allocator);
-            break :blk .{ .boolean = contracts.runtimeKind(value) != .none };
+            break :blk .{ .boolean = value_contracts.runtimeKind(value) != .none };
         },
         .coalesce => |coalesce| blk: {
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.target.*);
-            if (contracts.runtimeKind(value) != .none) break :blk value;
+            if (value_contracts.runtimeKind(value) != .none) break :blk value;
             value.deinit(ir.allocator);
             break :blk try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.fallback.*);
         },
@@ -1440,7 +1440,7 @@ fn evalSelectCall(
         if (err == error.InvalidArity) try validateFixedArity(ir, call.args.items.len, descriptor.arity, current_origin);
         return err;
     };
-    try contracts.ensureValueConformsToType(ir, null, base, descriptor.input_type, current_origin, .UnmatchedInputType);
+    try value_contracts.ensureValueConformsToType(ir, null, base, descriptor.input_type, current_origin, .UnmatchedInputType);
     switch (descriptor.op) {
         .self_object => {
             return try ir.select(ir.allocator, base, core.Query.selfObject());
@@ -1523,7 +1523,7 @@ fn bindUserFunctionArgs(
             try evalExpr(ir, page_id, context, mode, caller_env, functions, closures, current_origin, call.args.items[index])
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
+        value_contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1551,7 +1551,7 @@ fn bindUserFunctionValueArgs(
             try args[index].clone(ir.allocator)
         else
             try evalExpr(ir, page_id, context, mode, local_env, functions, closures, current_origin, (param.default_value orelse return error.InvalidArity).*);
-        contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
+        value_contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1870,9 +1870,9 @@ fn executeCallStatement(
                     owned.deinit(ir.allocator);
                 }
                 if (func.result_type.kind == .void) {
-                    try contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
+                    try value_contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
                 } else {
-                    try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
+                    try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
                 return;
@@ -1927,7 +1927,7 @@ fn invokeClosureValues(
     defer deinitValueEnv(ir.allocator, &local_env);
     for (closure.lambda.params.items, 0..) |param, index| {
         const value = try args[index].clone(ir.allocator);
-        contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
+        value_contracts.ensureValueConformsToType(ir, page_id, value, param.ty, current_origin, .UnmatchedArgumentType) catch |err| {
             var owned = value;
             owned.deinit(ir.allocator);
             return err;
@@ -1964,7 +1964,7 @@ fn invokeUserFunctionValue(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
+                try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
@@ -1995,7 +1995,7 @@ fn invokeUserFunctionValues(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                try contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
+                try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
                 return value;
             },
         }
