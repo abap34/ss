@@ -112,9 +112,9 @@ be painful.
 ss uses real local LaTeX for math rendering, so uncommon notation should not be
 a problem. Use `\lightning` as much as you want.
 
-### 5. Design Goals
+### 5. Carefully Designed for Analysis, Extensibility, and Performance
 
-ss is also designed with careful attention to properties such as termination of
+ss is also designed with attention to properties such as termination of
 the render process, ease of analysis, extensibility, and performance. (Except
 when relying on external processes, ss is guaranteed to terminate!)
 
@@ -172,9 +172,21 @@ directory when omitted.
 
 ## Installation
 
-### Dependency Overview
+### Homebrew
 
-Dependencies:
+On macOS, Homebrew is the recommended install path:
+
+```sh
+brew tap abap34/ss
+brew install ss
+```
+
+The Homebrew formula installs the dependencies **without** `pdflatex`.
+LaTeX math rendering still needs a TeX distribution.
+
+### Build From Source
+
+ss has the following dependencies:
 
 | Dependency | Purpose |
 | ---------- | ------- |
@@ -188,31 +200,6 @@ Dependencies:
 
 Run `ss doctor` to check the tools available in the current environment.
 
-### Homebrew
-
-On macOS, Homebrew is the recommended install path:
-
-```sh
-brew tap abap34/ss
-brew install ss
-```
-
-The Homebrew formula builds ss from the GitHub Release source archive and
-installs the CLI. It installs the native PDF dependencies, `qpdf`, ImageMagick,
-and Poppler. LaTeX math rendering still needs a TeX distribution such as MacTeX
-or BasicTeX.
-
-### GitHub Release
-
-GitHub Releases contain the source archive and VS Code VSIX:
-
-- source archive: <https://github.com/abap34/ss/releases/latest>
-- VSIX: <https://github.com/abap34/ss/releases/latest>
-
-The VS Code extension does not bundle the `ss` CLI. Install the CLI first, then
-keep `ss` on `PATH` or set the extension's `ss.cli.path` setting.
-
-### Build From Source
 
 Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
 set up MD4C, and build:
@@ -236,9 +223,6 @@ sudo apt-get install -y \
   pkg-config libcairo2-dev libpango1.0-dev librsvg2-dev \
   qpdf poppler-utils imagemagick
 ```
-
-Install a TeX distribution only when you render LaTeX math. Install fonts for
-the scripts you use in slide text; the Docker image includes CJK and emoji fonts.
 
 ### Container and GitHub Actions
 
