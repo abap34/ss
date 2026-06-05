@@ -77,6 +77,17 @@ fn expectBodyTextDefaults(source: []const u8, expected: compiler_semantics.BodyT
     try compiler_semantics.expectBodyTextDefaults(testing.io, allocator, path, source, expected);
 }
 
+fn expectDumpContains(source: []const u8, expected: []const []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectDumpContains(testing.io, allocator, path, source, expected);
+}
+
 fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -223,6 +234,65 @@ test "compiler semantics: enum cases type function parameters" {
     , "case.ss:bytes:", "TypeMismatch: expected Mode, got String");
 }
 
+test "compiler semantics: enum cases are resolved before evaluation" {
+    try expectDumpContains(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\
+        \\fn keep_mode(mode: Mode) -> Mode
+        \\  return mode
+        \\end
+        \\
+        \\page ok
+        \\  let mode = keep_mode(Mode.beta)
+        \\end
+        \\
+    , &.{
+        "\"kind\":\"enum_case\"",
+        "\"enum\":\"Mode\"",
+        "\"case\":\"beta\"",
+    });
+}
+
+test "compiler semantics: enum names can be shadowed by values" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\type Mode = alpha | beta
+        \\type Card = object {
+        \\  roles = ["card"]
+        \\  custom_mode: Mode = Mode.alpha
+        \\}
+        \\
+        \\page ok
+        \\  let fallback = Mode.beta
+        \\  let card = obj("card", "card", "text")
+        \\  let Mode = card
+        \\  let current = Mode.custom_mode ?? fallback
+        \\  Mode.custom_mode = current
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: enum type names do not depend on capitalization" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\type mode = active | String
+        \\
+        \\fn keep(value: mode) -> mode
+        \\  return value
+        \\end
+        \\
+        \\page ok
+        \\  let value = keep(mode.String)
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: enum types resolve through imported modules" {
     try buildSourceWithOverlay(
         \\import "lib/types.ss"
@@ -339,16 +409,6 @@ test "compiler semantics: type names share one namespace" {
         \\end
         \\
     );
-
-    try expectDiagnostic(
-        \\import std:themes/default
-        \\
-        \\type Mode = alpha |
-        \\
-        \\page bad
-        \\end
-        \\
-    , "case.ss:bytes:", "InvalidTypeDeclaration: expected enum cases in type Mode");
 
     try expectDiagnostic(
         \\import std:themes/default

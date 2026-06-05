@@ -722,6 +722,7 @@ pub const Ir = struct {
             .anchor => .anchor,
             .function => .function,
             .string => .string,
+            .enum_case => .enum_case,
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,

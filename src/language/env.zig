@@ -116,8 +116,7 @@ pub const SemanticEnv = struct {
         module_id: core.SourceModuleId,
         name: []const u8,
     ) ?declarations.TypeDescriptor {
-        const descriptor = self.typeDescriptor(module_id, name) orelse return null;
-        return if (type_defs.isEnumBody(descriptor.body)) descriptor else null;
+        return self.typeDescriptor(module_id, name);
     }
 
     pub fn enumHasCase(
@@ -127,13 +126,13 @@ pub const SemanticEnv = struct {
         case_name: []const u8,
     ) bool {
         const descriptor = self.enumDescriptor(module_id, name) orelse return false;
-        return type_defs.enumContains(descriptor.body, case_name);
+        return type_defs.enumCasesContain(descriptor.cases, case_name);
     }
 
     pub fn enumHasCaseAny(self: *const SemanticEnv, name: []const u8, case_name: []const u8) bool {
         if (self.declarations) |index| {
             const descriptor = index.typeByName(name) orelse return false;
-            return type_defs.isEnumBody(descriptor.body) and type_defs.enumContains(descriptor.body, case_name);
+            return type_defs.enumCasesContain(descriptor.cases, case_name);
         }
         if (self.ir) |ir| {
             var index = ir.module_order.items.len;
@@ -142,7 +141,7 @@ pub const SemanticEnv = struct {
                 const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
                 for (module.program.types.items) |decl| {
                     if (!std.mem.eql(u8, decl.name, name)) continue;
-                    return type_defs.isEnumBody(decl.body) and type_defs.enumContains(decl.body, case_name);
+                    return type_defs.enumCasesContain(decl.cases.items, case_name);
                 }
             }
         }
@@ -151,8 +150,7 @@ pub const SemanticEnv = struct {
 
     pub fn enumExistsAny(self: *const SemanticEnv, name: []const u8) bool {
         if (self.declarations) |index| {
-            const descriptor = index.typeByName(name) orelse return false;
-            return type_defs.isEnumBody(descriptor.body);
+            return index.typeByName(name) != null;
         }
         if (self.ir) |ir| {
             var index = ir.module_order.items.len;
@@ -160,7 +158,7 @@ pub const SemanticEnv = struct {
                 index -= 1;
                 const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
                 for (module.program.types.items) |decl| {
-                    if (std.mem.eql(u8, decl.name, name) and type_defs.isEnumBody(decl.body)) return true;
+                    if (std.mem.eql(u8, decl.name, name)) return true;
                 }
             }
         }
@@ -237,7 +235,7 @@ fn findTypeInModule(ir: *const core.Ir, module_id: core.SourceModuleId, name: []
     const module = ir.moduleById(module_id) orelse return null;
     for (module.program.types.items) |decl| {
         if (!std.mem.eql(u8, decl.name, name)) continue;
-        return .{ .name = decl.name, .body = decl.body, .module_id = module.id };
+        return .{ .name = decl.name, .cases = decl.cases.items, .module_id = module.id };
     }
     return null;
 }

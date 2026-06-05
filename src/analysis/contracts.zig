@@ -19,6 +19,7 @@ pub fn runtimeKind(value: core.Value) core.ValueTag {
         .anchor => .anchor,
         .function => .function,
         .string => .string,
+        .enum_case => .enum_case,
         .number => .number,
         .boolean => .boolean,
         .constraints => .constraints,
@@ -89,6 +90,13 @@ pub fn valueConformsToType(value: core.Value, expected: ast.Type) bool {
         const child = expected.optional_child orelse return false;
         return valueConformsToType(value, child.*);
     }
+    if (expected.kind == .enum_type) {
+        const expected_name = expected.enum_name orelse return false;
+        return switch (value) {
+            .enum_case => |case| std.mem.eql(u8, case.enum_name, expected_name),
+            else => false,
+        };
+    }
     const expected_kind = expectedRuntimeKind(expected) orelse return false;
     return runtimeKind(value) == expected_kind;
 }
@@ -103,7 +111,8 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .selection => .selection,
         .anchor => .anchor,
         .function => .function,
-        .string, .color, .enum_type => .string,
+        .string, .color => .string,
+        .enum_type => .enum_case,
         .number => .number,
         .boolean => .boolean,
         .constraints => .constraints,

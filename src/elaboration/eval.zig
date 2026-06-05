@@ -881,6 +881,10 @@ fn evalExpr(
         .number => |value| .{ .number = value },
         .boolean => |value| .{ .boolean = value },
         .none => .{ .none = {} },
+        .enum_case => |case| .{ .enum_case = .{
+            .enum_name = case.enum_name,
+            .case_name = case.case_name,
+        } },
         .call => |call| try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call),
         .apply => |apply| try evalApply(ir, page_id, context, mode, env, functions, closures, current_origin, apply),
         .lambda => |lambda| try evalLambda(env, closures, lambda),
@@ -910,9 +914,6 @@ fn evalMember(
     current_origin: []const u8,
     member: ast.MemberExpr,
 ) !core.Value {
-    if (member.target.* == .ident and startsUpper(member.target.ident)) {
-        return .{ .string = member.name };
-    }
     var target = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, member.target.*);
     defer target.deinit(ir.allocator);
     if (std.mem.eql(u8, member.name, "content")) {
@@ -936,10 +937,6 @@ fn evalMember(
     return typedPropertyValue(value, field_type);
 }
 
-fn startsUpper(name: []const u8) bool {
-    return name.len != 0 and name[0] >= 'A' and name[0] <= 'Z';
-}
-
 fn typedPropertyValue(value: []const u8, ty: ast.Type) !core.Value {
     if (ty.kind == .optional) {
         const child = ty.optional_child orelse return .{ .string = value };
@@ -947,7 +944,11 @@ fn typedPropertyValue(value: []const u8, ty: ast.Type) !core.Value {
     }
     return switch (ty.kind) {
         .none => .{ .none = {} },
-        .string, .color, .enum_type => .{ .string = value },
+        .string, .color => .{ .string = value },
+        .enum_type => .{ .enum_case = .{
+            .enum_name = ty.enum_name orelse "",
+            .case_name = value,
+        } },
         .number => .{ .number = std.fmt.parseFloat(f32, value) catch return error.InvalidValueTag },
         .boolean => blk: {
             if (std.mem.eql(u8, value, "true")) break :blk .{ .boolean = true };

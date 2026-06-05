@@ -205,7 +205,7 @@ pub const Analyzer = struct {
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
-            .ident, .string, .color, .number, .boolean, .none => AccessSummary.init(self.allocator),
+            .ident, .string, .color, .number, .boolean, .none, .enum_case => AccessSummary.init(self.allocator),
             .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
             .apply => |apply| blk: {
                 var summary = try self.analyzeExpr(apply.callee.*);

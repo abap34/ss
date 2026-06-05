@@ -23,7 +23,7 @@ pub const Program = struct {
         for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
         self.imports.deinit(allocator);
         self.top_level_items.deinit(allocator);
-        for (self.types.items) |type_decl| type_decl.deinit(allocator);
+        for (self.types.items) |*type_decl| type_decl.deinit(allocator);
         self.types.deinit(allocator);
         for (self.objects.items) |*object| object.deinit(allocator);
         self.objects.deinit(allocator);
@@ -54,12 +54,13 @@ pub const ImportDecl = struct {
 
 pub const TypeDecl = struct {
     name: []const u8,
-    body: []const u8,
+    cases: std.ArrayList([]const u8),
     span: Span,
 
-    pub fn deinit(self: TypeDecl, allocator: Allocator) void {
+    pub fn deinit(self: *TypeDecl, allocator: Allocator) void {
         allocator.free(self.name);
-        allocator.free(self.body);
+        for (self.cases.items) |case_name| allocator.free(case_name);
+        self.cases.deinit(allocator);
     }
 };
 
@@ -203,6 +204,16 @@ pub const MemberExpr = struct {
     }
 };
 
+pub const EnumCaseExpr = struct {
+    enum_name: []const u8,
+    case_name: []const u8,
+
+    pub fn deinit(self: *EnumCaseExpr, allocator: Allocator) void {
+        allocator.free(self.enum_name);
+        allocator.free(self.case_name);
+    }
+};
+
 pub const OptionalCheckExpr = struct {
     target: *Expr,
 
@@ -240,6 +251,7 @@ pub const Expr = union(enum) {
     apply: ApplyExpr,
     lambda: LambdaExpr,
     member: MemberExpr,
+    enum_case: EnumCaseExpr,
     optional_check: OptionalCheckExpr,
     coalesce: CoalesceExpr,
 
@@ -250,6 +262,7 @@ pub const Expr = union(enum) {
             .apply => |*apply| apply.deinit(allocator),
             .lambda => |*lambda| lambda.deinit(allocator),
             .member => |*member| member.deinit(allocator),
+            .enum_case => |*enum_case| enum_case.deinit(allocator),
             .optional_check => |*check| check.deinit(allocator),
             .coalesce => |*coalesce| coalesce.deinit(allocator),
             else => {},

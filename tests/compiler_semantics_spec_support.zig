@@ -183,6 +183,23 @@ pub fn expectBodyTextDefaults(
     return error.ExpectedObjectContentMissing;
 }
 
+pub fn expectDumpContains(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    expected: []const []const u8,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    const text = try compiler.dump.toOwnedString(allocator, &ir);
+    defer allocator.free(text);
+    for (expected) |needle| {
+        if (std.mem.indexOf(u8, text, needle) == null) return error.ExpectedDumpTextMissing;
+    }
+}
+
 pub fn expectOverlayDiagnostic(
     io: std.Io,
     allocator: std.mem.Allocator,

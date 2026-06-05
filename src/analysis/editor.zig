@@ -110,6 +110,7 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
         .number => |value| std.fmt.allocPrint(allocator, "{d}", .{value}),
         .boolean => |value| allocator.dupe(u8, if (value) "true" else "false"),
         .none => allocator.dupe(u8, "none"),
+        .enum_case => |case| std.fmt.allocPrint(allocator, "{s}.{s}", .{ case.enum_name, case.case_name }),
         .call => |call| blk: {
             var args = std.ArrayList(u8).empty;
             defer args.deinit(allocator);
