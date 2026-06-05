@@ -1738,6 +1738,34 @@ test "compiler semantics: scheduled document statements share document scope" {
     , "from document scope");
 }
 
+test "compiler semantics: document blocks preserve top-level order" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  docctx().footer_text = "before"
+        \\end
+        \\
+        \\page first
+        \\  text(docctx().footer_text ?? "unset")
+        \\end
+        \\
+    , "before");
+
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\page first
+        \\  text(docctx().footer_text ?? "unset")
+        \\end
+        \\
+        \\document
+        \\  docctx().footer_text = "after"
+        \\end
+        \\
+    , "unset");
+}
+
 test "compiler semantics: void functions may finish without explicit return" {
     try expectObjectContent(
         \\import std:themes/default

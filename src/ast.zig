@@ -12,11 +12,12 @@ pub const Program = struct {
     objects: std.ArrayList(ObjectDecl),
     object_extensions: std.ArrayList(ObjectExtensionDecl),
     functions: std.ArrayList(FunctionDecl),
+    document_blocks: std.ArrayList(DocumentBlockDecl),
     document_statements: std.ArrayList(Statement),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
@@ -31,6 +32,7 @@ pub const Program = struct {
         self.object_extensions.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
+        self.document_blocks.deinit(allocator);
         for (self.document_statements.items) |*stmt| stmt.deinit(allocator);
         self.document_statements.deinit(allocator);
         for (self.pages.items) |*page| {
@@ -44,6 +46,7 @@ pub const Program = struct {
 
 pub const TopLevelItem = union(enum) {
     import: usize,
+    document: usize,
     page: usize,
 };
 
@@ -119,6 +122,12 @@ pub const ObjectExtensionDecl = struct {
 pub const PageDecl = struct {
     name: []const u8,
     statements: std.ArrayList(Statement),
+    span: Span,
+};
+
+pub const DocumentBlockDecl = struct {
+    statement_start: usize,
+    statement_count: usize,
     span: Span,
 };
 

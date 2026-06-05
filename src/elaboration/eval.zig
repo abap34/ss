@@ -354,9 +354,8 @@ fn collectScheduledUnits(
         try collected_modules.put(module.id, {});
     }
 
-    try appendDocumentStatementUnits(core_ir.allocator, module, functions, units, source_order);
-
     if (module.program.top_level_items.items.len == 0) {
+        try appendDocumentStatementUnits(core_ir.allocator, module, functions, units, source_order, 0, module.program.document_statements.items.len);
         for (module.program.pages.items) |page| try appendPageUnit(core_ir.allocator, module, document, functions, units, source_order, page);
         return;
     }
@@ -368,6 +367,11 @@ fn collectScheduledUnits(
                 const import_id = module.resolved_import_ids.items[import_index];
                 const imported = core_ir.moduleById(import_id) orelse continue;
                 try collectScheduledUnits(core_ir, imported, document, functions, units, collected_modules, source_order);
+            },
+            .document => |document_index| {
+                if (document_index >= module.program.document_blocks.items.len) continue;
+                const block = module.program.document_blocks.items[document_index];
+                try appendDocumentStatementUnits(core_ir.allocator, module, functions, units, source_order, block.statement_start, block.statement_count);
             },
             .page => |page_index| {
                 if (page_index >= module.program.pages.items.len) continue;
@@ -383,10 +387,13 @@ fn appendDocumentStatementUnits(
     functions: *const std.StringHashMap(FunctionDecl),
     units: *std.ArrayList(ScheduledUnit),
     source_order: *usize,
+    statement_start: usize,
+    statement_count: usize,
 ) !void {
     var analyzer = dependencies.Analyzer.init(allocator, functions);
     defer analyzer.deinit();
-    for (module.program.document_statements.items, 0..) |stmt, stmt_index| {
+    const statement_end = @min(statement_start + statement_count, module.program.document_statements.items.len);
+    for (module.program.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
         const summary = try analyzer.statement(stmt);
         errdefer {
             var owned = summary;
@@ -697,10 +704,12 @@ fn executeModuleProgramInSourceOrderWithClosures(
         try executed_modules.put(module.id, {});
     }
 
-    setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
-    try executeDocumentStatements(module.program, ir, functions, closures);
+    var document_state = DocumentExecutionState.init(ir.allocator);
+    defer document_state.deinit(ir.allocator);
 
     if (module.program.top_level_items.items.len == 0) {
+        setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
+        try executeDocumentStatementsWithState(module.program, ir, functions, closures, &document_state);
         for (module.program.pages.items) |page| {
             setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
             try executePage(page, ir, functions, closures);
@@ -715,6 +724,11 @@ fn executeModuleProgramInSourceOrderWithClosures(
                 const import_id = module.resolved_import_ids.items[import_index];
                 const imported = core_ir.moduleById(import_id) orelse continue;
                 try executeModuleProgramInSourceOrderWithClosures(core_ir, imported, ir, functions, executed_modules, closures);
+            },
+            .document => |document_index| {
+                if (document_index >= module.program.document_blocks.items.len) continue;
+                setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
+                try executeDocumentBlockWithState(module.program, module.program.document_blocks.items[document_index], ir, functions, closures, &document_state);
             },
             .page => |page_index| {
                 if (page_index >= module.program.pages.items.len) continue;
@@ -772,6 +786,38 @@ fn executeDocumentStatements(
     closures: *ClosureStore,
 ) !void {
     try executeDocumentStatementSlice(ir, functions, closures, program.document_statements.items);
+}
+
+fn executeDocumentStatementsWithState(
+    program: Program,
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    closures: *ClosureStore,
+    state: *DocumentExecutionState,
+) !void {
+    try executeDocumentStatementSliceWithState(ir, functions, closures, state, program.document_statements.items);
+}
+
+fn executeDocumentBlockWithState(
+    program: Program,
+    block: ast.DocumentBlockDecl,
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    closures: *ClosureStore,
+    state: *DocumentExecutionState,
+) !void {
+    const statement_end = @min(block.statement_start + block.statement_count, program.document_statements.items.len);
+    try executeDocumentStatementSliceWithState(ir, functions, closures, state, program.document_statements.items[block.statement_start..statement_end]);
+}
+
+fn executeDocumentStatementSliceWithState(
+    ir: *doc.Document,
+    functions: *const std.StringHashMap(FunctionDecl),
+    closures: *ClosureStore,
+    state: *DocumentExecutionState,
+    statements: []const Statement,
+) !void {
+    for (statements) |stmt| try executeScheduledDocumentStatement(ir, functions, closures, state, stmt);
 }
 
 fn executeDocumentStatementSlice(
