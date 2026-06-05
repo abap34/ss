@@ -79,8 +79,14 @@ pub const PrimitiveDescriptor = struct {
     arg_types: []const Type,
     result_type: ?Type,
     result_policy: PrimitiveResultPolicy = .declared,
+    context: PrimitiveContext = .any,
     callback: ?PrimitiveCallbackSpec = null,
     summary: []const u8,
+};
+
+pub const PrimitiveContext = enum {
+    any,
+    page,
 };
 
 pub const PrimitiveResultPolicy = enum {
@@ -114,7 +120,7 @@ pub const QueryDescriptor = struct {
 };
 
 const primitive_descriptors = [_]PrimitiveDescriptor{
-    .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .summary = "Return the current page context" },
+    .{ .op = .pagectx, .name = "pagectx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.page, .context = .page, .summary = "Return the current page context" },
     .{ .op = .docctx, .name = "docctx", .min_arity = 0, .max_arity = 0, .arg_names = &.{}, .arg_types = &.{}, .result_type = Type.document, .summary = "Return the current document context" },
     .{ .op = .select, .name = "select", .min_arity = 2, .max_arity = 255, .arg_names = &.{ "base", "query_name" }, .arg_types = &.{ Type.any, Type.string }, .result_type = Type.selection(.any), .result_policy = .select_query, .summary = "Build a Selection using the query registry" },
     .{ .op = .anchor, .name = "anchor", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "anchor_name" }, .arg_types = &.{ Type.object, Type.string }, .result_type = Type.anchor, .summary = "Return an object anchor" },
@@ -157,7 +163,7 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .selection_empty, .name = "selection_empty", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.boolean, .summary = "Return whether a Selection has no members" },
     .{ .op = .selection_count, .name = "selection_count", .min_arity = 1, .max_arity = 1, .arg_names = &.{"selection"}, .arg_types = &.{Type.selection(.any)}, .result_type = Type.number, .summary = "Return the number of members in a Selection" },
     .{ .op = .set_content, .name = "set_content", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "object", "text" }, .arg_types = &.{ Type.object, Type.string }, .result_type = Type.object, .result_policy = .first_arg, .summary = "Replace an object's textual content" },
-    .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.object}, .result_type = Type.object, .result_policy = .group_object, .summary = "Create a bbox group from multiple objects" },
+    .{ .op = .group, .name = "group", .min_arity = 1, .max_arity = 255, .arg_names = &.{"child"}, .arg_types = &.{Type.object}, .result_type = Type.object, .result_policy = .group_object, .context = .page, .summary = "Create a bbox group from multiple objects" },
     .{ .op = .new_page, .name = "new_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "title" }, .arg_types = &.{ Type.document, Type.string }, .result_type = Type.page, .summary = "Create a page in the scheduled document graph" },
     .{ .op = .new, .name = "new", .min_arity = 4, .max_arity = 4, .arg_names = &.{ "page", "content", "role_name", "payload_name" }, .arg_types = &.{ Type.page, Type.string, Type.string, Type.string }, .result_type = Type.object, .result_policy = .object_from_role_arg, .summary = "Create an object on an explicit page in the scheduled document graph" },
     .{ .op = .new_group, .name = "new_group", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "children" }, .arg_types = &.{ Type.page, Type.selection(.any) }, .result_type = Type.object, .result_policy = .group_object, .summary = "Create a group on an explicit page in the scheduled document graph" },
