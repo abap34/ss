@@ -143,26 +143,14 @@ fn fit_ignore(obj: Object) -> Object
   return fit(obj, FitPolicy.ignore)
 end
 
-fn byline(text_value: String) -> Object
+fn/! byline(text_value: String) -> Object
   return by_obj(text_value)
 end
 
-fn byline!(text_value: String) -> Object
-  return place!(byline(text_value))
-end
-
-fn label(text_value: String) -> Object
+fn/! label(text_value: String) -> Object
   return lab_obj(text_value)
 end
 
-fn label!(text_value: String) -> Object
-  return place!(label(text_value))
-end
-
-fn rule() -> Object
+fn/! rule() -> Object
   return rule_obj()
-end
-
-fn rule!() -> Object
-  return place!(rule())
 end
