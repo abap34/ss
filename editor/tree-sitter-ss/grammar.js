@@ -44,8 +44,10 @@ module.exports = grammar({
 
     function_declaration: $ => seq(
       repeat(seq($.annotation, optional($._terminator))),
-      "fn",
-      field("name", $.identifier),
+      choice(
+        seq("fn", "/!", field("name", $.identifier)),
+        seq("fn", field("name", $.callable_identifier)),
+      ),
       $.parameters,
       "->",
       field("result", $.type),
@@ -142,8 +144,8 @@ module.exports = grammar({
       optional($._terminator),
     ),
 
-    block_call_statement: $ => prec(PREC.call + 1, seq(field("function", $.identifier), field("text", $.block_text), optional($._terminator))),
-    line_call_statement: $ => prec(PREC.call + 1, seq(field("function", $.identifier), field("text", $.line_text), $._terminator)),
+    block_call_statement: $ => prec(PREC.call + 1, seq(field("function", $.callable_identifier), field("text", $.block_text), optional($._terminator))),
+    line_call_statement: $ => prec(PREC.call + 1, seq(field("function", $.callable_identifier), field("text", $.line_text), $._terminator)),
     expression_statement: $ => seq($._expression, $._terminator),
 
     _expression: $ => choice(
@@ -174,11 +176,11 @@ module.exports = grammar({
 
     unary_expression: $ => prec(PREC.unary, seq(choice("-", "!"), $._expression)),
     text_call_expression: $ => prec(PREC.call, seq(
-      field("function", $.identifier),
+      field("function", $.callable_identifier),
       field("text", choice($.string, $.block_text)),
     )),
     call_expression: $ => prec.left(PREC.call, seq(
-      field("function", choice($.identifier, $.parenthesized_expression, $.lambda_expression, $.call_expression)),
+      field("function", choice($.callable_identifier, $.parenthesized_expression, $.lambda_expression, $.call_expression)),
       "(",
       repeat($._terminator),
       optional(commaSepNewline($, $._expression)),
@@ -236,6 +238,7 @@ module.exports = grammar({
     ),
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
+    callable_identifier: $ => prec(1, seq($.identifier, optional("!"))),
     import_spec: _ => /[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_./-]+/,
     type_identifier: _ => /[A-Z][A-Za-z0-9_]*/,
     string: _ => token(choice(

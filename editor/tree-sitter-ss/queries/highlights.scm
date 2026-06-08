@@ -52,11 +52,11 @@
 (type) @type
 (type_identifier) @type
 
-(function_declaration name: (identifier) @function)
-(call_expression function: (identifier) @function.call)
-(text_call_expression function: (identifier) @function.call)
-(line_call_statement function: (identifier) @function.call)
-(block_call_statement function: (identifier) @function.call)
+(function_declaration name: [(identifier) (callable_identifier)] @function)
+(call_expression function: (callable_identifier) @function.call)
+(text_call_expression function: (callable_identifier) @function.call)
+(line_call_statement function: (callable_identifier) @function.call)
+(block_call_statement function: (callable_identifier) @function.call)
 (parameter name: (identifier) @variable.parameter)
 (lambda_parameter name: (identifier) @variable.parameter)
 (let_statement name: (identifier) @variable)

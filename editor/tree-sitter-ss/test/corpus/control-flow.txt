@@ -24,18 +24,21 @@ end
   (document_block
     (expression_statement
       (call_expression
-        function: (identifier))))
+        function: (callable_identifier
+          (identifier)))))
   (page_declaration
     name: (string)
     (let_statement
       name: (identifier)
       value: (call_expression
-        function: (identifier)
+        function: (callable_identifier
+          (identifier))
         (string)))
     (let_statement
       name: (identifier)
       value: (call_expression
-        function: (identifier)
+        function: (callable_identifier
+          (identifier))
         (string)
         (string)))
     (for_statement
@@ -50,7 +53,8 @@ end
           value: (identifier))
         (expression_statement
           (call_expression
-            function: (identifier)
+            function: (callable_identifier
+              (identifier))
             (identifier)
             (string)
             (color_string)))))))

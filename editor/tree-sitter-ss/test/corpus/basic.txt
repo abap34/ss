@@ -43,7 +43,8 @@ end
       (annotation_arg
         (annotation_value
           (string))))
-    name: (identifier)
+    name: (callable_identifier
+      (identifier))
     (parameters
       (parameter
         name: (identifier)
@@ -53,7 +54,8 @@ end
       (primary_type))
     (return_statement
       value: (call_expression
-        function: (identifier)
+        function: (callable_identifier
+          (identifier))
         (identifier)
         (string)
         (string))))
@@ -79,10 +81,12 @@ end
     (let_statement
       name: (identifier)
       value: (call_expression
-        function: (identifier)
+        function: (callable_identifier
+          (identifier))
         (string)))
     (block_call_statement
-      function: (identifier)
+      function: (callable_identifier
+        (identifier))
       text: (block_text))
     (constrain_statement
       left: (member_expression

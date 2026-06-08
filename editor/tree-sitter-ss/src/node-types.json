@@ -228,7 +228,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "callable_identifier",
             "named": true
           }
         ]
@@ -263,7 +263,7 @@
             "named": true
           },
           {
-            "type": "identifier",
+            "type": "callable_identifier",
             "named": true
           },
           {
@@ -347,6 +347,21 @@
         },
         {
           "type": "unary_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "callable_identifier",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
           "named": true
         }
       ]
@@ -980,6 +995,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "callable_identifier",
+            "named": true
+          },
           {
             "type": "identifier",
             "named": true
@@ -1696,7 +1715,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "callable_identifier",
             "named": true
           }
         ]
@@ -2746,7 +2765,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "callable_identifier",
             "named": true
           }
         ]
@@ -2940,6 +2959,10 @@
     "named": false
   },
   {
+    "type": "/!",
+    "named": false
+  },
+  {
     "type": ":",
     "named": false
   },
@@ -3086,11 +3109,11 @@
   },
   {
     "type": "number",
-    "named": false
+    "named": true
   },
   {
     "type": "number",
-    "named": true
+    "named": false
   },
   {
     "type": "object",
