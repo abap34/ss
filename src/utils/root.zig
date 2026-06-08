@@ -3,3 +3,6 @@ pub const err = @import("error.zig");
 pub const source = @import("source.zig");
 pub const fs = @import("fs.zig");
 pub const color = @import("color.zig");
+pub const progress = @import("progress.zig");
+pub const render_cache = @import("render_cache.zig");
+pub const io = @import("io.zig");

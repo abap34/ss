@@ -90,11 +90,11 @@ fn failCli(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
 fn version() void {
     var buffer: [128]u8 = undefined;
     const text = std.fmt.bufPrint(&buffer, "ss {s} ({s})\n", .{ build_options.version, build_options.commit }) catch return;
-    stdoutWriteAll(text) catch {};
+    utils.io.writeStdoutAll(text) catch {};
 }
 
-fn printCacheStats(stats: app.CacheStats) void {
-    std.debug.print("render cache: {s}\n", .{app.render_cache_path});
+fn printCacheStats(stats: utils.render_cache.Stats) void {
+    std.debug.print("render cache: {s}\n", .{utils.render_cache.path});
     std.debug.print("files: {d}\n", .{stats.files});
     std.debug.print("directories: {d}\n", .{stats.directories});
     std.debug.print("size: ", .{});
@@ -550,10 +550,10 @@ fn run(init: std.process.Init) !void {
         defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
-            var progress = app.Progress.init(7);
+            var progress = utils.progress.Progress.init(7);
             try app.writeIrJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
         } else {
-            var progress = app.Progress.init(7);
+            var progress = utils.progress.Progress.init(7);
             try app.printIrJsonForFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, &progress);
         }
         return;
@@ -565,7 +565,7 @@ fn run(init: std.process.Init) !void {
         defer resolved.deinit(allocator);
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         try validateOutputParentOrCliError(io, output_path);
-        var progress = app.Progress.init(7);
+        var progress = utils.progress.Progress.init(7);
         const render_options = app.RenderOptions{ .jobs = options.jobs };
         try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
         return;
@@ -620,12 +620,12 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "cache")) {
         if (args.len == 3 and std.mem.eql(u8, args[2], "clear")) {
-            try app.clearRenderCache(io);
-            std.debug.print("cleared render cache: {s}\n", .{app.render_cache_path});
+            try utils.render_cache.clear(io);
+            std.debug.print("cleared render cache: {s}\n", .{utils.render_cache.path});
             return;
         }
         if (args.len == 3 and std.mem.eql(u8, args[2], "stats")) {
-            const stats = try app.renderCacheStats(io, allocator);
+            const stats = try utils.render_cache.stats(io, allocator);
             printCacheStats(stats);
             return;
         }
@@ -634,15 +634,6 @@ fn run(init: std.process.Init) !void {
     }
 
     return failUsage("unknown command: {s}", .{cmd});
-}
-
-fn stdoutWriteAll(bytes: []const u8) !void {
-    var offset: usize = 0;
-    while (offset < bytes.len) {
-        const n = std.c.write(1, bytes[offset..].ptr, bytes.len - offset);
-        if (n <= 0) return error.WriteFailed;
-        offset += @intCast(n);
-    }
 }
 
 pub fn main(init: std.process.Init) void {
