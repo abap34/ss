@@ -29,9 +29,13 @@ pub fn build(b: *std.Build) void {
     const default_version = b.fmt("{s}-dev", .{release_version});
     const version = b.option([]const u8, "version", "Version string reported by `ss --version`") orelse default_version;
     const commit = b.option([]const u8, "commit", "Source commit reported by `ss --version`") orelse "unknown";
+    const source_stdlib_dir = b.pathFromRoot("stdlib");
+    const installed_stdlib_dir = b.pathJoin(&.{ b.install_path, "share", "ss", "stdlib" });
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
     build_options.addOption([]const u8, "commit", commit);
+    build_options.addOption([]const u8, "source_stdlib_dir", source_stdlib_dir);
+    build_options.addOption([]const u8, "installed_stdlib_dir", installed_stdlib_dir);
 
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
@@ -45,6 +49,12 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
     b.installArtifact(exe);
+    b.installDirectory(.{
+        .source_dir = b.path("stdlib"),
+        .install_dir = .prefix,
+        .install_subdir = "share/ss/stdlib",
+        .include_extensions = &.{".ss"},
+    });
 
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| run_cmd.addArgs(args);
