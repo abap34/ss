@@ -4,6 +4,28 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-09
+
+### Added
+
+- Added explicit object placement APIs with `place_on!` and `place!`, while
+  making `new` and `group` generate objects without placing them.
+- Added `fn/!` syntax for defining paired generating and placing functions.
+- Added unplaced object warnings across `check`, `dump`, `render`, and LSP
+  diagnostics, with `let _ = ...` as an explicit discard form.
+
+### Changed
+
+- Refactored stdlib components and themes to expose paired generating and
+  placing functions through `fn/!`.
+- Updated demos, fixtures, starter templates, tree-sitter grammar, Helix
+  queries, and VS Code grammar for `!`-marked placing calls.
+
+### Fixed
+
+- Fixed LSP go-to-definition for `!`-marked functions across imported files and
+  stdlib modules.
+
 ## [0.3.1] - 2026-06-08
 
 ### Changed
