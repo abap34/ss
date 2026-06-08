@@ -1183,33 +1183,19 @@ const BuiltinContext = struct {
         payload_kind: core.PayloadKind,
         content: []const u8,
     ) !core.NodeId {
-        if (self.eval_context != .page) return error.NoCurrentPage;
-        return try self.ir.makeObjectWithOrigin(self.page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
+        return try self.ir.createObjectWithOrigin(role_name, role, object_kind, payload_kind, content, self.current_origin);
     }
 
     pub fn makeGroup(self: *BuiltinContext, child_ids: []const core.NodeId) !core.NodeId {
-        if (self.eval_context != .page) return error.NoCurrentPage;
-        return try self.ir.makeGroupWithOrigin(self.page_id, true, child_ids, self.current_origin);
+        return try self.ir.createGroupWithOrigin(child_ids, self.current_origin);
     }
 
     pub fn makePage(self: *BuiltinContext, title: []const u8) !core.NodeId {
         return try self.ir.addPage(title);
     }
 
-    pub fn makeObjectOnPage(
-        self: *BuiltinContext,
-        page_id: core.NodeId,
-        role_name: []const u8,
-        role: core.Role,
-        object_kind: core.ObjectKind,
-        payload_kind: core.PayloadKind,
-        content: []const u8,
-    ) !core.NodeId {
-        return try self.ir.makeObjectWithOrigin(page_id, role_name, role, object_kind, payload_kind, content, self.current_origin);
-    }
-
-    pub fn makeGroupOnPage(self: *BuiltinContext, page_id: core.NodeId, child_ids: []const core.NodeId) !core.NodeId {
-        return try self.ir.makeGroupWithOrigin(page_id, true, child_ids, self.current_origin);
+    pub fn placeObjectOnPage(self: *BuiltinContext, page_id: core.NodeId, object_id: core.NodeId) !void {
+        try self.ir.placeObjectOnPage(page_id, object_id);
     }
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
@@ -1774,6 +1760,14 @@ fn executeStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, binding.expr);
+            if (names.isDiscardBindingName(binding.name)) {
+                defer {
+                    var owned = value;
+                    owned.deinit(ir.allocator);
+                }
+                try discardStatementValue(ir, value);
+                return .none;
+            }
             try putEnvValue(ir.allocator, env, binding.name, value);
         },
         .return_expr => |expr| {
@@ -1856,6 +1850,24 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
     }
 }
 
+fn connectReturnedObject(ir: *core.Ir, value: core.Value, start_node_count: usize) !void {
+    switch (value) {
+        .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count),
+        else => {},
+    }
+}
+
+fn discardStatementValue(ir: *core.Ir, value: core.Value) !void {
+    switch (value) {
+        .object => |id| try ir.discardObjectSubtree(id),
+        .selection => |selection| {
+            if (selection.item_tag != .object) return;
+            for (selection.ids.items) |id| try ir.discardObjectSubtree(id);
+        },
+        else => {},
+    }
+}
+
 fn executeCallStatement(
     ir: *core.Ir,
     page_id: core.NodeId,
@@ -1877,6 +1889,7 @@ fn executeCallStatement(
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, closures, func, current_origin, call);
+    const start_node_count = ir.nodeCount();
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, last_code_like, inner, current_origin);
         switch (flow) {
@@ -1890,6 +1903,7 @@ fn executeCallStatement(
                     try value_contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
                 } else {
                     try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
+                    try connectReturnedObject(ir, value, start_node_count);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
                 return;
@@ -1951,7 +1965,10 @@ fn invokeClosureValues(
         };
         try putEnvValue(ir.allocator, &local_env, param.name, value);
     }
-    return try evalExpr(ir, page_id, context, mode, &local_env, functions, closures, current_origin, closure.lambda.body.*);
+    const start_node_count = ir.nodeCount();
+    const value = try evalExpr(ir, page_id, context, mode, &local_env, functions, closures, current_origin, closure.lambda.body.*);
+    try connectReturnedObject(ir, value, start_node_count);
+    return value;
 }
 
 fn invokeUserFunctionValue(
@@ -1976,12 +1993,14 @@ fn invokeUserFunctionValue(
     try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, closures, func, current_origin, call);
 
     var last_code_like: ?core.NodeId = null;
+    const start_node_count = ir.nodeCount();
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, &last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
                 try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
+                try connectReturnedObject(ir, value, start_node_count);
                 return value;
             },
         }
@@ -2007,12 +2026,14 @@ fn invokeUserFunctionValues(
     try bindUserFunctionValueArgs(ir, page_id, context, mode, env, &local_env, functions, closures, func, current_origin, args);
 
     var last_code_like: ?core.NodeId = null;
+    const start_node_count = ir.nodeCount();
     for (func.statements.items) |inner| {
         const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, &last_code_like, inner, current_origin);
         switch (flow) {
             .none => {},
             .returned => |value| {
                 try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
+                try connectReturnedObject(ir, value, start_node_count);
                 return value;
             },
         }

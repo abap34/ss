@@ -111,6 +111,50 @@ fn expectDiagnostic(source: []const u8, expected_origin: []const u8, expected_me
     try compiler_semantics.expectDiagnostic(testing.io, allocator, path, source, expected_origin, expected_message);
 }
 
+fn expectLoweredDiagnostic(source: []const u8, expected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectLoweredDiagnostic(testing.io, allocator, path, source, expected_message);
+}
+
+fn expectNoLoweredDiagnostic(source: []const u8, unexpected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectNoLoweredDiagnostic(testing.io, allocator, path, source, unexpected_message);
+}
+
+fn expectLoweredDiagnosticCount(source: []const u8, expected_message: []const u8, expected_count: usize) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectLoweredDiagnosticCount(testing.io, allocator, path, source, expected_message, expected_count);
+}
+
+fn expectObjectState(source: []const u8, expected: compiler_semantics.ObjectStateExpectation) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectState(testing.io, allocator, path, source, expected);
+}
+
 test "compiler semantics: imported function return inference diagnostics keep callee origin" {
     try expectOverlayDiagnostic(
         \\import "lib/bad.ss"
@@ -1521,7 +1565,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\
         \\document
         \\  docctx().footer_text = "footer"
-        \\  footers(docctx().footer_text ?? "")
+        \\  footers!(docctx().footer_text ?? "")
         \\end
         \\
         \\page ok
@@ -1648,7 +1692,7 @@ test "compiler semantics: generated page numbers keep optional format semantics"
         \\import std:themes/default
         \\
         \\document
-        \\  pagenos(none)
+        \\  pagenos!(none)
         \\end
         \\
         \\page one
@@ -1663,7 +1707,7 @@ test "compiler semantics: generated page numbers keep optional format semantics"
         \\import std:themes/default
         \\
         \\document
-        \\  pagenos("{page} of {total}")
+        \\  pagenos!("{page} of {total}")
         \\end
         \\
         \\page one
@@ -1708,7 +1752,7 @@ test "compiler semantics: generated page numbers run after page graph exists" {
         \\import std:themes/default
         \\
         \\document
-        \\  pagenos()
+        \\  pagenos!()
         \\end
         \\
         \\page one
@@ -1728,7 +1772,7 @@ test "compiler semantics: scheduled document statements share document scope" {
         \\  let label = "from document scope"
         \\  foreach(
         \\    pages(docctx()),
-        \\    (page_value: Page) |-> new(page_value, label, "body", "text")
+        \\    (page_value: Page) |-> place_on!(page_value, new(label, "body", "text"))
         \\  )
         \\end
         \\
@@ -1770,21 +1814,19 @@ test "compiler semantics: void functions may finish without explicit return" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn add_page_text(page_value: Page) -> Void
-        \\  new(page_value, str(page_index(page_value)), "body", "text")
+        \\fn remember() -> Void
+        \\  docctx().footer_text = "remembered"
         \\end
         \\
         \\document
-        \\  foreach(pages(docctx()), add_page_text)
+        \\  remember()
         \\end
         \\
         \\page one
+        \\  text!(docctx().footer_text ?? "missing")
         \\end
         \\
-        \\page two
-        \\end
-        \\
-    , "1");
+    , "remembered");
 }
 
 test "compiler semantics: bare return is only valid for void functions" {
@@ -1836,7 +1878,7 @@ test "compiler semantics: lambda callbacks can create objs over a document selec
         \\import std:themes/default
         \\
         \\document
-        \\  let add_each = (page_value: Page) |-> new(page_value, "lambda", "body", "text")
+        \\  let add_each = (page_value: Page) |-> place_on!(page_value, new("lambda", "body", "text"))
         \\  foreach(pages(docctx()), add_each)
         \\end
         \\
@@ -1850,12 +1892,12 @@ test "compiler semantics: functions can return captured function values" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn make_label(text_value: String) -> Page -> Object
-        \\  return (page_value: Page) |-> new(page_value, text_value, "body", "text")
+        \\fn make_label!(text_value: String) -> Page -> Object
+        \\  return (page_value: Page) |-> place_on!(page_value, new(text_value, "body", "text"))
         \\end
         \\
         \\document
-        \\  foreach(pages(docctx()), make_label("made"))
+        \\  foreach(pages(docctx()), make_label!("made"))
         \\end
         \\
         \\page one
@@ -1981,12 +2023,12 @@ test "compiler semantics: lambda bodies cannot be void" {
     try expectBuildFails(
         \\import std:themes/default
         \\
-        \\fn side_effect(page_value: Page) -> Void
-        \\  new(page_value, "side", "body", "text")
+        \\fn side_effect!(page_value: Page) -> Void
+        \\  place_on!(page_value, new("side", "body", "text"))
         \\end
         \\
         \\document
-        \\  foreach(pages(docctx()), (page_value: Page) |-> side_effect(page_value))
+        \\  foreach(pages(docctx()), (page_value: Page) |-> side_effect!(page_value))
         \\end
         \\
         \\page bad
@@ -2139,7 +2181,7 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
         \\
         \\fn duplicate_title(title_obj: Object) -> Object
         \\  let page_value = page_of(title_obj)
-        \\  new(page_value, "copy", "title", "text")
+        \\  place_on!(page_value, new("copy", "title", "text"))
         \\  return title_obj
         \\end
         \\
@@ -2249,39 +2291,39 @@ test "compiler semantics: page-only primitives are rejected in document context"
         \\import std:themes/default
         \\
         \\document
-        \\  title("bad")
+        \\  title!("bad")
         \\end
         \\
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage: 'title' is only valid inside a page block");
+    , "case.ss:bytes:", "NoCurrentPage");
 
     try expectDiagnostic(
         \\import std:themes/default
         \\
         \\document
-        \\  foreach(pages(docctx()), title)
+        \\  foreach(pages(docctx()), (page_value: Page) |-> title!("bad"))
         \\end
         \\
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage: 'title' is only valid inside a page block");
+    , "case.ss:bytes:", "NoCurrentPage");
 }
 
 test "compiler semantics: document callbacks may use explicit pages without current page" {
     try expectObjectContent(
         \\import std:themes/default
         \\
-        \\fn decorate(page_value: Page) -> Object
-        \\  let item = new(page_value, "explicit", "body", "text")
+        \\fn decorate!(page_value: Page) -> Object
+        \\  let item = place_on!(page_value, new("explicit", "body", "text"))
         \\  pin_l(item, 72)
         \\  return item
         \\end
         \\
         \\document
-        \\  foreach(pages(docctx()), decorate)
+        \\  foreach(pages(docctx()), (page_value: Page) |-> decorate!(page_value))
         \\end
         \\
         \\page ok
@@ -2309,21 +2351,478 @@ test "compiler semantics: document callbacks reject current page access" {
     try expectDiagnostic(
         \\import std:themes/default
         \\
-        \\fn make_implicit() -> Object
-        \\  return title("bad")
+        \\fn make_implicit!() -> Object
+        \\  return title!("bad")
         \\end
         \\
         \\document
         \\  foreach(
         \\    pages(docctx()),
-        \\    (page_value: Page) |-> make_implicit()
+        \\    (page_value: Page) |-> make_implicit!()
         \\  )
         \\end
         \\
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:", "NoCurrentPage: 'make_implicit' is only valid inside a page block");
+    , "case.ss:bytes:", "NoCurrentPage");
+}
+
+test "compiler semantics: generated objects must be placed or discarded" {
+    try expectLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page loose
+        \\  new("loose", "body", "text")
+        \\end
+        \\
+    , "UnplacedObject");
+
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page placed
+        \\  place!(new("placed", "body", "text"))
+        \\end
+        \\
+    , "UnplacedObject");
+
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page placed
+        \\  place_on!(pagectx(), new("placed", "body", "text"))
+        \\end
+        \\
+    , "UnplacedObject");
+
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page discarded
+        \\  let _ = new("discarded", "body", "text")
+        \\end
+        \\
+    , "UnplacedObject");
+}
+
+test "compiler semantics: unplaced group warns once for the root object" {
+    const source =
+        \\import std:themes/default
+        \\
+        \\page loose
+        \\  group(
+        \\    new("one", "body", "text"),
+        \\    new("two", "note", "text")
+        \\  )
+        \\end
+        \\
+    ;
+
+    try expectLoweredDiagnosticCount(source, "UnplacedObject", 1);
+    try expectObjectState(source, .{ .role = "group", .attached = false, .discarded = false });
+    try expectObjectState(source, .{ .content = "one", .attached = false, .discarded = false });
+    try expectObjectState(source, .{ .content = "two", .attached = false, .discarded = false });
+}
+
+test "compiler semantics: placing or discarding a group covers its children" {
+    const placed_source =
+        \\import std:themes/default
+        \\
+        \\page placed
+        \\  place!(group(
+        \\    new("one", "body", "text"),
+        \\    new("two", "note", "text")
+        \\  ))
+        \\end
+        \\
+    ;
+    try expectNoLoweredDiagnostic(placed_source, "UnplacedObject");
+    try expectObjectState(placed_source, .{ .role = "group", .attached = true, .discarded = false });
+    try expectObjectState(placed_source, .{ .content = "one", .attached = true, .discarded = false });
+    try expectObjectState(placed_source, .{ .content = "two", .attached = true, .discarded = false });
+
+    const discarded_source =
+        \\import std:themes/default
+        \\
+        \\page discarded
+        \\  let _ = group(
+        \\    new("one", "body", "text"),
+        \\    new("two", "note", "text")
+        \\  )
+        \\end
+        \\
+    ;
+    try expectNoLoweredDiagnostic(discarded_source, "UnplacedObject");
+    try expectObjectState(discarded_source, .{ .role = "group", .attached = false, .discarded = true });
+    try expectObjectState(discarded_source, .{ .content = "one", .attached = false, .discarded = true });
+    try expectObjectState(discarded_source, .{ .content = "two", .attached = false, .discarded = true });
+}
+
+test "compiler semantics: object generation works outside page context when discarded" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\document
+        \\  let _ = group(
+        \\    new("doc-one", "body", "text"),
+        \\    new("doc-two", "note", "text")
+        \\  )
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: returned object placement covers connected generated objects" {
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  place!(head("Connected helper"))
+        \\end
+        \\
+    , "UnplacedObject");
+
+    try expectLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn make_card() -> Object
+        \\  let visible = new("visible", "body", "text")
+        \\  let extra = new("extra", "note", "text")
+        \\  return visible
+        \\end
+        \\
+        \\page loose
+        \\  place!(make_card())
+        \\end
+        \\
+    , "UnplacedObject");
+
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn make_discarded() -> Object
+        \\  return new("discarded", "body", "text")
+        \\end
+        \\
+        \\page discarded
+        \\  let _ = make_discarded()
+        \\end
+        \\
+    , "UnplacedObject");
+}
+
+test "compiler semantics: returned object placement follows constraints and group edges" {
+    const constrained_source =
+        \\import std:themes/default
+        \\
+        \\fn connected_pair() -> Object
+        \\  let main = new("main", "body", "text")
+        \\  let helper = new("helper", "note", "text")
+        \\  ~ helper.top == main.bottom - 8
+        \\  return main
+        \\end
+        \\
+        \\page ok
+        \\  place!(connected_pair())
+        \\end
+        \\
+    ;
+    try expectNoLoweredDiagnostic(constrained_source, "UnplacedObject");
+    try expectObjectState(constrained_source, .{ .content = "main", .attached = true, .discarded = false });
+    try expectObjectState(constrained_source, .{ .content = "helper", .attached = true, .discarded = false });
+
+    const grouped_source =
+        \\import std:themes/default
+        \\
+        \\fn grouped_pair() -> Object
+        \\  let left = new("left", "body", "text")
+        \\  let right = new("right", "note", "text")
+        \\  return group(left, right)
+        \\end
+        \\
+        \\page ok
+        \\  place!(grouped_pair())
+        \\end
+        \\
+    ;
+    try expectNoLoweredDiagnostic(grouped_source, "UnplacedObject");
+    try expectObjectState(grouped_source, .{ .role = "group", .attached = true, .discarded = false });
+    try expectObjectState(grouped_source, .{ .content = "left", .attached = true, .discarded = false });
+    try expectObjectState(grouped_source, .{ .content = "right", .attached = true, .discarded = false });
+}
+
+test "compiler semantics: connected return objects still warn when the result is not placed" {
+    const source =
+        \\import std:themes/default
+        \\
+        \\fn connected_pair() -> Object
+        \\  let main = new("main", "body", "text")
+        \\  let helper = new("helper", "note", "text")
+        \\  ~ helper.top == main.bottom - 8
+        \\  return main
+        \\end
+        \\
+        \\page loose
+        \\  connected_pair()
+        \\end
+        \\
+    ;
+
+    try expectLoweredDiagnosticCount(source, "UnplacedObject", 1);
+    try expectObjectState(source, .{ .content = "main", .attached = false, .discarded = false });
+    try expectObjectState(source, .{ .content = "helper", .attached = false, .discarded = false });
+}
+
+test "compiler semantics: disconnected generated objects are not hidden by placing the return value" {
+    const source =
+        \\import std:themes/default
+        \\
+        \\fn disconnected_pair() -> Object
+        \\  let main = new("main", "body", "text")
+        \\  let helper = new("helper", "note", "text")
+        \\  return main
+        \\end
+        \\
+        \\page loose
+        \\  place!(disconnected_pair())
+        \\end
+        \\
+    ;
+
+    try expectLoweredDiagnosticCount(source, "UnplacedObject", 1);
+    try expectLoweredDiagnostic(source, "object 'note'");
+    try expectObjectState(source, .{ .content = "main", .attached = true, .discarded = false });
+    try expectObjectState(source, .{ .content = "helper", .attached = false, .discarded = false });
+}
+
+test "compiler semantics: underscore discard applies after return object connection" {
+    const source =
+        \\import std:themes/default
+        \\
+        \\fn connected_pair() -> Object
+        \\  let main = new("main", "body", "text")
+        \\  let helper = new("helper", "note", "text")
+        \\  ~ helper.top == main.bottom - 8
+        \\  return main
+        \\end
+        \\
+        \\page discarded
+        \\  let _ = connected_pair()
+        \\end
+        \\
+    ;
+
+    try expectNoLoweredDiagnostic(source, "UnplacedObject");
+    try expectObjectState(source, .{ .content = "main", .attached = false, .discarded = true });
+    try expectObjectState(source, .{ .content = "helper", .attached = false, .discarded = true });
+}
+
+test "compiler semantics: dump includes unplaced object diagnostics" {
+    try expectDumpContains(
+        \\import std:themes/default
+        \\
+        \\page loose
+        \\  new("loose", "body", "text")
+        \\end
+        \\
+    , &.{ "diagnostics", "UnplacedObject", "object 'body' was generated but not placed" });
+}
+
+test "compiler semantics: underscore let binding is not a variable" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let _ = new("discarded", "body", "text")
+        \\  text(_)
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownIdentifier: unknown identifier: _");
+}
+
+test "compiler semantics: placing calls require bang-marked functions" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad() -> Object
+        \\  return place!(new("bad", "body", "text"))
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\fn ok!() -> Object
+        \\  return new("ok", "body", "text")
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn ok!() -> Object
+        \\  return new("ok", "body", "text")
+        \\end
+        \\
+        \\fn bad() -> Object
+        \\  return ok!()
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: paired placement functions desugar through existing checks" {
+    const placed_source =
+        \\import std:themes/default
+        \\
+        \\fn/! badge(content: String, role_name: String = "body") -> Object
+        \\  return new(content, role_name, "text")
+        \\end
+        \\
+        \\page ok
+        \\  badge!("visible")
+        \\end
+        \\
+    ;
+
+    try expectNoLoweredDiagnostic(placed_source, "UnplacedObject");
+    try expectObjectState(placed_source, .{ .content = "visible", .attached = true, .discarded = false });
+
+    try expectDiagnostic(
+        \\fn/! bad() -> String
+        \\  return "bad"
+        \\end
+        \\
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:0-", "TypeMismatch: expected Object, got String");
+
+    try expectDiagnostic(
+        \\fn/! bad() -> Object
+        \\  return place!(new("bad", "body", "text"))
+        \\end
+        \\
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:0-", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: placement effect is detected through primitive calls and lambdas" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad(page_value: Page) -> Object
+        \\  return place_on!(page_value, new("bad", "body", "text"))
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\fn bad() -> Page -> Object
+        \\  return (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
+        \\end
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+}
+
+test "compiler semantics: non-placement effects do not require bang-marked functions" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\fn add_page(doc: Document) -> Void
+        \\  let _ = new_page(doc, "generated")
+        \\end
+        \\
+        \\document
+        \\  add_page(docctx())
+        \\end
+        \\
+        \\page first
+        \\end
+        \\
+    );
+
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\fn mark(obj: Object) -> Object
+        \\  obj.link_id = "marked"
+        \\  return obj
+        \\end
+        \\
+        \\page ok
+        \\  let item = place!(new("body", "body", "text"))
+        \\  mark(item)
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: bang-marked functions may generate without placing" {
+    const source =
+        \\import std:themes/default
+        \\
+        \\fn make!() -> Object
+        \\  return new("made", "body", "text")
+        \\end
+        \\
+        \\page ok
+        \\  let _ = make!()
+        \\end
+        \\
+    ;
+
+    try expectNoLoweredDiagnostic(source, "UnplacedObject");
+    try expectObjectState(source, .{ .content = "made", .attached = false, .discarded = true });
+}
+
+test "compiler semantics: removed object placement APIs are rejected" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  new(pagectx(), "old", "body", "text")
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidArity: expected 3, got 4");
+
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  new_group(pagectx(), objs_here("body"))
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: new_group");
 }
 
 test "compiler semantics: page anchors cannot be constraint targets" {
@@ -2410,7 +2909,7 @@ test "compiler semantics: object class annotations are checked through selection
         \\end
         \\
         \\page ok
-        \\  obj("A", "card", "text")
+        \\  place!(obj("A", "card", "text"))
         \\  let card_obj = first_card(objs_here("card"))
         \\  text(content(card_obj))
         \\end
@@ -2429,7 +2928,7 @@ test "compiler semantics: object class annotations are checked through selection
         \\end
         \\
         \\page bad
-        \\  obj("A", "card", "text")
+        \\  place!(obj("A", "card", "text"))
         \\  foreach(select(pagectx(), "page_objects_by_role", "card"), accept_body)
         \\end
         \\
@@ -2449,7 +2948,7 @@ test "compiler semantics: object class mismatches report concrete type labels" {
         \\end
         \\
         \\page bad
-        \\  keep_card(new(pagectx(), "not a card", "body", "text"))
+        \\  keep_card(new("not a card", "body", "text"))
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
@@ -2538,7 +3037,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
         \\end
         \\
         \\page bad
-        \\  take_card(new(pagectx(), "not a card", "body", "text"))
+        \\  take_card(new("not a card", "body", "text"))
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>?, got Object<Body>");

@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
+const language_names = @import("../language/names.zig");
 const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
 const utils = @import("utils");
@@ -201,7 +202,11 @@ fn collectDefinitionsFromStatement(
     visible_end: usize,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name, visible_end),
+        .let_binding => |binding| {
+            if (!language_names.isDiscardBindingName(binding.name)) {
+                try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name, visible_end);
+            }
+        },
         .if_stmt => |if_stmt| {
             const then_end = statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
             for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, then_end);

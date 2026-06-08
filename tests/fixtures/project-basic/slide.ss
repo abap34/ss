@@ -2,8 +2,8 @@ import std:themes/default
 import "./parts.ss"
 
 page title
-let heading = module_label("Project fixture")
-cover(
+let heading = module_label!("Project fixture")
+cover!(
   "Project fixture",
   "ss.toml + LSP smoke",
   "v1"

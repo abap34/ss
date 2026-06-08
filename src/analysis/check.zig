@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const infer = @import("infer.zig");
 const registry = @import("../language/registry.zig");
@@ -161,6 +162,7 @@ const PageContextRequirement = struct {
         return switch (stmt.kind) {
             .let_binding => |binding| blk: {
                 if ((try self.exprRequirement(scope, binding.expr)) != null) break :blk true;
+                if (language_names.isDiscardBindingName(binding.name)) break :blk false;
                 try scope.put(binding.name);
                 break :blk false;
             },
@@ -302,6 +304,7 @@ fn checkTopLevelStatement(
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, binding.expr);
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try rejectVoidValue(ir, info, origin);
+            if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try scope.put(binding.name);
         },
@@ -425,6 +428,7 @@ fn checkStatement(
         .let_binding => |binding| {
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try rejectVoidValue(ir, info, origin);
+            if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
         },
         .return_expr => |expr| {

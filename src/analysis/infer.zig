@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const declarations = @import("../language/declarations.zig");
+const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const contracts = @import("contracts.zig");
@@ -483,6 +484,7 @@ fn inferReturnInfoFromStatements(
         switch (stmt.kind) {
             .let_binding => |binding| {
                 const info = try exprInfoWithOptions(allocator, ir, sema, env, binding.expr, origin, options);
+                if (language_names.isDiscardBindingName(binding.name)) continue;
                 try env.put(binding.name, info);
             },
             .return_expr => |expr| {
@@ -587,7 +589,7 @@ fn primitiveResultTypeInfo(
     var info = infoFromType(result_type);
     info.object_class = switch (descriptor.result_policy) {
         .group_object => "Group",
-        .object_from_role_arg => inferObjectConstructorClass(sema, env, call, 2),
+        .object_from_role_arg => inferObjectConstructorClass(sema, env, call, if (descriptor.op == .new) 1 else 2),
         else => null,
     };
     if (info.object_class) |class_name| info.ty.class_name = class_name;

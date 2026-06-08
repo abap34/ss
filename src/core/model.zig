@@ -123,6 +123,7 @@ pub const Node = struct {
     kind: NodeKind,
     name: []const u8,
     attached: bool = false,
+    discarded: bool = false,
     role: ?Role = null,
     object_kind: ?ObjectKind = null,
     payload_kind: ?PayloadKind = null,

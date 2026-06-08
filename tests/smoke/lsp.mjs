@@ -177,6 +177,22 @@ notify("textDocument/didChange", {
 const fixedDiagnostics = await fixedDiagnosticsPromise;
 assert(fixedDiagnostics.params.diagnostics.length === 0, "ranged didChange did not clear diagnostics after restoring source");
 
+const warningDiagnosticsPromise = waitForNotification(
+  (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
+);
+notify("textDocument/didChange", {
+  textDocument: { uri, version: 4 },
+  contentChanges: [{
+    range: { start: { line: 12, character: 0 }, end: { line: 12, character: 0 } },
+    text: "new(\"loose\", \"body\", \"text\")\n",
+  }],
+});
+const warningDiagnostics = await warningDiagnosticsPromise;
+assert(
+  warningDiagnostics.params.diagnostics.some((diagnostic) => diagnostic.message?.includes("UnplacedObject")),
+  `expected UnplacedObject diagnostic, got ${JSON.stringify(warningDiagnostics.params.diagnostics)}`,
+);
+
 await request("shutdown", null);
 notify("exit", {});
 
