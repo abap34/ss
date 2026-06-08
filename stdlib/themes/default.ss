@@ -1,26 +1,18 @@
 import std:themes/base
 
-fn h1(title_text: String) -> Object
+fn/! h1(title_text: String) -> Object
   let title = title_obj(title_text)
   txt(title, "Helvetica-Bold", 30, 36, c"0.07,0.08,0.10", 40, 72, 72)
   return title
 end
 
-fn h1!(title_text: String) -> Object
-  return place!(h1(title_text))
-end
-
-fn h2(subtitle_text: String) -> Object
+fn/! h2(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
   txt(subtitle, "Helvetica-Bold", 20, 26, c"0.10,0.11,0.13", 30, 96, 96)
   return subtitle
 end
 
-fn h2!(subtitle_text: String) -> Object
-  return place!(h2(subtitle_text))
-end
-
-fn head(title_text: String) -> Object
+fn/! head(title_text: String) -> Object
   let rule = rule()
   let title = tl(title_obj(title_text), 72, 62)
   txt(title, "Helvetica-Bold", 28, 34, c"0.07,0.08,0.10", 28, 72, 72)
@@ -32,11 +24,7 @@ fn head(title_text: String) -> Object
   return title
 end
 
-fn head!(title_text: String) -> Object
-  return place!(head(title_text))
-end
-
-fn subhead(subtitle_text: String) -> Object
+fn/! subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 108)
   txt(subtitle, "Helvetica-Bold", 18, 24, c"0.10,0.11,0.13", 30, 96, 96)
   subtitle.text_cjk_bold_passes = 3
@@ -44,21 +32,13 @@ fn subhead(subtitle_text: String) -> Object
   return subtitle
 end
 
-fn subhead!(subtitle_text: String) -> Object
-  return place!(subhead(subtitle_text))
-end
-
-fn text(text_value: String) -> Object
+fn/! text(text_value: String) -> Object
   let body = body_obj(text_value)
   md_code(body, 15, 20, 12, 10, c"0.97,0.98,0.99", c"0.84,0.86,0.90", 0.8, 6)
   return body
 end
 
-fn text!(text_value: String) -> Object
-  return place!(text(text_value))
-end
-
-fn tex(text_value: String, scale: Number = 1) -> Object
+fn/! tex(text_value: String, scale: Number = 1) -> Object
   let obj = frame(text_value, "math", "math_tex", 96, 96, 8, 8, c"1,1,1", c"0.86,0.88,0.92", 0.7, 6)
   obj.render_kind = RenderKind.vector_math
   obj.text_parse = TextParseMode.none
@@ -66,16 +46,8 @@ fn tex(text_value: String, scale: Number = 1) -> Object
   return obj
 end
 
-fn tex!(text_value: String, scale: Number = 1) -> Object
-  return place!(tex(text_value, scale))
-end
-
-fn code(text_value: String, language_name: String = "python") -> Object
+fn/! code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, 96, 96, 12, 10, c"0.97,0.98,0.99", c"0.84,0.86,0.90", 0.8, 6)
-end
-
-fn code!(text_value: String, language_name: String = "python") -> Object
-  return place!(code(text_value, language_name))
 end
 
 fn toc(title_text: String) -> Object
@@ -93,7 +65,7 @@ fn toc!(title_text: String) -> Object
   return contents
 end
 
-fn cover(title_text: String, subtitle_text: String, author_name: String) -> Object
+fn/! cover(title_text: String, subtitle_text: String, author_name: String) -> Object
   let title = tl(title_obj(title_text), 72, 156)
   let subtitle = sub_obj(subtitle_text)
   let author = by_obj(author_name)
@@ -104,8 +76,4 @@ fn cover(title_text: String, subtitle_text: String, author_name: String) -> Obje
   below_l(subtitle, title, 0, 24)
   below_l(author, subtitle, 0, 34)
   return title
-end
-
-fn cover!(title_text: String, subtitle_text: String, author_name: String) -> Object
-  return place!(cover(title_text, subtitle_text, author_name))
 end

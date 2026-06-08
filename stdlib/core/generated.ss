@@ -10,12 +10,8 @@ fn pageno_s(page_no: Object) -> Object
   return page_no
 end
 
-fn pageno_obj() -> Object
+fn/! pageno_obj() -> Object
   return pageno_s(obj("", "pageno", "text"))
-end
-
-fn pageno_obj!() -> Object
-  return place!(pageno_obj())
 end
 
 fn pagenos!(format: String? = none) -> Void
