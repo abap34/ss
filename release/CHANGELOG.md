@@ -4,6 +4,19 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-08
+
+### Changed
+
+- Resolved enum cases during static analysis so enum values are checked before
+  elaboration and dump output carries the resolved case information.
+- Moved value-domain contract checks into elaboration, keeping runtime value
+  validation at the stage boundary.
+- Preserved document block source order during parsing, source dumps, and
+  document evaluation.
+- Validated page-only primitive use through primitive descriptors.
+- Refreshed README guidance for the current command surface.
+
 ## [0.3.0] - 2026-06-05
 
 ### Added
