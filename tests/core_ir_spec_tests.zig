@@ -40,8 +40,8 @@ test "core IR spec: containment is idempotent for the same parent-child pair" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "title", null, .text, .text, "Hello");
-    try ir.addContainmentFromStage(page, object);
-    try ir.addContainmentFromStage(page, object);
+    try ir.addContainment(page, object);
+    try ir.addContainment(page, object);
 
     const children = ir.childrenOf(page).?;
     try testing.expectEqual(@as(usize, 1), children.len);

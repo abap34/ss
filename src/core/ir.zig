@@ -314,7 +314,7 @@ pub const Ir = struct {
         return id;
     }
 
-    fn addContainment(self: *Ir, parent: NodeId, child: NodeId) !void {
+    pub fn addContainment(self: *Ir, parent: NodeId, child: NodeId) !void {
         const gop = try self.contains.getOrPut(parent);
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
@@ -323,10 +323,6 @@ pub const Ir = struct {
             if (existing == child) return;
         }
         try gop.value_ptr.append(self.allocator, child);
-    }
-
-    pub fn addContainmentFromStage(self: *Ir, parent: NodeId, child: NodeId) !void {
-        try self.addContainment(parent, child);
     }
 
     pub fn addPage(self: *Ir, name: []const u8) !NodeId {
@@ -539,21 +535,6 @@ pub const Ir = struct {
         });
         if (attached) try self.addContainment(page_id, obj_id);
         return obj_id;
-    }
-
-    pub fn makeNodeFromStage(
-        self: *Ir,
-        page_id: NodeId,
-        attached: bool,
-        kind: NodeKind,
-        name: []const u8,
-        role: ?Role,
-        object_kind: ObjectKind,
-        payload_kind: PayloadKind,
-        content: ?[]const u8,
-        origin: ?[]const u8,
-    ) !NodeId {
-        return self.makeNodeWithOrigin(page_id, attached, kind, name, role, object_kind, payload_kind, content, origin);
     }
 
     pub fn addConstraint(self: *Ir, expr: []const u8) !void {
