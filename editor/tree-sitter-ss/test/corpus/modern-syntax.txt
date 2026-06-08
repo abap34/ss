@@ -7,7 +7,7 @@ const plus_one: number -> number = (x: number) |-> x + 1
 fn make_label(text_value: string) -> page -> object
   return (page_value: page)
     |->
-      new(page_value, text_value, "body", "text")
+      place_on!(page_value, new(text_value, "body", "text"))
 end
 
 fn use(callback: (page -> object) -> document, pair: (page, document) -> object, thunk: () -> number) -> void
@@ -49,7 +49,8 @@ end
         (identifier)
         (number))))
   (function_declaration
-    (identifier)
+    (callable_identifier
+      (identifier))
     (parameters
       (parameter
         (identifier)
@@ -68,13 +69,18 @@ end
             (type
               (primary_type))))
         (call_expression
+          (callable_identifier
+            (identifier))
           (identifier)
-          (identifier)
-          (identifier)
-          (string)
-          (string)))))
+          (call_expression
+            (callable_identifier
+              (identifier))
+            (identifier)
+            (string)
+            (string))))))
   (function_declaration
-    (identifier)
+    (callable_identifier
+      (identifier))
     (parameters
       (parameter
         (identifier)
@@ -107,11 +113,14 @@ end
       (primary_type))
     (expression_statement
       (call_expression
-        (identifier)
+        (callable_identifier
+          (identifier))
         (call_expression
-          (identifier)
+          (callable_identifier
+            (identifier))
           (call_expression
-            (identifier)))
+            (callable_identifier
+              (identifier))))
         (lambda_expression
           (lambda_parameters
             (lambda_parameter
@@ -119,19 +128,23 @@ end
               (type
                 (primary_type))))
           (call_expression
-            (identifier)
+            (callable_identifier
+              (identifier))
             (identifier)
             (call_expression
-              (identifier))))))
+              (callable_identifier
+                (identifier)))))))
     (return_statement))
   (page_declaration
     (identifier)
     (let_statement
       (identifier)
       (call_expression
-        (identifier)
+        (callable_identifier
+          (identifier))
         (text_call_expression
-          (identifier)
+          (callable_identifier
+            (identifier))
           (string))
         (string)))
     (member_assignment_statement
@@ -142,7 +155,8 @@ end
     (member_assignment_statement
       (member_expression
         (call_expression
-          (identifier))
+          (callable_identifier
+            (identifier)))
         (identifier))
       (property_default_expression
         (member_expression
@@ -162,7 +176,8 @@ end
     (let_statement
       (identifier)
       (text_call_expression
-        (identifier)
+        (callable_identifier
+          (identifier))
         (string)))
     (let_statement
       (identifier)
@@ -178,3 +193,84 @@ end
               (identifier)
               (number))))
         (number)))))
+
+================================================================================
+Bang calls and paired placement functions
+================================================================================
+
+fn/! note(text_value: string) -> object
+  return text(text_value)
+end
+
+fn place_direct!(obj: object) -> object
+  return place!(obj)
+end
+
+page Bang
+  let card = note("draft")
+  note!("placed")
+  place!(new("loose", "body", "text"))
+  text! <<
+body text
+>>
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (primary_type))))
+    (type
+      (primary_type))
+    (return_statement
+      (call_expression
+        (callable_identifier
+          (identifier))
+        (identifier))))
+  (function_declaration
+    (callable_identifier
+      (identifier))
+    (parameters
+      (parameter
+        (identifier)
+        (type
+          (primary_type))))
+    (type
+      (primary_type))
+    (return_statement
+      (call_expression
+        (callable_identifier
+          (identifier))
+        (identifier))))
+  (page_declaration
+    (identifier)
+    (let_statement
+      (identifier)
+      (call_expression
+        (callable_identifier
+          (identifier))
+        (string)))
+    (expression_statement
+      (call_expression
+        (callable_identifier
+          (identifier))
+        (string)))
+    (expression_statement
+      (call_expression
+        (callable_identifier
+          (identifier))
+        (call_expression
+          (callable_identifier
+            (identifier))
+          (string)
+          (string)
+          (string))))
+    (block_call_statement
+      (callable_identifier
+        (identifier))
+      (block_text))))

@@ -1,5 +1,5 @@
 (function_declaration
-  name: (identifier) @name) @definition.function
+  name: [(identifier) (callable_identifier)] @name) @definition.function
 
 (const_declaration
   name: (identifier) @name) @definition.constant
