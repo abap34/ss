@@ -508,11 +508,17 @@ fn findIdentifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: [
     while (index < source.len and std.ascii.isWhitespace(source[index])) : (index += 1) {}
     if (index + keyword.len > source.len or !std.mem.eql(u8, source[index .. index + keyword.len], keyword)) return null;
     index += keyword.len;
+    const paired_function = std.mem.eql(u8, keyword, "fn") and index + 2 <= source.len and std.mem.eql(u8, source[index .. index + 2], "/!");
+    if (paired_function) index += 2;
     while (index < source.len and std.ascii.isWhitespace(source[index])) : (index += 1) {}
     const ident_start = index;
     if (index >= source.len or !source_utils.isIdentifierStart(source[index])) return null;
     index += 1;
     while (index < source.len and source_utils.isIdentifierContinue(source[index])) : (index += 1) {}
-    if (!std.mem.eql(u8, source[ident_start..index], expected_name)) return null;
+    if (std.mem.eql(u8, keyword, "fn") and index < source.len and source[index] == '!') index += 1;
+    const source_name = source[ident_start..index];
+    const matches_source_name = std.mem.eql(u8, source_name, expected_name);
+    const matches_paired_generated_name = paired_function and expected_name.len == source_name.len + 1 and expected_name[expected_name.len - 1] == '!' and std.mem.eql(u8, source_name, expected_name[0 .. expected_name.len - 1]);
+    if (!matches_source_name and !matches_paired_generated_name) return null;
     return .{ .offset = ident_start, .length = index - ident_start };
 }
