@@ -7,7 +7,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const ssBin = process.env.SS_BIN ?? path.join(root, "zig-out", "bin", "ss");
 const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
+const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "parts.ss");
+const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
 const uri = pathToFileURL(fixture).toString();
+const partsUri = pathToFileURL(partsFixture).toString();
+const defaultThemeUri = pathToFileURL(defaultTheme).toString();
 const source = await readFile(fixture, "utf8");
 
 const child = spawn(ssBin, ["lsp"], { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
@@ -149,7 +153,18 @@ const definition = await request("textDocument/definition", {
   textDocument: { uri },
   position: { line: 4, character: 17 },
 });
-assert(definition === null || definition.uri === uri || typeof definition.uri === "string" || Array.isArray(definition), "definition response was malformed");
+assert(Array.isArray(definition), `expected definition array, got ${JSON.stringify(definition)}`);
+assert(definition.some((location) => location.uri === partsUri && location.range?.start?.line === 0 && location.range?.start?.character === 3), `definition did not jump to parts.ss: ${JSON.stringify(definition)}`);
+
+const pairedDefinition = await request("textDocument/definition", {
+  textDocument: { uri },
+  position: { line: 5, character: 2 },
+});
+assert(Array.isArray(pairedDefinition), `expected paired definition array, got ${JSON.stringify(pairedDefinition)}`);
+assert(
+  pairedDefinition.some((location) => location.uri === defaultThemeUri && location.range?.start?.line === 67 && location.range?.start?.character === 5),
+  `definition did not jump to default theme cover: ${JSON.stringify(pairedDefinition)}`,
+);
 
 const brokenDiagnosticsPromise = waitForNotification(
   (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,

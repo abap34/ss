@@ -1310,7 +1310,7 @@ fn wordAt(allocator: std.mem.Allocator, source: []const u8, target_line: usize, 
 }
 
 fn isIdentChar(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_';
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!';
 }
 
 fn pathFromUri(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
@@ -1457,13 +1457,35 @@ fn samePath(allocator: std.mem.Allocator, left: []const u8, right: []const u8) b
 
 fn definitionPath(allocator: std.mem.Allocator, root: *const JsonObject, item: *const JsonObject) !?[]u8 {
     if (stringField(item, "file")) |file| return try allocator.dupe(u8, file);
+    if (stringField(item, "moduleSpec")) |spec| {
+        if (try stdModulePath(allocator, spec)) |path| return path;
+    }
     const module_id = intField(item, "moduleId") orelse return null;
     if (arrayFieldObject(root, "modules")) |modules| for (modules.items) |module| if (module == .object) {
         if ((intField(&module.object, "id") orelse -1) == module_id) {
             if (stringField(&module.object, "path")) |path| return try allocator.dupe(u8, path);
+            if (stringField(&module.object, "spec")) |spec| {
+                if (try stdModulePath(allocator, spec)) |path| return path;
+            }
         }
     };
     return null;
+}
+
+fn stdModulePath(allocator: std.mem.Allocator, spec: []const u8) !?[]u8 {
+    if (!std.mem.startsWith(u8, spec, "std:")) return null;
+    const module_name = spec["std:".len..];
+    if (module_name.len == 0 or std.mem.indexOfScalar(u8, module_name, '\\') != null) return null;
+
+    const relative = try std.fmt.allocPrint(allocator, "stdlib/{s}.ss", .{module_name});
+    defer allocator.free(relative);
+    const absolute = try project.absolutePath(allocator, relative);
+    errdefer allocator.free(absolute);
+    if (!utils.fs.fileExists(allocator, absolute)) {
+        allocator.free(absolute);
+        return null;
+    }
+    return absolute;
 }
 
 fn symbolName(line: []const u8) ?[]const u8 {
