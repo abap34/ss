@@ -53,6 +53,21 @@ fn expectParseErrorAt(expected: anyerror, source: []const u8, expected_start: us
     return error.ExpectedParseError;
 }
 
+fn expectParseErrorSpan(expected: anyerror, source: []const u8, expected_start: usize, expected_end: usize) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var program = syntax.parseWithSourceName(arena.allocator(), source, "unit-test.ss") catch |err| {
+        try testing.expectEqual(expected, err);
+        const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
+        try testing.expectEqual(expected, diagnostic.err);
+        try testing.expectEqual(expected_start, diagnostic.span.start);
+        try testing.expectEqual(expected_end, diagnostic.span.end);
+        return;
+    };
+    defer program.deinit(arena.allocator());
+    return error.ExpectedParseError;
+}
+
 fn expectCall(expr: ast.Expr, name: []const u8, arity: usize) !ast.CallExpr {
     switch (expr) {
         .call => |call| {
@@ -712,12 +727,14 @@ test "syntax spec: call sugar is explicit about text-bearing and zero-argument c
     const quote = try expectCall(statements[2].kind.expr_stmt, "quote", 1);
     try expectString(quote.args.items[0], "hello");
 
-    try expectParseError(error.ZeroArgCallRequiresParens,
+    const bad_source =
         \\page Bad
         \\  title
         \\end
         \\
-    );
+    ;
+    const title_start = std.mem.indexOf(u8, bad_source, "title") orelse return error.MissingFixtureText;
+    try expectParseErrorSpan(error.ZeroArgCallRequiresParens, bad_source, title_start, title_start + "title".len);
 }
 
 test "syntax spec: assignment syntax separates bindings, properties, and constraints" {

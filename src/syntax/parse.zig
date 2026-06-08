@@ -35,14 +35,22 @@ pub fn parseWithSourceName(allocator: Allocator, source: []const u8, source_name
         .source_name = source_name,
         .pos = 0,
         .error_pos = 0,
+        .error_span = null,
         .generated_page_count = 0,
     };
     last_diagnostic = null;
     return parser.parseProgram() catch |err| {
         const pos = @min(parser.error_pos, source.len);
+        const span = if (parser.error_span) |span|
+            ast.Span{
+                .start = @min(span.start, source.len),
+                .end = @min(@max(span.end, span.start + 1), source.len),
+            }
+        else
+            ast.Span{ .start = pos, .end = @min(pos + 1, source.len) };
         last_diagnostic = .{
             .err = err,
-            .span = .{ .start = pos, .end = @min(pos + 1, source.len) },
+            .span = span,
             .expected = diagnostics.expected(err),
             .found = diagnostics.foundToken(source, pos),
         };
@@ -60,6 +68,7 @@ const Parser = struct {
     source_name: []const u8,
     pos: usize,
     error_pos: usize,
+    error_span: ?ast.Span,
     generated_page_count: usize,
 
     fn parseProgram(self: *Parser) !Program {
@@ -841,7 +850,7 @@ const Parser = struct {
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
         }
 
-        if (self.atStatementBoundary()) return self.fail(error.ZeroArgCallRequiresParens);
+        if (self.atStatementBoundary()) return self.failSpan(.{ .start = start, .end = start + name.len }, error.ZeroArgCallRequiresParens);
 
         const text = try self.parseLineText();
         const call = try self.makeUnaryStringCall(name, text);
@@ -1661,11 +1670,19 @@ const Parser = struct {
 
     fn fail(self: *Parser, err: anyerror) anyerror {
         self.error_pos = @min(self.pos, self.source.len);
+        self.error_span = null;
         return err;
     }
 
     fn failAt(self: *Parser, pos: usize, err: anyerror) anyerror {
         self.error_pos = @min(pos, self.source.len);
+        self.error_span = null;
+        return err;
+    }
+
+    fn failSpan(self: *Parser, span: ast.Span, err: anyerror) anyerror {
+        self.error_pos = @min(span.start, self.source.len);
+        self.error_span = span;
         return err;
     }
 };

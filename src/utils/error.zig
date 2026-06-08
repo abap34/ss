@@ -362,7 +362,7 @@ fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
         error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
         error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
         error.BindRemoved => "BindRemoved: 'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
-        error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: zero-argument calls require parentheses; use 'name()'",
+        error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
         else => blk: {
             const expected = diagnostic.expected orelse @errorName(diagnostic.err);
             const found = diagnostic.found orelse "unknown token";
