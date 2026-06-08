@@ -1477,15 +1477,29 @@ fn stdModulePath(allocator: std.mem.Allocator, spec: []const u8) !?[]u8 {
     const module_name = spec["std:".len..];
     if (module_name.len == 0 or std.mem.indexOfScalar(u8, module_name, '\\') != null) return null;
 
-    const relative = try std.fmt.allocPrint(allocator, "stdlib/{s}.ss", .{module_name});
+    const relative = try std.fmt.allocPrint(allocator, "{s}.ss", .{module_name});
     defer allocator.free(relative);
-    const absolute = try project.absolutePath(allocator, relative);
+    if (try stdModulePathFromEnv(allocator, relative)) |path| return path;
+    if (try stdModulePathFromRoot(allocator, build_options.source_stdlib_dir, relative)) |path| return path;
+    if (try stdModulePathFromRoot(allocator, build_options.installed_stdlib_dir, relative)) |path| return path;
+    return stdModulePathFromRoot(allocator, "stdlib", relative);
+}
+
+fn stdModulePathFromEnv(allocator: std.mem.Allocator, relative: []const u8) !?[]u8 {
+    const raw = std.c.getenv("SS_STDLIB_DIR") orelse return null;
+    const root = std.mem.span(raw);
+    return stdModulePathFromRoot(allocator, root, relative);
+}
+
+fn stdModulePathFromRoot(allocator: std.mem.Allocator, root: []const u8, relative: []const u8) !?[]u8 {
+    if (root.len == 0) return null;
+    const joined = try std.fs.path.join(allocator, &.{ root, relative });
+    defer allocator.free(joined);
+    const absolute = try project.absolutePath(allocator, joined);
     errdefer allocator.free(absolute);
-    if (!utils.fs.fileExists(allocator, absolute)) {
-        allocator.free(absolute);
-        return null;
-    }
-    return absolute;
+    if (utils.fs.fileExists(allocator, absolute)) return absolute;
+    allocator.free(absolute);
+    return null;
 }
 
 fn symbolName(line: []const u8) ?[]const u8 {

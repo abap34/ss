@@ -219,3 +219,127 @@ await new Promise((resolve, reject) => {
     else reject(new Error(`language server exited with ${code}; stderr:\n${stderr}`));
   });
 });
+
+const outsideSource = `import std:themes/default
+
+page title
+cover!(
+  "Hello",
+  "Subtitle",
+  "Author"
+)
+end
+`;
+const outsideDefinition = await definitionInFreshServer({
+  cwd: "/tmp",
+  fixture: "/tmp/ss-lsp-outside/slide.ss",
+  source: outsideSource,
+  needle: "cover!",
+  characterOffset: 2,
+});
+assert(Array.isArray(outsideDefinition), `expected outside definition array, got ${JSON.stringify(outsideDefinition)}`);
+assert(
+  outsideDefinition.some((location) => location.uri === defaultThemeUri && location.range?.start?.line === 67 && location.range?.start?.character === 5),
+  `outside cwd definition did not jump to default theme cover: ${JSON.stringify(outsideDefinition)}`,
+);
+
+async function definitionInFreshServer({ cwd, fixture, source, needle, characterOffset }) {
+  const localUri = pathToFileURL(fixture).toString();
+  const lines = source.split("\n");
+  const line = lines.findIndex((text) => text.includes(needle));
+  assert(line >= 0, `fixture did not contain ${needle}`);
+  const character = lines[line].indexOf(needle) + characterOffset;
+  const localChild = spawn(ssBin, ["lsp"], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+  let localNextId = 1;
+  let localBuffer = Buffer.alloc(0);
+  const localPending = new Map();
+  let localStderr = "";
+
+  localChild.stderr.setEncoding("utf8");
+  localChild.stderr.on("data", (chunk) => {
+    localStderr += chunk;
+  });
+
+  localChild.stdout.on("data", (chunk) => {
+    localBuffer = Buffer.concat([localBuffer, chunk]);
+    while (true) {
+      const headerEnd = localBuffer.indexOf("\r\n\r\n");
+      if (headerEnd < 0) return;
+      const header = localBuffer.subarray(0, headerEnd).toString("utf8");
+      const match = /^Content-Length:\s*(\d+)/im.exec(header);
+      if (!match) throw new Error(`missing Content-Length in ${header}`);
+      const length = Number(match[1]);
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + length;
+      if (localBuffer.length < bodyEnd) return;
+      const message = JSON.parse(localBuffer.subarray(bodyStart, bodyEnd).toString("utf8"));
+      localBuffer = localBuffer.subarray(bodyEnd);
+      if (Object.prototype.hasOwnProperty.call(message, "id")) {
+        const waiter = localPending.get(message.id);
+        if (waiter) {
+          localPending.delete(message.id);
+          waiter.resolve(message);
+        }
+      }
+    }
+  });
+
+  function localSend(message) {
+    const body = Buffer.from(JSON.stringify(message), "utf8");
+    localChild.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+    localChild.stdin.write(body);
+  }
+
+  function localRequest(method, params) {
+    const id = localNextId++;
+    localSend({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        localPending.delete(id);
+        reject(new Error(`timed out waiting for response ${id}; stderr:\n${localStderr}`));
+      }, 10000);
+      localPending.set(id, {
+        resolve: (message) => {
+          clearTimeout(timeout);
+          if (message.error) reject(new Error(`${message.error.code}: ${message.error.message}`));
+          else resolve(message.result);
+        },
+      });
+    });
+  }
+
+  function localNotify(method, params) {
+    localSend({ jsonrpc: "2.0", method, params });
+  }
+
+  await localRequest("initialize", {
+    processId: process.pid,
+    rootUri: pathToFileURL(cwd).toString(),
+    capabilities: {},
+  });
+  localNotify("initialized", {});
+  localNotify("textDocument/didOpen", {
+    textDocument: {
+      uri: localUri,
+      languageId: "ss-slide",
+      version: 1,
+      text: source,
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const result = await localRequest("textDocument/definition", {
+    textDocument: { uri: localUri },
+    position: { line, character },
+  });
+  await localRequest("shutdown", null);
+  localNotify("exit", {});
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`language server did not exit; stderr:\n${localStderr}`)), 5000);
+    localChild.on("exit", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(`language server exited with ${code}; stderr:\n${localStderr}`));
+    });
+  });
+  return result;
+}
