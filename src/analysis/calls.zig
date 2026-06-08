@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
+const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
@@ -167,6 +168,7 @@ const Analyzer = struct {
             switch (stmt.kind) {
                 .let_binding => |binding| {
                     const labels = try self.exprLabels(binding.expr, env, owner);
+                    if (language_names.isDiscardBindingName(binding.name)) continue;
                     try env.set(self.allocator, binding.name, labels);
                 },
                 .return_expr => |expr| {

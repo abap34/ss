@@ -6,10 +6,18 @@ fn h1(title_text: String) -> Object
   return title
 end
 
+fn h1!(title_text: String) -> Object
+  return place!(h1(title_text))
+end
+
 fn h2(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
   txt(subtitle, "Helvetica-Bold", 20, 26, c"0.10,0.11,0.13", 30, 96, 96)
   return subtitle
+end
+
+fn h2!(subtitle_text: String) -> Object
+  return place!(h2(subtitle_text))
 end
 
 fn head(title_text: String) -> Object
@@ -24,6 +32,10 @@ fn head(title_text: String) -> Object
   return title
 end
 
+fn head!(title_text: String) -> Object
+  return place!(head(title_text))
+end
+
 fn subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 108)
   txt(subtitle, "Helvetica-Bold", 18, 24, c"0.10,0.11,0.13", 30, 96, 96)
@@ -32,10 +44,18 @@ fn subhead(subtitle_text: String) -> Object
   return subtitle
 end
 
+fn subhead!(subtitle_text: String) -> Object
+  return place!(subhead(subtitle_text))
+end
+
 fn text(text_value: String) -> Object
   let body = body_obj(text_value)
   md_code(body, 15, 20, 12, 10, c"0.97,0.98,0.99", c"0.84,0.86,0.90", 0.8, 6)
   return body
+end
+
+fn text!(text_value: String) -> Object
+  return place!(text(text_value))
 end
 
 fn tex(text_value: String, scale: Number = 1) -> Object
@@ -46,18 +66,31 @@ fn tex(text_value: String, scale: Number = 1) -> Object
   return obj
 end
 
+fn tex!(text_value: String, scale: Number = 1) -> Object
+  return place!(tex(text_value, scale))
+end
+
 fn code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, 96, 96, 12, 10, c"0.97,0.98,0.99", c"0.84,0.86,0.90", 0.8, 6)
 end
 
+fn code!(text_value: String, language_name: String = "python") -> Object
+  return place!(code(text_value, language_name))
+end
+
 fn toc(title_text: String) -> Object
-  head(title_text)
+  let title = head(title_text)
   let list = toc_obj()
   let chrome = panel()
   box(chrome, c"1,1,1", c"0.84,0.86,0.90", 0.8, 6)
   surround(chrome, list, 10, 8)
-  pageno()
-  return list
+  return group(title, list)
+end
+
+fn toc!(title_text: String) -> Object
+  let contents = place!(toc(title_text))
+  pageno!()
+  return contents
 end
 
 fn cover(title_text: String, subtitle_text: String, author_name: String) -> Object
@@ -71,4 +104,8 @@ fn cover(title_text: String, subtitle_text: String, author_name: String) -> Obje
   below_l(subtitle, title, 0, 24)
   below_l(author, subtitle, 0, 34)
   return title
+end
+
+fn cover!(title_text: String, subtitle_text: String, author_name: String) -> Object
+  return place!(cover(title_text, subtitle_text, author_name))
 end

@@ -314,6 +314,10 @@ pub const Ir = struct {
         return id;
     }
 
+    pub fn nodeCount(self: *const Ir) usize {
+        return self.nodes.items.len;
+    }
+
     pub fn addContainment(self: *Ir, parent: NodeId, child: NodeId) !void {
         const gop = try self.contains.getOrPut(parent);
         if (!gop.found_existing) {
@@ -366,6 +370,18 @@ pub const Ir = struct {
         return self.makeNodeWithOrigin(page_id, true, .object, name, role, object_kind, payload_kind, content, origin);
     }
 
+    pub fn createObjectWithOrigin(
+        self: *Ir,
+        name: []const u8,
+        role: ?Role,
+        object_kind: ObjectKind,
+        payload_kind: PayloadKind,
+        content: ?[]const u8,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return self.makeNodeWithOrigin(self.document_id, false, .object, name, role, object_kind, payload_kind, content, origin);
+    }
+
     pub fn makeGroupWithOrigin(
         self: *Ir,
         page_id: NodeId,
@@ -388,6 +404,141 @@ pub const Ir = struct {
             try self.addContainment(group_id, child_id);
         }
         return group_id;
+    }
+
+    pub fn createGroupWithOrigin(
+        self: *Ir,
+        children: []const NodeId,
+        origin: ?[]const u8,
+    ) !NodeId {
+        return try self.makeGroupWithOrigin(self.document_id, false, children, origin);
+    }
+
+    pub fn placeObjectOnPage(self: *Ir, page_id: NodeId, object_id: NodeId) !void {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        try self.placeObjectSubtree(page_id, object_id, &visited);
+    }
+
+    fn placeObjectSubtree(self: *Ir, page_id: NodeId, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
+        if (visited.contains(object_id)) return;
+        try visited.put(object_id, {});
+        const node = self.getNode(object_id) orelse return error.UnknownNode;
+        if (node.kind != .object) return error.InvalidValueTag;
+        node.attached = true;
+        node.discarded = false;
+        try self.addContainment(page_id, object_id);
+        const children = self.childrenOf(object_id) orelse return;
+        for (children) |child_id| try self.placeObjectSubtree(page_id, child_id, visited);
+    }
+
+    pub fn discardObjectSubtree(self: *Ir, object_id: NodeId) !void {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        try self.discardObjectSubtreeInner(object_id, &visited);
+    }
+
+    fn discardObjectSubtreeInner(self: *Ir, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
+        if (visited.contains(object_id)) return;
+        try visited.put(object_id, {});
+        const node = self.getNode(object_id) orelse return error.UnknownNode;
+        if (node.kind != .object) return error.InvalidValueTag;
+        node.discarded = true;
+        const children = self.childrenOf(object_id) orelse return;
+        for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
+    }
+
+    pub fn connectGeneratedReturnObjects(self: *Ir, return_id: NodeId, start_index: usize) !void {
+        const return_node = self.getNode(return_id) orelse return error.UnknownNode;
+        if (return_node.kind != .object) return;
+
+        var candidates = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer candidates.deinit();
+        try candidates.put(return_id, {});
+        if (start_index < self.nodes.items.len) {
+            for (self.nodes.items[start_index..]) |node| {
+                if (node.kind != .object or node.attached or node.discarded) continue;
+                try candidates.put(node.id, {});
+            }
+        }
+
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var queue = std.ArrayList(NodeId).empty;
+        defer queue.deinit(self.allocator);
+        try seen.put(return_id, {});
+        try queue.append(self.allocator, return_id);
+
+        var index: usize = 0;
+        while (index < queue.items.len) : (index += 1) {
+            try self.appendConnectedCandidates(candidates, &seen, &queue, queue.items[index]);
+        }
+
+        const page_id = if (return_node.attached) self.parentPageOf(return_id) else null;
+        for (queue.items) |candidate_id| {
+            if (candidate_id == return_id) continue;
+            if (try self.containsDescendant(candidate_id, return_id)) continue;
+            try self.addContainment(return_id, candidate_id);
+        }
+        if (page_id) |page| try self.placeObjectOnPage(page, return_id);
+    }
+
+    fn appendConnectedCandidates(
+        self: *Ir,
+        candidates: std.AutoHashMap(NodeId, void),
+        seen: *std.AutoHashMap(NodeId, void),
+        queue: *std.ArrayList(NodeId),
+        current: NodeId,
+    ) !void {
+        var containment = self.contains.iterator();
+        while (containment.next()) |entry| {
+            const parent_id = entry.key_ptr.*;
+            for (entry.value_ptr.items) |child_id| {
+                if (parent_id == current) try self.appendCandidate(candidates, seen, queue, child_id);
+                if (child_id == current) try self.appendCandidate(candidates, seen, queue, parent_id);
+            }
+        }
+        for (self.constraints.items) |constraint| {
+            if (constraint.target_node == current) {
+                switch (constraint.source) {
+                    .page => {},
+                    .node => |source| try self.appendCandidate(candidates, seen, queue, source.node_id),
+                }
+            }
+            switch (constraint.source) {
+                .page => {},
+                .node => |source| if (source.node_id == current) try self.appendCandidate(candidates, seen, queue, constraint.target_node),
+            }
+        }
+    }
+
+    fn appendCandidate(
+        self: *Ir,
+        candidates: std.AutoHashMap(NodeId, void),
+        seen: *std.AutoHashMap(NodeId, void),
+        queue: *std.ArrayList(NodeId),
+        candidate: NodeId,
+    ) !void {
+        if (!candidates.contains(candidate) or seen.contains(candidate)) return;
+        try seen.put(candidate, {});
+        try queue.append(self.allocator, candidate);
+    }
+
+    fn containsDescendant(self: *Ir, parent_id: NodeId, child_id: NodeId) !bool {
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.containsDescendantInner(parent_id, child_id, &visited);
+    }
+
+    fn containsDescendantInner(self: *Ir, parent_id: NodeId, child_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !bool {
+        if (visited.contains(parent_id)) return false;
+        try visited.put(parent_id, {});
+        const children = self.childrenOf(parent_id) orelse return false;
+        for (children) |candidate| {
+            if (candidate == child_id) return true;
+            if (try self.containsDescendantInner(candidate, child_id, visited)) return true;
+        }
+        return false;
     }
 
     pub fn setNodeProperty(self: *Ir, node_id: NodeId, key: []const u8, value: []const u8) !void {
@@ -640,6 +791,30 @@ pub const Ir = struct {
         };
         errdefer diagnostic.deinit(self.allocator);
         try self.addDiagnostic(diagnostic);
+    }
+
+    pub fn addUnplacedObjectWarnings(self: *Ir) !void {
+        for (self.nodes.items) |node| {
+            if (node.kind != .object or node.attached or node.discarded) continue;
+            if (try self.hasUnplacedObjectParent(node.id)) continue;
+            const role = node.role orelse node.name;
+            const message = try std.fmt.allocPrint(self.allocator, "UnplacedObject: object '{s}' was generated but not placed", .{role});
+            try self.addValidationDiagnostic(.warning, null, node.id, node.origin, .{
+                .user_report = .{ .message = message },
+            });
+        }
+    }
+
+    fn hasUnplacedObjectParent(self: *Ir, child_id: NodeId) !bool {
+        var it = self.contains.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.items) |candidate| {
+                if (candidate != child_id) continue;
+                const parent = self.getNode(entry.key_ptr.*) orelse continue;
+                if (parent.kind == .object and !parent.attached and !parent.discarded) return true;
+            }
+        }
+        return false;
     }
 
     pub fn getNode(self: *Ir, id: NodeId) ?*Node {

@@ -54,6 +54,7 @@ pub const AccessSummary = struct {
     selection_reads: std.ArrayList(Resource),
     reads_layout: bool = false,
     writes_layout_input: bool = false,
+    places_objects: bool = false,
     invalid_selection_mutation: ?InvalidSelectionMutation = null,
 
     pub const InvalidSelectionMutation = struct {
@@ -95,6 +96,7 @@ pub const AccessSummary = struct {
         for (other.selection_reads.items) |resource| try self.addSelectionRead(resource);
         self.reads_layout = self.reads_layout or other.reads_layout;
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
+        self.places_objects = self.places_objects or other.places_objects;
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
     }
 };
@@ -135,6 +137,10 @@ pub const Analyzer = struct {
         errdefer summary.deinit();
         summary.writes_layout_input = true;
         return summary;
+    }
+
+    pub fn functionBody(self: *Analyzer, func: ast.FunctionDecl) anyerror!AccessSummary {
+        return try self.analyzeStatements(func.statements.items);
     }
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
@@ -259,6 +265,7 @@ pub const Analyzer = struct {
     fn functionCall(self: *Analyzer, func: ast.FunctionDecl, call: ast.CallExpr) anyerror!AccessSummary {
         var summary = try self.callArgs(call);
         errdefer summary.deinit();
+        if (callableNamePlacesObjects(call.name)) summary.places_objects = true;
         if (self.visiting.contains(func.name)) return summary;
         try self.visiting.put(func.name, {});
         defer _ = self.visiting.remove(func.name);
@@ -321,6 +328,7 @@ pub const Analyzer = struct {
 
         var summary = try self.callArgs(call);
         errdefer summary.deinit();
+        if (descriptor.places_objects) summary.places_objects = true;
         switch (descriptor.op) {
             .select => try self.applySelectSummary(&summary, call),
             .page_index, .page_count => try summary.addRead(Resource.graphPages()),
@@ -345,12 +353,12 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .new => {
-                try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 2)));
-                try summary.addWrite(Resource.content(literalStringArg(self, call, 2)));
+                try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.content(literalStringArg(self, call, 1)));
                 summary.writes_layout_input = true;
             },
-            .new_group => {
-                try summary.addWrite(Resource.graphObjects("group"));
+            .place_on => {
+                try summary.addWrite(Resource.graphObjects(null));
                 summary.writes_layout_input = true;
             },
             .set_prop => {
@@ -461,4 +469,8 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) ?[]const u8 {
         .ident => |name| self.string_bindings.get(name),
         else => null,
     };
+}
+
+pub fn callableNamePlacesObjects(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, "!");
 }

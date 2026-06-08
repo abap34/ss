@@ -325,23 +325,17 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .page = try ctx.makePage(title) };
         },
         .new => blk: {
-            const page_id = try evalPageArg(ctx, call, 0);
-            const content = try ctx.evalStringArg(call, 1);
-            const role_name = try ctx.evalStringArg(call, 2);
-            const role = try ctx.evalRoleArg(call, 2);
-            const payload = try ctx.evalPayloadArg(call, 3);
-            break :blk .{ .object = try ctx.makeObjectOnPage(page_id, role_name, role, payload.object_kind, payload.payload_kind, content) };
+            const content = try ctx.evalStringArg(call, 0);
+            const role_name = try ctx.evalStringArg(call, 1);
+            const role = try ctx.evalRoleArg(call, 1);
+            const payload = try ctx.evalPayloadArg(call, 2);
+            break :blk .{ .object = try ctx.makeObject(role_name, role, payload.object_kind, payload.payload_kind, content) };
         },
-        .new_group => blk: {
+        .place_on => blk: {
             const page_id = try evalPageArg(ctx, call, 0);
-            var value = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[1]));
-            defer value.deinit(ctx.ir.allocator);
-            const selection = switch (value) {
-                .selection => |sel| sel,
-                else => return error.ExpectedSelection,
-            };
-            if (selection.item_tag != .object) return error.InvalidSelectionItemType;
-            break :blk .{ .object = try ctx.makeGroupOnPage(page_id, selection.ids.items) };
+            const object_id = try ctx.evalObjectArg(call, 1);
+            try ctx.placeObjectOnPage(page_id, object_id);
+            break :blk .{ .object = object_id };
         },
         .set_prop => blk: {
             const raw_target = try ctx.evalExprValue(call.args.items[0]);

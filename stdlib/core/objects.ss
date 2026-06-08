@@ -1,39 +1,79 @@
 import std:core/layout
 
 fn obj(text_value: String, role_name: String, payload_name: String) -> Object
-  return new(pagectx(), text_value, role_name, payload_name)
+  return new(text_value, role_name, payload_name)
+end
+
+fn obj!(text_value: String, role_name: String, payload_name: String) -> Object
+  return place!(obj(text_value, role_name, payload_name))
+end
+
+fn place!(obj: Object) -> Object
+  return place_on!(pagectx(), obj)
 end
 
 fn txt_obj(text_value: String, role_name: String) -> Object
   return obj(text_value, role_name, "text")
 end
 
+fn txt_obj!(text_value: String, role_name: String) -> Object
+  return place!(txt_obj(text_value, role_name))
+end
+
 fn title_obj(text_value: String) -> Object
   return txt_obj(text_value, "title")
+end
+
+fn title_obj!(text_value: String) -> Object
+  return place!(title_obj(text_value))
 end
 
 fn sub_obj(text_value: String) -> Object
   return txt_obj(text_value, "subtitle")
 end
 
+fn sub_obj!(text_value: String) -> Object
+  return place!(sub_obj(text_value))
+end
+
 fn body_obj(text_value: String) -> Object
   return txt_obj(text_value, "body")
+end
+
+fn body_obj!(text_value: String) -> Object
+  return place!(body_obj(text_value))
 end
 
 fn note_obj(text_value: String) -> Object
   return txt_obj(text_value, "note")
 end
 
+fn note_obj!(text_value: String) -> Object
+  return place!(note_obj(text_value))
+end
+
 fn by_obj(text_value: String) -> Object
   return txt_obj(text_value, "byline")
+end
+
+fn by_obj!(text_value: String) -> Object
+  return place!(by_obj(text_value))
 end
 
 fn lab_obj(text_value: String) -> Object
   return txt_obj(text_value, "label")
 end
 
+fn lab_obj!(text_value: String) -> Object
+  return place!(lab_obj(text_value))
+end
+
 fn cite_obj(text_value: String) -> Object
   return txt_obj(text_value, "citation")
+end
+
+fn cite_obj!(text_value: String) -> Object
+  return place!(cite_obj(text_value))
 end
 
 fn rule_obj() -> Object
@@ -41,9 +81,17 @@ fn rule_obj() -> Object
   return obj
 end
 
+fn rule_obj!() -> Object
+  return place!(rule_obj())
+end
+
 fn panel_obj() -> Object
   let obj = txt_obj("", "panel")
   return obj
+end
+
+fn panel_obj!() -> Object
+  return place!(panel_obj())
 end
 
 fn spacer(height: Number, width: Number = 1) -> Object
@@ -61,27 +109,55 @@ fn raw_obj(text_value: String, role_name: String, payload_name: String) -> Objec
   return obj(text_value, role_name, payload_name)
 end
 
+fn raw_obj!(text_value: String, role_name: String, payload_name: String) -> Object
+  return place!(raw_obj(text_value, role_name, payload_name))
+end
+
 fn math_obj(text_value: String) -> Object
   return raw_obj(text_value, "math", "math_text")
+end
+
+fn math_obj!(text_value: String) -> Object
+  return place!(math_obj(text_value))
 end
 
 fn tex_obj(text_value: String) -> Object
   return raw_obj(text_value, "math_tex", "math_tex")
 end
 
+fn tex_obj!(text_value: String) -> Object
+  return place!(tex_obj(text_value))
+end
+
 fn fig_obj(text_value: String) -> Object
   return raw_obj(text_value, "figure", "figure_text")
+end
+
+fn fig_obj!(text_value: String) -> Object
+  return place!(fig_obj(text_value))
 end
 
 fn img_obj(path_value: String) -> Object
   return raw_obj(path_value, "image", "image_ref")
 end
 
+fn img_obj!(path_value: String) -> Object
+  return place!(img_obj(path_value))
+end
+
 fn pdf_obj(path_value: String) -> Object
   return raw_obj(path_value, "pdf", "pdf_ref")
+end
+
+fn pdf_obj!(path_value: String) -> Object
+  return place!(pdf_obj(path_value))
 end
 
 fn code_obj(text_value: String) -> Object
   let code = raw_obj(text_value, "code", "code")
   return code
+end
+
+fn code_obj!(text_value: String) -> Object
+  return place!(code_obj(text_value))
 end

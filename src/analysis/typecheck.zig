@@ -2,10 +2,12 @@ const std = @import("std");
 const core = @import("core");
 const ast = @import("ast");
 const declarations = @import("../language/declarations.zig");
+const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const module_loader = @import("../modules/loader.zig");
 const calls = @import("calls.zig");
 const checker = @import("check.zig");
+const dependencies = @import("dependencies.zig");
 const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
@@ -125,10 +127,31 @@ pub fn typecheckProgram(
     try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checkTypeAnnotations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
+    try checkPlacementEffectDeclarations(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
+    }
+}
+
+fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    var analyzer = dependencies.Analyzer.init(allocator, &ir.functions);
+    defer analyzer.deinit();
+    var it = ir.functions.iterator();
+    while (it.next()) |entry| {
+        const func = entry.value_ptr.*;
+        if (dependencies.callableNamePlacesObjects(func.name)) continue;
+        var summary = try analyzer.functionBody(func);
+        defer summary.deinit();
+        if (!summary.places_objects) continue;
+        const module_id = if (ir.function_metadata.get(func.name)) |metadata| metadata.module_id else ir.project_module_id;
+        const origin = try functionOrigin(allocator, ir, module_id, func.name);
+        defer allocator.free(origin);
+        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "PlacementEffect: function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
+        });
+        return error.DiagnosticsFailed;
     }
 }
 
@@ -955,6 +978,7 @@ fn collectVariableTypesFromStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
         },
@@ -1007,6 +1031,7 @@ fn collectScopedVariableTypesFromStatement(
     switch (stmt.kind) {
         .let_binding => |binding| {
             const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope_kind, scope_name, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
         },

@@ -19,6 +19,14 @@ pub const BodyTextDefaults = struct {
     cjk_bold_dx: f32,
 };
 
+pub const ObjectStateExpectation = struct {
+    role: ?[]const u8 = null,
+    content: ?[]const u8 = null,
+    attached: ?bool = null,
+    discarded: ?bool = null,
+    count: usize = 1,
+};
+
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
@@ -285,4 +293,93 @@ pub fn expectDiagnostic(
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
     return error.ExpectedDiagnosticMissing;
+}
+
+pub fn expectLoweredDiagnostic(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    expected_message: []const u8,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    for (ir.diagnostics.items) |diagnostic| {
+        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        defer allocator.free(message);
+        if (std.mem.indexOf(u8, message, expected_message) != null) return;
+    }
+    return error.ExpectedDiagnosticMissing;
+}
+
+pub fn expectNoLoweredDiagnostic(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    unexpected_message: []const u8,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    for (ir.diagnostics.items) |diagnostic| {
+        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        defer allocator.free(message);
+        if (std.mem.indexOf(u8, message, unexpected_message) != null) {
+            return error.UnexpectedDiagnosticPresent;
+        }
+    }
+}
+
+pub fn expectLoweredDiagnosticCount(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    expected_message: []const u8,
+    expected_count: usize,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    var count: usize = 0;
+    for (ir.diagnostics.items) |diagnostic| {
+        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        defer allocator.free(message);
+        if (std.mem.indexOf(u8, message, expected_message) != null) count += 1;
+    }
+    try std.testing.expectEqual(expected_count, count);
+}
+
+pub fn expectObjectState(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    expected: ObjectStateExpectation,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    var count: usize = 0;
+    for (ir.nodes.items) |node| {
+        if (node.kind != .object) continue;
+        if (expected.role) |role| {
+            const node_role = node.role orelse continue;
+            if (!std.mem.eql(u8, node_role, role)) continue;
+        }
+        if (expected.content) |content| {
+            const node_content = node.content orelse continue;
+            if (!std.mem.eql(u8, node_content, content)) continue;
+        }
+        if (expected.attached) |attached| {
+            if (node.attached != attached) continue;
+        }
+        if (expected.discarded) |discarded| {
+            if (node.discarded != discarded) continue;
+        }
+        count += 1;
+    }
+    try std.testing.expectEqual(expected.count, count);
 }

@@ -6,10 +6,18 @@ fn h1(title_text: String) -> Object
   return title
 end
 
+fn h1!(title_text: String) -> Object
+  return place!(h1(title_text))
+end
+
 fn h2(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
   txt(subtitle, "Helvetica", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78)
   return subtitle
+end
+
+fn h2!(subtitle_text: String) -> Object
+  return place!(h2(subtitle_text))
 end
 
 fn head(title_text: String) -> Object
@@ -22,6 +30,10 @@ fn head(title_text: String) -> Object
   return title
 end
 
+fn head!(title_text: String) -> Object
+  return place!(head(title_text))
+end
+
 fn subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 110, 110, 150)
   txt(subtitle, "Helvetica-Bold", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78)
@@ -30,8 +42,16 @@ fn subhead(subtitle_text: String) -> Object
   return subtitle
 end
 
+fn subhead!(subtitle_text: String) -> Object
+  return place!(subhead(subtitle_text))
+end
+
 fn text(text_value: String) -> Object
   return body_obj(text_value)
+end
+
+fn text!(text_value: String) -> Object
+  return place!(text(text_value))
 end
 
 fn tex(text_value: String, scale: Number = 1) -> Object
@@ -42,8 +62,16 @@ fn tex(text_value: String, scale: Number = 1) -> Object
   return obj
 end
 
+fn tex!(text_value: String, scale: Number = 1) -> Object
+  return place!(tex(text_value, scale))
+end
+
 fn figure(text_value: String) -> Object
   return frame(text_value, "figure", "figure_text", 108, 108, 14, 12, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
+end
+
+fn figure!(text_value: String) -> Object
+  return place!(figure(text_value))
 end
 
 fn image(path_value: String, factor: Number = 1) -> Object
@@ -57,6 +85,10 @@ fn image(path_value: String, factor: Number = 1) -> Object
   return obj
 end
 
+fn image!(path_value: String, factor: Number = 1) -> Object
+  return place!(image(path_value, factor))
+end
+
 fn pdf(path_value: String, factor: Number = 1) -> Object
   let obj = pdf_obj(path_value)
   flow(obj, 108, 108)
@@ -68,22 +100,39 @@ fn pdf(path_value: String, factor: Number = 1) -> Object
   return obj
 end
 
+fn pdf!(path_value: String, factor: Number = 1) -> Object
+  return place!(pdf(path_value, factor))
+end
+
 fn code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, 108, 108, 18, 14, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
+end
+
+fn code!(text_value: String, language_name: String = "python") -> Object
+  return place!(code(text_value, language_name))
 end
 
 fn note(text_value: String) -> Object
   return inset(note_obj(text_value), 124, 124)
 end
 
+fn note!(text_value: String) -> Object
+  return place!(note(text_value))
+end
+
 fn toc(title_text: String) -> Object
-  head(title_text)
+  let title = head(title_text)
   let list = toc_obj()
   let chrome = panel()
   box(chrome, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
   surround(chrome, list, 14, 12)
-  pageno()
-  return list
+  return group(title, list)
+end
+
+fn toc!(title_text: String) -> Object
+  let contents = place!(toc(title_text))
+  pageno!()
+  return contents
 end
 
 fn cover(title_text: String, subtitle_text: String, author_name: String) -> Object
@@ -97,4 +146,8 @@ fn cover(title_text: String, subtitle_text: String, author_name: String) -> Obje
   below_l(subtitle, title, 6, 28)
   same_tr(author, title, 72, -4)
   return title
+end
+
+fn cover!(title_text: String, subtitle_text: String, author_name: String) -> Object
+  return place!(cover(title_text, subtitle_text, author_name))
 end
