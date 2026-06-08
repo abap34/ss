@@ -81,8 +81,23 @@ const Parser = struct {
                 });
                 try program.top_level_items.append(self.allocator, .{ .import = import_index });
             } else if (try self.consumeKeyword("fn")) {
-                const func = try self.parseFunctionAfterKeyword(item_start);
-                try program.functions.append(self.allocator, func);
+                const paired = self.consumePairedFunctionMarker();
+                var func = try self.parseFunctionAfterKeyword(item_start, .{ .paired = paired });
+                if (paired) {
+                    var placed_func = try self.makePairedPlacementFunction(func);
+                    var func_moved = false;
+                    var placed_func_moved = false;
+                    errdefer {
+                        if (!func_moved) func.deinit(self.allocator);
+                        if (!placed_func_moved) placed_func.deinit(self.allocator);
+                    }
+                    try program.functions.append(self.allocator, func);
+                    func_moved = true;
+                    try program.functions.append(self.allocator, placed_func);
+                    placed_func_moved = true;
+                } else {
+                    try program.functions.append(self.allocator, func);
+                }
             } else if (try self.consumeKeyword("const")) {
                 const constant = try self.parseConstAfterKeyword(item_start);
                 try program.functions.append(self.allocator, constant);
@@ -128,8 +143,16 @@ const Parser = struct {
         return program;
     }
 
-    fn parseFunctionAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
-        const name = try self.parseIdentifier();
+    const FunctionParseOptions = struct {
+        paired: bool = false,
+    };
+
+    fn parseFunctionAfterKeyword(self: *Parser, start: usize, options: FunctionParseOptions) !FunctionDecl {
+        const name = try self.parseCallableName();
+        if (options.paired and names.hasBangSuffix(name)) {
+            defer self.allocator.free(name);
+            return self.failAt(self.pos - 1, error.PairedFunctionNameCannotEndWithBang);
+        }
         self.skipInlineSpaces();
         try self.expectChar('(');
 
@@ -181,6 +204,48 @@ const Parser = struct {
         const statements = try self.parseBodyStatements();
         if (result_type.kind != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .statements = statements };
+    }
+
+    fn makePairedPlacementFunction(self: *Parser, func: FunctionDecl) !FunctionDecl {
+        const placed_name = try names.bangName(self.allocator, func.name);
+        defer self.allocator.free(placed_name);
+
+        var placed = try func.cloneSignature(self.allocator, placed_name, func.span);
+        errdefer placed.deinit(self.allocator);
+
+        var inner_args = std.ArrayList(Expr).empty;
+        errdefer {
+            for (inner_args.items) |*arg| arg.deinit(self.allocator);
+            inner_args.deinit(self.allocator);
+        }
+        for (func.params.items) |param| {
+            try inner_args.append(self.allocator, .{ .ident = try self.allocator.dupe(u8, param.name) });
+        }
+
+        var outer_args = std.ArrayList(Expr).empty;
+        errdefer {
+            for (outer_args.items) |*arg| arg.deinit(self.allocator);
+            outer_args.deinit(self.allocator);
+        }
+        try outer_args.append(self.allocator, .{ .call = .{
+            .name = try self.allocator.dupe(u8, func.name),
+            .args = inner_args,
+        } });
+        inner_args = .empty;
+
+        const return_expr = Expr{ .call = .{
+            .name = try self.allocator.dupe(u8, "place!"),
+            .args = outer_args,
+        } };
+        outer_args = .empty;
+
+        var return_stmt = Statement{
+            .span = func.span,
+            .kind = .{ .return_expr = return_expr },
+        };
+        errdefer return_stmt.deinit(self.allocator);
+        try placed.statements.append(self.allocator, return_stmt);
+        return placed;
     }
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
@@ -592,7 +657,7 @@ const Parser = struct {
 
     fn resolvePageName(self: *Parser, name: []const u8, name_start: usize) ![]const u8 {
         errdefer self.allocator.free(name);
-        if (std.mem.eql(u8, name, "_")) {
+        if (names.isAnonymousPageName(name)) {
             self.allocator.free(name);
             return self.generatedPageName();
         }
@@ -753,7 +818,7 @@ const Parser = struct {
     }
 
     fn parseCallSugarStatement(self: *Parser, start: usize) !Statement {
-        const name = try self.parseIdentifier();
+        const name = try self.parseCallableName();
         self.skipInlineSpaces();
 
         if (!self.eof() and self.source[self.pos] == '(') {
@@ -912,7 +977,7 @@ const Parser = struct {
         if (self.startsNumberLiteral()) {
             return .{ .number = try self.parseNumber() };
         }
-        const name = try self.parseIdentifier();
+        const name = try self.parseCallableName();
         self.skipInlineSpaces();
         if (std.mem.eql(u8, name, "none")) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
@@ -936,6 +1001,7 @@ const Parser = struct {
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .call = try self.makeUnaryStringCall(name, try self.parseString()) };
         }
+        if (std.mem.endsWith(u8, name, "!")) return self.fail(error.ExpectedChar);
         if (!self.eof() and self.source[self.pos] != '(') {
             return .{ .ident = name };
         }
@@ -1379,6 +1445,19 @@ const Parser = struct {
     }
 
     fn parseIdentifier(self: *Parser) ![]const u8 {
+        return self.parseName(.identifier);
+    }
+
+    const NameKind = enum {
+        identifier,
+        callable,
+    };
+
+    fn parseCallableName(self: *Parser) ![]const u8 {
+        return self.parseName(.callable);
+    }
+
+    fn parseName(self: *Parser, kind: NameKind) ![]const u8 {
         self.skipTrivia();
         if (self.eof()) return self.fail(error.ExpectedIdentifier);
         const start = self.pos;
@@ -1387,8 +1466,13 @@ const Parser = struct {
         while (!self.eof() and source_utils.isIdentifierContinue(self.source[self.pos])) {
             self.pos += 1;
         }
+        const ident_end = self.pos;
+        if (kind == .callable and !self.eof() and self.source[self.pos] == '!') {
+            self.pos += 1;
+        }
+        const base = self.source[start..ident_end];
         const ident = self.source[start..self.pos];
-        if (isReservedKeyword(ident)) return self.fail(error.ReservedIdentifier);
+        if (isReservedKeyword(base)) return self.fail(error.ReservedIdentifier);
         return self.allocator.dupe(u8, ident);
     }
 
@@ -1424,6 +1508,12 @@ const Parser = struct {
 
     fn consumeKeywordNoTrivia(self: *Parser, keyword: []const u8) bool {
         return scanner.consumeKeywordNoTrivia(self.source, &self.pos, keyword);
+    }
+
+    fn consumePairedFunctionMarker(self: *Parser) bool {
+        if (!self.startsWith("/!")) return false;
+        self.pos += 2;
+        return true;
     }
 
     fn expectChar(self: *Parser, ch: u8) !void {
