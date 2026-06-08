@@ -34,6 +34,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.ExpectedEqualityOperator => "'=='",
         error.ExpectedConstraintMarker => "'~' before a constraint",
         error.ReservedPageNamePrefix => "page name not starting with '#'",
+        error.PairedFunctionNameCannotEndWithBang => "function name without '!'",
         else => null,
     };
 }

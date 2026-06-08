@@ -1,6 +1,26 @@
 const std = @import("std");
 const core = @import("core");
 
+pub fn isDiscardBindingName(text: []const u8) bool {
+    return isSingleUnderscore(text);
+}
+
+pub fn isAnonymousPageName(text: []const u8) bool {
+    return isSingleUnderscore(text);
+}
+
+pub fn hasBangSuffix(text: []const u8) bool {
+    return text.len > 0 and text[text.len - 1] == '!';
+}
+
+pub fn bangName(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}!", .{text});
+}
+
+fn isSingleUnderscore(text: []const u8) bool {
+    return std.mem.eql(u8, text, "_");
+}
+
 pub fn parseRoleName(text: []const u8) ?core.Role {
     if (text.len == 0) return null;
     return text;

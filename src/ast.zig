@@ -151,6 +151,26 @@ pub const FunctionDecl = struct {
         for (self.statements.items) |*stmt| stmt.deinit(allocator);
         self.statements.deinit(allocator);
     }
+
+    pub fn cloneSignature(self: FunctionDecl, allocator: Allocator, name: []const u8, span: Span) anyerror!FunctionDecl {
+        var params = std.ArrayList(ParamDecl).empty;
+        errdefer {
+            for (params.items) |*param| param.deinit(allocator);
+            params.deinit(allocator);
+        }
+        for (self.params.items) |param| {
+            try params.append(allocator, try param.clone(allocator));
+        }
+
+        return .{
+            .kind = self.kind,
+            .name = try allocator.dupe(u8, name),
+            .span = span,
+            .params = params,
+            .result_type = try self.result_type.clone(allocator),
+            .statements = .empty,
+        };
+    }
 };
 
 pub const ParamDecl = struct {
@@ -165,6 +185,21 @@ pub const ParamDecl = struct {
             allocator.destroy(expr);
         }
     }
+
+    pub fn clone(self: ParamDecl, allocator: Allocator) anyerror!ParamDecl {
+        var default_value: ?*Expr = null;
+        if (self.default_value) |expr| {
+            const copied = try allocator.create(Expr);
+            errdefer allocator.destroy(copied);
+            copied.* = try expr.clone(allocator);
+            default_value = copied;
+        }
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .ty = try self.ty.clone(allocator),
+            .default_value = default_value,
+        };
+    }
 };
 
 pub const CallExpr = struct {
@@ -174,6 +209,21 @@ pub const CallExpr = struct {
     pub fn deinit(self: *CallExpr, allocator: Allocator) void {
         for (self.args.items) |*arg| arg.deinit(allocator);
         self.args.deinit(allocator);
+    }
+
+    pub fn clone(self: CallExpr, allocator: Allocator) anyerror!CallExpr {
+        var args = std.ArrayList(Expr).empty;
+        errdefer {
+            for (args.items) |*arg| arg.deinit(allocator);
+            args.deinit(allocator);
+        }
+        for (self.args.items) |arg| {
+            try args.append(allocator, try arg.clone(allocator));
+        }
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .args = args,
+        };
     }
 };
 
@@ -186,6 +236,26 @@ pub const ApplyExpr = struct {
         allocator.destroy(self.callee);
         for (self.args.items) |*arg| arg.deinit(allocator);
         self.args.deinit(allocator);
+    }
+
+    pub fn clone(self: ApplyExpr, allocator: Allocator) anyerror!ApplyExpr {
+        const callee = try allocator.create(Expr);
+        errdefer allocator.destroy(callee);
+        callee.* = try self.callee.clone(allocator);
+
+        var args = std.ArrayList(Expr).empty;
+        errdefer {
+            for (args.items) |*arg| arg.deinit(allocator);
+            args.deinit(allocator);
+        }
+        for (self.args.items) |arg| {
+            try args.append(allocator, try arg.clone(allocator));
+        }
+
+        return .{
+            .callee = callee,
+            .args = args,
+        };
     }
 };
 
@@ -200,6 +270,27 @@ pub const LambdaExpr = struct {
         self.body.deinit(allocator);
         allocator.destroy(self.body);
     }
+
+    pub fn clone(self: LambdaExpr, allocator: Allocator) anyerror!LambdaExpr {
+        var params = std.ArrayList(ParamDecl).empty;
+        errdefer {
+            for (params.items) |*param| param.deinit(allocator);
+            params.deinit(allocator);
+        }
+        for (self.params.items) |param| {
+            try params.append(allocator, try param.clone(allocator));
+        }
+
+        const body = try allocator.create(Expr);
+        errdefer allocator.destroy(body);
+        body.* = try self.body.clone(allocator);
+
+        return .{
+            .params = params,
+            .body = body,
+            .span = self.span,
+        };
+    }
 };
 
 pub const MemberExpr = struct {
@@ -211,6 +302,16 @@ pub const MemberExpr = struct {
         allocator.destroy(self.target);
         allocator.free(self.name);
     }
+
+    pub fn clone(self: MemberExpr, allocator: Allocator) anyerror!MemberExpr {
+        const target = try allocator.create(Expr);
+        errdefer allocator.destroy(target);
+        target.* = try self.target.clone(allocator);
+        return .{
+            .target = target,
+            .name = try allocator.dupe(u8, self.name),
+        };
+    }
 };
 
 pub const EnumCaseExpr = struct {
@@ -221,6 +322,13 @@ pub const EnumCaseExpr = struct {
         allocator.free(self.enum_name);
         allocator.free(self.case_name);
     }
+
+    pub fn clone(self: EnumCaseExpr, allocator: Allocator) anyerror!EnumCaseExpr {
+        return .{
+            .enum_name = try allocator.dupe(u8, self.enum_name),
+            .case_name = try allocator.dupe(u8, self.case_name),
+        };
+    }
 };
 
 pub const OptionalCheckExpr = struct {
@@ -229,6 +337,13 @@ pub const OptionalCheckExpr = struct {
     pub fn deinit(self: *OptionalCheckExpr, allocator: Allocator) void {
         self.target.deinit(allocator);
         allocator.destroy(self.target);
+    }
+
+    pub fn clone(self: OptionalCheckExpr, allocator: Allocator) anyerror!OptionalCheckExpr {
+        const target = try allocator.create(Expr);
+        errdefer allocator.destroy(target);
+        target.* = try self.target.clone(allocator);
+        return .{ .target = target };
     }
 };
 
@@ -241,6 +356,21 @@ pub const CoalesceExpr = struct {
         allocator.destroy(self.target);
         self.fallback.deinit(allocator);
         allocator.destroy(self.fallback);
+    }
+
+    pub fn clone(self: CoalesceExpr, allocator: Allocator) anyerror!CoalesceExpr {
+        const target = try allocator.create(Expr);
+        errdefer allocator.destroy(target);
+        target.* = try self.target.clone(allocator);
+
+        const fallback = try allocator.create(Expr);
+        errdefer allocator.destroy(fallback);
+        fallback.* = try self.fallback.clone(allocator);
+
+        return .{
+            .target = target,
+            .fallback = fallback,
+        };
     }
 };
 
@@ -276,6 +406,24 @@ pub const Expr = union(enum) {
             .coalesce => |*coalesce| coalesce.deinit(allocator),
             else => {},
         }
+    }
+
+    pub fn clone(self: Expr, allocator: Allocator) anyerror!Expr {
+        return switch (self) {
+            .ident => |text| .{ .ident = try allocator.dupe(u8, text) },
+            .string => |text| .{ .string = try allocator.dupe(u8, text) },
+            .color => |text| .{ .color = try allocator.dupe(u8, text) },
+            .number => |value| .{ .number = value },
+            .boolean => |value| .{ .boolean = value },
+            .none => .none,
+            .call => |call| .{ .call = try call.clone(allocator) },
+            .apply => |apply| .{ .apply = try apply.clone(allocator) },
+            .lambda => |lambda| .{ .lambda = try lambda.clone(allocator) },
+            .member => |member| .{ .member = try member.clone(allocator) },
+            .enum_case => |enum_case| .{ .enum_case = try enum_case.clone(allocator) },
+            .optional_check => |check| .{ .optional_check = try check.clone(allocator) },
+            .coalesce => |coalesce| .{ .coalesce = try coalesce.clone(allocator) },
+        };
     }
 };
 

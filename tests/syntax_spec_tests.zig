@@ -39,6 +39,20 @@ fn expectParseError(expected: anyerror, source: []const u8) !void {
     return error.ExpectedParseError;
 }
 
+fn expectParseErrorAt(expected: anyerror, source: []const u8, expected_start: usize) !void {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var program = syntax.parseWithSourceName(arena.allocator(), source, "unit-test.ss") catch |err| {
+        try testing.expectEqual(expected, err);
+        const diagnostic = syntax.lastParseDiagnostic() orelse return error.MissingParseDiagnostic;
+        try testing.expectEqual(expected, diagnostic.err);
+        try testing.expectEqual(expected_start, diagnostic.span.start);
+        return;
+    };
+    defer program.deinit(arena.allocator());
+    return error.ExpectedParseError;
+}
+
 fn expectCall(expr: ast.Expr, name: []const u8, arity: usize) !ast.CallExpr {
     switch (expr) {
         .call => |call| {
@@ -239,7 +253,7 @@ test "syntax spec: void functions may omit explicit return values" {
 test "syntax spec: function types and lambdas are source syntax" {
     var parsed = try parse(
         \\fn make_label(text_value: String) -> Page -> Object
-        \\  return (page_value: Page) |-> new(page_value, text_value, "body", "text")
+        \\  return (page_value: Page) |-> place_on!(page_value, new(text_value, "body", "text"))
         \\end
         \\
         \\fn use(callback: (Page -> Object) -> Document, pair: (Page, Document) -> Object, thunk: () -> Number) -> Number
@@ -272,6 +286,62 @@ test "syntax spec: function types and lambdas are source syntax" {
     try testing.expectEqual(@as(usize, 0), use.params.items[2].ty.fn_params.len);
 }
 
+test "syntax spec: bang suffix is limited to callable names" {
+    var parsed = try parse(
+        \\fn mark!() -> Void
+        \\  return
+        \\end
+        \\
+        \\page Calls
+        \\  mark!()
+        \\  text! "body"
+        \\  code! <<
+        \\plain block
+        \\>>
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("mark!", parsed.program.functions.items[0].name);
+    const call = try expectCall(parsed.program.pages.items[0].statements.items[0].kind.expr_stmt, "mark!", 0);
+    try testing.expectEqualStrings("mark!", call.name);
+    _ = try expectCall(parsed.program.pages.items[0].statements.items[1].kind.expr_stmt, "text!", 1);
+    _ = try expectCall(parsed.program.pages.items[0].statements.items[2].kind.expr_stmt, "code!", 1);
+
+    try expectParseError(error.ExpectedChar,
+        \\type Bad! = object {
+        \\}
+        \\
+    );
+
+    try expectParseError(error.ExpectedChar,
+        \\page Bad
+        \\  let value! = 1
+        \\end
+        \\
+    );
+
+    try expectParseError(error.ExpectedTypeAnnotation,
+        \\const value!: Number = 1
+        \\
+    );
+
+    try expectParseError(error.ExpectedTypeAnnotation,
+        \\fn bad(value!: Number) -> Number
+        \\  return 1
+        \\end
+        \\
+    );
+
+    try expectParseError(error.ExpectedChar,
+        \\page Bad
+        \\  let value = mark!
+        \\end
+        \\
+    );
+}
+
 test "syntax spec: incomplete function type is not accepted as a surface type" {
     try expectParseError(error.InvalidTypeAnnotation,
         \\fn bad(f: Function) -> Number
@@ -279,6 +349,52 @@ test "syntax spec: incomplete function type is not accepted as a surface type" {
         \\end
         \\
     );
+}
+
+test "syntax spec: paired placement functions expand to plain and placing definitions" {
+    var parsed = try parse(
+        \\fn/! note(text_value: String, tone: String = "soft") -> Object
+        \\  return text(text_value)
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 2), parsed.program.functions.items.len);
+    const note = parsed.program.functions.items[0];
+    try testing.expectEqualStrings("note", note.name);
+    try testing.expectEqual(@as(usize, 2), note.params.items.len);
+    try testing.expectEqualStrings("tone", note.params.items[1].name);
+    try expectString(note.params.items[1].default_value.?.*, "soft");
+
+    const placing = parsed.program.functions.items[1];
+    try testing.expectEqualStrings("note!", placing.name);
+    try testing.expectEqual(@as(usize, 2), placing.params.items.len);
+    try testing.expectEqualStrings("tone", placing.params.items[1].name);
+    try expectString(placing.params.items[1].default_value.?.*, "soft");
+    try testing.expectEqual(note.span.start, placing.span.start);
+    try testing.expectEqual(note.span.end, placing.span.end);
+
+    const return_expr = placing.statements.items[0].kind.return_expr;
+    const place_call = try expectCall(return_expr, "place!", 1);
+    const inner_call = try expectCall(place_call.args.items[0], "note", 2);
+    switch (inner_call.args.items[0]) {
+        .ident => |name| try testing.expectEqualStrings("text_value", name),
+        else => return error.ExpectedIdentifier,
+    }
+    switch (inner_call.args.items[1]) {
+        .ident => |name| try testing.expectEqualStrings("tone", name),
+        else => return error.ExpectedIdentifier,
+    }
+
+    const bad_source =
+        \\fn/! note!() -> Object
+        \\  return new("", "body", "text")
+        \\end
+        \\
+    ;
+    const bang_offset = (std.mem.indexOf(u8, bad_source, "note!") orelse return error.ExpectedIdentifier) + "note".len;
+    try expectParseErrorAt(error.PairedFunctionNameCannotEndWithBang, bad_source, bang_offset);
 }
 
 test "syntax spec: bare user type names parse as object class annotations" {
@@ -502,11 +618,13 @@ test "syntax spec: lambda body may start on a later line" {
         \\    pages(docctx()),
         \\    (page_value: Page)
         \\      |->
-        \\        new(
+        \\        place_on!(
         \\          page_value,
-        \\          str(page_index(page_value)),
-        \\          "body",
-        \\          "text"
+        \\          new(
+        \\            str(page_index(page_value)),
+        \\            "body",
+        \\            "text"
+        \\          )
         \\        )
         \\  )
         \\end
@@ -520,7 +638,7 @@ test "syntax spec: lambda body may start on a later line" {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
             try testing.expectEqual(Type.Kind.page, lambda.params.items[0].ty.kind);
             switch (lambda.body.*) {
-                .call => |call| try testing.expectEqualStrings("new", call.name),
+                .call => |call| try testing.expectEqualStrings("place_on!", call.name),
                 else => return error.ExpectedCallExpr,
             }
         },
