@@ -4,6 +4,20 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-09
+
+### Changed
+
+- Installed stdlib `.ss` sources under `share/ss/stdlib` so editor features can
+  open stdlib definitions from installed binaries.
+
+### Fixed
+
+- Improved the bare-name parse diagnostic so it points at the full identifier
+  and explains how to call or place the value.
+- Fixed LSP go-to-definition for stdlib functions such as `cover!` when the
+  language server is started outside the `ss` repository.
+
 ## [0.4.0] - 2026-06-09
 
 ### Added
