@@ -4,6 +4,17 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-10
+
+### Added
+
+- Added PDF link annotations for Markdown links, including URI links and
+  internal destinations from object `link_id` properties.
+
+### Changed
+
+- Moved remaining Zig regression tests out of `src/` and into `tests/`.
+
 ## [0.4.1] - 2026-06-09
 
 ### Changed
