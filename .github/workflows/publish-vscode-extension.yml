@@ -31,6 +31,7 @@ jobs:
             librsvg2-dev \
             libpango1.0-dev \
             pkg-config \
+            qpdf \
             xz-utils
 
       - name: Restore Zig compiler cache

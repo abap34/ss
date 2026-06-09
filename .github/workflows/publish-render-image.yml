@@ -47,6 +47,7 @@ jobs:
             librsvg2-dev \
             libpango1.0-dev \
             pkg-config \
+            qpdf \
             xz-utils
           sudo rm -rf "$APT_ARCHIVE_CACHE/partial" "$APT_ARCHIVE_CACHE/lock"
           sudo chown -R "$USER:$(id -gn)" "$APT_ARCHIVE_CACHE"
@@ -92,6 +93,7 @@ jobs:
           zig version
           pkg-config --modversion pangocairo
           pkg-config --modversion librsvg-2.0
+          qpdf --version
 
       - name: Run release validation
         run: |

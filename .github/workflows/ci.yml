@@ -30,7 +30,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          if command -v pkg-config >/dev/null && pkg-config --exists cairo pangocairo librsvg-2.0; then
+          if command -v qpdf >/dev/null && command -v pkg-config >/dev/null && pkg-config --exists cairo pangocairo librsvg-2.0; then
             echo "system dependencies already installed"
           else
             APT_ARCHIVE_CACHE="$RUNNER_TEMP/apt-archives"
@@ -43,7 +43,8 @@ jobs:
               libcairo2-dev \
               librsvg2-dev \
               libpango1.0-dev \
-              pkg-config
+              pkg-config \
+              qpdf
           fi
           if [ -d "$RUNNER_TEMP/apt-archives" ]; then
             sudo rm -rf "$RUNNER_TEMP/apt-archives/partial" "$RUNNER_TEMP/apt-archives/lock"
@@ -99,6 +100,7 @@ jobs:
           npm --version
           pkg-config --modversion pangocairo
           pkg-config --modversion librsvg-2.0
+          qpdf --version
           git -C third_party/md4c rev-parse HEAD
 
       - name: Check release metadata
