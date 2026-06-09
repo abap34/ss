@@ -19,9 +19,10 @@ fn contains(haystack: []const u8, needle: []const u8) bool {
 
 fn expectInternalDestination(json: []const u8) !void {
     const direct_dest = contains(json, "\"/Dest\": \"u:target\"") or
-        contains(json, "\"/Dest\": \"target\"");
+        contains(json, "\"/Dest\": \"target\"") or
+        contains(json, "\"/Dest\": [");
     const goto_action = contains(json, "\"/S\": \"/GoTo\"") and
-        (contains(json, "\"/D\": \"u:target\"") or contains(json, "\"/D\": \"target\""));
+        (contains(json, "\"/D\": \"u:target\"") or contains(json, "\"/D\": \"target\"") or contains(json, "\"/D\": ["));
     if (direct_dest or goto_action) return;
 
     std.debug.print("missing expected internal destination annotation in PDF JSON\n", .{});

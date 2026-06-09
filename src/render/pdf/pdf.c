@@ -64,20 +64,23 @@ static char *ss_pdf_link_attributes(
     double width,
     double height,
     const char *key,
-    const char *value
+    const char *value,
+    const char *suffix
 ) {
     char *escaped = ss_pdf_escape_tag_string(value);
     if (escaped == NULL) return NULL;
+    if (suffix == NULL) suffix = "";
     const int len = snprintf(
         NULL,
         0,
-        "rect=[%.17g %.17g %.17g %.17g] %s='%s'",
+        "rect=[%.17g %.17g %.17g %.17g] %s='%s'%s",
         x,
         y,
         width,
         height,
         key,
-        escaped
+        escaped,
+        suffix
     );
     if (len < 0) {
         free(escaped);
@@ -97,15 +100,16 @@ static char *ss_pdf_link_attributes(
         width,
         height,
         key,
-        escaped
+        escaped,
+        suffix
     );
     free(escaped);
     return attributes;
 }
 
-static int ss_pdf_begin_link(SsPdf *pdf, double x, double y, double width, double height, const char *key, const char *value) {
+static int ss_pdf_begin_link(SsPdf *pdf, double x, double y, double width, double height, const char *key, const char *value, const char *suffix) {
     if (pdf == NULL || pdf->cr == NULL || value == NULL) return 1;
-    char *attributes = ss_pdf_link_attributes(x, y, width, height, key, value);
+    char *attributes = ss_pdf_link_attributes(x, y, width, height, key, value, suffix);
     if (attributes == NULL) return 1;
     cairo_tag_begin(pdf->cr, CAIRO_TAG_LINK, attributes);
     free(attributes);
@@ -241,11 +245,11 @@ void ss_pdf_pop_clip(SsPdf *pdf) {
 }
 
 int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri) {
-    return ss_pdf_begin_link(pdf, x, y, width, height, "uri", uri);
+    return ss_pdf_begin_link(pdf, x, y, width, height, "uri", uri, "");
 }
 
 int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest) {
-    return ss_pdf_begin_link(pdf, x, y, width, height, "dest", dest);
+    return ss_pdf_begin_link(pdf, x, y, width, height, "dest", dest, " internal");
 }
 
 void ss_pdf_end_link(SsPdf *pdf) {
