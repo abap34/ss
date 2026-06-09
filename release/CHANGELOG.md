@@ -4,6 +4,18 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-10
+
+### Fixed
+
+- Rejected unsatisfied hard layout constraints after solving, including
+  nonzero same-anchor constraints produced by aliased objects.
+
+### Changed
+
+- Expanded layout constraint regression tests for self constraints, explicit
+  conflicts, cycles, and group width propagation.
+
 ## [0.4.2] - 2026-06-10
 
 ### Added
