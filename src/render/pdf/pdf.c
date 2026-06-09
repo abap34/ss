@@ -4,7 +4,9 @@
 #include <cairo.h>
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SS_PI 3.14159265358979323846
 
@@ -34,6 +36,80 @@ static void ss_pdf_rounded_rect_path(cairo_t *cr, double x, double y, double wid
     cairo_arc(cr, x + radius, y + height - radius, radius, SS_PI / 2.0, SS_PI);
     cairo_arc(cr, x + radius, y + radius, radius, SS_PI, SS_PI * 1.5);
     cairo_close_path(cr);
+}
+
+static char *ss_pdf_escape_tag_string(const char *value) {
+    if (value == NULL) return NULL;
+    size_t extra = 0;
+    for (const char *p = value; *p != '\0'; p++) {
+        if (*p == '\'' || *p == '\\') extra++;
+    }
+
+    const size_t len = strlen(value);
+    char *escaped = (char *)malloc(len + extra + 1);
+    if (escaped == NULL) return NULL;
+
+    char *out = escaped;
+    for (const char *p = value; *p != '\0'; p++) {
+        if (*p == '\'' || *p == '\\') *out++ = '\\';
+        *out++ = *p;
+    }
+    *out = '\0';
+    return escaped;
+}
+
+static char *ss_pdf_link_attributes(
+    double x,
+    double y,
+    double width,
+    double height,
+    const char *key,
+    const char *value
+) {
+    char *escaped = ss_pdf_escape_tag_string(value);
+    if (escaped == NULL) return NULL;
+    const int len = snprintf(
+        NULL,
+        0,
+        "rect=[%.17g %.17g %.17g %.17g] %s='%s'",
+        x,
+        y,
+        width,
+        height,
+        key,
+        escaped
+    );
+    if (len < 0) {
+        free(escaped);
+        return NULL;
+    }
+    char *attributes = (char *)malloc((size_t)len + 1);
+    if (attributes == NULL) {
+        free(escaped);
+        return NULL;
+    }
+    snprintf(
+        attributes,
+        (size_t)len + 1,
+        "rect=[%.17g %.17g %.17g %.17g] %s='%s'",
+        x,
+        y,
+        width,
+        height,
+        key,
+        escaped
+    );
+    free(escaped);
+    return attributes;
+}
+
+static int ss_pdf_begin_link(SsPdf *pdf, double x, double y, double width, double height, const char *key, const char *value) {
+    if (pdf == NULL || pdf->cr == NULL || value == NULL) return 1;
+    char *attributes = ss_pdf_link_attributes(x, y, width, height, key, value);
+    if (attributes == NULL) return 1;
+    cairo_tag_begin(pdf->cr, CAIRO_TAG_LINK, attributes);
+    free(attributes);
+    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
 SsPdf *ss_pdf_create(const char *path, double width, double height) {
@@ -162,6 +238,41 @@ void ss_pdf_push_clip_rect(SsPdf *pdf, double x, double y, double width, double 
 void ss_pdf_pop_clip(SsPdf *pdf) {
     if (pdf == NULL || pdf->cr == NULL) return;
     cairo_restore(pdf->cr);
+}
+
+int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri) {
+    return ss_pdf_begin_link(pdf, x, y, width, height, "uri", uri);
+}
+
+int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest) {
+    return ss_pdf_begin_link(pdf, x, y, width, height, "dest", dest);
+}
+
+void ss_pdf_end_link(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return;
+    cairo_tag_end(pdf->cr, CAIRO_TAG_LINK);
+}
+
+int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y) {
+    if (pdf == NULL || pdf->cr == NULL || name == NULL) return 1;
+    char *escaped = ss_pdf_escape_tag_string(name);
+    if (escaped == NULL) return 1;
+    const int len = snprintf(NULL, 0, "name='%s' x=%.17g y=%.17g", escaped, x, y);
+    if (len < 0) {
+        free(escaped);
+        return 1;
+    }
+    char *attributes = (char *)malloc((size_t)len + 1);
+    if (attributes == NULL) {
+        free(escaped);
+        return 1;
+    }
+    snprintf(attributes, (size_t)len + 1, "name='%s' x=%.17g y=%.17g", escaped, x, y);
+    cairo_tag_begin(pdf->cr, CAIRO_TAG_DEST, attributes);
+    cairo_tag_end(pdf->cr, CAIRO_TAG_DEST);
+    free(attributes);
+    free(escaped);
+    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
 int ss_pdf_draw_text(

@@ -47,6 +47,10 @@ void ss_pdf_fill_stroke_rounded_rect(
 );
 void ss_pdf_push_clip_rect(SsPdf *pdf, double x, double y, double width, double height);
 void ss_pdf_pop_clip(SsPdf *pdf);
+int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri);
+int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest);
+void ss_pdf_end_link(SsPdf *pdf);
+int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y);
 int ss_pdf_draw_text(
     SsPdf *pdf,
     double x,

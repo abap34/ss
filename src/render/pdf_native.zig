@@ -35,7 +35,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v8";
+const page_pdf_cache_version = "ss-native-page-pdf-v9";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -64,6 +64,7 @@ const Atom = struct {
     is_space: bool,
     is_emoji: bool = false,
     svg_path: ?[]const u8 = null,
+    link_url: ?[]const u8 = null,
 };
 
 const AtomPaint = struct {
@@ -115,6 +116,7 @@ const RenderOp = struct {
     node_id: core.NodeId,
     frame: Frame,
     content: []const u8,
+    link_id: ?[]const u8 = null,
     render: ResolvedRender,
     parse_mode: core.markdown.ParseMode,
     math_packages: []const []const u8,
@@ -345,6 +347,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                     .node_id = node.id,
                     .frame = node.frame,
                     .content = node.content orelse "",
+                    .link_id = core.nodeProperty(node, "link_id"),
                     .render = core.render_policy.resolveWithEnv(ir, node, sema),
                     .parse_mode = core.markdown.parseModeForNode(ir, node),
                     .math_packages = try clonePackageSlice(ctx.allocator, env.math_latex_packages.items),
@@ -473,6 +476,7 @@ fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(File
 fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, op: *const RenderOp) !void {
     hashFrame(hasher, op.frame);
     hashString(hasher, op.content);
+    hashOptionalString(hasher, op.link_id);
     hashString(hasher, @tagName(op.parse_mode));
     hashUsize(hasher, op.math_packages.len);
     for (op.math_packages) |package| hashString(hasher, package);
@@ -649,6 +653,11 @@ fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
 fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
     hashUsize(hasher, value.len);
     hasher.update(value);
+}
+
+fn hashOptionalString(hasher: *std.hash.Wyhash, value: ?[]const u8) void {
+    hashBool(hasher, value != null);
+    if (value) |text| hashString(hasher, text);
 }
 
 fn hashBool(hasher: *std.hash.Wyhash, value: bool) void {
@@ -1041,6 +1050,7 @@ fn drawRenderPage(ctx: *DrawContext, page: *const RenderPage) !void {
 }
 
 fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
+    try addDestination(ctx, op.link_id, op.frame);
     drawObjectChrome(ctx.pdf, op.frame, op.render);
     const content_frame = contentFrameForRender(op.frame, op.render);
     pushClipRect(ctx.pdf, content_frame);
@@ -1566,6 +1576,7 @@ fn clampWorkerCount(value: usize, task_count: usize) usize {
 }
 
 fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, render: ResolvedRender) !void {
+    try addDestination(ctx, core.nodeProperty(node, "link_id"), node.frame);
     drawObjectChrome(ctx.pdf, node.frame, render);
     const content_frame = contentFrameForRender(node.frame, render);
     pushClipRect(ctx.pdf, content_frame);
@@ -1582,6 +1593,14 @@ fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, r
         .vector_asset => try drawVectorAsset(ctx, content_frame, node.content orelse ""),
         .raster_asset => try drawRasterAsset(ctx, content_frame, node.content orelse ""),
     }
+}
+
+fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !void {
+    const link_id = maybe_link_id orelse return;
+    if (link_id.len == 0) return;
+    const name_z = try ctx.allocator.dupeZ(u8, link_id);
+    defer ctx.allocator.free(name_z);
+    if (c.ss_pdf_add_destination(ctx.pdf, name_z.ptr, frame.x, topOf(frame)) != 0) return NativePdfError.CairoFailed;
 }
 
 fn pushClipRect(pdf: *c.SsPdf, frame: Frame) void {
@@ -1902,11 +1921,11 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, package
                 try appendMathAtom(ctx, atoms, run.text, text, packages, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.color, text.font_size),
-            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size),
-            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size),
-            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size),
+            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.color, text.font_size, null),
+            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null),
+            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null),
+            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url),
+            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null),
         }
     }
 }
@@ -2047,7 +2066,7 @@ fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
     }
 }
 
-fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: []const u8, color: Color, font_size: f32) !void {
+fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: []const u8, color: Color, font_size: f32, link_url: ?[]const u8) !void {
     var tokenizer = Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = isEmojiToken(token);
@@ -2064,6 +2083,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             .width = width,
             .is_space = isWhitespace(token),
             .is_emoji = is_emoji,
+            .link_url = link_url,
         });
     }
 }
@@ -2136,7 +2156,12 @@ fn drawAtomsWithOptions(
         }
         switch (atom.kind) {
             .text => {
-                try drawRawText(ctx, cursor_x, baselineTop(cursor_bl, paint.font_size), @max(atom.width + paint.font_size, 1), paint.line_height, atom.text, atom.font, paint.font_size, atom.color, false);
+                const y_top = baselineTop(cursor_bl, paint.font_size);
+                if (atom.link_url) |url| {
+                    try drawLinkedRawText(ctx, cursor_x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
+                } else {
+                    try drawRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), paint.line_height, atom.text, atom.font, paint.font_size, atom.color, false);
+                }
                 cursor_x += atomAdvance(atoms, index, paint);
             },
             .math => {
@@ -2242,7 +2267,7 @@ fn drawPlainTextAtTopWithOptions(
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try appendTextAtoms(ctx, &atoms, content, font, color, font_size);
+    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null);
     const paint = AtomPaint{
         .font_size = font_size,
         .line_height = line_height,
@@ -2631,6 +2656,36 @@ fn drawRawText(
         color.b,
         if (wrap) 1 else 0,
     ) != 0) return NativePdfError.PangoCreateFailed;
+}
+
+fn drawLinkedRawText(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    link_width: f32,
+    height: f32,
+    atom: Atom,
+    paint: AtomPaint,
+    url: []const u8,
+) !void {
+    const target = if (isInternalLink(url)) url[1..] else url;
+    if (target.len == 0) {
+        try drawRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom.text, atom.font, paint.font_size, atom.color, false);
+        return;
+    }
+    const target_z = try ctx.allocator.dupeZ(u8, target);
+    defer ctx.allocator.free(target_z);
+    const begin_result = if (isInternalLink(url))
+        c.ss_pdf_begin_dest_link(ctx.pdf, x, y_top, @max(link_width, 1), height, target_z.ptr)
+    else
+        c.ss_pdf_begin_uri_link(ctx.pdf, x, y_top, @max(link_width, 1), height, target_z.ptr);
+    if (begin_result != 0) return NativePdfError.CairoFailed;
+    defer c.ss_pdf_end_link(ctx.pdf);
+    try drawRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom.text, atom.font, paint.font_size, atom.color, false);
+}
+
+fn isInternalLink(url: []const u8) bool {
+    return url.len > 1 and url[0] == '#';
 }
 
 fn measureText(ctx: *DrawContext, content: []const u8, font: []const u8, font_size: f32) !f32 {
