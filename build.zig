@@ -157,12 +157,18 @@ fn addTestStep(
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, true);
+    addModuleTest(ctx, test_step, "tests/core_markdown_spec_tests.zig", &.{
+        import("core", modules.core),
+    }, true);
     addModuleTest(ctx, test_step, "tests/layout_graph_spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
         import("model", modules.model),
         import("language_type", modules.language_type),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/utils_fs_spec_tests.zig", &.{
+        import("utils", modules.utils),
     }, true);
     addModuleTest(ctx, test_step, "tests/project_spec_tests.zig", &.{
         import("project", modules.project),
@@ -173,6 +179,14 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/lsp_scope_spec_tests.zig", &.{
         import("lsp_scope", lsp_scope_mod),
     }, true);
+    const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
+    addNativePdfBackend(b, watch_mod);
+    addModuleTest(ctx, test_step, "tests/watch_spec_tests.zig", &.{
+        import("watch", watch_mod),
+    }, true);
+    const render_pdf_spec_mod = createModule(ctx, "tests/render_pdf_spec_tests.zig", &.{}, true);
+    addNativePdfBackend(b, render_pdf_spec_mod);
+    addTestModule(b, test_step, render_pdf_spec_mod);
 
     const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
     const compiler_semantics_support_mod = createModule(ctx, "tests/compiler_semantics_spec_support.zig", &.{
