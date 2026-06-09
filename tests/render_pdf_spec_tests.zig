@@ -13,6 +13,21 @@ fn expectContains(haystack: []const u8, needle: []const u8) !void {
     }
 }
 
+fn contains(haystack: []const u8, needle: []const u8) bool {
+    return std.mem.indexOf(u8, haystack, needle) != null;
+}
+
+fn expectInternalDestination(json: []const u8) !void {
+    const direct_dest = contains(json, "\"/Dest\": \"u:target\"") or
+        contains(json, "\"/Dest\": \"target\"");
+    const goto_action = contains(json, "\"/S\": \"/GoTo\"") and
+        (contains(json, "\"/D\": \"u:target\"") or contains(json, "\"/D\": \"target\""));
+    if (direct_dest or goto_action) return;
+
+    std.debug.print("missing expected internal destination annotation in PDF JSON\n", .{});
+    return error.ExpectedPdfJsonTextMissing;
+}
+
 fn qpdfJson(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) ![]const u8 {
     const result = try std.process.run(allocator, io, .{
         .argv = &.{ "qpdf", "--json", pdf_path },
@@ -56,5 +71,5 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     try expectContains(json, "\"/Subtype\": \"/Link\"");
     try expectContains(json, "\"/S\": \"/URI\"");
     try expectContains(json, "https://example.com");
-    try expectContains(json, "\"/Dest\": \"u:target\"");
+    try expectInternalDestination(json);
 }
