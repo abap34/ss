@@ -2836,6 +2836,61 @@ test "compiler semantics: page anchors cannot be constraint targets" {
     );
 }
 
+test "compiler semantics: aliased object self-anchor constraints are rejected" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let a = text("a")
+        \\  place!(a)
+        \\  let b = a
+        \\  place!(b)
+        \\  ~ b.top == a.top + 100
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: aliased tautological self-anchor constraints are accepted" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\page ok
+        \\  let a = text("a")
+        \\  place!(a)
+        \\  let b = a
+        \\  place!(b)
+        \\  ~ b.top == a.top
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: explicit layout conflicts are rejected" {
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let a = text("a")
+        \\  place!(a)
+        \\  ~ a.left == page.left + 100
+        \\  ~ a.left == page.left + 120
+        \\end
+        \\
+    );
+
+    try expectBuildFails(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let a = text("a")
+        \\  place!(a)
+        \\  ~ a.left == a.right + 10
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: missing constraint anchors are rejected statically" {
     try expectBuildFails(
         \\import std:themes/default

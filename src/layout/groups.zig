@@ -114,21 +114,31 @@ fn applyGroupTargetConstraintSlice(
         used.* = true;
         last_constraint.* = constraint;
 
-        if (graph.selfReferentialSize(constraint, workspace.axis)) |size| {
-            if (size < -graph.ConstraintTolerance) {
+        switch (graph.classifySelfConstraint(constraint, workspace.axis)) {
+            .none => {},
+            .tautology => continue,
+            .conflict => {
                 if (options.record_diagnostics) {
-                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
+                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(temp.*, constraint.target_anchor), .conflict);
                 }
                 continue;
-            }
-            _ = graph.setAxisSize(temp, size, constraint) catch |err| {
-                if (options.record_diagnostics) {
-                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
+            },
+            .size => |size| {
+                if (size < -graph.ConstraintTolerance) {
+                    if (options.record_diagnostics) {
+                        ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
+                    }
+                    continue;
                 }
+                _ = graph.setAxisSize(temp, size, constraint) catch |err| {
+                    if (options.record_diagnostics) {
+                        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                        ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
+                    }
+                    continue;
+                };
                 continue;
-            };
-            continue;
+            },
         }
 
         const source_value = switch (constraint.source) {

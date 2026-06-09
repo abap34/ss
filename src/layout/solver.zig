@@ -81,6 +81,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
         }
     }
 
+    try validatePageConstraints(ir, page_id, &page_graph);
     try diagnostics.collectPageDiagnostics(ir, page_id, page_graph.child_ids);
 }
 
@@ -261,23 +262,33 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
     const target_node = ir.getNode(constraint.target_node) orelse return error.UnknownNode;
     if (groups.isGroupNode(target_node)) return false;
 
-    if (graph.selfReferentialSize(constraint, workspace.axis)) |size| {
-        if (size < -ConstraintTolerance) {
-            if (is_soft) return false;
-            if (options.record_diagnostics) {
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, .negative_size);
+    switch (graph.classifySelfConstraint(constraint, workspace.axis)) {
+        .none => {},
+        .tautology => return false,
+        .conflict => {
+            if (!is_soft and options.record_diagnostics) {
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor), .conflict);
             }
             return false;
-        }
-        if (is_soft and workspace.states[target_index].size != null) return false;
-        return graph.setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
-            if (is_soft) return false;
-            if (options.record_diagnostics) {
-                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, kind);
+        },
+        .size => |size| {
+            if (size < -ConstraintTolerance) {
+                if (is_soft) return false;
+                if (options.record_diagnostics) {
+                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, .negative_size);
+                }
+                return false;
             }
-            return false;
-        };
+            if (is_soft and workspace.states[target_index].size != null) return false;
+            return graph.setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
+                if (is_soft) return false;
+                if (options.record_diagnostics) {
+                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
+                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, kind);
+                }
+                return false;
+            };
+        },
     }
 
     if (is_soft and graph.axisAnchorValue(workspace.states[target_index], constraint.target_anchor) != null) {
@@ -332,4 +343,53 @@ fn applyReverseAxisConstraint(
         }
         return false;
     };
+}
+
+fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph) !void {
+    for (ir.constraints.items) |constraint| {
+        if (page_graph.indexOf(constraint.target_node) == null) continue;
+
+        const target_value = switch (try finalNodeAnchorValue(ir, constraint.target_node, constraint.target_anchor)) {
+            .known => |value| value,
+            .unknown => {
+                ir.noteConstraintFailure(page_id, constraint, null, .conflict);
+                continue;
+            },
+        };
+
+        const source_value = switch (try finalConstraintSourceValue(ir, page_id, constraint.source)) {
+            .known => |value| value,
+            .unknown => {
+                ir.noteConstraintFailure(page_id, constraint, null, .conflict);
+                continue;
+            },
+        };
+
+        const expected = source_value + constraint.offset;
+        if (@abs(target_value - expected) > ConstraintTolerance) {
+            ir.noteConstraintFailure(page_id, constraint, null, .conflict);
+        }
+    }
+}
+
+const FinalAnchorValue = union(enum) {
+    known: f32,
+    unknown: void,
+};
+
+fn finalConstraintSourceValue(ir: anytype, page_id: NodeId, source: model.ConstraintSource) !FinalAnchorValue {
+    return switch (source) {
+        .page => |anchor| blk: {
+            const page = ir.getNode(page_id) orelse return error.UnknownNode;
+            if (!graph.anchorKnown(page.frame, anchor)) break :blk .{ .unknown = {} };
+            break :blk .{ .known = graph.anchorValue(page.frame, anchor) };
+        },
+        .node => |node_source| try finalNodeAnchorValue(ir, node_source.node_id, node_source.anchor),
+    };
+}
+
+fn finalNodeAnchorValue(ir: anytype, node_id: NodeId, anchor: model.Anchor) !FinalAnchorValue {
+    const node = ir.getNode(node_id) orelse return error.UnknownNode;
+    if (!graph.anchorKnown(node.frame, anchor)) return .{ .unknown = {} };
+    return .{ .known = graph.anchorValue(node.frame, anchor) };
 }

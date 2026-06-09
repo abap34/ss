@@ -24,6 +24,13 @@ fn expectFloat(expected: f32, actual: f32) !void {
     try testing.expectApproxEqAbs(expected, actual, 0.0001);
 }
 
+fn expectSelfConstraintSize(expected: f32, actual: graph.SelfConstraint) !void {
+    switch (actual) {
+        .size => |size| try expectFloat(expected, size),
+        else => return error.ExpectedSelfConstraintSize,
+    }
+}
+
 test "layout graph spec: anchors map to axes and frame coordinates" {
     try testing.expectEqual(model.Axis.horizontal, graph.anchorAxis(.left));
     try testing.expectEqual(model.Axis.horizontal, graph.anchorAxis(.right));
@@ -69,7 +76,7 @@ test "layout graph spec: self-referential anchor pairs define sizes when roles d
         .source = .{ .node = .{ .node_id = 1, .anchor = .left } },
         .offset = 120,
     };
-    try expectFloat(120, graph.selfReferentialSize(width, .horizontal).?);
+    try expectSelfConstraintSize(120, graph.classifySelfConstraint(width, .horizontal));
 
     const centered = model.Constraint{
         .target_node = 1,
@@ -77,7 +84,7 @@ test "layout graph spec: self-referential anchor pairs define sizes when roles d
         .source = .{ .node = .{ .node_id = 1, .anchor = .left } },
         .offset = 35,
     };
-    try expectFloat(70, graph.selfReferentialSize(centered, .horizontal).?);
+    try expectSelfConstraintSize(70, graph.classifySelfConstraint(centered, .horizontal));
 
     const same_role = model.Constraint{
         .target_node = 1,
@@ -85,7 +92,21 @@ test "layout graph spec: self-referential anchor pairs define sizes when roles d
         .source = .{ .node = .{ .node_id = 1, .anchor = .right } },
         .offset = 120,
     };
-    try testing.expect(graph.selfReferentialSize(same_role, .horizontal) == null);
+    switch (graph.classifySelfConstraint(same_role, .horizontal)) {
+        .conflict => {},
+        else => return error.ExpectedSelfConstraintConflict,
+    }
+
+    const tautology = model.Constraint{
+        .target_node = 1,
+        .target_anchor = .right,
+        .source = .{ .node = .{ .node_id = 1, .anchor = .right } },
+        .offset = 0,
+    };
+    switch (graph.classifySelfConstraint(tautology, .horizontal)) {
+        .tautology => {},
+        else => return error.ExpectedSelfConstraintTautology,
+    }
 
     const wrong_axis = model.Constraint{
         .target_node = 1,
@@ -93,7 +114,10 @@ test "layout graph spec: self-referential anchor pairs define sizes when roles d
         .source = .{ .node = .{ .node_id = 1, .anchor = .top } },
         .offset = 120,
     };
-    try testing.expect(graph.selfReferentialSize(wrong_axis, .horizontal) == null);
+    switch (graph.classifySelfConstraint(wrong_axis, .horizontal)) {
+        .none => {},
+        else => return error.ExpectedSelfConstraintNone,
+    }
 }
 
 test "layout graph spec: shifting an axis moves anchors without changing size" {
@@ -229,6 +253,13 @@ test "layout graph spec: constraint classification names layout dependency roles
         .offset = 120,
     }, .horizontal));
 
+    try testing.expectEqual(graph.ConstraintClass.self_anchor, page_graph.constraintClass(&ir, .{
+        .target_node = a,
+        .target_anchor = .right,
+        .source = .{ .node = .{ .node_id = a, .anchor = .right } },
+        .offset = 120,
+    }, .horizontal));
+
     try testing.expectEqual(graph.ConstraintClass.group_target, page_graph.constraintClass(&ir, .{
         .target_node = group_id,
         .target_anchor = .left,
@@ -286,6 +317,77 @@ test "layout graph spec: axis workspaces seed known frames only without target c
     try testing.expect(fixed_state.end == null);
     try testing.expect(fixed_state.center == null);
     try testing.expect(fixed_state.size == null);
+}
+
+test "layout solver: final validation rejects unsatisfied hard constraints" {
+    var self_conflict = try initEmptyIr();
+    defer self_conflict.deinit();
+
+    const self_page = try self_conflict.addPage("Page");
+    const object = try self_conflict.makeObject(self_page, "body", null, .text, .text, "A");
+    try self_conflict.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, "self-top");
+    try testing.expectError(error.ConstraintConflict, self_conflict.finalize());
+
+    var cycle = try initEmptyIr();
+    defer cycle.deinit();
+
+    const cycle_page = try cycle.addPage("Page");
+    const a = try cycle.makeObject(cycle_page, "a", null, .text, .text, "A");
+    const b = try cycle.makeObject(cycle_page, "b", null, .text, .text, "B");
+    try cycle.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 10, "a-top");
+    try cycle.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 10, "b-top");
+    try testing.expectError(error.ConstraintConflict, cycle.finalize());
+}
+
+test "layout solver: tautological self-anchor constraints do not block fallback placement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "A");
+    try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 0, "self-top");
+
+    try ir.finalize();
+
+    const node = ir.getNode(object).?;
+    try testing.expect(node.frame.x_set);
+    try testing.expect(node.frame.y_set);
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: explicit anchor conflicts and negative sizes are rejected" {
+    var conflict = try initEmptyIr();
+    defer conflict.deinit();
+
+    const conflict_page = try conflict.addPage("Page");
+    const conflict_object = try conflict.makeObject(conflict_page, "body", null, .text, .text, "A");
+    try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 100, "left-a");
+    try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 120, "left-b");
+    try testing.expectError(error.ConstraintConflict, conflict.finalize());
+
+    var negative = try initEmptyIr();
+    defer negative.deinit();
+
+    const negative_page = try negative.addPage("Page");
+    const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
+    try negative.addAnchorConstraint(negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, "negative-width");
+    try testing.expectError(error.NegativeConstraintSize, negative.finalize());
+}
+
+test "layout solver: group width propagation must preserve child hard widths" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const child = try ir.makeObject(page, "body", null, .text, .text, "this text can be wrapped");
+    try ir.setNodeProperty(child, "wrap", "on");
+    const group = try ir.makeGroupWithOrigin(page, true, &.{child}, "group");
+
+    try ir.addAnchorConstraint(child, .left, .{ .page = .left }, 100, "child-left");
+    try ir.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 700, "child-width");
+    try ir.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 600, "group-width");
+
+    try testing.expectError(error.ConstraintConflict, ir.finalize());
 }
 
 test "layout solver: wrapped width cap propagates through dependent anchors" {

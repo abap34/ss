@@ -16,6 +16,7 @@ pub const ConstraintTolerance: f32 = 0.01;
 
 pub const ConstraintClass = enum {
     self_size,
+    self_anchor,
     normal,
     page_source,
     external_source,
@@ -65,7 +66,12 @@ pub const PageLayoutGraph = struct {
         @memset(has_vertical_target_constraint, false);
         for (ir.constraints.items) |constraint| {
             const target_index = index_by_node.get(constraint.target_node) orelse continue;
-            switch (anchorAxis(constraint.target_anchor)) {
+            const axis = anchorAxis(constraint.target_anchor);
+            switch (classifySelfConstraint(constraint, axis)) {
+                .none, .size => {},
+                .tautology, .conflict => continue,
+            }
+            switch (axis) {
                 .horizontal => has_horizontal_target_constraint[target_index] = true,
                 .vertical => has_vertical_target_constraint[target_index] = true,
             }
@@ -218,7 +224,11 @@ pub const PageLayoutGraph = struct {
         const target_index = self.indexOf(constraint.target_node) orelse return .external_source;
         _ = target_index;
         const target_node = ir.getNode(constraint.target_node) orelse return .external_source;
-        if (selfReferentialSize(constraint, axis) != null) return .self_size;
+        switch (classifySelfConstraint(constraint, axis)) {
+            .none => {},
+            .size => return .self_size,
+            .tautology, .conflict => return .self_anchor,
+        }
         if (isGroupNode(target_node)) return .group_target;
         return switch (constraint.source) {
             .page => .page_source,
@@ -441,7 +451,7 @@ pub const ComponentSet = struct {
         for (constraints) |constraint| {
             const class = self.workspace.graph.constraintClass(ir, constraint, self.workspace.axis);
             switch (class) {
-                .wrong_axis, .self_size => continue,
+                .wrong_axis, .self_size, .self_anchor => continue,
                 .external_source => {
                     if (self.workspace.indexOf(constraint.target_node)) |target_index| {
                         self.markPageDependent(target_index);
@@ -496,15 +506,31 @@ pub fn anchorAxis(anchor: Anchor) Axis {
     };
 }
 
-pub fn selfReferentialSize(constraint: Constraint, axis: Axis) ?f32 {
+pub const SelfConstraint = union(enum) {
+    none: void,
+    tautology: void,
+    conflict: void,
+    size: f32,
+};
+
+pub fn classifySelfConstraint(constraint: Constraint, axis: Axis) SelfConstraint {
     const node_source = switch (constraint.source) {
         .node => |ns| ns,
-        .page => return null,
+        .page => return .{ .none = {} },
     };
-    if (node_source.node_id != constraint.target_node) return null;
-    if (anchorAxis(node_source.anchor) != axis) return null;
-    if (anchorAxis(constraint.target_anchor) != axis) return null;
-    return sizeFromAnchorPair(constraint.target_anchor, node_source.anchor, constraint.offset);
+    if (node_source.node_id != constraint.target_node) return .{ .none = {} };
+    if (anchorAxis(node_source.anchor) != axis) return .{ .none = {} };
+    if (anchorAxis(constraint.target_anchor) != axis) return .{ .none = {} };
+    if (node_source.anchor == constraint.target_anchor) {
+        return if (approxEq(constraint.offset, 0))
+            .{ .tautology = {} }
+        else
+            .{ .conflict = {} };
+    }
+    if (sizeFromAnchorPair(constraint.target_anchor, node_source.anchor, constraint.offset)) |size| {
+        return .{ .size = size };
+    }
+    return .{ .none = {} };
 }
 
 pub fn constraintSourceValue(ir: anytype, workspace: *const AxisWorkspace, source: ConstraintSource) !?f32 {
