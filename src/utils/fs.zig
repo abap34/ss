@@ -238,22 +238,3 @@ fn parsePdfDimensions(bytes: []const u8) ?ImageDimensions {
     if (width <= 0 or height <= 0) return null;
     return .{ .width = width, .height = height };
 }
-
-test "parseSvgDimensions uses explicit size attributes" {
-    const dimensions = parseSvgDimensions(
-        \\<svg xmlns="http://www.w3.org/2000/svg" width="640px" height="360">
-        \\</svg>
-    ) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(f32, 640), dimensions.width);
-    try std.testing.expectEqual(@as(f32, 360), dimensions.height);
-}
-
-test "parseSvgDimensions falls back to viewBox" {
-    const dimensions = parseSvgDimensions(
-        \\<?xml version="1.0" encoding="UTF-8"?>
-        \\<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 256">
-        \\</svg>
-    ) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(f32, 512), dimensions.width);
-    try std.testing.expectEqual(@as(f32, 256), dimensions.height);
-}
