@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, ServerOptions, Trace } from "vscode-languageclient/node";
+import { PageGuideDecorations } from "./pageGuide";
 import { LivePreview } from "./preview";
 
 let client: LanguageClient | undefined;
+let pageGuide: PageGuideDecorations | undefined;
 let preview: LivePreview | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -28,9 +30,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   client = new LanguageClient("ss", "ss Language Server", serverOptions, clientOptions);
   applyTraceSetting(client);
+  pageGuide = new PageGuideDecorations();
   preview = new LivePreview(context, output, () => client);
 
-  context.subscriptions.push(output, client, preview);
+  context.subscriptions.push(output, client, pageGuide, preview);
   context.subscriptions.push(vscode.commands.registerCommand("ss.preview.live", () => {
     preview?.open(vscode.window.activeTextEditor?.document);
   }));
@@ -51,6 +54,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export async function deactivate(): Promise<void> {
+  pageGuide?.dispose();
+  pageGuide = undefined;
   preview?.dispose();
   preview = undefined;
   const active = client;
