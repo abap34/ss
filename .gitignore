@@ -5,3 +5,6 @@
 /editor/vscode/node_modules
 /editor/vscode/out
 /editor/tree-sitter-ss/node_modules
+/editor/zed/extension.wasm
+/editor/zed/grammars
+/editor/zed/target

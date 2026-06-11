@@ -352,6 +352,16 @@ An example of Helix integration lives under `editor/helix/`. It wires `.ss` file
 Copy the language entry and query files into your Helix runtime, then set the
 `ss` language server command to the `ss` binary you want to use.
 
+### Zed
+
+A local Zed extension lives under `editor/zed/`. It wires `.ss` files to:
+
+- the `ss` tree-sitter grammar and queries
+- compiler-backed LSP through `ss lsp`
+
+Install it from Zed with `zed: install dev extension`, then select
+`editor/zed/`. Make sure `ss` is available on `PATH` for the Zed process.
+
 ### Tree-sitter
 
 The standalone grammar package lives under `editor/tree-sitter-ss/`.

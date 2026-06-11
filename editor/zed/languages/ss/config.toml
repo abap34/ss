@@ -1,0 +1,22 @@
+name = "ss"
+grammar = "ss"
+path_suffixes = ["ss"]
+line_comments = [";; ", "// ", "# "]
+autoclose_before = "}])"
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "\"\"\"", end = "\"\"\"", close = true, newline = true, not_in = ["string", "comment"] },
+    { start = "<<", end = "\n>>", close = true, newline = true, not_in = ["string", "comment"] },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+]
+collapsed_placeholder = "..."
+tab_size = 2
+
+increase_indent_pattern = "^\\s*(document|page\\b.*|fn(?:/!?|!?)\\b.*|if\\b.*|for\\b.*|type\\b.*=\\s*(object|protocol)\\s*\\{|extend\\b.*\\{)\\s*(?:;;.*|//.*|#.*)?$"
+decrease_indent_patterns = [
+    { pattern = "^\\s*else\\b.*", valid_after = ["if"] },
+    { pattern = "^\\s*end\\b.*", valid_after = ["document", "page", "fn", "if", "for"] },
+    { pattern = "^\\s*}\\s*(?:;;.*|//.*|#.*)?$", valid_after = ["object", "extend"] },
+]

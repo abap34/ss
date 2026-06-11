@@ -1,0 +1,24 @@
+id = "ss"
+name = "ss"
+description = "Zed support for the ss slide language."
+version = "0.4.3"
+schema_version = 1
+authors = ["Yuchi Yamaguchi"]
+repository = "https://github.com/abap34/ss"
+languages = ["languages/ss"]
+capabilities = []
+
+[lib]
+kind = "Rust"
+version = "0.7.0"
+
+[grammars.ss]
+repository = "https://github.com/abap34/ss"
+rev = "4ba01fb66a5b6de90bfe142fc1c6d0b14bebf9a4"
+path = "editor/tree-sitter-ss"
+
+[language_servers.ss]
+language = "ss"
+
+[language_servers.ss.language_ids]
+ss = "ss-slide"
