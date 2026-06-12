@@ -19,6 +19,8 @@ interface ProjectInfo {
 interface PreviewSession {
   wantsPreview: boolean;
   externalOpened: boolean;
+  rendering: boolean;
+  queuedDocument?: vscode.TextDocument;
   pdfPath?: string;
   renderId: number;
   timer?: NodeJS.Timeout;
@@ -66,9 +68,9 @@ export class LivePreview implements vscode.Disposable {
       watcher.onDidChange((uri) => this.scheduleAffectedUri(uri, 0)),
       watcher.onDidCreate((uri) => this.scheduleAffectedUri(uri, 0)),
       watcher.onDidDelete((uri) => this.scheduleAffectedUri(uri, 0)),
-      projectWatcher.onDidChange(() => this.scheduleAll(0)),
-      projectWatcher.onDidCreate(() => this.scheduleAll(0)),
-      projectWatcher.onDidDelete(() => this.scheduleAll(0)),
+      projectWatcher.onDidChange((uri) => this.scheduleProjectConfigChange(uri, 0)),
+      projectWatcher.onDidCreate((uri) => this.scheduleProjectConfigChange(uri, 0)),
+      projectWatcher.onDidDelete((uri) => this.scheduleProjectConfigChange(uri, 0)),
     );
   }
 
@@ -116,7 +118,7 @@ export class LivePreview implements vscode.Disposable {
     const configuredDelay = settings.debounceMs;
     session.timer = setTimeout(() => {
       session.timer = undefined;
-      void this.render(document);
+      void this.requestRender(document);
     }, delayMs ?? configuredDelay);
   }
 
@@ -125,10 +127,17 @@ export class LivePreview implements vscode.Disposable {
   }
 
   private scheduleAffectedUri(uri: vscode.Uri, delayMs?: number): void {
-    if (uri.scheme !== "file") {
+    if (uri.scheme !== "file" || ignoreGeneratedPath(uri.fsPath)) {
       return;
     }
     this.scheduleAffectedPath(uri.fsPath, delayMs);
+  }
+
+  private scheduleProjectConfigChange(uri: vscode.Uri, delayMs?: number): void {
+    if (uri.scheme !== "file" || ignoreGeneratedPath(uri.fsPath)) {
+      return;
+    }
+    this.scheduleAll(delayMs);
   }
 
   private scheduleAll(delayMs?: number): void {
@@ -167,6 +176,41 @@ export class LivePreview implements vscode.Disposable {
     }
   }
 
+  private async requestRender(document: vscode.TextDocument): Promise<void> {
+    const key = document.uri.toString();
+    const session = this.sessions.get(key);
+    if (!session) {
+      return;
+    }
+    if (session.rendering) {
+      session.renderId += 1;
+      session.queuedDocument = document;
+      return;
+    }
+
+    session.rendering = true;
+    session.queuedDocument = undefined;
+    try {
+      let nextDocument: vscode.TextDocument | undefined = document;
+      while (nextDocument && this.sessions.get(key) === session) {
+        const currentDocument = nextDocument;
+        nextDocument = undefined;
+        session.queuedDocument = undefined;
+        await this.render(currentDocument);
+        nextDocument = session.queuedDocument;
+      }
+    } finally {
+      if (this.sessions.get(key) === session) {
+        const queued = session.queuedDocument;
+        session.rendering = false;
+        session.queuedDocument = undefined;
+        if (queued) {
+          void this.requestRender(queued);
+        }
+      }
+    }
+  }
+
   private async render(document: vscode.TextDocument): Promise<void> {
     const key = document.uri.toString();
     const session = this.sessions.get(key);
@@ -182,7 +226,17 @@ export class LivePreview implements vscode.Disposable {
     const localModules = projectInfo.localModules ?? [];
     session.entryPath = normalizePath(entryPath);
     session.dependencyPaths = new Set(unique([entryPath, ...localModules]).map(normalizePath));
+    if (!this.renderIsCurrent(key, renderId)) {
+      return;
+    }
     const snapshot = await this.writeSnapshot(entryPath, assetBaseDir, localModules, renderId);
+    if (!this.renderIsCurrent(key, renderId)) {
+      const settings = projectSettings(document.uri).preview;
+      if (settings.deleteSnapshotsAfterRender) {
+        await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      return;
+    }
     const paths = this.previewPaths(document, renderId);
     await fs.promises.mkdir(paths.dir, { recursive: true });
 
@@ -216,6 +270,11 @@ export class LivePreview implements vscode.Disposable {
     current.pdfPath = paths.pdf;
     await this.cleanupPreviewCache(paths.dir, paths.pdf, paths.stem);
     await this.present(document, current, paths.pdf, false);
+  }
+
+  private renderIsCurrent(key: string, renderId: number): boolean {
+    const current = this.sessions.get(key);
+    return Boolean(current && current.renderId === renderId);
   }
 
   private async projectInfo(document: vscode.TextDocument): Promise<ProjectInfo> {
@@ -324,6 +383,7 @@ export class LivePreview implements vscode.Disposable {
     const session: PreviewSession = {
       wantsPreview: false,
       externalOpened: false,
+      rendering: false,
       renderId: 0,
     };
     this.sessions.set(key, session);
@@ -385,6 +445,16 @@ function sessionDependsOn(session: PreviewSession, changedPath: string): boolean
   return session.dependencyPaths?.has(changedPath) ?? false;
 }
 
+function ignoreGeneratedPath(filePath: string): boolean {
+  return path.resolve(filePath).split(path.sep).some((part) =>
+    part === ".ss-cache" ||
+    part === ".git" ||
+    part === ".zig-cache" ||
+    part === "node_modules" ||
+    part === "zig-out"
+  );
+}
+
 function documentForSession(key: string): vscode.TextDocument | undefined {
   return vscode.workspace.textDocuments.find((document) => document.uri.toString() === key);
 }
@@ -429,7 +499,8 @@ async function copyDirectory(source: string, target: string): Promise<void> {
 }
 
 function skipSnapshotEntry(name: string): boolean {
-  return name === ".ss-cache" ||
+  return name === "ss.toml" ||
+    name === ".ss-cache" ||
     name === ".git" ||
     name === ".zig-cache" ||
     name === "zig-out" ||
