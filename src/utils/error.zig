@@ -354,7 +354,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
     };
 }
 
-fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
+pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
     return switch (diagnostic.err) {
         error.UnterminatedString => "UnterminatedString: unterminated string",
         error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",

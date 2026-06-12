@@ -81,6 +81,61 @@ pub const Graph = struct {
     }
 };
 
+pub const LoadDiagnostic = struct {
+    path: []u8,
+    source: []u8,
+    severity: core.DiagnosticSeverity,
+    code: []u8,
+    message: []u8,
+    span: ?error_report.ByteSpan,
+
+    pub fn deinit(self: *LoadDiagnostic, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        allocator.free(self.source);
+        allocator.free(self.code);
+        allocator.free(self.message);
+    }
+};
+
+pub const LoadDiagnostics = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayList(LoadDiagnostic),
+
+    pub fn init(allocator: std.mem.Allocator) LoadDiagnostics {
+        return .{ .allocator = allocator, .items = .empty };
+    }
+
+    pub fn deinit(self: *LoadDiagnostics) void {
+        for (self.items.items) |*item| item.deinit(self.allocator);
+        self.items.deinit(self.allocator);
+    }
+
+    pub fn add(
+        self: *LoadDiagnostics,
+        path: []const u8,
+        source: []const u8,
+        severity: core.DiagnosticSeverity,
+        code: []const u8,
+        message: []const u8,
+        span: ?error_report.ByteSpan,
+    ) !void {
+        try self.items.append(self.allocator, .{
+            .path = try self.allocator.dupe(u8, path),
+            .source = try self.allocator.dupe(u8, source),
+            .severity = severity,
+            .code = try self.allocator.dupe(u8, code),
+            .message = try self.allocator.dupe(u8, message),
+            .span = span,
+        });
+    }
+};
+
+pub const LoadOptions = struct {
+    overlay: ?*const SourceOverlay = null,
+    diagnostics: ?*LoadDiagnostics = null,
+    print_diagnostics: bool = true,
+};
+
 pub fn loadGraph(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -97,10 +152,22 @@ pub fn loadGraphWithOverlay(
     project_program: ast.Program,
     overlay: ?*const SourceOverlay,
 ) !Graph {
+    return loadGraphWithOptions(allocator, io, project_dir, project_program, .{ .overlay = overlay });
+}
+
+pub fn loadGraphWithOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    project_dir: []const u8,
+    project_program: ast.Program,
+    options: LoadOptions,
+) !Graph {
     var builder = Builder{
         .allocator = allocator,
         .io = io,
-        .overlay = overlay,
+        .overlay = options.overlay,
+        .diagnostics = options.diagnostics,
+        .print_diagnostics = options.print_diagnostics,
         .modules = std.ArrayList(core.SourceModule).empty,
         .by_key = std.StringHashMap(core.SourceModuleId).init(allocator),
         .state_by_id = std.AutoHashMap(core.SourceModuleId, VisitState).init(allocator),
@@ -116,10 +183,10 @@ pub fn loadGraphWithOverlay(
     };
     errdefer graph.deinit();
 
-	    for (project_program.imports.items) |import_decl| {
-	        const module_id = try builder.loadImport(project_dir, import_decl.spec);
-	        try graph.project_import_ids.append(allocator, module_id);
-	    }
+    for (project_program.imports.items) |import_decl| {
+        const module_id = try builder.loadImport(project_dir, import_decl.spec);
+        try graph.project_import_ids.append(allocator, module_id);
+    }
 
     var seen = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
     defer seen.deinit();
@@ -206,6 +273,8 @@ const Builder = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     overlay: ?*const SourceOverlay,
+    diagnostics: ?*LoadDiagnostics,
+    print_diagnostics: bool,
     modules: std.ArrayList(core.SourceModule),
     by_key: std.StringHashMap(core.SourceModuleId),
     state_by_id: std.AutoHashMap(core.SourceModuleId, VisitState),
@@ -218,6 +287,20 @@ const Builder = struct {
         self.state_by_id.deinit();
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
+    }
+
+    fn addDiagnostic(
+        self: *Builder,
+        path: []const u8,
+        source: []const u8,
+        severity: core.DiagnosticSeverity,
+        code: []const u8,
+        message: []const u8,
+        span: ?error_report.ByteSpan,
+    ) !void {
+        if (self.diagnostics) |diagnostics| {
+            try diagnostics.add(path, source, severity, code, message, span);
+        }
     }
 
     fn takeModules(self: *Builder) !std.ArrayList(core.SourceModule) {
@@ -245,7 +328,13 @@ const Builder = struct {
         errdefer if (owns_source) self.allocator.free(source);
         const parse_path = resolved.path orelse resolved.spec;
         const program = syntax.parseWithSourceName(self.allocator, source, parse_path) catch |err| {
-            error_report.printParseError(parse_path, source, err, syntax.lastDiagnostic());
+            const diagnostic = syntax.lastDiagnostic();
+            var message_buf: [256]u8 = undefined;
+            const message = if (diagnostic) |diag| error_report.formatParseDiagnostic(&message_buf, diag) else @errorName(err);
+            try self.addDiagnostic(parse_path, source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
+            if (self.print_diagnostics) {
+                error_report.printParseError(parse_path, source, err, diagnostic);
+            }
             return err;
         };
         var owns_program = true;
@@ -255,11 +344,11 @@ const Builder = struct {
         };
         if (kind == .project) unreachable;
 
-	        const key = try self.allocator.dupe(u8, resolved.key);
-	        var owns_key = true;
-	        errdefer if (owns_key) self.allocator.free(key);
-	        try self.by_key.put(key, module_id);
-	        owns_key = false;
+        const key = try self.allocator.dupe(u8, resolved.key);
+        var owns_key = true;
+        errdefer if (owns_key) self.allocator.free(key);
+        try self.by_key.put(key, module_id);
+        owns_key = false;
 
         const spec = try self.allocator.dupe(u8, resolved.spec);
         var owns_spec = true;
@@ -288,13 +377,16 @@ const Builder = struct {
                 if (err == error.UnknownImport) {
                     const message = try formatUnknownImportMessage(self.allocator, importer_base_dir, import_decl.spec);
                     defer self.allocator.free(message);
-                    error_report.print(.{
-                        .path = path orelse spec,
-                        .source = source,
-                        .severity = .@"error",
-                        .message = message,
-                        .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
-                    });
+                    try self.addDiagnostic(path orelse spec, source, .@"error", "UnknownImport", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
+                    if (self.print_diagnostics) {
+                        error_report.print(.{
+                            .path = path orelse spec,
+                            .source = source,
+                            .severity = .@"error",
+                            .message = message,
+                            .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
+                        });
+                    }
                     return error.DiagnosticsFailed;
                 }
                 return err;

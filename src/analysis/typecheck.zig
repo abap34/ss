@@ -930,7 +930,27 @@ pub fn loadProgramIndexWithOverlay(
     project_program: ast.Program,
     overlay: ?*const module_loader.SourceOverlay,
 ) !ProgramIndex {
-    var graph = try module_loader.loadGraphWithOverlay(allocator, io, base_dir, project_program, overlay);
+    return loadProgramIndexWithOptions(allocator, io, base_dir, project_program, .{ .overlay = overlay });
+}
+
+pub const LoadProgramIndexOptions = struct {
+    overlay: ?*const module_loader.SourceOverlay = null,
+    diagnostics: ?*module_loader.LoadDiagnostics = null,
+    print_diagnostics: bool = true,
+};
+
+pub fn loadProgramIndexWithOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    project_program: ast.Program,
+    options: LoadProgramIndexOptions,
+) !ProgramIndex {
+    var graph = try module_loader.loadGraphWithOptions(allocator, io, base_dir, project_program, .{
+        .overlay = options.overlay,
+        .diagnostics = options.diagnostics,
+        .print_diagnostics = options.print_diagnostics,
+    });
     errdefer graph.deinit();
 
     var index = ProgramIndex{

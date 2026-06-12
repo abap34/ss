@@ -50,6 +50,7 @@ const Server = struct {
     documents: std.StringHashMap([]u8),
     snapshot: ?Snapshot = null,
     last_good_completion: ?CompletionCache = null,
+    published_diagnostic_uris: std.StringHashMap(void),
     shutdown: bool = false,
 
     fn init(io: std.Io, allocator: std.mem.Allocator) Server {
@@ -57,6 +58,7 @@ const Server = struct {
             .io = io,
             .allocator = allocator,
             .documents = std.StringHashMap([]u8).init(allocator),
+            .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
         };
     }
 
@@ -69,6 +71,7 @@ const Server = struct {
         self.documents.deinit();
         if (self.snapshot) |*snapshot| snapshot.deinit(self.allocator);
         if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
+        deinitStringSet(self.allocator, &self.published_diagnostic_uris);
     }
 
     fn replaceDocument(self: *Server, uri: []const u8, text: []const u8) !void {
@@ -211,11 +214,22 @@ const Server = struct {
             return snapshot;
         };
 
-        var index = typecheck.loadProgramIndexWithOverlay(self.allocator, self.io, asset_base_dir, program, &overlay) catch |err| {
-            const span = if (program.imports.items.len != 0) program.imports.items[0].span else null;
-            const message = try std.fmt.allocPrint(self.allocator, "ProjectLoadFailed: {s}", .{@errorName(err)});
-            defer self.allocator.free(message);
-            try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, if (span) |s| .{ .start = s.start, .end = s.end } else null);
+        var load_diagnostics = module_loader.LoadDiagnostics.init(self.allocator);
+        defer load_diagnostics.deinit();
+        var index = typecheck.loadProgramIndexWithOptions(self.allocator, self.io, asset_base_dir, program, .{
+            .overlay = &overlay,
+            .diagnostics = &load_diagnostics,
+            .print_diagnostics = false,
+        }) catch |err| {
+            try diagnostics.addLoadDiagnostics(&load_diagnostics);
+            const span = importFailureSpan(self.allocator, asset_base_dir, &program, &load_diagnostics);
+            if (load_diagnostics.items.items.len != 0) {
+                try diagnostics.add(entry_path, source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span);
+            } else {
+                const message = try std.fmt.allocPrint(self.allocator, "ProjectLoadFailed: {s}", .{@errorName(err)});
+                defer self.allocator.free(message);
+                try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, span);
+            }
             program.deinit(self.allocator);
             self.allocator.free(source);
             return snapshot;
@@ -293,12 +307,11 @@ const Server = struct {
             try gop.value_ptr.append(self.allocator, index);
         }
 
-        var published = std.StringHashMap(void).init(self.allocator);
-        defer published.deinit();
+        var current_published = std.StringHashMap(void).init(self.allocator);
+        errdefer deinitStringSet(self.allocator, &current_published);
 
         var it = grouped.iterator();
         while (it.next()) |entry| {
-            try published.put(entry.key_ptr.*, {});
             var body = std.ArrayList(u8).empty;
             defer body.deinit(self.allocator);
             try body.appendSlice(self.allocator, "{\"uri\":");
@@ -310,22 +323,51 @@ const Server = struct {
             }
             try body.appendSlice(self.allocator, "]}");
             try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
+            try putStringSet(self.allocator, &current_published, entry.key_ptr.*);
         }
 
         var doc_iterator = self.documents.iterator();
         while (doc_iterator.next()) |entry| {
             const uri = try uriFromPath(self.allocator, entry.key_ptr.*);
             defer self.allocator.free(uri);
-            if (published.contains(uri)) continue;
+            if (current_published.contains(uri)) continue;
             var body = std.ArrayList(u8).empty;
             defer body.deinit(self.allocator);
             try body.appendSlice(self.allocator, "{\"uri\":");
             try appendJsonString(self.allocator, &body, uri);
             try body.appendSlice(self.allocator, ",\"diagnostics\":[]}");
             try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
+            try putStringSet(self.allocator, &current_published, uri);
         }
+
+        var previous_iterator = self.published_diagnostic_uris.iterator();
+        while (previous_iterator.next()) |entry| {
+            if (current_published.contains(entry.key_ptr.*)) continue;
+            var body = std.ArrayList(u8).empty;
+            defer body.deinit(self.allocator);
+            try body.appendSlice(self.allocator, "{\"uri\":");
+            try appendJsonString(self.allocator, &body, entry.key_ptr.*);
+            try body.appendSlice(self.allocator, ",\"diagnostics\":[]}");
+            try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
+        }
+
+        deinitStringSet(self.allocator, &self.published_diagnostic_uris);
+        self.published_diagnostic_uris = current_published;
     }
 };
+
+fn putStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void), value: []const u8) !void {
+    if (set.contains(value)) return;
+    const owned = try allocator.dupe(u8, value);
+    errdefer allocator.free(owned);
+    try set.put(owned, {});
+}
+
+fn deinitStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void)) void {
+    var iterator = set.keyIterator();
+    while (iterator.next()) |key| allocator.free(key.*);
+    set.deinit();
+}
 
 const DiagnosticSet = struct {
     allocator: std.mem.Allocator,
@@ -364,6 +406,12 @@ const DiagnosticSet = struct {
             .code = try self.allocator.dupe(u8, code),
             .message = try self.allocator.dupe(u8, message),
         });
+    }
+
+    fn addLoadDiagnostics(self: *DiagnosticSet, load_diagnostics: *const module_loader.LoadDiagnostics) !void {
+        for (load_diagnostics.items.items) |item| {
+            try self.add(item.path, item.source, item.severity, item.code, item.message, item.span);
+        }
     }
 
     fn addIr(self: *DiagnosticSet, ir: *core.Ir) !void {
@@ -1611,6 +1659,41 @@ fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
             break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ @errorName(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
         },
     };
+}
+
+fn importFailureSpan(
+    allocator: std.mem.Allocator,
+    asset_base_dir: []const u8,
+    program: *const ast.Program,
+    load_diagnostics: *const module_loader.LoadDiagnostics,
+) ?utils.err.ByteSpan {
+    for (load_diagnostics.items.items) |diagnostic| {
+        for (program.imports.items) |import_decl| {
+            if (importMatchesDiagnosticPath(allocator, asset_base_dir, import_decl.spec, diagnostic.path) catch false) {
+                return .{ .start = import_decl.span.start, .end = import_decl.span.end };
+            }
+        }
+    }
+    if (program.imports.items.len == 0) return null;
+    const span = program.imports.items[0].span;
+    return .{ .start = span.start, .end = span.end };
+}
+
+fn importMatchesDiagnosticPath(
+    allocator: std.mem.Allocator,
+    asset_base_dir: []const u8,
+    import_spec: []const u8,
+    diagnostic_path: []const u8,
+) !bool {
+    if (std.mem.startsWith(u8, import_spec, "std:")) {
+        return std.mem.eql(u8, import_spec, diagnostic_path);
+    }
+    const resolved = if (std.fs.path.isAbsolute(import_spec))
+        try allocator.dupe(u8, import_spec)
+    else
+        try std.fs.path.resolve(allocator, &.{ asset_base_dir, import_spec });
+    defer allocator.free(resolved);
+    return std.mem.eql(u8, resolved, diagnostic_path);
 }
 
 fn dirnameAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
