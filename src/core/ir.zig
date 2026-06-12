@@ -33,6 +33,34 @@ const nodeProperty = model.nodeProperty;
 
 pub const SourceModuleId = u32;
 
+pub const FunctionKey = struct {
+    module_id: SourceModuleId,
+    name: []const u8,
+
+    pub fn eql(left: FunctionKey, right: FunctionKey) bool {
+        return left.module_id == right.module_id and std.mem.eql(u8, left.name, right.name);
+    }
+};
+
+pub const FunctionKeyContext = struct {
+    pub fn hash(_: FunctionKeyContext, key: FunctionKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.module_id));
+        hasher.update(key.name);
+        return hasher.final();
+    }
+
+    pub fn eql(_: FunctionKeyContext, left: FunctionKey, right: FunctionKey) bool {
+        return left.eql(right);
+    }
+};
+
+pub const FunctionMap = std.HashMap(FunctionKey, ast.FunctionDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+
+pub fn functionKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
+    return .{ .module_id = module_id, .name = name };
+}
+
 pub const SourceModuleKind = enum {
     project,
     library,
@@ -54,10 +82,6 @@ pub const SourceModule = struct {
         allocator.free(self.source);
         if (self.path) |path| allocator.free(path);
     }
-};
-
-pub const FunctionMetadata = struct {
-    module_id: SourceModuleId,
 };
 
 pub const DefinitionKind = enum {
@@ -109,8 +133,7 @@ pub const Ir = struct {
     modules: std.ArrayList(SourceModule),
     module_order: std.ArrayList(SourceModuleId),
     project_module_id: SourceModuleId,
-    functions: std.StringHashMap(ast.FunctionDecl),
-    function_metadata: std.StringHashMap(FunctionMetadata),
+    functions: FunctionMap,
     definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
@@ -139,8 +162,7 @@ pub const Ir = struct {
             .modules = .empty,
             .module_order = .empty,
             .project_module_id = 0,
-            .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
-            .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
+            .functions = FunctionMap.init(allocator),
             .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
@@ -187,7 +209,6 @@ pub const Ir = struct {
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
         self.functions.deinit();
-        self.function_metadata.deinit();
         self.definitions.deinit(self.allocator);
         self.hints.deinit(self.allocator);
         self.contains.deinit();
@@ -207,7 +228,6 @@ pub const Ir = struct {
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
         self.functions.deinit();
-        self.function_metadata.deinit();
         for (self.definitions.items) |definition| {
             self.allocator.free(definition.name);
             if (definition.file) |file| self.allocator.free(file);

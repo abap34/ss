@@ -28,3 +28,7 @@ pub fn requireReturnsValue(func: ast.FunctionDecl) !void {
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
     return contracts.functionRefFor(allocator, func);
 }
+
+pub fn functionRefForInModule(allocator: std.mem.Allocator, module_id: core.SourceModuleId, func: ast.FunctionDecl) !core.FunctionRef {
+    return contracts.functionRefForInModule(allocator, module_id, func);
+}

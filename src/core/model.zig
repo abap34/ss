@@ -253,6 +253,7 @@ pub const ConstraintSet = struct {
 
 pub const FunctionRef = struct {
     name: []const u8,
+    module_id: u32 = 0,
     closure_id: ?usize = null,
     param_count: usize,
     returns_value: bool,
@@ -266,6 +267,7 @@ pub const FunctionRef = struct {
         _ = allocator;
         return .{
             .name = self.name,
+            .module_id = self.module_id,
             .closure_id = self.closure_id,
             .param_count = self.param_count,
             .returns_value = self.returns_value,

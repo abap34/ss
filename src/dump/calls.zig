@@ -9,15 +9,22 @@ const json = @import("utils").json;
 pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
-        if (ir.functions.contains(descriptor.name)) continue;
+        if (userFunctionNameExists(ir, descriptor.name)) continue;
         try writePrimitiveFunction(allocator, &functions, descriptor);
     }
     var function_iterator = ir.functions.iterator();
     while (function_iterator.next()) |entry| {
-        const metadata = ir.function_metadata.get(entry.key_ptr.*) orelse core.FunctionMetadata{ .module_id = ir.project_module_id };
-        try writeUserFunction(allocator, &functions, ir, entry.key_ptr.*, entry.value_ptr.*, metadata);
+        try writeUserFunction(allocator, &functions, ir, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
     }
     try functions.end();
+}
+
+fn userFunctionNameExists(ir: *const core.Ir, name: []const u8) bool {
+    var iterator = ir.functions.iterator();
+    while (iterator.next()) |entry| {
+        if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
+    }
+    return false;
 }
 
 pub fn writeQueryContractsField(allocator: std.mem.Allocator, root: *json.Object) !void {
@@ -80,7 +87,7 @@ fn writeUserFunction(
     ir: *core.Ir,
     name: []const u8,
     func: ast.FunctionDecl,
-    metadata: core.FunctionMetadata,
+    module_id: core.SourceModuleId,
 ) !void {
     const signature = try editor.formatUserSignature(allocator, name, func);
     defer allocator.free(signature);
@@ -92,14 +99,14 @@ fn writeUserFunction(
     const result_label = try func.result_type.formatAlloc(allocator);
     defer allocator.free(result_label);
     try item.stringField("resultType", result_label);
-    if (ir.moduleById(metadata.module_id)) |module| {
+    if (ir.moduleById(module_id)) |module| {
         try item.enumTagField("source", module.kind);
         try item.intField("moduleId", module.id);
         try item.stringField("moduleSpec", module.spec);
         try item.optionalStringField("file", module.path);
     } else {
         try item.stringField("source", "unknown");
-        try item.intField("moduleId", metadata.module_id);
+        try item.intField("moduleId", module_id);
         try item.nullField("file");
     }
     try item.stringField("summary", "");

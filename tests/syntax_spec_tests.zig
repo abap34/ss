@@ -71,7 +71,7 @@ fn expectParseErrorSpan(expected: anyerror, source: []const u8, expected_start: 
 fn expectCall(expr: ast.Expr, name: []const u8, arity: usize) !ast.CallExpr {
     switch (expr) {
         .call => |call| {
-            try testing.expectEqualStrings(name, call.name);
+            try testing.expectEqualStrings(name, call.callee.name);
             try testing.expectEqual(arity, call.args.items.len);
             return call;
         },
@@ -124,6 +124,20 @@ fn expectMember(expr: ast.Expr, name: []const u8) !ast.MemberExpr {
     }
 }
 
+fn expectImportAlias(import_decl: ast.ImportDecl, expected: []const u8) !void {
+    switch (import_decl.mode) {
+        .alias => |alias| try testing.expectEqualStrings(expected, alias),
+        .open => return error.ExpectedImportAlias,
+    }
+}
+
+fn expectImportOpen(import_decl: ast.ImportDecl) !void {
+    switch (import_decl.mode) {
+        .open => {},
+        .alias => return error.ExpectedImportOpen,
+    }
+}
+
 test "syntax spec: imports and pages preserve source order" {
     var parsed = try parse(
         \\// Leading trivia is not part of the AST.
@@ -164,6 +178,64 @@ test "syntax spec: imports and pages preserve source order" {
     try testing.expectEqual(@as(usize, 0), program.top_level_items.items[2].page);
     try testing.expectEqual(@as(usize, 1), program.top_level_items.items[3].import);
     try testing.expectEqual(@as(usize, 1), program.top_level_items.items[4].page);
+}
+
+test "syntax spec: import modes are explicit in the AST" {
+    var parsed = try parse(
+        \\import std:themes/default
+        \\import std:themes/default as base
+        \\import std:themes/default as *
+        \\import seminar-theme as *
+        \\import seminar-theme as seminar_theme
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 5), parsed.program.imports.items.len);
+    try expectImportAlias(parsed.program.imports.items[0], "default");
+    try expectImportAlias(parsed.program.imports.items[1], "base");
+    try expectImportOpen(parsed.program.imports.items[2]);
+    try expectImportOpen(parsed.program.imports.items[3]);
+    try expectImportAlias(parsed.program.imports.items[4], "seminar_theme");
+}
+
+test "syntax spec: default import aliases must be identifiers" {
+    try expectParseError(error.InvalidImportAlias,
+        \\import seminar-theme
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: import specs omit ss extension" {
+    try expectParseError(error.InvalidImportSpec,
+        \\import seminar-theme.ss as *
+        \\
+        \\page ok
+        \\end
+        \\
+    );
+}
+
+test "syntax spec: as is reserved" {
+    try expectParseError(error.ReservedIdentifier,
+        \\fn as() -> Void
+        \\  return
+        \\end
+        \\
+    );
+
+    try expectParseError(error.ReservedIdentifier,
+        \\page ok
+        \\  let as = 1
+        \\end
+        \\
+    );
 }
 
 test "syntax spec: page name underscore generates an internal reserved name" {
@@ -320,7 +392,7 @@ test "syntax spec: bang suffix is limited to callable names" {
 
     try testing.expectEqualStrings("mark!", parsed.program.functions.items[0].name);
     const call = try expectCall(parsed.program.pages.items[0].statements.items[0].kind.expr_stmt, "mark!", 0);
-    try testing.expectEqualStrings("mark!", call.name);
+    try testing.expectEqualStrings("mark!", call.callee.name);
     _ = try expectCall(parsed.program.pages.items[0].statements.items[1].kind.expr_stmt, "text!", 1);
     _ = try expectCall(parsed.program.pages.items[0].statements.items[2].kind.expr_stmt, "code!", 1);
 
@@ -355,6 +427,29 @@ test "syntax spec: bang suffix is limited to callable names" {
         \\end
         \\
     );
+}
+
+test "syntax spec: qualified callables parse in normal and text block calls" {
+    var parsed = try parse(
+        \\import std:themes/default
+        \\
+        \\page Calls
+        \\  default::h2("body")
+        \\  default::h2! <<
+        \\block body
+        \\>>
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const normal_call = try expectCall(parsed.program.pages.items[0].statements.items[0].kind.expr_stmt, "h2", 1);
+    try testing.expect(normal_call.callee.isQualified());
+    try testing.expectEqualStrings("default", normal_call.callee.qualifier.?);
+
+    const block_call = try expectCall(parsed.program.pages.items[0].statements.items[1].kind.expr_stmt, "h2!", 1);
+    try testing.expect(block_call.callee.isQualified());
+    try testing.expectEqualStrings("default", block_call.callee.qualifier.?);
 }
 
 test "syntax spec: incomplete function type is not accepted as a surface type" {
@@ -653,7 +748,7 @@ test "syntax spec: lambda body may start on a later line" {
             try testing.expectEqual(@as(usize, 1), lambda.params.items.len);
             try testing.expectEqual(Type.Kind.page, lambda.params.items[0].ty.kind);
             switch (lambda.body.*) {
-                .call => |call| try testing.expectEqualStrings("place_on!", call.name),
+                .call => |call| try testing.expectEqualStrings("place_on!", call.callee.name),
                 else => return error.ExpectedCallExpr,
             }
         },

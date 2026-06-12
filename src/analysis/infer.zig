@@ -21,8 +21,9 @@ const resolveStringLiteral = semantic_types.resolveStringLiteral;
 const singleFunctionLabel = semantic_types.singleFunctionLabel;
 const targetClassForInfo = semantic_types.targetClassForInfo;
 const typeLabelAlloc = semantic_types.typeLabelAlloc;
+const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
-threadlocal var active_return_visiting: ?*std.StringHashMap(void) = null;
+threadlocal var active_return_visiting: ?*FunctionVisitSet = null;
 
 const InferenceOptions = struct {
     validate_contracts: bool = true,
@@ -41,9 +42,9 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
 }
 
 fn originPathForFunction(sema: *const SemanticEnv, func: ast.FunctionDecl) []const u8 {
+    _ = func;
     const ir = sema.ir orelse return "";
-    const metadata = ir.function_metadata.get(func.name) orelse return "";
-    const module = ir.moduleById(metadata.module_id) orelse return "";
+    const module = ir.moduleById(sema.module_id) orelse return "";
     return module.path orelse module.spec;
 }
 
@@ -239,28 +240,53 @@ fn inferCallInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) anyerror!TypeInfo {
-    if (env.get(call.name)) |callee_info| {
-        if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
-            return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin, options);
+    if (!call.callee.isQualified()) {
+        if (env.get(call.callee.name)) |callee_info| {
+            if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
+                return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin, options);
+            }
         }
     }
-    if (sema.function(call.name)) |func| {
+    if (sema.resolvedFunction(call.callee)) |resolved| {
+        const func = resolved.decl;
         if (isConst(func) and func.result_type.kind == .function and func.result_type.fn_result != null) {
-            const const_info = try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, .{
-                .name = call.name,
+            const callee_sema = sema.forModule(resolved.module_id);
+            const const_info = try inferUserFunctionReturnInfo(allocator, ir, &callee_sema, env, func, .{
+                .callee = call.callee,
                 .args = std.ArrayList(ast.Expr).empty,
             }, origin, options);
             return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin, options);
         }
     }
-    const descriptor = sema.call(call.name) orelse {
-        try addUserReport(ir, origin, "UnknownFunction: unknown function: {s}", .{call.name});
+    const descriptor = sema.callCallee(call.callee) orelse {
+        try reportCallResolutionFailure(allocator, ir, sema, call.callee, origin);
         return error.UnknownFunction;
     };
     return switch (descriptor) {
-        .function => |func| try inferUserCallInfo(allocator, ir, sema, env, call, origin, func, options),
+        .function => |resolved| blk: {
+            const callee_sema = sema.forModule(resolved.module_id);
+            break :blk try inferUserCallInfo(allocator, ir, sema, &callee_sema, env, call, origin, resolved.decl, options);
+        },
         .primitive => |primitive| try inferPrimitiveCallInfo(allocator, ir, sema, env, call, origin, primitive, options),
     };
+}
+
+fn reportCallResolutionFailure(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    callee: ast.CallableName,
+    origin: []const u8,
+) !void {
+    switch (sema.resolveFunction(callee)) {
+        .unknown_alias => |alias| try addUserReport(ir, origin, "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
+        .ambiguous_open => |name| try addUserReport(ir, origin, "AmbiguousImport: function '{s}' is provided by multiple open imports", .{name}),
+        else => {
+            const name = try callee.displayAlloc(allocator);
+            defer allocator.free(name);
+            try addUserReport(ir, origin, "UnknownFunction: unknown function: {s}", .{name});
+        },
+    }
 }
 
 fn inferApplyInfo(
@@ -307,7 +333,8 @@ fn inferFunctionValueCallInfo(
 fn inferUserCallInfo(
     allocator: std.mem.Allocator,
     ir: ?*core.Ir,
-    sema: *const SemanticEnv,
+    caller_sema: *const SemanticEnv,
+    callee_sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
@@ -315,7 +342,7 @@ fn inferUserCallInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     if (isConst(func)) {
-        try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.name});
+        try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
         return error.UnknownFunction;
     }
     const min_arity = contracts.requiredParamCount(func);
@@ -330,10 +357,10 @@ fn inferUserCallInfo(
     }
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
-        const actual = try exprInfoWithOptions(allocator, ir, sema, env, arg, origin, options);
+        const actual = try exprInfoWithOptions(allocator, ir, caller_sema, env, arg, origin, options);
         try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
     }
-    return try inferUserFunctionReturnInfo(allocator, ir, sema, env, func, call, origin, options);
+    return try inferUserFunctionReturnInfo(allocator, ir, callee_sema, env, func, call, origin, options);
 }
 
 fn inferPrimitiveCallInfo(
@@ -413,7 +440,7 @@ fn inferUserFunctionReturnInfo(
     if (active_return_visiting) |visiting| {
         return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, options, visiting);
     }
-    var visiting = std.StringHashMap(void).init(allocator);
+    var visiting = FunctionVisitSet.init(allocator);
     defer visiting.deinit();
     active_return_visiting = &visiting;
     defer active_return_visiting = null;
@@ -429,16 +456,17 @@ fn inferUserFunctionReturnInfoInner(
     call: ast.CallExpr,
     origin: []const u8,
     options: InferenceOptions,
-    visiting: *std.StringHashMap(void),
+    visiting: *FunctionVisitSet,
 ) !TypeInfo {
     _ = caller_env;
-    if (visiting.contains(func.name)) {
+    const visit_key = core.functionKey(sema.module_id, func.name);
+    if (visiting.contains(visit_key)) {
         var info = infoFromType(func.result_type);
         info.object_class = func.result_type.class_name;
         return info;
     }
-    try visiting.put(func.name, {});
-    defer _ = visiting.remove(func.name);
+    try visiting.put(visit_key, {});
+    defer _ = visiting.remove(visit_key);
 
     var env = TypeEnv.init(allocator);
     defer env.deinit();

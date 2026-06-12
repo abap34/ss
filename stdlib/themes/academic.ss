@@ -1,4 +1,4 @@
-import std:themes/base
+import std:themes/base as *
 
 fn/! h1(text_value: String) -> Object
   let content = title_obj(text_value)

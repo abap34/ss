@@ -21,7 +21,7 @@ test "watch spec: fingerprint changes when a missing explicit import appears out
     defer allocator.free(entry_path);
     try std.Io.Dir.cwd().writeFile(testing.io, .{
         .sub_path = entry_path,
-        .data = "import ../dep/missing.ss\npage main\nend\n",
+        .data = "import ../dep/missing\npage main\nend\n",
         .flags = .{ .truncate = true },
     });
 

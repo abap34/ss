@@ -1,4 +1,4 @@
-import std:core/layout
+import std:core/layout as *
 
 fn/! obj(text_value: String, role_name: String, payload_name: String) -> Object
   return new(text_value, role_name, payload_name)

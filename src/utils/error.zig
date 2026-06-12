@@ -301,6 +301,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownType,
         error.ExpectedString,
         error.ExpectedIdentifier,
+        error.InvalidImportSpec,
         error.ExpectedKeyword,
         error.ExpectedChar,
         error.ExpectedLineBreak,
@@ -375,6 +376,7 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
     return switch (err) {
         error.ExpectedString => "ExpectedString",
         error.ExpectedIdentifier => "ExpectedIdentifier",
+        error.InvalidImportSpec => "InvalidImportSpec",
         error.ExpectedKeyword => "ExpectedKeyword",
         error.ExpectedChar => "ExpectedPunctuation",
         error.ExpectedLineBreak => "ExpectedLineBreak",
@@ -643,7 +645,7 @@ fn asciiIdentifierEnd(slice: []const u8, start: usize) usize {
 }
 
 fn isKeyword(token: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "const", "page", "fn", "let", "return", "end" };
+    const keywords = [_][]const u8{ "import", "as", "const", "page", "fn", "let", "return", "end" };
     for (keywords) |keyword| {
         if (std.mem.eql(u8, token, keyword)) return true;
     }

@@ -1,10 +1,10 @@
-import std:core/classes
-import std:core/layout
-import std:core/objects
-import std:core/render
-import std:core/selectors
-import std:core/utils
-import std:core/generated
+import std:core/classes as *
+import std:core/layout as *
+import std:core/objects as *
+import std:core/render as *
+import std:core/selectors as *
+import std:core/utils as *
+import std:core/generated as *
 
 fn/! title(text_value: String) -> Object
   return title_obj(text_value)

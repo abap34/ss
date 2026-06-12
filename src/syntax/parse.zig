@@ -82,10 +82,14 @@ const Parser = struct {
 
             if (try self.consumeKeyword("import")) {
                 const spec = try self.parseImportSpec();
+                errdefer self.allocator.free(spec);
+                try self.validateImportSpec(spec);
+                const mode = try self.parseImportMode(spec);
                 try self.consumeStatementTerminator();
                 const import_index = program.imports.items.len;
                 try program.imports.append(self.allocator, .{
                     .spec = spec,
+                    .mode = mode,
                     .span = .{ .start = item_start, .end = self.pos },
                 });
                 try program.top_level_items.append(self.allocator, .{ .import = import_index });
@@ -157,7 +161,7 @@ const Parser = struct {
     };
 
     fn parseFunctionAfterKeyword(self: *Parser, start: usize, options: FunctionParseOptions) !FunctionDecl {
-        const name = try self.parseCallableName();
+        const name = try self.parseCallableDeclName();
         if (options.paired and names.hasBangSuffix(name)) {
             defer self.allocator.free(name);
             return self.failAt(self.pos - 1, error.PairedFunctionNameCannotEndWithBang);
@@ -237,13 +241,13 @@ const Parser = struct {
             outer_args.deinit(self.allocator);
         }
         try outer_args.append(self.allocator, .{ .call = .{
-            .name = try self.allocator.dupe(u8, func.name),
+            .callee = .{ .name = try self.allocator.dupe(u8, func.name) },
             .args = inner_args,
         } });
         inner_args = .empty;
 
         const return_expr = Expr{ .call = .{
-            .name = try self.allocator.dupe(u8, "place!"),
+            .callee = .{ .name = try self.allocator.dupe(u8, "place!") },
             .args = outer_args,
         } };
         outer_args = .empty;
@@ -711,6 +715,29 @@ const Parser = struct {
         return self.allocator.dupe(u8, self.source[start..self.pos]);
     }
 
+    fn parseImportMode(self: *Parser, spec: []const u8) !ast.ImportDecl.Mode {
+        self.skipInlineSpaces();
+        if (self.consumeKeywordNoTrivia("as")) {
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == '*') {
+                self.pos += 1;
+                return .open;
+            }
+            return .{ .alias = try self.parseIdentifier() };
+        }
+        return .{ .alias = try self.defaultImportAlias(spec) };
+    }
+
+    fn validateImportSpec(self: *Parser, spec: []const u8) !void {
+        if (names.importSpecHasFileExtension(spec)) return self.fail(error.InvalidImportSpec);
+    }
+
+    fn defaultImportAlias(self: *Parser, spec: []const u8) ![]const u8 {
+        const base = names.defaultImportAlias(spec);
+        if (!isValidIdentifier(base) or isReservedKeyword(base)) return self.fail(error.InvalidImportAlias);
+        return self.allocator.dupe(u8, base);
+    }
+
     fn parseBodyStatements(self: *Parser) !std.ArrayList(Statement) {
         self.skipInlineSpaces();
         try self.expectLineBreakAfterHeader();
@@ -850,7 +877,7 @@ const Parser = struct {
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
         }
 
-        if (self.atStatementBoundary()) return self.failSpan(.{ .start = start, .end = start + name.len }, error.ZeroArgCallRequiresParens);
+        if (self.atStatementBoundary()) return self.failSpan(.{ .start = start, .end = start + name.name.len }, error.ZeroArgCallRequiresParens);
 
         const text = try self.parseLineText();
         const call = try self.makeUnaryStringCall(name, text);
@@ -907,14 +934,14 @@ const Parser = struct {
             var args = std.ArrayList(Expr).empty;
             errdefer args.deinit(self.allocator);
             try args.append(self.allocator, try self.parseUnaryExpr());
-            return .{ .call = .{ .name = "not", .args = args } };
+            return .{ .call = .{ .callee = ast.CallableName.bare("not"), .args = args } };
         }
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
             var args = std.ArrayList(Expr).empty;
             errdefer args.deinit(self.allocator);
             try args.append(self.allocator, try self.parseUnaryExpr());
-            return .{ .call = .{ .name = "neg", .args = args } };
+            return .{ .call = .{ .callee = ast.CallableName.bare("neg"), .args = args } };
         }
         return self.parsePostfixExpr();
     }
@@ -988,16 +1015,14 @@ const Parser = struct {
         }
         const name = try self.parseCallableName();
         self.skipInlineSpaces();
-        if (std.mem.eql(u8, name, "none")) {
+        if (!name.isQualified() and std.mem.eql(u8, name.name, "none")) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
-                self.allocator.free(name);
                 return .none;
             }
         }
-        if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
+        if (!name.isQualified() and (std.mem.eql(u8, name.name, "true") or std.mem.eql(u8, name.name, "false"))) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
-                const value = std.mem.eql(u8, name, "true");
-                self.allocator.free(name);
+                const value = std.mem.eql(u8, name.name, "true");
                 return .{ .boolean = value };
             }
         }
@@ -1010,11 +1035,11 @@ const Parser = struct {
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .call = try self.makeUnaryStringCall(name, try self.parseString()) };
         }
-        if (std.mem.endsWith(u8, name, "!")) return self.fail(error.ExpectedChar);
+        if (name.isQualified() or std.mem.endsWith(u8, name.name, "!")) return self.fail(error.ExpectedChar);
         if (!self.eof() and self.source[self.pos] != '(') {
-            return .{ .ident = name };
+            return .{ .ident = name.name };
         }
-        return .{ .ident = name };
+        return .{ .ident = name.name };
     }
 
     fn startsLambdaExpr(self: *Parser) bool {
@@ -1099,10 +1124,10 @@ const Parser = struct {
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, left);
         try args.append(self.allocator, right);
-        return .{ .call = .{ .name = name, .args = args } };
+        return .{ .call = .{ .callee = ast.CallableName.bare(name), .args = args } };
     }
 
-    fn parseCallAfterName(self: *Parser, name: []const u8) anyerror!ast.CallExpr {
+    fn parseCallAfterName(self: *Parser, name: ast.CallableName) anyerror!ast.CallExpr {
         try self.expectChar('(');
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
@@ -1120,14 +1145,14 @@ const Parser = struct {
         }
         if (self.eof() or self.source[self.pos] != ')') return self.fail(error.ExpectedChar);
         self.pos += 1;
-        return .{ .name = name, .args = args };
+        return .{ .callee = name, .args = args };
     }
 
-    fn makeUnaryStringCall(self: *Parser, name: []const u8, text: []const u8) !ast.CallExpr {
+    fn makeUnaryStringCall(self: *Parser, name: ast.CallableName, text: []const u8) !ast.CallExpr {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, .{ .string = text });
-        return .{ .name = name, .args = args };
+        return .{ .callee = name, .args = args };
     }
 
     fn parseMemberAssignmentStatement(self: *Parser, start: usize) !?Statement {
@@ -1203,7 +1228,7 @@ const Parser = struct {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, arg0);
-        return .{ .name = name, .args = args };
+        return .{ .callee = ast.CallableName.bare(name), .args = args };
     }
 
     fn makeCall2(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr) !ast.CallExpr {
@@ -1211,7 +1236,7 @@ const Parser = struct {
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, arg0);
         try args.append(self.allocator, arg1);
-        return .{ .name = name, .args = args };
+        return .{ .callee = ast.CallableName.bare(name), .args = args };
     }
 
     fn makeCall3(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr, arg2: Expr) !ast.CallExpr {
@@ -1220,7 +1245,7 @@ const Parser = struct {
         try args.append(self.allocator, arg0);
         try args.append(self.allocator, arg1);
         try args.append(self.allocator, arg2);
-        return .{ .name = name, .args = args };
+        return .{ .callee = ast.CallableName.bare(name), .args = args };
     }
 
     fn parseMemberConstraintDecl(self: *Parser) !ConstraintDecl {
@@ -1289,7 +1314,7 @@ const Parser = struct {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, expr);
-        return .{ .call = .{ .name = "neg", .args = args } };
+        return .{ .call = .{ .callee = ast.CallableName.bare("neg"), .args = args } };
     }
 
     fn parseTextArg(self: *Parser) ![]const u8 {
@@ -1462,8 +1487,22 @@ const Parser = struct {
         callable,
     };
 
-    fn parseCallableName(self: *Parser) ![]const u8 {
+    fn parseCallableDeclName(self: *Parser) ![]const u8 {
         return self.parseName(.callable);
+    }
+
+    fn parseCallableName(self: *Parser) !ast.CallableName {
+        const first = try self.parseName(.identifier);
+        if (self.startsWith("::")) {
+            self.pos += 2;
+            const name = try self.parseName(.callable);
+            return ast.CallableName.qualified(first, name);
+        }
+        if (!self.eof() and self.source[self.pos] == '!') {
+            self.pos += 1;
+            return ast.CallableName.bare(try std.fmt.allocPrint(self.allocator, "{s}!", .{first}));
+        }
+        return ast.CallableName.bare(first);
     }
 
     fn parseName(self: *Parser, kind: NameKind) ![]const u8 {
@@ -1485,6 +1524,14 @@ const Parser = struct {
         return self.allocator.dupe(u8, ident);
     }
 
+    fn isValidIdentifier(ident: []const u8) bool {
+        if (ident.len == 0 or !source_utils.isIdentifierStart(ident[0])) return false;
+        for (ident[1..]) |ch| {
+            if (!source_utils.isIdentifierContinue(ch)) return false;
+        }
+        return true;
+    }
+
     fn isReservedKeyword(ident: []const u8) bool {
         const reserved = [_][]const u8{
             "import",
@@ -1499,6 +1546,7 @@ const Parser = struct {
             "return",
             "let",
             "bind",
+            "as",
         };
         inline for (reserved) |keyword| {
             if (std.mem.eql(u8, ident, keyword)) return true;

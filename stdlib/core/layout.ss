@@ -1,4 +1,4 @@
-import std:core/classes
+import std:core/classes as *
 
 fn vflow(policy: LayoutPolicy, center_offset: Number = 0) -> Void
   pagectx().layout_v = policy

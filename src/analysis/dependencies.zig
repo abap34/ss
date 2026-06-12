@@ -6,6 +6,7 @@ const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
+const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 pub const ResourceKind = enum {
     graph_pages,
@@ -110,15 +111,15 @@ fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), re
 
 pub const Analyzer = struct {
     allocator: std.mem.Allocator,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
-    visiting: std.StringHashMap(void),
+    sema: SemanticEnv,
+    visiting: FunctionVisitSet,
     string_bindings: std.StringHashMap([]const u8),
 
-    pub fn init(allocator: std.mem.Allocator, functions: *const std.StringHashMap(ast.FunctionDecl)) Analyzer {
+    pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
         return .{
             .allocator = allocator,
-            .functions = functions,
-            .visiting = std.StringHashMap(void).init(allocator),
+            .sema = sema.*,
+            .visiting = FunctionVisitSet.init(allocator),
             .string_bindings = std.StringHashMap([]const u8).init(allocator),
         };
     }
@@ -243,10 +244,17 @@ pub const Analyzer = struct {
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
-        const sema = SemanticEnv.init(null, null, self.functions);
-        const descriptor = sema.call(call.name) orelse return try self.callArgs(call);
+        const descriptor = self.sema.callCallee(call.callee) orelse return try self.callArgs(call);
         return switch (descriptor) {
-            .function => |func| try self.functionCall(func, call),
+            .function => |resolved| blk: {
+                var summary = try self.callArgs(call);
+                errdefer summary.deinit();
+                if (callableNamePlacesObjects(call.callee.name)) summary.places_objects = true;
+                const previous = self.sema;
+                self.sema = self.sema.forModule(resolved.module_id);
+                defer self.sema = previous;
+                break :blk try self.functionCall(resolved.key, resolved.decl, call, summary);
+            },
             .primitive => |primitive| try self.primitiveCall(call, primitive),
         };
     }
@@ -262,13 +270,12 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn functionCall(self: *Analyzer, func: ast.FunctionDecl, call: ast.CallExpr) anyerror!AccessSummary {
-        var summary = try self.callArgs(call);
+    fn functionCall(self: *Analyzer, key: core.FunctionKey, func: ast.FunctionDecl, call: ast.CallExpr, initial_summary: AccessSummary) anyerror!AccessSummary {
+        var summary = initial_summary;
         errdefer summary.deinit();
-        if (callableNamePlacesObjects(call.name)) summary.places_objects = true;
-        if (self.visiting.contains(func.name)) return summary;
-        try self.visiting.put(func.name, {});
-        defer _ = self.visiting.remove(func.name);
+        if (self.visiting.contains(key)) return summary;
+        try self.visiting.put(key, {});
+        defer _ = self.visiting.remove(key);
 
         var bindings = std.ArrayList(StringBindingRestore).empty;
         defer {
@@ -397,11 +404,16 @@ pub const Analyzer = struct {
         if (call.args.items.len > callback_spec.function_arg_index) {
             switch (call.args.items[callback_spec.function_arg_index]) {
                 .ident => |callback_name| {
-                    if (self.functions.get(callback_name)) |callback| {
-                        callback_summary = try self.functionCall(callback, .{
-                            .name = callback_name,
+                    if (self.sema.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
+                        var initial_summary = AccessSummary.init(self.allocator);
+                        errdefer initial_summary.deinit();
+                        const previous = self.sema;
+                        self.sema = self.sema.forModule(callback.module_id);
+                        defer self.sema = previous;
+                        callback_summary = try self.functionCall(callback.key, callback.decl, .{
+                            .callee = ast.CallableName.bare(callback_name),
                             .args = .empty,
-                        });
+                        }, initial_summary);
                     }
                 },
                 .lambda => |lambda| {

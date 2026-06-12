@@ -21,7 +21,13 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
-        for (self.imports.items) |import_decl| allocator.free(import_decl.spec);
+        for (self.imports.items) |import_decl| {
+            allocator.free(import_decl.spec);
+            switch (import_decl.mode) {
+                .alias => |name| allocator.free(name),
+                .open => {},
+            }
+        }
         self.imports.deinit(allocator);
         self.top_level_items.deinit(allocator);
         for (self.types.items) |*type_decl| type_decl.deinit(allocator);
@@ -51,7 +57,13 @@ pub const TopLevelItem = union(enum) {
 };
 
 pub const ImportDecl = struct {
+    pub const Mode = union(enum) {
+        alias: []const u8,
+        open,
+    };
+
     spec: []const u8,
+    mode: Mode,
     span: Span,
 };
 
@@ -202,8 +214,39 @@ pub const ParamDecl = struct {
     }
 };
 
-pub const CallExpr = struct {
+pub const CallableName = struct {
+    qualifier: ?[]const u8 = null,
     name: []const u8,
+
+    pub fn bare(name: []const u8) CallableName {
+        return .{ .name = name };
+    }
+
+    pub fn qualified(qualifier: []const u8, name: []const u8) CallableName {
+        return .{ .qualifier = qualifier, .name = name };
+    }
+
+    pub fn isQualified(self: CallableName) bool {
+        return self.qualifier != null;
+    }
+
+    pub fn displayAlloc(self: CallableName, allocator: Allocator) ![]const u8 {
+        if (self.qualifier) |qualifier| {
+            return std.fmt.allocPrint(allocator, "{s}::{s}", .{ qualifier, self.name });
+        }
+        return allocator.dupe(u8, self.name);
+    }
+
+    pub fn clone(self: CallableName, allocator: Allocator) !CallableName {
+        return .{
+            .qualifier = if (self.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
+            .name = try allocator.dupe(u8, self.name),
+        };
+    }
+};
+
+pub const CallExpr = struct {
+    callee: CallableName,
     args: std.ArrayList(Expr),
 
     pub fn deinit(self: *CallExpr, allocator: Allocator) void {
@@ -221,7 +264,7 @@ pub const CallExpr = struct {
             try args.append(allocator, try arg.clone(allocator));
         }
         return .{
-            .name = try allocator.dupe(u8, self.name),
+            .callee = try self.callee.clone(allocator),
             .args = args,
         };
     }

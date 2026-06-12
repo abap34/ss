@@ -1,5 +1,5 @@
-import std:core/render
-import std:core/selectors
+import std:core/render as *
+import std:core/selectors as *
 
 fn pageno_s(page_no: Object) -> Object
   txt(page_no, "Helvetica", 13, 16, c"0.5,0.5,0.5", 0, 60, 24)

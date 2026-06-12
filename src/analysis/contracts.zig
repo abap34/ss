@@ -9,10 +9,15 @@ pub const FunctionContract = struct {
 };
 
 pub fn functionRefFor(allocator: std.mem.Allocator, func: ast.FunctionDecl) !core.FunctionRef {
+    return functionRefForInModule(allocator, 0, func);
+}
+
+pub fn functionRefForInModule(allocator: std.mem.Allocator, module_id: core.SourceModuleId, func: ast.FunctionDecl) !core.FunctionRef {
     _ = allocator;
     const contract = functionContract(func);
     return .{
         .name = func.name,
+        .module_id = module_id,
         .param_count = contract.max_param_count,
         .returns_value = contract.returns_value,
     };

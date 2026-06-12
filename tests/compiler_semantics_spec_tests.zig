@@ -100,6 +100,23 @@ fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expec
     try compiler_semantics.expectOverlayDiagnostic(testing.io, allocator, path, source, overlay_path, overlay_source, expected_origin, expected_message);
 }
 
+fn expectDiagnosticWithTwoOverlays(source: []const u8, first_source: []const u8, second_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const first_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/a.ss", .{tmp.sub_path[0..]});
+    const second_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/b.ss", .{tmp.sub_path[0..]});
+    const overlays = [_]compiler_semantics.OverlaySource{
+        .{ .path = first_path, .source = first_source },
+        .{ .path = second_path, .source = second_source },
+    };
+    try compiler_semantics.expectDiagnosticWithOverlays(testing.io, allocator, path, source, &overlays, expected_origin, expected_message);
+}
+
 fn expectDiagnostic(source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -157,8 +174,8 @@ fn expectObjectState(source: []const u8, expected: compiler_semantics.ObjectStat
 
 test "compiler semantics: imported function return inference diagnostics keep callee origin" {
     try expectOverlayDiagnostic(
-        \\import "lib/bad.ss"
-        \\import std:themes/default
+        \\import "lib/bad"
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  text(bad())
@@ -172,9 +189,90 @@ test "compiler semantics: imported function return inference diagnostics keep ca
     , "lib/bad.ss:bytes:", "InvalidArity: expected 2, got 1");
 }
 
+test "compiler semantics: default import introduces only an alias" {
+    try expectDiagnostic(
+        \\import std:themes/default
+        \\
+        \\page bad
+        \\  let title = h2("bare")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: h2");
+}
+
+test "compiler semantics: open import introduces bare names" {
+    try buildSource(
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  h2!("open")
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: qualified calls bypass local shadowing" {
+    const source =
+        \\import std:themes/default
+        \\import std:themes/default as *
+        \\
+        \\fn/! h2(content: String) -> Object
+        \\  return text("local")
+        \\end
+        \\
+        \\page ok
+        \\  h2!("ignored")
+        \\  default::h2!("qualified")
+        \\end
+        \\
+    ;
+    try expectObjectContent(source, "local");
+    try expectObjectContent(source, "qualified");
+}
+
+test "compiler semantics: open import ambiguity is diagnosed" {
+    try expectDiagnosticWithTwoOverlays(
+        \\import "lib/a" as *
+        \\import "lib/b" as *
+        \\
+        \\page bad
+        \\  let value = same()
+        \\end
+        \\
+    ,
+        \\fn same() -> String
+        \\  return "a"
+        \\end
+        \\
+    ,
+        \\fn same() -> String
+        \\  return "b"
+        \\end
+        \\
+    , "case.ss:bytes:", "AmbiguousImport: function 'same' is provided by multiple open imports");
+}
+
+test "compiler semantics: extensionless path imports can be aliased and opened together" {
+    try buildSourceWithOverlay(
+        \\import std:themes/default as *
+        \\import "lib/types"
+        \\import "lib/types" as *
+        \\
+        \\page ok
+        \\  text(types::overlay_value() ++ overlay_value())
+        \\end
+        \\
+    ,
+        \\fn overlay_value() -> String
+        \\  return "ok"
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: branch-local let bindings do not escape their branch" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let x = "a"
@@ -189,7 +287,7 @@ test "compiler semantics: branch-local let bindings do not escape their branch" 
 
 test "compiler semantics: selection values can be reused after lookup" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  let pages = select(docctx(), "document_pages")
@@ -205,7 +303,7 @@ test "compiler semantics: selection values can be reused after lookup" {
 
 test "compiler semantics: dynamically built residual text survives lowering" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  text("hello" ++ " " ++ "world")
@@ -216,7 +314,7 @@ test "compiler semantics: dynamically built residual text survives lowering" {
 
 test "compiler semantics: content mutation helpers are stdlib functions" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let target = text("hello [1]")
@@ -229,7 +327,7 @@ test "compiler semantics: content mutation helpers are stdlib functions" {
 
 test "compiler semantics: math alignment helpers are stdlib functions" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  left_math(text("$$x^2$$"))
@@ -241,7 +339,7 @@ test "compiler semantics: math alignment helpers are stdlib functions" {
 
 test "compiler semantics: enum cases type function parameters" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | Beta | READY
         \\type Any = String | Number
@@ -263,7 +361,7 @@ test "compiler semantics: enum cases type function parameters" {
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\
@@ -280,7 +378,7 @@ test "compiler semantics: enum cases type function parameters" {
 
 test "compiler semantics: enum cases are resolved before evaluation" {
     try expectDumpContains(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\
@@ -301,7 +399,7 @@ test "compiler semantics: enum cases are resolved before evaluation" {
 
 test "compiler semantics: enum names can be shadowed by values" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Card = object {
@@ -322,7 +420,7 @@ test "compiler semantics: enum names can be shadowed by values" {
 
 test "compiler semantics: enum type names do not depend on capitalization" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type mode = active | String
         \\
@@ -339,8 +437,8 @@ test "compiler semantics: enum type names do not depend on capitalization" {
 
 test "compiler semantics: enum types resolve through imported modules" {
     try buildSourceWithOverlay(
-        \\import "lib/types.ss"
-        \\import std:themes/default
+        \\import "lib/types"
+        \\import std:themes/default as *
         \\
         \\fn keep_mode(mode: Mode) -> Mode
         \\  return mode
@@ -363,7 +461,7 @@ test "compiler semantics: enum types resolve through imported modules" {
 
 test "compiler semantics: enum properties serialize as case names" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Card = object {
@@ -382,7 +480,7 @@ test "compiler semantics: enum properties serialize as case names" {
     , "enum-ok");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Card = object {
@@ -398,7 +496,7 @@ test "compiler semantics: enum properties serialize as case names" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'custom_mode' expects Mode, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Other = beta
@@ -417,7 +515,7 @@ test "compiler semantics: enum properties serialize as case names" {
 
 test "compiler semantics: type names share one namespace" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Color = accent
         \\
@@ -427,7 +525,7 @@ test "compiler semantics: type names share one namespace" {
     , "case.ss:bytes:", "DuplicateType: type 'Color' conflicts with a built-in type");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha
         \\type Mode = object {
@@ -439,7 +537,7 @@ test "compiler semantics: type names share one namespace" {
     , "case.ss:bytes:", "DuplicateType: object type 'Mode' is already defined in this module");
 
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Scalar = Number | String
         \\
@@ -455,7 +553,7 @@ test "compiler semantics: type names share one namespace" {
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta | alpha
         \\
@@ -465,7 +563,7 @@ test "compiler semantics: type names share one namespace" {
     , "case.ss:bytes:", "DuplicateEnumCase: enum 'Mode' already has case 'alpha'");
 
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = Alpha | beta
         \\
@@ -476,7 +574,7 @@ test "compiler semantics: type names share one namespace" {
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type String = object {
         \\}
@@ -487,7 +585,7 @@ test "compiler semantics: type names share one namespace" {
     , "case.ss:bytes:", "DuplicateType: type 'String' conflicts with a built-in type");
 
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\}
@@ -500,8 +598,8 @@ test "compiler semantics: type names share one namespace" {
     );
 
     try buildSourceWithOverlay(
-        \\import "lib/types.ss"
-        \\import std:themes/default
+        \\import "lib/types"
+        \\import std:themes/default as *
         \\
         \\type Mode = RemoteType | local
         \\
@@ -518,7 +616,7 @@ test "compiler semantics: type names share one namespace" {
 
 test "compiler semantics: Color is a static type" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn keep_color(value: Color) -> Color
         \\  return value
@@ -532,7 +630,7 @@ test "compiler semantics: Color is a static type" {
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn keep_color(value: Color) -> Color
         \\  return value
@@ -546,7 +644,7 @@ test "compiler semantics: Color is a static type" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
 
     try expectObjectProperty(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = text("color")
@@ -556,7 +654,7 @@ test "compiler semantics: Color is a static type" {
     , "text_color", "0.2,0.26666668,0.33333334");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -568,7 +666,7 @@ test "compiler semantics: Color is a static type" {
 
 test "compiler semantics: optional fields accept none and coalesce" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn fallback(value: Color?) -> Color
         \\  return value ?? c"0,0,0"
@@ -583,7 +681,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn id(c: Color?) -> Color
         \\  return c
@@ -596,7 +694,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -606,7 +704,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn name(value: None) -> String
         \\  return "none"
@@ -619,7 +717,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     , "none");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = text("body")
@@ -635,7 +733,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     , "unset");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let color = c"1,0,0"
@@ -647,7 +745,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     , "case.ss:bytes:", "TypeMismatch: '?' expects an optional value");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let color = c"1,0,0"
@@ -657,7 +755,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
     , "case.ss:bytes:", "TypeMismatch: '??' expects an optional value");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn fallback(value: Color?) -> Color
         \\  return value ?? "black"
@@ -672,7 +770,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
 
 test "compiler semantics: optional values are checked at function boundaries" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn take_color(value: Color) -> Color
         \\  return value
@@ -686,7 +784,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn take_maybe(value: Color?) -> Color?
         \\  return value
@@ -700,7 +798,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad_return(value: Color?) -> Color
         \\  if true
@@ -717,7 +815,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad_optional_return() -> Color?
         \\  return 1
@@ -730,7 +828,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad_default(value: Color = "red") -> Color
         \\  return value
@@ -743,7 +841,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad_optional_default(value: Color? = "red") -> Color?
         \\  return value
@@ -758,7 +856,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
 
 test "compiler semantics: optional values stay checked through multi-step flows" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn may_be_none(target: Body, prefer_markup: Bool) -> Color?
         \\  if prefer_markup
@@ -787,7 +885,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_color(primary: Color?, fallback: Color?, use_primary: Bool, allow_fallback: Bool) -> Color
         \\  let chosen = primary
@@ -813,7 +911,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn apply_palette(target: Body, primary: Color?, secondary: Color?) -> Void
         \\  let chosen = primary
@@ -832,7 +930,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Status = draft | reviewing | ready
         \\
@@ -864,7 +962,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
     , "case.ss:bytes:", "TypeMismatch: expected Status, got Status?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Status = draft | reviewing | ready
         \\type OtherStatus = draft | reviewing | ready
@@ -890,7 +988,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
 
 test "compiler semantics: mismatched if branches are rejected statically" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_text_color(use_theme: Bool) -> Color
         \\  if use_theme
@@ -907,7 +1005,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn maybe_accent(target: Body, use_saved: Bool, force_number: Bool) -> Color?
         \\  if use_saved
@@ -928,7 +1026,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got Number");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_from_branch_local(target: Body, maybe_color: Color?, prefer_saved: Bool) -> Color
         \\  if prefer_saved
@@ -947,7 +1045,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn paint_target(target: Body, maybe_color: Color?, use_optional: Bool) -> Void
         \\  if use_optional
@@ -965,7 +1063,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Status = draft | ready
         \\type OtherStatus = draft | ready
@@ -985,7 +1083,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
     , "case.ss:bytes:", "TypeMismatch: expected Status, got OtherStatus");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -1008,7 +1106,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
 
 test "compiler semantics: if branch checks do not depend on optional types" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_score(use_score: Bool) -> Number
         \\  if use_score
@@ -1025,7 +1123,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_score(use_score: Bool) -> Number
         \\  if use_score
@@ -1046,7 +1144,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     , "case.ss:bytes:", "TypeMismatch: expected Bool, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_score(use_score: Bool) -> Number
         \\  if use_score
@@ -1063,7 +1161,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     , "case.ss:bytes:", "TypeMismatch: expected Number, got Bool");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn configure_text(target: Body, compact: Bool) -> Void
         \\  if compact
@@ -1081,7 +1179,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_size' expects Number, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn choose_selection(use_pages: Bool) -> Selection<Page>
         \\  if use_pages
@@ -1098,7 +1196,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     , "case.ss:bytes:", "TypeMismatch: expected Selection<Page>, got Selection<Object>");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn inc(x: Number) -> Number
         \\  return x + 1
@@ -1123,7 +1221,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
     , "case.ss:bytes:", "TypeMismatch: expected Number -> Number, got String -> String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad_void_branch(write_number: Bool) -> Void
         \\  if write_number
@@ -1142,7 +1240,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
 
 test "compiler semantics: enum optional values reject strings and other enums" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\
@@ -1157,7 +1255,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     , "case.ss:bytes:", "TypeMismatch: expected Mode, got None");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\
@@ -1172,7 +1270,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     , "case.ss:bytes:", "TypeMismatch: expected Mode?, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Other = alpha | beta
@@ -1188,7 +1286,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     , "case.ss:bytes:", "TypeMismatch: expected Mode?, got Other");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Other = alpha | beta
@@ -1204,7 +1302,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
     , "case.ss:bytes:", "TypeMismatch: expected Mode, got Other");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Other = alpha | beta
@@ -1222,7 +1320,7 @@ test "compiler semantics: enum optional values reject strings and other enums" {
 
 test "compiler semantics: properties require known fields" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1233,7 +1331,7 @@ test "compiler semantics: properties require known fields" {
     , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1243,7 +1341,7 @@ test "compiler semantics: properties require known fields" {
     , "case.ss:bytes:", "UnknownField: unknown field: no_such_field");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1254,7 +1352,7 @@ test "compiler semantics: properties require known fields" {
     , "case.ss:bytes:", "InvalidProperty: property key must be a known field literal");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1264,7 +1362,7 @@ test "compiler semantics: properties require known fields" {
     , "case.ss:bytes:", "UnknownField: unknown field: no_such_field");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1276,7 +1374,7 @@ test "compiler semantics: properties require known fields" {
 
 test "compiler semantics: typed properties reject optional and wrong static values" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1286,7 +1384,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  docctx().background_fill = "white"
@@ -1298,7 +1396,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
     , "case.ss:bytes:", "InvalidFieldValue: field 'background_fill' expects Color?, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  text("body")
@@ -1308,7 +1406,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1318,7 +1416,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got Number");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
@@ -1330,7 +1428,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
 
 test "compiler semantics: object field defaults are statically typed" {
     const defaults_source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Card = object {
@@ -1358,7 +1456,7 @@ test "compiler semantics: object field defaults are statically typed" {
     try expectClassDefaultProperty(defaults_source, "card", "label", "default label");
 
     try expectBodyTextDefaults(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  text("body")
@@ -1374,7 +1472,7 @@ test "compiler semantics: object field defaults are statically typed" {
     });
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  accent: Color = "red"
@@ -1386,7 +1484,7 @@ test "compiler semantics: object field defaults are statically typed" {
     , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Color");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  accent: Color = none
@@ -1398,7 +1496,7 @@ test "compiler semantics: object field defaults are statically typed" {
     , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Color");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  accent: Color? = "red"
@@ -1410,7 +1508,7 @@ test "compiler semantics: object field defaults are statically typed" {
     , "case.ss:bytes:", "InvalidFieldDefault");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  count: Number = 1 + 2
@@ -1422,7 +1520,7 @@ test "compiler semantics: object field defaults are statically typed" {
     , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Number");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  label: String = "a" ++ "b"
@@ -1434,7 +1532,7 @@ test "compiler semantics: object field defaults are statically typed" {
     , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Card = object {
@@ -1447,7 +1545,7 @@ test "compiler semantics: object field defaults are statically typed" {
     , "case.ss:bytes:", "InvalidFieldDefault: default value does not match field type Mode");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Mode = alpha | beta
         \\type Other = alpha | beta
@@ -1463,7 +1561,7 @@ test "compiler semantics: object field defaults are statically typed" {
 
 test "compiler semantics: document page and selection properties are typed" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  docctx().math_align = Align.left
@@ -1478,7 +1576,7 @@ test "compiler semantics: document page and selection properties are typed" {
     , "left");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  docctx().math_align = "left"
@@ -1490,7 +1588,7 @@ test "compiler semantics: document page and selection properties are typed" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects Align, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  text("body")
@@ -1502,7 +1600,7 @@ test "compiler semantics: document page and selection properties are typed" {
 
 test "compiler semantics: document math alignment helpers update the document setting" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  left_math_all()
@@ -1517,7 +1615,7 @@ test "compiler semantics: document math alignment helpers update the document se
 
 test "compiler semantics: math alignment rejects unknown literals" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("$$x^2$$")
@@ -1527,7 +1625,7 @@ test "compiler semantics: math alignment rejects unknown literals" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'math_align' expects Align, got String");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  math_align(text("$$x^2$$"), Align.sideways)
@@ -1538,7 +1636,7 @@ test "compiler semantics: math alignment rejects unknown literals" {
 
 test "compiler semantics: member sugar reads and writes properties and content" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let target = text("hello")
@@ -1548,7 +1646,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
     , "hello!");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let target = text("styled")
@@ -1561,7 +1659,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
     , "custom");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  docctx().footer_text = "footer"
@@ -1576,7 +1674,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
 
 test "compiler semantics: member reads materialize typed property values" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn wrap_label(value: WrapMode) -> String
         \\  return "wrap"
@@ -1606,7 +1704,7 @@ test "compiler semantics: member reads materialize typed property values" {
     , "wrap:24:custom");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn render_label(value: RenderKind) -> String
         \\  return "render"
@@ -1622,7 +1720,7 @@ test "compiler semantics: member reads materialize typed property values" {
 
 test "compiler semantics: logical not inverts optional presence checks" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn optional_color_label(target: Body) -> String
         \\  if !target.text_markdown_code_fill?
@@ -1642,7 +1740,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
     , "none:some");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn none_label(value: Bool?) -> String
         \\  if !value?
@@ -1659,7 +1757,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
     , "none:some:some");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn none_label(value: String?) -> String
         \\  if !value?
@@ -1676,7 +1774,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
     , "none:some:some");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  if !1
@@ -1689,7 +1787,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
 
 test "compiler semantics: generated page numbers keep optional format semantics" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  pagenos!(none)
@@ -1704,7 +1802,7 @@ test "compiler semantics: generated page numbers keep optional format semantics"
     , "1/2");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  pagenos!("{page} of {total}")
@@ -1721,7 +1819,7 @@ test "compiler semantics: generated page numbers keep optional format semantics"
 
 test "compiler semantics: removed render kind chrome case is rejected" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let panel_obj = panel()
@@ -1733,7 +1831,7 @@ test "compiler semantics: removed render kind chrome case is rejected" {
 
 test "compiler semantics: pass annotation is rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\@pass
         \\fn old_pass(doc: Document) -> Document
@@ -1749,7 +1847,7 @@ test "compiler semantics: pass annotation is rejected" {
 
 test "compiler semantics: generated page numbers run after page graph exists" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  pagenos!()
@@ -1766,7 +1864,7 @@ test "compiler semantics: generated page numbers run after page graph exists" {
 
 test "compiler semantics: scheduled document statements share document scope" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  let label = "from document scope"
@@ -1784,7 +1882,7 @@ test "compiler semantics: scheduled document statements share document scope" {
 
 test "compiler semantics: document blocks preserve top-level order" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  docctx().footer_text = "before"
@@ -1797,7 +1895,7 @@ test "compiler semantics: document blocks preserve top-level order" {
     , "before");
 
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page first
         \\  text(docctx().footer_text ?? "unset")
@@ -1812,7 +1910,7 @@ test "compiler semantics: document blocks preserve top-level order" {
 
 test "compiler semantics: void functions may finish without explicit return" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn remember() -> Void
         \\  docctx().footer_text = "remembered"
@@ -1831,7 +1929,7 @@ test "compiler semantics: void functions may finish without explicit return" {
 
 test "compiler semantics: bare return is only valid for void functions" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn stop() -> Void
         \\  return
@@ -1847,7 +1945,7 @@ test "compiler semantics: bare return is only valid for void functions" {
     );
 
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad() -> String
         \\  return
@@ -1861,7 +1959,7 @@ test "compiler semantics: bare return is only valid for void functions" {
 
 test "compiler semantics: void results cannot be used as values" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn side_effect() -> Void
         \\end
@@ -1875,7 +1973,7 @@ test "compiler semantics: void results cannot be used as values" {
 
 test "compiler semantics: lambda callbacks can create objs over a document selection" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  let add_each = (page_value: Page) |-> place_on!(page_value, new("lambda", "body", "text"))
@@ -1890,7 +1988,7 @@ test "compiler semantics: lambda callbacks can create objs over a document selec
 
 test "compiler semantics: functions can return captured function values" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn make_label!(text_value: String) -> Page -> Object
         \\  return (page_value: Page) |-> place_on!(page_value, new(text_value, "body", "text"))
@@ -1908,7 +2006,7 @@ test "compiler semantics: functions can return captured function values" {
 
 test "compiler semantics: function values use ordinary application" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn apply(f: Number -> Number, x: Number) -> Number
         \\  return f(x)
@@ -1927,7 +2025,7 @@ test "compiler semantics: function values use ordinary application" {
 
 test "compiler semantics: direct lambda application works" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  text(str(((x: Number) |-> x + 4)(1)))
@@ -1938,7 +2036,7 @@ test "compiler semantics: direct lambda application works" {
 
 test "compiler semantics: constants can hold function values" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\const plus_one: Number -> Number = (x: Number) |-> x + 1
         \\
@@ -1951,7 +2049,7 @@ test "compiler semantics: constants can hold function values" {
 
 test "compiler semantics: returned lambdas are directly applicable" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn add_two() -> Number -> Number
         \\  return (x: Number) |-> x + 2
@@ -1966,7 +2064,7 @@ test "compiler semantics: returned lambdas are directly applicable" {
 
 test "compiler semantics: returned named functions flow through branches" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn inc(x: Number) -> Number
         \\  return x + 1
@@ -1993,7 +2091,7 @@ test "compiler semantics: returned named functions flow through branches" {
 
 test "compiler semantics: join accepts an inline typed lambda" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page one
         \\  text(join(pages(docctx()), ",", (page_value: Page) |-> str(page_index(page_value))))
@@ -2007,7 +2105,7 @@ test "compiler semantics: join accepts an inline typed lambda" {
 
 test "compiler semantics: fold accepts an inline typed lambda" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page one
         \\  text(fold(pages(docctx()), "", (acc: String, page_value: Page) |-> acc ++ str(page_index(page_value))))
@@ -2021,7 +2119,7 @@ test "compiler semantics: fold accepts an inline typed lambda" {
 
 test "compiler semantics: lambda bodies cannot be void" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn side_effect!(page_value: Page) -> Void
         \\  place_on!(page_value, new("side", "body", "text"))
@@ -2039,7 +2137,7 @@ test "compiler semantics: lambda bodies cannot be void" {
 
 test "compiler semantics: function value application checks argument types" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let f = (x: Number) |-> x + 1
@@ -2049,7 +2147,7 @@ test "compiler semantics: function value application checks argument types" {
     );
 
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let value = 1
@@ -2061,7 +2159,7 @@ test "compiler semantics: function value application checks argument types" {
 
 test "compiler semantics: function return annotations are checked for function values" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad() -> Number -> Number
         \\  return (text_value: String) |-> text_value
@@ -2076,7 +2174,7 @@ test "compiler semantics: function return annotations are checked for function v
 
 test "compiler semantics: function values cannot be stored as properties" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn id(x: Number) -> Number
         \\  return x
@@ -2092,7 +2190,7 @@ test "compiler semantics: function values cannot be stored as properties" {
 
 test "compiler semantics: function values cannot be stored as metadata content" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn id(x: Number) -> Number
         \\  return x
@@ -2110,7 +2208,7 @@ test "compiler semantics: function values cannot be stored as metadata content" 
 
 test "compiler semantics: function-value recursion is rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad(x: Number) -> Number
         \\  let f = bad
@@ -2124,7 +2222,7 @@ test "compiler semantics: function-value recursion is rejected" {
     );
 
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn apply(f: Number -> Number, x: Number) -> Number
         \\  return f(x)
@@ -2143,7 +2241,7 @@ test "compiler semantics: function-value recursion is rejected" {
 
 test "compiler semantics: mutual recursion is rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn first(x: Number) -> Number
         \\  return second(x)
@@ -2162,7 +2260,7 @@ test "compiler semantics: mutual recursion is rejected" {
 
 test "compiler semantics: function-returning lambda recursion is rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn make_bad() -> Number -> Number
         \\  return (x: Number) |-> make_bad()(x)
@@ -2177,7 +2275,7 @@ test "compiler semantics: function-returning lambda recursion is rejected" {
 
 test "compiler semantics: foreach cannot mutate the iterated object selection" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn duplicate_title(title_obj: Object) -> Object
         \\  let page_value = page_of(title_obj)
@@ -2195,7 +2293,7 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
 
 test "compiler semantics: foreach cannot create pages while iterating pages" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  foreach(pages(docctx()), (page_value: Page) |-> new_page(docctx(), "extra"))
@@ -2209,7 +2307,7 @@ test "compiler semantics: foreach cannot create pages while iterating pages" {
 
 test "compiler semantics: fold cannot mutate the iterated page selection" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn add_page(acc: String, page_value: Page) -> String
         \\  new_page(docctx(), "extra")
@@ -2225,7 +2323,7 @@ test "compiler semantics: fold cannot mutate the iterated page selection" {
 
 test "compiler semantics: join cannot mutate the iterated page selection" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn add_page(page_value: Page) -> String
         \\  new_page(docctx(), "extra")
@@ -2241,7 +2339,7 @@ test "compiler semantics: join cannot mutate the iterated page selection" {
 
 test "compiler semantics: layout reads cannot feed layout input" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let t = text("hello")
@@ -2254,7 +2352,7 @@ test "compiler semantics: layout reads cannot feed layout input" {
 
 test "compiler semantics: return type inference sees branch-local bindings" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn branch_label(flag: Bool) -> String
         \\  if flag
@@ -2276,7 +2374,7 @@ test "compiler semantics: return type inference sees branch-local bindings" {
 
 test "compiler semantics: page-only primitives are rejected in document context" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  let p = pagectx()
@@ -2288,7 +2386,7 @@ test "compiler semantics: page-only primitives are rejected in document context"
     , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  title!("bad")
@@ -2300,7 +2398,7 @@ test "compiler semantics: page-only primitives are rejected in document context"
     , "case.ss:bytes:", "NoCurrentPage");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  foreach(pages(docctx()), (page_value: Page) |-> title!("bad"))
@@ -2314,7 +2412,7 @@ test "compiler semantics: page-only primitives are rejected in document context"
 
 test "compiler semantics: document callbacks may use explicit pages without current page" {
     try expectObjectContent(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn decorate!(page_value: Page) -> Object
         \\  let item = place_on!(page_value, new("explicit", "body", "text"))
@@ -2334,7 +2432,7 @@ test "compiler semantics: document callbacks may use explicit pages without curr
 
 test "compiler semantics: document callbacks reject current page access" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  foreach(
@@ -2349,7 +2447,7 @@ test "compiler semantics: document callbacks reject current page access" {
     , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn make_implicit!() -> Object
         \\  return title!("bad")
@@ -2370,7 +2468,7 @@ test "compiler semantics: document callbacks reject current page access" {
 
 test "compiler semantics: generated objects must be placed or discarded" {
     try expectLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page loose
         \\  new("loose", "body", "text")
@@ -2379,7 +2477,7 @@ test "compiler semantics: generated objects must be placed or discarded" {
     , "UnplacedObject");
 
     try expectNoLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page placed
         \\  place!(new("placed", "body", "text"))
@@ -2388,7 +2486,7 @@ test "compiler semantics: generated objects must be placed or discarded" {
     , "UnplacedObject");
 
     try expectNoLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page placed
         \\  place_on!(pagectx(), new("placed", "body", "text"))
@@ -2397,7 +2495,7 @@ test "compiler semantics: generated objects must be placed or discarded" {
     , "UnplacedObject");
 
     try expectNoLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page discarded
         \\  let _ = new("discarded", "body", "text")
@@ -2408,7 +2506,7 @@ test "compiler semantics: generated objects must be placed or discarded" {
 
 test "compiler semantics: unplaced group warns once for the root object" {
     const source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page loose
         \\  group(
@@ -2427,7 +2525,7 @@ test "compiler semantics: unplaced group warns once for the root object" {
 
 test "compiler semantics: placing or discarding a group covers its children" {
     const placed_source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page placed
         \\  place!(group(
@@ -2443,7 +2541,7 @@ test "compiler semantics: placing or discarding a group covers its children" {
     try expectObjectState(placed_source, .{ .content = "two", .attached = true, .discarded = false });
 
     const discarded_source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page discarded
         \\  let _ = group(
@@ -2461,7 +2559,7 @@ test "compiler semantics: placing or discarding a group covers its children" {
 
 test "compiler semantics: object generation works outside page context when discarded" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\document
         \\  let _ = group(
@@ -2478,7 +2576,7 @@ test "compiler semantics: object generation works outside page context when disc
 
 test "compiler semantics: returned object placement covers connected generated objects" {
     try expectNoLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  place!(head("Connected helper"))
@@ -2487,7 +2585,7 @@ test "compiler semantics: returned object placement covers connected generated o
     , "UnplacedObject");
 
     try expectLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn make_card() -> Object
         \\  let visible = new("visible", "body", "text")
@@ -2502,7 +2600,7 @@ test "compiler semantics: returned object placement covers connected generated o
     , "UnplacedObject");
 
     try expectNoLoweredDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn make_discarded() -> Object
         \\  return new("discarded", "body", "text")
@@ -2517,7 +2615,7 @@ test "compiler semantics: returned object placement covers connected generated o
 
 test "compiler semantics: returned object placement follows constraints and group edges" {
     const constrained_source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn connected_pair() -> Object
         \\  let main = new("main", "body", "text")
@@ -2536,7 +2634,7 @@ test "compiler semantics: returned object placement follows constraints and grou
     try expectObjectState(constrained_source, .{ .content = "helper", .attached = true, .discarded = false });
 
     const grouped_source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn grouped_pair() -> Object
         \\  let left = new("left", "body", "text")
@@ -2557,7 +2655,7 @@ test "compiler semantics: returned object placement follows constraints and grou
 
 test "compiler semantics: connected return objects still warn when the result is not placed" {
     const source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn connected_pair() -> Object
         \\  let main = new("main", "body", "text")
@@ -2579,7 +2677,7 @@ test "compiler semantics: connected return objects still warn when the result is
 
 test "compiler semantics: disconnected generated objects are not hidden by placing the return value" {
     const source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn disconnected_pair() -> Object
         \\  let main = new("main", "body", "text")
@@ -2601,7 +2699,7 @@ test "compiler semantics: disconnected generated objects are not hidden by placi
 
 test "compiler semantics: underscore discard applies after return object connection" {
     const source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn connected_pair() -> Object
         \\  let main = new("main", "body", "text")
@@ -2623,7 +2721,7 @@ test "compiler semantics: underscore discard applies after return object connect
 
 test "compiler semantics: dump includes unplaced object diagnostics" {
     try expectDumpContains(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page loose
         \\  new("loose", "body", "text")
@@ -2634,7 +2732,7 @@ test "compiler semantics: dump includes unplaced object diagnostics" {
 
 test "compiler semantics: underscore let binding is not a variable" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let _ = new("discarded", "body", "text")
@@ -2646,7 +2744,7 @@ test "compiler semantics: underscore let binding is not a variable" {
 
 test "compiler semantics: placing calls require bang-marked functions" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad() -> Object
         \\  return place!(new("bad", "body", "text"))
@@ -2658,7 +2756,7 @@ test "compiler semantics: placing calls require bang-marked functions" {
     , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
 
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn ok!() -> Object
         \\  return new("ok", "body", "text")
@@ -2670,7 +2768,7 @@ test "compiler semantics: placing calls require bang-marked functions" {
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn ok!() -> Object
         \\  return new("ok", "body", "text")
@@ -2688,7 +2786,7 @@ test "compiler semantics: placing calls require bang-marked functions" {
 
 test "compiler semantics: paired placement functions desugar through existing checks" {
     const placed_source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn/! badge(content: String, role_name: String = "body") -> Object
         \\  return new(content, role_name, "text")
@@ -2708,7 +2806,7 @@ test "compiler semantics: paired placement functions desugar through existing ch
         \\  return "bad"
         \\end
         \\
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\end
@@ -2720,7 +2818,7 @@ test "compiler semantics: paired placement functions desugar through existing ch
         \\  return place!(new("bad", "body", "text"))
         \\end
         \\
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\end
@@ -2730,7 +2828,7 @@ test "compiler semantics: paired placement functions desugar through existing ch
 
 test "compiler semantics: placement effect is detected through primitive calls and lambdas" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad(page_value: Page) -> Object
         \\  return place_on!(page_value, new("bad", "body", "text"))
@@ -2742,7 +2840,7 @@ test "compiler semantics: placement effect is detected through primitive calls a
     , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn bad() -> Page -> Object
         \\  return (page_value: Page) |-> place_on!(page_value, new("bad", "body", "text"))
@@ -2756,7 +2854,7 @@ test "compiler semantics: placement effect is detected through primitive calls a
 
 test "compiler semantics: non-placement effects do not require bang-marked functions" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn add_page(doc: Document) -> Void
         \\  let _ = new_page(doc, "generated")
@@ -2772,7 +2870,7 @@ test "compiler semantics: non-placement effects do not require bang-marked funct
     );
 
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn mark(obj: Object) -> Object
         \\  obj.link_id = "marked"
@@ -2789,7 +2887,7 @@ test "compiler semantics: non-placement effects do not require bang-marked funct
 
 test "compiler semantics: bang-marked functions may generate without placing" {
     const source =
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn make!() -> Object
         \\  return new("made", "body", "text")
@@ -2807,7 +2905,7 @@ test "compiler semantics: bang-marked functions may generate without placing" {
 
 test "compiler semantics: removed object placement APIs are rejected" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  new(pagectx(), "old", "body", "text")
@@ -2816,7 +2914,7 @@ test "compiler semantics: removed object placement APIs are rejected" {
     , "case.ss:bytes:", "InvalidArity: expected 3, got 4");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  new_group(pagectx(), objs_here("body"))
@@ -2827,7 +2925,7 @@ test "compiler semantics: removed object placement APIs are rejected" {
 
 test "compiler semantics: page anchors cannot be constraint targets" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  ~ page.left == page.left
@@ -2838,7 +2936,7 @@ test "compiler semantics: page anchors cannot be constraint targets" {
 
 test "compiler semantics: aliased object self-anchor constraints are rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let a = text("a")
@@ -2853,7 +2951,7 @@ test "compiler semantics: aliased object self-anchor constraints are rejected" {
 
 test "compiler semantics: aliased tautological self-anchor constraints are accepted" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page ok
         \\  let a = text("a")
@@ -2868,7 +2966,7 @@ test "compiler semantics: aliased tautological self-anchor constraints are accep
 
 test "compiler semantics: explicit layout conflicts are rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let a = text("a")
@@ -2880,7 +2978,7 @@ test "compiler semantics: explicit layout conflicts are rejected" {
     );
 
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  let a = text("a")
@@ -2893,7 +2991,7 @@ test "compiler semantics: explicit layout conflicts are rejected" {
 
 test "compiler semantics: missing constraint anchors are rejected statically" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\page bad
         \\  ~ missing.left == page.left
@@ -2904,7 +3002,7 @@ test "compiler semantics: missing constraint anchors are rejected statically" {
 
 test "compiler semantics: duplicate user functions are rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn label() -> String
         \\  return "first"
@@ -2922,7 +3020,7 @@ test "compiler semantics: duplicate user functions are rejected" {
 
 test "compiler semantics: duplicate object classes are rejected" {
     try expectBuildFails(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Thing = object {
         \\}
@@ -2953,7 +3051,7 @@ test "compiler semantics: user object class names can be used as annotations" {
 
 test "compiler semantics: object class annotations are checked through selections" {
     try buildSource(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -2972,7 +3070,7 @@ test "compiler semantics: object class annotations are checked through selection
     );
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -2992,7 +3090,7 @@ test "compiler semantics: object class annotations are checked through selection
 
 test "compiler semantics: object class mismatches report concrete type labels" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -3011,7 +3109,7 @@ test "compiler semantics: object class mismatches report concrete type labels" {
 
 test "compiler semantics: object class optional and selection mismatches are rejected" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -3027,7 +3125,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Body>");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -3043,7 +3141,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
     , "case.ss:bytes:", "TypeMismatch: expected Object<Card>, got Object<Card>?");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -3059,7 +3157,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
     , "case.ss:bytes:", "TypeMismatch: expected Selection<Object<Card>>, got Selection<Object<Body>>");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -3081,7 +3179,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
     , "case.ss:bytes:", "TypeMismatch: expected Selection<Object<Card>>, got Selection<Object<Body>>");
 
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]
@@ -3100,7 +3198,7 @@ test "compiler semantics: object class optional and selection mismatches are rej
 
 test "compiler semantics: selection item class annotations resolve class names" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\fn count_missing(items: Selection<Missing>) -> Number
         \\  return selection_count(items)
@@ -3114,7 +3212,7 @@ test "compiler semantics: selection item class annotations resolve class names" 
 
 test "compiler semantics: default argument expressions are checked for nested type annotations" {
     try expectDiagnostic(
-        \\import std:themes/default
+        \\import std:themes/default as *
         \\
         \\type Card = object {
         \\  roles = ["card"]

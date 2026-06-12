@@ -270,7 +270,7 @@ fn projectTemplate(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
 
 fn starterSlideTemplate() []const u8 {
     return
-    \\import std:themes/default
+    \\import std:themes/default as *
     \\
     \\page title
     \\cover!(

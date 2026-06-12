@@ -7,19 +7,56 @@ const registry = @import("registry.zig");
 const type_defs = @import("type_defs.zig");
 
 pub const CallDescriptor = union(enum) {
-    function: ast.FunctionDecl,
+    function: ResolvedFunction,
     primitive: registry.PrimitiveDescriptor,
+};
+
+pub const ResolvedFunction = struct {
+    key: core.FunctionKey,
+    module_id: core.SourceModuleId,
+    decl: ast.FunctionDecl,
+};
+
+pub const FunctionResolution = union(enum) {
+    found: ResolvedFunction,
+    unknown,
+    unknown_alias: []const u8,
+    ambiguous_open: []const u8,
+};
+
+const ModuleVisitStack = struct {
+    items: [256]core.SourceModuleId = undefined,
+    len: usize = 0,
+
+    fn contains(self: *const ModuleVisitStack, module_id: core.SourceModuleId) bool {
+        for (self.items[0..self.len]) |item| {
+            if (item == module_id) return true;
+        }
+        return false;
+    }
+
+    fn push(self: *ModuleVisitStack, module_id: core.SourceModuleId) bool {
+        if (self.contains(module_id) or self.len >= self.items.len) return false;
+        self.items[self.len] = module_id;
+        self.len += 1;
+        return true;
+    }
+
+    fn pop(self: *ModuleVisitStack) void {
+        if (self.len > 0) self.len -= 1;
+    }
 };
 
 pub const SemanticEnv = struct {
     ir: ?*const core.Ir,
     declarations: ?*const declarations.DeclarationIndex,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
+    module_id: core.SourceModuleId = 0,
 
     pub fn init(
         ir: ?*const core.Ir,
         declaration_index: ?*const declarations.DeclarationIndex,
-        functions: *const std.StringHashMap(ast.FunctionDecl),
+        functions: *const core.FunctionMap,
     ) SemanticEnv {
         return .{
             .ir = ir,
@@ -28,12 +65,64 @@ pub const SemanticEnv = struct {
         };
     }
 
+    pub fn forModule(self: *const SemanticEnv, module_id: core.SourceModuleId) SemanticEnv {
+        var next = self.*;
+        next.module_id = module_id;
+        return next;
+    }
+
     pub fn function(self: *const SemanticEnv, name: []const u8) ?ast.FunctionDecl {
-        return self.functions.get(name);
+        return switch (self.resolveFunction(ast.CallableName.bare(name))) {
+            .found => |resolved| resolved.decl,
+            else => null,
+        };
+    }
+
+    pub fn resolvedFunction(self: *const SemanticEnv, callee: ast.CallableName) ?ResolvedFunction {
+        return switch (self.resolveFunction(callee)) {
+            .found => |resolved| resolved,
+            else => null,
+        };
+    }
+
+    pub fn resolveFunction(self: *const SemanticEnv, callee: ast.CallableName) FunctionResolution {
+        if (callee.qualifier) |alias| {
+            const module_id = self.resolveAlias(alias) orelse return .{ .unknown_alias = alias };
+            return if (self.findFunctionInModule(module_id, callee.name)) |resolved|
+                .{ .found = resolved }
+            else
+                .unknown;
+        }
+
+        if (self.findFunctionInModule(self.module_id, callee.name)) |resolved| return .{ .found = resolved };
+        var found: ?ResolvedFunction = null;
+        if (self.ir) |ir| {
+            const module = ir.moduleById(self.module_id) orelse return .unknown;
+            for (module.program.imports.items, 0..) |import_decl, index| {
+                switch (import_decl.mode) {
+                    .open => {},
+                    .alias => continue,
+                }
+                if (index >= module.resolved_import_ids.items.len) continue;
+                const imported_id = module.resolved_import_ids.items[index];
+                var stack = ModuleVisitStack{};
+                switch (self.resolveOpenFunctionInModule(imported_id, callee.name, &stack)) {
+                    .found => |resolved| {
+                        if (found != null and !found.?.key.eql(resolved.key)) return .{ .ambiguous_open = callee.name };
+                        found = resolved;
+                    },
+                    .ambiguous_open => return .{ .ambiguous_open = callee.name },
+                    else => {},
+                }
+            }
+        } else if (self.findFunctionByName(callee.name)) |resolved| {
+            found = resolved;
+        }
+        return if (found) |resolved| .{ .found = resolved } else .unknown;
     }
 
     pub fn hasFunction(self: *const SemanticEnv, name: []const u8) bool {
-        return self.functions.contains(name);
+        return self.function(name) != null;
     }
 
     pub fn primitive(self: *const SemanticEnv, name: []const u8) ?registry.PrimitiveDescriptor {
@@ -42,8 +131,16 @@ pub const SemanticEnv = struct {
     }
 
     pub fn call(self: *const SemanticEnv, name: []const u8) ?CallDescriptor {
-        if (self.function(name)) |func| return .{ .function = func };
+        if (self.resolvedFunction(ast.CallableName.bare(name))) |func| return .{ .function = func };
         if (self.primitive(name)) |descriptor| return .{ .primitive = descriptor };
+        return null;
+    }
+
+    pub fn callCallee(self: *const SemanticEnv, callee: ast.CallableName) ?CallDescriptor {
+        if (self.resolvedFunction(callee)) |func| return .{ .function = func };
+        if (!callee.isQualified()) {
+            if (self.primitive(callee.name)) |descriptor| return .{ .primitive = descriptor };
+        }
         return null;
     }
 
@@ -202,6 +299,93 @@ pub const SemanticEnv = struct {
             if (descriptor.arg_names.len == 0) return null;
             return if (index < descriptor.arg_names.len) descriptor.arg_names[index] else descriptor.arg_names[descriptor.arg_names.len - 1];
         }
+        return null;
+    }
+
+    pub fn callCalleeParamName(self: *const SemanticEnv, callee: ast.CallableName, index: usize) ?[]const u8 {
+        if (self.resolvedFunction(callee)) |resolved| {
+            if (index < resolved.decl.params.items.len) return resolved.decl.params.items[index].name;
+            return null;
+        }
+        if (!callee.isQualified()) return self.callParamName(callee.name, index);
+        return null;
+    }
+
+    fn resolveAlias(self: *const SemanticEnv, alias: []const u8) ?core.SourceModuleId {
+        const ir = self.ir orelse return null;
+        const module = ir.moduleById(self.module_id) orelse return null;
+        for (module.program.imports.items, 0..) |import_decl, index| {
+            const alias_name = switch (import_decl.mode) {
+                .alias => |name| name,
+                .open => continue,
+            };
+            if (!std.mem.eql(u8, alias_name, alias)) continue;
+            if (index >= module.resolved_import_ids.items.len) return null;
+            return module.resolved_import_ids.items[index];
+        }
+        return null;
+    }
+
+    fn findFunctionInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ResolvedFunction {
+        const ir = self.ir orelse return self.findFunctionByName(name);
+        const module = ir.moduleById(module_id) orelse return null;
+        for (module.program.functions.items) |func| {
+            if (!std.mem.eql(u8, func.name, name)) continue;
+            const key = self.findFunctionKey(module_id, name) orelse core.functionKey(module_id, func.name);
+            return .{ .key = key, .module_id = module_id, .decl = func };
+        }
+        return null;
+    }
+
+    fn resolveOpenFunctionInModule(
+        self: *const SemanticEnv,
+        module_id: core.SourceModuleId,
+        name: []const u8,
+        stack: *ModuleVisitStack,
+    ) FunctionResolution {
+        const ir = self.ir orelse return if (self.findFunctionByName(name)) |resolved| .{ .found = resolved } else .unknown;
+        if (!stack.push(module_id)) return .unknown;
+        defer stack.pop();
+
+        if (self.findFunctionInModule(module_id, name)) |resolved| return .{ .found = resolved };
+
+        const module = ir.moduleById(module_id) orelse return .unknown;
+        var found: ?ResolvedFunction = null;
+        for (module.program.imports.items, 0..) |import_decl, index| {
+            switch (import_decl.mode) {
+                .open => {},
+                .alias => continue,
+            }
+            if (index >= module.resolved_import_ids.items.len) continue;
+            const imported_id = module.resolved_import_ids.items[index];
+            switch (self.resolveOpenFunctionInModule(imported_id, name, stack)) {
+                .found => |resolved| {
+                    if (found != null and !found.?.key.eql(resolved.key)) return .{ .ambiguous_open = name };
+                    found = resolved;
+                },
+                .ambiguous_open => return .{ .ambiguous_open = name },
+                else => {},
+            }
+        }
+        return if (found) |resolved| .{ .found = resolved } else .unknown;
+    }
+
+    fn findFunctionByName(self: *const SemanticEnv, name: []const u8) ?ResolvedFunction {
+        var iterator = self.functions.iterator();
+        while (iterator.next()) |entry| {
+            if (!std.mem.eql(u8, entry.value_ptr.name, name)) continue;
+            return .{
+                .key = entry.key_ptr.*,
+                .module_id = entry.key_ptr.module_id,
+                .decl = entry.value_ptr.*,
+            };
+        }
+        return null;
+    }
+
+    fn findFunctionKey(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.FunctionKey {
+        const key = core.functionKey(module_id, name);
+        if (self.functions.contains(key)) return key;
         return null;
     }
 };

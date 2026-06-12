@@ -14,6 +14,8 @@ const ensureType = semantic_types.ensureType;
 const infoFromType = semantic_types.infoFromType;
 const inferExprInfo = infer.exprInfo;
 const validatePropertySetStatement = infer.validatePropertySetStatement;
+const FunctionBoolMap = std.HashMap(core.FunctionKey, bool, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
+const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 const StatementContext = enum {
     document,
@@ -66,15 +68,15 @@ const PageContextRequirement = struct {
 
     allocator: std.mem.Allocator,
     sema: *const SemanticEnv,
-    memo: std.StringHashMap(bool),
-    visiting: std.StringHashMap(void),
+    memo: FunctionBoolMap,
+    visiting: FunctionVisitSet,
 
     fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) PageContextRequirement {
         return .{
             .allocator = allocator,
             .sema = sema,
-            .memo = std.StringHashMap(bool).init(allocator),
-            .visiting = std.StringHashMap(void).init(allocator),
+            .memo = FunctionBoolMap.init(allocator),
+            .visiting = FunctionVisitSet.init(allocator),
         };
     }
 
@@ -87,16 +89,18 @@ const PageContextRequirement = struct {
         return switch (expr) {
             .ident => |name| blk: {
                 if (scope.contains(name)) break :blk null;
-                const func = self.sema.function(name) orelse break :blk null;
-                break :blk if (try self.functionRequiresPage(name, func)) .{ .function = func } else null;
+                const resolved = self.sema.resolvedFunction(ast.CallableName.bare(name)) orelse break :blk null;
+                break :blk if (try self.functionRequiresPage(resolved.key, resolved.decl)) .{ .function = resolved.decl } else null;
             },
             .string, .color, .number, .boolean, .none, .enum_case => null,
             .call => |call| blk: {
-                if (registry.lookupPrimitiveCall(call.name)) |descriptor| {
-                    if (descriptor.context == .page) break :blk .{ .primitive = descriptor };
+                if (!call.callee.isQualified()) {
+                    if (registry.lookupPrimitiveCall(call.callee.name)) |descriptor| {
+                        if (descriptor.context == .page) break :blk .{ .primitive = descriptor };
+                    }
                 }
-                if (self.sema.function(call.name)) |func| {
-                    if (try self.functionRequiresPage(call.name, func)) break :blk .{ .function = func };
+                if (self.sema.resolvedFunction(call.callee)) |resolved| {
+                    if (try self.functionRequiresPage(resolved.key, resolved.decl)) break :blk .{ .function = resolved.decl };
                 }
                 for (call.args.items) |arg| {
                     if (try self.exprRequirement(scope, arg)) |requirement| break :blk requirement;
@@ -132,14 +136,14 @@ const PageContextRequirement = struct {
         return try self.exprRequirement(&local_scope, lambda.body.*);
     }
 
-    fn functionRequiresPage(self: *PageContextRequirement, name: []const u8, func: ast.FunctionDecl) anyerror!bool {
-        if (self.memo.get(name)) |cached| return cached;
-        if (self.visiting.contains(name)) return false;
-        try self.visiting.put(name, {});
-        defer _ = self.visiting.remove(name);
+    fn functionRequiresPage(self: *PageContextRequirement, key: core.FunctionKey, func: ast.FunctionDecl) anyerror!bool {
+        if (self.memo.get(key)) |cached| return cached;
+        if (self.visiting.contains(key)) return false;
+        try self.visiting.put(key, {});
+        defer _ = self.visiting.remove(key);
 
         const requires = try self.functionBodyRequiresPage(func);
-        try self.memo.put(name, requires);
+        try self.memo.put(key, requires);
         return requires;
     }
 

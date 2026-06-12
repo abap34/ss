@@ -18,10 +18,10 @@ pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
         try collectDefinitionsFromProgram(allocator, module.source, module.program, module.id, module.path, false, &ir.definitions);
-        try collectProgramHints(allocator, &ir.hints, module.source, module.path, module.program, module.id, &ir.functions);
+        try collectProgramHints(allocator, ir, &ir.hints, module.source, module.path, module.program, module.id, &ir.functions);
     }
     try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), ir.project_module_id, null, true, &ir.definitions);
-    try collectProgramHints(allocator, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectProgram(), ir.project_module_id, &ir.functions);
+    try collectProgramHints(allocator, ir, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectProgram(), ir.project_module_id, &ir.functions);
 }
 
 pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -113,6 +113,8 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
         .none => allocator.dupe(u8, "none"),
         .enum_case => |case| std.fmt.allocPrint(allocator, "{s}.{s}", .{ case.enum_name, case.case_name }),
         .call => |call| blk: {
+            const callee = try call.callee.displayAlloc(allocator);
+            defer allocator.free(callee);
             var args = std.ArrayList(u8).empty;
             defer args.deinit(allocator);
             for (call.args.items, 0..) |arg, index| {
@@ -121,7 +123,7 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
                 defer allocator.free(text);
                 try args.appendSlice(allocator, text);
             }
-            break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ call.name, args.items });
+            break :blk std.fmt.allocPrint(allocator, "{s}({s})", .{ callee, args.items });
         },
         .apply => |apply| blk: {
             const callee = try formatExpr(allocator, apply.callee.*);
@@ -275,55 +277,58 @@ fn putDefinition(
 
 fn collectProgramHints(
     allocator: std.mem.Allocator,
+    ir: *const core.Ir,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
     source_path: ?[]const u8,
     program: ast.Program,
     module_id: core.SourceModuleId,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
 ) !void {
     for (program.functions.items) |func| {
         for (func.statements.items) |stmt| {
-            try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
+            try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
         }
     }
     for (program.document_statements.items) |stmt| {
-        try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
+        try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
     }
     for (program.pages.items) |page| {
         for (page.statements.items) |stmt| {
-            try collectStatementHints(allocator, hints, functions, source, source_path, module_id, stmt);
+            try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
         }
     }
 }
 
 fn collectStatementHints(
     allocator: std.mem.Allocator,
+    ir: *const core.Ir,
     hints: *std.ArrayList(core.InlayHint),
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
     source: []const u8,
     source_path: ?[]const u8,
     module_id: core.SourceModuleId,
     stmt: ast.Statement,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
-        .return_expr => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
-        .property_set => |property_set| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, property_set.value),
+        .let_binding => |binding| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
+        .return_expr => |expr| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, expr),
+        .property_set => |property_set| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, property_set.value),
         .if_stmt => |if_stmt| {
-            try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
-            for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, hints, functions, source, source_path, module_id, nested);
-            for (if_stmt.else_statements.items) |nested| try collectStatementHints(allocator, hints, functions, source, source_path, module_id, nested);
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
+            for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, nested);
+            for (if_stmt.else_statements.items) |nested| try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, nested);
         },
-        .expr_stmt => |expr| try collectExprHints(allocator, hints, functions, source, source_path, module_id, stmt.span, expr),
+        .expr_stmt => |expr| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, expr),
         else => {},
     }
 }
 
 fn collectExprHints(
     allocator: std.mem.Allocator,
+    ir: *const core.Ir,
     hints: *std.ArrayList(core.InlayHint),
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
     source: []const u8,
     source_path: ?[]const u8,
     module_id: core.SourceModuleId,
@@ -332,19 +337,19 @@ fn collectExprHints(
 ) !void {
     switch (expr) {
         .call => |call| {
-            try hintForCallExpr(allocator, hints, functions, source, source_path, module_id, span, call);
-            for (call.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
+            try hintForCallExpr(allocator, ir, hints, functions, source, source_path, module_id, span, call);
+            for (call.args.items) |arg| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, arg);
         },
         .apply => |apply| {
-            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, apply.callee.*);
-            for (apply.args.items) |arg| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, arg);
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, apply.callee.*);
+            for (apply.args.items) |arg| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, arg);
         },
-        .lambda => |lambda| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, lambda.body.*),
-        .member => |member| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, member.target.*),
-        .optional_check => |check| try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, check.target.*),
+        .lambda => |lambda| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, lambda.body.*),
+        .member => |member| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, member.target.*),
+        .optional_check => |check| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, check.target.*),
         .coalesce => |coalesce| {
-            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, coalesce.target.*);
-            try collectExprHints(allocator, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, coalesce.target.*);
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
         },
         else => {},
     }
@@ -352,8 +357,9 @@ fn collectExprHints(
 
 fn hintForCallExpr(
     allocator: std.mem.Allocator,
+    ir: *const core.Ir,
     hints: *std.ArrayList(core.InlayHint),
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
     source: []const u8,
     source_path: ?[]const u8,
     module_id: core.SourceModuleId,
@@ -362,12 +368,12 @@ fn hintForCallExpr(
 ) !void {
     if (call.args.items.len == 0) return;
     const slice = source[span.start..@min(span.end, source.len)];
-    const arg_starts = try findCallArgStartOffsets(allocator, slice, call.name, call.args.items.len);
+    const arg_starts = try findCallArgStartOffsets(allocator, slice, call.callee.name, call.args.items.len);
     defer allocator.free(arg_starts);
     const hint_count = @min(call.args.items.len, arg_starts.len);
-    const sema = SemanticEnv.init(null, null, functions);
+    const sema = SemanticEnv.init(ir, null, functions).forModule(module_id);
     for (0..hint_count) |index| {
-        const param_name = sema.callParamName(call.name, index) orelse continue;
+        const param_name = sema.callCalleeParamName(call.callee, index) orelse continue;
         const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
         try appendInlayHint(allocator, hints, source, source_path, module_id, span.start + arg_starts[index], label, .parameter_names);
     }

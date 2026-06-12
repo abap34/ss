@@ -1,5 +1,5 @@
-import std:themes/default
-import "./parts.ss"
+import std:themes/default as *
+import "./parts" as *
 
 page title
 let heading = module_label!("Project fixture")

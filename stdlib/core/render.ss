@@ -1,4 +1,4 @@
-import std:core/objects
+import std:core/objects as *
 
 fn clear(obj: Object) -> Object
   obj.content = ""

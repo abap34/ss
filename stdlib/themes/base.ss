@@ -1,1 +1,1 @@
-import std:core/components
+import std:core/components as *

@@ -1,6 +1,7 @@
 const std = @import("std");
 const app = @import("app.zig");
 const syntax = @import("syntax.zig");
+const names = @import("language/names.zig");
 const utils = @import("utils");
 
 pub const Mode = enum {
@@ -151,7 +152,6 @@ fn mixModuleImportGraph(
     for (program.imports.items) |import_decl| {
         mixBytes(hash, import_decl.spec);
         if (std.mem.startsWith(u8, import_decl.spec, "std:")) continue;
-        if (!looksLikePathImport(import_decl.spec)) continue;
 
         const import_path = try resolveExplicitImportPath(allocator, base_dir, import_decl.spec);
         defer allocator.free(import_path);
@@ -161,15 +161,11 @@ fn mixModuleImportGraph(
     }
 }
 
-fn looksLikePathImport(spec: []const u8) bool {
-    return std.mem.indexOfScalar(u8, spec, '/') != null or
-        std.mem.indexOfScalar(u8, spec, '\\') != null or
-        std.mem.endsWith(u8, spec, ".ss");
-}
-
 fn resolveExplicitImportPath(allocator: std.mem.Allocator, base_dir: []const u8, spec: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(spec)) return allocator.dupe(u8, spec);
-    return std.fs.path.resolve(allocator, &.{ base_dir, spec });
+    const path = try names.importPathWithDefaultExtension(allocator, spec);
+    defer allocator.free(path);
+    if (std.fs.path.isAbsolute(path)) return allocator.dupe(u8, path);
+    return std.fs.path.resolve(allocator, &.{ base_dir, path });
 }
 
 fn mixStatFile(io: std.Io, hash: *u64, path: []const u8) !void {

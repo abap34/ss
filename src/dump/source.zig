@@ -20,6 +20,7 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     for (module.program.imports.items, 0..) |import_decl, index| {
         var import_item = try imports.objectItem();
         try import_item.stringField("spec", import_decl.spec);
+        try writeImportMode(&import_item, import_decl.mode);
         try writeSpan(&import_item, import_decl.span);
         if (index < module.resolved_import_ids.items.len) {
             try import_item.intField("module_id", module.resolved_import_ids.items[index]);
@@ -41,6 +42,7 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.imports.items) |import_decl| {
         var item = try imports.objectItem();
         try item.stringField("spec", import_decl.spec);
+        try writeImportMode(&item, import_decl.mode);
         try writeSpan(&item, import_decl.span);
         try item.end();
     }
@@ -139,6 +141,19 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     try program_object.end();
 }
 
+fn writeImportMode(object: *json.Object, mode: ast.ImportDecl.Mode) !void {
+    switch (mode) {
+        .alias => |name| {
+            try object.stringField("mode", "alias");
+            try object.stringField("alias", name);
+        },
+        .open => {
+            try object.stringField("mode", "open");
+            try object.nullField("alias");
+        },
+    }
+}
+
 fn writeObjectDeclaration(objects: *json.Array, object_decl: ast.ObjectDecl) !void {
     var item = try objects.objectItem();
     try item.stringField("name", object_decl.name);
@@ -212,7 +227,8 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         },
         .call => |call| {
             try object.stringField("exprKind", "call");
-            try object.stringField("name", call.name);
+            try object.stringField("name", call.callee.name);
+            try object.optionalStringField("qualifier", call.callee.qualifier);
         },
         .apply => |apply| {
             try object.stringField("exprKind", "apply");
@@ -346,7 +362,8 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
         },
         .call => |call| {
             try item.stringField("kind", "call");
-            try item.stringField("name", call.name);
+            try item.stringField("name", call.callee.name);
+            try item.optionalStringField("qualifier", call.callee.qualifier);
             var args = try item.arrayField("args");
             for (call.args.items) |arg| try writeExprItem(allocator, &args, arg);
             try args.end();

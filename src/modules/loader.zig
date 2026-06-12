@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const syntax = @import("../syntax/parse.zig");
+const names = @import("../language/names.zig");
 const stdlib_assets = @import("stdlib_assets");
 const utils = @import("utils");
 const error_report = utils.err;
@@ -210,19 +211,12 @@ pub fn formatUnknownImportMessage(
             .{import_spec},
         );
     }
-    if (looksLikePath(import_spec)) {
-        const resolved = try resolveExplicitPath(allocator, base_dir, import_spec);
-        defer allocator.free(resolved);
-        return std.fmt.allocPrint(
-            allocator,
-            "UnknownImport: module file was not found: {s}",
-            .{resolved},
-        );
-    }
+    const resolved = try resolveExplicitPathForMessage(allocator, base_dir, import_spec);
+    defer allocator.free(resolved);
     return std.fmt.allocPrint(
         allocator,
-        "UnknownImport: module '{s}' was not found. imports must use std:... or explicit paths relative to {s}",
-        .{ import_spec, base_dir },
+        "UnknownImport: module file was not found: {s}",
+        .{resolved},
     );
 }
 
@@ -464,8 +458,6 @@ fn resolveImport(
     if (std.mem.startsWith(u8, import_spec, "std:")) {
         return resolveStdModule(allocator, import_spec) orelse error.UnknownImport;
     }
-    if (!looksLikePath(import_spec)) return error.UnknownImport;
-
     const path = try resolveExplicitPath(allocator, importer_dir, import_spec);
     errdefer allocator.free(path);
     const source = if (overlay) |source_overlay|
@@ -510,19 +502,27 @@ fn resolveStdModule(allocator: std.mem.Allocator, spec: []const u8) ?ResolvedMod
     return null;
 }
 
-fn looksLikePath(spec: []const u8) bool {
-    return std.mem.indexOfScalar(u8, spec, '/') != null or
-        std.mem.indexOfScalar(u8, spec, '\\') != null or
-        std.mem.endsWith(u8, spec, ".ss");
-}
-
 fn resolveExplicitPath(
     allocator: std.mem.Allocator,
     base_dir: []const u8,
     spec: []const u8,
 ) ![]u8 {
-    if (std.fs.path.isAbsolute(spec)) return allocator.dupe(u8, spec);
-    return std.fs.path.resolve(allocator, &.{ base_dir, spec });
+    const normalized = try specWithDefaultExtension(allocator, spec);
+    defer allocator.free(normalized);
+    if (std.fs.path.isAbsolute(normalized)) return allocator.dupe(u8, normalized);
+    return std.fs.path.resolve(allocator, &.{ base_dir, normalized });
+}
+
+fn resolveExplicitPathForMessage(
+    allocator: std.mem.Allocator,
+    base_dir: []const u8,
+    spec: []const u8,
+) ![]u8 {
+    return resolveExplicitPath(allocator, base_dir, spec);
+}
+
+fn specWithDefaultExtension(allocator: std.mem.Allocator, spec: []const u8) ![]u8 {
+    return names.importPathWithDefaultExtension(allocator, spec);
 }
 
 fn readModuleFile(

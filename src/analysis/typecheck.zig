@@ -35,18 +35,14 @@ const ensureType = semantic_types.ensureType;
 const inferExprInfo = infer.exprInfo;
 pub const expectedPrimitiveArgType = infer.expectedPrimitiveArgType;
 
-pub const FunctionMetadata = core.FunctionMetadata;
-
 pub const ProgramIndex = struct {
     allocator: std.mem.Allocator,
     modules: std.ArrayList(core.SourceModule),
     module_order: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
-    functions: std.StringHashMap(ast.FunctionDecl),
-    function_metadata: std.StringHashMap(FunctionMetadata),
+    functions: core.FunctionMap,
 
     pub fn deinit(self: *ProgramIndex) void {
-        self.function_metadata.deinit();
         self.functions.deinit();
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
@@ -62,11 +58,11 @@ pub const BuildIrOptions = struct {
 pub fn collectFunctionsFromPrograms(
     allocator: std.mem.Allocator,
     programs: []const *const ast.Program,
-) !std.StringHashMap(ast.FunctionDecl) {
-    var functions = std.StringHashMap(ast.FunctionDecl).init(allocator);
-    for (programs) |program| {
+) !core.FunctionMap {
+    var functions = core.FunctionMap.init(allocator);
+    for (programs, 0..) |program, module_index| {
         for (program.functions.items) |func| {
-            try functions.put(func.name, func);
+            try functions.put(core.functionKey(@intCast(module_index), func.name), func);
         }
     }
     return functions;
@@ -82,7 +78,7 @@ fn findModuleById(modules: []const core.SourceModule, module_id: core.SourceModu
 pub fn checkFunctionDefinitions(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
 ) !void {
     const sema = SemanticEnv.init(ir, null, functions);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
@@ -97,13 +93,13 @@ fn checkFunctionDefinitionsWithEnv(
 
     var it = sema.functions.iterator();
     while (it.next()) |entry| {
+        const module_id = entry.key_ptr.module_id;
         const origin_path = blk: {
-            if (ir.function_metadata.get(entry.key_ptr.*)) |metadata| {
-                if (ir.moduleById(metadata.module_id)) |module| break :blk checker.originPathForModule(module);
-            }
+            if (ir.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
             break :blk "";
         };
-        try checker.checkFunction(allocator, ir, sema, origin_path, entry.value_ptr.*);
+        const module_sema = sema.forModule(module_id);
+        try checker.checkFunction(allocator, ir, &module_sema, origin_path, entry.value_ptr.*);
     }
 }
 
@@ -131,21 +127,24 @@ pub fn typecheckProgram(
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
-        try checker.checkPageStatements(allocator, ir, &sema, checker.originPathForModule(module), module.program);
+        const module_sema = sema.forModule(module_id);
+        try checker.checkPageStatements(allocator, ir, &module_sema, checker.originPathForModule(module), module.program);
     }
 }
 
 fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    var analyzer = dependencies.Analyzer.init(allocator, &ir.functions);
+    var base_sema = SemanticEnv.init(ir, null, &ir.functions);
+    var analyzer = dependencies.Analyzer.init(allocator, &base_sema);
     defer analyzer.deinit();
     var it = ir.functions.iterator();
     while (it.next()) |entry| {
         const func = entry.value_ptr.*;
         if (dependencies.callableNamePlacesObjects(func.name)) continue;
+        const module_id = entry.key_ptr.module_id;
+        analyzer.sema = base_sema.forModule(module_id);
         var summary = try analyzer.functionBody(func);
         defer summary.deinit();
         if (!summary.places_objects) continue;
-        const module_id = if (ir.function_metadata.get(func.name)) |metadata| metadata.module_id else ir.project_module_id;
         const origin = try functionOrigin(allocator, ir, module_id, func.name);
         defer allocator.free(origin);
         try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
@@ -423,7 +422,7 @@ fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]
 }
 
 fn staticNumericDefaultPropertyValue(allocator: std.mem.Allocator, call: ast.CallExpr) !?[]const u8 {
-    if (!std.mem.eql(u8, call.name, "neg") or call.args.items.len != 1) return null;
+    if (!std.mem.eql(u8, call.callee.name, "neg") or call.args.items.len != 1) return null;
     return switch (call.args.items[0]) {
         .number => |value| try std.fmt.allocPrint(allocator, "-{d}", .{value}),
         else => null,
@@ -576,10 +575,9 @@ fn rebuildFunctionDeclarations(
 ) !void {
     _ = allocator;
     ir.functions.clearRetainingCapacity();
-    ir.function_metadata.clearRetainingCapacity();
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
-        try appendFunctionDeclarations(&ir.functions, &ir.function_metadata, module.program, module.id);
+        try appendFunctionDeclarations(&ir.functions, module.program, module.id);
     }
 }
 
@@ -726,7 +724,7 @@ fn functionOrigin(
 
 pub fn collectVariableInfoFromProgram(
     allocator: std.mem.Allocator,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
     program: ast.Program,
     diagnostic_ir: ?*core.Ir,
 ) !std.StringHashMap(VariableInfo) {
@@ -777,7 +775,7 @@ pub fn collectVariableInfoFromProgram(
 
 pub fn collectScopedVariableInfoFromProgram(
     allocator: std.mem.Allocator,
-    functions: *const std.StringHashMap(ast.FunctionDecl),
+    functions: *const core.FunctionMap,
     program: ast.Program,
     module_id: core.SourceModuleId,
     source_len: usize,
@@ -829,14 +827,12 @@ pub fn collectScopedVariableInfoFromProgram(
 }
 
 fn appendFunctionDeclarations(
-    functions: *std.StringHashMap(ast.FunctionDecl),
-    metadata: *std.StringHashMap(FunctionMetadata),
+    functions: *core.FunctionMap,
     program: ast.Program,
     module_id: core.SourceModuleId,
 ) !void {
     for (program.functions.items) |func| {
-        try functions.put(func.name, func);
-        try metadata.put(func.name, .{ .module_id = module_id });
+        try functions.put(core.functionKey(module_id, func.name), func);
     }
 }
 
@@ -874,9 +870,7 @@ pub fn buildIrWithOptions(
     errdefer ir.deinit();
 
     ir.functions = index.functions;
-    index.functions = std.StringHashMap(ast.FunctionDecl).init(allocator);
-    ir.function_metadata = index.function_metadata;
-    index.function_metadata = std.StringHashMap(FunctionMetadata).init(allocator);
+    index.functions = core.FunctionMap.init(allocator);
     ir.module_order = index.module_order;
     index.module_order = .empty;
     ir.projectModuleMutable().resolved_import_ids = index.project_import_ids;
@@ -958,8 +952,7 @@ pub fn loadProgramIndexWithOptions(
         .modules = graph.modules,
         .module_order = graph.module_order,
         .project_import_ids = graph.project_import_ids,
-        .functions = std.StringHashMap(ast.FunctionDecl).init(allocator),
-        .function_metadata = std.StringHashMap(FunctionMetadata).init(allocator),
+        .functions = core.FunctionMap.init(allocator),
     };
     graph.modules = .empty;
     graph.module_order = .empty;
@@ -969,9 +962,9 @@ pub fn loadProgramIndexWithOptions(
 
     for (index.module_order.items) |module_id| {
         const module = findModuleById(index.modules.items, module_id) orelse continue;
-        try appendFunctionDeclarations(&index.functions, &index.function_metadata, module.program, module.id);
+        try appendFunctionDeclarations(&index.functions, module.program, module.id);
     }
-    try appendFunctionDeclarations(&index.functions, &index.function_metadata, project_program, 0);
+    try appendFunctionDeclarations(&index.functions, project_program, 0);
     return index;
 }
 

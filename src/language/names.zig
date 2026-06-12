@@ -17,6 +17,23 @@ pub fn bangName(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}!", .{text});
 }
 
+pub fn importSpecHasFileExtension(spec: []const u8) bool {
+    return std.fs.path.extension(spec).len != 0;
+}
+
+pub fn importPathWithDefaultExtension(allocator: std.mem.Allocator, spec: []const u8) ![]u8 {
+    if (importSpecHasFileExtension(spec)) return error.InvalidImportSpec;
+    return std.fmt.allocPrint(allocator, "{s}.ss", .{spec});
+}
+
+pub fn defaultImportAlias(spec: []const u8) []const u8 {
+    var end = spec.len;
+    while (end > 0 and (spec[end - 1] == '/' or spec[end - 1] == '\\')) end -= 1;
+    const trimmed = spec[0..end];
+    const separator = std.mem.lastIndexOfAny(u8, trimmed, "/\\:");
+    return if (separator) |index| trimmed[index + 1 ..] else trimmed;
+}
+
 fn isSingleUnderscore(text: []const u8) bool {
     return std.mem.eql(u8, text, "_");
 }
