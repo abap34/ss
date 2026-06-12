@@ -501,6 +501,84 @@ fn resolveProjectOrUsage(
     };
 }
 
+fn runWatchCommand(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    mode: watcher.Mode,
+    options: CommandOptions,
+) !void {
+    var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
+        if (project.isConfigError(err)) {
+            try waitForWatchProject(io, allocator, mode, options, err);
+            return;
+        }
+        if (err == error.MissingInputPath) return failUsage("missing input path or --project", .{});
+        return err;
+    };
+    defer resolved.deinit(allocator);
+    try runResolvedWatch(io, allocator, mode, options, &resolved);
+}
+
+fn waitForWatchProject(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    mode: watcher.Mode,
+    options: CommandOptions,
+    first_error: anyerror,
+) !void {
+    const interval_ms = @max(options.interval_ms, 50);
+    std.debug.print("watch: ss.toml is invalid: {s}; waiting every {d}ms\n", .{ @errorName(first_error), interval_ms });
+    var last_error = first_error;
+    while (true) {
+        const sleep_ms: i64 = @intCast(@min(interval_ms, @as(u64, std.math.maxInt(i64))));
+        try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(sleep_ms), .awake);
+
+        var resolved = project.resolve(allocator, io, options.input_path, options.project_path, options.asset_base_dir) catch |err| {
+            if (watchRecoverableProjectError(options, err)) {
+                if (err != last_error) {
+                    std.debug.print("watch: still waiting for ss.toml: {s}\n", .{@errorName(err)});
+                    last_error = err;
+                }
+                continue;
+            }
+            if (err == error.MissingInputPath) return failUsage("missing input path or --project", .{});
+            return err;
+        };
+        defer resolved.deinit(allocator);
+        std.debug.print("watch: ss.toml is valid\n", .{});
+        try runResolvedWatch(io, allocator, mode, options, &resolved);
+        return;
+    }
+}
+
+fn watchRecoverableProjectError(options: CommandOptions, err: anyerror) bool {
+    return project.isConfigError(err) or
+        (options.input_path == null and err == error.MissingInputPath) or
+        (options.project_path != null and err == error.FileNotFound);
+}
+
+fn runResolvedWatch(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    mode: watcher.Mode,
+    options: CommandOptions,
+    resolved: *const project.Resolved,
+) !void {
+    const output_path = if (mode == .render)
+        options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
+    else
+        options.output_path;
+    if (output_path) |path| try validateOutputParentOrCliError(io, path);
+    try watcher.run(io, allocator, mode, .{
+        .input_path = resolved.entry_path,
+        .output_path = output_path,
+        .asset_base_dir = resolved.asset_base_dir,
+        .project_file = resolved.project_file,
+        .jobs = options.jobs,
+        .interval_ms = options.interval_ms,
+    });
+}
+
 fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
     utils.fs.validateOutputParent(io, output_path) catch |err| switch (err) {
         error.OutputParentNotFound => {
@@ -600,21 +678,7 @@ fn run(init: std.process.Init) !void {
             return failUsage("unknown watch mode: {s}", .{args[2]});
         };
         const options = try parseCommandOptions(args[3..]);
-        var resolved = try resolveProjectOrUsage(allocator, io, options);
-        defer resolved.deinit(allocator);
-        const output_path = if (mode == .render)
-            options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
-        else
-            options.output_path;
-        if (output_path) |path| try validateOutputParentOrCliError(io, path);
-        try watcher.run(io, allocator, mode, .{
-            .input_path = resolved.entry_path,
-            .output_path = output_path,
-            .asset_base_dir = resolved.asset_base_dir,
-            .project_file = resolved.project_file,
-            .jobs = options.jobs,
-            .interval_ms = options.interval_ms,
-        });
+        try runWatchCommand(io, allocator, mode, options);
         return;
     }
 

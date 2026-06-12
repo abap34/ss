@@ -34,11 +34,22 @@ const Snapshot = struct {
     }
 };
 
+const CompletionCache = struct {
+    entry_path: []u8,
+    dump_json: []u8,
+
+    fn deinit(self: *CompletionCache, allocator: std.mem.Allocator) void {
+        allocator.free(self.entry_path);
+        allocator.free(self.dump_json);
+    }
+};
+
 const Server = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     documents: std.StringHashMap([]u8),
     snapshot: ?Snapshot = null,
+    last_good_completion: ?CompletionCache = null,
     shutdown: bool = false,
 
     fn init(io: std.Io, allocator: std.mem.Allocator) Server {
@@ -57,6 +68,7 @@ const Server = struct {
         }
         self.documents.deinit();
         if (self.snapshot) |*snapshot| snapshot.deinit(self.allocator);
+        if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
     }
 
     fn replaceDocument(self: *Server, uri: []const u8, text: []const u8) !void {
@@ -131,6 +143,7 @@ const Server = struct {
         defer diagnostics.deinit();
         var snapshot = try self.buildSnapshot(changed_path, &diagnostics);
         errdefer snapshot.deinit(self.allocator);
+        if (snapshot.dump_json != null) try self.rememberCompletionSnapshot(&snapshot);
         self.snapshot = snapshot;
         if (self.snapshot.?.lsp.enabled and self.snapshot.?.lsp.diagnostics) {
             try self.publishDiagnostics(&diagnostics);
@@ -146,7 +159,16 @@ const Server = struct {
         defer self.allocator.free(changed_abs);
         const changed_dir = std.fs.path.dirname(changed_abs) orelse ".";
 
-        var config = try project.discover(self.allocator, self.io, changed_dir);
+        const project_path = try project.discoverPath(self.allocator, changed_dir);
+        defer if (project_path) |path| self.allocator.free(path);
+
+        var config: ?project.Config = null;
+        if (project_path) |path| {
+            config = project.loadFile(self.allocator, self.io, path) catch |err| blk: {
+                try self.addProjectConfigDiagnostic(diagnostics, path, err);
+                break :blk null;
+            };
+        }
         defer if (config) |*cfg| cfg.deinit(self.allocator);
         const entry_path = if (config) |cfg| try self.allocator.dupe(u8, cfg.entry) else try self.allocator.dupe(u8, changed_abs);
         errdefer self.allocator.free(entry_path);
@@ -229,6 +251,32 @@ const Server = struct {
 
         snapshot.dump_json = dump.toOwnedString(self.allocator, &ir) catch null;
         return snapshot;
+    }
+
+    fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {
+        var owned_source: ?[]u8 = null;
+        defer if (owned_source) |source| self.allocator.free(source);
+        const source = self.sourceForPath(path) orelse blk: {
+            owned_source = utils.fs.readFileAlloc(self.io, self.allocator, path) catch null;
+            break :blk owned_source orelse "";
+        };
+        const message = try std.fmt.allocPrint(self.allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
+        defer self.allocator.free(message);
+        try diagnostics.add(path, source, .@"error", @errorName(err), message, null);
+    }
+
+    fn rememberCompletionSnapshot(self: *Server, snapshot: *const Snapshot) !void {
+        const json = snapshot.dump_json orelse return;
+        const entry_path = try self.allocator.dupe(u8, snapshot.entry_path);
+        errdefer self.allocator.free(entry_path);
+        const dump_json = try self.allocator.dupe(u8, json);
+        errdefer self.allocator.free(dump_json);
+        const next = CompletionCache{
+            .entry_path = entry_path,
+            .dump_json = dump_json,
+        };
+        if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
+        self.last_good_completion = next;
     }
 
     fn publishDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
@@ -589,11 +637,19 @@ fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     var first = true;
     const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
     for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
-    if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
+    if (completionDumpJson(server)) |json_text| {
         try appendDumpCompletions(allocator, &out, &first, json_text, if (context) |*ctx| ctx else null);
-    };
+    }
     try out.appendSlice(allocator, "]}");
     return out.toOwnedSlice(allocator);
+}
+
+fn completionDumpJson(server: *const Server) ?[]const u8 {
+    const snapshot = server.snapshot orelse return null;
+    if (snapshot.dump_json) |json| return json;
+    const cache = server.last_good_completion orelse return null;
+    if (!std.mem.eql(u8, cache.entry_path, snapshot.entry_path)) return null;
+    return cache.dump_json;
 }
 
 fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, json_text: []const u8, context: ?*const RequestContext) !void {

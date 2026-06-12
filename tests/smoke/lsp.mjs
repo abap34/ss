@@ -143,6 +143,7 @@ const completion = await request("textDocument/completion", {
 });
 assert(completion.items?.some((item) => item.label === "page"), "completion did not include language keywords");
 assert(!completion.items?.some((item) => item.label === "place"), "completion still exposed removed place keyword");
+assert(completion.items?.some((item) => item.label === "module_label!"), "completion did not include imported functions");
 
 const hover = await request("textDocument/hover", {
   textDocument: { uri },
@@ -179,6 +180,15 @@ notify("textDocument/didChange", {
 });
 const brokenDiagnostics = await brokenDiagnosticsPromise;
 assert(brokenDiagnostics.params.diagnostics.length > 0, "ranged didChange did not publish diagnostics for broken source");
+
+const brokenCompletion = await request("textDocument/completion", {
+  textDocument: { uri },
+  position: { line: 4, character: 15 },
+});
+assert(
+  brokenCompletion.items?.some((item) => item.label === "module_label!"),
+  `completion lost semantic candidates after a syntax error: ${JSON.stringify(brokenCompletion)}`,
+);
 
 const fixedDiagnosticsPromise = waitForNotification(
   (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
@@ -327,6 +337,26 @@ positions = false
   assert(argumentOnly.inlayHints.every((hint) => hint.kind !== 1), `position hints were not filtered: ${JSON.stringify(argumentOnly.inlayHints)}`);
 } finally {
   await rm(configuredProject, { recursive: true, force: true });
+}
+
+const brokenProject = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-broken-config-"));
+try {
+  const brokenSlide = path.join(brokenProject, "slide.ss");
+  await writeFile(path.join(brokenProject, "ss.toml"), `[project]
+asset_base_dir = "."
+`, "utf8");
+  const brokenSource = `page alive
+end
+`;
+  await writeFile(brokenSlide, brokenSource, "utf8");
+  const broken = await configuredResponses({
+    cwd: brokenProject,
+    fixture: brokenSlide,
+    source: brokenSource,
+  });
+  assert(broken.completion.items?.some((item) => item.label === "page"), `broken ss.toml stopped completion responses: ${JSON.stringify(broken.completion)}`);
+} finally {
+  await rm(brokenProject, { recursive: true, force: true });
 }
 
 async function definitionInFreshServer({ cwd, fixture, source, needle, characterOffset }) {

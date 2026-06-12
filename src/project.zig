@@ -117,15 +117,21 @@ pub fn resolve(
 }
 
 pub fn discover(allocator: std.mem.Allocator, io: std.Io, start_dir: []const u8) !?Config {
+    const path = try discoverPath(allocator, start_dir);
+    defer if (path) |found| allocator.free(found);
+    return if (path) |found| try loadFile(allocator, io, found) else null;
+}
+
+pub fn discoverPath(allocator: std.mem.Allocator, start_dir: []const u8) !?[]u8 {
     var current = try absolutePath(allocator, start_dir);
     defer allocator.free(current);
 
     while (true) {
         const candidate = try std.fs.path.join(allocator, &.{ current, "ss.toml" });
-        defer allocator.free(candidate);
         if (utils.fs.fileExists(allocator, candidate)) {
-            return try loadFile(allocator, io, candidate);
+            return candidate;
         }
+        allocator.free(candidate);
         const parent = std.fs.path.dirname(current) orelse break;
         if (std.mem.eql(u8, parent, current)) break;
         const next = try allocator.dupe(u8, parent);
@@ -133,6 +139,13 @@ pub fn discover(allocator: std.mem.Allocator, io: std.Io, start_dir: []const u8)
         current = next;
     }
     return null;
+}
+
+pub fn isConfigError(err: anyerror) bool {
+    return switch (err) {
+        error.MissingProjectEntry => true,
+        else => false,
+    };
 }
 
 pub fn loadProjectArgument(allocator: std.mem.Allocator, io: std.Io, arg: []const u8) !Config {
