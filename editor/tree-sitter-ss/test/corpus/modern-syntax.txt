@@ -49,7 +49,7 @@ end
         (identifier)
         (number))))
   (function_declaration
-    (callable_identifier
+    (bare_callable_identifier
       (identifier))
     (parameters
       (parameter
@@ -70,16 +70,18 @@ end
               (primary_type))))
         (call_expression
           (callable_identifier
-            (identifier))
+            (bare_callable_identifier
+              (identifier)))
           (identifier)
           (call_expression
             (callable_identifier
-              (identifier))
+              (bare_callable_identifier
+                (identifier)))
             (identifier)
             (string)
             (string))))))
   (function_declaration
-    (callable_identifier
+    (bare_callable_identifier
       (identifier))
     (parameters
       (parameter
@@ -114,13 +116,16 @@ end
     (expression_statement
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (call_expression
           (callable_identifier
-            (identifier))
+            (bare_callable_identifier
+              (identifier)))
           (call_expression
             (callable_identifier
-              (identifier))))
+              (bare_callable_identifier
+                (identifier)))))
         (lambda_expression
           (lambda_parameters
             (lambda_parameter
@@ -129,11 +134,13 @@ end
                 (primary_type))))
           (call_expression
             (callable_identifier
-              (identifier))
+              (bare_callable_identifier
+                (identifier)))
             (identifier)
             (call_expression
               (callable_identifier
-                (identifier)))))))
+                (bare_callable_identifier
+                  (identifier))))))))
     (return_statement))
   (page_declaration
     (identifier)
@@ -141,10 +148,12 @@ end
       (identifier)
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (text_call_expression
           (callable_identifier
-            (identifier))
+            (bare_callable_identifier
+              (identifier)))
           (string))
         (string)))
     (member_assignment_statement
@@ -156,7 +165,8 @@ end
       (member_expression
         (call_expression
           (callable_identifier
-            (identifier)))
+            (bare_callable_identifier
+              (identifier))))
         (identifier))
       (property_default_expression
         (member_expression
@@ -177,7 +187,8 @@ end
       (identifier)
       (text_call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (string)))
     (let_statement
       (identifier)
@@ -230,10 +241,11 @@ end
     (return_statement
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (identifier))))
   (function_declaration
-    (callable_identifier
+    (bare_callable_identifier
       (identifier))
     (parameters
       (parameter
@@ -245,7 +257,8 @@ end
     (return_statement
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (identifier))))
   (page_declaration
     (identifier)
@@ -253,24 +266,29 @@ end
       (identifier)
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (string)))
     (expression_statement
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (string)))
     (expression_statement
       (call_expression
         (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (call_expression
           (callable_identifier
-            (identifier))
+            (bare_callable_identifier
+              (identifier)))
           (string)
           (string)
           (string))))
     (block_call_statement
       (callable_identifier
-        (identifier))
+        (bare_callable_identifier
+          (identifier)))
       (block_text))))

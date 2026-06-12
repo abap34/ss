@@ -1,4 +1,11 @@
 {
+  "import theme": {
+    "prefix": "ss-import",
+    "body": [
+      "import std:themes/${1:default} as *"
+    ],
+    "description": "Import an ss theme into the bare namespace"
+  },
   "page": {
     "prefix": "ss-page",
     "body": [

@@ -25,20 +25,23 @@ end
     (expression_statement
       (call_expression
         function: (callable_identifier
-          (identifier)))))
+          (bare_callable_identifier
+            (identifier))))))
   (page_declaration
     name: (string)
     (let_statement
       name: (identifier)
       value: (call_expression
         function: (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (string)))
     (let_statement
       name: (identifier)
       value: (call_expression
         function: (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (string)
         (string)))
     (for_statement
@@ -54,7 +57,8 @@ end
         (expression_statement
           (call_expression
             function: (callable_identifier
-              (identifier))
+              (bare_callable_identifier
+                (identifier)))
             (identifier)
             (string)
             (color_string)))))))

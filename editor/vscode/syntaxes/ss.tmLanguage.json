@@ -78,7 +78,7 @@
       "patterns": [
         {
           "name": "keyword.control.ss",
-          "match": "\\b(?:import|const|document|page|fn|let|return|end|type|extend|protocol|base|implements|roles|property|if|then|else|for|in)\\b"
+          "match": "\\b(?:import|as|const|document|page|fn|let|return|end|type|extend|protocol|base|implements|roles|property|if|then|else|for|in)\\b"
         },
         {
           "name": "storage.type.ss",
@@ -149,7 +149,7 @@
       "patterns": [
         {
           "name": "keyword.operator.ss",
-          "match": "\\|->|->|\\?\\?|\\+\\+|==|=|\\?|:|\\||~|\\.|,|!|<|>|\\-|\\+|\\*|/"
+          "match": "\\|->|->|\\?\\?|\\+\\+|::|==|=|\\?|:|\\||~|\\.|,|!|<|>|\\-|\\+|\\*|/"
         }
       ]
     },
@@ -157,10 +157,11 @@
       "patterns": [
         {
           "captures": {
-            "1": { "name": "entity.name.function.ss" },
-            "2": { "name": "punctuation.section.group.begin.ss" }
+            "1": { "name": "entity.name.namespace.ss" },
+            "2": { "name": "entity.name.function.ss" },
+            "3": { "name": "punctuation.section.group.begin.ss" }
           },
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*!?)\\s*(\\()"
+          "match": "\\b(?:([A-Za-z_][A-Za-z0-9_]*)::)?([A-Za-z_][A-Za-z0-9_]*!?)\\s*(\\()"
         }
       ]
     },
@@ -170,7 +171,7 @@
           "captures": {
             "1": { "name": "entity.name.function.ss" }
           },
-          "match": "^(\\s*[A-Za-z_][A-Za-z0-9_]*!?)(?=\\s|$)"
+          "match": "^(\\s*(?:[A-Za-z_][A-Za-z0-9_]*::)?[A-Za-z_][A-Za-z0-9_]*!?)(?=\\s|$)"
         }
       ]
     },

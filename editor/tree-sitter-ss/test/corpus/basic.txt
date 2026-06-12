@@ -2,7 +2,8 @@
 Declarations and a page
 ================================================================================
 
-import "std:core/components"
+import std:themes/default as *
+import std:themes/default
 
 const gap: number = 24
 
@@ -21,6 +22,7 @@ extend Hero {
 
 page "Intro"
   let title = h1("Hello")
+  let subtitle = default::h2("Sub")
   text <<
 Markdown body
 >>
@@ -31,7 +33,9 @@ end
 
 (source_file
   (import_declaration
-    spec: (string))
+    spec: (import_spec))
+  (import_declaration
+    spec: (import_spec))
   (const_declaration
     name: (identifier)
     type: (type
@@ -43,7 +47,7 @@ end
       (annotation_arg
         (annotation_value
           (string))))
-    name: (callable_identifier
+    name: (bare_callable_identifier
       (identifier))
     (parameters
       (parameter
@@ -55,7 +59,8 @@ end
     (return_statement
       value: (call_expression
         function: (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
         (identifier)
         (string)
         (string))))
@@ -82,11 +87,22 @@ end
       name: (identifier)
       value: (call_expression
         function: (callable_identifier
-          (identifier))
+          (bare_callable_identifier
+            (identifier)))
+        (string)))
+    (let_statement
+      name: (identifier)
+      value: (call_expression
+        function: (callable_identifier
+          (qualified_callable_identifier
+            module: (identifier)
+            name: (bare_callable_identifier
+              (identifier))))
         (string)))
     (block_call_statement
       function: (callable_identifier
-        (identifier))
+        (bare_callable_identifier
+          (identifier)))
       text: (block_text))
     (constrain_statement
       left: (member_expression

@@ -81,6 +81,40 @@
           }
         },
         {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "as"
+                },
+                {
+                  "type": "FIELD",
+                  "name": "alias",
+                  "content": {
+                    "type": "CHOICE",
+                    "members": [
+                      {
+                        "type": "SYMBOL",
+                        "name": "identifier"
+                      },
+                      {
+                        "type": "STRING",
+                        "value": "*"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
           "type": "SYMBOL",
           "name": "_terminator"
         }
@@ -194,7 +228,7 @@
                   "name": "name",
                   "content": {
                     "type": "SYMBOL",
-                    "name": "callable_identifier"
+                    "name": "bare_callable_identifier"
                   }
                 }
               ]
@@ -2416,6 +2450,23 @@
       "type": "PREC",
       "value": 1,
       "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "SYMBOL",
+            "name": "bare_callable_identifier"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "qualified_callable_identifier"
+          }
+        ]
+      }
+    },
+    "bare_callable_identifier": {
+      "type": "PREC",
+      "value": 1,
+      "content": {
         "type": "SEQ",
         "members": [
           {
@@ -2437,9 +2488,38 @@
         ]
       }
     },
+    "qualified_callable_identifier": {
+      "type": "PREC",
+      "value": 1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "module",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "::"
+          },
+          {
+            "type": "FIELD",
+            "name": "name",
+            "content": {
+              "type": "SYMBOL",
+              "name": "bare_callable_identifier"
+            }
+          }
+        ]
+      }
+    },
     "import_spec": {
       "type": "PATTERN",
-      "value": "[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_./-]+"
+      "value": "[A-Za-z0-9_./:-]+"
     },
     "type_identifier": {
       "type": "PATTERN",

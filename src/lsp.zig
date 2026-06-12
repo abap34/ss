@@ -9,12 +9,25 @@ const module_loader = @import("modules/loader.zig");
 const project = @import("project.zig");
 const dump = @import("dump.zig");
 const utils = @import("utils");
+const language_names = @import("language/names.zig");
 const lsp_scope = @import("lsp/scope.zig");
 
 const JsonValue = std.json.Value;
 const JsonObject = std.json.ObjectMap;
 const JsonArray = std.json.Array;
 const RequestContext = lsp_scope.RequestContext;
+
+const RequestPosition = struct {
+    doc_path: []u8,
+    source: []const u8,
+    offset: usize,
+    line: usize,
+    character: usize,
+
+    fn deinit(self: *RequestPosition, allocator: std.mem.Allocator) void {
+        allocator.free(self.doc_path);
+    }
+};
 
 const Snapshot = struct {
     entry_path: []u8,
@@ -633,7 +646,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
 }
 
 const initializeResultPrefix =
-    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@"]},"hoverProvider":true,"definitionProvider":true,"inlayHintProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
+    \\{"capabilities":{"textDocumentSync":2,"completionProvider":{"triggerCharacters":[".","\"","@",":"]},"hoverProvider":true,"definitionProvider":true,"inlayHintProvider":true,"documentSymbolProvider":true,"foldingRangeProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","function","variable","string","number","type","property","operator"],"tokenModifiers":[]},"full":true},"colorProvider":true},"serverInfo":{"name":"ss-lsp","version":
 ;
 
 fn initializeResult(allocator: std.mem.Allocator) ![]const u8 {
@@ -681,12 +694,15 @@ fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     const allocator = server.allocator;
     var context = try requestContext(server, params);
     defer if (context) |*ctx| ctx.deinit(allocator);
+    var position = try requestPosition(server, params);
+    defer if (position) |*pos| pos.deinit(allocator);
     try out.appendSlice(allocator, "{\"isIncomplete\":false,\"items\":[");
     var first = true;
-    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
+    const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
     for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
+    if (position) |*pos| try appendImportAsCompletions(allocator, &out, &first, pos.source, pos.offset);
     if (completionDumpJson(server)) |json_text| {
-        try appendDumpCompletions(allocator, &out, &first, json_text, if (context) |*ctx| ctx else null);
+        try appendDumpCompletions(allocator, &out, &first, json_text, if (context) |*ctx| ctx else null, if (position) |*pos| pos else null);
     }
     try out.appendSlice(allocator, "]}");
     return out.toOwnedSlice(allocator);
@@ -700,10 +716,25 @@ fn completionDumpJson(server: *const Server) ?[]const u8 {
     return cache.dump_json;
 }
 
-fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, json_text: []const u8, context: ?*const RequestContext) !void {
+fn appendDumpCompletions(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    first: *bool,
+    json_text: []const u8,
+    context: ?*const RequestContext,
+    position: ?*const RequestPosition,
+) !void {
     var parsed = std.json.parseFromSlice(JsonValue, allocator, json_text, .{}) catch return;
     defer parsed.deinit();
     const root = parsed.value.object;
+    if (position) |pos| {
+        if (qualifiedAliasBeforeOffset(pos.source, pos.offset)) |alias| {
+            if (resolveAliasModuleId(allocator, &root, pos.doc_path, alias)) |module_id| {
+                try appendModuleFunctionCompletions(allocator, out, first, &root, module_id);
+                return;
+            }
+        }
+    }
     if (arrayFieldObject(&root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
         const label = stringField(&item.object, "name") orelse continue;
         const detail = stringField(&item.object, "signature");
@@ -729,6 +760,184 @@ fn appendDumpCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
             try appendCompletion(allocator, out, first, label, field.kind, stringField(&item.object, "type"), null);
         };
     }
+}
+
+fn appendImportAsCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, source: []const u8, offset: usize) !void {
+    const spec = importAsSpecBeforeCursor(source, offset) orelse return;
+    try appendCompletion(allocator, out, first, "*", 14, "open import", null);
+    if (defaultAliasCandidate(spec)) |alias| {
+        try appendCompletion(allocator, out, first, alias, 6, "import alias", null);
+    }
+}
+
+fn appendModuleFunctionCompletions(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    first: *bool,
+    root: *const JsonObject,
+    module_id: i64,
+) !void {
+    if (arrayFieldObject(root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
+        if ((intField(&item.object, "moduleId") orelse -1) != module_id) continue;
+        const label = stringField(&item.object, "name") orelse continue;
+        const detail = stringField(&item.object, "signature");
+        try appendCompletion(allocator, out, first, label, 3, detail, stringField(&item.object, "summary"));
+    };
+}
+
+fn importAsSpecBeforeCursor(source: []const u8, offset: usize) ?[]const u8 {
+    const safe_offset = @min(offset, source.len);
+    var line_start = safe_offset;
+    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
+    const before = std.mem.trim(u8, source[line_start..safe_offset], " \t\r");
+    const trimmed = std.mem.trim(u8, before, " \t");
+    if (!std.mem.startsWith(u8, trimmed, "import ")) return null;
+    const as_index = std.mem.lastIndexOf(u8, trimmed, " as") orelse return null;
+    const spec = std.mem.trim(u8, trimmed["import ".len..as_index], " \t");
+    if (spec.len == 0) return null;
+    return unquoteImportSpec(spec);
+}
+
+fn unquoteImportSpec(spec: []const u8) []const u8 {
+    if (spec.len >= 2 and spec[0] == '"' and spec[spec.len - 1] == '"') return spec[1 .. spec.len - 1];
+    return spec;
+}
+
+fn defaultAliasCandidate(spec: []const u8) ?[]const u8 {
+    if (language_names.importSpecHasFileExtension(spec)) return null;
+    const base = language_names.defaultImportAlias(spec);
+    if (!isValidAlias(base) or isKeyword(base)) return null;
+    return base;
+}
+
+fn isValidAlias(alias: []const u8) bool {
+    if (alias.len == 0 or !isIdentifierStart(alias[0])) return false;
+    for (alias[1..]) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and byte != '_') return false;
+    }
+    return true;
+}
+
+fn qualifiedAliasBeforeOffset(source: []const u8, offset: usize) ?[]const u8 {
+    var cursor = @min(offset, source.len);
+    while (cursor > 0 and isIdentChar(source[cursor - 1])) cursor -= 1;
+    if (cursor < 2 or !std.mem.eql(u8, source[cursor - 2 .. cursor], "::")) return null;
+    var alias_start = cursor - 2;
+    while (alias_start > 0 and (std.ascii.isAlphanumeric(source[alias_start - 1]) or source[alias_start - 1] == '_')) alias_start -= 1;
+    if (alias_start == cursor - 2) return null;
+    return source[alias_start .. cursor - 2];
+}
+
+fn resolveAliasModuleId(allocator: std.mem.Allocator, root: *const JsonObject, doc_path: []const u8, alias: []const u8) ?i64 {
+    const module = moduleForPath(allocator, root, doc_path) orelse return null;
+    if (arrayFieldObject(module, "imports")) |imports| for (imports.items) |item| if (item == .object) {
+        if (!std.mem.eql(u8, stringField(&item.object, "mode") orelse "", "alias")) continue;
+        if (!std.mem.eql(u8, stringField(&item.object, "alias") orelse "", alias)) continue;
+        return intField(&item.object, "module_id");
+    };
+    return null;
+}
+
+fn moduleForPath(allocator: std.mem.Allocator, root: *const JsonObject, doc_path: []const u8) ?*const JsonObject {
+    if (arrayFieldObject(root, "modules")) |modules| for (modules.items) |*module| if (module.* == .object) {
+        const path = stringField(&module.object, "path") orelse continue;
+        if (samePath(allocator, path, doc_path)) return &module.object;
+    };
+    return null;
+}
+
+fn moduleObjectById(root: *const JsonObject, module_id: i64) ?*const JsonObject {
+    if (arrayFieldObject(root, "modules")) |modules| for (modules.items) |*module| if (module.* == .object) {
+        if ((intField(&module.object, "id") orelse -1) == module_id) return &module.object;
+    };
+    return null;
+}
+
+fn functionObject(root: *const JsonObject, target: []const u8, module_id: ?i64) ?*const JsonObject {
+    if (arrayFieldObject(root, "functions")) |functions| for (functions.items) |*item| if (item.* == .object) {
+        if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
+        if (module_id) |id| {
+            if ((intField(&item.object, "moduleId") orelse -1) != id) continue;
+        }
+        return &item.object;
+    };
+    return null;
+}
+
+fn definitionObject(root: *const JsonObject, target: []const u8, module_id: i64) ?*const JsonObject {
+    if (arrayFieldObject(root, "definitions")) |defs| for (defs.items) |*item| if (item.* == .object) {
+        if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
+        if ((intField(&item.object, "moduleId") orelse -1) != module_id) continue;
+        if (std.mem.eql(u8, stringField(&item.object, "kind") orelse "", "variable")) continue;
+        return &item.object;
+    };
+    return null;
+}
+
+fn qualifiedModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
+    const alias = qualifiedAliasBeforeOffset(context.source, context.offset) orelse return null;
+    return resolveAliasModuleId(allocator, root, context.doc_path, alias);
+}
+
+fn aliasModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
+    if (!targetFollowedByDoubleColon(context) and !isImportAliasTarget(context)) return null;
+    return resolveAliasModuleId(allocator, root, context.doc_path, context.target);
+}
+
+fn targetFollowedByDoubleColon(context: *const RequestContext) bool {
+    const bounds = wordBoundsAtOffset(context.source, context.offset) orelse return false;
+    return bounds.end + 2 <= context.source.len and std.mem.eql(u8, context.source[bounds.end .. bounds.end + 2], "::");
+}
+
+fn isImportAliasTarget(context: *const RequestContext) bool {
+    const bounds = wordBoundsAtOffset(context.source, context.offset) orelse return false;
+    var line_start = bounds.start;
+    while (line_start > 0 and context.source[line_start - 1] != '\n') line_start -= 1;
+    var line_end = bounds.end;
+    while (line_end < context.source.len and context.source[line_end] != '\n') line_end += 1;
+    const line = context.source[line_start..line_end];
+    const trimmed = std.mem.trim(u8, line, " \t");
+    if (!std.mem.startsWith(u8, trimmed, "import ")) return false;
+    const as_index = std.mem.lastIndexOf(u8, line, " as ") orelse return false;
+    return bounds.start >= line_start + as_index + " as ".len;
+}
+
+fn wordBoundsAtOffset(source: []const u8, offset: usize) ?struct { start: usize, end: usize } {
+    const pos = @min(offset, source.len);
+    var line_start = pos;
+    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
+    var line_end = pos;
+    while (line_end < source.len and source[line_end] != '\n') line_end += 1;
+    var start = pos;
+    while (start > line_start and isIdentChar(source[start - 1])) start -= 1;
+    var end = pos;
+    while (end < line_end and isIdentChar(source[end])) end += 1;
+    if (end <= start) return null;
+    return .{ .start = start, .end = end };
+}
+
+fn appendModuleDefinitionLocation(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    root: *const JsonObject,
+    module_id: i64,
+    fallback_path: []const u8,
+    first: *bool,
+) !void {
+    const path = try modulePathForDefinition(allocator, root, module_id);
+    defer if (path) |value| allocator.free(value);
+    const uri = try uriFromPath(allocator, path orelse fallback_path);
+    defer allocator.free(uri);
+    if (!first.*) try out.append(allocator, ',');
+    first.* = false;
+    try appendLocationObject(allocator, out, uri, 0, 0, 0, 1);
+}
+
+fn modulePathForDefinition(allocator: std.mem.Allocator, root: *const JsonObject, module_id: i64) !?[]u8 {
+    const module = moduleObjectById(root, module_id) orelse return null;
+    if (stringField(module, "path")) |path| return try allocator.dupe(u8, path);
+    if (stringField(module, "spec")) |spec| return try stdModulePath(allocator, spec);
+    return null;
 }
 
 fn appendCompletion(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, label: []const u8, kind: usize, detail: ?[]const u8, documentation: ?[]const u8) !void {
@@ -770,15 +979,26 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
 
 fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) !?[]u8 {
     const target = context.target;
+    if (qualifiedModuleIdForContext(allocator, root, context)) |module_id| {
+        if (functionObject(root, target, module_id)) |item| {
+            const signature = stringField(item, "signature") orelse target;
+            const summary = stringField(item, "summary") orelse "";
+            return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
+        }
+    }
+    if (aliasModuleIdForContext(allocator, root, context)) |module_id| {
+        if (moduleObjectById(root, module_id)) |module| {
+            return try std.fmt.allocPrint(allocator, "```ss\nimport {s}\n```", .{stringField(module, "spec") orelse context.target});
+        }
+    }
     if (lsp_scope.bestVisibleVariable(allocator, root, target, context)) |item| {
         return try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ target, stringField(item, "type") orelse "unknown" });
     }
-    if (arrayFieldObject(root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
-        if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
-        const signature = stringField(&item.object, "signature") orelse target;
-        const summary = stringField(&item.object, "summary") orelse "";
+    if (functionObject(root, target, null)) |item| {
+        const signature = stringField(item, "signature") orelse target;
+        const summary = stringField(item, "summary") orelse "";
         return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
-    };
+    }
     if (objectFieldObject(root, "declarations")) |decls| {
         if (arrayFieldObject(decls, "classes")) |classes| for (classes.items) |item| if (item == .object and std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) {
             return try std.fmt.allocPrint(allocator, "```ss\ntype {s} = object {{ ... }}\n```", .{target});
@@ -804,6 +1024,18 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
         var first = true;
         if (lsp_scope.bestVisibleDefinition(server.allocator, &root, context.target, &context)) |definition| {
             try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
+            try out.append(server.allocator, ']');
+            return out.toOwnedSlice(server.allocator);
+        }
+        if (qualifiedModuleIdForContext(server.allocator, &root, &context)) |module_id| {
+            if (definitionObject(&root, context.target, module_id)) |definition| {
+                try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
+                try out.append(server.allocator, ']');
+                return out.toOwnedSlice(server.allocator);
+            }
+        }
+        if (aliasModuleIdForContext(server.allocator, &root, &context)) |module_id| {
+            try appendModuleDefinitionLocation(server.allocator, &out, &root, module_id, snapshot.entry_path, &first);
             try out.append(server.allocator, ']');
             return out.toOwnedSlice(server.allocator);
         }
@@ -1007,6 +1239,12 @@ fn scanSemanticLine(allocator: std.mem.Allocator, tokens: *std.ArrayList(Semanti
             index += 1;
             continue;
         }
+        if (byte == ':' and index + 1 < line.len and line[index + 1] == ':') {
+            try appendSemanticToken(allocator, tokens, line, line_index, index, index + 2, 7);
+            previous_word = null;
+            index += 2;
+            continue;
+        }
         if ((byte == 'c' and index + 1 < line.len and line[index + 1] == '"') or byte == '"') {
             const start = index;
             index += if (byte == 'c') @as(usize, 2) else 1;
@@ -1080,7 +1318,7 @@ fn semanticTokenType(word: []const u8, previous_word: ?[]const u8, next: ?u8, pr
 }
 
 fn isKeyword(word: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "protocol", "base", "implements", "roles", "if", "then", "else", "for", "in", "property" };
+    const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "protocol", "base", "implements", "roles", "if", "then", "else", "for", "in", "property" };
     for (keywords) |keyword| if (std.mem.eql(u8, word, keyword)) return true;
     return false;
 }
@@ -1486,6 +1724,29 @@ fn docPathFromParams(allocator: std.mem.Allocator, params: ?JsonValue) !?[]u8 {
     const doc = objectField(p, "textDocument") orelse return null;
     const uri = stringField(doc, "uri") orelse return null;
     return try pathFromUri(allocator, uri);
+}
+
+fn requestPosition(server: *Server, params: ?JsonValue) !?RequestPosition {
+    const p = params orelse return null;
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return null;
+    errdefer server.allocator.free(doc_path);
+    const pos_obj = objectField(p, "position") orelse {
+        server.allocator.free(doc_path);
+        return null;
+    };
+    const line: usize = @intCast(@max(0, intField(pos_obj, "line") orelse 0));
+    const character: usize = @intCast(@max(0, intField(pos_obj, "character") orelse 0));
+    const source = server.sourceForPath(doc_path) orelse {
+        server.allocator.free(doc_path);
+        return null;
+    };
+    return .{
+        .doc_path = doc_path,
+        .source = source,
+        .offset = positionOffset(source, line, character),
+        .line = line,
+        .character = character,
+    };
 }
 
 fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {

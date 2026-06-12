@@ -30,7 +30,12 @@ module.exports = grammar({
       $.page_declaration,
     ),
 
-    import_declaration: $ => seq("import", field("spec", choice($.string, $.import_spec, $.identifier)), $._terminator),
+    import_declaration: $ => seq(
+      "import",
+      field("spec", choice($.string, $.import_spec, $.identifier)),
+      optional(seq("as", field("alias", choice($.identifier, "*")))),
+      $._terminator,
+    ),
 
     const_declaration: $ => seq(
       "const",
@@ -46,7 +51,7 @@ module.exports = grammar({
       repeat(seq($.annotation, optional($._terminator))),
       choice(
         seq("fn", "/!", field("name", $.identifier)),
-        seq("fn", field("name", $.callable_identifier)),
+        seq("fn", field("name", $.bare_callable_identifier)),
       ),
       $.parameters,
       "->",
@@ -238,8 +243,10 @@ module.exports = grammar({
     ),
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
-    callable_identifier: $ => prec(1, seq($.identifier, optional("!"))),
-    import_spec: _ => /[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_./-]+/,
+    callable_identifier: $ => prec(1, choice($.bare_callable_identifier, $.qualified_callable_identifier)),
+    bare_callable_identifier: $ => prec(1, seq($.identifier, optional("!"))),
+    qualified_callable_identifier: $ => prec(1, seq(field("module", $.identifier), "::", field("name", $.bare_callable_identifier))),
+    import_spec: _ => /[A-Za-z0-9_./:-]+/,
     type_identifier: _ => /[A-Z][A-Za-z0-9_]*/,
     string: _ => token(choice(
       seq('"""', repeat(choice(/[^"]+/, /"[^"]/, /""[^"]/)), '"""'),

@@ -156,7 +156,7 @@ const definition = await request("textDocument/definition", {
   position: { line: 4, character: 17 },
 });
 assert(Array.isArray(definition), `expected definition array, got ${JSON.stringify(definition)}`);
-assert(definition.some((location) => location.uri === partsUri && location.range?.start?.line === 0 && location.range?.start?.character === 3), `definition did not jump to parts.ss: ${JSON.stringify(definition)}`);
+assert(definition.some((location) => location.uri === partsUri && location.range?.start?.line === 2 && location.range?.start?.character === 3), `definition did not jump to parts.ss: ${JSON.stringify(definition)}`);
 
 const pairedDefinition = await request("textDocument/definition", {
   textDocument: { uri },
@@ -234,7 +234,7 @@ await new Promise((resolve, reject) => {
 const outsideSource = `import std:themes/default
 
 page title
-cover!(
+default::cover!(
   "Hello",
   "Subtitle",
   "Author"
@@ -252,6 +252,32 @@ assert(Array.isArray(outsideDefinition), `expected outside definition array, got
 assert(
   outsideDefinition.some(isCoverDefinition),
   `outside cwd definition did not jump to default theme cover: ${JSON.stringify(outsideDefinition)}`,
+);
+
+const qualifiedSource = `import std:themes/default
+
+page title
+  default::h2!("Qualified")
+end
+`;
+const qualified = await qualifiedResponsesInFreshServer({
+  cwd: "/tmp",
+  fixture: "/tmp/ss-lsp-qualified/slide.ss",
+  source: qualifiedSource,
+});
+assert(
+  qualified.completion.items?.some((item) => item.label === "h2") &&
+    qualified.completion.items?.some((item) => item.label === "h2!"),
+  `qualified completion did not include default module functions: ${JSON.stringify(qualified.completion)}`,
+);
+assert(Array.isArray(qualified.definition), `expected qualified definition array, got ${JSON.stringify(qualified.definition)}`);
+assert(
+  qualified.definition.some((location) => location.uri === defaultThemeUri && location.range?.start?.line === 8 && location.range?.start?.character === 5),
+  `qualified definition did not jump to default h2: ${JSON.stringify(qualified.definition)}`,
+);
+assert(
+  qualified.semanticTokens.data?.some((_, index, data) => index % 5 === 3 && data[index] === 7),
+  `semantic tokens did not include :: operator: ${JSON.stringify(qualified.semanticTokens)}`,
 );
 
 function isCoverDefinition(location) {
@@ -276,7 +302,7 @@ completion = false
 [editor.lsp.inlay_hints]
 enabled = false
 `, "utf8");
-  await writeFile(configuredSlide, `import std:themes/default
+  await writeFile(configuredSlide, `import std:themes/default as *
 
 pag broken
 `, "utf8");
@@ -289,7 +315,7 @@ pag broken
   assert(configured.completion.items?.length === 0, `disabled completion still returned entries: ${JSON.stringify(configured.completion)}`);
   assert(Array.isArray(configured.inlayHints) && configured.inlayHints.length === 0, `disabled inlay hints still returned entries: ${JSON.stringify(configured.inlayHints)}`);
 
-  const validSource = `import std:themes/default
+  const validSource = `import std:themes/default as *
 
 page configured
 cover!(
@@ -458,6 +484,140 @@ async function definitionInFreshServer({ cwd, fixture, source, needle, character
     });
   });
   return result;
+}
+
+async function qualifiedResponsesInFreshServer({ cwd, fixture, source }) {
+  const localUri = pathToFileURL(fixture).toString();
+  const localChild = spawn(ssBin, ["lsp"], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+  let localNextId = 1;
+  let localBuffer = Buffer.alloc(0);
+  const localPending = new Map();
+  const localNotificationWaiters = [];
+  let localStderr = "";
+
+  localChild.stderr.setEncoding("utf8");
+  localChild.stderr.on("data", (chunk) => {
+    localStderr += chunk;
+  });
+
+  localChild.stdout.on("data", (chunk) => {
+    localBuffer = Buffer.concat([localBuffer, chunk]);
+    while (true) {
+      const headerEnd = localBuffer.indexOf("\r\n\r\n");
+      if (headerEnd < 0) return;
+      const header = localBuffer.subarray(0, headerEnd).toString("utf8");
+      const match = /^Content-Length:\s*(\d+)/im.exec(header);
+      if (!match) throw new Error(`missing Content-Length in ${header}`);
+      const length = Number(match[1]);
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + length;
+      if (localBuffer.length < bodyEnd) return;
+      const message = JSON.parse(localBuffer.subarray(bodyStart, bodyEnd).toString("utf8"));
+      localBuffer = localBuffer.subarray(bodyEnd);
+      if (Object.prototype.hasOwnProperty.call(message, "id")) {
+        const waiter = localPending.get(message.id);
+        if (waiter) {
+          localPending.delete(message.id);
+          waiter.resolve(message);
+        }
+      }
+      for (let i = localNotificationWaiters.length - 1; i >= 0; i -= 1) {
+        const waiter = localNotificationWaiters[i];
+        if (waiter.predicate(message)) {
+          localNotificationWaiters.splice(i, 1);
+          waiter.resolve(message);
+        }
+      }
+    }
+  });
+
+  function localSend(message) {
+    const body = Buffer.from(JSON.stringify(message), "utf8");
+    localChild.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+    localChild.stdin.write(body);
+  }
+
+  function localRequest(method, params) {
+    const id = localNextId++;
+    localSend({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        localPending.delete(id);
+        reject(new Error(`timed out waiting for response ${id}; stderr:\n${localStderr}`));
+      }, 10000);
+      localPending.set(id, {
+        resolve: (message) => {
+          clearTimeout(timeout);
+          if (message.error) reject(new Error(`${message.error.code}: ${message.error.message}`));
+          else resolve(message.result);
+        },
+      });
+    });
+  }
+
+  function localNotify(method, params) {
+    localSend({ jsonrpc: "2.0", method, params });
+  }
+
+  function localWaitForNotification(predicate) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const index = localNotificationWaiters.findIndex((waiter) => waiter.resolve === wrappedResolve);
+        if (index >= 0) localNotificationWaiters.splice(index, 1);
+        reject(new Error(`timed out waiting for notification; stderr:\n${localStderr}`));
+      }, 10000);
+      const wrappedResolve = (message) => {
+        clearTimeout(timeout);
+        resolve(message);
+      };
+      localNotificationWaiters.push({ predicate, resolve: wrappedResolve });
+    });
+  }
+
+  await localRequest("initialize", {
+    processId: process.pid,
+    rootUri: pathToFileURL(cwd).toString(),
+    capabilities: {},
+  });
+  localNotify("initialized", {});
+  const diagnosticsPromise = localWaitForNotification(
+    (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === localUri,
+  );
+  localNotify("textDocument/didOpen", {
+    textDocument: {
+      uri: localUri,
+      languageId: "ss-slide",
+      version: 1,
+      text: source,
+    },
+  });
+  const diagnostics = await diagnosticsPromise;
+  assert(diagnostics.params.diagnostics.length === 0, `qualified source diagnostics: ${JSON.stringify(diagnostics.params.diagnostics)}`);
+  const completionLine = 3;
+  const completionCharacter = source.split("\n")[completionLine].indexOf("default::") + "default::".length;
+  const definitionCharacter = source.split("\n")[completionLine].indexOf("h2!") + 1;
+  const completion = await localRequest("textDocument/completion", {
+    textDocument: { uri: localUri },
+    position: { line: completionLine, character: completionCharacter },
+  });
+  const definition = await localRequest("textDocument/definition", {
+    textDocument: { uri: localUri },
+    position: { line: completionLine, character: definitionCharacter },
+  });
+  const semanticTokens = await localRequest("textDocument/semanticTokens/full", {
+    textDocument: { uri: localUri },
+  });
+  await localRequest("shutdown", null);
+  localNotify("exit", {});
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`qualified language server did not exit; stderr:\n${localStderr}`)), 5000);
+    localChild.on("exit", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(`qualified language server exited with ${code}; stderr:\n${localStderr}`));
+    });
+  });
+  return { completion, definition, semanticTokens };
 }
 
 async function configuredResponses({ cwd, fixture, source }) {
