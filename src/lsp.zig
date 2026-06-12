@@ -19,6 +19,9 @@ const RequestContext = lsp_scope.RequestContext;
 const Snapshot = struct {
     entry_path: []u8,
     asset_base_dir: []u8,
+    lsp: project.LspConfig = .{},
+    preview: project.PreviewConfig = .{},
+    page_guide: project.PageGuideConfig = .{},
     dump_json: ?[]u8 = null,
     module_paths: std.ArrayList([]u8),
 
@@ -129,7 +132,13 @@ const Server = struct {
         var snapshot = try self.buildSnapshot(changed_path, &diagnostics);
         errdefer snapshot.deinit(self.allocator);
         self.snapshot = snapshot;
-        try self.publishDiagnostics(&diagnostics);
+        if (self.snapshot.?.lsp.enabled and self.snapshot.?.lsp.diagnostics) {
+            try self.publishDiagnostics(&diagnostics);
+        } else {
+            var empty = DiagnosticSet.init(self.allocator);
+            defer empty.deinit();
+            try self.publishDiagnostics(&empty);
+        }
     }
 
     fn buildSnapshot(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !Snapshot {
@@ -147,6 +156,9 @@ const Server = struct {
         var snapshot = Snapshot{
             .entry_path = entry_path,
             .asset_base_dir = asset_base_dir,
+            .lsp = if (config) |cfg| cfg.lsp else .{},
+            .preview = if (config) |cfg| cfg.preview else .{},
+            .page_guide = if (config) |cfg| cfg.page_guide else .{},
             .module_paths = .empty,
         };
         errdefer snapshot.deinit(self.allocator);
@@ -541,7 +553,34 @@ fn jsonLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return allocator.dupe(u8, text);
 }
 
+const LspFeature = enum {
+    completion,
+    hover,
+    definition,
+    inlay_hints,
+    document_symbols,
+    folding_ranges,
+    semantic_tokens,
+    colors,
+};
+
+fn lspFeatureEnabled(server: *const Server, feature: LspFeature) bool {
+    const cfg = if (server.snapshot) |snapshot| snapshot.lsp else project.LspConfig{};
+    if (!cfg.enabled) return false;
+    return switch (feature) {
+        .completion => cfg.completion,
+        .hover => cfg.hover,
+        .definition => cfg.definition,
+        .inlay_hints => cfg.inlay_hints,
+        .document_symbols => cfg.document_symbols,
+        .folding_ranges => cfg.folding_ranges,
+        .semantic_tokens => cfg.semantic_tokens,
+        .colors => cfg.colors,
+    };
+}
+
 fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .completion)) return try jsonLiteral(server.allocator, "{\"isIncomplete\":false,\"items\":[]}");
     var out = std.ArrayList(u8).empty;
     const allocator = server.allocator;
     var context = try requestContext(server, params);
@@ -607,6 +646,7 @@ fn appendCompletion(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first
 }
 
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .hover)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer context.deinit(server.allocator);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
@@ -647,6 +687,7 @@ fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, context:
 }
 
 fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .definition)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer context.deinit(server.allocator);
     if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
@@ -696,6 +737,7 @@ fn appendDefinitionLocation(
 }
 
 fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .inlay_hints)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
     var out = std.ArrayList(u8).empty;
@@ -707,6 +749,8 @@ fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
         if (arrayFieldObject(&parsed.value.object, "hints")) |hints| for (hints.items) |item| if (item == .object) {
             const file = stringField(&item.object, "file") orelse continue;
             if (!samePath(server.allocator, file, doc_path)) continue;
+            const kind = stringField(&item.object, "kind") orelse "";
+            if (!inlayHintKindEnabled(server, kind)) continue;
             if (!first) try out.append(server.allocator, ',');
             first = false;
             const line: usize = @intCast(@max(0, (intField(&item.object, "line") orelse 1) - 1));
@@ -718,7 +762,7 @@ fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
             try out.appendSlice(server.allocator, "},\"label\":");
             try appendJsonString(server.allocator, &out, stringField(&item.object, "label") orelse "");
             try out.appendSlice(server.allocator, ",\"kind\":");
-            const hint_kind: i64 = if (std.mem.eql(u8, stringField(&item.object, "kind") orelse "", "parameter_names")) 2 else 1;
+            const hint_kind: i64 = if (std.mem.eql(u8, kind, "parameter_names")) 2 else 1;
             try appendInt(server.allocator, &out, hint_kind);
             try out.appendSlice(server.allocator, ",\"paddingLeft\":true}");
         };
@@ -727,7 +771,15 @@ fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
     return out.toOwnedSlice(server.allocator);
 }
 
+fn inlayHintKindEnabled(server: *const Server, kind: []const u8) bool {
+    const cfg = if (server.snapshot) |snapshot| snapshot.lsp else project.LspConfig{};
+    if (std.mem.eql(u8, kind, "parameter_names")) return cfg.inlay_hint_arguments;
+    if (std.mem.eql(u8, kind, "solved_frame")) return cfg.inlay_hint_positions;
+    return true;
+}
+
 fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .document_symbols)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
     const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
@@ -761,6 +813,7 @@ fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
 }
 
 fn foldingRangeResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .folding_ranges)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
     const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
@@ -800,6 +853,7 @@ const SemanticToken = struct {
 };
 
 fn semanticTokensResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .semantic_tokens)) return try jsonLiteral(server.allocator, "{\"data\":[]}");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "{\"data\":[]}");
     defer server.allocator.free(doc_path);
     const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "{\"data\":[]}");
@@ -968,6 +1022,7 @@ fn utf16Units(bytes: []const u8) usize {
 }
 
 fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .colors)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
     const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
@@ -1011,6 +1066,7 @@ fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
 }
 
 fn colorPresentationResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    if (!lspFeatureEnabled(server, .colors)) return try jsonLiteral(server.allocator, "[]");
     const color = if (params) |p| objectField(p, "color") else null;
     const red = if (color) |c| numberField(c, "red") orelse 0 else 0;
     const green = if (color) |c| numberField(c, "green") orelse 0 else 0;
@@ -1054,9 +1110,64 @@ fn projectInfoJson(allocator: std.mem.Allocator, snapshot: ?*const Snapshot) ![]
             try appendJsonString(allocator, &out, path);
         }
         try out.append(allocator, ']');
+        try appendProjectInfoSettings(allocator, &out, snap);
     }
     try out.append(allocator, '}');
     return out.toOwnedSlice(allocator);
+}
+
+fn appendProjectInfoSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), snapshot: *const Snapshot) !void {
+    try out.appendSlice(allocator, ",\"lsp\":{");
+    try appendBoolField(allocator, out, "enabled", snapshot.lsp.enabled, true);
+    try appendIntField(allocator, out, "debounce", snapshot.lsp.change_debounce_ms, false);
+    try appendBoolField(allocator, out, "diagnostics", snapshot.lsp.diagnostics, false);
+    try appendBoolField(allocator, out, "completion", snapshot.lsp.completion, false);
+    try appendBoolField(allocator, out, "hover", snapshot.lsp.hover, false);
+    try appendBoolField(allocator, out, "definition", snapshot.lsp.definition, false);
+    try appendBoolField(allocator, out, "inlayHints", snapshot.lsp.inlay_hints, false);
+    try appendBoolField(allocator, out, "inlayHintArguments", snapshot.lsp.inlay_hint_arguments, false);
+    try appendBoolField(allocator, out, "inlayHintPositions", snapshot.lsp.inlay_hint_positions, false);
+    try appendBoolField(allocator, out, "documentSymbols", snapshot.lsp.document_symbols, false);
+    try appendBoolField(allocator, out, "foldingRanges", snapshot.lsp.folding_ranges, false);
+    try appendBoolField(allocator, out, "semanticTokens", snapshot.lsp.semantic_tokens, false);
+    try appendBoolField(allocator, out, "colors", snapshot.lsp.colors, false);
+    try out.append(allocator, '}');
+
+    try out.appendSlice(allocator, ",\"preview\":{");
+    try appendBoolField(allocator, out, "enabled", snapshot.preview.enabled, true);
+    try appendIntField(allocator, out, "debounce", snapshot.preview.debounce_ms, false);
+    try appendBoolField(allocator, out, "refreshOnEdit", snapshot.preview.refresh_on_edit, false);
+    try appendBoolField(allocator, out, "refreshOnSave", snapshot.preview.refresh_on_save, false);
+    try appendBoolField(allocator, out, "refreshOnDependencyChange", snapshot.preview.refresh_on_dependency_change, false);
+    try out.appendSlice(allocator, ",\"open\":");
+    try appendJsonString(allocator, out, if (snapshot.preview.open_mode == .external) "external" else "vscode");
+    try appendBoolField(allocator, out, "reveal", snapshot.preview.reveal_after_render, false);
+    try appendIntField(allocator, out, "timeout", snapshot.preview.render_timeout_ms, false);
+    try appendBoolField(allocator, out, "deleteSnapshots", snapshot.preview.delete_snapshots_after_render, false);
+    try out.append(allocator, '}');
+
+    try out.appendSlice(allocator, ",\"pageGuide\":{");
+    try appendBoolField(allocator, out, "enabled", snapshot.page_guide.enabled, true);
+    try appendBoolField(allocator, out, "bodyBackground", snapshot.page_guide.body_background, false);
+    try appendBoolField(allocator, out, "boundary", snapshot.page_guide.boundary, false);
+    try appendBoolField(allocator, out, "boundaryBackground", snapshot.page_guide.boundary_background, false);
+    try appendBoolField(allocator, out, "gutterIcon", snapshot.page_guide.gutter_icon, false);
+    try appendBoolField(allocator, out, "overviewRuler", snapshot.page_guide.overview_ruler, false);
+    try out.append(allocator, '}');
+}
+
+fn appendBoolField(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: bool, first: bool) !void {
+    if (!first) try out.append(allocator, ',');
+    try appendJsonString(allocator, out, name);
+    try out.append(allocator, ':');
+    try appendBool(allocator, out, value);
+}
+
+fn appendIntField(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: anytype, first: bool) !void {
+    if (!first) try out.append(allocator, ',');
+    try appendJsonString(allocator, out, name);
+    try out.append(allocator, ':');
+    try appendInt(allocator, out, value);
 }
 
 fn snapshotCoversPath(snapshot: *const Snapshot, path: []const u8) bool {
@@ -1170,6 +1281,10 @@ fn appendInt(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: anyty
     const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
     defer allocator.free(text);
     try out.appendSlice(allocator, text);
+}
+
+fn appendBool(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: bool) !void {
+    try out.appendSlice(allocator, if (value) "true" else "false");
 }
 
 fn appendFloat(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f64) !void {

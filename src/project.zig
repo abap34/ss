@@ -6,6 +6,9 @@ pub const Config = struct {
     dir: []u8,
     entry: []u8,
     asset_base_dir: []u8,
+    lsp: LspConfig = .{},
+    preview: PreviewConfig = .{},
+    page_guide: PageGuideConfig = .{},
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
@@ -13,6 +16,48 @@ pub const Config = struct {
         allocator.free(self.entry);
         allocator.free(self.asset_base_dir);
     }
+};
+
+pub const LspConfig = struct {
+    enabled: bool = true,
+    change_debounce_ms: u64 = 120,
+    diagnostics: bool = true,
+    completion: bool = true,
+    hover: bool = true,
+    definition: bool = true,
+    inlay_hints: bool = true,
+    inlay_hint_arguments: bool = true,
+    inlay_hint_positions: bool = true,
+    document_symbols: bool = true,
+    folding_ranges: bool = true,
+    semantic_tokens: bool = true,
+    colors: bool = true,
+};
+
+pub const PreviewOpenMode = enum {
+    vscode,
+    external,
+};
+
+pub const PreviewConfig = struct {
+    enabled: bool = true,
+    debounce_ms: u64 = 350,
+    refresh_on_edit: bool = true,
+    refresh_on_save: bool = true,
+    refresh_on_dependency_change: bool = true,
+    open_mode: PreviewOpenMode = .vscode,
+    reveal_after_render: bool = true,
+    render_timeout_ms: u64 = 30000,
+    delete_snapshots_after_render: bool = true,
+};
+
+pub const PageGuideConfig = struct {
+    enabled: bool = true,
+    body_background: bool = true,
+    boundary: bool = true,
+    boundary_background: bool = true,
+    gutter_icon: bool = true,
+    overview_ruler: bool = true,
 };
 
 pub const Resolved = struct {
@@ -111,8 +156,8 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
     const dir = try dirnameAlloc(allocator, path);
     errdefer allocator.free(dir);
 
-    const raw_entry = parseProjectString(source, "entry") orelse return error.MissingProjectEntry;
-    const raw_asset_base = parseProjectString(source, "asset_base_dir");
+    const raw_entry = parseString(source, "project", "entry") orelse return error.MissingProjectEntry;
+    const raw_asset_base = parseString(source, "project", "asset_base_dir");
     const entry = try resolveAgainst(allocator, dir, raw_entry);
     errdefer allocator.free(entry);
     const asset_base_dir = if (raw_asset_base) |value|
@@ -126,29 +171,105 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
         .dir = dir,
         .entry = entry,
         .asset_base_dir = asset_base_dir,
+        .lsp = parseLspConfig(source),
+        .preview = parsePreviewConfig(source),
+        .page_guide = parsePageGuideConfig(source),
     };
 }
 
-fn parseProjectString(source: []const u8, key: []const u8) ?[]const u8 {
-    var in_project = false;
+fn parseLspConfig(source: []const u8) LspConfig {
+    const inlay_hints = parseBool(source, "editor.lsp", "inlay_hints", true);
+    return .{
+        .enabled = parseBool(source, "editor.lsp", "enabled", true),
+        .change_debounce_ms = parseU64(source, "editor.lsp", "debounce", 120),
+        .diagnostics = parseBool(source, "editor.lsp", "diagnostics", true),
+        .completion = parseBool(source, "editor.lsp", "completion", true),
+        .hover = parseBool(source, "editor.lsp", "hover", true),
+        .definition = parseBool(source, "editor.lsp", "definition", true),
+        .inlay_hints = inlay_hints,
+        .inlay_hint_arguments = parseBool(source, "editor.lsp.inlay_hints", "arguments", inlay_hints),
+        .inlay_hint_positions = parseBool(source, "editor.lsp.inlay_hints", "positions", inlay_hints),
+        .document_symbols = parseBool(source, "editor.lsp", "document_symbols", true),
+        .folding_ranges = parseBool(source, "editor.lsp", "folding_ranges", true),
+        .semantic_tokens = parseBool(source, "editor.lsp", "semantic_tokens", true),
+        .colors = parseBool(source, "editor.lsp", "colors", true),
+    };
+}
+
+fn parsePreviewConfig(source: []const u8) PreviewConfig {
+    return .{
+        .enabled = parseBool(source, "editor.preview", "enabled", true),
+        .debounce_ms = parseU64(source, "editor.preview", "debounce", 350),
+        .refresh_on_edit = parseBool(source, "editor.preview.refresh", "edit", true),
+        .refresh_on_save = parseBool(source, "editor.preview.refresh", "save", true),
+        .refresh_on_dependency_change = parseBool(source, "editor.preview.refresh", "dependency", true),
+        .open_mode = parsePreviewOpenMode(source, "editor.preview", "open", .vscode),
+        .reveal_after_render = parseBool(source, "editor.preview", "reveal", true),
+        .render_timeout_ms = parseU64(source, "editor.preview.render", "timeout", 30000),
+        .delete_snapshots_after_render = parseBool(source, "editor.preview.render", "delete_snapshots", true),
+    };
+}
+
+fn parsePageGuideConfig(source: []const u8) PageGuideConfig {
+    return .{
+        .enabled = parseBool(source, "editor.page_guide", "enabled", true),
+        .body_background = parseBool(source, "editor.page_guide", "body_background", true),
+        .boundary = parseBool(source, "editor.page_guide", "boundary", true),
+        .boundary_background = parseBool(source, "editor.page_guide", "boundary_background", true),
+        .gutter_icon = parseBool(source, "editor.page_guide", "gutter_icon", true),
+        .overview_ruler = parseBool(source, "editor.page_guide", "overview_ruler", true),
+    };
+}
+
+fn parsePreviewOpenMode(source: []const u8, section: []const u8, key: []const u8, default: PreviewOpenMode) PreviewOpenMode {
+    const value = parseString(source, section, key) orelse return default;
+    if (std.mem.eql(u8, value, "external")) return .external;
+    if (std.mem.eql(u8, value, "vscode")) return .vscode;
+    return default;
+}
+
+fn parseBool(source: []const u8, section: []const u8, key: []const u8, default: bool) bool {
+    const value = parseValue(source, section, key) orelse return default;
+    if (std.mem.eql(u8, value, "true")) return true;
+    if (std.mem.eql(u8, value, "false")) return false;
+    return default;
+}
+
+fn parseU64(source: []const u8, section: []const u8, key: []const u8, default: u64) u64 {
+    const value = parseValue(source, section, key) orelse return default;
+    return std.fmt.parseUnsigned(u64, value, 10) catch default;
+}
+
+fn parseString(source: []const u8, section: []const u8, key: []const u8) ?[]const u8 {
+    const value = parseValue(source, section, key) orelse return null;
+    if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return null;
+    return value[1 .. value.len - 1];
+}
+
+fn parseValue(source: []const u8, section: []const u8, key: []const u8) ?[]const u8 {
+    var in_target_section = false;
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line_raw| {
         const comment_start = tomlCommentStart(line_raw);
         const line = std.mem.trim(u8, line_raw[0..comment_start], " \t\r");
         if (line.len == 0) continue;
         if (line[0] == '[') {
-            in_project = std.mem.eql(u8, line, "[project]");
+            in_target_section = sectionHeaderMatches(line, section);
             continue;
         }
-        if (!in_project) continue;
+        if (!in_target_section) continue;
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const name = std.mem.trim(u8, line[0..eq], " \t");
         if (!std.mem.eql(u8, name, key)) continue;
-        const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
-        if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return null;
-        return value[1 .. value.len - 1];
+        return std.mem.trim(u8, line[eq + 1 ..], " \t");
     }
     return null;
+}
+
+fn sectionHeaderMatches(line: []const u8, section: []const u8) bool {
+    if (line.len != section.len + 2) return false;
+    if (line[0] != '[' or line[line.len - 1] != ']') return false;
+    return std.mem.eql(u8, line[1 .. line.len - 1], section);
 }
 
 fn tomlCommentStart(line: []const u8) usize {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -162,7 +163,7 @@ const pairedDefinition = await request("textDocument/definition", {
 });
 assert(Array.isArray(pairedDefinition), `expected paired definition array, got ${JSON.stringify(pairedDefinition)}`);
 assert(
-  pairedDefinition.some((location) => location.uri === defaultThemeUri && location.range?.start?.line === 67 && location.range?.start?.character === 5),
+  pairedDefinition.some(isCoverDefinition),
   `definition did not jump to default theme cover: ${JSON.stringify(pairedDefinition)}`,
 );
 
@@ -239,9 +240,90 @@ const outsideDefinition = await definitionInFreshServer({
 });
 assert(Array.isArray(outsideDefinition), `expected outside definition array, got ${JSON.stringify(outsideDefinition)}`);
 assert(
-  outsideDefinition.some((location) => location.uri === defaultThemeUri && location.range?.start?.line === 67 && location.range?.start?.character === 5),
+  outsideDefinition.some(isCoverDefinition),
   `outside cwd definition did not jump to default theme cover: ${JSON.stringify(outsideDefinition)}`,
 );
+
+function isCoverDefinition(location) {
+  const start = location.range?.start;
+  if (location.uri === defaultThemeUri && start?.line === 67 && start?.character === 5) {
+    return true;
+  }
+  return location.uri?.endsWith("/stdlib/themes/constructors.ss") && start?.line === 120 && start?.character === 5;
+}
+
+const configuredProject = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-config-"));
+try {
+  const configuredSlide = path.join(configuredProject, "slide.ss");
+  await writeFile(path.join(configuredProject, "ss.toml"), `[project]
+entry = "slide.ss"
+asset_base_dir = "."
+
+[editor.lsp]
+diagnostics = false
+completion = false
+inlay_hints = false
+`, "utf8");
+  await writeFile(configuredSlide, `import std:themes/default
+
+pag broken
+`, "utf8");
+  const configured = await configuredResponses({
+    cwd: configuredProject,
+    fixture: configuredSlide,
+    source: await readFile(configuredSlide, "utf8"),
+  });
+  assert(configured.diagnostics.length === 0, `disabled diagnostics still published entries: ${JSON.stringify(configured.diagnostics)}`);
+  assert(configured.completion.items?.length === 0, `disabled completion still returned entries: ${JSON.stringify(configured.completion)}`);
+  assert(Array.isArray(configured.inlayHints) && configured.inlayHints.length === 0, `disabled inlay hints still returned entries: ${JSON.stringify(configured.inlayHints)}`);
+
+  const validSource = `import std:themes/default
+
+page configured
+cover!(
+  "Title",
+  "Subtitle",
+  "Author"
+)
+end
+`;
+  await writeFile(path.join(configuredProject, "ss.toml"), `[project]
+entry = "slide.ss"
+asset_base_dir = "."
+
+[editor.lsp.inlay_hints]
+arguments = false
+positions = true
+`, "utf8");
+  await writeFile(configuredSlide, validSource, "utf8");
+  const positionOnly = await configuredResponses({
+    cwd: configuredProject,
+    fixture: configuredSlide,
+    source: validSource,
+  });
+  assert(positionOnly.inlayHints.length > 0, "position-only inlay hints did not return any hints");
+  assert(positionOnly.inlayHints.every((hint) => hint.kind !== 2), `argument hints were not filtered: ${JSON.stringify(positionOnly.inlayHints)}`);
+  assert(positionOnly.inlayHints.some((hint) => hint.kind === 1), `position hints were not present: ${JSON.stringify(positionOnly.inlayHints)}`);
+
+  await writeFile(path.join(configuredProject, "ss.toml"), `[project]
+entry = "slide.ss"
+asset_base_dir = "."
+
+[editor.lsp.inlay_hints]
+arguments = true
+positions = false
+`, "utf8");
+  const argumentOnly = await configuredResponses({
+    cwd: configuredProject,
+    fixture: configuredSlide,
+    source: validSource,
+  });
+  assert(argumentOnly.inlayHints.length > 0, "argument-only inlay hints did not return any hints");
+  assert(argumentOnly.inlayHints.some((hint) => hint.kind === 2), `argument hints were not present: ${JSON.stringify(argumentOnly.inlayHints)}`);
+  assert(argumentOnly.inlayHints.every((hint) => hint.kind !== 1), `position hints were not filtered: ${JSON.stringify(argumentOnly.inlayHints)}`);
+} finally {
+  await rm(configuredProject, { recursive: true, force: true });
+}
 
 async function definitionInFreshServer({ cwd, fixture, source, needle, characterOffset }) {
   const localUri = pathToFileURL(fixture).toString();
@@ -342,4 +424,134 @@ async function definitionInFreshServer({ cwd, fixture, source, needle, character
     });
   });
   return result;
+}
+
+async function configuredResponses({ cwd, fixture, source }) {
+  const localUri = pathToFileURL(fixture).toString();
+  const localChild = spawn(ssBin, ["lsp"], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+  let localNextId = 1;
+  let localBuffer = Buffer.alloc(0);
+  const localPending = new Map();
+  const localNotificationWaiters = [];
+  let localStderr = "";
+
+  localChild.stderr.setEncoding("utf8");
+  localChild.stderr.on("data", (chunk) => {
+    localStderr += chunk;
+  });
+
+  localChild.stdout.on("data", (chunk) => {
+    localBuffer = Buffer.concat([localBuffer, chunk]);
+    while (true) {
+      const headerEnd = localBuffer.indexOf("\r\n\r\n");
+      if (headerEnd < 0) return;
+      const header = localBuffer.subarray(0, headerEnd).toString("utf8");
+      const match = /^Content-Length:\s*(\d+)/im.exec(header);
+      if (!match) throw new Error(`missing Content-Length in ${header}`);
+      const length = Number(match[1]);
+      const bodyStart = headerEnd + 4;
+      const bodyEnd = bodyStart + length;
+      if (localBuffer.length < bodyEnd) return;
+      const message = JSON.parse(localBuffer.subarray(bodyStart, bodyEnd).toString("utf8"));
+      localBuffer = localBuffer.subarray(bodyEnd);
+      if (Object.prototype.hasOwnProperty.call(message, "id")) {
+        const waiter = localPending.get(message.id);
+        if (waiter) {
+          localPending.delete(message.id);
+          waiter.resolve(message);
+        }
+      }
+      for (let i = localNotificationWaiters.length - 1; i >= 0; i -= 1) {
+        const waiter = localNotificationWaiters[i];
+        if (waiter.predicate(message)) {
+          localNotificationWaiters.splice(i, 1);
+          waiter.resolve(message);
+        }
+      }
+    }
+  });
+
+  function localSend(message) {
+    const body = Buffer.from(JSON.stringify(message), "utf8");
+    localChild.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+    localChild.stdin.write(body);
+  }
+
+  function localRequest(method, params) {
+    const id = localNextId++;
+    localSend({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        localPending.delete(id);
+        reject(new Error(`timed out waiting for response ${id}; stderr:\n${localStderr}`));
+      }, 10000);
+      localPending.set(id, {
+        resolve: (message) => {
+          clearTimeout(timeout);
+          if (message.error) reject(new Error(`${message.error.code}: ${message.error.message}`));
+          else resolve(message.result);
+        },
+      });
+    });
+  }
+
+  function localNotify(method, params) {
+    localSend({ jsonrpc: "2.0", method, params });
+  }
+
+  function localWaitForNotification(predicate) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const index = localNotificationWaiters.findIndex((waiter) => waiter.resolve === wrappedResolve);
+        if (index >= 0) localNotificationWaiters.splice(index, 1);
+        reject(new Error(`timed out waiting for notification; stderr:\n${localStderr}`));
+      }, 10000);
+      const wrappedResolve = (message) => {
+        clearTimeout(timeout);
+        resolve(message);
+      };
+      localNotificationWaiters.push({ predicate, resolve: wrappedResolve });
+    });
+  }
+
+  await localRequest("initialize", {
+    processId: process.pid,
+    rootUri: pathToFileURL(cwd).toString(),
+    capabilities: {},
+  });
+  localNotify("initialized", {});
+  const diagnosticsPromise = localWaitForNotification(
+    (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === localUri,
+  );
+  localNotify("textDocument/didOpen", {
+    textDocument: {
+      uri: localUri,
+      languageId: "ss-slide",
+      version: 1,
+      text: source,
+    },
+  });
+  const diagnostics = await diagnosticsPromise;
+  const completion = await localRequest("textDocument/completion", {
+    textDocument: { uri: localUri },
+    position: { line: 2, character: 1 },
+  });
+  const inlayHints = await localRequest("textDocument/inlayHint", {
+    textDocument: { uri: localUri },
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: 3, character: 0 },
+    },
+  });
+  await localRequest("shutdown", null);
+  localNotify("exit", {});
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`configured language server did not exit; stderr:\n${localStderr}`)), 5000);
+    localChild.on("exit", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve();
+      else reject(new Error(`configured language server exited with ${code}; stderr:\n${localStderr}`));
+    });
+  });
+  return { diagnostics: diagnostics.params.diagnostics, completion, inlayHints };
 }

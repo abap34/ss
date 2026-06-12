@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { PageGuideSettings, projectSettings } from "./projectConfig";
 
 type BlockKind = "page" | "other";
 
@@ -65,55 +66,87 @@ const pagePalette: PaletteEntry[] = [
 
 export class PageGuideDecorations implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
-  private readonly bodyDecorations: vscode.TextEditorDecorationType[];
-  private readonly startDecorations: vscode.TextEditorDecorationType[];
-  private readonly endDecorations: vscode.TextEditorDecorationType[];
+  private bodyDecorations: vscode.TextEditorDecorationType[] = [];
+  private startDecorations: vscode.TextEditorDecorationType[] = [];
+  private endDecorations: vscode.TextEditorDecorationType[] = [];
+  private decorationSignature = "";
 
   constructor() {
-    this.bodyDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: entry.background,
-      gutterIconPath: pageGuideIconUri(entry.icon),
-      gutterIconSize: "contain",
-      overviewRulerColor: entry.ruler,
-      overviewRulerLane: vscode.OverviewRulerLane.Left,
-      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
-    }));
-    this.startDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: entry.boundaryBackground,
-      borderColor: entry.boundary,
-      borderStyle: "solid",
-      borderWidth: "2px 0 0 0",
-      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
-    }));
-    this.endDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: entry.boundaryBackground,
-      borderColor: entry.boundary,
-      borderStyle: "solid",
-      borderWidth: "0 0 2px 0",
-      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
-    }));
+    this.rebuildDecorations(projectSettings(undefined).pageGuide);
+    const projectWatcher = vscode.workspace.createFileSystemWatcher("**/ss.toml");
 
     this.disposables.push(
-      ...this.bodyDecorations,
-      ...this.startDecorations,
-      ...this.endDecorations,
+      projectWatcher,
       vscode.workspace.onDidChangeTextDocument((event) => this.refreshDocument(event.document)),
       vscode.workspace.onDidSaveTextDocument((document) => this.refreshDocument(document)),
       vscode.window.onDidChangeActiveTextEditor((editor) => this.refreshEditor(editor)),
       vscode.window.onDidChangeVisibleTextEditors(() => this.refreshVisibleEditors()),
+      projectWatcher.onDidChange(() => this.refreshVisibleEditors()),
+      projectWatcher.onDidCreate(() => this.refreshVisibleEditors()),
+      projectWatcher.onDidDelete(() => this.refreshVisibleEditors()),
     );
 
     this.refreshVisibleEditors();
   }
 
   dispose(): void {
+    this.disposeDecorations();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
     this.disposables.length = 0;
+  }
+
+  private rebuildDecorations(settings: PageGuideSettings): void {
+    const signature = JSON.stringify(settings);
+    if (signature === this.decorationSignature) {
+      return;
+    }
+    this.decorationSignature = signature;
+    this.disposeDecorations();
+    this.bodyDecorations = pagePalette.map((entry) => {
+      const options: vscode.DecorationRenderOptions = {
+        isWholeLine: true,
+        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+      };
+      if (settings.bodyBackground) {
+        options.backgroundColor = entry.background;
+      }
+      if (settings.gutterIcon) {
+        options.gutterIconPath = pageGuideIconUri(entry.icon);
+        options.gutterIconSize = "contain";
+      }
+      if (settings.overviewRuler) {
+        options.overviewRulerColor = entry.ruler;
+        options.overviewRulerLane = vscode.OverviewRulerLane.Left;
+      }
+      return vscode.window.createTextEditorDecorationType(options);
+    });
+    this.startDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: settings.boundaryBackground ? entry.boundaryBackground : undefined,
+      borderColor: settings.boundary ? entry.boundary : undefined,
+      borderStyle: settings.boundary ? "solid" : undefined,
+      borderWidth: settings.boundary ? "2px 0 0 0" : undefined,
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    }));
+    this.endDecorations = pagePalette.map((entry) => vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: settings.boundaryBackground ? entry.boundaryBackground : undefined,
+      borderColor: settings.boundary ? entry.boundary : undefined,
+      borderStyle: settings.boundary ? "solid" : undefined,
+      borderWidth: settings.boundary ? "0 0 2px 0" : undefined,
+      rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+    }));
+  }
+
+  private disposeDecorations(): void {
+    for (const decoration of [...this.bodyDecorations, ...this.startDecorations, ...this.endDecorations]) {
+      decoration.dispose();
+    }
+    this.bodyDecorations = [];
+    this.startDecorations = [];
+    this.endDecorations = [];
   }
 
   private refreshDocument(document: vscode.TextDocument): void {
@@ -134,7 +167,9 @@ export class PageGuideDecorations implements vscode.Disposable {
     if (!editor) {
       return;
     }
-    if (editor.document.languageId !== "ss-slide") {
+    const settings = projectSettings(editor.document.uri).pageGuide;
+    this.rebuildDecorations(settings);
+    if (editor.document.languageId !== "ss-slide" || !settings.enabled) {
       this.clearEditor(editor);
       return;
     }

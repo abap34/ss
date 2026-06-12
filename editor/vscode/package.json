@@ -108,30 +108,6 @@
           "default": "ss",
           "description": "Path to the ss executable used to launch `ss lsp` and render live previews."
         },
-        "ss.diagnostics.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable diagnostics from the ss language server."
-        },
-        "ss.livePreview.debounceMs": {
-          "type": "number",
-          "default": 350,
-          "minimum": 100,
-          "description": "Delay before refreshing the ss live preview after edits."
-        },
-        "ss.livePreview.openMode": {
-          "type": "string",
-          "default": "vscode",
-          "enum": [
-            "vscode",
-            "external"
-          ],
-          "enumDescriptions": [
-            "Open the generated PDF through VS Code's normal document opening command.",
-            "Open the generated PDF with the operating system's external PDF application."
-          ],
-          "description": "How ss live preview opens the generated PDF."
-        },
         "ss.lsp.trace.server": {
           "type": "string",
           "default": "off",

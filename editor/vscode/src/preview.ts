@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
+import { projectSettings } from "./projectConfig";
 
 type ClientProvider = () => LanguageClient | undefined;
 
@@ -39,12 +40,12 @@ export class LivePreview implements vscode.Disposable {
     private readonly clientProvider: ClientProvider,
   ) {
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.languageId === "ss-slide") {
+      if (event.document.languageId === "ss-slide" && projectSettings(event.document.uri).preview.refreshOnEdit) {
         this.scheduleAffectedDocument(event.document);
       }
     }));
     this.disposables.push(vscode.workspace.onDidSaveTextDocument((document) => {
-      if (document.languageId === "ss-slide") {
+      if (document.languageId === "ss-slide" && projectSettings(document.uri).preview.refreshOnSave) {
         this.scheduleAffectedDocument(document, 0);
       }
     }));
@@ -56,11 +57,16 @@ export class LivePreview implements vscode.Disposable {
       this.sessions.delete(document.uri.toString());
     }));
     const watcher = vscode.workspace.createFileSystemWatcher("**/*.ss");
+    const projectWatcher = vscode.workspace.createFileSystemWatcher("**/ss.toml");
     this.disposables.push(
       watcher,
+      projectWatcher,
       watcher.onDidChange((uri) => this.scheduleAffectedUri(uri, 0)),
       watcher.onDidCreate((uri) => this.scheduleAffectedUri(uri, 0)),
       watcher.onDidDelete((uri) => this.scheduleAffectedUri(uri, 0)),
+      projectWatcher.onDidChange(() => this.scheduleAll(0)),
+      projectWatcher.onDidCreate(() => this.scheduleAll(0)),
+      projectWatcher.onDidDelete(() => this.scheduleAll(0)),
     );
   }
 
@@ -79,6 +85,10 @@ export class LivePreview implements vscode.Disposable {
   open(document: vscode.TextDocument | undefined): void {
     if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
       void vscode.window.showWarningMessage("Open an .ss file to start live preview.");
+      return;
+    }
+    if (!projectSettings(document.uri).preview.enabled) {
+      void vscode.window.showWarningMessage("ss live preview is disabled by ss.toml [editor.preview].enabled.");
       return;
     }
     const key = document.uri.toString();
@@ -100,10 +110,14 @@ export class LivePreview implements vscode.Disposable {
     if (!session) {
       return;
     }
+    const settings = projectSettings(document.uri).preview;
+    if (!settings.enabled) {
+      return;
+    }
     if (session.timer) {
       clearTimeout(session.timer);
     }
-    const configuredDelay = Math.max(80, vscode.workspace.getConfiguration("ss").get<number>("livePreview.debounceMs", 350));
+    const configuredDelay = settings.debounceMs;
     session.timer = setTimeout(() => {
       session.timer = undefined;
       void this.render(document);
@@ -119,6 +133,15 @@ export class LivePreview implements vscode.Disposable {
       return;
     }
     this.scheduleAffectedPath(uri.fsPath, delayMs);
+  }
+
+  private scheduleAll(delayMs?: number): void {
+    for (const key of this.sessions.keys()) {
+      const document = documentForSession(key);
+      if (document) {
+        this.schedule(document, delayMs);
+      }
+    }
   }
 
   private scheduleAffectedPath(changedPath: string, delayMs?: number, changedDocument?: vscode.TextDocument): void {
@@ -138,6 +161,9 @@ export class LivePreview implements vscode.Disposable {
       }
       const document = documentForSession(key);
       if (!document) {
+        continue;
+      }
+      if (!projectSettings(document.uri).preview.refreshOnDependencyChange) {
         continue;
       }
       this.schedule(document, delayMs);
@@ -164,11 +190,21 @@ export class LivePreview implements vscode.Disposable {
     const paths = this.previewPaths(document, renderId);
     await fs.promises.mkdir(paths.dir, { recursive: true });
 
+    const settings = projectSettings(document.uri).preview;
     const command = vscode.workspace.getConfiguration("ss").get<string>("cli.path", "ss");
-    const args = ["render", snapshot.entryPath, paths.tempPdf, "--asset-base-dir", snapshot.assetBaseDir];
+    const args = [
+      "render",
+      snapshot.entryPath,
+      paths.tempPdf,
+      "--asset-base-dir",
+      snapshot.assetBaseDir,
+      ...settings.extraRenderArgs,
+    ];
     this.output.appendLine(`[preview] ${command} ${args.join(" ")}`);
-    const result = await run(command, args, snapshot.cwd);
-    await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
+    const result = await run(command, args, snapshot.cwd, settings.renderTimeoutMs);
+    if (settings.deleteSnapshotsAfterRender) {
+      await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
+    }
     if (this.sessions.get(key)?.renderId !== renderId) {
       await removeIfExists(paths.tempPdf);
       return;
@@ -202,7 +238,8 @@ export class LivePreview implements vscode.Disposable {
 
   private async writeSnapshot(entryPath: string, assetBaseDir: string, modules: string[], renderId: number): Promise<Snapshot> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(entryPath);
-    const snapshotRoot = path.join(workspaceRoot, ".ss-cache", "vscode-projects", stableHash(entryPath));
+    const settings = projectSettings(vscode.Uri.file(entryPath)).preview;
+    const snapshotRoot = path.join(resolveWorkspacePath(workspaceRoot, settings.snapshotDirectory), stableHash(entryPath));
     const snapshotDir = path.join(snapshotRoot, `${process.pid}-${renderId}`);
     await fs.promises.rm(snapshotDir, { recursive: true, force: true });
     await copyDirectory(assetBaseDir, snapshotDir);
@@ -227,7 +264,7 @@ export class LivePreview implements vscode.Disposable {
 
   private previewPaths(document: vscode.TextDocument, renderId: number): { dir: string; stem: string; pdf: string; tempPdf: string } {
     const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath ?? path.dirname(document.uri.fsPath);
-    const dir = path.join(workspaceRoot, ".ss-cache", "vscode-preview");
+    const dir = resolveWorkspacePath(workspaceRoot, projectSettings(document.uri).preview.outputDirectory);
     const base = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath)).replace(/[^A-Za-z0-9_-]/g, "_") || "preview";
     const stem = `${base}-${stableHash(document.uri.toString())}`;
     return {
@@ -244,8 +281,13 @@ export class LivePreview implements vscode.Disposable {
     if (!session || (!force && session.opened)) {
       return;
     }
+    const settings = projectSettings(document.uri).preview;
+    if (!settings.revealAfterRender) {
+      session.opened = true;
+      return;
+    }
     const uri = vscode.Uri.file(pdfPath);
-    if (vscode.workspace.getConfiguration("ss").get<string>("livePreview.openMode", "vscode") === "external") {
+    if (settings.openMode === "external") {
       await vscode.env.openExternal(uri);
     } else {
       await vscode.commands.executeCommand("vscode.open", uri, {
@@ -302,6 +344,10 @@ function safeRelative(root: string, filePath: string): string {
   return relative;
 }
 
+function resolveWorkspacePath(workspaceRoot: string, configuredPath: string): string {
+  return path.isAbsolute(configuredPath) ? configuredPath : path.join(workspaceRoot, configuredPath);
+}
+
 function openDocumentText(filePath: string): string | undefined {
   const resolved = path.resolve(filePath);
   return vscode.workspace.textDocuments.find((doc) => doc.uri.scheme === "file" && path.resolve(doc.uri.fsPath) === resolved)?.getText();
@@ -336,18 +382,34 @@ function skipSnapshotEntry(name: string): boolean {
     name === "coverage";
 }
 
-function run(command: string, args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function run(command: string, args: string[], cwd: string, timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const childProcess = require("child_process") as typeof import("child_process");
   return new Promise((resolve) => {
     const child = childProcess.spawn(command, args, { cwd });
     let stdout = "";
     let stderr = "";
+    let finished = false;
+    let timedOut = false;
+    const timer = timeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs) : undefined;
+    const finish = (code: number | null, nextStderr: string): void => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve({ code, stdout, stderr: nextStderr });
+    };
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { stdout += chunk; });
     child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", (error: Error) => resolve({ code: -1, stdout, stderr: error.message }));
-    child.on("close", (code: number | null) => resolve({ code, stdout, stderr }));
+    child.on("error", (error: Error) => finish(-1, error.message));
+    child.on("close", (code: number | null) => finish(timedOut ? -1 : code, timedOut ? `[preview] render timed out after ${timeoutMs}ms` : stderr));
   });
 }
 
