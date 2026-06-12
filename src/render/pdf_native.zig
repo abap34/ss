@@ -63,6 +63,7 @@ const Atom = struct {
     height: f32 = 0,
     is_space: bool,
     is_emoji: bool = false,
+    strikethrough: bool = false,
     svg_path: ?[]const u8 = null,
     link_url: ?[]const u8 = null,
 };
@@ -1921,11 +1922,11 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, package
                 try appendMathAtom(ctx, atoms, run.text, text, packages, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.color, text.font_size, null),
-            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null),
-            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url),
-            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null),
+            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.color, text.font_size, null, run.strikethrough),
+            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough),
+            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough),
+            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough),
+            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough),
         }
     }
 }
@@ -2066,7 +2067,7 @@ fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
     }
 }
 
-fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: []const u8, color: Color, font_size: f32, link_url: ?[]const u8) !void {
+fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: []const u8, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool) !void {
     var tokenizer = Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = isEmojiToken(token);
@@ -2083,6 +2084,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             .width = width,
             .is_space = isWhitespace(token),
             .is_emoji = is_emoji,
+            .strikethrough = strikethrough,
             .link_url = link_url,
         });
     }
@@ -2161,6 +2163,9 @@ fn drawAtomsWithOptions(
                     try drawLinkedRawText(ctx, cursor_x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
                 } else {
                     try drawRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), paint.line_height, atom.text, atom.font, paint.font_size, atom.color, false);
+                }
+                if (atom.strikethrough) {
+                    drawStrikethrough(ctx, cursor_x, y_top, atom, paint);
                 }
                 cursor_x += atomAdvance(atoms, index, paint);
             },
@@ -2267,7 +2272,7 @@ fn drawPlainTextAtTopWithOptions(
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null);
+    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false);
     const paint = AtomPaint{
         .font_size = font_size,
         .line_height = line_height,
@@ -2277,6 +2282,12 @@ fn drawPlainTextAtTopWithOptions(
     const baseline_bl = PageLayout.height - (y_top + font_size);
     _ = try drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms.items, paint, wrap, preserve_leading_space);
     return atomLineAdvance(atoms.items, paint);
+}
+
+fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) void {
+    const y = y_top + paint.font_size * 0.55;
+    const line_width = @max(@as(f32, 1.0), paint.font_size * 0.065);
+    c.ss_pdf_stroke_line(ctx.pdf, x, y, x + @max(atom.width, 1), y, line_width, atom.color.r, atom.color.g, atom.color.b, 0, 0);
 }
 
 fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: ?CodePaint) !void {

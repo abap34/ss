@@ -27,6 +27,7 @@ pub const RunKind = enum {
 pub const Run = struct {
     kind: RunKind,
     text: []const u8,
+    strikethrough: bool = false,
     url: ?[]const u8 = null,
     icon: ?[]const u8 = null,
 };
@@ -131,6 +132,7 @@ const ParserState = struct {
     current_line: Line = .{},
     strong_depth: usize = 0,
     italic_depth: usize = 0,
+    strikethrough_depth: usize = 0,
     code_depth: usize = 0,
     math_depth: usize = 0,
     display_math_depth: usize = 0,
@@ -397,6 +399,7 @@ const InlineParserState = struct {
     runs: *std.ArrayList(Run),
     strong_depth: usize = 0,
     italic_depth: usize = 0,
+    strikethrough_depth: usize = 0,
     code_depth: usize = 0,
     math_depth: usize = 0,
     display_math_depth: usize = 0,
@@ -585,6 +588,7 @@ fn handleEnterSpan(comptime T: type, state: *T, span_type: c.MD_SPANTYPE, detail
     switch (span_type) {
         c.MD_SPAN_EM => state.italic_depth += 1,
         c.MD_SPAN_STRONG => state.strong_depth += 1,
+        c.MD_SPAN_DEL => state.strikethrough_depth += 1,
         c.MD_SPAN_CODE => state.code_depth += 1,
         c.MD_SPAN_LATEXMATH => state.math_depth += 1,
         c.MD_SPAN_LATEXMATH_DISPLAY => {
@@ -616,6 +620,9 @@ fn handleLeaveSpan(comptime T: type, state: *T, span_type: c.MD_SPANTYPE, runs: 
         },
         c.MD_SPAN_STRONG => {
             if (state.strong_depth > 0) state.strong_depth -= 1;
+        },
+        c.MD_SPAN_DEL => {
+            if (state.strikethrough_depth > 0) state.strikethrough_depth -= 1;
         },
         c.MD_SPAN_CODE => {
             if (state.code_depth > 0) state.code_depth -= 1;
@@ -718,6 +725,7 @@ fn appendTextRun(
     var run = Run{
         .kind = kind,
         .text = text_copy,
+        .strikethrough = state.strikethrough_depth > 0,
     };
     if (run.kind == .link and state.link_url != null) {
         run.url = try alloc.dupe(u8, state.link_url.?);

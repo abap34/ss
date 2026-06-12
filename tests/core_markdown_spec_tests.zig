@@ -45,6 +45,26 @@ test "core markdown spec: links preserve target URLs on link runs" {
     try testing.expectEqualStrings("#target", runs[2].url.?);
 }
 
+test "core markdown spec: strikethrough marks inline runs without changing style kind" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var layout = try markdown.parseTextLayoutContent(allocator, "before ~~gone~~ ~~**bold gone**~~");
+    defer layout.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), layout.lines.items.len);
+    const runs = layout.lines.items[0].runs.items;
+    try testing.expectEqual(@as(usize, 4), runs.len);
+    try testing.expectEqual(markdown.RunKind.text, runs[0].kind);
+    try testing.expect(!runs[0].strikethrough);
+    try testing.expectEqual(markdown.RunKind.text, runs[1].kind);
+    try testing.expect(runs[1].strikethrough);
+    try testing.expectEqualStrings("gone", runs[1].text);
+    try testing.expectEqual(markdown.RunKind.bold, runs[3].kind);
+    try testing.expect(runs[3].strikethrough);
+    try testing.expectEqualStrings("bold gone", runs[3].text);
+}
+
 test "core markdown spec: fenced code blocks count embedded physical lines" {
     const allocator = testing.allocator;
     var doc = try markdown.parseMarkdownContent(allocator,
