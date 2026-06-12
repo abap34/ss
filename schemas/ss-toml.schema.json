@@ -1,0 +1,245 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "$id": "https://raw.githubusercontent.com/abap34/ss/main/schemas/ss-toml.schema.json",
+  "title": "ss project configuration",
+  "description": "Configuration schema for ss.toml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project"],
+  "properties": {
+    "project": {
+      "type": "object",
+      "description": "Project entrypoint and asset root.",
+      "additionalProperties": false,
+      "required": ["entry"],
+      "properties": {
+        "entry": {
+          "type": "string",
+          "description": "Slide entry file resolved relative to ss.toml."
+        },
+        "asset_base_dir": {
+          "type": "string",
+          "description": "Asset root resolved relative to ss.toml. Defaults to the entry file's parent directory."
+        }
+      }
+    },
+    "editor": {
+      "type": "object",
+      "description": "Editor integration settings.",
+      "additionalProperties": false,
+      "properties": {
+        "lsp": {
+          "type": "object",
+          "description": "Language server behavior.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable language server backed editor features."
+            },
+            "debounce": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 120,
+              "description": "Debounce time for didChange notifications in milliseconds."
+            },
+            "diagnostics": {
+              "type": "boolean",
+              "default": true,
+              "description": "Publish diagnostics."
+            },
+            "completion": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide completion items."
+            },
+            "hover": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide hover information."
+            },
+            "definition": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide go-to-definition."
+            },
+            "document_symbols": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide document symbols."
+            },
+            "folding_ranges": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide folding ranges."
+            },
+            "semantic_tokens": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide semantic tokens."
+            },
+            "colors": {
+              "type": "boolean",
+              "default": true,
+              "description": "Provide color decorators and presentations."
+            },
+            "inlay_hints": {
+              "type": "object",
+              "description": "Inlay hint categories.",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Provide inlay hints."
+                },
+                "arguments": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Show argument inlay hints."
+                },
+                "positions": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Show position inlay hints."
+                }
+              }
+            }
+          }
+        },
+        "preview": {
+          "type": "object",
+          "description": "Live preview behavior.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable live preview."
+            },
+            "debounce": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 350,
+              "description": "Debounce time for live preview renders in milliseconds."
+            },
+            "open": {
+              "type": "string",
+              "enum": ["vscode", "external"],
+              "default": "vscode",
+              "description": "Preview target. \"vscode\" opens the bundled PDF.js viewer; \"external\" opens the generated PDF with the operating system."
+            },
+            "reveal": {
+              "type": "boolean",
+              "default": true,
+              "description": "Reveal the preview after rendering."
+            },
+            "refresh": {
+              "type": "object",
+              "description": "Live preview refresh triggers.",
+              "additionalProperties": false,
+              "properties": {
+                "edit": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Refresh after edits."
+                },
+                "save": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Refresh after saves."
+                },
+                "dependency": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Refresh when a dependency file changes."
+                }
+              }
+            },
+            "render": {
+              "type": "object",
+              "description": "Live preview render process.",
+              "additionalProperties": false,
+              "properties": {
+                "timeout": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 30000,
+                  "description": "Render timeout in milliseconds."
+                },
+                "delete_snapshots": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "Delete temporary project snapshots after rendering."
+                },
+                "extra_args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "default": [],
+                  "description": "Additional arguments passed to ss render."
+                }
+              }
+            },
+            "path": {
+              "type": "object",
+              "description": "Live preview output paths.",
+              "additionalProperties": false,
+              "properties": {
+                "output": {
+                  "type": "string",
+                  "default": ".ss-cache/vscode-preview",
+                  "description": "Generated PDF directory, relative to the workspace root unless absolute."
+                },
+                "snapshot": {
+                  "type": "string",
+                  "default": ".ss-cache/vscode-projects",
+                  "description": "Temporary snapshot directory, relative to the workspace root unless absolute."
+                }
+              }
+            }
+          }
+        },
+        "page_guide": {
+          "type": "object",
+          "description": "VS Code page guide decorations.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable page guide decorations."
+            },
+            "body_background": {
+              "type": "boolean",
+              "default": true,
+              "description": "Decorate the slide body background."
+            },
+            "boundary": {
+              "type": "boolean",
+              "default": true,
+              "description": "Decorate the slide boundary."
+            },
+            "boundary_background": {
+              "type": "boolean",
+              "default": true,
+              "description": "Decorate the area outside the slide boundary."
+            },
+            "gutter_icon": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show page markers in the gutter."
+            },
+            "overview_ruler": {
+              "type": "boolean",
+              "default": true,
+              "description": "Show page markers in the overview ruler."
+            }
+          }
+        }
+      }
+    }
+  }
+}

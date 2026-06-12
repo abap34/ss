@@ -178,7 +178,8 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
 }
 
 fn parseLspConfig(source: []const u8) LspConfig {
-    const inlay_hints = parseBool(source, "editor.lsp", "inlay_hints", true);
+    const legacy_inlay_hints = parseBool(source, "editor.lsp", "inlay_hints", true);
+    const inlay_hints = parseBool(source, "editor.lsp.inlay_hints", "enabled", legacy_inlay_hints);
     return .{
         .enabled = parseBool(source, "editor.lsp", "enabled", true),
         .change_debounce_ms = parseU64(source, "editor.lsp", "debounce", 120),

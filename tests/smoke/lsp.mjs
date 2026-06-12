@@ -262,7 +262,9 @@ asset_base_dir = "."
 [editor.lsp]
 diagnostics = false
 completion = false
-inlay_hints = false
+
+[editor.lsp.inlay_hints]
+enabled = false
 `, "utf8");
   await writeFile(configuredSlide, `import std:themes/default
 
@@ -292,6 +294,7 @@ entry = "slide.ss"
 asset_base_dir = "."
 
 [editor.lsp.inlay_hints]
+enabled = true
 arguments = false
 positions = true
 `, "utf8");
@@ -310,6 +313,7 @@ entry = "slide.ss"
 asset_base_dir = "."
 
 [editor.lsp.inlay_hints]
+enabled = true
 arguments = true
 positions = false
 `, "utf8");

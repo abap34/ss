@@ -98,7 +98,8 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
     return cloneDefaults();
   }
   const table = parseTomlSubset(source);
-  const inlayHints = boolValue(table, "editor.lsp", "inlay_hints", defaultSettings.lsp.inlayHints);
+  const legacyInlayHints = boolValue(table, "editor.lsp", "inlay_hints", defaultSettings.lsp.inlayHints);
+  const inlayHints = boolValue(table, "editor.lsp.inlay_hints", "enabled", legacyInlayHints);
   return {
     lsp: {
       enabled: boolValue(table, "editor.lsp", "enabled", defaultSettings.lsp.enabled),

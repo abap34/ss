@@ -4,6 +4,7 @@ const childProcess = require("child_process");
 const esbuild = require("esbuild");
 
 const root = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(root, "..", "..");
 const outDir = path.join(root, "out");
 const watch = process.argv.includes("--watch");
 
@@ -45,10 +46,21 @@ function copyPdfJsAssets() {
   fs.cpSync(path.join(pdfjsRoot, "standard_fonts"), path.join(targetRoot, "standard_fonts"), { recursive: true });
 }
 
+function copySchemaAssets() {
+  const targetRoot = path.join(outDir, "schemas");
+  fs.rmSync(targetRoot, { recursive: true, force: true });
+  fs.mkdirSync(targetRoot, { recursive: true });
+  fs.copyFileSync(
+    path.join(repoRoot, "schemas", "ss-toml.schema.json"),
+    path.join(targetRoot, "ss-toml.schema.json"),
+  );
+}
+
 async function main() {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
   copyPdfJsAssets();
+  copySchemaAssets();
 
   if (watch) {
     const context = await esbuild.context(buildOptions);

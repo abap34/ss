@@ -127,6 +127,8 @@ inside the language itself. More unique features will continue to arrive.
 Create an `ss.toml` at the root of your slide project:
 
 ```toml
+#:schema https://raw.githubusercontent.com/abap34/ss/main/schemas/ss-toml.schema.json
+
 [project]
 entry = "slide.ss"
 asset_base_dir = "."
@@ -169,6 +171,9 @@ ss render --project . --output deck.pdf
 
 `entry` is required. `asset_base_dir` defaults to the entry file's parent
 directory when omitted.
+
+The JSON Schema for `ss.toml` lives at `schemas/ss-toml.schema.json`. TOML
+language servers such as Taplo can use it for completion and validation.
 
 ## Installation
 

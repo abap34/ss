@@ -35,13 +35,13 @@ diagnostics = true
 completion = true
 hover = true
 definition = true
-inlay_hints = true
 document_symbols = true
 folding_ranges = true
 semantic_tokens = true
 colors = true
 
 [editor.lsp.inlay_hints]
+enabled = true
 arguments = true
 positions = true
 
@@ -72,6 +72,16 @@ boundary = true
 boundary_background = true
 gutter_icon = true
 overview_ruler = true
+```
+
+The repository ships a JSON Schema for `ss.toml` at
+`schemas/ss-toml.schema.json`. TOML language servers such as Taplo can use it
+for completion and validation. In a deck repository, add a Taplo rule like:
+
+```toml
+[[rule]]
+include = ["**/ss.toml"]
+schema.path = "schemas/ss-toml.schema.json"
 ```
 
 ## If `.ss` Opens As Scheme

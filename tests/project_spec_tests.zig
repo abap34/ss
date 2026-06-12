@@ -49,9 +49,9 @@ test "project spec: editor settings parse from ss.toml" {
         \\[editor.lsp]
         \\debounce = 25
         \\diagnostics = false
-        \\inlay_hints = true
         \\
         \\[editor.lsp.inlay_hints]
+        \\enabled = true
         \\arguments = false
         \\positions = false
         \\
