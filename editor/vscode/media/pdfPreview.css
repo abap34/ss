@@ -1,0 +1,122 @@
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground, #d4d4d4);
+  background: var(--vscode-editor-background, #1e1e1e);
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+body {
+  display: grid;
+  grid-template-rows: 32px 1fr;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, #454545);
+  background: var(--vscode-sideBar-background, #252526);
+}
+
+button,
+input {
+  height: 24px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  color: var(--vscode-foreground, #d4d4d4);
+  background: transparent;
+  font: inherit;
+}
+
+button {
+  min-width: 28px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgb(255 255 255 / 10%));
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+input {
+  width: 54px;
+  padding: 0 4px;
+  color: var(--vscode-input-foreground, #cccccc);
+  background: var(--vscode-input-background, #3c3c3c);
+}
+
+#fitWidth {
+  min-width: 34px;
+}
+
+.separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--vscode-panel-border, #454545);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+#pageCount,
+#zoomValue {
+  color: var(--vscode-descriptionForeground, #9d9d9d);
+  white-space: nowrap;
+}
+
+.scroll {
+  min-height: 0;
+  overflow: auto;
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+
+.pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 18px;
+}
+
+.page {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.page canvas {
+  display: block;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 28%);
+  background: white;
+}
+
+.empty {
+  align-self: stretch;
+  padding: 40px 16px;
+  color: var(--vscode-descriptionForeground, #9d9d9d);
+  text-align: center;
+}

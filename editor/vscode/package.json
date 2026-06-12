@@ -20,10 +20,10 @@
     "vscode": "^1.85.0"
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p .",
-    "package": "vsce package",
-    "test": "npm run compile"
+    "compile": "node scripts/build.js",
+    "watch": "node scripts/build.js --watch",
+    "package": "npm run compile && vsce package",
+    "test": "npm run compile && node scripts/test-preview-server.js"
   },
   "activationEvents": [
     "onLanguage:ss-slide",
@@ -122,12 +122,14 @@
     }
   },
   "dependencies": {
+    "pdfjs-dist": "^4.8.69",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.25",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.6.2",
+    "esbuild": "^0.28.1",
     "typescript": "^5.9.3"
   }
 }

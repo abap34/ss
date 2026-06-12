@@ -98,9 +98,13 @@ open `.ss` buffers under `.ss-cache/vscode-projects/`, and refreshes a PDF with:
 ss render <snapshot-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base>
 ```
 
-The extension opens the preview PDF once, then updates that same file on later
-renders. Set `[editor.preview].open` to `external` in `ss.toml` to open the
-generated PDF in the operating system's PDF application:
+With the default `[editor.preview].open = "vscode"`, the extension opens its own
+PDF.js webview. The webview loads a loopback viewer page, and the extension
+serves the generated PDF plus the bundled PDF.js assets from that local server
+while the preview is open. Later renders update the registered PDF and send a
+refresh message to the viewer, preserving the current page, zoom, and scroll
+position where possible. Set `[editor.preview].open` to `external` in `ss.toml`
+to open the generated PDF in the operating system's PDF application:
 
 ```toml
 [editor.preview]

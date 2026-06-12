@@ -4,6 +4,8 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
+import { PdfPreviewPanel } from "./pdfPreviewPanel";
+import { PdfPreviewServer } from "./pdfPreviewServer";
 import { projectSettings } from "./projectConfig";
 
 type ClientProvider = () => LanguageClient | undefined;
@@ -15,12 +17,14 @@ interface ProjectInfo {
 }
 
 interface PreviewSession {
-  opened: boolean;
+  wantsPreview: boolean;
+  externalOpened: boolean;
   pdfPath?: string;
   renderId: number;
   timer?: NodeJS.Timeout;
   entryPath?: string;
   dependencyPaths?: Set<string>;
+  panel?: PdfPreviewPanel;
 }
 
 interface Snapshot {
@@ -33,12 +37,14 @@ interface Snapshot {
 export class LivePreview implements vscode.Disposable {
   private readonly sessions = new Map<string, PreviewSession>();
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly previewServer: PdfPreviewServer;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel,
     private readonly clientProvider: ClientProvider,
   ) {
+    this.previewServer = new PdfPreviewServer(context.extensionPath, output);
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
       if (event.document.languageId === "ss-slide" && projectSettings(event.document.uri).preview.refreshOnEdit) {
         this.scheduleAffectedDocument(event.document);
@@ -50,11 +56,7 @@ export class LivePreview implements vscode.Disposable {
       }
     }));
     this.disposables.push(vscode.workspace.onDidCloseTextDocument((document) => {
-      const session = this.sessions.get(document.uri.toString());
-      if (session?.timer) {
-        clearTimeout(session.timer);
-      }
-      this.sessions.delete(document.uri.toString());
+      this.stopSession(document.uri.toString(), true);
     }));
     const watcher = vscode.workspace.createFileSystemWatcher("**/*.ss");
     const projectWatcher = vscode.workspace.createFileSystemWatcher("**/ss.toml");
@@ -71,15 +73,13 @@ export class LivePreview implements vscode.Disposable {
   }
 
   dispose(): void {
-    for (const session of this.sessions.values()) {
-      if (session.timer) {
-        clearTimeout(session.timer);
-      }
+    for (const key of [...this.sessions.keys()]) {
+      this.stopSession(key, true);
     }
-    this.sessions.clear();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
+    this.previewServer.dispose();
   }
 
   open(document: vscode.TextDocument | undefined): void {
@@ -92,15 +92,11 @@ export class LivePreview implements vscode.Disposable {
       return;
     }
     const key = document.uri.toString();
-    const current = this.sessions.get(key);
-    if (current) {
-      if (current.pdfPath) {
-        void this.reveal(document, current.pdfPath, true);
-      }
-      this.schedule(document, 0);
-      return;
+    const session = this.ensureSession(key);
+    session.wantsPreview = true;
+    if (session.pdfPath) {
+      void this.present(document, session, session.pdfPath, true);
     }
-    this.sessions.set(key, { opened: false, renderId: 0 });
     this.schedule(document, 0);
   }
 
@@ -205,7 +201,8 @@ export class LivePreview implements vscode.Disposable {
     if (settings.deleteSnapshotsAfterRender) {
       await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
     }
-    if (this.sessions.get(key)?.renderId !== renderId) {
+    const current = this.sessions.get(key);
+    if (!current || current.renderId !== renderId) {
       await removeIfExists(paths.tempPdf);
       return;
     }
@@ -216,9 +213,9 @@ export class LivePreview implements vscode.Disposable {
     }
     await fs.promises.copyFile(paths.tempPdf, paths.pdf);
     await removeIfExists(paths.tempPdf);
-    session.pdfPath = paths.pdf;
+    current.pdfPath = paths.pdf;
     await this.cleanupPreviewCache(paths.dir, paths.pdf, paths.stem);
-    await this.reveal(document, paths.pdf, false);
+    await this.present(document, current, paths.pdf, false);
   }
 
   private async projectInfo(document: vscode.TextDocument): Promise<ProjectInfo> {
@@ -237,7 +234,8 @@ export class LivePreview implements vscode.Disposable {
   }
 
   private async writeSnapshot(entryPath: string, assetBaseDir: string, modules: string[], renderId: number): Promise<Snapshot> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(entryPath);
+    const entryUri = vscode.Uri.file(entryPath);
+    const workspaceRoot = vscode.workspace.getWorkspaceFolder(entryUri)?.uri.fsPath ?? path.dirname(entryPath);
     const settings = projectSettings(vscode.Uri.file(entryPath)).preview;
     const snapshotRoot = path.join(resolveWorkspacePath(workspaceRoot, settings.snapshotDirectory), stableHash(entryPath));
     const snapshotDir = path.join(snapshotRoot, `${process.pid}-${renderId}`);
@@ -275,28 +273,87 @@ export class LivePreview implements vscode.Disposable {
     };
   }
 
-  private async reveal(document: vscode.TextDocument, pdfPath: string, force: boolean): Promise<void> {
+  private async present(document: vscode.TextDocument, session: PreviewSession, pdfPath: string, forceReveal: boolean): Promise<void> {
     const key = document.uri.toString();
-    const session = this.sessions.get(key);
-    if (!session || (!force && session.opened)) {
+    if (this.sessions.get(key) !== session) {
       return;
     }
     const settings = projectSettings(document.uri).preview;
-    if (!settings.revealAfterRender) {
-      session.opened = true;
+    if (settings.openMode === "external") {
+      this.disposePanel(session);
+      if (forceReveal || (!session.externalOpened && (session.wantsPreview || settings.revealAfterRender))) {
+        await vscode.env.openExternal(vscode.Uri.file(pdfPath));
+        session.externalOpened = true;
+      }
       return;
     }
-    const uri = vscode.Uri.file(pdfPath);
-    if (settings.openMode === "external") {
-      await vscode.env.openExternal(uri);
-    } else {
-      await vscode.commands.executeCommand("vscode.open", uri, {
-        viewColumn: vscode.ViewColumn.Beside,
-        preserveFocus: true,
-        preview: false,
+
+    session.externalOpened = false;
+    if (!session.panel) {
+      if (!forceReveal && !session.wantsPreview && !settings.revealAfterRender) {
+        return;
+      }
+      let panel: PdfPreviewPanel;
+      panel = await PdfPreviewPanel.create(this.context, this.previewServer, document, pdfPath, session.renderId, this.output, () => {
+        const current = this.sessions.get(key);
+        if (current?.panel === panel) {
+          this.stopSession(key, false);
+        }
       });
+      if (this.sessions.get(key) !== session) {
+        panel.dispose();
+        return;
+      }
+      session.panel = panel;
+      session.panel.show();
+      return;
     }
-    session.opened = true;
+
+    if (forceReveal) {
+      session.panel.reveal(pdfPath, session.renderId);
+    } else {
+      session.panel.refresh(pdfPath, session.renderId);
+    }
+  }
+
+  private ensureSession(key: string): PreviewSession {
+    const current = this.sessions.get(key);
+    if (current) {
+      return current;
+    }
+    const session: PreviewSession = {
+      wantsPreview: false,
+      externalOpened: false,
+      renderId: 0,
+    };
+    this.sessions.set(key, session);
+    return session;
+  }
+
+  private stopSession(key: string, disposePanel: boolean): void {
+    const session = this.sessions.get(key);
+    if (!session) {
+      return;
+    }
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = undefined;
+    }
+    if (disposePanel) {
+      this.disposePanel(session);
+    } else {
+      session.panel = undefined;
+    }
+    this.sessions.delete(key);
+  }
+
+  private disposePanel(session: PreviewSession): void {
+    const panel = session.panel;
+    if (!panel) {
+      return;
+    }
+    session.panel = undefined;
+    panel.dispose();
   }
 
   private async cleanupPreviewCache(dir: string, keepPdf: string, stem: string): Promise<void> {
