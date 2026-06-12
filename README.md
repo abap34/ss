@@ -62,7 +62,7 @@ whole document after pages and objects have been created.
 In ss, this kind of computation can be written naturally:
 
 ```ss
-import std:themes/default
+import std:themes/default as *
 
 fn add_pageno() -> Void
   foreach(
@@ -137,7 +137,7 @@ asset_base_dir = "."
 Create `slide.ss`:
 
 ```text
-import std:themes/default
+import std:themes/default as *
 
 document
 pagenos()
