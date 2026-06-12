@@ -17,6 +17,7 @@
   const maxScale = 4;
   const fetchTimeoutMs = 15000;
   const loadTimeoutMs = 20000;
+  const fitWidthInset = 64;
 
   installPromiseWithResolvers();
 
@@ -347,7 +348,7 @@
   }
 
   function fitScale(pageWidth) {
-    const availableWidth = Math.max(160, scroll.clientWidth - 40);
+    const availableWidth = Math.max(160, scroll.clientWidth - fitWidthInset);
     return clamp(availableWidth / pageWidth, minScale, maxScale);
   }
 
