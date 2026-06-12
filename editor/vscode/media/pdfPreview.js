@@ -267,8 +267,6 @@
     canvas.style.height = Math.floor(viewport.height) + "px";
     holder.appendChild(canvas);
 
-    pages.appendChild(holder);
-
     const transform = outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0];
     await page.render({ canvasContext: context, viewport, transform }).promise;
     page.cleanup();
@@ -299,7 +297,8 @@
       scroll.scrollTop = 0;
       return;
     }
-    scroll.scrollTop = Math.max(0, holder.offsetTop + (previousView.offset || 0));
+    const offset = clamp(previousView.offset || 0, 0, Math.max(0, holder.offsetHeight - 1));
+    scroll.scrollTop = Math.max(0, holder.offsetTop + offset);
   }
 
   function updateCurrentPageFromScroll() {
