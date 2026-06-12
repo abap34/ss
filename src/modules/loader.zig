@@ -8,6 +8,7 @@ const utils = @import("utils");
 const error_report = utils.err;
 
 const max_module_bytes = 256 * 1024;
+const implicit_prelude_spec = "std:core/prelude";
 
 pub const SourceOverlay = struct {
     allocator: std.mem.Allocator,
@@ -54,6 +55,7 @@ const EmbeddedModule = struct {
 };
 
 const embedded_modules = [_]EmbeddedModule{
+    .{ .spec = "std:core/prelude", .source = stdlib_assets.core_prelude },
     .{ .spec = "std:core/classes", .source = stdlib_assets.core_classes },
     .{ .spec = "std:core/layout", .source = stdlib_assets.core_layout },
     .{ .spec = "std:core/objects", .source = stdlib_assets.core_objects },
@@ -72,12 +74,14 @@ pub const Graph = struct {
     allocator: std.mem.Allocator,
     modules: std.ArrayList(core.SourceModule),
     module_order: std.ArrayList(core.SourceModuleId),
+    project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
 
     pub fn deinit(self: *Graph) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
+        self.project_implicit_import_ids.deinit(self.allocator);
         self.project_import_ids.deinit(self.allocator);
     }
 };
@@ -180,9 +184,15 @@ pub fn loadGraphWithOptions(
         .allocator = allocator,
         .modules = .empty,
         .module_order = .empty,
+        .project_implicit_import_ids = .empty,
         .project_import_ids = .empty,
     };
     errdefer graph.deinit();
+
+    if (shouldProjectImplicitlyImportPrelude(project_dir)) {
+        const prelude_id = try builder.loadImport(project_dir, implicit_prelude_spec);
+        try graph.project_implicit_import_ids.append(allocator, prelude_id);
+    }
 
     for (project_program.imports.items) |import_decl| {
         const module_id = try builder.loadImport(project_dir, import_decl.spec);
@@ -191,6 +201,9 @@ pub fn loadGraphWithOptions(
 
     var seen = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
     defer seen.deinit();
+    for (graph.project_implicit_import_ids.items) |module_id| {
+        try builder.appendPostOrder(module_id, &graph.module_order, &seen);
+    }
     for (graph.project_import_ids.items) |module_id| {
         try builder.appendPostOrder(module_id, &graph.module_order, &seen);
     }
@@ -358,6 +371,7 @@ const Builder = struct {
             .path = path,
             .source = source,
             .program = program,
+            .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,
         });
         owns_source = false;
@@ -366,6 +380,11 @@ const Builder = struct {
         owns_path = false;
 
         const importer_base_dir = if (path) |module_path| std.fs.path.dirname(module_path) orelse "." else ".";
+        if (shouldImplicitlyImportPrelude(kind, spec)) {
+            const import_id = try self.loadImport(importer_base_dir, implicit_prelude_spec);
+            const module = self.moduleByIdMutable(module_id).?;
+            try module.implicit_import_ids.append(self.allocator, import_id);
+        }
         for (program.imports.items) |import_decl| {
             const import_id = self.loadImport(importer_base_dir, import_decl.spec) catch |err| {
                 if (err == error.UnknownImport) {
@@ -419,6 +438,15 @@ const Builder = struct {
         }
 
         const module = self.moduleByIdMutable(module_id) orelse return error.UnknownImport;
+        for (module.implicit_import_ids.items) |import_id| {
+            if (self.state_by_id.get(import_id)) |state| {
+                if (state == .visiting) {
+                    reportImportCycle(module, null);
+                    return error.DiagnosticsFailed;
+                }
+            }
+            try self.appendPostOrder(import_id, order, seen);
+        }
         for (module.resolved_import_ids.items, 0..) |import_id, import_index| {
             if (self.state_by_id.get(import_id)) |state| {
                 if (state == .visiting) {
@@ -433,9 +461,12 @@ const Builder = struct {
         try order.append(self.allocator, module_id);
     }
 
-    fn reportImportCycle(module: *const core.SourceModule, import_index: usize) void {
-        const span = if (import_index < module.program.imports.items.len)
-            module.program.imports.items[import_index].span
+    fn reportImportCycle(module: *const core.SourceModule, import_index: ?usize) void {
+        const span = if (import_index) |index|
+            if (index < module.program.imports.items.len)
+                module.program.imports.items[index].span
+            else
+                ast.Span{ .start = 0, .end = 1 }
         else
             ast.Span{ .start = 0, .end = 1 };
         error_report.print(.{
@@ -447,6 +478,18 @@ const Builder = struct {
         });
     }
 };
+
+fn shouldImplicitlyImportPrelude(kind: core.SourceModuleKind, spec: []const u8) bool {
+    if (kind == .project) return true;
+    return !std.mem.startsWith(u8, spec, "std:core/");
+}
+
+fn shouldProjectImplicitlyImportPrelude(project_dir: []const u8) bool {
+    const base = std.fs.path.basename(project_dir);
+    if (!std.mem.eql(u8, base, "core")) return true;
+    const parent = std.fs.path.dirname(project_dir) orelse return true;
+    return !std.mem.eql(u8, std.fs.path.basename(parent), "stdlib");
+}
 
 fn resolveImport(
     allocator: std.mem.Allocator,

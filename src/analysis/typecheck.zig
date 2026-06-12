@@ -39,6 +39,7 @@ pub const ProgramIndex = struct {
     allocator: std.mem.Allocator,
     modules: std.ArrayList(core.SourceModule),
     module_order: std.ArrayList(core.SourceModuleId),
+    project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
     functions: core.FunctionMap,
 
@@ -47,6 +48,7 @@ pub const ProgramIndex = struct {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
+        self.project_implicit_import_ids.deinit(self.allocator);
         self.project_import_ids.deinit(self.allocator);
     }
 };
@@ -873,6 +875,8 @@ pub fn buildIrWithOptions(
     index.functions = core.FunctionMap.init(allocator);
     ir.module_order = index.module_order;
     index.module_order = .empty;
+    ir.projectModuleMutable().implicit_import_ids = index.project_implicit_import_ids;
+    index.project_implicit_import_ids = .empty;
     ir.projectModuleMutable().resolved_import_ids = index.project_import_ids;
     index.project_import_ids = .empty;
     for (index.modules.items) |module| try ir.modules.append(allocator, module);
@@ -951,11 +955,13 @@ pub fn loadProgramIndexWithOptions(
         .allocator = allocator,
         .modules = graph.modules,
         .module_order = graph.module_order,
+        .project_implicit_import_ids = graph.project_implicit_import_ids,
         .project_import_ids = graph.project_import_ids,
         .functions = core.FunctionMap.init(allocator),
     };
     graph.modules = .empty;
     graph.module_order = .empty;
+    graph.project_implicit_import_ids = .empty;
     graph.project_import_ids = .empty;
 
     errdefer index.deinit();

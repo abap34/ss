@@ -58,10 +58,23 @@ pub fn buildSourceWithOverlay(
     overlay_path: []const u8,
     overlay_source: []const u8,
 ) !void {
+    const overlays = [_]OverlaySource{
+        .{ .path = overlay_path, .source = overlay_source },
+    };
+    try buildSourceWithOverlays(io, allocator, path, source, &overlays);
+}
+
+pub fn buildSourceWithOverlays(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    overlays: []const OverlaySource,
+) !void {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var overlay = module_loader.SourceOverlay.init(allocator);
     defer overlay.deinit();
-    try overlay.put(overlay_path, overlay_source);
+    for (overlays) |item| try overlay.put(item.path, item.source);
 
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);

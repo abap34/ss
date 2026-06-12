@@ -95,30 +95,22 @@ pub const SemanticEnv = struct {
         }
 
         if (self.findFunctionInModule(self.module_id, callee.name)) |resolved| return .{ .found = resolved };
-        var found: ?ResolvedFunction = null;
         if (self.ir) |ir| {
             const module = ir.moduleById(self.module_id) orelse return .unknown;
-            for (module.program.imports.items, 0..) |import_decl, index| {
-                switch (import_decl.mode) {
-                    .open => {},
-                    .alias => continue,
-                }
-                if (index >= module.resolved_import_ids.items.len) continue;
-                const imported_id = module.resolved_import_ids.items[index];
-                var stack = ModuleVisitStack{};
-                switch (self.resolveOpenFunctionInModule(imported_id, callee.name, &stack)) {
-                    .found => |resolved| {
-                        if (found != null and !found.?.key.eql(resolved.key)) return .{ .ambiguous_open = callee.name };
-                        found = resolved;
-                    },
-                    .ambiguous_open => return .{ .ambiguous_open = callee.name },
-                    else => {},
-                }
+            switch (self.resolveExplicitOpenFunction(module, callee.name)) {
+                .found => |resolved| return .{ .found = resolved },
+                .ambiguous_open => return .{ .ambiguous_open = callee.name },
+                else => {},
+            }
+            switch (self.resolveImplicitOpenFunction(module, callee.name)) {
+                .found => |resolved| return .{ .found = resolved },
+                .ambiguous_open => return .{ .ambiguous_open = callee.name },
+                else => return .unknown,
             }
         } else if (self.findFunctionByName(callee.name)) |resolved| {
-            found = resolved;
+            return .{ .found = resolved };
         }
-        return if (found) |resolved| .{ .found = resolved } else .unknown;
+        return .unknown;
     }
 
     pub fn hasFunction(self: *const SemanticEnv, name: []const u8) bool {
@@ -333,6 +325,46 @@ pub const SemanticEnv = struct {
             if (!std.mem.eql(u8, func.name, name)) continue;
             const key = self.findFunctionKey(module_id, name) orelse core.functionKey(module_id, func.name);
             return .{ .key = key, .module_id = module_id, .decl = func };
+        }
+        return null;
+    }
+
+    fn resolveExplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
+        var found: ?ResolvedFunction = null;
+        for (module.program.imports.items, 0..) |import_decl, index| {
+            switch (import_decl.mode) {
+                .open => {},
+                .alias => continue,
+            }
+            if (index >= module.resolved_import_ids.items.len) continue;
+            const imported_id = module.resolved_import_ids.items[index];
+            if (self.mergeOpenFunctionCandidate(imported_id, name, &found)) |resolution| return resolution;
+        }
+        return if (found) |resolved| .{ .found = resolved } else .unknown;
+    }
+
+    fn resolveImplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
+        var found: ?ResolvedFunction = null;
+        for (module.implicit_import_ids.items) |imported_id| {
+            if (self.mergeOpenFunctionCandidate(imported_id, name, &found)) |resolution| return resolution;
+        }
+        return if (found) |resolved| .{ .found = resolved } else .unknown;
+    }
+
+    fn mergeOpenFunctionCandidate(
+        self: *const SemanticEnv,
+        imported_id: core.SourceModuleId,
+        name: []const u8,
+        found: *?ResolvedFunction,
+    ) ?FunctionResolution {
+        var stack = ModuleVisitStack{};
+        switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
+            .found => |resolved| {
+                if (found.* != null and !found.*.?.key.eql(resolved.key)) return .{ .ambiguous_open = name };
+                found.* = resolved;
+            },
+            .ambiguous_open => return .{ .ambiguous_open = name },
+            else => {},
         }
         return null;
     }

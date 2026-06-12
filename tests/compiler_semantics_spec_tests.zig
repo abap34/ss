@@ -26,6 +26,23 @@ fn buildSourceWithOverlay(source: []const u8, overlay_source: []const u8) !void 
     try compiler_semantics.buildSourceWithOverlay(testing.io, allocator, path, source, overlay_path, overlay_source);
 }
 
+fn buildSourceWithTwoOverlays(source: []const u8, first_source: []const u8, second_source: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const first_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/a.ss", .{tmp.sub_path[0..]});
+    const second_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/b.ss", .{tmp.sub_path[0..]});
+    const overlays = [_]compiler_semantics.OverlaySource{
+        .{ .path = first_path, .source = first_source },
+        .{ .path = second_path, .source = second_source },
+    };
+    try compiler_semantics.buildSourceWithOverlays(testing.io, allocator, path, source, &overlays);
+}
+
 fn expectBuildFails(source: []const u8) !void {
     buildSource(source) catch {
         return;
@@ -200,6 +217,32 @@ test "compiler semantics: default import introduces only an alias" {
     , "case.ss:bytes:", "UnknownFunction: unknown function: h2");
 }
 
+test "compiler semantics: core prelude is implicitly open" {
+    try buildSource(
+        \\page ok
+        \\  place!(new("prelude", "body", "text"))
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: default alias supports theme override with prelude placement" {
+    try expectObjectContent(
+        \\import std:themes/default
+        \\
+        \\fn/! h2(content: String) -> Object
+        \\  let t = default::h2(content)
+        \\  t.text_size = 32
+        \\  return t
+        \\end
+        \\
+        \\page ok
+        \\  h2!("override")
+        \\end
+        \\
+    , "override");
+}
+
 test "compiler semantics: open import introduces bare names" {
     try buildSource(
         \\import std:themes/default as *
@@ -228,6 +271,26 @@ test "compiler semantics: qualified calls bypass local shadowing" {
     ;
     try expectObjectContent(source, "local");
     try expectObjectContent(source, "qualified");
+}
+
+test "compiler semantics: implicit prelude is not re-exported through open imports" {
+    try buildSourceWithTwoOverlays(
+        \\import "lib/a" as *
+        \\import "lib/b" as *
+        \\
+        \\page ok
+        \\  place!(new("custom", "body", "text"))
+        \\end
+        \\
+    ,
+        \\
+    ,
+        \\fn place!(obj: Object) -> Object
+        \\  obj.text_size = 41
+        \\  return place_on!(pagectx(), obj)
+        \\end
+        \\
+    );
 }
 
 test "compiler semantics: open import ambiguity is diagnosed" {

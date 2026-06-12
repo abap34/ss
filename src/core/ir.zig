@@ -73,10 +73,12 @@ pub const SourceModule = struct {
     path: ?[]u8,
     source: []u8,
     program: ast.Program,
+    implicit_import_ids: std.ArrayList(SourceModuleId),
     resolved_import_ids: std.ArrayList(SourceModuleId),
 
     pub fn deinit(self: *SourceModule, allocator: Allocator) void {
         self.program.deinit(allocator);
+        self.implicit_import_ids.deinit(allocator);
         self.resolved_import_ids.deinit(allocator);
         allocator.free(self.spec);
         allocator.free(self.source);
@@ -199,6 +201,7 @@ pub const Ir = struct {
             .path = project_path,
             .source = project_source,
             .program = project_program,
+            .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,
         });
 

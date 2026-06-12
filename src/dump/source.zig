@@ -6,16 +6,28 @@ const json = @import("utils").json;
 
 pub fn writeModulesField(allocator: std.mem.Allocator, root: *json.Object, modules: []const core.SourceModule) !void {
     var array = try root.arrayField("modules");
-    for (modules) |module| try writeModule(allocator, &array, module);
+    for (modules) |module| try writeModule(allocator, &array, module, modules);
     try array.end();
 }
 
-fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.SourceModule) !void {
+fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.SourceModule, all_modules: []const core.SourceModule) !void {
     var item = try modules.objectItem();
     try item.intField("id", module.id);
     try item.enumTagField("kind", module.kind);
     try item.stringField("spec", module.spec);
     try item.optionalStringField("path", module.path);
+    var implicit_imports = try item.arrayField("implicitImports");
+    for (module.implicit_import_ids.items) |module_id| {
+        var import_item = try implicit_imports.objectItem();
+        try import_item.intField("module_id", module_id);
+        if (moduleSpecById(all_modules, module_id)) |spec| {
+            try import_item.stringField("spec", spec);
+        } else {
+            try import_item.nullField("spec");
+        }
+        try import_item.end();
+    }
+    try implicit_imports.end();
     var imports = try item.arrayField("imports");
     for (module.program.imports.items, 0..) |import_decl, index| {
         var import_item = try imports.objectItem();
@@ -33,6 +45,13 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     try item.stringField("source", module.source);
     try writeProgram(allocator, &item, module.program);
     try item.end();
+}
+
+fn moduleSpecById(modules: []const core.SourceModule, module_id: core.SourceModuleId) ?[]const u8 {
+    for (modules) |module| {
+        if (module.id == module_id) return module.spec;
+    }
+    return null;
 }
 
 fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast.Program) !void {
