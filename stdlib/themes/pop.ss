@@ -81,8 +81,9 @@ fn toc(title_text: String) -> Object
   let list = toc_obj()
   let chrome = panel()
   box(chrome, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
+  below(list, title, title.layout_spacing_after ?? 32)
   surround(chrome, list, 14, 12)
-  return group(title, list)
+  return group(title, chrome, list)
 end
 
 fn toc!(title_text: String) -> Object

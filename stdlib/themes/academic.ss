@@ -43,6 +43,7 @@ end
 fn toc(title_text: String) -> Object
   let title = head(title_text)
   let list = toc_obj()
+  below(list, title, title.layout_spacing_after ?? 32)
   return group(title, list)
 end
 

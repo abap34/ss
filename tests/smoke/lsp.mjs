@@ -14,6 +14,9 @@ const uri = pathToFileURL(fixture).toString();
 const partsUri = pathToFileURL(partsFixture).toString();
 const defaultThemeUri = pathToFileURL(defaultTheme).toString();
 const source = await readFile(fixture, "utf8");
+const defaultThemeSource = await readFile(defaultTheme, "utf8");
+const defaultThemeCoverDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "cover");
+const defaultThemeH2Definition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "h2");
 
 const child = spawn(ssBin, ["lsp"], { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
 let nextId = 1;
@@ -313,7 +316,7 @@ assert(
 );
 assert(Array.isArray(qualified.definition), `expected qualified definition array, got ${JSON.stringify(qualified.definition)}`);
 assert(
-  qualified.definition.some((location) => location.uri === defaultThemeUri && location.range?.start?.line === 8 && location.range?.start?.character === 5),
+  qualified.definition.some((location) => isDefinitionLocation(location, defaultThemeH2Definition)),
   `qualified definition did not jump to default h2: ${JSON.stringify(qualified.definition)}`,
 );
 assert(
@@ -322,11 +325,22 @@ assert(
 );
 
 function isCoverDefinition(location) {
+  return isDefinitionLocation(location, defaultThemeCoverDefinition);
+}
+
+function functionDefinitionLocation(uri, text, name) {
+  const needle = `fn/! ${name}`;
+  const lines = text.split("\n");
+  const line = lines.findIndex((lineText) => lineText.includes(needle));
+  assert(line >= 0, `fixture did not contain ${needle}`);
+  const character = lines[line].indexOf(name);
+  assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);
+  return { uri, line, character };
+}
+
+function isDefinitionLocation(location, expected) {
   const start = location.range?.start;
-  if (location.uri === defaultThemeUri && start?.line === 67 && start?.character === 5) {
-    return true;
-  }
-  return location.uri?.endsWith("/stdlib/themes/constructors.ss") && start?.line === 120 && start?.character === 5;
+  return location.uri === expected.uri && start?.line === expected.line && start?.character === expected.character;
 }
 
 const configuredProject = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-config-"));

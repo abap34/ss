@@ -43,6 +43,36 @@ fn buildSourceWithTwoOverlays(source: []const u8, first_source: []const u8, seco
     try compiler_semantics.buildSourceWithOverlays(testing.io, allocator, path, source, &overlays);
 }
 
+fn buildSourceWithAssetFixtures(source: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    const slide_path = try std.fs.path.join(allocator, &.{ root, "case.ss" });
+    const image_path = try std.fs.path.join(allocator, &.{ root, "image.svg" });
+    const pdf_path = try std.fs.path.join(allocator, &.{ root, "doc.pdf" });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = image_path,
+        .data =
+        \\<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32">
+        \\</svg>
+        ,
+        .flags = .{ .truncate = true },
+    });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = pdf_path,
+        .data = "%PDF-1.7\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n",
+        .flags = .{ .truncate = true },
+    });
+
+    try compiler_semantics.buildSource(testing.io, allocator, slide_path, source);
+}
+
 fn expectBuildFails(source: []const u8) !void {
     buildSource(source) catch {
         return;
@@ -320,6 +350,135 @@ test "compiler semantics: default alias supports theme override with prelude pla
         \\end
         \\
     , "override");
+}
+
+test "compiler semantics: stdlib theme toc works through default aliases" {
+    try buildSource(
+        \\import std:themes/default
+        \\
+        \\page table_of_contents
+        \\  toc!("Contents")
+        \\end
+        \\
+    );
+    try buildSource(
+        \\import std:themes/academic
+        \\
+        \\page table_of_contents
+        \\  toc!("Contents")
+        \\end
+        \\
+    );
+    try buildSource(
+        \\import std:themes/pop
+        \\
+        \\page table_of_contents
+        \\  toc!("Contents")
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: stdlib core components build when called directly" {
+    try buildSourceWithAssetFixtures(
+        \\import std:core/components
+        \\
+        \\page text_components
+        \\  title!("Title")
+        \\  subtitle!("Subtitle")
+        \\  text!("Body")
+        \\  math!("x + y")
+        \\  mathtex!("x^2")
+        \\  code_l!("const x = 1", "zig")
+        \\  code!("print('x')", "python")
+        \\  note!("note")
+        \\  pageno!()
+        \\end
+        \\
+        \\page frame_components
+        \\  frame_s!(text("frame_s"), 8, 6)
+        \\  frame!("frame", "body", "text", 96, 96, 8, 6, none, none, 0, 0)
+        \\  place!(surround_s(text("surround"), 8, 6))
+        \\  place!(border_p(text("border_p"), 8, 6, none, c"0.2,0.2,0.2", 1, 4))
+        \\  place!(border(text("border")))
+        \\  place!(outline(text("outline")))
+        \\end
+        \\
+        \\page asset_components
+        \\  image!("image.svg")
+        \\  pdf!("doc.pdf")
+        \\end
+        \\
+        \\page citation_component
+        \\  let target = text!("body [1]")
+        \\  citation!(target, 1, "reference")
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: stdlib theme components build when imported by theme alias" {
+    try buildSourceWithAssetFixtures(
+        \\import std:themes/default
+        \\
+        \\page default_text
+        \\  h1!("Title")
+        \\  h2!("Subtitle")
+        \\  head!("Head")
+        \\  subhead!("Subhead")
+        \\  text!("Body")
+        \\  tex!("x^2")
+        \\  code!("print('x')", "python")
+        \\  toc!("Contents")
+        \\end
+        \\
+        \\page default_cover
+        \\  cover!("Title", "Subtitle", "Author")
+        \\end
+        \\
+    );
+    try buildSourceWithAssetFixtures(
+        \\import std:themes/academic
+        \\
+        \\page academic_text
+        \\  h1!("Title")
+        \\  h2!("Subtitle")
+        \\  h3!("Section")
+        \\  head!("Head")
+        \\  subhead!("Subhead")
+        \\  text!("Body")
+        \\  code!("print('x')", "python")
+        \\  toc!("Contents")
+        \\end
+        \\
+        \\page academic_cover
+        \\  cover!("Title", "Subtitle", "Author", "2026")
+        \\end
+        \\
+    );
+    try buildSourceWithAssetFixtures(
+        \\import std:themes/pop
+        \\
+        \\page pop_text
+        \\  h1!("Title")
+        \\  h2!("Subtitle")
+        \\  head!("Head")
+        \\  subhead!("Subhead")
+        \\  text!("Body")
+        \\  tex!("x^2")
+        \\  figure!("Figure")
+        \\  image!("image.svg")
+        \\  pdf!("doc.pdf")
+        \\  code!("print('x')", "python")
+        \\  note!("note")
+        \\  toc!("Contents")
+        \\end
+        \\
+        \\page pop_cover
+        \\  cover!("Title", "Subtitle", "Author")
+        \\end
+        \\
+    );
 }
 
 test "compiler semantics: import as star introduces bare names" {
