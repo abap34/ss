@@ -588,12 +588,64 @@ test "layout metrics use enlarged rendered text size" {
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
     try ir.setNodeProperty(object, "layout_font_size", "20");
-    try ir.setNodeProperty(object, "layout_line_height", "28");
     try ir.setNodeProperty(object, "text_size", "30");
     try ir.setNodeProperty(object, "text_line_height", "45");
 
     const node = ir.getNode(object).?;
     try expectFloat(90, metrics.intrinsicHeight(&ir, node));
+}
+
+test "layout metrics derive line height from explicit text size" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
+    try ir.setNodeProperty(object, "text_size", "30");
+
+    const node = ir.getNode(object).?;
+    try expectFloat(96, metrics.intrinsicHeight(&ir, node));
+
+    const resolved = core.render_policy.resolve(&ir, node);
+    try expectFloat(30, resolved.text.?.font_size);
+    try expectFloat(48, resolved.text.?.line_height);
+}
+
+test "layout metrics honor explicit text and layout line heights" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const text_only = try ir.makeObject(page, "text-only", null, .text, .text, "one\ntwo");
+    try ir.setNodeProperty(text_only, "text_size", "30");
+    try ir.setNodeProperty(text_only, "text_line_height", "45");
+    try expectFloat(90, metrics.intrinsicHeight(&ir, ir.getNode(text_only).?));
+
+    const layout_override = try ir.makeObject(page, "layout-override", null, .text, .text, "one\ntwo");
+    try ir.setNodeProperty(layout_override, "text_size", "30");
+    try ir.setNodeProperty(layout_override, "text_line_height", "45");
+    try ir.setNodeProperty(layout_override, "layout_line_height", "50");
+    try expectFloat(100, metrics.intrinsicHeight(&ir, ir.getNode(layout_override).?));
+
+    const resolved = core.render_policy.resolve(&ir, ir.getNode(layout_override).?);
+    try expectFloat(45, resolved.text.?.line_height);
+}
+
+test "layout metrics treat zero line heights as automatic" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
+    try ir.setNodeProperty(object, "text_size", "30");
+    try ir.setNodeProperty(object, "text_line_height", "0");
+    try ir.setNodeProperty(object, "layout_line_height", "0");
+
+    const node = ir.getNode(object).?;
+    try expectFloat(96, metrics.intrinsicHeight(&ir, node));
+
+    const resolved = core.render_policy.resolve(&ir, node);
+    try expectFloat(48, resolved.text.?.line_height);
 }
 
 test "render policy: invalid numeric properties fall back before rendering" {
@@ -615,7 +667,7 @@ test "render policy: invalid numeric properties fall back before rendering" {
     const resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
     const text = resolved.text.?;
     try expectFloat(20, text.font_size);
-    try expectFloat(28, text.line_height);
+    try expectFloat(32, text.line_height);
     try expectFloat(1, text.inline_math_height_factor);
     try expectFloat(0, resolved.chrome.pad_x);
     try expectFloat(0, resolved.chrome.pad_y);

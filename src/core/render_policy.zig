@@ -176,14 +176,15 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
     }
 
     const layout_style = layout.styleForNode(ir, node);
+    const text_metrics = layout.style.textMetricsForNode(ir, node);
     const font = stringProperty(ir, node, "text_font", "Helvetica");
     return .{
         .font = font,
         .bold_font = stringProperty(ir, node, "text_bold_font", font),
         .italic_font = stringProperty(ir, node, "text_italic_font", font),
         .code_font = stringProperty(ir, node, "text_code_font", "Courier"),
-        .font_size = positiveFloatProperty(ir, node, "text_size") orelse layout_style.font_size,
-        .line_height = positiveFloatProperty(ir, node, "text_line_height") orelse layout_style.line_height,
+        .font_size = text_metrics.font_size,
+        .line_height = text_metrics.line_height,
         .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
         .link_color = parseColorProperty(ir, node, "text_link_color") orelse FALLBACK_LINK_COLOR,
         .link_underline_width = nonNegativeFloatProperty(ir, node, "text_link_underline_width") orelse 0,
@@ -247,14 +248,15 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
     }
 
     const layout_style = layout.styleForNode(ir, node);
+    const text_metrics = layout.style.textMetricsForNode(ir, node);
     const font = stringPropertyWithEnv(node, "text_font", "Helvetica", sema);
     return .{
         .font = font,
         .bold_font = stringPropertyWithEnv(node, "text_bold_font", font, sema),
         .italic_font = stringPropertyWithEnv(node, "text_italic_font", font, sema),
         .code_font = stringPropertyWithEnv(node, "text_code_font", "Courier", sema),
-        .font_size = positiveFloatPropertyWithEnv(node, "text_size", sema) orelse layout_style.font_size,
-        .line_height = positiveFloatPropertyWithEnv(node, "text_line_height", sema) orelse layout_style.line_height,
+        .font_size = text_metrics.font_size,
+        .line_height = text_metrics.line_height,
         .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
         .link_color = parseColorPropertyWithEnv(node, "text_link_color", sema) orelse FALLBACK_LINK_COLOR,
         .link_underline_width = nonNegativeFloatPropertyWithEnv(node, "text_link_underline_width", sema) orelse 0,

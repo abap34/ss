@@ -13,6 +13,13 @@ const DEFAULT_TEXT_STYLE = TextStyle{
     .default_right_inset = 96,
 };
 
+const DEFAULT_LINE_HEIGHT_FACTOR: f32 = 1.6;
+
+pub const TextMetrics = struct {
+    font_size: f32,
+    line_height: f32,
+};
+
 pub fn styleForNode(ir: anytype, node: *const Node) TextStyle {
     return overrideTextStyleFromProperties(ir, node, DEFAULT_TEXT_STYLE);
 }
@@ -35,19 +42,37 @@ pub fn parseNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?
 
 fn overrideTextStyleFromProperties(ir: anytype, node: *const Node, base: TextStyle) TextStyle {
     var style = base;
-    const text_size = positiveNodeFloatProperty(ir, node, "text_size");
-    const layout_font_size = positiveNodeFloatProperty(ir, node, "layout_font_size");
-    if (layout_font_size orelse text_size) |value| style.font_size = value;
-    if (text_size) |value| style.font_size = @max(style.font_size, value);
+    const text_metrics = textMetricsForNode(ir, node);
+    const explicit_text_size = explicitPositiveNodeFloatProperty(node, "text_size");
+    const explicit_layout_font_size = explicitPositiveNodeFloatProperty(node, "layout_font_size");
+    const default_layout_font_size = defaultPositiveNodeFloatProperty(ir, node, "layout_font_size");
+    style.font_size = explicit_layout_font_size orelse explicit_text_size orelse default_layout_font_size orelse text_metrics.font_size;
 
-    const text_line_height = positiveNodeFloatProperty(ir, node, "text_line_height");
-    const layout_line_height = positiveNodeFloatProperty(ir, node, "layout_line_height");
-    if (layout_line_height orelse text_line_height) |value| style.line_height = value;
-    if (text_line_height) |value| style.line_height = @max(style.line_height, value);
+    const text_line_height = explicitPositiveNodeFloatProperty(node, "text_line_height");
+    const explicit_layout_line_height = explicitPositiveNodeFloatProperty(node, "layout_line_height");
+    const default_layout_line_height = defaultPositiveNodeFloatProperty(ir, node, "layout_line_height");
+    style.line_height = explicit_layout_line_height orelse text_line_height orelse default_layout_line_height orelse text_metrics.line_height;
     if (nonNegativeNodeFloatProperty(ir, node, "layout_spacing_after")) |value| style.spacing_after = value;
     if (parseNodeFloatProperty(ir, node, "layout_x")) |value| style.default_x = value;
     if (nonNegativeNodeFloatProperty(ir, node, "layout_right_inset")) |value| style.default_right_inset = value;
     return style;
+}
+
+pub fn textMetricsForNode(ir: anytype, node: *const Node) TextMetrics {
+    const explicit_text_size = explicitPositiveNodeFloatProperty(node, "text_size");
+    const default_text_size = defaultPositiveNodeFloatProperty(ir, node, "text_size");
+    const layout_font_size = explicitPositiveNodeFloatProperty(node, "layout_font_size") orelse defaultPositiveNodeFloatProperty(ir, node, "layout_font_size");
+    const font_size = explicit_text_size orelse default_text_size orelse layout_font_size orelse DEFAULT_TEXT_STYLE.font_size;
+
+    const line_height = explicitPositiveNodeFloatProperty(node, "text_line_height") orelse blk: {
+        const default_text_line_height = defaultPositiveNodeFloatProperty(ir, node, "text_line_height");
+        break :blk default_text_line_height orelse defaultLineHeight(font_size);
+    };
+
+    return .{
+        .font_size = font_size,
+        .line_height = line_height,
+    };
 }
 
 fn positiveNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
@@ -58,4 +83,23 @@ fn positiveNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f
 fn nonNegativeNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
     const value = parseNodeFloatProperty(ir, node, key) orelse return null;
     return if (value >= 0) value else null;
+}
+
+fn explicitPositiveNodeFloatProperty(node: *const Node, key: []const u8) ?f32 {
+    const value = parseFloatValue(model.nodeProperty(node, key) orelse return null) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn defaultPositiveNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    const value = parseFloatValue(class_fields.defaultProperty(ir, node, key) orelse return null) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn parseFloatValue(value: []const u8) ?f32 {
+    const parsed = std.fmt.parseFloat(f32, value) catch return null;
+    return if (std.math.isFinite(parsed)) parsed else null;
+}
+
+fn defaultLineHeight(font_size: f32) f32 {
+    return font_size * DEFAULT_LINE_HEIGHT_FACTOR;
 }
