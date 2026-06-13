@@ -179,6 +179,10 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/lsp_scope_spec_tests.zig", &.{
         import("lsp_scope", lsp_scope_mod),
     }, true);
+    const lsp_completion_mod = createModule(ctx, "src/lsp/completion.zig", &.{}, true);
+    addModuleTest(ctx, test_step, "tests/lsp_completion_spec_tests.zig", &.{
+        import("lsp_completion", lsp_completion_mod),
+    }, true);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfBackend(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch_spec_tests.zig", &.{

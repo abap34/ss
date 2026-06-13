@@ -10,6 +10,7 @@ const project = @import("project.zig");
 const dump = @import("dump.zig");
 const utils = @import("utils");
 const language_names = @import("language/names.zig");
+const lsp_completion = @import("lsp/completion.zig");
 const lsp_scope = @import("lsp/scope.zig");
 
 const JsonValue = std.json.Value;
@@ -696,11 +697,14 @@ fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     defer if (context) |*ctx| ctx.deinit(allocator);
     var position = try requestPosition(server, params);
     defer if (position) |*pos| pos.deinit(allocator);
+    const access_completion = if (position) |*pos| lsp_completion.accessBeforeOffset(pos.source, pos.offset) != null else false;
     try out.appendSlice(allocator, "{\"isIncomplete\":false,\"items\":[");
     var first = true;
-    const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
-    for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
-    if (position) |*pos| try appendImportAsCompletions(allocator, &out, &first, pos.source, pos.offset);
+    if (!access_completion) {
+        const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
+        for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
+        if (position) |*pos| try appendImportAsCompletions(allocator, &out, &first, pos.source, pos.offset);
+    }
     if (completionDumpJson(server)) |json_text| {
         try appendDumpCompletions(allocator, &out, &first, json_text, if (context) |*ctx| ctx else null, if (position) |*pos| pos else null);
     }
@@ -728,10 +732,29 @@ fn appendDumpCompletions(
     defer parsed.deinit();
     const root = parsed.value.object;
     if (position) |pos| {
-        if (qualifiedAliasBeforeOffset(pos.source, pos.offset)) |alias| {
-            if (resolveAliasModuleId(allocator, &root, pos.doc_path, alias)) |module_id| {
-                try appendModuleFunctionCompletions(allocator, out, first, &root, module_id);
-                return;
+        if (lsp_completion.accessBeforeOffset(pos.source, pos.offset)) |access| {
+            switch (access.separator) {
+                .double_colon => {
+                    if (resolveAliasModuleId(allocator, &root, pos.doc_path, access.receiver)) |module_id| {
+                        try appendModuleFunctionCompletions(allocator, out, first, &root, module_id);
+                    }
+                    return;
+                },
+                .dot => {
+                    var member_context = RequestContext{
+                        .target = @constCast(access.receiver),
+                        .doc_path = pos.doc_path,
+                        .source = pos.source,
+                        .offset = pos.offset,
+                    };
+                    if (lsp_scope.bestVisibleVariable(allocator, &root, access.receiver, &member_context)) |variable| {
+                        if (lsp_completion.propertyTargetForVariable(variable)) |target| {
+                            try appendMemberPropertyCompletions(allocator, out, first, &root, target);
+                            return;
+                        }
+                    }
+                    return;
+                },
             }
         }
     }
@@ -783,6 +806,30 @@ fn appendModuleFunctionCompletions(
         const detail = stringField(&item.object, "signature");
         try appendCompletion(allocator, out, first, label, 3, detail, stringField(&item.object, "summary"));
     };
+}
+
+fn appendMemberPropertyCompletions(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    first: *bool,
+    root: *const JsonObject,
+    target: lsp_completion.PropertyTarget,
+) !void {
+    const decls = objectFieldObject(root, "declarations") orelse return;
+    const fields = arrayFieldObject(decls, "fields") orelse return;
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+    var index = fields.items.len;
+    while (index > 0) {
+        index -= 1;
+        const item = fields.items[index];
+        if (item != .object) continue;
+        if (!lsp_completion.fieldAppliesToTarget(root, &item.object, target)) continue;
+        const label = stringField(&item.object, "name") orelse continue;
+        if (seen.contains(label)) continue;
+        try seen.put(label, {});
+        try appendCompletion(allocator, out, first, label, 10, stringField(&item.object, "type"), null);
+    }
 }
 
 fn importAsSpecBeforeCursor(source: []const u8, offset: usize) ?[]const u8 {
