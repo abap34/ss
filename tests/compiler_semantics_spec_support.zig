@@ -32,6 +32,13 @@ pub const OverlaySource = struct {
     source: []const u8,
 };
 
+pub const VariableObjectClassExpectation = struct {
+    name: []const u8,
+    scope_kind: []const u8,
+    scope_name: ?[]const u8 = null,
+    object_class: ?[]const u8,
+};
+
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
@@ -219,6 +226,54 @@ pub fn expectDumpContains(
     for (expected) |needle| {
         if (std.mem.indexOf(u8, text, needle) == null) return error.ExpectedDumpTextMissing;
     }
+}
+
+pub fn expectVariableObjectClasses(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    expected: []const VariableObjectClassExpectation,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    const text = try compiler.dump.toOwnedString(allocator, &ir);
+    defer allocator.free(text);
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, text, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    const variables = root.get("variables") orelse return error.ExpectedDumpTextMissing;
+    if (variables != .array) return error.ExpectedDumpTextMissing;
+
+    for (expected) |item| {
+        if (!dumpVariableObjectClassMatches(&variables.array, item)) return error.ExpectedDumpTextMissing;
+    }
+}
+
+fn dumpVariableObjectClassMatches(variables: *const std.json.Array, expected: VariableObjectClassExpectation) bool {
+    for (variables.items) |value| {
+        if (value != .object) continue;
+        const object = &value.object;
+        if (!std.mem.eql(u8, jsonStringField(object, "name") orelse "", expected.name)) continue;
+        if (!std.mem.eql(u8, jsonStringField(object, "scopeKind") orelse "", expected.scope_kind)) continue;
+        if (!optionalStringEql(jsonStringField(object, "scopeName"), expected.scope_name)) continue;
+        if (!optionalStringEql(jsonStringField(object, "objectClass"), expected.object_class)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn jsonStringField(object: *const std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = object.get(key) orelse return null;
+    return if (value == .string) value.string else null;
+}
+
+fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left == null and right == null) return true;
+    if (left == null or right == null) return false;
+    return std.mem.eql(u8, left.?, right.?);
 }
 
 pub fn expectOverlayDiagnostic(

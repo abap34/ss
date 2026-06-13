@@ -122,6 +122,17 @@ fn expectDumpContains(source: []const u8, expected: []const []const u8) !void {
     try compiler_semantics.expectDumpContains(testing.io, allocator, path, source, expected);
 }
 
+fn expectVariableObjectClasses(source: []const u8, expected: []const compiler_semantics.VariableObjectClassExpectation) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectVariableObjectClasses(testing.io, allocator, path, source, expected);
+}
+
 fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -216,6 +227,73 @@ test "compiler semantics: default import introduces an alias and bare names" {
         \\end
         \\
     );
+}
+
+test "compiler semantics: editor variable info keeps object classes through user calls" {
+    try expectVariableObjectClasses(
+        \\type Thing = object {
+        \\  roles = ["thing"]
+        \\  size: Number = 1
+        \\}
+        \\
+        \\fn make(role: String) -> Object
+        \\  return new("x", role, "text")
+        \\end
+        \\
+        \\fn wrap() -> Object
+        \\  return make("thing")
+        \\end
+        \\
+        \\page ok
+        \\  let t = wrap()
+        \\  t.size = 2
+        \\end
+        \\
+    , &.{
+        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Thing" },
+    });
+}
+
+test "compiler semantics: editor variable info keeps object classes through paired placement calls" {
+    try expectVariableObjectClasses(
+        \\type Thing = object {
+        \\  roles = ["thing"]
+        \\  size: Number = 1
+        \\}
+        \\
+        \\fn/! thing() -> Object
+        \\  return new("x", "thing", "text")
+        \\end
+        \\
+        \\page ok
+        \\  let t = thing!()
+        \\  t.size = 2
+        \\end
+        \\
+    , &.{
+        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Thing" },
+    });
+}
+
+test "compiler semantics: stdlib editor variable info keeps theme object classes" {
+    try expectVariableObjectClasses(
+        \\import std:themes/default
+        \\
+        \\fn/! h2(content: String) -> Object
+        \\  let t = default::h2(content)
+        \\  t.text_size = 32
+        \\  return t
+        \\end
+        \\
+        \\page ok
+        \\  let t = text! "body"
+        \\  t.text_size = 20
+        \\end
+        \\
+    , &.{
+        .{ .name = "t", .scope_kind = "function", .scope_name = "h2", .object_class = "Sub" },
+        .{ .name = "t", .scope_kind = "page", .scope_name = "ok", .object_class = "Body" },
+    });
 }
 
 test "compiler semantics: core prelude is implicitly open" {

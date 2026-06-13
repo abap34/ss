@@ -254,7 +254,7 @@ fn inferCallInfo(
             const const_info = try inferUserFunctionReturnInfo(allocator, ir, &callee_sema, env, func, .{
                 .callee = call.callee,
                 .args = std.ArrayList(ast.Expr).empty,
-            }, origin, options);
+            }, sema, origin, options);
             return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin, options);
         }
     }
@@ -359,7 +359,7 @@ fn inferUserCallInfo(
         const actual = try exprInfoWithOptions(allocator, ir, caller_sema, env, arg, origin, options);
         try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
     }
-    return try inferUserFunctionReturnInfo(allocator, ir, callee_sema, env, func, call, origin, options);
+    return try inferUserFunctionReturnInfo(allocator, ir, callee_sema, env, func, call, caller_sema, origin, options);
 }
 
 fn inferPrimitiveCallInfo(
@@ -433,17 +433,18 @@ fn inferUserFunctionReturnInfo(
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
     call: ast.CallExpr,
+    caller_sema: *const SemanticEnv,
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
     if (active_return_visiting) |visiting| {
-        return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, options, visiting);
+        return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, caller_sema, origin, options, visiting);
     }
     var visiting = FunctionVisitSet.init(allocator);
     defer visiting.deinit();
     active_return_visiting = &visiting;
     defer active_return_visiting = null;
-    return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, origin, options, &visiting);
+    return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, caller_sema, origin, options, &visiting);
 }
 
 fn inferUserFunctionReturnInfoInner(
@@ -453,11 +454,11 @@ fn inferUserFunctionReturnInfoInner(
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
     call: ast.CallExpr,
+    caller_sema: *const SemanticEnv,
     origin: []const u8,
     options: InferenceOptions,
     visiting: *FunctionVisitSet,
 ) !TypeInfo {
-    _ = caller_env;
     const visit_key = core.functionKey(sema.module_id, func.name);
     if (visiting.contains(visit_key)) {
         var info = infoFromType(func.result_type);
@@ -470,13 +471,18 @@ fn inferUserFunctionReturnInfoInner(
     var env = TypeEnv.init(allocator);
     defer env.deinit();
     for (func.params.items, 0..) |param, index| {
+        var param_info = infoFromType(param.ty);
         if (index >= call.args.items.len) {
             if (param.default_value) |default_value| {
                 const default_info = try exprInfoWithOptions(allocator, ir, sema, &env, default_value.*, origin, options);
                 try ensureType(ir, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
+                param_info = try mergeTypeInfo(allocator, param_info, default_info);
             }
+        } else {
+            const actual_info = try exprInfoWithOptions(allocator, ir, caller_sema, caller_env, call.args.items[index], origin, options);
+            param_info = try mergeTypeInfo(allocator, param_info, actual_info);
         }
-        try env.put(param.name, infoFromType(param.ty));
+        try env.put(param.name, param_info);
     }
 
     var result = infoFromType(func.result_type);
@@ -590,14 +596,14 @@ fn primitiveResultTypeInfo(
             return info;
         },
         .first_arg => {
-            if (call.args.items.len == 0) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
-            return try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
+            if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
+            return try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
         },
         .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin, options),
         .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin, options),
         .target_arg => {
-            if (call.args.items.len == 0) return infoFromType(Type.object);
-            const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
+            if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(Type.object);
+            const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
             return .{
                 .ty = switch (target_info.ty.kind) {
                     .document, .page, .object, .selection => target_info.ty,

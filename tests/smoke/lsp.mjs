@@ -219,6 +219,47 @@ assert(
   `expected UnplacedObject diagnostic, got ${JSON.stringify(warningDiagnostics.params.diagnostics)}`,
 );
 
+const memberValidSource = `import std:themes/default
+
+page ok
+  let t = text! "body"
+  t.text_size = 20
+end
+`;
+const memberValidDiagnosticsPromise = waitForNotification(
+  (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
+);
+notify("textDocument/didChange", {
+  textDocument: { uri, version: 5 },
+  contentChanges: [{ text: memberValidSource }],
+});
+const memberValidDiagnostics = await memberValidDiagnosticsPromise;
+assert(memberValidDiagnostics.params.diagnostics.length === 0, `member valid diagnostics: ${JSON.stringify(memberValidDiagnostics.params.diagnostics)}`);
+
+const memberBrokenSource = `import std:themes/default
+
+page ok
+  let t = text! "body"
+  t.
+end
+`;
+notify("textDocument/didChange", {
+  textDocument: { uri, version: 6 },
+  contentChanges: [{ text: memberBrokenSource }],
+});
+const memberCompletion = await request("textDocument/completion", {
+  textDocument: { uri },
+  position: { line: 4, character: 4 },
+});
+assert(
+  memberCompletion.items?.some((item) => item.label === "text_size"),
+  `member completion did not include text_size: ${JSON.stringify(memberCompletion)}`,
+);
+assert(
+  !memberCompletion.items?.some((item) => item.label === "add" || item.label === "Align"),
+  `member completion leaked global candidates: ${JSON.stringify(memberCompletion)}`,
+);
+
 await request("shutdown", null);
 notify("exit", {});
 
