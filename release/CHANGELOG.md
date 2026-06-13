@@ -4,6 +4,25 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-14
+
+### Changed
+
+- Changed repeated open imports to resolve bare names by the latest import so
+  later themes can override earlier imported components.
+- Tightened member completion so `.` completion shows object properties while
+  `::` completion shows module members.
+- Sent editor document changes to the language server immediately instead of
+  applying an extra extension-side delay.
+
+### Fixed
+
+- Preserved object class information through calls such as `text!` and
+  qualified theme constructors so member completion can infer the resulting
+  object properties.
+- Fixed stdlib theme `toc` components so default, academic, and pop table of
+  contents pages build without layout conflicts.
+
 ## [0.5.0] - 2026-06-13
 
 ### Added
