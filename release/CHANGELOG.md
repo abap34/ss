@@ -4,6 +4,36 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-13
+
+### Added
+
+- Added Zed editor support for `ss` files.
+- Added a JSON Schema for `ss.toml` editor and project configuration.
+- Added Markdown strikethrough rendering.
+- Added an implicit core prelude so core layout and placement helpers are
+  available without explicit imports.
+
+### Changed
+
+- Reworked import semantics around alias imports, open imports with `as *`,
+  qualified calls with `::`, extensionless path imports, and module-scoped
+  function resolution.
+- Reworked the VS Code PDF preview around a local preview server, smoother
+  refreshes, a simpler control bar, fit-width padding, and stable page sizing.
+- Moved editor feature controls such as preview debounce, diagnostics, inlay
+  hints, and page guides into `ss.toml`.
+- Updated LSP, tree-sitter, Helix, Zed, VS Code grammar, snippets, completions,
+  definitions, semantic tokens, and diagnostics for the new import model.
+
+### Fixed
+
+- Kept watch mode and editor services responsive when project configuration or
+  source parsing fails.
+- Published imported module diagnostics through the LSP so import sites and
+  imported files report the relevant errors.
+- Fixed VS Code preview flicker, stale reloads, and over-zoomed page stretching.
+
 ## [0.4.3] - 2026-06-10
 
 ### Fixed
