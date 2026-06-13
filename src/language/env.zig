@@ -21,7 +21,6 @@ pub const FunctionResolution = union(enum) {
     found: ResolvedFunction,
     unknown,
     unknown_alias: []const u8,
-    ambiguous_open: []const u8,
 };
 
 const ModuleVisitStack = struct {
@@ -99,12 +98,10 @@ pub const SemanticEnv = struct {
             const module = ir.moduleById(self.module_id) orelse return .unknown;
             switch (self.resolveExplicitOpenFunction(module, callee.name)) {
                 .found => |resolved| return .{ .found = resolved },
-                .ambiguous_open => return .{ .ambiguous_open = callee.name },
                 else => {},
             }
             switch (self.resolveImplicitOpenFunction(module, callee.name)) {
                 .found => |resolved| return .{ .found = resolved },
-                .ambiguous_open => return .{ .ambiguous_open = callee.name },
                 else => return .unknown,
             }
         } else if (self.findFunctionByName(callee.name)) |resolved| {
@@ -306,11 +303,11 @@ pub const SemanticEnv = struct {
     fn resolveAlias(self: *const SemanticEnv, alias: []const u8) ?core.SourceModuleId {
         const ir = self.ir orelse return null;
         const module = ir.moduleById(self.module_id) orelse return null;
-        for (module.program.imports.items, 0..) |import_decl, index| {
-            const alias_name = switch (import_decl.mode) {
-                .alias => |name| name,
-                .open => continue,
-            };
+        var index = module.program.imports.items.len;
+        while (index > 0) {
+            index -= 1;
+            const import_decl = module.program.imports.items[index];
+            const alias_name = import_decl.mode.alias orelse continue;
             if (!std.mem.eql(u8, alias_name, alias)) continue;
             if (index >= module.resolved_import_ids.items.len) return null;
             return module.resolved_import_ids.items[index];
@@ -330,43 +327,34 @@ pub const SemanticEnv = struct {
     }
 
     fn resolveExplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
-        var found: ?ResolvedFunction = null;
-        for (module.program.imports.items, 0..) |import_decl, index| {
-            switch (import_decl.mode) {
-                .open => {},
-                .alias => continue,
-            }
+        var index = module.program.imports.items.len;
+        while (index > 0) {
+            index -= 1;
+            const import_decl = module.program.imports.items[index];
+            if (!import_decl.mode.unqualified) continue;
             if (index >= module.resolved_import_ids.items.len) continue;
             const imported_id = module.resolved_import_ids.items[index];
-            if (self.mergeOpenFunctionCandidate(imported_id, name, &found)) |resolution| return resolution;
+            var stack = ModuleVisitStack{};
+            switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => {},
+            }
         }
-        return if (found) |resolved| .{ .found = resolved } else .unknown;
+        return .unknown;
     }
 
     fn resolveImplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
-        var found: ?ResolvedFunction = null;
-        for (module.implicit_import_ids.items) |imported_id| {
-            if (self.mergeOpenFunctionCandidate(imported_id, name, &found)) |resolution| return resolution;
+        var index = module.implicit_import_ids.items.len;
+        while (index > 0) {
+            index -= 1;
+            const imported_id = module.implicit_import_ids.items[index];
+            var stack = ModuleVisitStack{};
+            switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => {},
+            }
         }
-        return if (found) |resolved| .{ .found = resolved } else .unknown;
-    }
-
-    fn mergeOpenFunctionCandidate(
-        self: *const SemanticEnv,
-        imported_id: core.SourceModuleId,
-        name: []const u8,
-        found: *?ResolvedFunction,
-    ) ?FunctionResolution {
-        var stack = ModuleVisitStack{};
-        switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
-            .found => |resolved| {
-                if (found.* != null and !found.*.?.key.eql(resolved.key)) return .{ .ambiguous_open = name };
-                found.* = resolved;
-            },
-            .ambiguous_open => return .{ .ambiguous_open = name },
-            else => {},
-        }
-        return null;
+        return .unknown;
     }
 
     fn resolveOpenFunctionInModule(
@@ -382,24 +370,19 @@ pub const SemanticEnv = struct {
         if (self.findFunctionInModule(module_id, name)) |resolved| return .{ .found = resolved };
 
         const module = ir.moduleById(module_id) orelse return .unknown;
-        var found: ?ResolvedFunction = null;
-        for (module.program.imports.items, 0..) |import_decl, index| {
-            switch (import_decl.mode) {
-                .open => {},
-                .alias => continue,
-            }
+        var index = module.program.imports.items.len;
+        while (index > 0) {
+            index -= 1;
+            const import_decl = module.program.imports.items[index];
+            if (!import_decl.mode.unqualified) continue;
             if (index >= module.resolved_import_ids.items.len) continue;
             const imported_id = module.resolved_import_ids.items[index];
             switch (self.resolveOpenFunctionInModule(imported_id, name, stack)) {
-                .found => |resolved| {
-                    if (found != null and !found.?.key.eql(resolved.key)) return .{ .ambiguous_open = name };
-                    found = resolved;
-                },
-                .ambiguous_open => return .{ .ambiguous_open = name },
+                .found => |resolved| return .{ .found = resolved },
                 else => {},
             }
         }
-        return if (found) |resolved| .{ .found = resolved } else .unknown;
+        return .unknown;
     }
 
     fn findFunctionByName(self: *const SemanticEnv, name: []const u8) ?ResolvedFunction {

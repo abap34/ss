@@ -23,10 +23,7 @@ pub const Program = struct {
     pub fn deinit(self: *Program, allocator: Allocator) void {
         for (self.imports.items) |import_decl| {
             allocator.free(import_decl.spec);
-            switch (import_decl.mode) {
-                .alias => |name| allocator.free(name),
-                .open => {},
-            }
+            if (import_decl.mode.alias) |alias| allocator.free(alias);
         }
         self.imports.deinit(allocator);
         self.top_level_items.deinit(allocator);
@@ -57,9 +54,9 @@ pub const TopLevelItem = union(enum) {
 };
 
 pub const ImportDecl = struct {
-    pub const Mode = union(enum) {
-        alias: []const u8,
-        open,
+    pub const Mode = struct {
+        alias: ?[]const u8 = null,
+        unqualified: bool = false,
     };
 
     spec: []const u8,

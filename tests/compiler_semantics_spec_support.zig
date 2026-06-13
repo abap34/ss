@@ -93,21 +93,29 @@ pub fn buildSourceWithOverlays(
 }
 
 pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, expected: []const u8) !void {
-    const asset_base_dir = std.fs.path.dirname(path) orelse ".";
-    var source_buf = try allocator.dupe(u8, source);
-    var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try typecheck.loadProgramIndex(allocator, io, asset_base_dir, program);
-    defer index.deinit();
-
-    var ir = try typecheck.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var ir = try buildLoweredIr(io, allocator, path, source);
     defer ir.deinit();
 
-    try typecheck.typecheckProgram(allocator, &ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try lowering.lowerToIr(&ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    for (ir.nodes.items) |node| {
+        if (node.kind == .object) {
+            if (node.content) |content| {
+                if (std.mem.eql(u8, content, expected)) return;
+            }
+        }
+    }
+    return error.ExpectedObjectContentMissing;
+}
+
+pub fn expectObjectContentWithOverlays(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    overlays: []const OverlaySource,
+    expected: []const u8,
+) !void {
+    var ir = try buildLoweredIrWithOverlays(io, allocator, path, source, overlays);
+    defer ir.deinit();
 
     for (ir.nodes.items) |node| {
         if (node.kind == .object) {
@@ -120,21 +128,8 @@ pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []con
 }
 
 pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8, expected: []const u8) !void {
-    const asset_base_dir = std.fs.path.dirname(path) orelse ".";
-    var source_buf = try allocator.dupe(u8, source);
-    var program = try syntax.parseWithSourceName(allocator, source_buf, path);
-    var index = try typecheck.loadProgramIndex(allocator, io, asset_base_dir, program);
-    defer index.deinit();
-
-    var ir = try typecheck.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
-        .allow_diagnostics = true,
-    });
+    var ir = try buildLoweredIr(io, allocator, path, source);
     defer ir.deinit();
-
-    try typecheck.typecheckProgram(allocator, &ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try lowering.lowerToIr(&ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
 
     for (ir.nodes.items) |node| {
         if (node.kind != .object) continue;
@@ -306,6 +301,37 @@ fn buildLoweredIr(io: std.Io, allocator: std.mem.Allocator, path: []const u8, so
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
     var index = try typecheck.loadProgramIndex(allocator, io, asset_base_dir, program);
+    defer index.deinit();
+
+    var ir = try typecheck.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+        .allow_diagnostics = true,
+    });
+    errdefer ir.deinit();
+
+    try typecheck.typecheckProgram(allocator, &ir);
+    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    try lowering.lowerToIr(&ir);
+    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    return ir;
+}
+
+fn buildLoweredIrWithOverlays(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    overlays: []const OverlaySource,
+) !core.Ir {
+    const asset_base_dir = std.fs.path.dirname(path) orelse ".";
+    var overlay = module_loader.SourceOverlay.init(allocator);
+    defer overlay.deinit();
+    for (overlays) |item| {
+        try overlay.put(item.path, item.source);
+    }
+
+    var source_buf = try allocator.dupe(u8, source);
+    var program = try syntax.parseWithSourceName(allocator, source_buf, path);
+    var index = try typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
     var ir = try typecheck.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{

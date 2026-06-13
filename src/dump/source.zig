@@ -161,16 +161,15 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
 }
 
 fn writeImportMode(object: *json.Object, mode: ast.ImportDecl.Mode) !void {
-    switch (mode) {
-        .alias => |name| {
-            try object.stringField("mode", "alias");
-            try object.stringField("alias", name);
-        },
-        .open => {
-            try object.stringField("mode", "open");
-            try object.nullField("alias");
-        },
-    }
+    const mode_name = if (mode.alias != null and mode.unqualified)
+        "alias_and_unqualified"
+    else if (mode.alias != null)
+        "alias"
+    else
+        "unqualified";
+    try object.stringField("mode", mode_name);
+    try object.optionalStringField("alias", mode.alias);
+    try object.boolField("unqualified", mode.unqualified);
 }
 
 fn writeObjectDeclaration(objects: *json.Array, object_decl: ast.ObjectDecl) !void {

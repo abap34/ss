@@ -764,9 +764,9 @@ fn appendDumpCompletions(
 
 fn appendImportAsCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, source: []const u8, offset: usize) !void {
     const spec = importAsSpecBeforeCursor(source, offset) orelse return;
-    try appendCompletion(allocator, out, first, "*", 14, "open import", null);
+    try appendCompletion(allocator, out, first, "*", 14, "bare names", null);
     if (defaultAliasCandidate(spec)) |alias| {
-        try appendCompletion(allocator, out, first, alias, 6, "import alias", null);
+        try appendCompletion(allocator, out, first, alias, 6, "module alias", null);
     }
 }
 
@@ -830,11 +830,16 @@ fn qualifiedAliasBeforeOffset(source: []const u8, offset: usize) ?[]const u8 {
 
 fn resolveAliasModuleId(allocator: std.mem.Allocator, root: *const JsonObject, doc_path: []const u8, alias: []const u8) ?i64 {
     const module = moduleForPath(allocator, root, doc_path) orelse return null;
-    if (arrayFieldObject(module, "imports")) |imports| for (imports.items) |item| if (item == .object) {
-        if (!std.mem.eql(u8, stringField(&item.object, "mode") orelse "", "alias")) continue;
-        if (!std.mem.eql(u8, stringField(&item.object, "alias") orelse "", alias)) continue;
-        return intField(&item.object, "module_id");
-    };
+    if (arrayFieldObject(module, "imports")) |imports| {
+        var index = imports.items.len;
+        while (index > 0) {
+            index -= 1;
+            const item = imports.items[index];
+            if (item != .object) continue;
+            if (!std.mem.eql(u8, stringField(&item.object, "alias") orelse "", alias)) continue;
+            return intField(&item.object, "module_id");
+        }
+    }
     return null;
 }
 

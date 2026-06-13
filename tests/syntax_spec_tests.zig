@@ -124,24 +124,21 @@ fn expectMember(expr: ast.Expr, name: []const u8) !ast.MemberExpr {
     }
 }
 
-fn expectImportAlias(import_decl: ast.ImportDecl, expected: []const u8) !void {
-    switch (import_decl.mode) {
-        .alias => |alias| try testing.expectEqualStrings(expected, alias),
-        .open => return error.ExpectedImportAlias,
+fn expectImportMode(import_decl: ast.ImportDecl, expected_alias: ?[]const u8, expected_unqualified: bool) !void {
+    if (expected_alias) |alias| {
+        try testing.expect(import_decl.mode.alias != null);
+        try testing.expectEqualStrings(alias, import_decl.mode.alias.?);
+    } else {
+        try testing.expect(import_decl.mode.alias == null);
     }
-}
-
-fn expectImportOpen(import_decl: ast.ImportDecl) !void {
-    switch (import_decl.mode) {
-        .open => {},
-        .alias => return error.ExpectedImportOpen,
-    }
+    try testing.expectEqual(expected_unqualified, import_decl.mode.unqualified);
 }
 
 test "syntax spec: imports and pages preserve source order" {
     var parsed = try parse(
         \\// Leading trivia is not part of the AST.
         \\import core
+        \\import "themes/default"; // comments may follow terminators
         \\
         \\document
         \\  let deck_title = "Intro"
@@ -150,8 +147,6 @@ test "syntax spec: imports and pages preserve source order" {
         \\page Intro
         \\  title Hello
         \\end
-        \\
-        \\import "themes/default"; // comments may follow terminators
         \\
         \\page "Two Words"
         \\  title("Done");
@@ -174,9 +169,9 @@ test "syntax spec: imports and pages preserve source order" {
 
     try testing.expectEqual(@as(usize, 5), program.top_level_items.items.len);
     try testing.expectEqual(@as(usize, 0), program.top_level_items.items[0].import);
-    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[1].document);
-    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[2].page);
-    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[3].import);
+    try testing.expectEqual(@as(usize, 1), program.top_level_items.items[1].import);
+    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[2].document);
+    try testing.expectEqual(@as(usize, 0), program.top_level_items.items[3].page);
     try testing.expectEqual(@as(usize, 1), program.top_level_items.items[4].page);
 }
 
@@ -195,11 +190,21 @@ test "syntax spec: import modes are explicit in the AST" {
     defer parsed.deinit();
 
     try testing.expectEqual(@as(usize, 5), parsed.program.imports.items.len);
-    try expectImportAlias(parsed.program.imports.items[0], "default");
-    try expectImportAlias(parsed.program.imports.items[1], "base");
-    try expectImportOpen(parsed.program.imports.items[2]);
-    try expectImportOpen(parsed.program.imports.items[3]);
-    try expectImportAlias(parsed.program.imports.items[4], "seminar_theme");
+    try expectImportMode(parsed.program.imports.items[0], "default", true);
+    try expectImportMode(parsed.program.imports.items[1], "base", false);
+    try expectImportMode(parsed.program.imports.items[2], null, true);
+    try expectImportMode(parsed.program.imports.items[3], null, true);
+    try expectImportMode(parsed.program.imports.items[4], "seminar_theme", false);
+}
+
+test "syntax spec: imports must precede other top-level items" {
+    try expectParseError(error.ImportMustBeAtTop,
+        \\page ok
+        \\end
+        \\
+        \\import std:themes/default as *
+        \\
+    );
 }
 
 test "syntax spec: default import aliases must be identifiers" {

@@ -61,6 +61,23 @@ fn expectObjectContent(source: []const u8, expected: []const u8) !void {
     try compiler_semantics.expectObjectContent(testing.io, allocator, path, source, expected);
 }
 
+fn expectObjectContentWithTwoOverlays(source: []const u8, first_source: []const u8, second_source: []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const first_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/a.ss", .{tmp.sub_path[0..]});
+    const second_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/b.ss", .{tmp.sub_path[0..]});
+    const overlays = [_]compiler_semantics.OverlaySource{
+        .{ .path = first_path, .source = first_source },
+        .{ .path = second_path, .source = second_source },
+    };
+    try compiler_semantics.expectObjectContentWithOverlays(testing.io, allocator, path, source, &overlays, expected);
+}
+
 fn expectObjectProperty(source: []const u8, key: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -115,23 +132,6 @@ fn expectOverlayDiagnostic(source: []const u8, overlay_source: []const u8, expec
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
     const overlay_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/bad.ss", .{tmp.sub_path[0..]});
     try compiler_semantics.expectOverlayDiagnostic(testing.io, allocator, path, source, overlay_path, overlay_source, expected_origin, expected_message);
-}
-
-fn expectDiagnosticWithTwoOverlays(source: []const u8, first_source: []const u8, second_source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
-    const first_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/a.ss", .{tmp.sub_path[0..]});
-    const second_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/lib/b.ss", .{tmp.sub_path[0..]});
-    const overlays = [_]compiler_semantics.OverlaySource{
-        .{ .path = first_path, .source = first_source },
-        .{ .path = second_path, .source = second_source },
-    };
-    try compiler_semantics.expectDiagnosticWithOverlays(testing.io, allocator, path, source, &overlays, expected_origin, expected_message);
 }
 
 fn expectDiagnostic(source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
@@ -206,15 +206,16 @@ test "compiler semantics: imported function return inference diagnostics keep ca
     , "lib/bad.ss:bytes:", "InvalidArity: expected 2, got 1");
 }
 
-test "compiler semantics: default import introduces only an alias" {
-    try expectDiagnostic(
+test "compiler semantics: default import introduces an alias and bare names" {
+    try buildSource(
         \\import std:themes/default
         \\
-        \\page bad
-        \\  let title = h2("bare")
+        \\page ok
+        \\  h2!("bare")
+        \\  default::h2!("qualified")
         \\end
         \\
-    , "case.ss:bytes:", "UnknownFunction: unknown function: h2");
+    );
 }
 
 test "compiler semantics: core prelude is implicitly open" {
@@ -243,7 +244,7 @@ test "compiler semantics: default alias supports theme override with prelude pla
     , "override");
 }
 
-test "compiler semantics: open import introduces bare names" {
+test "compiler semantics: import as star introduces bare names" {
     try buildSource(
         \\import std:themes/default as *
         \\
@@ -254,10 +255,40 @@ test "compiler semantics: open import introduces bare names" {
     );
 }
 
+test "compiler semantics: import alias does not introduce bare names" {
+    try expectDiagnostic(
+        \\import std:themes/default as base
+        \\
+        \\page bad
+        \\  h2!("bare")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownFunction: unknown function: h2!");
+
+    try buildSource(
+        \\import std:themes/default as base
+        \\
+        \\page ok
+        \\  base::h2!("qualified")
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: import as star does not introduce an alias" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  default::h2!("qualified")
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownModuleAlias: unknown import alias: default");
+}
+
 test "compiler semantics: qualified calls bypass local shadowing" {
     const source =
         \\import std:themes/default
-        \\import std:themes/default as *
         \\
         \\fn/! h2(content: String) -> Object
         \\  return text("local")
@@ -273,7 +304,7 @@ test "compiler semantics: qualified calls bypass local shadowing" {
     try expectObjectContent(source, "qualified");
 }
 
-test "compiler semantics: implicit prelude is not re-exported through open imports" {
+test "compiler semantics: implicit prelude does not propagate through bare-name imports" {
     try buildSourceWithTwoOverlays(
         \\import "lib/a" as *
         \\import "lib/b" as *
@@ -293,33 +324,61 @@ test "compiler semantics: implicit prelude is not re-exported through open impor
     );
 }
 
-test "compiler semantics: open import ambiguity is diagnosed" {
-    try expectDiagnosticWithTwoOverlays(
+test "compiler semantics: later bare-name import overrides earlier imports" {
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\import std:themes/academic as *
+        \\
+        \\page ok
+        \\  h2!("later")
+        \\end
+        \\
+    , "text_size", "28");
+}
+
+test "compiler semantics: later alias import overrides earlier aliases" {
+    try expectObjectProperty(
+        \\import std:themes/default as theme
+        \\import std:themes/academic as theme
+        \\
+        \\page ok
+        \\  theme::h2!("later")
+        \\end
+        \\
+    , "text_size", "28");
+}
+
+test "compiler semantics: imported local definitions override their imports" {
+    try expectObjectContentWithTwoOverlays(
         \\import "lib/a" as *
         \\import "lib/b" as *
         \\
-        \\page bad
-        \\  let value = same()
+        \\page ok
+        \\  h2!("later")
+        \\  text!("base")
         \\end
         \\
     ,
-        \\fn same() -> String
-        \\  return "a"
+        \\import std:themes/default
+        \\
+        \\fn/! h2(content: String) -> Object
+        \\  return text("a " ++ content)
         \\end
         \\
     ,
-        \\fn same() -> String
-        \\  return "b"
+        \\import std:themes/default
+        \\
+        \\fn/! h2(content: String) -> Object
+        \\  return text("b " ++ content)
         \\end
         \\
-    , "case.ss:bytes:", "AmbiguousImport: function 'same' is provided by multiple open imports");
+    , "b later");
 }
 
 test "compiler semantics: extensionless path imports can be aliased and opened together" {
     try buildSourceWithOverlay(
         \\import std:themes/default as *
         \\import "lib/types"
-        \\import "lib/types" as *
         \\
         \\page ok
         \\  text(types::overlay_value() ++ overlay_value())
@@ -2865,28 +2924,28 @@ test "compiler semantics: paired placement functions desugar through existing ch
     try expectObjectState(placed_source, .{ .content = "visible", .attached = true, .discarded = false });
 
     try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
         \\fn/! bad() -> String
         \\  return "bad"
         \\end
         \\
-        \\import std:themes/default as *
-        \\
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:0-", "TypeMismatch: expected Object, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Object, got String");
 
     try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
         \\fn/! bad() -> Object
         \\  return place!(new("bad", "body", "text"))
         \\end
         \\
-        \\import std:themes/default as *
-        \\
         \\page ok
         \\end
         \\
-    , "case.ss:bytes:0-", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
+    , "case.ss:bytes:", "PlacementEffect: function 'bad' calls a placing operation and must end with '!'");
 }
 
 test "compiler semantics: placement effect is detected through primitive calls and lambdas" {

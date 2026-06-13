@@ -74,6 +74,7 @@ const Parser = struct {
     fn parseProgram(self: *Parser) !Program {
         var program = Program.init();
         errdefer program.deinit(self.allocator);
+        var imports_allowed = true;
 
         self.skipTrivia();
         while (!self.eof()) {
@@ -81,6 +82,7 @@ const Parser = struct {
             if (self.source[self.pos] == '@') return self.fail(error.ExpectedKeyword);
 
             if (try self.consumeKeyword("import")) {
+                if (!imports_allowed) return self.failAt(item_start, error.ImportMustBeAtTop);
                 const spec = try self.parseImportSpec();
                 errdefer self.allocator.free(spec);
                 try self.validateImportSpec(spec);
@@ -94,6 +96,7 @@ const Parser = struct {
                 });
                 try program.top_level_items.append(self.allocator, .{ .import = import_index });
             } else if (try self.consumeKeyword("fn")) {
+                imports_allowed = false;
                 const paired = self.consumePairedFunctionMarker();
                 var func = try self.parseFunctionAfterKeyword(item_start, .{ .paired = paired });
                 if (paired) {
@@ -112,9 +115,11 @@ const Parser = struct {
                     try program.functions.append(self.allocator, func);
                 }
             } else if (try self.consumeKeyword("const")) {
+                imports_allowed = false;
                 const constant = try self.parseConstAfterKeyword(item_start);
                 try program.functions.append(self.allocator, constant);
             } else if (try self.consumeKeyword("type")) {
+                imports_allowed = false;
                 const type_item = try self.parseTypeItemAfterKeyword(item_start);
                 switch (type_item) {
                     .enum_decl => |type_decl| {
@@ -124,9 +129,11 @@ const Parser = struct {
                     .object => |object_decl| try program.objects.append(self.allocator, object_decl),
                 }
             } else if (try self.consumeKeyword("extend")) {
+                imports_allowed = false;
                 const extension = try self.parseObjectExtensionAfterKeyword(item_start);
                 try program.object_extensions.append(self.allocator, extension);
             } else if (try self.consumeKeyword("document")) {
+                imports_allowed = false;
                 var statements = try self.parseBodyStatements();
                 var moved_statements = false;
                 defer statements.deinit(self.allocator);
@@ -146,6 +153,7 @@ const Parser = struct {
                 });
                 try program.top_level_items.append(self.allocator, .{ .document = document_index });
             } else {
+                imports_allowed = false;
                 const page = try self.parsePage();
                 const page_index = program.pages.items.len;
                 try program.pages.append(self.allocator, page);
@@ -721,11 +729,11 @@ const Parser = struct {
             self.skipInlineSpaces();
             if (!self.eof() and self.source[self.pos] == '*') {
                 self.pos += 1;
-                return .open;
+                return .{ .unqualified = true };
             }
             return .{ .alias = try self.parseIdentifier() };
         }
-        return .{ .alias = try self.defaultImportAlias(spec) };
+        return .{ .alias = try self.defaultImportAlias(spec), .unqualified = true };
     }
 
     fn validateImportSpec(self: *Parser, spec: []const u8) !void {

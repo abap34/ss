@@ -17,11 +17,18 @@ module.exports = grammar({
 
   word: $ => $.identifier,
 
+  conflicts: $ => [
+    [$.source_file],
+  ],
+
   rules: {
-    source_file: $ => repeat(choice($._top_level, $._terminator)),
+    source_file: $ => seq(
+      repeat($._terminator),
+      repeat(seq($.import_declaration, repeat($._terminator))),
+      repeat(choice($._top_level, $._terminator)),
+    ),
 
     _top_level: $ => choice(
-      $.import_declaration,
       $.const_declaration,
       $.function_declaration,
       $.type_declaration,

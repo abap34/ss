@@ -280,7 +280,6 @@ fn reportCallResolutionFailure(
 ) !void {
     switch (sema.resolveFunction(callee)) {
         .unknown_alias => |alias| try addUserReport(ir, origin, "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
-        .ambiguous_open => |name| try addUserReport(ir, origin, "AmbiguousImport: function '{s}' is provided by multiple open imports", .{name}),
         else => {
             const name = try callee.displayAlloc(allocator);
             defer allocator.free(name);

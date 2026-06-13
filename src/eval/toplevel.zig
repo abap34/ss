@@ -208,12 +208,6 @@ fn reportUnknownFunction(ir: *core.Ir, name: []const u8, origin: []const u8) !vo
 fn reportUnknownCallable(ir: *core.Ir, sema: *const SemanticEnv, callee: ast.CallableName, origin: []const u8) !void {
     switch (sema.resolveFunction(callee)) {
         .unknown_alias => |alias| try reportNamedResolutionError(ir, error.UnknownFunction, "import alias", alias, origin),
-        .ambiguous_open => |name| {
-            const message = try std.fmt.allocPrint(ir.allocator, "AmbiguousImport: function '{s}' is provided by multiple open imports", .{name});
-            try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                .user_report = .{ .message = message },
-            });
-        },
         else => {
             const name = try callee.displayAlloc(ir.allocator);
             defer ir.allocator.free(name);
