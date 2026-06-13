@@ -98,78 +98,8 @@ function applyTraceSetting(active: LanguageClient): void {
   active.setTrace(trace);
 }
 
-type ChangeNext = (event: vscode.TextDocumentChangeEvent) => Promise<void>;
-
-type PendingChange = {
-  event: vscode.TextDocumentChangeEvent;
-  next: ChangeNext;
-};
-
-type PendingChangeQueue = {
-  items: PendingChange[];
-  timer?: NodeJS.Timeout;
-  flushing: boolean;
-};
-
 function createMiddleware(): Middleware {
-  const pendingChanges = new Map<string, PendingChangeQueue>();
-
-  const flushChanges = async (key: string): Promise<void> => {
-    const queue = pendingChanges.get(key);
-    if (!queue || queue.flushing) {
-      return;
-    }
-    if (queue.timer) {
-      clearTimeout(queue.timer);
-      queue.timer = undefined;
-    }
-    queue.flushing = true;
-    try {
-      while (queue.items.length !== 0) {
-        const item = queue.items.shift();
-        if (item) {
-          await item.next(item.event);
-        }
-      }
-    } finally {
-      queue.flushing = false;
-      if (queue.items.length === 0) {
-        pendingChanges.delete(key);
-      }
-    }
-  };
-
   return {
-    didChange: (event, next) => {
-      const settings = projectSettings(event.document.uri).lsp;
-      if (!settings.enabled) {
-        return Promise.resolve();
-      }
-      const delay = settings.changeDebounceMs;
-      if (delay === 0) {
-        return next(event);
-      }
-      const key = event.document.uri.toString();
-      const queue = pendingChanges.get(key) ?? { items: [], flushing: false };
-      queue.items.push({ event, next });
-      if (queue.timer) {
-        clearTimeout(queue.timer);
-      }
-      queue.timer = setTimeout(() => {
-        void flushChanges(key);
-      }, delay);
-      pendingChanges.set(key, queue);
-      return Promise.resolve();
-    },
-    didSave: async (document, next) => {
-      await flushChanges(document.uri.toString());
-      await next(document);
-    },
-    didClose: async (document, next) => {
-      await flushChanges(document.uri.toString());
-      await next(document);
-      pendingChanges.delete(document.uri.toString());
-    },
     handleDiagnostics: (uri, diagnostics, next) => {
       const settings = projectSettings(uri).lsp;
       next(uri, settings.enabled && settings.diagnostics ? diagnostics : []);

@@ -38,12 +38,6 @@
               "default": true,
               "description": "Enable language server backed editor features."
             },
-            "debounce": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 120,
-              "description": "Debounce time for didChange notifications in milliseconds."
-            },
             "diagnostics": {
               "type": "boolean",
               "default": true,

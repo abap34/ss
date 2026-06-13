@@ -20,7 +20,6 @@ pub const Config = struct {
 
 pub const LspConfig = struct {
     enabled: bool = true,
-    change_debounce_ms: u64 = 120,
     diagnostics: bool = true,
     completion: bool = true,
     hover: bool = true,
@@ -194,7 +193,6 @@ fn parseLspConfig(source: []const u8) LspConfig {
     const inlay_hints = parseBool(source, "editor.lsp.inlay_hints", "enabled", true);
     return .{
         .enabled = parseBool(source, "editor.lsp", "enabled", true),
-        .change_debounce_ms = parseU64(source, "editor.lsp", "debounce", 120),
         .diagnostics = parseBool(source, "editor.lsp", "diagnostics", true),
         .completion = parseBool(source, "editor.lsp", "completion", true),
         .hover = parseBool(source, "editor.lsp", "hover", true),

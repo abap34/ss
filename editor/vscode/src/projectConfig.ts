@@ -10,7 +10,6 @@ export interface ProjectSettings {
 
 export interface LspSettings {
   enabled: boolean;
-  changeDebounceMs: number;
   diagnostics: boolean;
   completion: boolean;
   hover: boolean;
@@ -51,7 +50,6 @@ export interface PageGuideSettings {
 const defaultSettings: ProjectSettings = {
   lsp: {
     enabled: true,
-    changeDebounceMs: 120,
     diagnostics: true,
     completion: true,
     hover: true,
@@ -102,7 +100,6 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
   return {
     lsp: {
       enabled: boolValue(table, "editor.lsp", "enabled", defaultSettings.lsp.enabled),
-      changeDebounceMs: numberValue(table, "editor.lsp", "debounce", defaultSettings.lsp.changeDebounceMs, 0),
       diagnostics: boolValue(table, "editor.lsp", "diagnostics", defaultSettings.lsp.diagnostics),
       completion: boolValue(table, "editor.lsp", "completion", defaultSettings.lsp.completion),
       hover: boolValue(table, "editor.lsp", "hover", defaultSettings.lsp.hover),

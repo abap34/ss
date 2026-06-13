@@ -1513,7 +1513,6 @@ fn projectInfoJson(allocator: std.mem.Allocator, snapshot: ?*const Snapshot) ![]
 fn appendProjectInfoSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), snapshot: *const Snapshot) !void {
     try out.appendSlice(allocator, ",\"lsp\":{");
     try appendBoolField(allocator, out, "enabled", snapshot.lsp.enabled, true);
-    try appendIntField(allocator, out, "debounce", snapshot.lsp.change_debounce_ms, false);
     try appendBoolField(allocator, out, "diagnostics", snapshot.lsp.diagnostics, false);
     try appendBoolField(allocator, out, "completion", snapshot.lsp.completion, false);
     try appendBoolField(allocator, out, "hover", snapshot.lsp.hover, false);
