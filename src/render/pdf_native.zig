@@ -3,6 +3,8 @@ const core = @import("core");
 
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
+const text_measure = core.render_text_measure;
+const wrap_layout = core.render_wrap;
 
 const c = @cImport({
     @cInclude("pdf.h");
@@ -36,7 +38,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v9";
+const page_pdf_cache_version = "ss-native-page-pdf-v10";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -2473,14 +2475,15 @@ fn drawAtomsWithOptions(
     preserve_leading_space: bool,
 ) !f32 {
     var cursor_bl = baseline_bl;
-    var cursor_x = x;
+    var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
     for (atoms, 0..) |atom, index| {
-        if (atom.is_space and cursor_x == x and !preserve_leading_space) continue;
-        if (wrap and cursor_x > x and cursor_x + atom.width > x + width) {
-            cursor_bl -= paint.line_height;
-            cursor_x = x;
-            if (atom.is_space and !preserve_leading_space) continue;
+        const measured_atom = measuredWrapAtom(atoms, index, paint);
+        switch (cursor.next(measured_atom, width, wrap)) {
+            .skip => continue,
+            .break_then_draw => cursor_bl -= paint.line_height,
+            .draw => {},
         }
+        const cursor_x = x + cursor.offset;
         switch (atom.kind) {
             .text => {
                 const y_top = baselineTop(cursor_bl, paint.font_size);
@@ -2492,19 +2495,19 @@ fn drawAtomsWithOptions(
                 if (atom.strikethrough) {
                     drawStrikethrough(ctx, cursor_x, y_top, atom, paint);
                 }
-                cursor_x += atomAdvance(atoms, index, paint);
+                cursor.advance(measured_atom.advance);
             },
             .math => {
                 const path = atom.svg_path orelse continue;
                 const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
                 try drawSvgFrameTinted(ctx, frame, path, atom.color);
-                cursor_x += atomAdvance(atoms, index, paint);
+                cursor.advance(measured_atom.advance);
             },
             .icon => {
                 const path = atom.svg_path orelse continue;
                 const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.2, .width = atom.width, .height = atom.height };
                 try drawSvgFrameTinted(ctx, frame, path, atom.color);
-                cursor_x += atomAdvance(atoms, index, paint);
+                cursor.advance(measured_atom.advance);
             },
         }
     }
@@ -2513,19 +2516,27 @@ fn drawAtomsWithOptions(
 
 fn atomVisualLineCount(atoms: []const Atom, paint: AtomPaint, max_width: f32) usize {
     if (atoms.len == 0) return 1;
-    const available = @max(max_width, 1);
     var lines: usize = 1;
-    var cursor: f32 = 0;
-    for (atoms, 0..) |atom, index| {
-        if (atom.is_space and cursor == 0) continue;
-        if (cursor > 0 and cursor + atom.width > available) {
-            lines += 1;
-            cursor = 0;
-            if (atom.is_space) continue;
+    var cursor = wrap_layout.Cursor{};
+    for (atoms, 0..) |_, index| {
+        const measured_atom = measuredWrapAtom(atoms, index, paint);
+        switch (cursor.next(measured_atom, max_width, true)) {
+            .skip => continue,
+            .break_then_draw => lines += 1,
+            .draw => {},
         }
-        cursor += atomAdvance(atoms, index, paint);
+        cursor.advance(measured_atom.advance);
     }
     return lines;
+}
+
+fn measuredWrapAtom(atoms: []const Atom, index: usize, paint: AtomPaint) wrap_layout.Atom {
+    const atom = atoms[index];
+    return .{
+        .width = atom.width,
+        .advance = atomAdvance(atoms, index, paint),
+        .is_space = atom.is_space,
+    };
 }
 
 fn atomLineAdvance(atoms: []const Atom, paint: AtomPaint) f32 {
@@ -3734,36 +3745,7 @@ fn fileExists(path: []const u8) bool {
 }
 
 fn fontSpec(allocator: Allocator, font_name: []const u8, font_size: f32) ![:0]u8 {
-    const normalized = normalizeFontName(font_name);
-    const text = try std.fmt.allocPrint(allocator, "{s} {d}", .{ normalized, font_size });
-    defer allocator.free(text);
-    return try allocator.dupeZ(u8, text);
-}
-
-fn normalizeFontName(font_name: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, font_name, " \t\r\n");
-    if (trimmed.len == 0) return "sans-serif";
-
-    if (std.ascii.eqlIgnoreCase(trimmed, "Helvetica")) return "sans-serif";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Helvetica-Bold")) return "sans-serif Bold";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Helvetica-Oblique")) return "sans-serif Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Helvetica-Italic")) return "sans-serif Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Helvetica-BoldOblique")) return "sans-serif Bold Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Helvetica-BoldItalic")) return "sans-serif Bold Italic";
-
-    if (std.ascii.eqlIgnoreCase(trimmed, "Courier")) return "monospace";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Courier-Bold")) return "monospace Bold";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Courier-Oblique")) return "monospace Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Courier-Italic")) return "monospace Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Courier-BoldOblique")) return "monospace Bold Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Courier-BoldItalic")) return "monospace Bold Italic";
-
-    if (std.ascii.eqlIgnoreCase(trimmed, "Times") or std.ascii.eqlIgnoreCase(trimmed, "Times-Roman")) return "serif";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Times-Bold")) return "serif Bold";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Times-Italic")) return "serif Italic";
-    if (std.ascii.eqlIgnoreCase(trimmed, "Times-BoldItalic")) return "serif Bold Italic";
-
-    return trimmed;
+    return text_measure.fontSpec(allocator, font_name, font_size);
 }
 
 fn insetFrame(frame: Frame, dx: f32, dy: f32) Frame {

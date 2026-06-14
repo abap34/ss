@@ -2,6 +2,7 @@
 
 #include <cairo-pdf.h>
 #include <cairo.h>
+#include <glib.h>
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
 #include <stdio.h>
@@ -392,10 +393,10 @@ int ss_pdf_draw_text_baseline(
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
-double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, double font_size) {
-    if (pdf == NULL || pdf->cr == NULL) return 0.0;
+static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_spec, double font_size, int visual_width) {
+    if (cr == NULL) return 0.0;
 
-    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
+    PangoLayout *layout = pango_cairo_create_layout(cr);
     if (layout == NULL) return 0.0;
 
     PangoFontDescription *desc = pango_font_description_from_string(font_spec);
@@ -413,6 +414,17 @@ double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, 
     }
     pango_layout_set_text(layout, valid_text, -1);
     g_free(valid_text);
+
+    if (visual_width) {
+        PangoRectangle ink = {0};
+        PangoRectangle logical = {0};
+        pango_layout_get_extents(layout, &ink, &logical);
+        g_object_unref(layout);
+
+        const double logical_width = ((double)logical.width) / PANGO_SCALE;
+        const double ink_right = ((double)(ink.x + ink.width)) / PANGO_SCALE;
+        return ink_right > logical_width ? ink_right : logical_width;
+    }
 
     int width = 0;
     int height = 0;
@@ -421,36 +433,58 @@ double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, 
     return ((double)width) / PANGO_SCALE;
 }
 
+static cairo_t *ss_text_measure_context(void) {
+    static cairo_surface_t *surface = NULL;
+    static cairo_t *cr = NULL;
+
+    if (cr != NULL && cairo_status(cr) == CAIRO_STATUS_SUCCESS) return cr;
+    if (cr != NULL) {
+        cairo_destroy(cr);
+        cr = NULL;
+    }
+    if (surface != NULL) {
+        cairo_surface_destroy(surface);
+        surface = NULL;
+    }
+
+    surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    if (surface == NULL || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        if (surface != NULL) {
+            cairo_surface_destroy(surface);
+            surface = NULL;
+        }
+        return NULL;
+    }
+
+    cr = cairo_create(surface);
+    if (cr == NULL || cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+        if (cr != NULL) {
+            cairo_destroy(cr);
+            cr = NULL;
+        }
+        cairo_surface_destroy(surface);
+        surface = NULL;
+        return NULL;
+    }
+    return cr;
+}
+
+double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, double font_size) {
+    if (pdf == NULL || pdf->cr == NULL) return 0.0;
+    return ss_measure_text_on_cairo(pdf->cr, text, font_spec, font_size, 0);
+}
+
 double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_spec, double font_size) {
     if (pdf == NULL || pdf->cr == NULL) return 0.0;
+    return ss_measure_text_on_cairo(pdf->cr, text, font_spec, font_size, 1);
+}
 
-    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
-    if (layout == NULL) return 0.0;
-
-    PangoFontDescription *desc = pango_font_description_from_string(font_spec);
-    if (desc == NULL) {
-        g_object_unref(layout);
-        return 0.0;
-    }
-    pango_font_description_set_absolute_size(desc, font_size * PANGO_SCALE);
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-    char *valid_text = g_utf8_make_valid(text, -1);
-    if (valid_text == NULL) {
-        g_object_unref(layout);
-        return 0.0;
-    }
-    pango_layout_set_text(layout, valid_text, -1);
-    g_free(valid_text);
-
-    PangoRectangle ink = {0};
-    PangoRectangle logical = {0};
-    pango_layout_get_extents(layout, &ink, &logical);
-    g_object_unref(layout);
-
-    const double logical_width = ((double)logical.width) / PANGO_SCALE;
-    const double ink_right = ((double)(ink.x + ink.width)) / PANGO_SCALE;
-    return ink_right > logical_width ? ink_right : logical_width;
+double ss_text_measure_text(const char *text, const char *font_spec, double font_size) {
+    static GMutex measure_mutex;
+    g_mutex_lock(&measure_mutex);
+    const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_spec, font_size, 0);
+    g_mutex_unlock(&measure_mutex);
+    return width;
 }
 
 int ss_png_size(const char *path, double *width, double *height) {

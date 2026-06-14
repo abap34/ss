@@ -90,6 +90,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .root = ctx.b.path(md4c_src),
         .files = &.{"md4c.c"},
     });
+    addNativePdfBackend(ctx.b, core_mod);
 
     return .{
         .utils = utils_mod,
@@ -105,7 +106,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
 fn createCliModule(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options) *Module {
     const module = createCommonModule(ctx, "src/main.zig", modules, true);
     module.addOptions("build_options", build_options);
-    addNativePdfBackend(ctx.b, module);
+    addNativePdfHeadersAndLibraries(ctx.b, module);
     return module;
 }
 
@@ -184,13 +185,17 @@ fn addTestStep(
         import("compiler", compiler_mod),
     }, true);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
-    addNativePdfBackend(b, watch_mod);
+    addNativePdfHeadersAndLibraries(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch_spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render_pdf_spec_tests.zig", &.{}, true);
     addNativePdfBackend(b, render_pdf_spec_mod);
     addTestModule(b, test_step, render_pdf_spec_mod);
+    const render_wrap_mod = createModule(ctx, "src/render/wrap.zig", &.{}, null);
+    addModuleTest(ctx, test_step, "tests/render_pdf_native_wrap_spec_tests.zig", &.{
+        import("render_wrap", render_wrap_mod),
+    }, null);
 
     const compiler_semantics_support_mod = createModule(ctx, "tests/compiler_semantics_spec_support.zig", &.{
         import("utils", modules.utils),
@@ -324,10 +329,14 @@ fn addPdfPkgConfigPath(b: *std.Build) void {
 }
 
 fn addNativePdfBackend(b: *std.Build, module: *Module) void {
-    module.addIncludePath(b.path("src/render/pdf"));
+    addNativePdfHeadersAndLibraries(b, module);
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
     });
+}
+
+fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module) void {
+    module.addIncludePath(b.path("src/render/pdf"));
     module.linkSystemLibrary("ss-pdf", .{ .use_pkg_config = .force });
 }
 
