@@ -34,6 +34,7 @@ type Flow = object {
   layout_right_inset: Number = 96
   fit: FitPolicy = FitPolicy.warn
   link_id: String = ""
+  numbered_item_source: String? = none
 }
 
 type Text = object {
