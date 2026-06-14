@@ -55,3 +55,5 @@ pub const render_policy = @import("core/render_policy.zig");
 pub const render_env = @import("core/render_env.zig");
 pub const render_doc = @import("core/render_doc.zig");
 pub const markdown = @import("core/markdown.zig");
+pub const render_text_measure = @import("render/text_measure.zig");
+pub const render_wrap = @import("render/wrap.zig");

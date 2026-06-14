@@ -1,12 +1,21 @@
 const std = @import("std");
 const model = @import("model");
+const class_fields = @import("../core/class_fields.zig");
 const markdown = @import("../core/markdown.zig");
+const text_measure = @import("../render/text_measure.zig");
+const wrap_layout = @import("../render/wrap.zig");
 const style_defaults = @import("style.zig");
 
 const Node = model.Node;
-const Role = model.Role;
 const PageLayout = model.PageLayout;
 const TextStyle = model.TextStyle;
+
+const TextFonts = struct {
+    normal: []const u8,
+    bold: []const u8,
+    italic: []const u8,
+    code: []const u8,
+};
 
 fn styleForNode(ir: anytype, node: *const Node) TextStyle {
     return style_defaults.styleForNode(ir, node);
@@ -63,17 +72,14 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
         return maxWidthForStyle(style) + chrome_width;
     }
 
-    var max_len: usize = 0;
-    var wide = false;
+    var max_width: f32 = 0;
+    const fonts = textFontsForNode(ir, node);
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        const line_len = codepointCount(line);
-        if (line_len > max_len) max_len = line_len;
-        if (!wide and containsNonAscii(line)) wide = true;
+        max_width = @max(max_width, measuredTextWidth(ir.allocator, line, fonts.normal, style));
     }
-    if (max_len == 0) max_len = 1;
-    const advance = if (wide) style.font_size * 1.02 else style.font_size * 0.58;
-    return @min(maxWidthForStyle(style), @as(f32, @floatFromInt(max_len)) * advance) + chrome_width;
+    if (max_width <= 0) max_width = fallbackGlyphAdvance(style);
+    return @min(maxWidthForStyle(style), max_width) + chrome_width;
 }
 
 pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
@@ -108,7 +114,7 @@ pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
                 break :blk markdownBlocksHeight(ir, node, style, doc.blocks.items, width, 0) + chrome_height;
             }
             const lines = if (shouldWrapNode(ir, node))
-                wrappedLineCount(content, style, width, node.role)
+                wrappedLineCount(ir, node, style, content, width)
             else
                 lineCount(content);
             break :blk @as(f32, @floatFromInt(lines)) * style.line_height + chrome_height;
@@ -118,7 +124,7 @@ pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
 
 fn fallbackTextHeight(ir: anytype, node: *const Node, style: TextStyle, content: []const u8, width: f32) f32 {
     const lines = if (shouldWrapNode(ir, node))
-        wrappedLineCount(content, style, width, node.role)
+        wrappedLineCount(ir, node, style, content, width)
     else
         lineCount(content);
     return @as(f32, @floatFromInt(lines)) * style.line_height;
@@ -271,24 +277,20 @@ fn markdownWrappedLineCount(ir: anytype, node: *const Node, style: TextStyle, li
 
 fn markdownLineVisualLineCount(ir: anytype, node: *const Node, style: TextStyle, line: markdown.Line, max_width: f32) usize {
     if (!markdownLineContainsDisplayMath(line)) {
-        const width = markdownLineAdvance(style, line);
-        if (width <= 0) return 1;
-        return wrappedAdvanceLineCount(width, max_width);
+        return @max(markdownRunSliceVisualLineCount(ir, node, style, line.runs.items, max_width), 1);
     }
 
     const runs = line.runs.items;
     var total: usize = 0;
-    var inline_width: f32 = 0;
+    var segment_start: usize = 0;
     var index: usize = 0;
     while (index < runs.len) {
         if (runs[index].kind != .display_math) {
-            inline_width += markdownRunAdvance(style, runs[index]);
             index += 1;
             continue;
         }
 
-        total += wrappedAdvanceLineCount(inline_width, max_width);
-        inline_width = 0;
+        total += markdownRunSliceVisualLineCount(ir, node, style, runs[segment_start..index], max_width);
 
         const display_start = index;
         while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
@@ -297,9 +299,10 @@ fn markdownLineVisualLineCount(ir: anytype, node: *const Node, style: TextStyle,
             const block_height = displayMathBlockHeightForLines(style, visual_lines, displayMathHeightFactor(ir, node));
             total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(block_height / @max(style.line_height, 1)))));
         }
+        segment_start = index;
     }
 
-    total += wrappedAdvanceLineCount(inline_width, max_width);
+    total += markdownRunSliceVisualLineCount(ir, node, style, runs[segment_start..], max_width);
     return @max(total, 1);
 }
 
@@ -309,20 +312,11 @@ fn wrappedAdvanceLineCount(width: f32, max_width: f32) usize {
     return @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(width / available))));
 }
 
-fn markdownLineAdvance(style: TextStyle, line: markdown.Line) f32 {
-    var width: f32 = 0;
-    for (line.runs.items) |run| {
-        width += markdownRunAdvance(style, run);
-    }
-    return width;
-}
-
 fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
     return switch (run.kind) {
         .icon, .math, .display_math => style.font_size * 1.05,
         else => blk: {
-            const advance = if (containsNonAscii(run.text)) style.font_size * 1.02 else style.font_size * 0.58;
-            break :blk @as(f32, @floatFromInt(codepointCount(run.text))) * advance;
+            break :blk fallbackTextAdvance(style, run.text);
         },
     };
 }
@@ -421,8 +415,8 @@ pub fn lineCount(text: []const u8) usize {
     return count;
 }
 
-fn wrappedLineCount(text: []const u8, style: TextStyle, max_width: f32, role: ?Role) usize {
-    _ = role;
+fn wrappedLineCount(ir: anytype, node: *const Node, style: TextStyle, text: []const u8, max_width: f32) usize {
+    const fonts = textFontsForNode(ir, node);
     var total: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
@@ -432,14 +426,158 @@ fn wrappedLineCount(text: []const u8, style: TextStyle, max_width: f32, role: ?R
             continue;
         }
 
-        const wide = containsNonAscii(trimmed);
-        const advance = if (wide) style.font_size * 1.02 else style.font_size * 0.58;
-        const available = @max(advance, max_width);
-        const chars_per_line = @max(@as(usize, 1), @as(usize, @intFromFloat(@floor(available / advance))));
-        const needed = std.math.divCeil(usize, codepointCount(trimmed), chars_per_line) catch codepointCount(trimmed);
-        total += @max(@as(usize, 1), needed);
+        total += measuredWrappedTextLineCount(ir.allocator, trimmed, fonts.normal, style, max_width);
     }
     return total;
+}
+
+fn textFontsForNode(ir: anytype, node: *const Node) TextFonts {
+    return .{
+        .normal = class_fields.property(ir, node, "text_font") orelse "Helvetica",
+        .bold = class_fields.property(ir, node, "text_bold_font") orelse "Helvetica-Bold",
+        .italic = class_fields.property(ir, node, "text_italic_font") orelse "Helvetica-Oblique",
+        .code = class_fields.property(ir, node, "text_code_font") orelse "Courier",
+    };
+}
+
+fn markdownRunSliceVisualLineCount(ir: anytype, node: *const Node, style: TextStyle, runs: []const markdown.Run, max_width: f32) usize {
+    if (runs.len == 0) return 0;
+    const fonts = textFontsForNode(ir, node);
+    var lines: usize = 1;
+    var cursor = wrap_layout.Cursor{};
+    var saw_atom = false;
+
+    for (runs) |run| {
+        switch (run.kind) {
+            .icon, .math, .display_math => {
+                const atom = wrap_layout.Atom{
+                    .width = markdownRunAdvance(style, run),
+                    .advance = markdownRunAdvance(style, run),
+                    .is_space = false,
+                };
+                applyMeasuredAtom(&cursor, atom, max_width, &lines, &saw_atom);
+            },
+            else => {
+                const font = fontForRun(fonts, run.kind);
+                var tokenizer = MeasureTokenizer.init(run.text);
+                while (tokenizer.next()) |token| {
+                    const width = measuredTextWidth(ir.allocator, token, font, style);
+                    const atom = wrap_layout.Atom{
+                        .width = width,
+                        .advance = width,
+                        .is_space = isWhitespace(token),
+                    };
+                    applyMeasuredAtom(&cursor, atom, max_width, &lines, &saw_atom);
+                }
+            },
+        }
+    }
+
+    return if (saw_atom) lines else 0;
+}
+
+fn measuredWrappedTextLineCount(allocator: std.mem.Allocator, text: []const u8, font: []const u8, style: TextStyle, max_width: f32) usize {
+    var lines: usize = 1;
+    var cursor = wrap_layout.Cursor{};
+    var saw_atom = false;
+    var tokenizer = MeasureTokenizer.init(text);
+    while (tokenizer.next()) |token| {
+        const width = measuredTextWidth(allocator, token, font, style);
+        const atom = wrap_layout.Atom{
+            .width = width,
+            .advance = width,
+            .is_space = isWhitespace(token),
+        };
+        applyMeasuredAtom(&cursor, atom, max_width, &lines, &saw_atom);
+    }
+    return if (saw_atom) lines else 1;
+}
+
+fn applyMeasuredAtom(cursor: *wrap_layout.Cursor, atom: wrap_layout.Atom, max_width: f32, lines: *usize, saw_atom: *bool) void {
+    switch (cursor.next(atom, max_width, true)) {
+        .skip => return,
+        .break_then_draw => lines.* += 1,
+        .draw => {},
+    }
+    cursor.advance(atom.advance);
+    saw_atom.* = true;
+}
+
+fn fontForRun(fonts: TextFonts, kind: markdown.RunKind) []const u8 {
+    return switch (kind) {
+        .bold => fonts.bold,
+        .italic => fonts.italic,
+        .code => fonts.code,
+        else => fonts.normal,
+    };
+}
+
+fn measuredTextWidth(allocator: std.mem.Allocator, text: []const u8, font: []const u8, style: TextStyle) f32 {
+    const measured = text_measure.width(allocator, text, font, style.font_size) catch 0;
+    return if (measured > 0) measured else fallbackTextAdvance(style, text);
+}
+
+fn fallbackTextAdvance(style: TextStyle, text: []const u8) f32 {
+    const advance = if (containsNonAscii(text)) style.font_size * 1.02 else fallbackGlyphAdvance(style);
+    return @as(f32, @floatFromInt(codepointCount(text))) * advance;
+}
+
+fn fallbackGlyphAdvance(style: TextStyle) f32 {
+    return style.font_size * 0.58;
+}
+
+const MeasureTokenizer = struct {
+    text: []const u8,
+    index: usize = 0,
+
+    fn init(text: []const u8) MeasureTokenizer {
+        return .{ .text = text };
+    }
+
+    fn next(self: *MeasureTokenizer) ?[]const u8 {
+        if (self.index >= self.text.len) return null;
+        const start = self.index;
+        const first_len = utf8ByteSequenceLength(self.text[self.index]);
+        const first_end = @min(self.text.len, self.index + first_len);
+        const first = self.text[start..first_end];
+        self.index = first_end;
+
+        if (isWhitespace(first)) {
+            while (self.index < self.text.len) {
+                const len = utf8ByteSequenceLength(self.text[self.index]);
+                const end = @min(self.text.len, self.index + len);
+                if (!isWhitespace(self.text[self.index..end])) break;
+                self.index = end;
+            }
+            return self.text[start..self.index];
+        }
+
+        if (isAsciiWordByte(first[0])) {
+            while (self.index < self.text.len and isAsciiWordByte(self.text[self.index])) self.index += 1;
+            return self.text[start..self.index];
+        }
+
+        return first;
+    }
+};
+
+fn utf8ByteSequenceLength(first: u8) usize {
+    if (first < 0x80) return 1;
+    if ((first & 0xe0) == 0xc0) return 2;
+    if ((first & 0xf0) == 0xe0) return 3;
+    if ((first & 0xf8) == 0xf0) return 4;
+    return 1;
+}
+
+fn isAsciiWordByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '.' or byte == '/' or byte == ':' or byte == '+' or byte == '-';
+}
+
+fn isWhitespace(text: []const u8) bool {
+    for (text) |byte| {
+        if (byte != ' ' and byte != '\t' and byte != '\r' and byte != '\n') return false;
+    }
+    return text.len > 0;
 }
 
 fn codepointCount(text: []const u8) usize {
