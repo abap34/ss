@@ -59,30 +59,27 @@ In many slide description languages, defining something like a page number view
 inside the language itself is hard. The computation has to inspect the
 whole document after pages and objects have been created.
 
-In ss, this kind of computation can be written naturally:
+The standard library's page number helper is written in ss and uses that
+document-wide view of the deck. A deck can request it like this:
 
 ```ss
 import std:themes/default as *
 
-fn add_pageno() -> Void
-  foreach(
-    pages(docctx()),
-    (p: Page) |->
-      new(p, str(page_index(p)), "body", "text")
-  )
+page page1
+text!("This is page 1.")
 end
 
-page page1
-  text("This is page 1.")
+page page2
+text!("This is page 2.")
 end
 
 document
-  add_pageno()
+pagenos!()
 end
 ```
 
 ss analyzes dependencies across the whole program.
-This enables ss to infer that `add_pageno()` depends on the page list,
+This enables ss to infer that `pagenos!()` depends on the page list,
 so the function is evaluated only after the pages become available.
 
 That means document-wide behavior such as adding a table of contents or page numbers can be defined in ss itself, not
@@ -136,30 +133,30 @@ asset_base_dir = "."
 
 Create `slide.ss`:
 
-```text
+```ss
 import std:themes/default as *
 
-document
-pagenos()
-end
-
 page title
-cover(
+cover!(
   "Hello, ss",
   "Write slides as programs.",
-  "v0.1.8"
+  "v0.5.3"
 )
 end
 
 page body
-let title = head "Why ss?"
-let body = text <<
+let title = head!("Why ss?")
+let body = text! <<
 - Components are ordinary definitions.
 - Layout can be constrained when needed.
 - Math is rendered with real local LaTeX.
 >>
 
-~ body.top == title.bottom - 32
+~ body.top == title.bottom - 36
+end
+
+document
+pagenos!()
 end
 ```
 
@@ -236,8 +233,8 @@ and Debian's complete `texlive-full` package installed:
 
 ```text
 ghcr.io/abap34/ss-render:v0
-ghcr.io/abap34/ss-render:v0.1
-ghcr.io/abap34/ss-render:v0.1.8
+ghcr.io/abap34/ss-render:v0.5
+ghcr.io/abap34/ss-render:v0.5.3
 ```
 
 Mount the current directory as `/workspace` and pass normal `ss` subcommands:
@@ -264,7 +261,7 @@ The repository also includes a GitHub Action for rendering matching `.ss` files
 to PDFs with the same Docker image:
 
 ```yaml
-- uses: abap34/ss/release/actions/render@v0.1.8
+- uses: abap34/ss/release/actions/render@v0.5.3
   with:
     image: ghcr.io/abap34/ss-render:v0
     input: "slides/**/*.ss"
@@ -315,8 +312,12 @@ searching upward from that file's directory for the nearest `ss.toml`.
 
 ### Render Cache
 
-ss stores generated render artifacts under `.ss-cache/render` so repeated
-renders can reuse generated documents, math images, and converted assets.
+ss stores generated render artifacts under `.ss-cache/render`. Converted assets
+and math images live under `artifacts/`; the renderer keeps only the latest page
+generation for each deck under `decks/`.
+
+Preview tools that render temporary snapshots can pass `--cache-id ID` to reuse
+the same deck generation across changing snapshot paths.
 
 Environment knobs:
 

@@ -277,6 +277,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const node_spec_files = [_][]const u8{
         "tests/lsp_completion_runtime_spec.mjs",
         "tests/lsp_editor_runtime_spec.mjs",
+        "tests/render_cache_runtime_spec.mjs",
     };
 
     for (node_spec_files) |path| {

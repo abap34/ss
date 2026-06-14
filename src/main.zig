@@ -10,7 +10,7 @@ const error_report = utils.err;
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--jobs N]
+        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--jobs N] [--cache-id ID]
         \\
         \\Commands:
         \\  help
@@ -47,6 +47,8 @@ fn usage() void {
         \\    Write dump/render output to FILE when the input comes from ss.toml
         \\  --jobs N
         \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
+        \\  --cache-id ID
+        \\    Stable render cache identity for snapshot-based render inputs
         \\  --interval-ms N
         \\    Poll interval for watch commands
         \\  --entry FILE
@@ -130,6 +132,7 @@ const CommandOptions = struct {
     asset_base_dir: ?[]const u8 = null,
     project_path: ?[]const u8 = null,
     jobs: ?usize = null,
+    cache_id: ?[]const u8 = null,
     interval_ms: u64 = 500,
 };
 
@@ -177,6 +180,12 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
                 return failUsage("invalid --jobs value: {s}", .{args[i + 1]});
             };
             if (options.jobs.? == 0) return failUsage("--jobs must be greater than zero", .{});
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--cache-id")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --cache-id", .{});
+            options.cache_id = args[i + 1];
             i += 1;
             continue;
         }
@@ -575,6 +584,7 @@ fn runResolvedWatch(
         .asset_base_dir = resolved.asset_base_dir,
         .project_file = resolved.project_file,
         .jobs = options.jobs,
+        .cache_id = options.cache_id,
         .interval_ms = options.interval_ms,
     });
 }
@@ -644,7 +654,7 @@ fn run(init: std.process.Init) !void {
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         try validateOutputParentOrCliError(io, output_path);
         var progress = utils.progress.Progress.init(7);
-        const render_options = app.RenderOptions{ .jobs = options.jobs };
+        const render_options = app.RenderOptions{ .jobs = options.jobs, .cache_id = options.cache_id };
         try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
         return;
     }
@@ -684,7 +694,10 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "cache")) {
         if (args.len == 3 and std.mem.eql(u8, args[2], "clear")) {
-            try utils.render_cache.clear(io);
+            utils.render_cache.clear(io, allocator) catch |err| switch (err) {
+                error.ActiveRenderCacheLease => return failCli("render cache is currently in use", .{}),
+                else => return err,
+            };
             std.debug.print("cleared render cache: {s}\n", .{utils.render_cache.path});
             return;
         }

@@ -112,6 +112,7 @@ pub const RenderOptions = struct {
     jobs: ?usize = null,
     keep_temps: bool = false,
     cache_dir: []const u8 = ".ss-cache/render",
+    cache_id: ?[]const u8 = null,
 };
 
 const RenderOp = struct {
@@ -134,6 +135,7 @@ const RenderPage = struct {
     background: ?Color,
     ops: []RenderOp,
     artifact_deps: []usize,
+    page_hash: u64,
     render_path: []const u8,
     cache_path: []const u8,
     cache_hit: bool,
@@ -155,10 +157,16 @@ const RenderPlan = struct {
     artifact_miss_count: usize,
     page_cache_hit_count: usize,
     run_dir: []const u8,
+    generations_dir: []const u8,
+    building_dir: []const u8,
+    generation_dir: []const u8,
+    trash_dir: []const u8,
+    leases_dir: []const u8,
     pages_dir: []const u8,
     final_pdf_path: []const u8,
-    document_cache_path: []const u8,
-    document_cache_hit: bool,
+    current_path: []const u8,
+    lease_path: []const u8,
+    generation_published: bool = false,
 
     fn deinit(self: *RenderPlan) void {
         for (self.pages) |*page| page.deinit(self.allocator);
@@ -167,9 +175,15 @@ const RenderPlan = struct {
         self.allocator.free(self.artifact_tasks);
         self.allocator.free(self.artifact_cached);
         self.allocator.free(self.run_dir);
+        self.allocator.free(self.generations_dir);
+        self.allocator.free(self.building_dir);
+        self.allocator.free(self.generation_dir);
+        self.allocator.free(self.trash_dir);
+        self.allocator.free(self.leases_dir);
         self.allocator.free(self.pages_dir);
         self.allocator.free(self.final_pdf_path);
-        self.allocator.free(self.document_cache_path);
+        self.allocator.free(self.current_path);
+        self.allocator.free(self.lease_path);
     }
 };
 
@@ -181,6 +195,26 @@ const PreloadCacheState = struct {
 const FileFingerprint = struct {
     present: bool,
     digest: u64,
+};
+
+const PageManifest = struct {
+    hashes: []u64,
+
+    fn deinit(self: *PageManifest, allocator: Allocator) void {
+        allocator.free(self.hashes);
+    }
+};
+
+const PreviousGeneration = struct {
+    id: []u8,
+    dir: []u8,
+    manifest: PageManifest,
+
+    fn deinit(self: *PreviousGeneration, allocator: Allocator) void {
+        allocator.free(self.id);
+        allocator.free(self.dir);
+        self.manifest.deinit(allocator);
+    }
 };
 
 const PreloadWork = struct {
@@ -246,7 +280,7 @@ pub fn renderDocumentToPdfWithProgress(allocator: Allocator, io: std.Io, ir: *co
 
 pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *core.Ir, options: RenderOptions, progress: ?RenderProgress) ![]const u8 {
     try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
-    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "native-assets" });
+    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
     defer allocator.free(asset_cache_dir);
     try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
 
@@ -265,43 +299,64 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
     var plan = try buildRenderPlan(&ctx, ir, &sema, options);
     defer {
         if (!options.keep_temps) std.Io.Dir.cwd().deleteTree(io, plan.run_dir) catch {};
+        if (!plan.generation_published and !options.keep_temps) std.Io.Dir.cwd().deleteTree(io, plan.building_dir) catch {};
+        std.Io.Dir.cwd().deleteFile(io, plan.lease_path) catch {};
         plan.deinit();
     }
 
-    if (plan.document_cache_hit) {
-        if (progress) |p| {
-            p.artifactCompleted(p.context, plan.artifact_tasks.len, plan.artifact_tasks.len);
-            p.pageCompleted(p.context, plan.pages.len, plan.pages.len);
-        }
-    } else {
-        try executeRenderDag(&ctx, &plan, options, progress);
-    }
+    try executeRenderDag(&ctx, &plan, options, progress);
+    try writeRenderManifest(&ctx, &plan);
     try assembleRenderPlan(&ctx, &plan, options, progress);
-    if (!plan.document_cache_hit) {
-        try copyCacheFileIfMissing(&ctx, plan.final_pdf_path, plan.document_cache_path);
-    }
+    try publishRenderGeneration(&ctx, &plan);
 
-    const result_pdf_path = if (plan.document_cache_hit) plan.document_cache_path else plan.final_pdf_path;
-    return try std.Io.Dir.cwd().readFileAlloc(io, result_pdf_path, allocator, .unlimited);
+    return try std.Io.Dir.cwd().readFileAlloc(io, plan.final_pdf_path, allocator, .unlimited);
 }
 
 fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: RenderOptions) !RenderPlan {
     const nonce = std.hash.Wyhash.hash(0, ir.projectSource());
     const pid = std.c.getpid();
     const serial = @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic);
-    const run_dir = try std.fmt.allocPrint(ctx.allocator, "{s}/run-{d}-{x}-{d}", .{ options.cache_dir, pid, nonce, serial });
+    const run_id = try std.fmt.allocPrint(ctx.allocator, "run-{d}-{x}-{d}", .{ pid, nonce, serial });
+    defer ctx.allocator.free(run_id);
+    const run_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "runs", run_id });
     errdefer ctx.allocator.free(run_dir);
-    const pages_dir = try std.fs.path.join(ctx.allocator, &.{ run_dir, "pages" });
+    const deck_id = try renderDeckId(ctx.allocator, ir, options);
+    defer ctx.allocator.free(deck_id);
+    const deck_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "decks", deck_id });
+    defer ctx.allocator.free(deck_dir);
+    const generations_dir = try std.fs.path.join(ctx.allocator, &.{ deck_dir, "generations" });
+    errdefer ctx.allocator.free(generations_dir);
+    const current_path = try std.fs.path.join(ctx.allocator, &.{ deck_dir, "current.json" });
+    errdefer ctx.allocator.free(current_path);
+    const building_name = try std.fmt.allocPrint(ctx.allocator, ".building-{s}", .{run_id});
+    defer ctx.allocator.free(building_name);
+    const generation_name = try std.fmt.allocPrint(ctx.allocator, "gen-{s}", .{run_id});
+    defer ctx.allocator.free(generation_name);
+    const building_dir = try std.fs.path.join(ctx.allocator, &.{ generations_dir, building_name });
+    errdefer ctx.allocator.free(building_dir);
+    const generation_dir = try std.fs.path.join(ctx.allocator, &.{ generations_dir, generation_name });
+    errdefer ctx.allocator.free(generation_dir);
+    const pages_dir = try std.fs.path.join(ctx.allocator, &.{ building_dir, "pages" });
     errdefer ctx.allocator.free(pages_dir);
-    const page_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "pages" });
-    defer ctx.allocator.free(page_cache_dir);
-    const document_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "documents" });
-    defer ctx.allocator.free(document_cache_dir);
     const final_pdf_path = try std.fs.path.join(ctx.allocator, &.{ run_dir, "document.pdf" });
     errdefer ctx.allocator.free(final_pdf_path);
+    const trash_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "trash" });
+    errdefer ctx.allocator.free(trash_dir);
+    const leases_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "leases" });
+    errdefer ctx.allocator.free(leases_dir);
+    const lease_path = try std.fmt.allocPrint(ctx.allocator, "{s}/{s}.json", .{ leases_dir, run_id });
+    errdefer ctx.allocator.free(lease_path);
+
+    try std.Io.Dir.cwd().createDirPath(ctx.io, leases_dir);
+    try writeLeaseFile(ctx, lease_path, deck_id, run_id, null);
+    errdefer std.Io.Dir.cwd().deleteFile(ctx.io, lease_path) catch {};
+    try std.Io.Dir.cwd().createDirPath(ctx.io, run_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io, generations_dir);
     try std.Io.Dir.cwd().createDirPath(ctx.io, pages_dir);
-    try std.Io.Dir.cwd().createDirPath(ctx.io, page_cache_dir);
-    try std.Io.Dir.cwd().createDirPath(ctx.io, document_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io, trash_dir);
+
+    var previous_generation = try readPreviousGeneration(ctx, generations_dir, current_path);
+    defer if (previous_generation) |*previous| previous.deinit(ctx.allocator);
 
     var pages = std.ArrayList(RenderPage).empty;
     errdefer {
@@ -373,19 +428,20 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         var dep_slice_transferred = false;
         errdefer if (!dep_slice_transferred) ctx.allocator.free(dep_slice);
         const page_hash = try renderPageHash(ctx, &asset_fingerprints, page_background, op_slice);
-        const cache_path = try pagePdfCachePath(ctx.allocator, page_cache_dir, page_hash);
+        const cache_path = try pagePath(ctx.allocator, pages_dir, page_index);
         var cache_path_transferred = false;
         errdefer if (!cache_path_transferred) ctx.allocator.free(cache_path);
-        const render_path = try std.fmt.allocPrint(ctx.allocator, "{s}/page-{d:0>4}.pdf", .{ pages_dir, page_index + 1 });
+        const render_path = try tempCachePath(ctx, cache_path, "pdf");
         var render_path_transferred = false;
         errdefer if (!render_path_transferred) ctx.allocator.free(render_path);
-        const cache_hit = try cachedPdfAvailable(ctx, cache_path);
+        const cache_hit = try reusePreviousPage(ctx, if (previous_generation) |*previous| previous else null, page_index, page_hash, cache_path);
         try pages.append(ctx.allocator, .{
             .page_id = page.id,
             .index = page_index,
             .background = page_background,
             .ops = op_slice,
             .artifact_deps = dep_slice,
+            .page_hash = page_hash,
             .render_path = render_path,
             .cache_path = cache_path,
             .cache_hit = cache_hit,
@@ -404,13 +460,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     const artifact_slice = try tasks.toOwnedSlice(ctx.allocator);
     errdefer freePreloadTasks(ctx.allocator, artifact_slice);
     const page_cache_hit_count = countPageCacheHits(page_slice);
-    const document_cache_path = try documentPdfCachePath(ctx.allocator, document_cache_dir, page_slice);
-    errdefer ctx.allocator.free(document_cache_path);
-    const document_cache_hit = try cachedPdfAvailable(ctx, document_cache_path);
-    const artifact_cache = if (document_cache_hit)
-        try buildAllCachedPreloadState(ctx, artifact_slice.len)
-    else
-        try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
+    const artifact_cache = try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
     errdefer ctx.allocator.free(artifact_cache.cached);
 
     return .{
@@ -421,10 +471,15 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         .artifact_miss_count = artifact_cache.miss_count,
         .page_cache_hit_count = page_cache_hit_count,
         .run_dir = run_dir,
+        .generations_dir = generations_dir,
+        .building_dir = building_dir,
+        .generation_dir = generation_dir,
+        .trash_dir = trash_dir,
+        .leases_dir = leases_dir,
         .pages_dir = pages_dir,
         .final_pdf_path = final_pdf_path,
-        .document_cache_path = document_cache_path,
-        .document_cache_hit = document_cache_hit,
+        .current_path = current_path,
+        .lease_path = lease_path,
     };
 }
 
@@ -436,17 +491,282 @@ fn countPageCacheHits(pages: []const RenderPage) usize {
     return count;
 }
 
-fn pagePdfCachePath(allocator: Allocator, page_cache_dir: []const u8, page_hash: u64) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}/page-{x}.pdf", .{ page_cache_dir, page_hash });
+fn renderDeckId(allocator: Allocator, ir: *const core.Ir, options: RenderOptions) ![]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, "ss-render-deck-v1");
+    if (options.cache_id) |cache_id| {
+        hashString(&hasher, cache_id);
+    } else {
+        hashString(&hasher, ir.projectPath());
+        hashString(&hasher, if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir);
+    }
+    return std.fmt.allocPrint(allocator, "deck-{x}", .{hasher.final()});
 }
 
-fn documentPdfCachePath(allocator: Allocator, document_cache_dir: []const u8, pages: []const RenderPage) ![]u8 {
-    var hasher = std.hash.Wyhash.init(0);
-    hashString(&hasher, qpdf_cache_version);
-    hashString(&hasher, "document");
-    hashUsize(&hasher, pages.len);
-    for (pages) |page| hashString(&hasher, page.cache_path);
-    return qpdfCachePath(allocator, document_cache_dir, "document", hasher.final());
+fn pagePath(allocator: Allocator, pages_dir: []const u8, page_index: usize) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/page-{d:0>4}.pdf", .{ pages_dir, page_index + 1 });
+}
+
+fn readPreviousGeneration(ctx: *DrawContext, generations_dir: []const u8, current_path: []const u8) !?PreviousGeneration {
+    const id = try readCurrentGenerationId(ctx, current_path) orelse return null;
+    errdefer ctx.allocator.free(id);
+    if (!safeCacheName(id)) {
+        ctx.allocator.free(id);
+        return null;
+    }
+    const dir = try std.fs.path.join(ctx.allocator, &.{ generations_dir, id });
+    errdefer ctx.allocator.free(dir);
+    var manifest = readPageManifest(ctx, dir) catch {
+        ctx.allocator.free(id);
+        ctx.allocator.free(dir);
+        return null;
+    };
+    errdefer manifest.deinit(ctx.allocator);
+    return .{
+        .id = id,
+        .dir = dir,
+        .manifest = manifest,
+    };
+}
+
+fn readCurrentGenerationId(ctx: *DrawContext, current_path: []const u8) !?[]u8 {
+    const text = std.Io.Dir.cwd().readFileAlloc(ctx.io, current_path, ctx.allocator, .limited(64 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer ctx.allocator.free(text);
+    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, text, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const value = parsed.value.object.getPtr("generation") orelse return null;
+    if (value.* != .string) return null;
+    return try ctx.allocator.dupe(u8, value.string);
+}
+
+fn readPageManifest(ctx: *DrawContext, generation_dir: []const u8) !PageManifest {
+    const path = try std.fs.path.join(ctx.allocator, &.{ generation_dir, "manifest.json" });
+    defer ctx.allocator.free(path);
+    const text = try std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.allocator, .limited(1024 * 1024));
+    defer ctx.allocator.free(text);
+    var parsed = try std.json.parseFromSlice(std.json.Value, ctx.allocator, text, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidRenderCacheManifest;
+    const value = parsed.value.object.getPtr("pageHashes") orelse return error.InvalidRenderCacheManifest;
+    if (value.* != .array) return error.InvalidRenderCacheManifest;
+    const hashes = try ctx.allocator.alloc(u64, value.array.items.len);
+    errdefer ctx.allocator.free(hashes);
+    for (value.array.items, 0..) |item, index| {
+        if (item != .string) return error.InvalidRenderCacheManifest;
+        hashes[index] = std.fmt.parseUnsigned(u64, item.string, 16) catch return error.InvalidRenderCacheManifest;
+    }
+    return .{ .hashes = hashes };
+}
+
+fn safeCacheName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 160) return false;
+    for (name) |byte| {
+        if (std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_' or byte == '.') continue;
+        return false;
+    }
+    return true;
+}
+
+fn reusePreviousPage(ctx: *DrawContext, previous: ?*const PreviousGeneration, page_index: usize, page_hash: u64, dest_path: []const u8) !bool {
+    const generation = previous orelse return false;
+    if (page_index >= generation.manifest.hashes.len) return false;
+    if (generation.manifest.hashes[page_index] != page_hash) return false;
+    const previous_pages_dir = try std.fs.path.join(ctx.allocator, &.{ generation.dir, "pages" });
+    defer ctx.allocator.free(previous_pages_dir);
+    const previous_path = try pagePath(ctx.allocator, previous_pages_dir, page_index);
+    defer ctx.allocator.free(previous_path);
+    if (!(try cachedPdfAvailable(ctx, previous_path))) return false;
+    copyOrLinkCacheFile(ctx, previous_path, dest_path) catch return false;
+    return cachedPdfAvailable(ctx, dest_path) catch false;
+}
+
+fn copyOrLinkCacheFile(ctx: *DrawContext, source_path: []const u8, dest_path: []const u8) !void {
+    if (fileExists(dest_path)) return;
+    const cwd = std.Io.Dir.cwd();
+    cwd.hardLink(source_path, cwd, dest_path, ctx.io, .{}) catch {
+        try cwd.copyFile(source_path, cwd, dest_path, ctx.io, .{ .make_path = true, .replace = true });
+    };
+}
+
+fn writeLeaseFile(ctx: *DrawContext, lease_path: []const u8, deck_id: []const u8, run_id: []const u8, previous_generation: ?[]const u8) !void {
+    const tmp = try tempCachePath(ctx, lease_path, "json");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(ctx.allocator);
+    try out.appendSlice(ctx.allocator, "{\"schema\":1,\"pid\":");
+    try appendUnsignedJson(ctx.allocator, &out, @as(u64, @intCast(std.c.getpid())));
+    try out.appendSlice(ctx.allocator, ",\"runId\":");
+    try appendJsonString(ctx.allocator, &out, run_id);
+    try out.appendSlice(ctx.allocator, ",\"deckId\":");
+    try appendJsonString(ctx.allocator, &out, deck_id);
+    try out.appendSlice(ctx.allocator, ",\"protectedGenerations\":[");
+    if (previous_generation) |id| try appendJsonString(ctx.allocator, &out, id);
+    try out.appendSlice(ctx.allocator, "]}");
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
+    try renameReplacing(ctx, tmp, lease_path);
+}
+
+fn writeRenderManifest(ctx: *DrawContext, plan: *const RenderPlan) !void {
+    const path = try std.fs.path.join(ctx.allocator, &.{ plan.building_dir, "manifest.json" });
+    defer ctx.allocator.free(path);
+    const tmp = try tempCachePath(ctx, path, "json");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(ctx.allocator);
+    try out.appendSlice(ctx.allocator, "{\"schema\":1,\"pageHashes\":[");
+    for (plan.pages, 0..) |page, index| {
+        if (index != 0) try out.append(ctx.allocator, ',');
+        try out.append(ctx.allocator, '"');
+        const text = try std.fmt.allocPrint(ctx.allocator, "{x}", .{page.page_hash});
+        defer ctx.allocator.free(text);
+        try out.appendSlice(ctx.allocator, text);
+        try out.append(ctx.allocator, '"');
+    }
+    try out.appendSlice(ctx.allocator, "]}");
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
+    try renameReplacing(ctx, tmp, path);
+}
+
+fn publishRenderGeneration(ctx: *DrawContext, plan: *RenderPlan) !void {
+    const cwd = std.Io.Dir.cwd();
+    try cwd.rename(plan.building_dir, cwd, plan.generation_dir, ctx.io);
+    errdefer cwd.deleteTree(ctx.io, plan.generation_dir) catch {};
+    const generation_id = std.fs.path.basename(plan.generation_dir);
+    try writeCurrentGeneration(ctx, plan.current_path, generation_id);
+    plan.generation_published = true;
+    std.Io.Dir.cwd().deleteFile(ctx.io, plan.lease_path) catch {};
+    pruneOldGenerations(ctx, plan) catch {};
+}
+
+fn writeCurrentGeneration(ctx: *DrawContext, current_path: []const u8, generation_id: []const u8) !void {
+    const tmp = try tempCachePath(ctx, current_path, "json");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(ctx.allocator);
+    try out.appendSlice(ctx.allocator, "{\"schema\":1,\"generation\":");
+    try appendJsonString(ctx.allocator, &out, generation_id);
+    try out.appendSlice(ctx.allocator, "}");
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
+    try renameReplacing(ctx, tmp, current_path);
+}
+
+fn pruneOldGenerations(ctx: *DrawContext, plan: *const RenderPlan) !void {
+    try pruneStaleLeases(ctx, plan.leases_dir);
+    if (try activeRenderLeaseExists(ctx, plan.leases_dir)) return;
+    var dir = std.Io.Dir.cwd().openDir(ctx.io, plan.generations_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(ctx.io);
+    var iterator = dir.iterate();
+    const current = std.fs.path.basename(plan.generation_dir);
+    while (try iterator.next(ctx.io)) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.eql(u8, entry.name, current)) continue;
+        if (std.mem.startsWith(u8, entry.name, ".building-")) continue;
+        const victim = try std.fs.path.join(ctx.allocator, &.{ plan.generations_dir, entry.name });
+        defer ctx.allocator.free(victim);
+        const trash_name = try std.fmt.allocPrint(ctx.allocator, "{s}-{d}-{d}", .{ entry.name, std.c.getpid(), @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic) });
+        defer ctx.allocator.free(trash_name);
+        const trash_path = try std.fs.path.join(ctx.allocator, &.{ plan.trash_dir, trash_name });
+        defer ctx.allocator.free(trash_path);
+        std.Io.Dir.cwd().rename(victim, std.Io.Dir.cwd(), trash_path, ctx.io) catch continue;
+        std.Io.Dir.cwd().deleteTree(ctx.io, trash_path) catch {};
+    }
+}
+
+fn pruneStaleLeases(ctx: *DrawContext, leases_dir: []const u8) !void {
+    var dir = std.Io.Dir.cwd().openDir(ctx.io, leases_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(ctx.io);
+    var iterator = dir.iterate();
+    while (try iterator.next(ctx.io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isFinalLeaseFile(entry.name)) continue;
+        const lease_path = try std.fs.path.join(ctx.allocator, &.{ leases_dir, entry.name });
+        defer ctx.allocator.free(lease_path);
+        if (try leaseBelongsToLiveProcess(ctx, lease_path)) continue;
+        deleteFileIfExists(ctx, lease_path);
+    }
+}
+
+fn activeRenderLeaseExists(ctx: *DrawContext, leases_dir: []const u8) !bool {
+    var dir = std.Io.Dir.cwd().openDir(ctx.io, leases_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer dir.close(ctx.io);
+    var iterator = dir.iterate();
+    while (try iterator.next(ctx.io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isFinalLeaseFile(entry.name)) continue;
+        const lease_path = try std.fs.path.join(ctx.allocator, &.{ leases_dir, entry.name });
+        defer ctx.allocator.free(lease_path);
+        if (try leaseBelongsToLiveProcess(ctx, lease_path)) return true;
+    }
+    return false;
+}
+
+fn isFinalLeaseFile(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, ".json") and std.mem.indexOf(u8, name, ".tmp-") == null;
+}
+
+fn leaseBelongsToLiveProcess(ctx: *DrawContext, lease_path: []const u8) !bool {
+    const text = std.Io.Dir.cwd().readFileAlloc(ctx.io, lease_path, ctx.allocator, .limited(64 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer ctx.allocator.free(text);
+    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, text, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const pid_value = parsed.value.object.getPtr("pid") orelse return false;
+    if (pid_value.* != .integer) return false;
+    if (pid_value.integer <= 0 or pid_value.integer > std.math.maxInt(std.c.pid_t)) return false;
+    const pid: std.c.pid_t = @intCast(pid_value.integer);
+    const signal: std.c.SIG = @enumFromInt(0);
+    switch (std.c.errno(std.c.kill(pid, signal))) {
+        .SUCCESS => return true,
+        .SRCH => return false,
+        .PERM => return true,
+        else => return true,
+    }
+}
+
+fn appendUnsignedJson(allocator: Allocator, out: *std.ArrayList(u8), value: u64) !void {
+    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
+}
+
+fn appendJsonString(allocator: Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+    try out.append(allocator, '"');
+    for (value) |byte| switch (byte) {
+        '\\' => try out.appendSlice(allocator, "\\\\"),
+        '"' => try out.appendSlice(allocator, "\\\""),
+        '\n' => try out.appendSlice(allocator, "\\n"),
+        '\r' => try out.appendSlice(allocator, "\\r"),
+        '\t' => try out.appendSlice(allocator, "\\t"),
+        else => try out.append(allocator, byte),
+    };
+    try out.append(allocator, '"');
+}
+
+fn renameReplacing(ctx: *DrawContext, tmp_path: []const u8, final_path: []const u8) !void {
+    const cwd = std.Io.Dir.cwd();
+    cwd.rename(tmp_path, cwd, final_path, ctx.io) catch |err| {
+        deleteFileIfExists(ctx, final_path);
+        cwd.rename(tmp_path, cwd, final_path, ctx.io) catch return err;
+    };
 }
 
 fn qpdfInputCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, inputs: []const []const u8, single_page_inputs: bool) ![]u8 {
@@ -516,7 +836,7 @@ fn hashTexPreambleEntries(
         if (entry.source == .file) {
             const source = try resolveAssetPath(ctx, entry.value);
             defer ctx.allocator.free(source);
-            hashString(hasher, source);
+            hashLogicalAssetPath(ctx, hasher, source);
             const fingerprint = if (asset_fingerprints) |fingerprints|
                 try assetFileFingerprint(ctx, fingerprints, source)
             else
@@ -528,7 +848,7 @@ fn hashTexPreambleEntries(
 }
 
 fn hashAssetFile(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, source: []const u8) !void {
-    hashString(hasher, source);
+    hashLogicalAssetPath(ctx, hasher, source);
     const fingerprint = try assetFileFingerprint(ctx, asset_fingerprints, source);
     hashBool(hasher, fingerprint.present);
     hashU64(hasher, fingerprint.digest);
@@ -1341,20 +1661,6 @@ fn countMissingPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask) !usiz
     return missing;
 }
 
-fn buildPreloadCacheState(ctx: *DrawContext, tasks: []const PreloadTask) !PreloadCacheState {
-    const cached = try ctx.allocator.alloc(bool, tasks.len);
-    errdefer ctx.allocator.free(cached);
-    var miss_count: usize = 0;
-    for (tasks, 0..) |task, index| {
-        cached[index] = try preloadTaskPresent(ctx, task);
-        if (!cached[index]) miss_count += 1;
-    }
-    return .{
-        .cached = cached,
-        .miss_count = miss_count,
-    };
-}
-
 fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask, pages: []const RenderPage) !PreloadCacheState {
     const cached = try ctx.allocator.alloc(bool, tasks.len);
     errdefer ctx.allocator.free(cached);
@@ -1378,15 +1684,6 @@ fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask,
     return .{
         .cached = cached,
         .miss_count = miss_count,
-    };
-}
-
-fn buildAllCachedPreloadState(ctx: *DrawContext, task_count: usize) !PreloadCacheState {
-    const cached = try ctx.allocator.alloc(bool, task_count);
-    for (cached) |*value| value.* = true;
-    return .{
-        .cached = cached,
-        .miss_count = 0,
     };
 }
 
@@ -2481,12 +2778,6 @@ const direct_merge_page_limit: usize = 96;
 const merge_chunk_size: usize = 16;
 
 fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
-    if (plan.document_cache_hit) {
-        if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
-        if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
-        return;
-    }
-
     const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
     defer ctx.allocator.free(page_paths);
     for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
@@ -2505,7 +2796,7 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
         return;
     }
 
-    const chunk_cache_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "chunks" });
+    const chunk_cache_dir = try std.fs.path.join(ctx.allocator, &.{ plan.run_dir, "chunks" });
     defer ctx.allocator.free(chunk_cache_dir);
     try std.Io.Dir.cwd().createDirPath(ctx.io, chunk_cache_dir);
 
@@ -2976,6 +3267,25 @@ fn resolveAssetPath(ctx: *DrawContext, rel_path: []const u8) ![]const u8 {
     return std.fs.path.join(ctx.allocator, &.{ ctx.asset_base_dir, rel_path });
 }
 
+fn hashLogicalAssetPath(ctx: *DrawContext, hasher: *std.hash.Wyhash, source: []const u8) void {
+    const base = ctx.asset_base_dir;
+    if (base.len > 0 and !std.mem.eql(u8, base, ".")) {
+        if (std.mem.eql(u8, source, base)) {
+            hashString(hasher, ".");
+            return;
+        }
+        if (source.len > base.len and source[base.len] == std.fs.path.sep and std.mem.eql(u8, source[0..base.len], base)) {
+            hashString(hasher, source[base.len + 1 ..]);
+            return;
+        }
+    }
+    if (std.mem.startsWith(u8, source, "./")) {
+        hashString(hasher, source[2..]);
+        return;
+    }
+    hashString(hasher, source);
+}
+
 fn rasterToSizedPng(ctx: *DrawContext, source: []const u8, target_width: f32, target_height: f32) ![]const u8 {
     if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".png")) {
         var source_width: f64 = 0;
@@ -3201,7 +3511,7 @@ fn cachedAssetPath(ctx: *DrawContext, kind: []const u8, source: []const u8, exte
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
     hashString(&hasher, kind);
-    hashString(&hasher, source);
+    hashLogicalAssetPath(ctx, &hasher, source);
     hashBool(&hasher, fingerprint.present);
     hashU64(&hasher, fingerprint.digest);
     return std.fmt.allocPrint(ctx.allocator, "{s}/{s}-{x}.{s}", .{ ctx.cache_dir, kind, hasher.final(), extension });
@@ -3214,7 +3524,7 @@ fn cachedSizedAssetPath(ctx: *DrawContext, kind: []const u8, source: []const u8,
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
     hashString(&hasher, kind);
-    hashString(&hasher, source);
+    hashLogicalAssetPath(ctx, &hasher, source);
     hashU32(&hasher, target_width_px);
     hashU32(&hasher, target_height_px);
     hashBool(&hasher, fingerprint.present);
@@ -3274,17 +3584,6 @@ fn publishCacheFile(ctx: *DrawContext, tmp_path: []const u8, final_path: []const
         }
         return err;
     };
-}
-
-fn copyCacheFileIfMissing(ctx: *DrawContext, source_path: []const u8, dest_path: []const u8) !void {
-    if (try cachedPdfAvailable(ctx, dest_path)) return;
-    const tmp = try tempCachePath(ctx, dest_path, "pdf");
-    defer ctx.allocator.free(tmp);
-    errdefer deleteFileIfExists(ctx, tmp);
-    const cwd = std.Io.Dir.cwd();
-    try cwd.copyFile(source_path, cwd, tmp, ctx.io, .{ .make_path = true, .replace = true });
-    try validatePdfFile(ctx, tmp);
-    try publishCacheFile(ctx, tmp, dest_path);
 }
 
 fn deleteFileIfExists(ctx: *DrawContext, path: []const u8) void {
