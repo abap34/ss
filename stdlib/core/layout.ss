@@ -109,20 +109,13 @@ fn same_tr(node: Object, source: Object, right: Number, top_delta: Number) -> Ob
   return node
 end
 
-fn cols2c(left: Object, right: Object, gap: Number) -> Constraints
+fn cols2(left: Object, right: Object, gap: Number = 30) -> Constraints
   return constraints(
     equal(anchor(right, "left"), anchor(left, "right"), gap)
   )
 end
 
-fn cols2g(left: Object, right: Object, gap: Number) -> Object
-  cols2c(left, right, gap)
-  return group(left, right)
-end
 
-fn cols2(left: Object, right: Object) -> Object
-  return cols2g(left, right, 30)
-end
 
 fn surround(panel: Object, inner: Object, pad_x: Number, pad_y: Number) -> Constraints
   return constraints(
