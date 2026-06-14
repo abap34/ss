@@ -152,11 +152,13 @@ fn set_tocs(doc: Document) -> Void
 end
 
 fn toc_row(title: Object, page_value: Page) -> String
-  return "- " ++ title.content ++ " .... " ++ str(page_index(page_value)) ++ "\n"
+  return "- " ++ title.content ++ " .... " ++ str(page_index(page_value)) ++ "
+"
 end
 
 fn toc_text(doc: Document) -> String
-  return "Table of Contents\n" ++ join(
+  return "Table of Contents
+" ++ join(
     pages(doc),
     "",
     (page_value: Page) |->

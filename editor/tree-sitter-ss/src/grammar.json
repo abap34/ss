@@ -2600,17 +2600,8 @@
               {
                 "type": "REPEAT",
                 "content": {
-                  "type": "CHOICE",
-                  "members": [
-                    {
-                      "type": "PATTERN",
-                      "value": "[^\"\\\\]"
-                    },
-                    {
-                      "type": "PATTERN",
-                      "value": "\\\\."
-                    }
-                  ]
+                  "type": "PATTERN",
+                  "value": "[^\"]"
                 }
               },
               {
@@ -2624,7 +2615,7 @@
     },
     "color_string": {
       "type": "PATTERN",
-      "value": "c\"([^\"\\\\]|\\\\.)*\""
+      "value": "c\"[^\"]*\""
     },
     "block_text": {
       "type": "TOKEN",

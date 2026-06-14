@@ -22,8 +22,6 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.ExpectedEnd => "'end'",
         error.ExpectedNumber => "number",
         error.UnterminatedString => "closing string delimiter",
-        error.UnterminatedEscape => "escape target",
-        error.InvalidEscape => "valid escape sequence",
         error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
         error.InvalidValueTag => "value type",

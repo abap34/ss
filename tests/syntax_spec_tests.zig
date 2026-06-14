@@ -802,6 +802,26 @@ test "syntax spec: expression parsing lowers operators to named primitive calls"
     try expectBoolean(logical_not.args.items[0], false);
 }
 
+test "syntax spec: quoted strings keep backslashes literally" {
+    var parsed = try parse(
+        \\page Strings
+        \\  let tex = "$F : L \to L$"
+        \\  let marker = "\[1\]"
+        \\  let literal = "a\nb"
+        \\  let actual = "a
+        \\b"
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+    const statements = parsed.program.pages.items[0].statements.items;
+
+    try expectString(statements[0].kind.let_binding.expr, "$F : L \\to L$");
+    try expectString(statements[1].kind.let_binding.expr, "\\[1\\]");
+    try expectString(statements[2].kind.let_binding.expr, "a\\nb");
+    try expectString(statements[3].kind.let_binding.expr, "a\nb");
+}
+
 test "syntax spec: call sugar is explicit about text-bearing and zero-argument calls" {
     var parsed = try parse(
         \\page Text

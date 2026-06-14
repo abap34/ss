@@ -1444,29 +1444,12 @@ const Parser = struct {
         if (self.eof() or self.source[self.pos] != '"') return self.fail(error.ExpectedString);
         self.pos += 1;
 
-        var out = std.ArrayList(u8).empty;
-        errdefer out.deinit(self.allocator);
-
+        const start = self.pos;
         while (!self.eof()) {
             const ch = self.source[self.pos];
             self.pos += 1;
             if (ch == '"') {
-                return out.toOwnedSlice(self.allocator);
-            }
-            if (ch == '\\') {
-                if (self.eof()) return self.fail(error.UnterminatedEscape);
-                const esc = self.source[self.pos];
-                self.pos += 1;
-                switch (esc) {
-                    'n' => try out.append(self.allocator, '\n'),
-                    'r' => try out.append(self.allocator, '\r'),
-                    't' => try out.append(self.allocator, '\t'),
-                    '\\' => try out.append(self.allocator, '\\'),
-                    '"' => try out.append(self.allocator, '"'),
-                    else => return self.fail(error.InvalidEscape),
-                }
-            } else {
-                try out.append(self.allocator, ch);
+                return self.allocator.dupe(u8, self.source[start .. self.pos - 1]);
             }
         }
         return self.fail(error.UnterminatedString);

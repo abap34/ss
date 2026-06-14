@@ -314,8 +314,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.ZeroArgCallRequiresParens,
         error.ExpectedReturn,
         error.UnterminatedString,
-        error.UnterminatedEscape,
-        error.InvalidEscape,
         error.UnknownAnchor,
         error.ReturnOutsideFunction,
         error.NoCurrentPage,
@@ -358,8 +356,6 @@ pub fn isExpectedCliError(err: anyerror) bool {
 pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
     return switch (diagnostic.err) {
         error.UnterminatedString => "UnterminatedString: unterminated string",
-        error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",
-        error.InvalidEscape => "InvalidEscape: invalid escape sequence",
         error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
         error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
         error.BindRemoved => "BindRemoved: 'bind' has been removed; use lexical 'let' bindings and ordinary expression statements",
