@@ -111,7 +111,8 @@ end
 
 fn cols2(left: Object, right: Object, gap: Number = 30) -> Constraints
   return constraints(
-    equal(anchor(right, "left"), anchor(left, "right"), gap)
+    equal(anchor(right, "left"), anchor(left, "right"), gap),
+    equal(anchor(right, "center_y"), anchor(left, "center_y"), 0)
   )
 end
 

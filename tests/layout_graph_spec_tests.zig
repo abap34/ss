@@ -361,6 +361,39 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
     try testing.expect(!ir.hasConstraintFailures());
 }
 
+test "layout solver: horizontal alignment alone does not imply vertical row alignment" {
+    var stacked = try initEmptyIr();
+    defer stacked.deinit();
+
+    const stacked_page = try stacked.addPage("Page");
+    const first = try stacked.makeObject(stacked_page, "first", null, .text, .text, "A");
+    const second = try stacked.makeObject(stacked_page, "second", null, .text, .text, "B");
+    _ = try stacked.makeGroupWithOrigin(stacked_page, true, &.{ first, second }, "group");
+    try stacked.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "same-left");
+
+    try solver.solveLayout(&stacked);
+
+    const first_node = stacked.getNode(first).?;
+    const second_node = stacked.getNode(second).?;
+    const first_spacing = core.layout.styleForNode(&stacked, first_node).spacing_after;
+    try expectFloat(first_node.frame.y - first_spacing, second_node.frame.y + second_node.frame.height);
+
+    var row = try initEmptyIr();
+    defer row.deinit();
+
+    const row_page = try row.addPage("Page");
+    const left = try row.makeObject(row_page, "left", null, .text, .text, "A");
+    const right = try row.makeObject(row_page, "right", null, .text, .text, "B");
+    try row.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, "right-of-left");
+    try row.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, "same-center-y");
+
+    try solver.solveLayout(&row);
+
+    const left_node = row.getNode(left).?;
+    const right_node = row.getNode(right).?;
+    try expectFloat(left_node.frame.y + left_node.frame.height / 2, right_node.frame.y + right_node.frame.height / 2);
+}
+
 test "layout solver: explicit anchor conflicts and negative sizes are rejected" {
     var conflict = try initEmptyIr();
     defer conflict.deinit();

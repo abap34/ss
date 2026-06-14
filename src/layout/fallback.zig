@@ -452,27 +452,13 @@ fn appendLocalTopFlowForChildren(
     scope: FlowScope,
     constraints: *std.ArrayList(Constraint),
 ) !void {
-    const allocator = ir.allocator;
-    const used = try allocator.alloc(bool, children.len);
-    defer allocator.free(used);
-    @memset(used, false);
-
-    var unit = std.ArrayList(usize).empty;
-    defer unit.deinit(allocator);
-
     var current_source: ?ConstraintSource = null;
     var current_offset: f32 = 0;
     var started = false;
 
-    for (children, 0..) |child_id, child_pos| {
-        if (used[child_pos]) continue;
+    for (children) |child_id| {
         const index = flowChildIndex(ir, workspace, components, component_root, child_id, scope) orelse continue;
-
-        unit.clearRetainingCapacity();
-        try collectHorizontalFlowUnit(ir, workspace, components, component_root, children, scope, index, used, &unit);
-        const placement_index = flowUnitPlacementIndex(ir, workspace, unit.items) orelse index;
-        const spacing_index = flowUnitBottomIndex(ir, workspace, unit.items) orelse placement_index;
-        const contains_root = flowUnitContains(unit.items, root_index);
+        const contains_root = index == root_index;
 
         if (contains_root) {
             started = true;
@@ -481,66 +467,17 @@ fn appendLocalTopFlowForChildren(
         }
 
         if (!contains_root) {
-            try constraints.append(allocator, .{
-                .target_node = workspace.nodeAt(placement_index),
+            try constraints.append(ir.allocator, .{
+                .target_node = workspace.nodeAt(index),
                 .target_anchor = .top,
                 .source = current_source orelse .{ .node = .{ .node_id = workspace.nodeAt(root_index), .anchor = .top } },
                 .offset = current_offset,
             });
         }
 
-        try appendFlowUnitCenterConstraints(allocator, constraints, workspace, unit.items, if (contains_root) root_index else placement_index);
-
-        const spacing_node = ir.getNode(workspace.nodeAt(spacing_index)) orelse return error.UnknownNode;
-        current_source = .{ .node = .{ .node_id = workspace.nodeAt(spacing_index), .anchor = .bottom } };
+        const spacing_node = ir.getNode(workspace.nodeAt(index)) orelse return error.UnknownNode;
+        current_source = .{ .node = .{ .node_id = workspace.nodeAt(index), .anchor = .bottom } };
         current_offset = -style_defaults.styleForNode(ir, spacing_node).spacing_after;
-    }
-}
-
-fn collectHorizontalFlowUnit(
-    ir: anytype,
-    workspace: *const graph.AxisWorkspace,
-    components: *const graph.ComponentSet,
-    component_root: usize,
-    children: []const NodeId,
-    scope: FlowScope,
-    seed_index: usize,
-    used: []bool,
-    unit: *std.ArrayList(usize),
-) !void {
-    try unit.append(ir.allocator, seed_index);
-    markChildUsed(workspace, children, seed_index, used);
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (children) |candidate_id| {
-            const candidate_index = flowChildIndex(ir, workspace, components, component_root, candidate_id, scope) orelse continue;
-            if (flowUnitContains(unit.items, candidate_index)) continue;
-            if (!hasHorizontalRelationToUnit(ir, workspace, unit.items, candidate_index)) continue;
-            try unit.append(ir.allocator, candidate_index);
-            markChildUsed(workspace, children, candidate_index, used);
-            changed = true;
-        }
-    }
-}
-
-fn appendFlowUnitCenterConstraints(
-    allocator: std.mem.Allocator,
-    constraints: *std.ArrayList(Constraint),
-    workspace: *const graph.AxisWorkspace,
-    unit: []const usize,
-    center_index: usize,
-) !void {
-    if (unit.len < 2) return;
-    for (unit) |index| {
-        if (index == center_index) continue;
-        try constraints.append(allocator, .{
-            .target_node = workspace.nodeAt(index),
-            .target_anchor = .center_y,
-            .source = .{ .node = .{ .node_id = workspace.nodeAt(center_index), .anchor = .center_y } },
-            .offset = 0,
-        });
     }
 }
 
@@ -561,65 +498,6 @@ fn flowChildIndex(
     if (state.start != null or state.end != null or state.center != null) return null;
     if (workspace.graph.hasTargetConstraint(ir, child_id, .vertical, &.{})) return null;
     return index;
-}
-
-fn flowUnitPlacementIndex(ir: anytype, workspace: *const graph.AxisWorkspace, unit: []const usize) ?usize {
-    return flowUnitMaxHeightIndex(ir, workspace, unit);
-}
-
-fn flowUnitBottomIndex(ir: anytype, workspace: *const graph.AxisWorkspace, unit: []const usize) ?usize {
-    return flowUnitMaxHeightIndex(ir, workspace, unit);
-}
-
-fn flowUnitMaxHeightIndex(ir: anytype, workspace: *const graph.AxisWorkspace, unit: []const usize) ?usize {
-    var best: ?usize = null;
-    var best_height: f32 = -1;
-    for (unit) |index| {
-        const node = ir.getNode(workspace.nodeAt(index)) orelse continue;
-        const height = workspace.states[index].size orelse node.frame.height;
-        if (best == null or height > best_height) {
-            best = index;
-            best_height = height;
-        }
-    }
-    return best;
-}
-
-fn hasHorizontalRelationToUnit(ir: anytype, workspace: *const graph.AxisWorkspace, unit: []const usize, candidate_index: usize) bool {
-    for (unit) |member_index| {
-        if (hasHorizontalRelation(ir, workspace.nodeAt(candidate_index), workspace.nodeAt(member_index))) return true;
-    }
-    return false;
-}
-
-fn hasHorizontalRelation(ir: anytype, a: NodeId, b: NodeId) bool {
-    for (ir.constraints.items) |constraint| {
-        if (graph.anchorAxis(constraint.target_anchor) != .horizontal) continue;
-        const source = switch (constraint.source) {
-            .page => continue,
-            .node => |source| source,
-        };
-        if (graph.anchorAxis(source.anchor) != .horizontal) continue;
-        if (constraint.target_node == a and source.node_id == b) return true;
-        if (constraint.target_node == b and source.node_id == a) return true;
-    }
-    return false;
-}
-
-fn markChildUsed(workspace: *const graph.AxisWorkspace, children: []const NodeId, index: usize, used: []bool) void {
-    for (children, 0..) |child_id, child_pos| {
-        if (child_id == workspace.nodeAt(index)) {
-            used[child_pos] = true;
-            return;
-        }
-    }
-}
-
-fn flowUnitContains(unit: []const usize, index: usize) bool {
-    for (unit) |member| {
-        if (member == index) return true;
-    }
-    return false;
 }
 
 fn directParentGroupIndex(ir: anytype, workspace: *const graph.AxisWorkspace, components: *const graph.ComponentSet, component_root: usize, child_id: NodeId) ?usize {
