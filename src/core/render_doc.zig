@@ -197,6 +197,7 @@ fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, ir: anytype, node: 
     defer allocator.free(preamble);
     try op.put(allocator, "capability", "compile_math");
     try op.put(allocator, "source", node.content orelse "");
+    try op.put(allocator, "tex_mode", texModeForNode(node));
     try op.put(allocator, "math_tex_preamble", preamble);
     try op.putFloat(allocator, "scale", math.scale);
     try op.putColor(allocator, "color", math.color);
@@ -205,6 +206,14 @@ fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, ir: anytype, node: 
     try op.putFloat(allocator, "block_min_height", math.block_min_height);
     try op.putFloat(allocator, "block_vertical_padding", math.block_vertical_padding);
     try doc.ops.append(allocator, op);
+}
+
+fn texModeForNode(node: *const model.Node) []const u8 {
+    return switch (node.payload_kind orelse .text) {
+        .math_tex => "raw",
+        .math_text => "math",
+        else => "math",
+    };
 }
 
 fn appendAsset(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, op_name: []const u8) !void {

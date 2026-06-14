@@ -103,3 +103,36 @@ test "core IR spec: TeX preamble render environment resolves in document page ob
     try testing.expectEqual(core.render_env.TexPreambleSource.text, env.tex_preamble.items[2].source);
     try testing.expectEqualStrings("object preamble", env.tex_preamble.items[2].value);
 }
+
+test "core IR spec: render doc marks math and raw TeX vector modes" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const math_object = try ir.makeObject(page, "math", null, .source, .math_text, "x + y");
+    const tex_object = try ir.makeObject(page, "math_tex", null, .asset, .math_tex, "\\begin{algorithm}[H]\\end{algorithm}");
+    try ir.setNodeProperty(math_object, "render_kind", "vector_math");
+    try ir.setNodeProperty(tex_object, "render_kind", "vector_math");
+
+    var doc = try core.render_doc.build(testing.allocator, &ir);
+    defer doc.deinit(testing.allocator);
+
+    const math_op = vectorMathOpForNode(doc, math_object).?;
+    const tex_op = vectorMathOpForNode(doc, tex_object).?;
+    try testing.expectEqualStrings("math", argValue(math_op, "tex_mode").?);
+    try testing.expectEqualStrings("raw", argValue(tex_op, "tex_mode").?);
+}
+
+fn argValue(op: core.render_doc.Op, key: []const u8) ?[]const u8 {
+    for (op.args.items) |arg| {
+        if (std.mem.eql(u8, arg.key, key)) return arg.value;
+    }
+    return null;
+}
+
+fn vectorMathOpForNode(doc: core.render_doc.RenderDoc, node_id: core.NodeId) ?core.render_doc.Op {
+    for (doc.ops.items) |op| {
+        if (op.node_id == node_id and std.mem.eql(u8, op.op, "draw_vector_math")) return op;
+    }
+    return null;
+}
