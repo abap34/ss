@@ -2,7 +2,7 @@ import std:themes/base as *
 
 fn/! h1(title_text: String) -> Object
   let title = txt_obj(title_text, "title")
-  txt(title, "Helvetica-Bold", 36, 42, c"1,0.3765,0.5098", 46, 72, 72)
+  txt(title, "Helvetica", 36, 42, c"1,0.3765,0.5098", 46, 72, 72, 700)
   return title
 end
 
@@ -15,16 +15,16 @@ end
 fn/! head(title_text: String) -> Object
   let chip = txt_obj(title_text, "label")
   let title = tl(txt_obj(title_text, "title"), 72, 98)
-  txt(chip, "Helvetica-Bold", 13, 18, c"1,1,1", 0, 72, 72)
+  txt(chip, "Helvetica", 13, 18, c"1,1,1", 0, 72, 72, 700)
   box(chip, c"1,0.3765,0.5098", c"1,0.6706,0.2941", 1.0, 10)
-  txt(title, "Helvetica-Bold", 36, 42, c"1,0.3765,0.5098", 46, 72, 72)
+  txt(title, "Helvetica", 36, 42, c"1,0.3765,0.5098", 46, 72, 72, 700)
   same_tr(chip, title, 72, 8)
   return title
 end
 
 fn/! subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 110, 110, 150)
-  txt(subtitle, "Helvetica-Bold", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78)
+  txt(subtitle, "Helvetica", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78, 700)
   subtitle.text_cjk_bold_passes = 3
   subtitle.text_cjk_bold_dx = 0.04
   return subtitle
@@ -94,9 +94,9 @@ fn/! cover(title_text: String, subtitle_text: String, author_name: String) -> Ob
   let title = tl(txt_obj(title_text, "title"), 72, 152)
   let subtitle = txt_obj(subtitle_text, "subtitle")
   let author = txt_obj(author_name, "byline")
-  txt(title, "Helvetica-Bold", 52, 60, c"0.4745,0.3765,1", 26, 72, 72)
+  txt(title, "Helvetica", 52, 60, c"0.4745,0.3765,1", 26, 72, 72, 700)
   txt(subtitle, "Helvetica", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78)
-  txt(author, "Helvetica-Bold", 18, 24, c"1,0.6706,0.2941", 18, 72, 72)
+  txt(author, "Helvetica", 18, 24, c"1,0.6706,0.2941", 18, 72, 72, 700)
 
   below_l(subtitle, title, 6, 28)
   same_tr(author, title, 72, -4)

@@ -4,6 +4,8 @@ type TextParseMode = none | inline | block
 type WrapMode = on | off
 type FitPolicy = warn | error | ignore
 type Align = left | center | right
+type FontStyle = normal | oblique | italic
+type FontStretch = ultra_condensed | extra_condensed | condensed | semi_condensed | normal | semi_expanded | expanded | extra_expanded | ultra_expanded
 
 type Doc = object {
   layout_v: LayoutPolicy = LayoutPolicy.top_flow
@@ -38,10 +40,16 @@ type Text = object {
   base = Flow
 
   text_parse: TextParseMode = TextParseMode.inline
-  text_font: String = "Helvetica"
-  text_bold_font: String = "Helvetica-Bold"
-  text_italic_font: String = "Helvetica-Oblique"
-  text_code_font: String = "Courier"
+  text_font_family: String = "Helvetica"
+  text_font_weight: Number = 400
+  text_font_style: FontStyle = FontStyle.normal
+  text_font_stretch: FontStretch = FontStretch.normal
+  text_markdown_bold_weight: Number = 700
+  text_markdown_italic_style: FontStyle = FontStyle.italic
+  text_code_font_family: String = "Courier"
+  text_code_font_weight: Number = 400
+  text_code_font_style: FontStyle = FontStyle.normal
+  text_code_font_stretch: FontStretch = FontStretch.normal
   text_size: Number = 20
   text_line_height: Number? = none
   text_color: Color = c"0.08,0.08,0.08"
@@ -180,7 +188,8 @@ type Code = object {
 
   render_kind: RenderKind = RenderKind.code
   text_parse: TextParseMode = TextParseMode.none
-  text_font: String = "Courier"
+  text_font_family: String = "Courier"
+  text_code_font_family: String = "Courier"
   text_size: Number = 15
   text_line_height: Number? = none
   text_color: Color = c"0.12,0.12,0.12"
@@ -203,7 +212,7 @@ type Math = object {
 
   render_kind: RenderKind = RenderKind.vector_math
   text_parse: TextParseMode = TextParseMode.none
-  text_font: String = "Courier"
+  text_font_family: String = "Courier"
   text_size: Number = 18
   text_line_height: Number? = none
   text_color: Color = c"0,0,0.0353"
@@ -229,7 +238,7 @@ type Fig = object {
   base = Text
   roles = ["figure"]
 
-  text_font: String = "Courier"
+  text_font_family: String = "Courier"
   text_size: Number = 16
   text_line_height: Number? = none
   text_color: Color = c"0.18,0.18,0.18"

@@ -45,17 +45,21 @@ fn scale(obj: Object, factor: Number) -> Object
   return obj
 end
 
-fn txt_p(obj: Object, font_name: String, font_size_name: Number, line_height_name: Number, color_name: Color) -> Object
-  obj.text_font = font_name
+fn txt_p(obj: Object, family_name: String, font_size_name: Number, line_height_name: Number, color_name: Color, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
+  obj.text_font_family = family_name
+  obj.text_font_weight = weight_name
+  obj.text_font_style = style_name
+  obj.text_font_stretch = stretch_name
   obj.text_size = font_size_name
   obj.text_color = color_name
   return obj
 end
 
-fn font(obj: Object, family_name: String) -> Object
-  obj.text_font = family_name
-  obj.text_bold_font = family_name ++ " Bold"
-  obj.text_italic_font = family_name ++ " Italic"
+fn font(obj: Object, family_name: String, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
+  obj.text_font_family = family_name
+  obj.text_font_weight = weight_name
+  obj.text_font_style = style_name
+  obj.text_font_stretch = stretch_name
   return obj
 end
 
@@ -63,8 +67,11 @@ fn fonts(obj: Object, family_stack: String) -> Object
   return font(obj, family_stack)
 end
 
-fn code_font(obj: Object, family_name: String) -> Object
-  obj.text_code_font = family_name
+fn code_font(obj: Object, family_name: String, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
+  obj.text_code_font_family = family_name
+  obj.text_code_font_weight = weight_name
+  obj.text_code_font_style = style_name
+  obj.text_code_font_stretch = stretch_name
   return obj
 end
 
@@ -76,8 +83,8 @@ fn txt_flow(obj: Object, font_size_name: Number, line_height_name: Number, spaci
   return obj
 end
 
-fn txt(obj: Object, font_name: String, font_size_name: Number, line_height_name: Number, color_name: Color, spacing_after_name: Number, left_name: Number, right_name: Number) -> Object
-  txt_p(obj, font_name, font_size_name, line_height_name, color_name)
+fn txt(obj: Object, family_name: String, font_size_name: Number, line_height_name: Number, color_name: Color, spacing_after_name: Number, left_name: Number, right_name: Number, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
+  txt_p(obj, family_name, font_size_name, line_height_name, color_name, weight_name, style_name, stretch_name)
   txt_flow(obj, font_size_name, line_height_name, spacing_after_name, left_name, right_name)
   return obj
 end

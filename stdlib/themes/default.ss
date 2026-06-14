@@ -10,26 +10,26 @@ end
 
 fn/! h1(title_text: String) -> Object
   let title = title_obj(title_text)
-  txt(title, "Helvetica-Bold", 40, 47, c"0.04,0.06,0.09", 42, 72, 72)
+  txt(title, "Helvetica", 40, 47, c"0.04,0.06,0.09", 42, 72, 72, 700)
   return title
 end
 
 fn/! h2(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica-Bold", 30, 37, c"0.07,0.09,0.13", 34, 88, 88)
+  txt(subtitle, "Helvetica", 30, 37, c"0.07,0.09,0.13", 34, 88, 88, 700)
   return subtitle
 end
 
 fn/! h3(subtitle_text: String) -> Object
   let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica-Bold", 24, 31, c"0.10,0.12,0.16", 28, 96, 96)
+  txt(subtitle, "Helvetica", 24, 31, c"0.10,0.12,0.16", 28, 96, 96, 700)
   return subtitle
 end
 
 fn/! head(title_text: String) -> Object
   let rule = rule()
   let title = tl(title_obj(title_text), 72, 56)
-  txt(title, "Helvetica-Bold", 36, 44, c"0.04,0.06,0.09", 34, 72, 72)
+  txt(title, "Helvetica", 36, 44, c"0.04,0.06,0.09", 34, 72, 72, 700)
   rule_l(rule, c"0.78,0.84,0.91", 0.8, "")
   rule.layout_spacing_after = 48
   pin_l(rule, 72)
@@ -40,7 +40,7 @@ end
 
 fn/! subhead(subtitle_text: String) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 124)
-  txt(subtitle, "Helvetica-Bold", 26, 33, c"0.08,0.10,0.14", 30, 96, 96)
+  txt(subtitle, "Helvetica", 26, 33, c"0.08,0.10,0.14", 30, 96, 96, 700)
   subtitle.text_cjk_bold_passes = 3
   subtitle.text_cjk_bold_dx = 0.04
   return subtitle
@@ -98,7 +98,7 @@ end
 fn/! code(text_value: String, language_name: String = "python") -> Object
   let code = code_box(text_value, language_name, 96, 96, 16, 12, c"0.965,0.975,0.988", c"0.78,0.84,0.92", 0.9, 8)
   code.text_size = 16
-  code.text_code_font = "Menlo"
+  code.text_code_font_family = "Menlo"
   code.layout_spacing_after = 30
   return code
 end
@@ -126,7 +126,7 @@ fn/! cover(title_text: String, subtitle_text: String, author_name: String) -> Ob
   let subtitle = sub_obj(subtitle_text)
   let author = by_obj(author_name)
   let accent = rule()
-  txt(title, "Helvetica-Bold", 56, 64, c"0.04,0.06,0.09", 26, 72, 72)
+  txt(title, "Helvetica", 56, 64, c"0.04,0.06,0.09", 26, 72, 72, 700)
   txt(subtitle, "Helvetica", 30, 38, c"0.20,0.25,0.32", 24, 72, 72)
   txt(author, "Helvetica", 20, 26, c"0.38,0.42,0.48", 18, 72, 72)
   rule_l(accent, c"0.32,0.50,0.72", 2.0, "")
