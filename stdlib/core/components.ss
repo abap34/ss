@@ -14,12 +14,14 @@ fn/! subtitle(text_value: String) -> Object
   return sub_obj(text_value)
 end
 
-fn/! math(text_value: String) -> Object
-  return math_obj(text_value)
+fn/! math(text_value: String, scale: Number = 1) -> Object
+  let obj = math_obj(text_value)
+  obj.math_scale = scale
+  return obj
 end
 
 fn/! mathtex(text_value: String) -> Object
-  return tex_obj(text_value)
+  return math_obj(text_value)
 end
 
 fn/! panel() -> Object

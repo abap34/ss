@@ -76,7 +76,7 @@ const AtomPaint = struct {
     inline_math_spacing: f32,
 };
 
-const MathKind = enum { inline_math, display, block };
+const MathKind = enum { inline_math, display, block, raw_block };
 
 const SvgAsset = struct {
     path: []const u8,
@@ -123,6 +123,7 @@ const RenderOp = struct {
     render: ResolvedRender,
     parse_mode: core.markdown.ParseMode,
     tex_preamble: []const TexPreambleEntry,
+    math_kind: MathKind = .block,
 
     fn deinit(self: *RenderOp, allocator: Allocator) void {
         allocator.free(self.tex_preamble);
@@ -408,6 +409,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                     .render = core.render_policy.resolveWithEnv(ir, node, sema),
                     .parse_mode = core.markdown.parseModeForNode(ir, node),
                     .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
+                    .math_kind = mathKindForNode(node),
                 };
                 errdefer op.deinit(ctx.allocator);
                 try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
@@ -803,6 +805,7 @@ fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFi
     try hashTexPreambleEntries(ctx, asset_fingerprints, hasher, op.tex_preamble);
     hashResolvedRender(hasher, op);
     switch (op.render.kind) {
+        .vector_math => hashString(hasher, @tagName(op.math_kind)),
         .vector_asset, .raster_asset => {
             const source = try resolveAssetPath(ctx, op.content);
             defer ctx.allocator.free(source);
@@ -1041,7 +1044,7 @@ fn collectOpPreloads(
             try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, op.content),
                 .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
-                .kind = .block,
+                .kind = op.math_kind,
             } });
         },
         .vector_asset => {
@@ -1480,7 +1483,7 @@ fn collectNodePreloads(
             try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, node.content orelse ""),
                 .preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
-                .kind = .block,
+                .kind = mathKindForNode(node),
             } });
         },
         .vector_asset => {
@@ -2715,7 +2718,7 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame: Frame, content: []const u8, math: ?MathPaint) !void {
     var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
     defer env.deinit(ctx.allocator);
-    const svg = try renderMathToSvg(ctx, content, env.tex_preamble.items, .block);
+    const svg = try renderMathToSvg(ctx, content, env.tex_preamble.items, mathKindForNode(node));
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, content, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
@@ -2730,7 +2733,7 @@ fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame
 }
 
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
-    const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, .block);
+    const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
@@ -3458,6 +3461,7 @@ fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]
     switch (kind) {
         .inline_math => return std.fmt.allocPrint(allocator, "$\\mathstrut {s}$\n", .{source}),
         .display => return std.fmt.allocPrint(allocator, "$\\displaystyle\\mathstrut {s}$\n", .{source}),
+        .raw_block => return allocator.dupe(u8, source),
         .block => {
             var normalized = std.ArrayList(u8).empty;
             defer normalized.deinit(allocator);
@@ -3477,6 +3481,14 @@ fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]
             , .{normalized.items});
         },
     }
+}
+
+fn mathKindForNode(node: *const core.Node) MathKind {
+    return switch (node.payload_kind orelse .text) {
+        .math_tex => .raw_block,
+        .math_text => .block,
+        else => .block,
+    };
 }
 
 fn mathPreambleLines(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]const u8 {

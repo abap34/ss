@@ -201,6 +201,8 @@ type Math = object {
   base = Text
   roles = ["math"]
 
+  render_kind: RenderKind = RenderKind.vector_math
+  text_parse: TextParseMode = TextParseMode.none
   text_font: String = "Courier"
   text_size: Number = 18
   text_line_height: Number? = none
@@ -221,8 +223,6 @@ type Tex = object {
   base = Math
   roles = ["math_tex"]
 
-  render_kind: RenderKind = RenderKind.vector_math
-  text_parse: TextParseMode = TextParseMode.none
 }
 
 type Fig = object {

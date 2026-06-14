@@ -55,7 +55,7 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
             return base_width * assetScale(ir, node) + chrome_width;
         },
         .figure_text => return maxWidthForStyle(style) + chrome_width,
-        .math_tex => return maxWidthForStyle(style) + chrome_width,
+        .math_text, .math_tex => return maxWidthForStyle(style) + chrome_width,
         else => {},
     }
 
@@ -85,7 +85,7 @@ pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
             break :blk base_height * assetScale(ir, node) + chrome_height;
         },
         .figure_text => PageLayout.max_figure_height + chrome_height,
-        .math_tex => blk: {
+        .math_text, .math_tex => blk: {
             const content = node.content orelse "";
             const lines = @max(lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
