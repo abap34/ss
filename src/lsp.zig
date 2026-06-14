@@ -332,8 +332,21 @@ const Server = struct {
         typecheck.typecheckProgram(self.allocator, &ir) catch {};
         try diagnostics.addIr(&ir);
         if (!diagnostics.hasErrors()) {
-            lowering.lowerToIr(&ir) catch {};
-            try diagnostics.addIr(&ir);
+            if (lowering.lowerToIr(&ir)) {
+                try diagnostics.addIr(&ir);
+            } else |err| switch (err) {
+                error.ConstraintConflict,
+                error.NegativeConstraintSize,
+                => try diagnostics.addConstraintFailure(&ir, err),
+                else => {
+                    try diagnostics.addIr(&ir);
+                    if (!diagnostics.hasErrors()) {
+                        const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
+                        defer self.allocator.free(message);
+                        try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, null);
+                    }
+                },
+            }
         }
 
         var seen_modules = std.StringHashMap(void).init(self.allocator);
@@ -580,7 +593,96 @@ const DiagnosticSet = struct {
             try self.add(report_path, report_source, diagnostic.severity, diagnosticCode(diagnostic), message, span);
         }
     }
+
+    fn addConstraintFailure(self: *DiagnosticSet, ir: *core.Ir, err: anyerror) !void {
+        if (ir.last_constraint_failure) |failure| {
+            try self.addConstraintFailureItem(ir, failure);
+            return;
+        }
+        if (ir.constraint_failures.items.len > 0) {
+            try self.addConstraintFailureItem(ir, ir.constraint_failures.items[0]);
+            return;
+        }
+
+        const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
+        defer self.allocator.free(message);
+        try self.add(ir.projectPath(), ir.projectSource(), .@"error", @errorName(err), message, null);
+    }
+
+    fn addConstraintFailureItem(self: *DiagnosticSet, ir: *core.Ir, failure: core.ConstraintFailure) !void {
+        const kind_text = constraintFailureText(failure);
+        const message = try formatConstraintFailureMessage(self.allocator, ir, failure, kind_text);
+        defer self.allocator.free(message);
+
+        var report_path = ir.projectPath();
+        var report_source = ir.projectSource();
+        var span: ?utils.err.ByteSpan = null;
+        if (constraintFailureOrigin(failure)) |origin_text| {
+            if (utils.err.parseLocatedOrigin(origin_text)) |located| {
+                span = located.span;
+                if (located.path) |origin_path| {
+                    if (ir.moduleByPathOrSpec(origin_path)) |module| {
+                        report_path = module.path orelse module.spec;
+                        report_source = module.source;
+                    } else {
+                        report_path = origin_path;
+                    }
+                }
+            }
+        }
+
+        try self.add(report_path, report_source, .@"error", constraintFailureCode(failure), message, span);
+    }
 };
+
+fn constraintFailureCode(failure: core.ConstraintFailure) []const u8 {
+    return switch (failure.kind) {
+        .conflict => "ConstraintConflict",
+        .negative_size => "NegativeConstraintSize",
+    };
+}
+
+fn constraintFailureText(failure: core.ConstraintFailure) []const u8 {
+    return switch (failure.kind) {
+        .conflict => "ConstraintConflict: constraint conflict",
+        .negative_size => "NegativeConstraintSize: negative size from constraints",
+    };
+}
+
+fn constraintFailureOrigin(failure: core.ConstraintFailure) ?[]const u8 {
+    if (failure.constraint.origin) |origin| return origin;
+    if (failure.existing_constraint) |constraint| return constraint.origin;
+    return null;
+}
+
+fn formatConstraintFailureMessage(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    failure: core.ConstraintFailure,
+    kind_text: []const u8,
+) ![]u8 {
+    var message = std.ArrayList(u8).empty;
+    errdefer message.deinit(allocator);
+    try message.appendSlice(allocator, kind_text);
+
+    const constraint_text = core.formatConstraint(ir.allocator, failure.constraint) catch "";
+    defer if (constraint_text.len > 0) ir.allocator.free(constraint_text);
+    if (constraint_text.len > 0) {
+        try message.appendSlice(allocator, "\nconstraint: ");
+        try message.appendSlice(allocator, constraint_text);
+    }
+
+    if (failure.existing_constraint) |constraint| {
+        const existing_text = core.formatConstraint(ir.allocator, constraint) catch "";
+        defer if (existing_text.len > 0) ir.allocator.free(existing_text);
+        if (existing_text.len > 0) {
+            try message.appendSlice(allocator, "\nother constraint: ");
+            try message.appendSlice(allocator, existing_text);
+        }
+    }
+
+    return try message.toOwnedSlice(allocator);
+}
 
 const LspRange = struct {
     start_line: usize = 0,

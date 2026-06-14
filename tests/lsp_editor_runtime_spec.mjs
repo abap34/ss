@@ -21,6 +21,7 @@ const coverDefinition = functionDefinitionLocation(defaultThemeUri, defaultTheme
 await testStdlibDefinitionOutsideWorkspace();
 await testLspConfiguration();
 await testLspDebouncesDocumentChanges();
+await testConstraintConflictDiagnosticMatchesCli();
 await testBrokenProjectConfigKeepsCompletionAlive();
 
 async function testStdlibDefinitionOutsideWorkspace() {
@@ -202,6 +203,44 @@ end
       assert(
         message.params.diagnostics.length === 0,
         `debounced diagnostics used an intermediate source: ${JSON.stringify(message.params.diagnostics)}`,
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testConstraintConflictDiagnosticMatchesCli() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-constraint-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+page broken
+let a = text!("A")
+~ a.left == page.left + 10
+~ a.left == page.left + 20
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      const conflict = diagnostics.find((diagnostic) => diagnostic.code === "ConstraintConflict");
+      assert(conflict, `constraint conflict diagnostic missing: ${JSON.stringify(diagnostics)}`);
+      assert(
+        conflict.message.includes("ConstraintConflict: constraint conflict"),
+        `constraint conflict message did not match CLI classification: ${JSON.stringify(conflict)}`,
+      );
+      assert(conflict.message.includes("constraint:"), `constraint text missing from LSP diagnostic: ${JSON.stringify(conflict)}`);
+      assert(conflict.range.start.line === 4, `constraint diagnostic pointed at the wrong line: ${JSON.stringify(conflict)}`);
+      assert(
+        !diagnostics.some((diagnostic) => diagnostic.code === "unresolved_frame"),
+        `secondary unresolved frame diagnostics leaked through: ${JSON.stringify(diagnostics)}`,
       );
     });
   } finally {

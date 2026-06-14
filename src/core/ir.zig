@@ -1084,6 +1084,7 @@ pub fn formatConstraint(allocator: Allocator, constraint: Constraint) ![]const u
         .page => |anchor| try std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
         .node => |source| try std.fmt.allocPrint(allocator, "#{d}.{s}", .{ source.node_id, @tagName(source.anchor) }),
     };
+    defer allocator.free(source_text);
     return std.fmt.allocPrint(
         allocator,
         "  - #{d}.{s} = {s} {s} {d:.1}",
