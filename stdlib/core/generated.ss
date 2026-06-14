@@ -40,6 +40,31 @@ fn need_titles() -> Void
   chk_titles(docctx())
 end
 
+fn numbered_item_role(counter_name: String) -> String
+  return "__ss.std.numbered:" ++ counter_name
+end
+
+fn/! numbered_item(counter_name: String, text_value: String) -> Object
+  return new(text_value, numbered_item_role(counter_name), "text")
+end
+
+fn set_numbered_item(item: Object, index: Number, format: String) -> Object
+  if !item.numbered_item_source?
+    item.numbered_item_source = content(item)
+  end
+  let source_text = item.numbered_item_source ?? content(item)
+  let numbered_text = replace(format, "{number}", str(index))
+  return set_content(item, replace(numbered_text, "{text}", source_text))
+end
+
+fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
+  foreach_enumerate(
+    doc_objs(docctx(), numbered_item_role(counter_name)),
+    set_numbered_item,
+    format
+  )
+end
+
 fn mk_pagenos!(doc: Document) -> Void
   foreach(pages(doc), (page_value: Page) |-> mk_pageno!(page_value))
 end

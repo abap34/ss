@@ -2576,6 +2576,60 @@ test "compiler semantics: foreach_enumerate checks callback argument order" {
     );
 }
 
+test "compiler semantics: stdlib numbering formats numbered items" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  numbered_item!("claim", "A")
+        \\end
+        \\
+        \\page two
+        \\  numbered_item!("claim", "B")
+        \\end
+        \\
+        \\document
+        \\  numbering!("claim", "Claim {number}: {text}")
+        \\end
+        \\
+    , "Claim 2: B");
+}
+
+test "compiler semantics: stdlib numbering keeps source text across repeated formatting" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  numbered_item!("claim", "A")
+        \\end
+        \\
+        \\document
+        \\  numbering!("claim", "First {number}: {text}")
+        \\  numbering!("claim", "Second {number}: {text}")
+        \\end
+        \\
+    , "Second 1: A");
+}
+
+test "compiler semantics: stdlib numbering keeps counters separate" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  numbered_item!("claim", "A")
+        \\  numbered_item!("definition", "B")
+        \\end
+        \\
+        \\document
+        \\  numbering!("claim", "Claim {number}: {text}")
+        \\  numbering!("definition", "Definition {number}: {text}")
+        \\end
+        \\
+    ;
+    try expectObjectContent(source, "Claim 1: A");
+    try expectObjectContent(source, "Definition 1: B");
+}
+
 test "compiler semantics: lambda bodies cannot be void" {
     try expectBuildFails(
         \\import std:themes/default as *
