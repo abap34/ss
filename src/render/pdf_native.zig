@@ -22,6 +22,7 @@ const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
 const Block = core.markdown.Block;
 const Run = core.markdown.Run;
+const TexPreambleEntry = core.render_env.TexPreambleEntry;
 
 const NativePdfError = error{
     CairoCreateFailed,
@@ -97,7 +98,7 @@ const PreloadTask = union(enum) {
 
 const MathPreload = struct {
     source: []const u8,
-    packages: []const []const u8,
+    preamble: []const TexPreambleEntry,
     kind: MathKind,
 };
 
@@ -120,10 +121,10 @@ const RenderOp = struct {
     link_id: ?[]const u8 = null,
     render: ResolvedRender,
     parse_mode: core.markdown.ParseMode,
-    math_packages: []const []const u8,
+    tex_preamble: []const TexPreambleEntry,
 
     fn deinit(self: *RenderOp, allocator: Allocator) void {
-        allocator.free(self.math_packages);
+        allocator.free(self.tex_preamble);
     }
 };
 
@@ -351,7 +352,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                     .link_id = core.nodeProperty(node, "link_id"),
                     .render = core.render_policy.resolveWithEnv(ir, node, sema),
                     .parse_mode = core.markdown.parseModeForNode(ir, node),
-                    .math_packages = try clonePackageSlice(ctx.allocator, env.math_latex_packages.items),
+                    .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
                 };
                 errdefer op.deinit(ctx.allocator);
                 try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
@@ -479,8 +480,7 @@ fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFi
     hashString(hasher, op.content);
     hashOptionalString(hasher, op.link_id);
     hashString(hasher, @tagName(op.parse_mode));
-    hashUsize(hasher, op.math_packages.len);
-    for (op.math_packages) |package| hashString(hasher, package);
+    try hashTexPreambleEntries(ctx, asset_fingerprints, hasher, op.tex_preamble);
     hashResolvedRender(hasher, op);
     switch (op.render.kind) {
         .vector_asset, .raster_asset => {
@@ -501,6 +501,30 @@ fn hashResolvedRender(hasher: *std.hash.Wyhash, op: *const RenderOp) void {
     hashChromePaint(hasher, render.chrome);
     hashUnderlinePaint(hasher, render.underline);
     hashRulePaint(hasher, render.rule);
+}
+
+fn hashTexPreambleEntries(
+    ctx: *DrawContext,
+    asset_fingerprints: ?*std.StringHashMap(FileFingerprint),
+    hasher: *std.hash.Wyhash,
+    preamble: []const TexPreambleEntry,
+) !void {
+    hashUsize(hasher, preamble.len);
+    for (preamble) |entry| {
+        hashString(hasher, @tagName(entry.source));
+        hashString(hasher, entry.value);
+        if (entry.source == .file) {
+            const source = try resolveAssetPath(ctx, entry.value);
+            defer ctx.allocator.free(source);
+            hashString(hasher, source);
+            const fingerprint = if (asset_fingerprints) |fingerprints|
+                try assetFileFingerprint(ctx, fingerprints, source)
+            else
+                try streamFileFingerprint(ctx, source);
+            hashBool(hasher, fingerprint.present);
+            hashU64(hasher, fingerprint.digest);
+        }
+    }
 }
 
 fn hashAssetFile(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, source: []const u8) !void {
@@ -696,7 +720,7 @@ fn collectOpPreloads(
         .vector_math => {
             try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, op.content),
-                .packages = try clonePackageSlice(ctx.allocator, op.math_packages),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
                 .kind = .block,
             } });
         },
@@ -737,12 +761,12 @@ fn collectTextOpPreloads(
         .block => {
             var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
             defer doc.deinit();
-            try collectMarkdownBlockPreloadsForPlan(ctx, doc.blocks.items, op.math_packages, tasks, seen, page_deps);
+            try collectMarkdownBlockPreloadsForPlan(ctx, doc.blocks.items, op.tex_preamble, tasks, seen, page_deps);
         },
         .inline_text => {
             var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
             defer layout.deinit(ctx.allocator);
-            try collectLinePreloadsForPlan(ctx, layout.lines.items, op.math_packages, tasks, seen, page_deps);
+            try collectLinePreloadsForPlan(ctx, layout.lines.items, op.tex_preamble, tasks, seen, page_deps);
         },
     }
 }
@@ -750,7 +774,7 @@ fn collectTextOpPreloads(
 fn collectMarkdownBlockPreloadsForPlan(
     ctx: *DrawContext,
     blocks: []const *Block,
-    packages: []const []const u8,
+    preamble: []const TexPreambleEntry,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
@@ -758,17 +782,17 @@ fn collectMarkdownBlockPreloadsForPlan(
     for (blocks) |block| {
         switch (block.kind) {
             .paragraph, .code_block => if (block.paragraph) |paragraph| {
-                try collectLinePreloadsForPlan(ctx, paragraph.lines.items, packages, tasks, seen, page_deps);
+                try collectLinePreloadsForPlan(ctx, paragraph.lines.items, preamble, tasks, seen, page_deps);
             },
             .bullet_list, .ordered_list => if (block.list) |list| {
                 for (list.items.items) |item| {
-                    try collectMarkdownBlockPreloadsForPlan(ctx, item.blocks.items, packages, tasks, seen, page_deps);
+                    try collectMarkdownBlockPreloadsForPlan(ctx, item.blocks.items, preamble, tasks, seen, page_deps);
                 }
             },
             .table => if (block.table) |table| {
                 for (table.rows.items) |row| {
                     for (row.cells.items) |cell| {
-                        try collectLinePreloadsForPlan(ctx, cell.lines.items, packages, tasks, seen, page_deps);
+                        try collectLinePreloadsForPlan(ctx, cell.lines.items, preamble, tasks, seen, page_deps);
                     }
                 }
             },
@@ -779,7 +803,7 @@ fn collectMarkdownBlockPreloadsForPlan(
 fn collectLinePreloadsForPlan(
     ctx: *DrawContext,
     lines: []const Line,
-    packages: []const []const u8,
+    preamble: []const TexPreambleEntry,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
@@ -798,7 +822,7 @@ fn collectLinePreloadsForPlan(
                     if (source.len > 0) {
                         try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                             .source = try ctx.allocator.dupe(u8, source),
-                            .packages = try clonePackageSlice(ctx.allocator, packages),
+                            .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                             .kind = .display,
                         } });
                     }
@@ -806,7 +830,7 @@ fn collectLinePreloadsForPlan(
                 },
                 .math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, run.text),
-                    .packages = try clonePackageSlice(ctx.allocator, packages),
+                    .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                     .kind = .inline_math,
                 } }),
                 .icon => if (run.icon) |source| try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{
@@ -1135,7 +1159,7 @@ fn collectNodePreloads(
             defer env.deinit(ctx.allocator);
             try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, node.content orelse ""),
-                .packages = try clonePackageSlice(ctx.allocator, env.math_latex_packages.items),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
                 .kind = .block,
             } });
         },
@@ -1179,36 +1203,36 @@ fn collectTextPreloads(
     if (core.markdown.shouldParseBlocksNode(ir, node)) {
         var doc = try core.markdown.parseMarkdownDocumentForNode(ctx.allocator, ir, node, content);
         defer doc.deinit();
-        try collectMarkdownBlockPreloads(ctx, doc.blocks.items, env.math_latex_packages.items, tasks, seen);
+        try collectMarkdownBlockPreloads(ctx, doc.blocks.items, env.tex_preamble.items, tasks, seen);
         return;
     }
 
     var layout = try core.markdown.parseTextLayoutForNode(ctx.allocator, ir, node, content);
     defer layout.deinit(ctx.allocator);
-    try collectLinePreloads(ctx, layout.lines.items, env.math_latex_packages.items, tasks, seen);
+    try collectLinePreloads(ctx, layout.lines.items, env.tex_preamble.items, tasks, seen);
 }
 
 fn collectMarkdownBlockPreloads(
     ctx: *DrawContext,
     blocks: []const *Block,
-    packages: []const []const u8,
+    preamble: []const TexPreambleEntry,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(void),
 ) !void {
     for (blocks) |block| {
         switch (block.kind) {
             .paragraph, .code_block => if (block.paragraph) |paragraph| {
-                try collectLinePreloads(ctx, paragraph.lines.items, packages, tasks, seen);
+                try collectLinePreloads(ctx, paragraph.lines.items, preamble, tasks, seen);
             },
             .bullet_list, .ordered_list => if (block.list) |list| {
                 for (list.items.items) |item| {
-                    try collectMarkdownBlockPreloads(ctx, item.blocks.items, packages, tasks, seen);
+                    try collectMarkdownBlockPreloads(ctx, item.blocks.items, preamble, tasks, seen);
                 }
             },
             .table => if (block.table) |table| {
                 for (table.rows.items) |row| {
                     for (row.cells.items) |cell| {
-                        try collectLinePreloads(ctx, cell.lines.items, packages, tasks, seen);
+                        try collectLinePreloads(ctx, cell.lines.items, preamble, tasks, seen);
                     }
                 }
             },
@@ -1219,7 +1243,7 @@ fn collectMarkdownBlockPreloads(
 fn collectLinePreloads(
     ctx: *DrawContext,
     lines: []const Line,
-    packages: []const []const u8,
+    preamble: []const TexPreambleEntry,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(void),
 ) !void {
@@ -1237,7 +1261,7 @@ fn collectLinePreloads(
                     if (source.len > 0) {
                         try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
                             .source = try ctx.allocator.dupe(u8, source),
-                            .packages = try clonePackageSlice(ctx.allocator, packages),
+                            .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                             .kind = .display,
                         } });
                     }
@@ -1245,7 +1269,7 @@ fn collectLinePreloads(
                 },
                 .math => try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
                     .source = try ctx.allocator.dupe(u8, run.text),
-                    .packages = try clonePackageSlice(ctx.allocator, packages),
+                    .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                     .kind = .inline_math,
                 } }),
                 .icon => if (run.icon) |source| try registerPreloadTask(ctx, tasks, seen, .{
@@ -1258,9 +1282,9 @@ fn collectLinePreloads(
     }
 }
 
-fn clonePackageSlice(allocator: Allocator, packages: []const []const u8) ![]const []const u8 {
-    const cloned = try allocator.alloc([]const u8, packages.len);
-    @memcpy(cloned, packages);
+fn cloneTexPreambleEntries(allocator: Allocator, preamble: []const TexPreambleEntry) ![]const TexPreambleEntry {
+    const cloned = try allocator.alloc(TexPreambleEntry, preamble.len);
+    @memcpy(cloned, preamble);
     return cloned;
 }
 
@@ -1292,7 +1316,7 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
     switch (task) {
         .math => |math| {
             allocator.free(math.source);
-            allocator.free(math.packages);
+            allocator.free(math.preamble);
         },
         .icon => |source| allocator.free(source),
         .vector_pdf => |source| allocator.free(source),
@@ -1302,7 +1326,7 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
 
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     return switch (task) {
-        .math => |math| cachedMathPath(ctx, math.source, math.packages, math.kind, "svg"),
+        .math => |math| cachedMathPath(ctx, math.source, math.preamble, math.kind, "svg"),
         .icon => |source| cachedIconPath(ctx, source, "svg"),
         .vector_pdf => |source| cachedAssetPath(ctx, "pdf", source, "svg"),
         .raster => |raster| cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png"),
@@ -1369,7 +1393,7 @@ fn buildAllCachedPreloadState(ctx: *DrawContext, task_count: usize) !PreloadCach
 fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
-            const out = try cachedMathPath(ctx, math.source, math.packages, math.kind, "svg");
+            const out = try cachedMathPath(ctx, math.source, math.preamble, math.kind, "svg");
             defer ctx.allocator.free(out);
             return fileExists(out);
         },
@@ -1395,7 +1419,7 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
 fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
     switch (task) {
         .math => |math| {
-            const out = try cachedMathPath(ctx, math.source, math.packages, math.kind, "svg");
+            const out = try cachedMathPath(ctx, math.source, math.preamble, math.kind, "svg");
             defer ctx.allocator.free(out);
             return (try cachedSvgAsset(ctx, out)) != null;
         },
@@ -1515,7 +1539,7 @@ fn preloadWorker(work: *PreloadWork) void {
 fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
     switch (task) {
         .math => |math| {
-            const svg = try renderMathToSvg(ctx, math.source, math.packages, math.kind);
+            const svg = try renderMathToSvg(ctx, math.source, math.preamble, math.kind);
             ctx.allocator.free(svg.path);
         },
         .icon => |source| {
@@ -1679,14 +1703,14 @@ fn drawTextNode(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame: 
     if (core.markdown.shouldParseBlocksNode(ir, node)) {
         var doc = try core.markdown.parseMarkdownDocumentForNode(ctx.allocator, ir, node, content);
         defer doc.deinit();
-        _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, env.math_latex_packages.items);
+        _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, env.tex_preamble.items);
         return;
     }
 
     var layout = try core.markdown.parseTextLayoutForNode(ctx.allocator, ir, node, content);
     defer layout.deinit(ctx.allocator);
     const baseline = baselineBlForBox(frame, text.font_size);
-    _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, env.math_latex_packages.items);
+    _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, env.tex_preamble.items);
 }
 
 fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPaint) !void {
@@ -1695,40 +1719,40 @@ fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPa
         .block => {
             var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
             defer doc.deinit();
-            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, op.math_packages);
+            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, op.tex_preamble);
         },
         .inline_text => {
             var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
             defer layout.deinit(ctx.allocator);
             const baseline = baselineBlForBox(frame, text.font_size);
-            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, op.math_packages);
+            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, op.tex_preamble);
         },
     }
 }
 
-fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize, packages: []const []const u8) anyerror!f32 {
-    return drawMarkdownBlocksAt(ctx, frame, baselineBlForBox(frame, text.font_size), blocks, text, list_depth, packages);
+fn drawMarkdownBlocks(ctx: *DrawContext, frame: Frame, blocks: []const *Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) anyerror!f32 {
+    return drawMarkdownBlocksAt(ctx, frame, baselineBlForBox(frame, text.font_size), blocks, text, list_depth, preamble);
 }
 
-fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize, packages: []const []const u8) anyerror!f32 {
+fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, blocks: []const *Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) anyerror!f32 {
     var cursor_bl = baseline_bl;
     for (blocks, 0..) |block, index| {
         switch (block.kind) {
             .paragraph => {
                 if (block.paragraph) |paragraph| {
-                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, true, packages);
+                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, true, preamble);
                 }
             },
             .code_block => cursor_bl = try drawMarkdownCodeBlock(ctx, frame.x, cursor_bl, frame.width, block, text),
-            .bullet_list, .ordered_list => cursor_bl = try drawList(ctx, frame, cursor_bl, block, text, list_depth, packages),
-            .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text, packages),
+            .bullet_list, .ordered_list => cursor_bl = try drawList(ctx, frame, cursor_bl, block, text, list_depth, preamble),
+            .table => cursor_bl = try drawTable(ctx, frame.x, cursor_bl, frame.width, block, text, preamble),
         }
         if (index + 1 < blocks.len) cursor_bl -= text.markdown_block_gap;
     }
     return cursor_bl;
 }
 
-fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize, packages: []const []const u8) anyerror!f32 {
+fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) anyerror!f32 {
     const list = block.list orelse return baseline_bl;
     var cursor_bl = baseline_bl;
     const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
@@ -1746,7 +1770,7 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
             .width = @max(item_width - marker_width - @max(@as(f32, 8.0), text.font_size * 0.35), 1),
             .height = frame.height,
         };
-        cursor_bl = try drawMarkdownBlocksAt(ctx, content_frame, cursor_bl, item.blocks.items, text, list_depth + 1, packages);
+        cursor_bl = try drawMarkdownBlocksAt(ctx, content_frame, cursor_bl, item.blocks.items, text, list_depth + 1, preamble);
         if (item_index + 1 < list.items.items.len) cursor_bl -= text.markdown_block_gap;
     }
     return cursor_bl;
@@ -1813,7 +1837,7 @@ fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, physical_lin
     };
 }
 
-fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, packages: []const []const u8) !f32 {
+fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
     const table = block.table orelse return baseline_bl;
     const columns = @max(table.columns, 1);
     const column_width = width / @as(f32, @floatFromInt(columns));
@@ -1826,7 +1850,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         for (row.cells.items) |cell| {
             var cell_text = text;
             cell_text.font = if (row.header) text.bold_font else text.font;
-            row_lines = @max(row_lines, try markdownTableCellVisualLineCount(ctx, cell.lines.items, cell_text, content_width, packages));
+            row_lines = @max(row_lines, try markdownTableCellVisualLineCount(ctx, cell.lines.items, cell_text, content_width, preamble));
         }
         const row_height = @as(f32, @floatFromInt(row_lines)) * text.line_height + text.markdown_table_cell_pad_y * 2;
         const row_bottom = cursor_top_bl - row_height;
@@ -1866,7 +1890,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
                 var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - text.font_size;
                 for (cell.lines.items) |line| {
                     const one_line = [_]Line{line};
-                    line_bl = try drawInlineLines(ctx, cell_x + text.markdown_table_cell_pad_x, line_bl, content_width, one_line[0..], cell_text, true, packages);
+                    line_bl = try drawInlineLines(ctx, cell_x + text.markdown_table_cell_pad_x, line_bl, content_width, one_line[0..], cell_text, true, preamble);
                 }
             }
         }
@@ -1875,52 +1899,52 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
     return cursor_top_bl - text.font_size;
 }
 
-fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
     if (lines.len == 0) return 1;
     var total: usize = 0;
     for (lines) |line| {
-        total += try markdownTableLineVisualLineCount(ctx, line, text, max_width, packages);
+        total += try markdownTableLineVisualLineCount(ctx, line, text, max_width, preamble);
     }
     return @max(total, 1);
 }
 
-fn markdownTableLineVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+fn markdownTableLineVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
     if (lineContainsDisplayMath(line)) {
-        return try lineWithDisplayMathVisualLineCount(ctx, line, text, max_width, packages);
+        return try lineWithDisplayMathVisualLineCount(ctx, line, text, max_width, preamble);
     }
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutAtoms(ctx, line, text, packages, &atoms);
+    try layoutAtoms(ctx, line, text, preamble, &atoms);
     return atomVisualLineCount(atoms.items, atomPaint(text), max_width);
 }
 
-fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
+fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
     var cursor_bl = baseline_bl;
     for (lines) |line| {
         if (lineContainsDisplayMath(line)) {
-            cursor_bl = try drawLineWithDisplayMath(ctx, x, cursor_bl, width, line, text, wrap, packages);
+            cursor_bl = try drawLineWithDisplayMath(ctx, x, cursor_bl, width, line, text, wrap, preamble);
             continue;
         }
         var atoms = std.ArrayList(Atom).empty;
         defer atoms.deinit(ctx.allocator);
         defer freeAtoms(ctx.allocator, atoms.items);
-        try layoutAtoms(ctx, line, text, packages, &atoms);
+        try layoutAtoms(ctx, line, text, preamble, &atoms);
         cursor_bl = try drawAtoms(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
 }
 
-fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, packages: []const []const u8, atoms: *std.ArrayList(Atom)) !void {
-    try layoutRunAtoms(ctx, line.runs.items, text, packages, atoms);
+fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, preamble: []const TexPreambleEntry, atoms: *std.ArrayList(Atom)) !void {
+    try layoutRunAtoms(ctx, line.runs.items, text, preamble, atoms);
 }
 
-fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, packages: []const []const u8, atoms: *std.ArrayList(Atom)) !void {
+fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, preamble: []const TexPreambleEntry, atoms: *std.ArrayList(Atom)) !void {
     for (runs) |run| {
         switch (run.kind) {
             .math, .display_math => {
-                try appendMathAtom(ctx, atoms, run.text, text, packages, if (run.kind == .display_math) .display else .inline_math);
+                try appendMathAtom(ctx, atoms, run.text, text, preamble, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
             .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough),
@@ -1939,7 +1963,7 @@ fn lineContainsDisplayMath(line: Line) bool {
     return false;
 }
 
-fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
+fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
     const runs = line.runs.items;
     var cursor_bl = baseline_bl;
     var segment_start: usize = 0;
@@ -1951,7 +1975,7 @@ fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f
         }
 
         if (segment_start < index) {
-            cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, packages);
+            cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, preamble);
         }
 
         const display_start = index;
@@ -1959,28 +1983,28 @@ fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f
         const source = try displayMathSource(ctx.allocator, runs[display_start..index]);
         defer ctx.allocator.free(source);
         if (source.len > 0) {
-            cursor_bl = try drawDisplayMathBlock(ctx, x, cursor_bl, width, source, text, packages);
+            cursor_bl = try drawDisplayMathBlock(ctx, x, cursor_bl, width, source, text, preamble);
         }
         segment_start = index;
     }
 
     if (segment_start < runs.len) {
-        cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, packages);
+        cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, preamble);
     }
     return cursor_bl;
 }
 
-fn drawInlineRunSlice(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, packages: []const []const u8) !f32 {
+fn drawInlineRunSlice(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, packages, &atoms);
+    try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
     if (atoms.items.len == 0) return baseline_bl;
     return try drawAtoms(ctx, x, baseline_bl, width, atoms.items, atomPaint(text), wrap);
 }
 
-fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, packages: []const []const u8) !f32 {
-    const svg = try renderMathToSvg(ctx, source, packages, .display);
+fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
+    const svg = try renderMathToSvg(ctx, source, preamble, .display);
     defer ctx.allocator.free(svg.path);
 
     const block_height = displayMathBlockHeight(source, text);
@@ -2005,7 +2029,7 @@ fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32,
     return block_bottom - text.font_size;
 }
 
-fn lineWithDisplayMathVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+fn lineWithDisplayMathVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
     const runs = line.runs.items;
     var total: usize = 0;
     var segment_start: usize = 0;
@@ -2016,7 +2040,7 @@ fn lineWithDisplayMathVisualLineCount(ctx: *DrawContext, line: Line, text: TextP
             continue;
         }
         if (segment_start < index) {
-            total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..index], text, max_width, packages);
+            total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..index], text, max_width, preamble);
         }
         const display_start = index;
         while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
@@ -2028,16 +2052,16 @@ fn lineWithDisplayMathVisualLineCount(ctx: *DrawContext, line: Line, text: TextP
         segment_start = index;
     }
     if (segment_start < runs.len) {
-        total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..], text, max_width, packages);
+        total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..], text, max_width, preamble);
     }
     return @max(total, 1);
 }
 
-fn inlineRunSliceVisualLineCount(ctx: *DrawContext, runs: []const Run, text: TextPaint, max_width: f32, packages: []const []const u8) !usize {
+fn inlineRunSliceVisualLineCount(ctx: *DrawContext, runs: []const Run, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, packages, &atoms);
+    try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
     if (atoms.items.len == 0) return 0;
     return atomVisualLineCount(atoms.items, atomPaint(text), max_width);
 }
@@ -2091,8 +2115,8 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
     }
 }
 
-fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, packages: []const []const u8, kind: MathKind) !void {
-    const svg = try renderMathToSvg(ctx, value, packages, kind);
+fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, text: TextPaint, preamble: []const TexPreambleEntry, kind: MathKind) !void {
+    const svg = try renderMathToSvg(ctx, value, preamble, kind);
     errdefer ctx.allocator.free(svg.path);
     const target_height = @max(text.font_size * text.inline_math_height_factor, 1);
     const scale = if (svg.height > 0) target_height / svg.height else 1;
@@ -2394,7 +2418,7 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame: Frame, content: []const u8, math: ?MathPaint) !void {
     var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
     defer env.deinit(ctx.allocator);
-    const svg = try renderMathToSvg(ctx, content, env.math_latex_packages.items, .block);
+    const svg = try renderMathToSvg(ctx, content, env.tex_preamble.items, .block);
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, content, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
@@ -2409,7 +2433,7 @@ fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame
 }
 
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
-    const svg = try renderMathToSvg(ctx, op.content, op.math_packages, .block);
+    const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, .block);
     defer ctx.allocator.free(svg.path);
     const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
@@ -2998,8 +3022,8 @@ fn pdfToSvg(ctx: *DrawContext, source: []const u8) ![]const u8 {
     return out;
 }
 
-fn renderMathToSvg(ctx: *DrawContext, source: []const u8, packages: []const []const u8, kind: MathKind) !SvgAsset {
-    const out = try cachedMathPath(ctx, source, packages, kind, "svg");
+fn renderMathToSvg(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind) !SvgAsset {
+    const out = try cachedMathPath(ctx, source, preamble, kind, "svg");
     errdefer ctx.allocator.free(out);
     if (try cachedSvgAsset(ctx, out)) |asset| return asset;
     const dir = try tempCachePath(ctx, out, "dir");
@@ -3011,7 +3035,7 @@ fn renderMathToSvg(ctx: *DrawContext, source: []const u8, packages: []const []co
     defer ctx.allocator.free(tex_path);
     const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
     defer ctx.allocator.free(pdf_path);
-    const tex = try mathDocumentSource(ctx.allocator, source, packages, kind);
+    const tex = try mathDocumentSource(ctx, source, preamble, kind);
     defer ctx.allocator.free(tex);
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
     try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
@@ -3102,12 +3126,12 @@ fn isValidIconName(name: []const u8) bool {
     return true;
 }
 
-fn mathDocumentSource(allocator: Allocator, source: []const u8, packages: []const []const u8, kind: MathKind) ![]const u8 {
-    const package_lines = try mathPackageLines(allocator, packages);
-    defer allocator.free(package_lines);
-    const fragment = try mathTexFragment(allocator, source, kind);
-    defer allocator.free(fragment);
-    return std.fmt.allocPrint(allocator,
+fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind) ![]const u8 {
+    const preamble_lines = try mathPreambleLines(ctx, preamble);
+    defer ctx.allocator.free(preamble_lines);
+    const fragment = try mathTexFragment(ctx.allocator, source, kind);
+    defer ctx.allocator.free(fragment);
+    return std.fmt.allocPrint(ctx.allocator,
         \\ \documentclass[border=0pt]{{standalone}}
         \\ \usepackage{{amsmath,amssymb}}
         \\ \usepackage{{graphicx}}
@@ -3117,7 +3141,7 @@ fn mathDocumentSource(allocator: Allocator, source: []const u8, packages: []cons
         \\{s}
         \\ \end{{document}}
         \\
-    , .{ package_lines, fragment });
+    , .{ preamble_lines, fragment });
 }
 
 fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]const u8 {
@@ -3145,20 +3169,31 @@ fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]
     }
 }
 
-fn mathPackageLines(allocator: Allocator, packages: []const []const u8) ![]const u8 {
+fn mathPreambleLines(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]const u8 {
+    const allocator = ctx.allocator;
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    for (packages) |package| {
-        if (!core.render_env.isValidLatexPackageName(package)) continue;
-        if (std.mem.eql(u8, package, "amsmath") or
-            std.mem.eql(u8, package, "amssymb") or
-            std.mem.eql(u8, package, "graphicx") or
-            std.mem.eql(u8, package, "xcolor")) continue;
-        const line = try std.fmt.allocPrint(allocator, "\n \\usepackage{{{s}}}", .{package});
-        defer allocator.free(line);
-        try out.appendSlice(allocator, line);
+    for (preamble) |entry| {
+        const text = switch (entry.source) {
+            .text => entry.value,
+            .file => try readTexPreambleFile(ctx, entry.value),
+        };
+        defer if (entry.source == .file) allocator.free(text);
+        if (std.mem.trim(u8, text, " \t\r\n").len == 0) continue;
+        try out.append(allocator, '\n');
+        try out.appendSlice(allocator, text);
+        if (text[text.len - 1] != '\n') try out.append(allocator, '\n');
     }
     return try out.toOwnedSlice(allocator);
+}
+
+fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
+    const resolved = try resolveAssetPath(ctx, path);
+    defer ctx.allocator.free(resolved);
+    return std.Io.Dir.cwd().readFileAlloc(ctx.io, resolved, ctx.allocator, .unlimited) catch |err| {
+        std.debug.print("native pdf: TeX preamble file not found: {s} (resolved: {s})\n", .{ path, resolved });
+        return err;
+    };
 }
 
 fn cachedAssetPath(ctx: *DrawContext, kind: []const u8, source: []const u8, extension: []const u8) ![]u8 {
@@ -3199,14 +3234,13 @@ fn cachedTextPath(ctx: *DrawContext, kind: []const u8, source: []const u8, exten
     return std.fmt.allocPrint(ctx.allocator, "{s}/{s}-{x}.{s}", .{ ctx.cache_dir, kind, hasher.final(), extension });
 }
 
-fn cachedMathPath(ctx: *DrawContext, source: []const u8, packages: []const []const u8, kind: MathKind, extension: []const u8) ![]u8 {
+fn cachedMathPath(ctx: *DrawContext, source: []const u8, preamble: []const TexPreambleEntry, kind: MathKind, extension: []const u8) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, native_artifact_cache_version);
     hashString(&hasher, "math");
     hashString(&hasher, @tagName(kind));
     hashString(&hasher, source);
-    hashUsize(&hasher, packages.len);
-    for (packages) |package| hashString(&hasher, package);
+    try hashTexPreambleEntries(ctx, null, &hasher, preamble);
     return std.fmt.allocPrint(ctx.allocator, "{s}/math-{x}.{s}", .{ ctx.cache_dir, hasher.final(), extension });
 }
 

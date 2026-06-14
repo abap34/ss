@@ -193,11 +193,11 @@ fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, ir: anytype, node: 
     errdefer op.deinit(allocator);
     var env = try @import("render_env.zig").resolveForNode(allocator, ir, node);
     defer env.deinit(allocator);
-    const packages = try @import("render_env.zig").joinMathLatexPackages(allocator, env);
-    defer allocator.free(packages);
+    const preamble = try @import("render_env.zig").joinTexPreambleEntries(allocator, env);
+    defer allocator.free(preamble);
     try op.put(allocator, "capability", "compile_math");
     try op.put(allocator, "source", node.content orelse "");
-    try op.put(allocator, "math_latex_packages", packages);
+    try op.put(allocator, "math_tex_preamble", preamble);
     try op.putFloat(allocator, "scale", math.scale);
     try op.putColor(allocator, "color", math.color);
     try op.put(allocator, "align", @tagName(math.horizontal_align));

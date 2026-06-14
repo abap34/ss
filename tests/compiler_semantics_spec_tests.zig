@@ -696,6 +696,29 @@ test "compiler semantics: math alignment helpers are stdlib functions" {
     );
 }
 
+test "compiler semantics: TeX preamble helpers extend scoped render environment" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\
+        \\document
+        \\tex_preamble("doc preamble")
+        \\tex_preamble_file("tex/preamble.tex")
+        \\end
+        \\
+        \\page ok
+        \\  page_tex_preamble("page preamble")
+        \\  page_tex_preamble_file("tex/page.tex")
+        \\  tex("x")
+        \\end
+        \\
+    , &.{
+        "\"source\":\"text\",\"value\":\"doc preamble\"",
+        "\"source\":\"file\",\"value\":\"tex/preamble.tex\"",
+        "\"source\":\"text\",\"value\":\"page preamble\"",
+        "\"source\":\"file\",\"value\":\"tex/page.tex\"",
+    });
+}
+
 test "compiler semantics: enum cases type function parameters" {
     try buildSource(
         \\import std:themes/default as *

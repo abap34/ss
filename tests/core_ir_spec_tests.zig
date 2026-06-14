@@ -80,3 +80,26 @@ test "core IR spec: render environment entries are deduplicated by full triple" 
     const node = ir.getNode(object).?;
     try testing.expectEqual(@as(usize, 3), node.render_env.items.len);
 }
+
+test "core IR spec: TeX preamble render environment resolves in document page object order" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "math", null, .text, .math_tex, "x");
+
+    try ir.extendRenderEnv(ir.document_id, core.render_env.OpAdd, core.render_env.KeyMathTexPreamble, "doc preamble");
+    try ir.extendRenderEnv(page, core.render_env.OpAdd, core.render_env.KeyMathTexPreambleFile, "page.tex");
+    try ir.extendRenderEnv(object, core.render_env.OpAdd, core.render_env.KeyMathTexPreamble, "object preamble");
+
+    var env = try core.render_env.resolveForNode(testing.allocator, &ir, ir.getNode(object).?);
+    defer env.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 3), env.tex_preamble.items.len);
+    try testing.expectEqual(core.render_env.TexPreambleSource.text, env.tex_preamble.items[0].source);
+    try testing.expectEqualStrings("doc preamble", env.tex_preamble.items[0].value);
+    try testing.expectEqual(core.render_env.TexPreambleSource.file, env.tex_preamble.items[1].source);
+    try testing.expectEqualStrings("page.tex", env.tex_preamble.items[1].value);
+    try testing.expectEqual(core.render_env.TexPreambleSource.text, env.tex_preamble.items[2].source);
+    try testing.expectEqualStrings("object preamble", env.tex_preamble.items[2].value);
+}

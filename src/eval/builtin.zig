@@ -408,11 +408,11 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const key = try ctx.evalStringArg(call, 2);
             const value = try ctx.evalStringArg(call, 3);
             if (!core.render_env.isSupported(op, key)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported v1 render environment operation is add math.latex.packages");
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: supported render environment operations are add math.tex.preamble and add math.tex.preamble.file");
                 break :blk target;
             }
-            if (!core.render_env.isValidLatexPackageName(value)) {
-                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: invalid LaTeX package name");
+            if (core.render_env.isTexPreambleFileKey(key) and !core.render_env.isValidTexPreambleFilePath(value)) {
+                try ctx.emitDiagnosticReport(.@"error", "InvalidRenderEnv: empty TeX preamble file path");
                 break :blk target;
             }
             break :blk switch (target) {

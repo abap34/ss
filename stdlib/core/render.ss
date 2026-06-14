@@ -15,17 +15,20 @@ fn rewrite(obj: Object, old_value: String, new_value: String) -> Object
   return obj
 end
 
-fn pkg(name: String) -> Void
-  extend_render_env(docctx(), "add", "math.latex.packages", name)
+fn tex_preamble(src: String) -> Void
+  extend_render_env(docctx(), "add", "math.tex.preamble", src)
 end
 
-fn page_pkg(name: String) -> Void
-  extend_render_env(pagectx(), "add", "math.latex.packages", name)
+fn page_tex_preamble(src: String) -> Void
+  extend_render_env(pagectx(), "add", "math.tex.preamble", src)
 end
 
-fn obj_pkg(obj: Object, name: String) -> Object
-  extend_render_env(obj, "add", "math.latex.packages", name)
-  return obj
+fn tex_preamble_file(path: String) -> Void
+  extend_render_env(docctx(), "add", "math.tex.preamble.file", path)
+end
+
+fn page_tex_preamble_file(path: String) -> Void
+  extend_render_env(pagectx(), "add", "math.tex.preamble.file", path)
 end
 
 fn link(obj: Object, id: String) -> Object

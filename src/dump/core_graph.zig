@@ -103,11 +103,16 @@ fn writeProperties(object: *json.Object, properties: anytype) !void {
 fn writeRenderEnv(object: *json.Object, env: core.render_env.Resolved) !void {
     var root = try object.objectField("render_env");
     var math = try root.objectField("math");
-    var latex = try math.objectField("latex");
-    var packages = try latex.arrayField("packages");
-    for (env.math_latex_packages.items) |package| try packages.stringItem(package);
-    try packages.end();
-    try latex.end();
+    var tex = try math.objectField("tex");
+    var preamble = try tex.arrayField("preamble");
+    for (env.tex_preamble.items) |entry| {
+        var item = try preamble.objectItem();
+        try item.enumTagField("source", entry.source);
+        try item.stringField("value", entry.value);
+        try item.end();
+    }
+    try preamble.end();
+    try tex.end();
     try math.end();
     try root.end();
 }

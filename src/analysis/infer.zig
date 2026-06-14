@@ -847,7 +847,9 @@ fn validateExtendRenderEnvCall(
         }
     }
     if (key) |literal| {
-        if (!std.mem.eql(u8, literal, core.render_env.KeyMathLatexPackages)) {
+        if (!std.mem.eql(u8, literal, core.render_env.KeyMathTexPreamble) and
+            !std.mem.eql(u8, literal, core.render_env.KeyMathTexPreambleFile))
+        {
             try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
             return error.InvalidType;
         }
@@ -856,10 +858,10 @@ fn validateExtendRenderEnvCall(
         try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
         return error.InvalidType;
     }
-    if (key != null and std.mem.eql(u8, key.?, core.render_env.KeyMathLatexPackages)) {
-        if (resolveStringLiteral(env, call.args.items[3])) |package| {
-            if (!core.render_env.isValidLatexPackageName(package)) {
-                try addUserReport(ir, origin, "InvalidRenderEnv: invalid LaTeX package name: {s}", .{package});
+    if (key != null and core.render_env.isTexPreambleFileKey(key.?)) {
+        if (resolveStringLiteral(env, call.args.items[3])) |path| {
+            if (!core.render_env.isValidTexPreambleFilePath(path)) {
+                try addUserReport(ir, origin, "InvalidRenderEnv: empty TeX preamble file path", .{});
                 return error.InvalidType;
             }
         }
