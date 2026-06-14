@@ -30,6 +30,7 @@ const defaultThemeH2Definition = functionDefinitionLocation(defaultThemeUri, def
 
 await testProjectCompletionLifecycle();
 await testQualifiedModuleCompletion();
+await testBrokenTypeNameCompletion();
 await testColdBrokenEntryCompletion();
 await testMultilineEntryCompletion();
 
@@ -197,7 +198,7 @@ end
       assertUniqueCompletionLabels(completion, "qualified completion");
       assertCompletionHas(completion, "h2", "qualified completion");
       assertCompletionHas(completion, "h2!", "qualified completion");
-      assertCompletionMissing(completion, ["page", "text_size"], "qualified completion");
+      assertCompletionMissing(completion, ["page", "text_size", "String", "Align"], "qualified completion");
 
       const definition = await client.request("textDocument/definition", {
         textDocument: { uri: localUri },
@@ -220,6 +221,27 @@ end
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+async function testBrokenTypeNameCompletion() {
+  const brokenTypeSource = `import std:themes/default as *
+
+type LocalMode = alpha | beta
+type LocalCard = object {
+}
+
+fn keep(value: ) -> LocalMode
+  return LocalMode.alpha
+end
+`;
+  const completion = await completionInTempProject("ss-lsp-broken-type-", brokenTypeSource, positionAfter(brokenTypeSource, "value: "));
+  assertUniqueCompletionLabels(completion, "broken type-name completion");
+  assertCompletionHas(completion, "String", "broken type-name completion");
+  assertCompletionHas(completion, "Object", "broken type-name completion");
+  assertCompletionHas(completion, "Selection", "broken type-name completion");
+  assertCompletionHas(completion, "LocalMode", "broken type-name completion");
+  assertCompletionHas(completion, "LocalCard", "broken type-name completion");
+  assertCompletionMissing(completion, ["text_size"], "broken type-name completion");
 }
 
 async function testColdBrokenEntryCompletion() {
@@ -293,7 +315,7 @@ asset_base_dir = "."
 function assertPropertyCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
   assertCompletionHas(completion, "text_size", label);
-  assertCompletionMissing(completion, ["page", "add"], label);
+  assertCompletionMissing(completion, ["page", "add", "String"], label);
 }
 
 function assertSameLabels(left, right, label) {
