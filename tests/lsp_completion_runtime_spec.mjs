@@ -76,6 +76,7 @@ end
       position: positionAfter(libraryBrokenSource, "t."),
     });
     assertPropertyCompletion(libraryMemberCompletion, "imported library member completion");
+    await client.waitForDiagnostics(partsUri);
 
     const repeatedLibraryCompletion = await client.request("textDocument/completion", {
       textDocument: { uri: partsUri },
@@ -108,6 +109,7 @@ end
       position: positionAfter(unimportedLibraryBrokenSource, "t."),
     });
     assertPropertyCompletion(unimportedBrokenCompletion, "unimported library broken completion");
+    await client.waitForDiagnostics(themeTempUri);
 
     const brokenDiagnosticsPromise = client.waitForDiagnostics(uri);
     client.changeDocumentRange({
@@ -302,4 +304,3 @@ function assertSameLabels(left, right, label) {
     `${label} changed labels between identical requests: ${JSON.stringify({ left: leftLabels, right: rightLabels })}`,
   );
 }
-

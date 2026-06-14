@@ -20,6 +20,7 @@ const coverDefinition = functionDefinitionLocation(defaultThemeUri, defaultTheme
 
 await testStdlibDefinitionOutsideWorkspace();
 await testLspConfiguration();
+await testLspDebouncesDocumentChanges();
 await testBrokenProjectConfigKeepsCompletionAlive();
 
 async function testStdlibDefinitionOutsideWorkspace() {
@@ -161,6 +162,48 @@ asset_base_dir = "."
       completionPosition: { line: 0, character: 0 },
     });
     assertCompletionHas(broken.completion, "page", "broken ss.toml completion");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testLspDebouncesDocumentChanges() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-debounce-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    await writeFile(path.join(project, "ss.toml"), `[project]
+entry = "slide.ss"
+asset_base_dir = "."
+
+[editor.lsp]
+debounce = 120
+`, "utf8");
+    const initial = `page initial
+end
+`;
+    const invalid = `pag broken
+`;
+    const fixed = `page fixed
+end
+`;
+    await writeFile(slide, initial, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const initialDiagnostics = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: initial });
+      await initialDiagnostics;
+
+      const debouncedDiagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 2, text: invalid });
+      client.changeDocument({ uri, version: 3, text: fixed });
+      const message = await debouncedDiagnostics;
+      assert(
+        message.params.diagnostics.length === 0,
+        `debounced diagnostics used an intermediate source: ${JSON.stringify(message.params.diagnostics)}`,
+      );
+    });
   } finally {
     await rm(project, { recursive: true, force: true });
   }
