@@ -21,6 +21,12 @@ test "language registry spec: semantic contracts live on primitive descriptors" 
     try testing.expectEqual(@as(usize, 1), foreach.callback.?.supplied_arg_count);
     try testing.expectEqual(registry.PrimitiveResultPolicy.first_arg, foreach.result_policy);
 
+    const foreach_enumerate = registry.lookupPrimitiveCall("foreach_enumerate").?;
+    try testing.expect(foreach_enumerate.callback != null);
+    try testing.expectEqual(@as(usize, 1), foreach_enumerate.callback.?.function_arg_index);
+    try testing.expectEqual(@as(usize, 2), foreach_enumerate.callback.?.supplied_arg_count);
+    try testing.expectEqual(registry.PrimitiveResultPolicy.first_arg, foreach_enumerate.result_policy);
+
     const fold = registry.lookupPrimitiveCall("fold").?;
     try testing.expect(fold.callback != null);
     try testing.expectEqual(@as(usize, 2), fold.callback.?.function_arg_index);

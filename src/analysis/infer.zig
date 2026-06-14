@@ -570,6 +570,7 @@ fn primitiveResultTypeInfo(
                 env,
                 call,
                 origin,
+                descriptor,
                 callback.function_arg_index,
                 selection_info,
                 callback.supplied_arg_count,
@@ -636,6 +637,7 @@ fn validateCallbackShape(
     env: *const TypeEnv,
     call: ast.CallExpr,
     origin: []const u8,
+    descriptor: registry.PrimitiveDescriptor,
     function_arg_index: usize,
     selection_info: TypeInfo,
     supplied_arg_count: usize,
@@ -667,8 +669,17 @@ fn validateCallbackShape(
     if (supplied_arg_count == 1) {
         try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
     } else if (supplied_arg_count == 2) {
-        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
-        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
+        switch (descriptor.op) {
+            .fold => {
+                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
+                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
+            },
+            .foreach_enumerate => {
+                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
+                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), Type.number, origin, .UnmatchedArgumentType);
+            },
+            else => {},
+        }
     }
     var extra_index: usize = 0;
     while (extra_index < extra_count) : (extra_index += 1) {

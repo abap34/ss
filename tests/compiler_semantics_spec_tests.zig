@@ -2537,6 +2537,45 @@ test "compiler semantics: fold accepts an inline typed lambda" {
     , "12");
 }
 
+test "compiler semantics: foreach_enumerate passes one-based indices" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\fn number_body(item: Object, index: Number) -> Object
+        \\  return set_content(item, str(index) ++ ":" ++ content(item))
+        \\end
+        \\
+        \\page one
+        \\  text!("A")
+        \\end
+        \\
+        \\page two
+        \\  text!("B")
+        \\end
+        \\
+        \\document
+        \\  foreach_enumerate(doc_objs(docctx(), "body"), number_body)
+        \\end
+        \\
+    , "2:B");
+}
+
+test "compiler semantics: foreach_enumerate checks callback argument order" {
+    try expectBuildFails(
+        \\import std:themes/default as *
+        \\
+        \\fn wrong(index: String, item: Object) -> Object
+        \\  return item
+        \\end
+        \\
+        \\page bad
+        \\  text("A")
+        \\  foreach_enumerate(doc_objs(docctx(), "body"), wrong)
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: lambda bodies cannot be void" {
     try expectBuildFails(
         \\import std:themes/default as *
@@ -2717,6 +2756,20 @@ test "compiler semantics: foreach cannot create pages while iterating pages" {
         \\
         \\document
         \\  foreach(pages(docctx()), (page_value: Page) |-> new_page(docctx(), "extra"))
+        \\end
+        \\
+        \\page bad
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: foreach_enumerate cannot create pages while iterating pages" {
+    try expectBuildFails(
+        \\import std:themes/default as *
+        \\
+        \\document
+        \\  foreach_enumerate(pages(docctx()), (page_value: Page, index: Number) |-> new_page(docctx(), str(index)))
         \\end
         \\
         \\page bad
