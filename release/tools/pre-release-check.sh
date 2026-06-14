@@ -9,6 +9,8 @@ Run the local checks that should pass before creating and pushing a release tag.
 
 Options:
   --allow-dirty   Allow tracked working tree changes while debugging this script.
+  --release-metadata-only
+                  Verify HEAD only changes release metadata, then skip Zig tests and smoke checks.
   --skip-docker   Skip the render Docker image build and container run.
   -h, --help      Show this help.
 
@@ -74,14 +76,54 @@ run_with_timeout() {
   return "$status"
 }
 
+is_release_metadata_path() {
+  case "$1" in
+    release/VERSION | \
+      release/CHANGELOG.md | \
+      editor/vscode/package.json | \
+      editor/vscode/package-lock.json | \
+      editor/tree-sitter-ss/package.json | \
+      editor/tree-sitter-ss/package-lock.json | \
+      editor/tree-sitter-ss/tree-sitter.json | \
+      editor/tree-sitter-ss/src/parser.c)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+assert_release_metadata_only_head() {
+  local changed_count=0
+  local path
+
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    changed_count=$((changed_count + 1))
+    if ! is_release_metadata_path "$path"; then
+      fail "--release-metadata-only requires HEAD to change only release metadata, but HEAD changes: $path"
+    fi
+  done < <(git diff-tree --no-commit-id --name-only -r HEAD)
+
+  if [[ "$changed_count" -eq 0 ]]; then
+    fail "--release-metadata-only requires HEAD to be the release metadata commit"
+  fi
+}
+
 tag=""
 allow_dirty=false
+release_metadata_only=false
 skip_docker=false
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --allow-dirty)
       allow_dirty=true
+      shift
+      ;;
+    --release-metadata-only)
+      release_metadata_only=true
       shift
       ;;
     --skip-docker)
@@ -148,6 +190,10 @@ esac
 release_version="$(tr -d '[:space:]' < release/VERSION)"
 [[ "$release_version" == "$version" ]] || fail "release/VERSION is $release_version but tag is $tag"
 
+if [[ "$release_metadata_only" == true ]]; then
+  assert_release_metadata_only_head
+fi
+
 require_command git
 require_command zig
 require_command node
@@ -168,7 +214,13 @@ test -s "$notes_path"
 
 run scripts/setup-md4c.sh
 
-run zig build test
+if [[ "$release_metadata_only" == true ]]; then
+  echo
+  echo "pre-release-check: release metadata-only HEAD; skipped Zig tests and smoke checks"
+else
+  run zig build test
+fi
+
 run zig build -Doptimize=ReleaseSafe -Dversion="$version" -Dcommit="$commit"
 
 step "built ss version"
@@ -179,8 +231,10 @@ case "$version_output" in
   *) fail "unexpected ss --version output for $tag at $commit" ;;
 esac
 
-run tests/smoke/project.sh
-run node tests/smoke/lsp.mjs
+if [[ "$release_metadata_only" != true ]]; then
+  run tests/smoke/project.sh
+  run node tests/smoke/lsp.mjs
+fi
 
 step "tree-sitter grammar"
 (
