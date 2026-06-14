@@ -12,6 +12,7 @@ const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
 const registry = @import("../language/registry.zig");
+const analysis_scope = @import("scope.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
 const type_defs = @import("../language/type_defs.zig");
@@ -783,7 +784,8 @@ pub fn collectScopedVariableInfoFromProgram(
     source_len: usize,
     diagnostic_ir: ?*core.Ir,
 ) !std.ArrayList(ScopedVariableInfo) {
-    const sema = SemanticEnv.init(diagnostic_ir, null, functions);
+    const root_sema = SemanticEnv.init(diagnostic_ir, null, functions);
+    const sema = root_sema.forModule(module_id);
     var variables = std.ArrayList(ScopedVariableInfo).empty;
     errdefer variables.deinit(allocator);
 
@@ -800,28 +802,31 @@ pub fn collectScopedVariableInfoFromProgram(
             }
             const info = semantic_types.infoFromType(param.ty);
             try env.put(param.name, info);
-            try appendScopedVariable(allocator, &variables, param.name, info, module_id, .function, func.name, func.span.start, func.span.start, func.span.start, func.span.end);
+            const func_scope = analysis_scope.functionScope(func);
+            try appendScopedVariable(allocator, &variables, param.name, info, module_id, func_scope, func.span.start, func.span.start, func.span.start, func.span.end);
         }
 
         for (func.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, .function, func.name, func.span.end);
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, analysis_scope.functionScope(func), func.span.end);
         }
     }
 
     {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
+        const document_scope = analysis_scope.documentScope(source_len);
         for (program.document_statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, .document, null, source_len);
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, document_scope, source_len);
         }
     }
 
     for (program.pages.items) |page| {
         var env = TypeEnv.init(allocator);
         defer env.deinit();
+        const page_scope = analysis_scope.pageScope(page);
 
         for (page.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, .page, page.name, page.span.end);
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &env, &sema, stmt, &variables, module_id, page_scope, page.span.end);
         }
     }
 
@@ -1041,8 +1046,7 @@ fn collectScopedVariableTypesFromStatement(
     stmt: ast.Statement,
     variables: *std.ArrayList(ScopedVariableInfo),
     module_id: core.SourceModuleId,
-    scope_kind: core.DefinitionScopeKind,
-    scope_name: ?[]const u8,
+    scope: analysis_scope.SourceScope,
     visible_end: usize,
 ) !void {
     const origin = try statementOrigin(allocator, stmt.span);
@@ -1052,7 +1056,7 @@ fn collectScopedVariableTypesFromStatement(
             const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
             if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
-            try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope_kind, scope_name, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
+            try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
         },
         .return_expr => |expr| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, expr, origin);
@@ -1066,15 +1070,15 @@ fn collectScopedVariableTypesFromStatement(
             try semantic_types.ensureType(diagnostic_ir, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
-            const then_end = scopedStatementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
+            const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
             for (if_stmt.then_statements.items) |nested| {
-                try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &then_env, sema, nested, variables, module_id, scope_kind, scope_name, then_end);
+                try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &then_env, sema, nested, variables, module_id, scope, then_end);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
-            const else_end = scopedStatementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
+            const else_end = analysis_scope.statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
             for (if_stmt.else_statements.items) |nested| {
-                try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &else_env, sema, nested, variables, module_id, scope_kind, scope_name, else_end);
+                try collectScopedVariableTypesFromStatement(allocator, diagnostic_ir, &else_env, sema, nested, variables, module_id, scope, else_end);
             }
         },
         .expr_stmt => |expr| {
@@ -1088,19 +1092,13 @@ fn collectScopedVariableTypesFromStatement(
     }
 }
 
-fn scopedStatementsVisibleEnd(statements: []const ast.Statement, fallback: usize) usize {
-    if (statements.len == 0) return fallback;
-    return statements[statements.len - 1].span.end;
-}
-
 fn appendScopedVariable(
     allocator: std.mem.Allocator,
     variables: *std.ArrayList(ScopedVariableInfo),
     name: []const u8,
     info: VariableInfo,
     module_id: core.SourceModuleId,
-    scope_kind: core.DefinitionScopeKind,
-    scope_name: ?[]const u8,
+    scope: analysis_scope.SourceScope,
     span_start: usize,
     span_end: usize,
     visible_start: usize,
@@ -1110,8 +1108,8 @@ fn appendScopedVariable(
         .name = name,
         .info = info,
         .module_id = module_id,
-        .scope_kind = scope_kind,
-        .scope_name = scope_name,
+        .scope_kind = scope.kind,
+        .scope_name = scope.name,
         .span_start = span_start,
         .span_end = span_end,
         .visible_start = visible_start,

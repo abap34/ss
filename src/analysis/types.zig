@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const analysis_env = @import("env.zig");
 
 const Type = ast.Type;
 
@@ -11,7 +12,7 @@ pub const TypeInfo = struct {
     function_labels: []const []const u8 = &.{},
 };
 
-pub const TypeEnv = std.StringHashMap(TypeInfo);
+pub const TypeEnv = analysis_env.ValueEnv(TypeInfo);
 
 pub fn infoFromType(ty: Type) TypeInfo {
     return .{

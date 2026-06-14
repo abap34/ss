@@ -173,15 +173,15 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/project_spec_tests.zig", &.{
         import("project", modules.project),
     }, null);
+    const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
     const lsp_scope_mod = createModule(ctx, "src/lsp/scope.zig", &.{
         import("utils", modules.utils),
     }, true);
     addModuleTest(ctx, test_step, "tests/lsp_scope_spec_tests.zig", &.{
         import("lsp_scope", lsp_scope_mod),
     }, true);
-    const lsp_completion_mod = createModule(ctx, "src/lsp/completion.zig", &.{}, true);
     addModuleTest(ctx, test_step, "tests/lsp_completion_spec_tests.zig", &.{
-        import("lsp_completion", lsp_completion_mod),
+        import("compiler", compiler_mod),
     }, true);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfBackend(b, watch_mod);
@@ -192,7 +192,6 @@ fn addTestStep(
     addNativePdfBackend(b, render_pdf_spec_mod);
     addTestModule(b, test_step, render_pdf_spec_mod);
 
-    const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
     const compiler_semantics_support_mod = createModule(ctx, "tests/compiler_semantics_spec_support.zig", &.{
         import("utils", modules.utils),
         import("compiler", compiler_mod),

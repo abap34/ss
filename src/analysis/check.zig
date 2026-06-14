@@ -6,6 +6,7 @@ const semantic_env = @import("../language/env.zig");
 const infer = @import("infer.zig");
 const registry = @import("../language/registry.zig");
 const semantic_types = @import("types.zig");
+const analysis_env = @import("env.zig");
 
 const Type = ast.Type;
 const SemanticEnv = semantic_env.SemanticEnv;
@@ -22,36 +23,7 @@ const StatementContext = enum {
     page,
 };
 
-const NameScope = struct {
-    allocator: std.mem.Allocator,
-    names: std.StringHashMap(void),
-
-    fn init(allocator: std.mem.Allocator) NameScope {
-        return .{
-            .allocator = allocator,
-            .names = std.StringHashMap(void).init(allocator),
-        };
-    }
-
-    fn deinit(self: *NameScope) void {
-        self.names.deinit();
-    }
-
-    fn clone(self: *const NameScope) !NameScope {
-        return .{
-            .allocator = self.allocator,
-            .names = try self.names.clone(),
-        };
-    }
-
-    fn put(self: *NameScope, name: []const u8) !void {
-        try self.names.put(name, {});
-    }
-
-    fn contains(self: *const NameScope, name: []const u8) bool {
-        return self.names.contains(name);
-    }
-};
+const NameScope = analysis_env.NameEnv;
 
 const PageContextRequirement = struct {
     const Requirement = union(enum) {

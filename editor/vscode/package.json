@@ -31,8 +31,7 @@
     "onCommand:ss.checkCurrentFile"
   ],
   "categories": [
-    "Programming Languages",
-    "Snippets"
+    "Programming Languages"
   ],
   "keywords": [
     "ss",
@@ -65,12 +64,6 @@
         "language": "ss-slide",
         "scopeName": "source.ss",
         "path": "./syntaxes/ss.tmLanguage.json"
-      }
-    ],
-    "snippets": [
-      {
-        "language": "ss-slide",
-        "path": "./snippets/ss.code-snippets"
       }
     ],
     "commands": [

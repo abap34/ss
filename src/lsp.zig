@@ -9,8 +9,7 @@ const module_loader = @import("modules/loader.zig");
 const project = @import("project.zig");
 const dump = @import("dump.zig");
 const utils = @import("utils");
-const language_names = @import("language/names.zig");
-const lsp_completion = @import("lsp/completion.zig");
+const analysis_completion = @import("analysis/completion.zig");
 const lsp_scope = @import("lsp/scope.zig");
 
 const JsonValue = std.json.Value;
@@ -37,12 +36,14 @@ const Snapshot = struct {
     preview: project.PreviewConfig = .{},
     page_guide: project.PageGuideConfig = .{},
     dump_json: ?[]u8 = null,
+    completion_index: ?analysis_completion.Index = null,
     module_paths: std.ArrayList([]u8),
 
     fn deinit(self: *Snapshot, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
         allocator.free(self.asset_base_dir);
         if (self.dump_json) |json| allocator.free(json);
+        if (self.completion_index) |*index| index.deinit();
         for (self.module_paths.items) |path| allocator.free(path);
         self.module_paths.deinit(allocator);
     }
@@ -50,11 +51,20 @@ const Snapshot = struct {
 
 const CompletionCache = struct {
     entry_path: []u8,
-    dump_json: []u8,
+    index: analysis_completion.Index,
 
     fn deinit(self: *CompletionCache, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
-        allocator.free(self.dump_json);
+        self.index.deinit();
+    }
+};
+
+const DocumentCompletionCache = struct {
+    source_hash: u64,
+    index: analysis_completion.Index,
+
+    fn deinit(self: *DocumentCompletionCache) void {
+        self.index.deinit();
     }
 };
 
@@ -64,6 +74,7 @@ const Server = struct {
     documents: std.StringHashMap([]u8),
     snapshot: ?Snapshot = null,
     last_good_completion: ?CompletionCache = null,
+    document_completion_cache: std.StringHashMap(DocumentCompletionCache),
     published_diagnostic_uris: std.StringHashMap(void),
     shutdown: bool = false,
 
@@ -72,6 +83,7 @@ const Server = struct {
             .io = io,
             .allocator = allocator,
             .documents = std.StringHashMap([]u8).init(allocator),
+            .document_completion_cache = std.StringHashMap(DocumentCompletionCache).init(allocator),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
         };
     }
@@ -85,6 +97,7 @@ const Server = struct {
         self.documents.deinit();
         if (self.snapshot) |*snapshot| snapshot.deinit(self.allocator);
         if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
+        deinitCompletionIndexMap(self.allocator, &self.document_completion_cache);
         deinitStringSet(self.allocator, &self.published_diagnostic_uris);
     }
 
@@ -144,6 +157,7 @@ const Server = struct {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
         }
+        self.removeDocumentCompletionCache(path);
     }
 
     fn sourceForPath(self: *Server, path: []const u8) ?[]const u8 {
@@ -162,6 +176,7 @@ const Server = struct {
         errdefer snapshot.deinit(self.allocator);
         if (snapshot.dump_json != null) try self.rememberCompletionSnapshot(&snapshot);
         self.snapshot = snapshot;
+        try self.refreshDocumentCompletionCache(changed_path);
         if (self.snapshot.?.lsp.enabled and self.snapshot.?.lsp.diagnostics) {
             try self.publishDiagnostics(&diagnostics);
         } else {
@@ -278,6 +293,7 @@ const Server = struct {
         }
 
         snapshot.dump_json = dump.toOwnedString(self.allocator, &ir) catch null;
+        snapshot.completion_index = analysis_completion.Index.fromIr(self.allocator, &ir) catch null;
         return snapshot;
     }
 
@@ -294,17 +310,64 @@ const Server = struct {
     }
 
     fn rememberCompletionSnapshot(self: *Server, snapshot: *const Snapshot) !void {
-        const json = snapshot.dump_json orelse return;
+        const index = if (snapshot.completion_index) |*value| value else return;
         const entry_path = try self.allocator.dupe(u8, snapshot.entry_path);
         errdefer self.allocator.free(entry_path);
-        const dump_json = try self.allocator.dupe(u8, json);
-        errdefer self.allocator.free(dump_json);
+        var cached_index = try index.clone(self.allocator);
+        errdefer cached_index.deinit();
         const next = CompletionCache{
             .entry_path = entry_path,
-            .dump_json = dump_json,
+            .index = cached_index,
         };
         if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
         self.last_good_completion = next;
+    }
+
+    fn rememberDocumentCompletion(self: *Server, path: []const u8, source_hash: u64, index: analysis_completion.Index) !void {
+        const key = try project.absolutePath(self.allocator, path);
+        errdefer self.allocator.free(key);
+        var value = DocumentCompletionCache{ .source_hash = source_hash, .index = index };
+        errdefer value.deinit();
+        if (self.document_completion_cache.fetchRemove(key)) |entry| {
+            self.allocator.free(entry.key);
+            var old = entry.value;
+            old.deinit();
+        }
+        try self.document_completion_cache.put(key, value);
+    }
+
+    fn documentCompletionCache(self: *const Server, path: []const u8, source_hash: u64) ?*const analysis_completion.Index {
+        const key = project.absolutePath(self.allocator, path) catch return null;
+        defer self.allocator.free(key);
+        const cache = self.document_completion_cache.getPtr(key) orelse return null;
+        if (cache.source_hash != source_hash) return null;
+        return &cache.index;
+    }
+
+    fn removeDocumentCompletionCache(self: *Server, path: []const u8) void {
+        const key = project.absolutePath(self.allocator, path) catch return;
+        defer self.allocator.free(key);
+        if (self.document_completion_cache.fetchRemove(key)) |entry| {
+            self.allocator.free(entry.key);
+            var cache = entry.value;
+            cache.deinit();
+        }
+    }
+
+    fn refreshDocumentCompletionCache(self: *Server, path: []const u8) !void {
+        const source = self.sourceForPath(path) orelse return;
+        const source_hash = completionSourceHash(source);
+        if (self.snapshot) |*snapshot| {
+            if (snapshot.completion_index) |*index| {
+                if (index.containsDocument(self.allocator, path)) {
+                    const cloned = try index.clone(self.allocator);
+                    try self.rememberDocumentCompletion(path, source_hash, cloned);
+                    return;
+                }
+            }
+        }
+        const index = try buildDocumentCompletionIndex(self, path, source) orelse return;
+        try self.rememberDocumentCompletion(path, source_hash, index);
     }
 
     fn publishDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
@@ -381,6 +444,15 @@ fn deinitStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void)) 
     var iterator = set.keyIterator();
     while (iterator.next()) |key| allocator.free(key.*);
     set.deinit();
+}
+
+fn deinitCompletionIndexMap(allocator: std.mem.Allocator, map: *std.StringHashMap(DocumentCompletionCache)) void {
+    var iterator = map.iterator();
+    while (iterator.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        entry.value_ptr.deinit();
+    }
+    map.deinit();
 }
 
 const DiagnosticSet = struct {
@@ -663,6 +735,61 @@ fn jsonLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return allocator.dupe(u8, text);
 }
 
+const CompletionBuilder = struct {
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    seen: std.StringHashMap(void),
+    first: bool = true,
+
+    fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) CompletionBuilder {
+        return .{
+            .allocator = allocator,
+            .out = out,
+            .seen = std.StringHashMap(void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *CompletionBuilder) void {
+        self.seen.deinit();
+    }
+
+    fn add(self: *CompletionBuilder, label: []const u8, kind: usize, detail: ?[]const u8, documentation: ?[]const u8) !void {
+        if (label.len == 0 or self.seen.contains(label)) return;
+        try self.seen.put(label, {});
+        if (!self.first) try self.out.append(self.allocator, ',');
+        self.first = false;
+        try self.out.appendSlice(self.allocator, "{\"label\":");
+        try appendJsonString(self.allocator, self.out, label);
+        try self.out.appendSlice(self.allocator, ",\"kind\":");
+        try appendInt(self.allocator, self.out, kind);
+        if (detail) |text| {
+            try self.out.appendSlice(self.allocator, ",\"detail\":");
+            try appendJsonString(self.allocator, self.out, text);
+        }
+        if (documentation) |text| if (text.len != 0) {
+            try self.out.appendSlice(self.allocator, ",\"documentation\":");
+            try appendJsonString(self.allocator, self.out, text);
+        };
+        try self.out.append(self.allocator, '}');
+    }
+
+    fn addCandidate(self: *CompletionBuilder, candidate: analysis_completion.Candidate) !void {
+        try self.add(candidate.label, completionKind(candidate.kind), candidate.detail, candidate.documentation);
+    }
+};
+
+fn completionKind(kind: analysis_completion.CompletionKind) usize {
+    return switch (kind) {
+        .keyword => 14,
+        .function => 3,
+        .variable => 6,
+        .property => 10,
+        .type_decl => 25,
+        .class => 7,
+        .role => 20,
+    };
+}
+
 const LspFeature = enum {
     completion,
     hover,
@@ -693,176 +820,136 @@ fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .completion)) return try jsonLiteral(server.allocator, "{\"isIncomplete\":false,\"items\":[]}");
     var out = std.ArrayList(u8).empty;
     const allocator = server.allocator;
-    var context = try requestContext(server, params);
-    defer if (context) |*ctx| ctx.deinit(allocator);
     var position = try requestPosition(server, params);
     defer if (position) |*pos| pos.deinit(allocator);
-    const access_completion = if (position) |*pos| lsp_completion.accessBeforeOffset(pos.source, pos.offset) != null else false;
     try out.appendSlice(allocator, "{\"isIncomplete\":false,\"items\":[");
-    var first = true;
-    if (!access_completion) {
-        const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
-        for (keywords) |keyword| try appendCompletion(allocator, &out, &first, keyword, 14, "keyword", null);
-        if (position) |*pos| try appendImportAsCompletions(allocator, &out, &first, pos.source, pos.offset);
-    }
-    if (completionDumpJson(server)) |json_text| {
-        try appendDumpCompletions(allocator, &out, &first, json_text, if (context) |*ctx| ctx else null, if (position) |*pos| pos else null);
+    var builder = CompletionBuilder.init(allocator, &out);
+    defer builder.deinit();
+    if (position) |*pos| {
+        if (try completionIndexForRequest(server, pos)) |index| {
+            var result = try analysis_completion.complete(allocator, index, .{
+                .doc_path = pos.doc_path,
+                .source = pos.source,
+                .offset = pos.offset,
+            });
+            defer result.deinit(allocator);
+            for (result.items) |item| {
+                try builder.addCandidate(item);
+            }
+        }
     }
     try out.appendSlice(allocator, "]}");
     return out.toOwnedSlice(allocator);
 }
 
-fn completionDumpJson(server: *const Server) ?[]const u8 {
-    const snapshot = server.snapshot orelse return null;
-    if (snapshot.dump_json) |json| return json;
-    const cache = server.last_good_completion orelse return null;
+fn completionIndex(server: *const Server) ?*const analysis_completion.Index {
+    const snapshot = if (server.snapshot) |*value| value else return null;
+    if (snapshot.completion_index) |*index| return index;
+    const cache = if (server.last_good_completion) |*value| value else return null;
     if (!std.mem.eql(u8, cache.entry_path, snapshot.entry_path)) return null;
-    return cache.dump_json;
+    return &cache.index;
 }
 
-fn appendDumpCompletions(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    first: *bool,
-    json_text: []const u8,
-    context: ?*const RequestContext,
-    position: ?*const RequestPosition,
-) !void {
-    var parsed = std.json.parseFromSlice(JsonValue, allocator, json_text, .{}) catch return;
-    defer parsed.deinit();
-    const root = parsed.value.object;
-    if (position) |pos| {
-        if (lsp_completion.accessBeforeOffset(pos.source, pos.offset)) |access| {
-            switch (access.separator) {
-                .double_colon => {
-                    if (resolveAliasModuleId(allocator, &root, pos.doc_path, access.receiver)) |module_id| {
-                        try appendModuleFunctionCompletions(allocator, out, first, &root, module_id);
-                    }
-                    return;
-                },
-                .dot => {
-                    var member_context = RequestContext{
-                        .target = @constCast(access.receiver),
-                        .doc_path = pos.doc_path,
-                        .source = pos.source,
-                        .offset = pos.offset,
-                    };
-                    if (lsp_scope.bestVisibleVariable(allocator, &root, access.receiver, &member_context)) |variable| {
-                        if (lsp_completion.propertyTargetForVariable(variable)) |target| {
-                            try appendMemberPropertyCompletions(allocator, out, first, &root, target);
-                            return;
-                        }
-                    }
-                    return;
-                },
-            }
+fn completionIndexForRequest(server: *Server, position: *const RequestPosition) !?*const analysis_completion.Index {
+    const current_project = currentSnapshotCompletionIndex(server);
+    const primary = completionIndex(server);
+    const source_hash = completionSourceHash(position.source);
+    if (server.documentCompletionCache(position.doc_path, source_hash)) |index| return index;
+    if (try buildDocumentCompletionIndex(server, position.doc_path, position.source)) |index| {
+        try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
+        return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
+    }
+    const access_completion = analysis_completion.accessBeforeOffset(position.source, position.offset) != null;
+    if (access_completion) {
+        if (try buildImportEnvironmentCompletionIndex(server, position.doc_path, position.source)) |index| {
+            try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
+            return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
         }
     }
-    if (arrayFieldObject(&root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
-        const label = stringField(&item.object, "name") orelse continue;
-        const detail = stringField(&item.object, "signature");
-        try appendCompletion(allocator, out, first, label, 3, detail, stringField(&item.object, "summary"));
-    };
-    if (arrayFieldObject(&root, "variables")) |variables| for (variables.items) |*item| if (item.* == .object) {
-        if (context) |ctx| {
-            if (!lsp_scope.variableVisibleAt(allocator, &root, &item.object, ctx)) continue;
-            if (!lsp_scope.isBestVisibleVariable(allocator, &root, &item.object, ctx)) continue;
+    if (!access_completion) {
+        if (try buildImportEnvironmentCompletionIndex(server, position.doc_path, position.source)) |index| {
+            try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
+            return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
         }
-        const label = stringField(&item.object, "name") orelse continue;
-        try appendCompletion(allocator, out, first, label, 6, stringField(&item.object, "type"), null);
+    }
+    if (current_project) |index| {
+        if (index.containsDocument(server.allocator, position.doc_path)) return index;
+    }
+    return primary;
+}
+
+fn completionSourceHash(source: []const u8) u64 {
+    return std.hash.Wyhash.hash(0, source);
+}
+
+fn currentSnapshotCompletionIndex(server: *const Server) ?*const analysis_completion.Index {
+    const snapshot = if (server.snapshot) |*value| value else return null;
+    if (snapshot.completion_index) |*index| return index;
+    return null;
+}
+
+fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_source: []const u8) !?analysis_completion.Index {
+    const asset_base_dir = if (server.snapshot) |snapshot|
+        try server.allocator.dupe(u8, snapshot.asset_base_dir)
+    else
+        try dirnameAlloc(server.allocator, doc_path);
+    defer server.allocator.free(asset_base_dir);
+
+    var overlay = module_loader.SourceOverlay.init(server.allocator);
+    defer overlay.deinit();
+    var doc_iterator = server.documents.iterator();
+    while (doc_iterator.next()) |entry| {
+        try overlay.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    var source = try server.allocator.dupe(u8, doc_source);
+    var program = syntax.parseWithSourceName(server.allocator, source, doc_path) catch {
+        server.allocator.free(source);
+        return null;
     };
-    if (objectFieldObject(&root, "declarations")) |decls| {
-        const fields = [_]struct { key: []const u8, kind: usize }{
-            .{ .key = "types", .kind = 25 },
-            .{ .key = "classes", .kind = 7 },
-            .{ .key = "roles", .kind = 20 },
-            .{ .key = "fields", .kind = 10 },
-        };
-        for (fields) |field| if (arrayFieldObject(decls, field.key)) |items| for (items.items) |item| if (item == .object) {
-            const label = stringField(&item.object, "name") orelse continue;
-            try appendCompletion(allocator, out, first, label, field.kind, stringField(&item.object, "type"), null);
-        };
-    }
-}
 
-fn appendImportAsCompletions(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, source: []const u8, offset: usize) !void {
-    const spec = importAsSpecBeforeCursor(source, offset) orelse return;
-    try appendCompletion(allocator, out, first, "*", 14, "bare names", null);
-    if (defaultAliasCandidate(spec)) |alias| {
-        try appendCompletion(allocator, out, first, alias, 6, "module alias", null);
-    }
-}
-
-fn appendModuleFunctionCompletions(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    first: *bool,
-    root: *const JsonObject,
-    module_id: i64,
-) !void {
-    if (arrayFieldObject(root, "functions")) |functions| for (functions.items) |item| if (item == .object) {
-        if ((intField(&item.object, "moduleId") orelse -1) != module_id) continue;
-        const label = stringField(&item.object, "name") orelse continue;
-        const detail = stringField(&item.object, "signature");
-        try appendCompletion(allocator, out, first, label, 3, detail, stringField(&item.object, "summary"));
+    var load_diagnostics = module_loader.LoadDiagnostics.init(server.allocator);
+    defer load_diagnostics.deinit();
+    var index = typecheck.loadProgramIndexWithOptions(server.allocator, server.io, asset_base_dir, program, .{
+        .overlay = &overlay,
+        .diagnostics = &load_diagnostics,
+        .print_diagnostics = false,
+    }) catch {
+        program.deinit(server.allocator);
+        server.allocator.free(source);
+        return null;
     };
+    defer index.deinit();
+
+    var ir = typecheck.buildIrWithOptions(server.allocator, doc_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch {
+        program.deinit(server.allocator);
+        if (source.len != 0) server.allocator.free(source);
+        return null;
+    };
+    defer ir.deinit();
+
+    typecheck.typecheckProgram(server.allocator, &ir) catch {};
+    return analysis_completion.Index.fromIr(server.allocator, &ir) catch null;
 }
 
-fn appendMemberPropertyCompletions(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    first: *bool,
-    root: *const JsonObject,
-    target: lsp_completion.PropertyTarget,
-) !void {
-    const decls = objectFieldObject(root, "declarations") orelse return;
-    const fields = arrayFieldObject(decls, "fields") orelse return;
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-    var index = fields.items.len;
-    while (index > 0) {
-        index -= 1;
-        const item = fields.items[index];
-        if (item != .object) continue;
-        if (!lsp_completion.fieldAppliesToTarget(root, &item.object, target)) continue;
-        const label = stringField(&item.object, "name") orelse continue;
-        if (seen.contains(label)) continue;
-        try seen.put(label, {});
-        try appendCompletion(allocator, out, first, label, 10, stringField(&item.object, "type"), null);
+fn buildImportEnvironmentCompletionIndex(server: *Server, doc_path: []const u8, doc_source: []const u8) !?analysis_completion.Index {
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(server.allocator);
+
+    var cursor: usize = 0;
+    while (cursor < doc_source.len) {
+        const line_start = cursor;
+        while (cursor < doc_source.len and doc_source[cursor] != '\n') cursor += 1;
+        const line = doc_source[line_start..cursor];
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.startsWith(u8, trimmed, "import ") and trimmed.len > "import ".len) {
+            try source.appendSlice(server.allocator, line);
+            try source.append(server.allocator, '\n');
+        }
+        if (cursor < doc_source.len and doc_source[cursor] == '\n') cursor += 1;
     }
-}
-
-fn importAsSpecBeforeCursor(source: []const u8, offset: usize) ?[]const u8 {
-    const safe_offset = @min(offset, source.len);
-    var line_start = safe_offset;
-    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
-    const before = std.mem.trim(u8, source[line_start..safe_offset], " \t\r");
-    const trimmed = std.mem.trim(u8, before, " \t");
-    if (!std.mem.startsWith(u8, trimmed, "import ")) return null;
-    const as_index = std.mem.lastIndexOf(u8, trimmed, " as") orelse return null;
-    const spec = std.mem.trim(u8, trimmed["import ".len..as_index], " \t");
-    if (spec.len == 0) return null;
-    return unquoteImportSpec(spec);
-}
-
-fn unquoteImportSpec(spec: []const u8) []const u8 {
-    if (spec.len >= 2 and spec[0] == '"' and spec[spec.len - 1] == '"') return spec[1 .. spec.len - 1];
-    return spec;
-}
-
-fn defaultAliasCandidate(spec: []const u8) ?[]const u8 {
-    if (language_names.importSpecHasFileExtension(spec)) return null;
-    const base = language_names.defaultImportAlias(spec);
-    if (!isValidAlias(base) or isKeyword(base)) return null;
-    return base;
-}
-
-fn isValidAlias(alias: []const u8) bool {
-    if (alias.len == 0 or !isIdentifierStart(alias[0])) return false;
-    for (alias[1..]) |byte| {
-        if (!std.ascii.isAlphanumeric(byte) and byte != '_') return false;
-    }
-    return true;
+    try source.appendSlice(server.allocator, "\npage __completion_probe\nend\n");
+    return buildDocumentCompletionIndex(server, doc_path, source.items);
 }
 
 fn qualifiedAliasBeforeOffset(source: []const u8, offset: usize) ?[]const u8 {
@@ -990,24 +1077,6 @@ fn modulePathForDefinition(allocator: std.mem.Allocator, root: *const JsonObject
     if (stringField(module, "path")) |path| return try allocator.dupe(u8, path);
     if (stringField(module, "spec")) |spec| return try stdModulePath(allocator, spec);
     return null;
-}
-
-fn appendCompletion(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, label: []const u8, kind: usize, detail: ?[]const u8, documentation: ?[]const u8) !void {
-    if (!first.*) try out.append(allocator, ',');
-    first.* = false;
-    try out.appendSlice(allocator, "{\"label\":");
-    try appendJsonString(allocator, out, label);
-    try out.appendSlice(allocator, ",\"kind\":");
-    try appendInt(allocator, out, kind);
-    if (detail) |text| {
-        try out.appendSlice(allocator, ",\"detail\":");
-        try appendJsonString(allocator, out, text);
-    }
-    if (documentation) |text| if (text.len != 0) {
-        try out.appendSlice(allocator, ",\"documentation\":");
-        try appendJsonString(allocator, out, text);
-    };
-    try out.append(allocator, '}');
 }
 
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {

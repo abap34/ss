@@ -5,6 +5,7 @@ const core = @import("core");
 const language_names = @import("../language/names.zig");
 const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
+const analysis_scope = @import("scope.zig");
 const utils = @import("utils");
 const source_utils = utils.source;
 
@@ -176,18 +177,21 @@ fn collectDefinitionsFromProgram(
             try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, 0, source.len, kind, module_id, file, .module, null);
         }
         if (include_variables) {
+            const scope = analysis_scope.functionScope(func);
             for (func.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .function, func.name, func.span.end);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, scope, func.span.end);
             }
         }
     }
     if (include_variables) {
+        const document_scope = analysis_scope.documentScope(source.len);
         for (program.document_statements.items) |stmt| {
-            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .document, null, source.len);
+            try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, document_scope, source.len);
         }
         for (program.pages.items) |page| {
+            const scope = analysis_scope.pageScope(page);
             for (page.statements.items) |stmt| {
-                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, .page, page.name, page.span.end);
+                try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, scope, page.span.end);
             }
         }
     }
@@ -199,29 +203,23 @@ fn collectDefinitionsFromStatement(
     module_id: core.SourceModuleId,
     stmt: ast.Statement,
     definitions: *std.ArrayList(core.Definition),
-    scope_kind: core.DefinitionScopeKind,
-    scope_name: ?[]const u8,
+    scope: analysis_scope.SourceScope,
     visible_end: usize,
 ) !void {
     switch (stmt.kind) {
         .let_binding => |binding| {
             if (!language_names.isDiscardBindingName(binding.name)) {
-                try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope_kind, scope_name, visible_end);
+                try putStatementDefinition(allocator, source, module_id, stmt, "let", binding.name, definitions, scope.kind, scope.name, visible_end);
             }
         },
         .if_stmt => |if_stmt| {
-            const then_end = statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
-            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, then_end);
-            const else_end = statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
-            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope_kind, scope_name, else_end);
+            const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
+            for (if_stmt.then_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope, then_end);
+            const else_end = analysis_scope.statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
+            for (if_stmt.else_statements.items) |nested| try collectDefinitionsFromStatement(allocator, source, module_id, nested, definitions, scope, else_end);
         },
         else => {},
     }
-}
-
-fn statementsVisibleEnd(statements: []const ast.Statement, fallback: usize) usize {
-    if (statements.len == 0) return fallback;
-    return statements[statements.len - 1].span.end;
 }
 
 fn putStatementDefinition(

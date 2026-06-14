@@ -4,6 +4,7 @@ const core = @import("core");
 
 const language_names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
+const analysis_env = @import("env.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
@@ -98,30 +99,15 @@ const LabelSet = struct {
     }
 };
 
-const FunctionEnv = struct {
-    values: std.StringHashMap(LabelSet),
+fn cloneLabelSet(allocator: std.mem.Allocator, labels: LabelSet) anyerror!LabelSet {
+    return labels.clone(allocator);
+}
 
-    fn init(allocator: std.mem.Allocator) FunctionEnv {
-        return .{ .values = std.StringHashMap(LabelSet).init(allocator) };
-    }
+fn deinitLabelSet(labels: *LabelSet) void {
+    labels.deinit();
+}
 
-    fn clone(self: FunctionEnv, allocator: std.mem.Allocator) !FunctionEnv {
-        var out = init(allocator);
-        var iterator = self.values.iterator();
-        while (iterator.next()) |entry| {
-            try out.values.put(entry.key_ptr.*, try entry.value_ptr.clone(allocator));
-        }
-        return out;
-    }
-
-    fn set(self: *FunctionEnv, allocator: std.mem.Allocator, name: []const u8, value: LabelSet) !void {
-        try self.values.put(name, try value.clone(allocator));
-    }
-
-    fn get(self: *const FunctionEnv, name: []const u8) ?LabelSet {
-        return self.values.get(name);
-    }
-};
+const FunctionEnv = analysis_env.CloneEnv(LabelSet, cloneLabelSet, deinitLabelSet);
 
 const Activation = struct {
     label: Label,
@@ -205,7 +191,7 @@ const Analyzer = struct {
         switch (activation.label) {
             .function => |function_key| {
                 const func = self.sema.functions.get(function_key) orelse return LabelSet.init(self.allocator);
-                var env = try activation.env.clone(self.allocator);
+                var env = try activation.env.clone();
                 const previous = self.sema;
                 self.sema = self.sema.forModule(activation.module_id);
                 defer self.sema = previous;
@@ -234,7 +220,7 @@ const Analyzer = struct {
                 .let_binding => |binding| {
                     const labels = try self.exprLabels(binding.expr, env, owner);
                     if (language_names.isDiscardBindingName(binding.name)) continue;
-                    try env.set(self.allocator, binding.name, labels);
+                    try env.bind(binding.name, labels);
                 },
                 .return_expr => |expr| {
                     const labels = try self.exprLabels(expr, env, owner);
@@ -246,9 +232,9 @@ const Analyzer = struct {
                 },
                 .if_stmt => |if_stmt| {
                     _ = try self.exprLabels(if_stmt.condition, env, owner);
-                    var then_env = try env.clone(self.allocator);
+                    var then_env = try env.clone();
                     try self.analyzeStatements(if_stmt.then_statements.items, &then_env, returns, owner);
-                    var else_env = try env.clone(self.allocator);
+                    var else_env = try env.clone();
                     try self.analyzeStatements(if_stmt.else_statements.items, &else_env, returns, owner);
                 },
                 .constrain => |decl| if (decl.offset) |expr| {
@@ -390,7 +376,7 @@ const Analyzer = struct {
                 var result = LabelSet.init(self.allocator);
                 for (captures.items) |capture_env| {
                     const lambda = self.lambda_exprs.get(span) orelse break :blk LabelSet.init(self.allocator);
-                    var env = try capture_env.clone(self.allocator);
+                    var env = try capture_env.clone();
                     try self.bindParams(&env, lambda.params.items, args);
                     const returned = try self.enter(.{ .label = label, .env = env, .owner = owner, .module_id = self.sema.module_id });
                     try result.unionWith(returned);
@@ -418,7 +404,7 @@ const Analyzer = struct {
                 {
                     defer self.sema = previous;
                     const labels = try self.exprLabels(default_value.*, &env, func);
-                    try env.set(self.allocator, param.name, labels);
+                    try env.bind(param.name, labels);
                 }
             }
         }
@@ -426,10 +412,11 @@ const Analyzer = struct {
     }
 
     fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const LabelSet) !void {
+        _ = self;
         var index: usize = 0;
         while (index < params.len and index < args.len) : (index += 1) {
             if (params[index].ty.kind == .function) {
-                try env.set(self.allocator, params[index].name, args[index]);
+                try env.bind(params[index].name, args[index]);
             }
         }
     }
@@ -437,7 +424,7 @@ const Analyzer = struct {
     fn registerLambda(self: *Analyzer, lambda: ast.LambdaExpr, env: *const FunctionEnv) !Label {
         const label = self.lambdaLabel(lambda);
         if (!self.lambda_exprs.contains(lambda.span)) try self.lambda_exprs.put(lambda.span, lambda);
-        const capture = try env.clone(self.allocator);
+        const capture = try env.clone();
         const gop = try self.lambda_captures.getOrPut(lambda.span);
         if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(FunctionEnv).empty;
         try gop.value_ptr.append(self.allocator, capture);
