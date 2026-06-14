@@ -352,6 +352,24 @@ test "compiler semantics: default alias supports theme override with prelude pla
     , "override");
 }
 
+test "compiler semantics: theme text size override keeps automatic line height" {
+    try expectDumpContains(
+        \\import std:themes/academic as *
+        \\
+        \\page ok
+        \\  let title = head! <<
+        \\large text
+        \\next line
+        \\>>
+        \\  title.text_size = 64
+        \\end
+        \\
+    , &.{
+        "\"font_size\":64.0,\"line_height\":92.8",
+        "\"height\":185.6",
+    });
+}
+
 test "compiler semantics: stdlib theme toc works through default aliases" {
     try buildSource(
         \\import std:themes/default

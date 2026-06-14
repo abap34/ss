@@ -610,11 +610,11 @@ test "layout metrics derive line height from explicit text size" {
     try ir.setNodeProperty(object, "text_size", "30");
 
     const node = ir.getNode(object).?;
-    try expectFloat(96, metrics.intrinsicHeight(&ir, node));
+    try expectFloat(87, metrics.intrinsicHeight(&ir, node));
 
     const resolved = core.render_policy.resolve(&ir, node);
     try expectFloat(30, resolved.text.?.font_size);
-    try expectFloat(48, resolved.text.?.line_height);
+    try expectFloat(43.5, resolved.text.?.line_height);
 }
 
 test "layout metrics honor explicit text and layout line heights" {
@@ -648,10 +648,10 @@ test "layout metrics treat zero line heights as automatic" {
     try ir.setNodeProperty(object, "layout_line_height", "0");
 
     const node = ir.getNode(object).?;
-    try expectFloat(96, metrics.intrinsicHeight(&ir, node));
+    try expectFloat(87, metrics.intrinsicHeight(&ir, node));
 
     const resolved = core.render_policy.resolve(&ir, node);
-    try expectFloat(48, resolved.text.?.line_height);
+    try expectFloat(43.5, resolved.text.?.line_height);
 }
 
 test "render policy: invalid numeric properties fall back before rendering" {
@@ -673,7 +673,7 @@ test "render policy: invalid numeric properties fall back before rendering" {
     const resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
     const text = resolved.text.?;
     try expectFloat(20, text.font_size);
-    try expectFloat(32, text.line_height);
+    try expectFloat(29, text.line_height);
     try expectFloat(1, text.inline_math_height_factor);
     try expectFloat(0, resolved.chrome.pad_x);
     try expectFloat(0, resolved.chrome.pad_y);
