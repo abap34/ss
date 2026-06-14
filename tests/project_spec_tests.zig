@@ -47,6 +47,7 @@ test "project spec: editor settings parse from ss.toml" {
         \\entry = "slides/main.ss"
         \\
         \\[editor.lsp]
+        \\debounce = 25
         \\diagnostics = false
         \\
         \\[editor.lsp.inlay_hints]
@@ -69,6 +70,7 @@ test "project spec: editor settings parse from ss.toml" {
     defer cfg.deinit(testing.allocator);
 
     try testing.expect(!cfg.lsp.diagnostics);
+    try testing.expectEqual(@as(u64, 25), cfg.lsp.debounce_ms);
     try testing.expect(cfg.lsp.inlay_hints);
     try testing.expect(!cfg.lsp.inlay_hint_arguments);
     try testing.expect(!cfg.lsp.inlay_hint_positions);

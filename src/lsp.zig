@@ -16,6 +16,7 @@ const JsonValue = std.json.Value;
 const JsonObject = std.json.ObjectMap;
 const JsonArray = std.json.Array;
 const RequestContext = lsp_scope.RequestContext;
+const max_poll_timeout_ms = std.math.maxInt(i32);
 
 const RequestPosition = struct {
     doc_path: []u8,
@@ -76,6 +77,8 @@ const Server = struct {
     last_good_completion: ?CompletionCache = null,
     document_completion_cache: std.StringHashMap(DocumentCompletionCache),
     published_diagnostic_uris: std.StringHashMap(void),
+    pending_rebuild_path: ?[]u8 = null,
+    pending_rebuild_due_ms: u64 = 0,
     shutdown: bool = false,
 
     fn init(io: std.Io, allocator: std.mem.Allocator) Server {
@@ -99,6 +102,7 @@ const Server = struct {
         if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
         deinitCompletionIndexMap(self.allocator, &self.document_completion_cache);
         deinitStringSet(self.allocator, &self.published_diagnostic_uris);
+        self.clearPendingRebuild();
     }
 
     fn replaceDocument(self: *Server, uri: []const u8, text: []const u8) !void {
@@ -184,6 +188,56 @@ const Server = struct {
             defer empty.deinit();
             try self.publishDiagnostics(&empty);
         }
+    }
+
+    fn rebuildImmediately(self: *Server, changed_path: []const u8) !void {
+        self.clearPendingRebuild();
+        try self.rebuild(changed_path);
+    }
+
+    fn scheduleRebuild(self: *Server, changed_path: []const u8) !void {
+        const delay_ms = self.lspDebounceMs();
+        if (delay_ms == 0) {
+            try self.rebuildImmediately(changed_path);
+            return;
+        }
+        const owned_path = try self.allocator.dupe(u8, changed_path);
+        errdefer self.allocator.free(owned_path);
+        self.clearPendingRebuild();
+        self.pending_rebuild_path = owned_path;
+        self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), delay_ms);
+    }
+
+    fn flushPendingRebuild(self: *Server) !void {
+        const path = self.pending_rebuild_path orelse return;
+        self.pending_rebuild_path = null;
+        self.pending_rebuild_due_ms = 0;
+        defer self.allocator.free(path);
+        try self.rebuild(path);
+    }
+
+    fn flushPendingRebuildIfDue(self: *Server) !void {
+        if (self.pending_rebuild_path == null) return;
+        if (monotonicMillis() < self.pending_rebuild_due_ms) return;
+        try self.flushPendingRebuild();
+    }
+
+    fn pendingRebuildPollTimeout(self: *const Server) ?i32 {
+        if (self.pending_rebuild_path == null) return null;
+        const now = monotonicMillis();
+        if (now >= self.pending_rebuild_due_ms) return 0;
+        const delta = self.pending_rebuild_due_ms - now;
+        return @intCast(@min(delta, @as(u64, @intCast(max_poll_timeout_ms))));
+    }
+
+    fn lspDebounceMs(self: *const Server) u64 {
+        return if (self.snapshot) |snapshot| snapshot.lsp.debounce_ms else (project.LspConfig{}).debounce_ms;
+    }
+
+    fn clearPendingRebuild(self: *Server) void {
+        if (self.pending_rebuild_path) |path| self.allocator.free(path);
+        self.pending_rebuild_path = null;
+        self.pending_rebuild_due_ms = 0;
     }
 
     fn buildSnapshot(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !Snapshot {
@@ -573,6 +627,12 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     defer server.deinit();
 
     while (!server.shutdown) {
+        try server.flushPendingRebuildIfDue();
+        const stdin_ready = try waitForStdin(server.pendingRebuildPollTimeout());
+        if (!stdin_ready) {
+            try server.flushPendingRebuild();
+            continue;
+        }
         const message = try readMessage(allocator);
         const body = message orelse break;
         defer allocator.free(body);
@@ -610,7 +670,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
                 try server.replaceDocument(uri, text);
                 const path = try pathFromUri(server.allocator, uri);
                 defer server.allocator.free(path);
-                try server.rebuild(path);
+                try server.rebuildImmediately(path);
             }
         };
         return;
@@ -624,7 +684,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
                     }
                     const path = try pathFromUri(server.allocator, uri);
                     defer server.allocator.free(path);
-                    try server.rebuild(path);
+                    try server.scheduleRebuild(path);
                 };
             }
         };
@@ -635,7 +695,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
             if (stringField(doc, "uri")) |uri| {
                 const path = try pathFromUri(server.allocator, uri);
                 defer server.allocator.free(path);
-                try server.rebuild(path);
+                try server.rebuildImmediately(path);
             }
         };
         return;
@@ -644,7 +704,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         if (server.snapshot) |snapshot| {
             const entry_path = try server.allocator.dupe(u8, snapshot.entry_path);
             defer server.allocator.free(entry_path);
-            try server.rebuild(entry_path);
+            try server.scheduleRebuild(entry_path);
         }
         return;
     }
@@ -1582,6 +1642,7 @@ fn projectInfoJson(allocator: std.mem.Allocator, snapshot: ?*const Snapshot) ![]
 fn appendProjectInfoSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), snapshot: *const Snapshot) !void {
     try out.appendSlice(allocator, ",\"lsp\":{");
     try appendBoolField(allocator, out, "enabled", snapshot.lsp.enabled, true);
+    try appendIntField(allocator, out, "debounce", snapshot.lsp.debounce_ms, false);
     try appendBoolField(allocator, out, "diagnostics", snapshot.lsp.diagnostics, false);
     try appendBoolField(allocator, out, "completion", snapshot.lsp.completion, false);
     try appendBoolField(allocator, out, "hover", snapshot.lsp.hover, false);
@@ -1638,6 +1699,30 @@ fn snapshotCoversPath(snapshot: *const Snapshot, path: []const u8) bool {
         if (std.mem.eql(u8, module_path, path)) return true;
     }
     return false;
+}
+
+fn waitForStdin(timeout_ms: ?i32) !bool {
+    var fds = [_]std.posix.pollfd{.{
+        .fd = 0,
+        .events = @as(i16, std.posix.POLL.IN),
+        .revents = 0,
+    }};
+    const ready = try std.posix.poll(fds[0..], timeout_ms orelse -1);
+    if (ready == 0) return false;
+    const terminal_events = @as(i16, std.posix.POLL.HUP) | @as(i16, std.posix.POLL.ERR) | @as(i16, std.posix.POLL.NVAL);
+    return (fds[0].revents & (@as(i16, std.posix.POLL.IN) | terminal_events)) != 0;
+}
+
+fn monotonicMillis() u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
+    const sec: u64 = @intCast(ts.sec);
+    const nsec: u64 = @intCast(ts.nsec);
+    return sec * std.time.ms_per_s + nsec / std.time.ns_per_ms;
+}
+
+fn saturatedAddMillis(base: u64, delta: u64) u64 {
+    return std.math.add(u64, base, delta) catch std.math.maxInt(u64);
 }
 
 fn readMessage(allocator: std.mem.Allocator) !?[]u8 {
