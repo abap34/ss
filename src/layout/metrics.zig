@@ -1,6 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 const class_fields = @import("../core/class_fields.zig");
+const font_model = @import("../core/font.zig");
 const markdown = @import("../core/markdown.zig");
 const text_measure = @import("../render/text_measure.zig");
 const wrap_layout = @import("../render/wrap.zig");
@@ -9,13 +10,6 @@ const style_defaults = @import("style.zig");
 const Node = model.Node;
 const PageLayout = model.PageLayout;
 const TextStyle = model.TextStyle;
-
-const TextFonts = struct {
-    normal: []const u8,
-    bold: []const u8,
-    italic: []const u8,
-    code: []const u8,
-};
 
 fn styleForNode(ir: anytype, node: *const Node) TextStyle {
     return style_defaults.styleForNode(ir, node);
@@ -73,10 +67,16 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
     }
 
     var max_width: f32 = 0;
-    const fonts = textFontsForNode(ir, node);
+    const fonts = font_model.textFacesForNode(ir, node);
+    const plain_font = plainTextFaceForNode(ir, node, fonts);
+    const wrap = shouldWrapNode(ir, node);
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
-        max_width = @max(max_width, measuredTextWidth(ir.allocator, line, fonts.normal, style));
+        const line_width = if (wrap)
+            measuredTextAdvance(ir.allocator, line, plain_font, style)
+        else
+            measuredTextWidth(ir.allocator, line, plain_font, style);
+        max_width = @max(max_width, line_width);
     }
     if (max_width <= 0) max_width = fallbackGlyphAdvance(style);
     return @min(maxWidthForStyle(style), max_width) + chrome_width;
@@ -416,7 +416,8 @@ pub fn lineCount(text: []const u8) usize {
 }
 
 fn wrappedLineCount(ir: anytype, node: *const Node, style: TextStyle, text: []const u8, max_width: f32) usize {
-    const fonts = textFontsForNode(ir, node);
+    const fonts = font_model.textFacesForNode(ir, node);
+    const plain_font = plainTextFaceForNode(ir, node, fonts);
     var total: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
@@ -426,23 +427,22 @@ fn wrappedLineCount(ir: anytype, node: *const Node, style: TextStyle, text: []co
             continue;
         }
 
-        total += measuredWrappedTextLineCount(ir.allocator, trimmed, fonts.normal, style, max_width);
+        total += measuredWrappedTextLineCount(ir.allocator, trimmed, plain_font, style, max_width);
     }
     return total;
 }
 
-fn textFontsForNode(ir: anytype, node: *const Node) TextFonts {
-    return .{
-        .normal = class_fields.property(ir, node, "text_font") orelse "Helvetica",
-        .bold = class_fields.property(ir, node, "text_bold_font") orelse "Helvetica-Bold",
-        .italic = class_fields.property(ir, node, "text_italic_font") orelse "Helvetica-Oblique",
-        .code = class_fields.property(ir, node, "text_code_font") orelse "Courier",
-    };
+fn plainTextFaceForNode(ir: anytype, node: *const Node, faces: font_model.TextFaces) font_model.Face {
+    if ((node.payload_kind orelse .text) == .code) return faces.code;
+    if (class_fields.property(ir, node, "render_kind")) |kind| {
+        if (std.mem.eql(u8, kind, "code")) return faces.code;
+    }
+    return faces.normal;
 }
 
 fn markdownRunSliceVisualLineCount(ir: anytype, node: *const Node, style: TextStyle, runs: []const markdown.Run, max_width: f32) usize {
     if (runs.len == 0) return 0;
-    const fonts = textFontsForNode(ir, node);
+    const fonts = font_model.textFacesForNode(ir, node);
     var lines: usize = 1;
     var cursor = wrap_layout.Cursor{};
     var saw_atom = false;
@@ -476,7 +476,7 @@ fn markdownRunSliceVisualLineCount(ir: anytype, node: *const Node, style: TextSt
     return if (saw_atom) lines else 0;
 }
 
-fn measuredWrappedTextLineCount(allocator: std.mem.Allocator, text: []const u8, font: []const u8, style: TextStyle, max_width: f32) usize {
+fn measuredWrappedTextLineCount(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle, max_width: f32) usize {
     var lines: usize = 1;
     var cursor = wrap_layout.Cursor{};
     var saw_atom = false;
@@ -503,7 +503,7 @@ fn applyMeasuredAtom(cursor: *wrap_layout.Cursor, atom: wrap_layout.Atom, max_wi
     saw_atom.* = true;
 }
 
-fn fontForRun(fonts: TextFonts, kind: markdown.RunKind) []const u8 {
+fn fontForRun(fonts: font_model.TextFaces, kind: markdown.RunKind) font_model.Face {
     return switch (kind) {
         .bold => fonts.bold,
         .italic => fonts.italic,
@@ -512,9 +512,20 @@ fn fontForRun(fonts: TextFonts, kind: markdown.RunKind) []const u8 {
     };
 }
 
-fn measuredTextWidth(allocator: std.mem.Allocator, text: []const u8, font: []const u8, style: TextStyle) f32 {
+fn measuredTextWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
     const measured = text_measure.width(allocator, text, font, style.font_size) catch 0;
     return if (measured > 0) measured else fallbackTextAdvance(style, text);
+}
+
+fn measuredTextAdvance(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
+    var total: f32 = 0;
+    var saw_token = false;
+    var tokenizer = MeasureTokenizer.init(text);
+    while (tokenizer.next()) |token| {
+        total += measuredTextWidth(allocator, token, font, style);
+        saw_token = true;
+    }
+    return if (saw_token) total else 0;
 }
 
 fn fallbackTextAdvance(style: TextStyle, text: []const u8) f32 {

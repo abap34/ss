@@ -2,6 +2,7 @@ const std = @import("std");
 const model = @import("model");
 const color_utils = @import("utils").color;
 const class_fields = @import("class_fields.zig");
+const font_model = @import("font.zig");
 const layout = @import("layout.zig");
 
 const Node = model.Node;
@@ -32,11 +33,13 @@ pub const HorizontalAlign = enum {
     right,
 };
 
+pub const FontFace = font_model.Face;
+
 pub const TextPaint = struct {
-    font: []const u8,
-    bold_font: []const u8,
-    italic_font: []const u8,
-    code_font: []const u8,
+    font: FontFace,
+    bold_font: FontFace,
+    italic_font: FontFace,
+    code_font: FontFace,
     font_size: f32,
     line_height: f32,
     color: Color,
@@ -178,12 +181,12 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
 
     const layout_style = layout.styleForNode(ir, node);
     const text_metrics = layout.style.textMetricsForNode(ir, node);
-    const font = stringProperty(ir, node, "text_font", "Helvetica");
+    const fonts = font_model.textFacesForNode(ir, node);
     return .{
-        .font = font,
-        .bold_font = stringProperty(ir, node, "text_bold_font", font),
-        .italic_font = stringProperty(ir, node, "text_italic_font", font),
-        .code_font = stringProperty(ir, node, "text_code_font", "Courier"),
+        .font = fonts.normal,
+        .bold_font = fonts.bold,
+        .italic_font = fonts.italic,
+        .code_font = fonts.code,
         .font_size = text_metrics.font_size,
         .line_height = text_metrics.line_height,
         .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
@@ -251,12 +254,12 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
 
     const layout_style = layout.styleForNode(ir, node);
     const text_metrics = layout.style.textMetricsForNode(ir, node);
-    const font = stringPropertyWithEnv(node, "text_font", "Helvetica", sema);
+    const fonts = font_model.textFacesForNodeWithEnv(node, sema);
     return .{
-        .font = font,
-        .bold_font = stringPropertyWithEnv(node, "text_bold_font", font, sema),
-        .italic_font = stringPropertyWithEnv(node, "text_italic_font", font, sema),
-        .code_font = stringPropertyWithEnv(node, "text_code_font", "Courier", sema),
+        .font = fonts.normal,
+        .bold_font = fonts.bold,
+        .italic_font = fonts.italic,
+        .code_font = fonts.code,
         .font_size = text_metrics.font_size,
         .line_height = text_metrics.line_height,
         .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
@@ -450,14 +453,6 @@ fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {
     if (std.mem.eql(u8, value, "center")) return .center;
     if (std.mem.eql(u8, value, "right")) return .right;
     return null;
-}
-
-fn stringProperty(ir: anytype, node: *const Node, key: []const u8, fallback: []const u8) []const u8 {
-    return class_fields.property(ir, node, key) orelse fallback;
-}
-
-fn stringPropertyWithEnv(node: *const Node, key: []const u8, fallback: []const u8, sema: anytype) []const u8 {
-    return class_fields.propertyWithEnv(node, key, sema) orelse fallback;
 }
 
 fn parseFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {

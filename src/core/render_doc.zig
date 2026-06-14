@@ -1,6 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 const render_policy = @import("render_policy.zig");
+const font_model = @import("font.zig");
 
 pub const Arg = struct {
     key: []const u8,
@@ -39,6 +40,13 @@ pub const Op = struct {
     }
 
     fn putFloat(self: *Op, allocator: std.mem.Allocator, key: []const u8, value: f32) !void {
+        try self.args.append(allocator, .{
+            .key = key,
+            .value = try std.fmt.allocPrint(allocator, "{d}", .{value}),
+        });
+    }
+
+    fn putInt(self: *Op, allocator: std.mem.Allocator, key: []const u8, value: anytype) !void {
         try self.args.append(allocator, .{
             .key = key,
             .value = try std.fmt.allocPrint(allocator, "{d}", .{value}),
@@ -164,10 +172,10 @@ fn appendText(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
     var op = Op.init(node, "draw_text");
     errdefer op.deinit(allocator);
     try op.put(allocator, "content", node.content orelse "");
-    try op.put(allocator, "font", text.font);
-    try op.put(allocator, "bold_font", text.bold_font);
-    try op.put(allocator, "italic_font", text.italic_font);
-    try op.put(allocator, "code_font", text.code_font);
+    try putFontFace(allocator, &op, "font", text.font);
+    try putFontFace(allocator, &op, "bold_font", text.bold_font);
+    try putFontFace(allocator, &op, "italic_font", text.italic_font);
+    try putFontFace(allocator, &op, "code_font", text.code_font);
     try op.putFloat(allocator, "font_size", text.font_size);
     try op.putFloat(allocator, "line_height", text.line_height);
     try op.putColor(allocator, "color", text.color);
@@ -175,6 +183,21 @@ fn appendText(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
     try op.putOptionalColor(allocator, "markdown_bold_color", text.markdown_bold_color);
     try op.putBool(allocator, "wrap", text.wrap);
     try doc.ops.append(allocator, op);
+}
+
+fn putFontFace(allocator: std.mem.Allocator, op: *Op, comptime prefix: []const u8, face: render_policy.FontFace) !void {
+    try op.put(allocator, prefix ++ "_family", face.family);
+    try op.putInt(allocator, prefix ++ "_weight", face.weight);
+    try op.put(allocator, prefix ++ "_style", coreFontStyleName(face.style));
+    try op.put(allocator, prefix ++ "_stretch", coreFontStretchName(face.stretch));
+}
+
+fn coreFontStyleName(style: font_model.Style) []const u8 {
+    return font_model.styleName(style);
+}
+
+fn coreFontStretchName(stretch: font_model.Stretch) []const u8 {
+    return font_model.stretchName(stretch);
 }
 
 fn appendCode(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, code: render_policy.CodePaint) !void {

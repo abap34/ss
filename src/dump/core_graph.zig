@@ -205,10 +205,10 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     };
 
     var text = try object.objectField("text");
-    try text.stringField("font", text_spec.font);
-    try text.stringField("bold_font", text_spec.bold_font);
-    try text.stringField("italic_font", text_spec.italic_font);
-    try text.stringField("code_font", text_spec.code_font);
+    try writeFontFace(&text, "font", text_spec.font);
+    try writeFontFace(&text, "bold_font", text_spec.bold_font);
+    try writeFontFace(&text, "italic_font", text_spec.italic_font);
+    try writeFontFace(&text, "code_font", text_spec.code_font);
     try text.floatField("font_size", text_spec.font_size, "{d:.1}");
     try text.floatField("line_height", text_spec.line_height, "{d:.1}");
     try writeColor(&text, "color", text_spec.color);
@@ -242,6 +242,15 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("cjk_bold_dx", text_spec.cjk_bold_dx, "{d:.4}");
     try text.boolField("wrap", text_spec.wrap);
     try text.end();
+}
+
+fn writeFontFace(object: *json.Object, key: []const u8, face: core.font.Face) !void {
+    var font = try object.objectField(key);
+    try font.stringField("family", face.family);
+    try font.intField("weight", face.weight);
+    try font.stringField("style", core.font.styleName(face.style));
+    try font.stringField("stretch", core.font.stretchName(face.stretch));
+    try font.end();
 }
 
 fn writeOptionalMathPaint(object: *json.Object, maybe_math: ?core.render_policy.MathPaint) !void {

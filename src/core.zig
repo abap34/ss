@@ -51,6 +51,7 @@ pub const InlayHint = @import("core/ir.zig").InlayHint;
 pub const formatConstraint = @import("core/ir.zig").formatConstraint;
 pub const layout = @import("core/layout.zig");
 pub const class_fields = @import("core/class_fields.zig");
+pub const font = @import("core/font.zig");
 pub const render_policy = @import("core/render_policy.zig");
 pub const render_env = @import("core/render_env.zig");
 pub const render_doc = @import("core/render_doc.zig");

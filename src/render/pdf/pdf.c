@@ -280,6 +280,43 @@ int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y) {
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
+static PangoStyle ss_pango_style(int style) {
+    switch (style) {
+        case 1: return PANGO_STYLE_OBLIQUE;
+        case 2: return PANGO_STYLE_ITALIC;
+        default: return PANGO_STYLE_NORMAL;
+    }
+}
+
+static PangoStretch ss_pango_stretch(int stretch) {
+    switch (stretch) {
+        case 0: return PANGO_STRETCH_ULTRA_CONDENSED;
+        case 1: return PANGO_STRETCH_EXTRA_CONDENSED;
+        case 2: return PANGO_STRETCH_CONDENSED;
+        case 3: return PANGO_STRETCH_SEMI_CONDENSED;
+        case 5: return PANGO_STRETCH_SEMI_EXPANDED;
+        case 6: return PANGO_STRETCH_EXPANDED;
+        case 7: return PANGO_STRETCH_EXTRA_EXPANDED;
+        case 8: return PANGO_STRETCH_ULTRA_EXPANDED;
+        default: return PANGO_STRETCH_NORMAL;
+    }
+}
+
+static PangoFontDescription *ss_font_description(const char *family, int weight, int style, int stretch, double font_size) {
+    PangoFontDescription *desc = pango_font_description_new();
+    if (desc == NULL) return NULL;
+    const char *resolved_family = (family != NULL && family[0] != '\0') ? family : "sans-serif";
+    int resolved_weight = weight;
+    if (resolved_weight < 1) resolved_weight = 1;
+    if (resolved_weight > 1000) resolved_weight = 1000;
+    pango_font_description_set_family(desc, resolved_family);
+    pango_font_description_set_weight(desc, (PangoWeight)resolved_weight);
+    pango_font_description_set_style(desc, ss_pango_style(style));
+    pango_font_description_set_stretch(desc, ss_pango_stretch(stretch));
+    pango_font_description_set_absolute_size(desc, font_size * PANGO_SCALE);
+    return desc;
+}
+
 int ss_pdf_draw_text(
     SsPdf *pdf,
     double x,
@@ -287,7 +324,10 @@ int ss_pdf_draw_text(
     double width,
     double height,
     const char *text,
-    const char *font_spec,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
     double font_size,
     double r,
     double g,
@@ -299,12 +339,11 @@ int ss_pdf_draw_text(
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
 
-    PangoFontDescription *desc = pango_font_description_from_string(font_spec);
+    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
     if (desc == NULL) {
         g_object_unref(layout);
         return 1;
     }
-    pango_font_description_set_absolute_size(desc, font_size * PANGO_SCALE);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
 
@@ -343,7 +382,10 @@ int ss_pdf_draw_text_baseline(
     double width,
     double height,
     const char *text,
-    const char *font_spec,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
     double font_size,
     double r,
     double g,
@@ -355,12 +397,11 @@ int ss_pdf_draw_text_baseline(
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
 
-    PangoFontDescription *desc = pango_font_description_from_string(font_spec);
+    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
     if (desc == NULL) {
         g_object_unref(layout);
         return 1;
     }
-    pango_font_description_set_absolute_size(desc, font_size * PANGO_SCALE);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
 
@@ -393,18 +434,17 @@ int ss_pdf_draw_text_baseline(
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
-static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_spec, double font_size, int visual_width) {
+static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size, int visual_width) {
     if (cr == NULL) return 0.0;
 
     PangoLayout *layout = pango_cairo_create_layout(cr);
     if (layout == NULL) return 0.0;
 
-    PangoFontDescription *desc = pango_font_description_from_string(font_spec);
+    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
     if (desc == NULL) {
         g_object_unref(layout);
         return 0.0;
     }
-    pango_font_description_set_absolute_size(desc, font_size * PANGO_SCALE);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
     char *valid_text = g_utf8_make_valid(text, -1);
@@ -469,20 +509,20 @@ static cairo_t *ss_text_measure_context(void) {
     return cr;
 }
 
-double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_spec, double font_size) {
+double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
     if (pdf == NULL || pdf->cr == NULL) return 0.0;
-    return ss_measure_text_on_cairo(pdf->cr, text, font_spec, font_size, 0);
+    return ss_measure_text_on_cairo(pdf->cr, text, font_family, font_weight, font_style, font_stretch, font_size, 0);
 }
 
-double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_spec, double font_size) {
+double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
     if (pdf == NULL || pdf->cr == NULL) return 0.0;
-    return ss_measure_text_on_cairo(pdf->cr, text, font_spec, font_size, 1);
+    return ss_measure_text_on_cairo(pdf->cr, text, font_family, font_weight, font_style, font_stretch, font_size, 1);
 }
 
-double ss_text_measure_text(const char *text, const char *font_spec, double font_size) {
+double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
     static GMutex measure_mutex;
     g_mutex_lock(&measure_mutex);
-    const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_spec, font_size, 0);
+    const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 0);
     g_mutex_unlock(&measure_mutex);
     return width;
 }

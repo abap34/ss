@@ -556,6 +556,22 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
     try expectFloat(expected_height, wrapped_node.frame.height);
 }
 
+test "layout metrics use measured font width for wrapped text height" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "0123456789012345678901234567");
+    try ir.setNodeProperty(object, "wrap", "on");
+    try ir.setNodeProperty(object, "text_font_family", "Helvetica");
+    try ir.setNodeProperty(object, "text_size", "30");
+
+    const node = ir.getNode(object).?;
+    node.frame.width = 480;
+
+    try expectFloat(43.5, metrics.intrinsicHeight(&ir, node));
+}
+
 test "layout metrics: chrome padding is part of visual bounds and yields a content frame" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -787,6 +803,33 @@ test "render policy: invalid numeric properties fall back before rendering" {
     try expectFloat(0, resolved.underline.width);
     try expectFloat(0, resolved.rule.line_width);
     try testing.expect(resolved.rule.dash == null);
+}
+
+test "render policy: font face properties resolve structurally" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "font", null, .text, .text, "Hello");
+    try ir.setNodeProperty(object, "text_font_family", "Avenir Next");
+    try ir.setNodeProperty(object, "text_font_weight", "650");
+    try ir.setNodeProperty(object, "text_font_style", "oblique");
+    try ir.setNodeProperty(object, "text_font_stretch", "condensed");
+    try ir.setNodeProperty(object, "text_markdown_bold_weight", "720");
+    try ir.setNodeProperty(object, "text_markdown_italic_style", "italic");
+    try ir.setNodeProperty(object, "text_code_font_family", "Menlo");
+    try ir.setNodeProperty(object, "text_code_font_weight", "500");
+
+    const resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
+    const text = resolved.text.?;
+    try testing.expectEqualStrings("Avenir Next", text.font.family);
+    try testing.expectEqual(@as(u16, 650), text.font.weight);
+    try testing.expectEqual(core.font.Style.oblique, text.font.style);
+    try testing.expectEqual(core.font.Stretch.condensed, text.font.stretch);
+    try testing.expectEqual(@as(u16, 720), text.bold_font.weight);
+    try testing.expectEqual(core.font.Style.italic, text.italic_font.style);
+    try testing.expectEqualStrings("Menlo", text.code_font.family);
+    try testing.expectEqual(@as(u16, 500), text.code_font.weight);
 }
 
 test "render policy: markdown bold color is optional and resolves as text paint" {

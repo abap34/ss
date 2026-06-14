@@ -3,7 +3,6 @@ const core = @import("core");
 
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
-const text_measure = core.render_text_measure;
 const wrap_layout = core.render_wrap;
 
 const c = @cImport({
@@ -16,6 +15,7 @@ const Frame = core.Frame;
 const PageLayout = core.PageLayout;
 const RenderKind = core.render_policy.RenderKind;
 const HorizontalAlign = core.render_policy.HorizontalAlign;
+const FontFace = core.font.Face;
 const ResolvedRender = core.render_policy.ResolvedRender;
 const TextPaint = core.render_policy.TextPaint;
 const CodePaint = core.render_policy.CodePaint;
@@ -60,7 +60,7 @@ const DrawContext = struct {
 const Atom = struct {
     kind: enum { text, math, icon } = .text,
     text: []const u8,
-    font: []const u8,
+    font: FontFace,
     color: Color,
     width: f32,
     height: f32 = 0,
@@ -890,10 +890,10 @@ fn streamFileFingerprint(ctx: *DrawContext, source: []const u8) !FileFingerprint
 fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
     hashBool(hasher, maybe != null);
     if (maybe) |text| {
-        hashString(hasher, text.font);
-        hashString(hasher, text.bold_font);
-        hashString(hasher, text.italic_font);
-        hashString(hasher, text.code_font);
+        hashFontFace(hasher, text.font);
+        hashFontFace(hasher, text.bold_font);
+        hashFontFace(hasher, text.italic_font);
+        hashFontFace(hasher, text.code_font);
         hashF32(hasher, text.font_size);
         hashF32(hasher, text.line_height);
         hashColor(hasher, text.color);
@@ -1004,6 +1004,13 @@ fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
 fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
     hashUsize(hasher, value.len);
     hasher.update(value);
+}
+
+fn hashFontFace(hasher: *std.hash.Wyhash, face: FontFace) void {
+    hashString(hasher, face.family);
+    hashU32(hasher, @intCast(face.weight));
+    hashU32(hasher, @intFromEnum(face.style));
+    hashU32(hasher, @intFromEnum(face.stretch));
 }
 
 fn hashOptionalString(hasher: *std.hash.Wyhash, value: ?[]const u8) void {
@@ -2394,7 +2401,7 @@ fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
     }
 }
 
-fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: []const u8, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool) !void {
+fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool) !void {
     var tokenizer = Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = isEmojiToken(token);
@@ -2567,7 +2574,7 @@ fn drawPlainTextAtTop(
     width: f32,
     line_height: f32,
     content: []const u8,
-    font: []const u8,
+    font: FontFace,
     font_size: f32,
     color: Color,
     wrap: bool,
@@ -2583,7 +2590,7 @@ fn drawCodeTextAtTop(
     width: f32,
     line_height: f32,
     content: []const u8,
-    font: []const u8,
+    font: FontFace,
     font_size: f32,
     color: Color,
     emoji_spacing: f32,
@@ -2598,7 +2605,7 @@ fn drawPlainTextAtTopWithOptions(
     width: f32,
     line_height: f32,
     content: []const u8,
-    font: []const u8,
+    font: FontFace,
     font_size: f32,
     color: Color,
     wrap: bool,
@@ -2648,7 +2655,7 @@ fn drawCodeLine(
     y_top: f32,
     width: f32,
     line: []const u8,
-    font: []const u8,
+    font: FontFace,
     font_size: f32,
     line_height: f32,
     code: CodePaint,
@@ -2685,7 +2692,7 @@ fn drawCodeLine(
     }
 }
 
-fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []const u8, font: []const u8, font_size: f32, line_height: f32, color: Color, emoji_spacing: f32) !void {
+fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []const u8, font: FontFace, font_size: f32, line_height: f32, color: Color, emoji_spacing: f32) !void {
     if (segment.len == 0) return;
     const segment_width = try drawCodeTextAtTop(ctx, cursor_x.*, y_top, 1, line_height, segment, font, font_size, color, emoji_spacing);
     cursor_x.* += segment_width;
@@ -2972,13 +2979,13 @@ fn drawRawText(
     width: f32,
     height: f32,
     content: []const u8,
-    font: []const u8,
+    font: FontFace,
     font_size: f32,
     color: Color,
     wrap: bool,
 ) !void {
-    const font_spec = try fontSpec(ctx.allocator, font, font_size);
-    defer ctx.allocator.free(font_spec);
+    const family_z = try ctx.allocator.dupeZ(u8, font.family);
+    defer ctx.allocator.free(family_z);
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
     const baseline_y = y_top + font_size;
@@ -2990,7 +2997,10 @@ fn drawRawText(
         width,
         height,
         content_z.ptr,
-        font_spec.ptr,
+        family_z.ptr,
+        @intCast(font.weight),
+        core.font.styleCode(font.style),
+        core.font.stretchCode(font.stretch),
         font_size,
         color.r,
         color.g,
@@ -3029,22 +3039,38 @@ fn isInternalLink(url: []const u8) bool {
     return url.len > 1 and url[0] == '#';
 }
 
-fn measureText(ctx: *DrawContext, content: []const u8, font: []const u8, font_size: f32) !f32 {
+fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
     if (content.len == 0) return 0;
-    const font_spec = try fontSpec(ctx.allocator, font, font_size);
-    defer ctx.allocator.free(font_spec);
+    const family_z = try ctx.allocator.dupeZ(u8, font.family);
+    defer ctx.allocator.free(family_z);
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
-    return @floatCast(c.ss_pdf_measure_text(ctx.pdf, content_z.ptr, font_spec.ptr, font_size));
+    return @floatCast(c.ss_pdf_measure_text(
+        ctx.pdf,
+        content_z.ptr,
+        family_z.ptr,
+        @intCast(font.weight),
+        core.font.styleCode(font.style),
+        core.font.stretchCode(font.stretch),
+        font_size,
+    ));
 }
 
-fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: []const u8, font_size: f32) !f32 {
+fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
     if (content.len == 0) return 0;
-    const font_spec = try fontSpec(ctx.allocator, font, font_size);
-    defer ctx.allocator.free(font_spec);
+    const family_z = try ctx.allocator.dupeZ(u8, font.family);
+    defer ctx.allocator.free(family_z);
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
-    return @floatCast(c.ss_pdf_measure_text_visual_width(ctx.pdf, content_z.ptr, font_spec.ptr, font_size));
+    return @floatCast(c.ss_pdf_measure_text_visual_width(
+        ctx.pdf,
+        content_z.ptr,
+        family_z.ptr,
+        @intCast(font.weight),
+        core.font.styleCode(font.style),
+        core.font.stretchCode(font.stretch),
+        font_size,
+    ));
 }
 
 fn baselineBlForBox(frame: Frame, font_size: f32) f32 {
@@ -3742,10 +3768,6 @@ fn fileExists(path: []const u8) bool {
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
     return std.c.access(@ptrCast(&buf), 0) == 0;
-}
-
-fn fontSpec(allocator: Allocator, font_name: []const u8, font_size: f32) ![:0]u8 {
-    return text_measure.fontSpec(allocator, font_name, font_size);
 }
 
 fn insetFrame(frame: Frame, dx: f32, dy: f32) Frame {
