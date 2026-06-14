@@ -4,6 +4,20 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-06-15
+
+### Changed
+
+- Split TeX rendering so `tex` accepts raw LaTeX blocks while `math` keeps the
+  math-array rendering path.
+- Removed implicit chrome from themed TeX components.
+- Refined layout fallback and cache behavior for more stable render output.
+- Debounced LSP project rebuilds after editor changes.
+
+### Fixed
+
+- Fixed LSP constraint diagnostics.
+
 ## [0.5.3] - 2026-06-14
 
 ### Changed
