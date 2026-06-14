@@ -492,16 +492,7 @@ fn skipExpr(slice: []const u8, start: usize) usize {
 
 fn skipString(slice: []const u8, start: usize) usize {
     var index = start + 1;
-    var escaped = false;
     while (index < slice.len) : (index += 1) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (slice[index] == '\\') {
-            escaped = true;
-            continue;
-        }
         if (slice[index] == '"') return index;
     }
     return slice.len;

@@ -1531,13 +1531,8 @@ fn scanSemanticLine(allocator: std.mem.Allocator, tokens: *std.ArrayList(Semanti
         if ((byte == 'c' and index + 1 < line.len and line[index + 1] == '"') or byte == '"') {
             const start = index;
             index += if (byte == 'c') @as(usize, 2) else 1;
-            var escaped = false;
             while (index < line.len) : (index += 1) {
-                if (escaped) {
-                    escaped = false;
-                } else if (line[index] == '\\') {
-                    escaped = true;
-                } else if (line[index] == '"') {
+                if (line[index] == '"') {
                     index += 1;
                     break;
                 }
@@ -1659,13 +1654,8 @@ fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
     var index: usize = 0;
     while (std.mem.indexOfPos(u8, source, index, "c\"")) |start| {
         var end = start + 2;
-        var escaped = false;
         while (end < source.len) : (end += 1) {
-            if (escaped) {
-                escaped = false;
-            } else if (source[end] == '\\') {
-                escaped = true;
-            } else if (source[end] == '"') {
+            if (source[end] == '"') {
                 end += 1;
                 break;
             }
@@ -2216,8 +2206,6 @@ fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
 fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
     return switch (diagnostic.err) {
         error.UnterminatedString => "UnterminatedString: unterminated string",
-        error.UnterminatedEscape => "UnterminatedEscape: unterminated escape sequence",
-        error.InvalidEscape => "InvalidEscape: invalid escape sequence",
         error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
         error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
         error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",

@@ -60,17 +60,29 @@
       "patterns": [
         {
           "name": "string.quoted.double.ss",
-          "match": "\"(?:\\\\.|[^\"\\\\])*\""
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.ss" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.ss" }
+          }
         }
       ]
     },
     "color-string": {
       "patterns": [
         {
-          "captures": {
-            "0": { "name": "constant.other.color.ss" }
+          "name": "constant.other.color.ss",
+          "begin": "c\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.ss" }
           },
-          "match": "c\"(?:\\\\.|[^\"\\\\])*\""
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.ss" }
+          }
         }
       ]
     },

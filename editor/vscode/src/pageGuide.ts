@@ -31,6 +31,7 @@ type PaletteEntry = {
 type ScanState = {
   inChevronBlock: boolean;
   inTripleString: boolean;
+  inDoubleString: boolean;
 };
 
 const pagePalette: PaletteEntry[] = [
@@ -217,7 +218,7 @@ function computePageDecorationBuckets(document: vscode.TextDocument, colorCount:
 function computePageRanges(document: vscode.TextDocument): PageRange[] {
   const pages: PageRange[] = [];
   const stack: BlockFrame[] = [];
-  const scan: ScanState = { inChevronBlock: false, inTripleString: false };
+  const scan: ScanState = { inChevronBlock: false, inTripleString: false, inDoubleString: false };
 
   for (let line = 0; line < document.lineCount; line += 1) {
     const visibleText = codeTextForBlockScan(document.lineAt(line).text, scan);
@@ -265,6 +266,15 @@ function codeTextForBlockScan(lineText: string, state: ScanState): string {
 
   let out = "";
   for (let index = 0; index < lineText.length;) {
+    if (state.inDoubleString) {
+      const closing = lineText.indexOf("\"", index);
+      if (closing < 0) {
+        return out;
+      }
+      state.inDoubleString = false;
+      index = closing + 1;
+      continue;
+    }
     if (lineText.startsWith("\"\"\"", index)) {
       state.inTripleString = !state.inTripleString;
       index += 3;
@@ -282,7 +292,8 @@ function codeTextForBlockScan(lineText: string, state: ScanState): string {
       break;
     }
     if (lineText[index] === "\"") {
-      index = skipDoubleQuotedString(lineText, index + 1);
+      state.inDoubleString = true;
+      index += 1;
       continue;
     }
 
@@ -291,19 +302,6 @@ function codeTextForBlockScan(lineText: string, state: ScanState): string {
   }
 
   return out;
-}
-
-function skipDoubleQuotedString(lineText: string, index: number): number {
-  for (let pos = index; pos < lineText.length; pos += 1) {
-    if (lineText[pos] === "\\") {
-      pos += 1;
-      continue;
-    }
-    if (lineText[pos] === "\"") {
-      return pos + 1;
-    }
-  }
-  return lineText.length;
 }
 
 function blockStartKind(lineText: string): BlockKind | undefined {

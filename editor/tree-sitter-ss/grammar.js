@@ -257,9 +257,9 @@ module.exports = grammar({
     type_identifier: _ => /[A-Z][A-Za-z0-9_]*/,
     string: _ => token(choice(
       seq('"""', repeat(choice(/[^"]+/, /"[^"]/, /""[^"]/)), '"""'),
-      seq('"', repeat(choice(/[^"\\]/, /\\./)), '"'),
+      seq('"', repeat(/[^"]/), '"'),
     )),
-    color_string: _ => /c"([^"\\]|\\.)*"/,
+    color_string: _ => /c"[^"]*"/,
     block_text: _ => token(seq("<<", /([^>]|>[^>])*/, ">>")),
     line_text: _ => token.immediate(/[ \t][^\n]+/),
     number: _ => /\d+(\.\d+)?/,
