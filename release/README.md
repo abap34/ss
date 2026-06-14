@@ -41,6 +41,19 @@ smoke tests, editor package checks, Homebrew formula rendering, and the render
 Docker image build with one direct CLI render check. Do not tag a release until
 this script passes locally.
 
+When the release preparation commit changes only release metadata and generated
+version metadata, use the faster guarded path:
+
+```sh
+release/tools/pre-release-check.sh --release-metadata-only vX.Y.Z
+```
+
+This mode verifies that `HEAD` only touches the release metadata files, then
+skips the Zig tests and smoke checks. It still checks release metadata, builds
+the release binary, checks `ss --version`, validates tree-sitter and VS Code
+packaging, renders the Homebrew formula, and runs Docker checks unless
+`--skip-docker` is also passed.
+
 After local and CI validation pass, create and push the tag:
 
 ```sh
