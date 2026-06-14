@@ -35,9 +35,7 @@ fn/! text(text_value: String) -> Object
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = frame(text_value, "math", "math_tex", 108, 108, 14, 12, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
-  obj.render_kind = RenderKind.vector_math
-  obj.text_parse = TextParseMode.none
+  let obj = flow(tex_obj(text_value), 108, 108)
   obj.math_scale = scale
   return obj
 end

@@ -59,9 +59,7 @@ fn/! note(text_value: String) -> Object
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = frame(text_value, "math", "math_tex", 96, 96, 14, 12, c"0.997,0.999,1.000", c"0.78,0.84,0.92", 0.9, 8)
-  obj.render_kind = RenderKind.vector_math
-  obj.text_parse = TextParseMode.none
+  let obj = flow(tex_obj(text_value), 96, 96)
   obj.math_scale = scale
   obj.math_align = Align.center
   return obj
