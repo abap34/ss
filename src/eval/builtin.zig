@@ -104,6 +104,31 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             }
             break :blk target;
         },
+        .foreach_enumerate => blk: {
+            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
+            errdefer target.deinit(ctx.ir.allocator);
+            var callback = try evalFunctionArg(ctx, call, 1);
+            defer callback.deinit(ctx.ir.allocator);
+            var extras = try evalExtraArgs(ctx, call, 2);
+            defer extras.deinit(ctx.ir.allocator);
+            defer deinitValues(ctx.ir.allocator, extras.items);
+            const selection = switch (target) {
+                .selection => |sel| sel,
+                else => return error.ExpectedSelection,
+            };
+            var snapshot = try selection.clone(ctx.ir.allocator);
+            defer snapshot.deinit(ctx.ir.allocator);
+            for (snapshot.ids.items, 0..) |id, index| {
+                var args = std.ArrayList(core.Value).empty;
+                defer args.deinit(ctx.ir.allocator);
+                try args.append(ctx.ir.allocator, itemValue(snapshot.item_tag, id));
+                try args.append(ctx.ir.allocator, .{ .number = @floatFromInt(index + 1) });
+                try args.appendSlice(ctx.ir.allocator, extras.items);
+                var result = try ctx.invokeCallback(callback, args.items);
+                defer result.deinit(ctx.ir.allocator);
+            }
+            break :blk target;
+        },
         .fold => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             defer target.deinit(ctx.ir.allocator);
