@@ -13,7 +13,7 @@ const DEFAULT_TEXT_STYLE = TextStyle{
     .default_right_inset = 96,
 };
 
-const DEFAULT_LINE_HEIGHT_FACTOR: f32 = 1.6;
+const DEFAULT_LINE_HEIGHT_FACTOR: f32 = 1.45;
 
 pub const TextMetrics = struct {
     font_size: f32,

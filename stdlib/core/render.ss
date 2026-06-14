@@ -48,7 +48,6 @@ end
 fn txt_p(obj: Object, font_name: String, font_size_name: Number, line_height_name: Number, color_name: Color) -> Object
   obj.text_font = font_name
   obj.text_size = font_size_name
-  obj.text_line_height = line_height_name
   obj.text_color = color_name
   return obj
 end
@@ -70,8 +69,6 @@ fn code_font(obj: Object, family_name: String) -> Object
 end
 
 fn txt_flow(obj: Object, font_size_name: Number, line_height_name: Number, spacing_after_name: Number, left_name: Number, right_name: Number) -> Object
-  obj.layout_font_size = font_size_name
-  obj.layout_line_height = line_height_name
   obj.layout_spacing_after = spacing_after_name
   obj.layout_x = left_name
   obj.layout_right_inset = right_name
