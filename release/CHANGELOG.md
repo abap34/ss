@@ -4,6 +4,29 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-14
+
+### Added
+
+- Added TeX preamble support for document-level render configuration.
+- Added focused LSP runtime tests for completion, editor configuration,
+  definitions, semantic tokens, and broken-source completion regressions.
+
+### Changed
+
+- Moved completion analysis into the compiler analysis layer so LSP completion
+  reuses shared module, scope, environment, and type information.
+- Removed VS Code snippets from the extension package.
+- Derived text line height from the effective text size and tuned the automatic
+  line-height factor.
+
+### Fixed
+
+- Fixed member completion across entry and library files, including `.` property
+  completion, `mod::` module completion, duplicate filtering, cold start, and
+  multiline broken-source edits.
+- Preserved Markdown bold color through render policy, dumps, and PDF rendering.
+
 ## [0.5.1] - 2026-06-14
 
 ### Changed
