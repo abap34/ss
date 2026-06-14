@@ -12,6 +12,8 @@ They intentionally assert:
   reconciliation;
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
+- focused LSP editor regressions through `tests/lsp_*_runtime_spec.mjs`, also
+  wired into `zig build test`.
 
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that
@@ -21,10 +23,10 @@ has ever touched that subsystem.
   `ss.toml`, basic CLI errors, and dump equivalence against
   `tests/fixtures/project-basic`.
 - `tests/smoke/lsp.mjs` spawns `ss lsp` and checks initialize, diagnostics,
-  completion, hover, definition, and one ranged edit cycle.
+  one global completion, hover, definition, and one ranged edit cycle.
 - Language semantics, static semantics, and detailed editor regressions belong
-  in `*_spec_tests.zig` or a focused regression fixture before being considered
-  for smoke coverage.
+  in `*_spec_tests.zig`, `tests/lsp_*_runtime_spec.mjs`, or a focused
+  regression fixture before being considered for smoke coverage.
 
 They intentionally avoid asserting behavior that is still an implementation
 detail or underspecified:

@@ -200,6 +200,7 @@ fn addTestStep(
         import("compiler_semantics", compiler_semantics_support_mod),
     }, true);
 
+    addNodeSpecTests(b, test_step, exe);
     addSmokeChecks(b, test_step, exe);
 }
 
@@ -270,6 +271,23 @@ fn createTestModule(
 fn addTestModule(b: *std.Build, test_step: *Step, module: *Module) void {
     const test_artifact = b.addTest(.{ .root_module = module });
     test_step.dependOn(&b.addRunArtifact(test_artifact).step);
+}
+
+fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
+    const node_spec_files = [_][]const u8{
+        "tests/lsp_completion_runtime_spec.mjs",
+        "tests/lsp_editor_runtime_spec.mjs",
+    };
+
+    for (node_spec_files) |path| {
+        const node_spec = b.addSystemCommand(&.{"node"});
+        node_spec.setName(b.fmt("node {s}", .{path}));
+        node_spec.addFileArg(b.path(path));
+        node_spec.addFileArg(exe.getEmittedBin());
+        node_spec.setCwd(b.path("."));
+        node_spec.stdio = .inherit;
+        test_step.dependOn(&node_spec.step);
+    }
 }
 
 fn addSmokeChecks(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
