@@ -53,6 +53,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectMissing(result, "page");
         try expectMissing(result, "add");
         try expectMissing(result, "Align");
+        try expectMissing(result, "String");
     }
 
     {
@@ -64,6 +65,8 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectMissing(result, "page");
         try expectMissing(result, "add");
         try expectMissing(result, "text_size");
+        try expectMissing(result, "String");
+        try expectMissing(result, "Align");
     }
 
     {
@@ -72,6 +75,11 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectUnique(result);
         try expectHas(result, "page");
         try expectHas(result, "h1!");
+        try expectHas(result, "String");
+        try expectHas(result, "Object");
+        try expectHas(result, "Selection");
+        try expectHas(result, "Align");
+        try expectHas(result, "Text");
         try expectMissing(result, "text_size");
     }
 }
@@ -93,6 +101,40 @@ test "analysis completion: normal position follows import visibility" {
     try expectHas(result, "page");
     try expectMissing(result, "h1");
     try expectMissing(result, "h1!");
+    try expectMissing(result, "text_size");
+}
+
+test "analysis completion: normal positions include builtin and source type names" {
+    var case = try CompletionCase.init(
+        \\import std:themes/default as *
+        \\
+        \\page title
+        \\end
+        \\
+    );
+    defer case.deinit();
+
+    const request_source =
+        \\import std:themes/default as *
+        \\
+        \\type SourceOnly = alpha | beta
+        \\type SourceCard = object {
+        \\}
+        \\
+        \\fn keep(value: ) -> SourceOnly
+        \\  return value
+        \\end
+        \\
+    ;
+
+    var result = try case.completeSourceAfter(request_source, "value: ");
+    defer result.deinit(case.allocator);
+    try expectUnique(result);
+    try expectHas(result, "String");
+    try expectHas(result, "Object");
+    try expectHas(result, "Selection");
+    try expectHas(result, "SourceOnly");
+    try expectHas(result, "SourceCard");
     try expectMissing(result, "text_size");
 }
 

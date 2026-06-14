@@ -41,6 +41,22 @@ pub const Request = struct {
     offset: usize,
 };
 
+const builtin_type_names = [_][]const u8{
+    "Document",
+    "Page",
+    "Object",
+    "Metadata",
+    "Anchor",
+    "String",
+    "Color",
+    "Number",
+    "Bool",
+    "Constraints",
+    "Void",
+    "None",
+    "Selection",
+};
+
 const ImportInfo = struct {
     alias: ?[]u8 = null,
     unqualified: bool = false,
@@ -236,8 +252,7 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
         if (!isBestVisibleVariable(index, allocator, variable, request)) continue;
         try builder.add(.{ .label = variable.name, .kind = .variable, .detail = variable.type_label });
     }
-    for (index.types) |item| try builder.add(.{ .label = item.name, .kind = .type_decl, .detail = item.type_label });
-    for (index.classes) |item| try builder.add(.{ .label = item.name, .kind = .class });
+    try appendTypeNameCompletions(&builder, index, request.source);
     for (index.roles) |item| try builder.add(.{ .label = item.name, .kind = .role, .detail = item.type_label });
     return try builder.finish();
 }
@@ -740,6 +755,68 @@ fn appendFunctionCandidate(builder: *CandidateBuilder, function: FunctionInfo) !
         .detail = function.signature,
         .documentation = function.documentation,
     });
+}
+
+fn appendTypeNameCompletions(builder: *CandidateBuilder, index: *const Index, source: []const u8) !void {
+    for (builtin_type_names) |name| try builder.add(.{ .label = name, .kind = .type_decl, .detail = "builtin type" });
+    try appendSourceTypeNameCompletions(builder, source);
+    for (index.types) |item| try builder.add(.{ .label = item.name, .kind = .type_decl, .detail = item.type_label });
+    for (index.classes) |item| try builder.add(.{ .label = item.name, .kind = .class });
+}
+
+fn appendSourceTypeNameCompletions(builder: *CandidateBuilder, source: []const u8) !void {
+    var cursor: usize = 0;
+    var in_chevron = false;
+    while (cursor < source.len) {
+        const line_start = cursor;
+        while (cursor < source.len and source[cursor] != '\n') cursor += 1;
+        const line = source[line_start..cursor];
+        if (in_chevron) {
+            if (std.mem.indexOf(u8, line, ">>") != null) in_chevron = false;
+        } else {
+            if (sourceTypeDeclOnLine(line)) |decl| try builder.add(.{
+                .label = decl.name,
+                .kind = decl.kind,
+                .detail = decl.detail,
+            });
+            const stripped = stripLineComment(line);
+            if (std.mem.indexOf(u8, stripped, "<<") != null and std.mem.indexOf(u8, stripped, ">>") == null) in_chevron = true;
+        }
+        if (cursor < source.len and source[cursor] == '\n') cursor += 1;
+    }
+}
+
+const SourceTypeDecl = struct {
+    name: []const u8,
+    kind: CompletionKind,
+    detail: ?[]const u8,
+};
+
+fn sourceTypeDeclOnLine(line: []const u8) ?SourceTypeDecl {
+    const trimmed = std.mem.trim(u8, stripLineComment(line), " \t\r");
+    if (!std.mem.startsWith(u8, trimmed, "type")) return null;
+    if (trimmed.len <= "type".len or !std.ascii.isWhitespace(trimmed["type".len])) return null;
+    var cursor: usize = "type".len;
+    while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) cursor += 1;
+    const name_start = cursor;
+    if (cursor >= trimmed.len or !isIdentifierStart(trimmed[cursor])) return null;
+    cursor += 1;
+    while (cursor < trimmed.len and isReceiverChar(trimmed[cursor])) cursor += 1;
+    const name = trimmed[name_start..cursor];
+    while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) cursor += 1;
+    if (cursor < trimmed.len and trimmed[cursor] == '=') {
+        cursor += 1;
+        while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) cursor += 1;
+        if (sourceStartsKeyword(trimmed[cursor..], "object") or sourceStartsKeyword(trimmed[cursor..], "protocol")) {
+            return .{ .name = name, .kind = .class, .detail = null };
+        }
+    }
+    return .{ .name = name, .kind = .type_decl, .detail = "type" };
+}
+
+fn sourceStartsKeyword(text: []const u8, keyword: []const u8) bool {
+    if (!std.mem.startsWith(u8, text, keyword)) return false;
+    return text.len == keyword.len or !isIdentChar(text[keyword.len]);
 }
 
 fn appendProperties(builder: *CandidateBuilder, index: *const Index, target: PropertyTarget) !void {
