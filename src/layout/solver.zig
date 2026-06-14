@@ -283,8 +283,9 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
             return graph.setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
                 if (is_soft) return false;
                 if (options.record_diagnostics) {
-                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, kind);
+                    if (err != error.ConstraintConflict) {
+                        ir.noteConstraintFailure(workspace.graph.page_id, constraint, workspace.states[target_index].size_source, .negative_size);
+                    }
                 }
                 return false;
             };
@@ -300,13 +301,111 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
         return try applyReverseAxisConstraint(ir, workspace, constraint, is_soft, target_index, options);
     }
 
-    return graph.setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
+    const target_value = source_value.? + constraint.offset;
+    if (!is_soft and canMoveDefaultSizedAnchor(ir, workspace, target_index)) {
+        if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
+            _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+            return true;
+        }
+    }
+
+    if (!is_soft and shouldReplaceDefaultGeometry(ir, workspace, target_index, constraint.target_anchor)) {
+        if (graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
+            _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+            return true;
+        }
+    }
+
+    return graph.setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint) catch |err| {
+        if (!is_soft and err == error.ConstraintConflict and canMoveDefaultSizedAnchor(ir, workspace, target_index)) {
+            if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
+                _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+                return true;
+            }
+        }
+        if (!is_soft and err == error.ConstraintConflict and canReplaceDuplicateDefaultAnchor(ir, workspace, target_index, constraint.target_anchor)) {
+            if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
+                _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+                return true;
+            }
+        }
+        if (!is_soft and err == error.ConstraintConflict) {
+            const existing = graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor);
+            if (existing != null and constraintInSlice(workspace.soft_constraints, existing.?) and graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
+                _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+                return true;
+            }
+        }
         if (is_soft) return false;
         if (options.record_diagnostics) {
-            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-            ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor), kind);
+            if (err != error.ConstraintConflict) {
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor), .negative_size);
+            }
         }
         return false;
+    };
+}
+
+fn canMoveDefaultSizedAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
+    const state = workspace.states[target_index];
+    if (!state.size_is_default or state.size == null) return false;
+    if (hardTargetAnchorCountOnAxis(ir, workspace.nodeAt(target_index), workspace.axis) > 1) return false;
+    const sources = [_]?Constraint{ state.size_source, state.start_source, state.end_source, state.center_source };
+    for (sources) |source| {
+        const constraint = source orelse continue;
+        if (!constraintInSlice(workspace.soft_constraints, constraint)) return false;
+    }
+    return true;
+}
+
+fn canReplaceDuplicateDefaultAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+    const state = workspace.states[target_index];
+    if (!state.size_is_default or state.size == null) return false;
+    if (hardTargetAnchorCountOnAxis(ir, workspace.nodeAt(target_index), workspace.axis) != 1) return false;
+    const existing = graph.axisAnchorSource(state, target_anchor) orelse return false;
+    return !constraintInSlice(workspace.soft_constraints, existing);
+}
+
+fn shouldReplaceDefaultGeometry(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
+    const state = workspace.states[target_index];
+    if (!state.size_is_default) return false;
+    if (hardTargetAnchorCountOnAxis(ir, workspace.nodeAt(target_index), workspace.axis) <= 1) return false;
+
+    const existing_source = graph.axisAnchorSource(state, target_anchor);
+    if (existing_source) |source| return constraintInSlice(workspace.soft_constraints, source);
+    return graph.axisAnchorValue(state, target_anchor) == null;
+}
+
+fn constraintInSlice(constraints: []const Constraint, needle: Constraint) bool {
+    for (constraints) |constraint| {
+        if (constraintsSame(constraint, needle)) return true;
+    }
+    return false;
+}
+
+fn hasHardTargetConstraintOnAxis(ir: anytype, node_id: NodeId, axis: model.Axis) bool {
+    return hardTargetAnchorCountOnAxis(ir, node_id, axis) > 0;
+}
+
+fn hardTargetAnchorCountOnAxis(ir: anytype, node_id: NodeId, axis: model.Axis) usize {
+    var seen = [_]bool{ false, false, false };
+    for (ir.constraints.items) |constraint| {
+        if (constraint.target_node != node_id) continue;
+        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
+        seen[anchorSlot(constraint.target_anchor)] = true;
+    }
+    var count: usize = 0;
+    for (seen) |item| {
+        if (item) count += 1;
+    }
+    return count;
+}
+
+fn anchorSlot(anchor: model.Anchor) usize {
+    return switch (anchor) {
+        .left, .bottom => 0,
+        .right, .top => 1,
+        .center_x, .center_y => 2,
     };
 }
 
@@ -333,13 +432,19 @@ fn applyReverseAxisConstraint(
     if (graph.axisAnchorValue(workspace.states[source_index], node_source.anchor) != null) return false;
 
     const target_state = workspace.states[target_index];
-    if (target_state.size_is_default and graph.axisAnchorSource(target_state, constraint.target_anchor) == null) return false;
+    const target_anchor_source = graph.axisAnchorSource(target_state, constraint.target_anchor);
+    if (target_anchor_source) |source| {
+        if (constraintInSlice(workspace.soft_constraints, source) and hasHardTargetConstraintOnAxis(ir, node_source.node_id, workspace.axis)) return false;
+    } else if (target_state.size_is_default) {
+        return false;
+    }
 
     const target_value = graph.axisAnchorValue(target_state, constraint.target_anchor) orelse return false;
     return graph.setAxisAnchor(&workspace.states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
         if (options.record_diagnostics) {
-            const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-            ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(workspace.states[source_index], node_source.anchor), kind);
+            if (err != error.ConstraintConflict) {
+                ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(workspace.states[source_index], node_source.anchor), .negative_size);
+            }
         }
         return false;
     };

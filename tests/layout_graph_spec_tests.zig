@@ -189,6 +189,33 @@ test "layout graph spec: sourced anchor updates preserve default size" {
     try expectFloat(140, explicit.center.?);
 }
 
+test "layout graph spec: hard anchors move default-sized states" {
+    const constraint = model.Constraint{
+        .target_node = 2,
+        .target_anchor = .center_y,
+        .source = .{ .node = .{ .node_id = 1, .anchor = .center_y } },
+        .offset = 0,
+    };
+
+    var state = model.AxisState{
+        .start = 10,
+        .end = 50,
+        .center = 30,
+        .size = 40,
+        .size_is_default = true,
+    };
+
+    try testing.expect(try graph.moveDefaultSizedAnchor(&state, .center_y, 80, constraint));
+    try expectFloat(80, state.center.?);
+    try expectFloat(40, state.size.?);
+    try testing.expect(state.start == null);
+    try testing.expect(state.end == null);
+
+    try testing.expect(try graph.reconcileAxisState(&state));
+    try expectFloat(60, state.start.?);
+    try expectFloat(100, state.end.?);
+}
+
 test "layout graph spec: page graph indexes direct page children and filters axis constraints" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -392,6 +419,52 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     const left_node = row.getNode(left).?;
     const right_node = row.getNode(right).?;
     try expectFloat(left_node.frame.y + left_node.frame.height / 2, right_node.frame.y + right_node.frame.height / 2);
+}
+
+test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const byline = try ir.makeObject(page, "byline", null, .text, .text, "Byline");
+    try ir.addAnchorConstraint(title, .left, .{ .node = .{ .node_id = byline, .anchor = .left } }, 0, "same-left");
+
+    try ir.finalize();
+
+    const title_node = ir.getNode(title).?;
+    const byline_node = ir.getNode(byline).?;
+    try expectFloat(title_node.frame.x, byline_node.frame.x);
+}
+
+test "layout solver: constrained group source forms one fallback unit" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+
+    const page = try ir.addPage("Page");
+    const left_title = try ir.makeObject(page, "left-title", null, .text, .text, "Left");
+    const left_body = try ir.makeObject(page, "left-body", null, .text, .text, "Body");
+    const right = try ir.makeObject(page, "right", null, .text, .text, "Right");
+    const left_group = try ir.makeGroupWithOrigin(ir.document_id, false, &.{ left_title, left_body }, "left-group");
+
+    try ir.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-group");
+    try ir.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-center");
+
+    try ir.finalize();
+
+    const group_node = ir.getNode(left_group).?;
+    const left_title_node = ir.getNode(left_title).?;
+    const left_body_node = ir.getNode(left_body).?;
+    const right_node = ir.getNode(right).?;
+    try testing.expect(group_node.frame.x_set);
+    try testing.expect(group_node.frame.y_set);
+    try expectFloat(group_node.frame.x + group_node.frame.width + 30, right_node.frame.x);
+    try expectFloat(group_node.frame.y + group_node.frame.height / 2, right_node.frame.y + right_node.frame.height / 2);
+
+    const title_spacing = core.layout.styleForNode(&ir, left_title_node).spacing_after;
+    try expectFloat(left_title_node.frame.y - title_spacing, left_body_node.frame.y + left_body_node.frame.height);
 }
 
 test "layout solver: explicit anchor conflicts and negative sizes are rejected" {

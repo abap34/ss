@@ -820,6 +820,7 @@ pub const Ir = struct {
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.attached or node.discarded) continue;
             if (try self.hasUnplacedObjectParent(node.id)) continue;
+            if (self.isConstraintReferencedGroupWithAttachedDescendant(node.id)) continue;
             const role = node.role orelse node.name;
             const message = try std.fmt.allocPrint(self.allocator, "UnplacedObject: object '{s}' was generated but not placed", .{role});
             try self.addValidationDiagnostic(.warning, null, node.id, node.origin, .{
@@ -836,6 +837,34 @@ pub const Ir = struct {
                 const parent = self.getNode(entry.key_ptr.*) orelse continue;
                 if (parent.kind == .object and !parent.attached and !parent.discarded) return true;
             }
+        }
+        return false;
+    }
+
+    fn isConstraintReferencedGroupWithAttachedDescendant(self: *Ir, node_id: NodeId) bool {
+        const node = self.getNode(node_id) orelse return false;
+        if (!roleEq(node.role, GroupRole)) return false;
+        if (!self.constraintReferencesNode(node_id)) return false;
+        return self.hasAttachedDescendant(node_id);
+    }
+
+    fn constraintReferencesNode(self: *Ir, node_id: NodeId) bool {
+        for (self.constraints.items) |constraint| {
+            if (constraint.target_node == node_id) return true;
+            switch (constraint.source) {
+                .page => {},
+                .node => |source| if (source.node_id == node_id) return true,
+            }
+        }
+        return false;
+    }
+
+    fn hasAttachedDescendant(self: *Ir, node_id: NodeId) bool {
+        const children = self.childrenOf(node_id) orelse return false;
+        for (children) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.attached) return true;
+            if (self.hasAttachedDescendant(child_id)) return true;
         }
         return false;
     }
