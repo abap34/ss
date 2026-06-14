@@ -2943,6 +2943,20 @@ test "compiler semantics: unplaced group warns once for the root object" {
     try expectObjectState(source, .{ .content = "two", .attached = false, .discarded = false });
 }
 
+test "compiler semantics: constraint-referenced groups are layout values" {
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let left = text! "left"
+        \\  let detail = text! "detail"
+        \\  let right = text! "right"
+        \\  cols2(group(left, detail), right)
+        \\end
+        \\
+    , "UnplacedObject");
+}
+
 test "compiler semantics: placing or discarding a group covers its children" {
     const placed_source =
         \\import std:themes/default as *

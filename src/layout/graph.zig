@@ -37,30 +37,30 @@ pub const SolveOptions = struct {
 pub const PageLayoutGraph = struct {
     allocator: std.mem.Allocator,
     page_id: NodeId,
-    child_ids: []const NodeId,
+    child_ids: []NodeId,
     index_by_node: std.AutoHashMap(NodeId, usize),
     has_horizontal_target_constraint: []bool,
     has_vertical_target_constraint: []bool,
 
     pub fn init(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId) !PageLayoutGraph {
-        const children = ir.contains.get(page_id) orelse return .{
-            .allocator = allocator,
-            .page_id = page_id,
-            .child_ids = &.{},
-            .index_by_node = std.AutoHashMap(NodeId, usize).init(allocator),
-            .has_horizontal_target_constraint = &.{},
-            .has_vertical_target_constraint = &.{},
-        };
+        var child_ids_list = std.ArrayList(NodeId).empty;
+        errdefer child_ids_list.deinit(allocator);
+        if (ir.contains.get(page_id)) |children| {
+            try child_ids_list.appendSlice(allocator, children.items);
+        }
+        try appendImplicitConstraintGroups(allocator, ir, page_id, &child_ids_list);
+        const child_ids = try child_ids_list.toOwnedSlice(allocator);
+        errdefer allocator.free(child_ids);
 
         var index_by_node = std.AutoHashMap(NodeId, usize).init(allocator);
         errdefer index_by_node.deinit();
-        try index_by_node.ensureTotalCapacity(@intCast(children.items.len));
-        for (children.items, 0..) |node_id, index| {
+        try index_by_node.ensureTotalCapacity(@intCast(child_ids.len));
+        for (child_ids, 0..) |node_id, index| {
             index_by_node.putAssumeCapacity(node_id, index);
         }
-        const has_horizontal_target_constraint = try allocator.alloc(bool, children.items.len);
+        const has_horizontal_target_constraint = try allocator.alloc(bool, child_ids.len);
         errdefer allocator.free(has_horizontal_target_constraint);
-        const has_vertical_target_constraint = try allocator.alloc(bool, children.items.len);
+        const has_vertical_target_constraint = try allocator.alloc(bool, child_ids.len);
         errdefer allocator.free(has_vertical_target_constraint);
         @memset(has_horizontal_target_constraint, false);
         @memset(has_vertical_target_constraint, false);
@@ -80,7 +80,7 @@ pub const PageLayoutGraph = struct {
         return .{
             .allocator = allocator,
             .page_id = page_id,
-            .child_ids = children.items,
+            .child_ids = child_ids,
             .index_by_node = index_by_node,
             .has_horizontal_target_constraint = has_horizontal_target_constraint,
             .has_vertical_target_constraint = has_vertical_target_constraint,
@@ -89,6 +89,7 @@ pub const PageLayoutGraph = struct {
 
     pub fn deinit(self: *PageLayoutGraph) void {
         self.index_by_node.deinit();
+        self.allocator.free(self.child_ids);
         self.allocator.free(self.has_horizontal_target_constraint);
         self.allocator.free(self.has_vertical_target_constraint);
     }
@@ -242,6 +243,42 @@ pub const PageLayoutGraph = struct {
         };
     }
 };
+
+fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (ir.nodes.items) |node| {
+            if (!isGroupNode(&node)) continue;
+            if (containsNodeId(child_ids.items, node.id)) continue;
+            if (!groupHasPageDescendant(ir, page_id, node.id)) continue;
+            if (!groupIsReferencedByConstraint(ir, node.id)) continue;
+            try child_ids.append(allocator, node.id);
+            changed = true;
+        }
+    }
+}
+
+fn groupIsReferencedByConstraint(ir: anytype, group_id: NodeId) bool {
+    for (ir.constraints.items) |constraint| {
+        if (constraint.target_node == group_id) return true;
+        switch (constraint.source) {
+            .page => {},
+            .node => |source| if (source.node_id == group_id) return true,
+        }
+    }
+    return false;
+}
+
+fn groupHasPageDescendant(ir: anytype, page_id: NodeId, group_id: NodeId) bool {
+    const children = ir.childrenOf(group_id) orelse return false;
+    for (children) |child_id| {
+        if (ir.parentPageOf(child_id) == page_id) return true;
+        const child = ir.getNode(child_id) orelse continue;
+        if (isGroupNode(child) and groupHasPageDescendant(ir, page_id, child_id)) return true;
+    }
+    return false;
+}
 
 pub const AxisWorkspace = struct {
     allocator: std.mem.Allocator,
@@ -645,6 +682,7 @@ fn overrideDefaultDerivedAnchor(state: *AxisState, anchor: Anchor, value: f32, s
         .left, .bottom => blk: {
             if (state.start) |current| {
                 if (approxEq(current, value)) break :blk false;
+                if (state.start_source != null) break :blk false;
                 if (state.end != null) {
                     state.start = value;
                     state.start_source = source;
@@ -661,6 +699,7 @@ fn overrideDefaultDerivedAnchor(state: *AxisState, anchor: Anchor, value: f32, s
         .right, .top => blk: {
             if (state.end) |current| {
                 if (approxEq(current, value)) break :blk false;
+                if (state.end_source != null) break :blk false;
                 if (state.start != null) {
                     state.end = value;
                     state.end_source = source;
@@ -676,6 +715,91 @@ fn overrideDefaultDerivedAnchor(state: *AxisState, anchor: Anchor, value: f32, s
         },
         .center_x, .center_y => false,
     };
+}
+
+pub fn moveDefaultSizedAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) !bool {
+    if (!state.size_is_default or state.size == null) return false;
+
+    return switch (anchor) {
+        .left, .bottom => blk: {
+            if (state.start) |current| if (approxEq(current, value)) break :blk false;
+            state.start = value;
+            state.start_source = source;
+            state.end = null;
+            state.end_source = null;
+            state.center = null;
+            state.center_source = null;
+            break :blk true;
+        },
+        .right, .top => blk: {
+            if (state.end) |current| if (approxEq(current, value)) break :blk false;
+            state.end = value;
+            state.end_source = source;
+            state.start = null;
+            state.start_source = null;
+            state.center = null;
+            state.center_source = null;
+            break :blk true;
+        },
+        .center_x, .center_y => blk: {
+            if (state.center) |current| if (approxEq(current, value)) break :blk false;
+            state.center = value;
+            state.center_source = source;
+            state.start = null;
+            state.start_source = null;
+            state.end = null;
+            state.end_source = null;
+            break :blk true;
+        },
+    };
+}
+
+pub fn replaceAxisAnchor(state: *AxisState, anchor: Anchor, value: f32, source: ?Constraint) bool {
+    switch (anchor) {
+        .left, .bottom => {
+            if (state.start) |current| {
+                if (approxEq(current, value) and constraintsEquivalentOptional(state.start_source, source)) return false;
+            }
+            state.start = value;
+            state.start_source = source;
+            state.end = null;
+            state.end_source = null;
+            state.size = null;
+            state.size_source = null;
+            state.size_is_default = false;
+            state.center = null;
+            state.center_source = null;
+        },
+        .right, .top => {
+            if (state.end) |current| {
+                if (approxEq(current, value) and constraintsEquivalentOptional(state.end_source, source)) return false;
+            }
+            state.end = value;
+            state.end_source = source;
+            state.start = null;
+            state.start_source = null;
+            state.size = null;
+            state.size_source = null;
+            state.size_is_default = false;
+            state.center = null;
+            state.center_source = null;
+        },
+        .center_x, .center_y => {
+            if (state.center) |current| {
+                if (approxEq(current, value) and constraintsEquivalentOptional(state.center_source, source)) return false;
+            }
+            state.center = value;
+            state.center_source = source;
+            state.start = null;
+            state.start_source = null;
+            state.end = null;
+            state.end_source = null;
+            state.size = null;
+            state.size_source = null;
+            state.size_is_default = false;
+        },
+    }
+    return true;
 }
 
 pub fn reconcileAxisState(state: *AxisState) !bool {
@@ -748,6 +872,11 @@ fn constraintsEquivalent(a: Constraint, b: Constraint) bool {
     if (a.target_anchor != b.target_anchor) return false;
     if (!approxEq(a.offset, b.offset)) return false;
     return constraintSourcesEquivalent(a.source, b.source);
+}
+
+fn constraintsEquivalentOptional(a: ?Constraint, b: ?Constraint) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return constraintsEquivalent(a.?, b.?);
 }
 
 fn constraintSourcesEquivalent(a: ConstraintSource, b: ConstraintSource) bool {
@@ -857,6 +986,13 @@ pub fn approxEq(a: f32, b: f32) bool {
 fn containsIndex(items: []const usize, index: usize) bool {
     for (items) |item| {
         if (item == index) return true;
+    }
+    return false;
+}
+
+fn containsNodeId(items: []const NodeId, node_id: NodeId) bool {
+    for (items) |item| {
+        if (item == node_id) return true;
     }
     return false;
 }
