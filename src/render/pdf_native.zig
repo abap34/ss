@@ -549,6 +549,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashF32(hasher, text.line_height);
         hashColor(hasher, text.color);
         hashColor(hasher, text.link_color);
+        hashOptionalColor(hasher, text.markdown_bold_color);
         hashF32(hasher, text.link_underline_width);
         hashF32(hasher, text.link_underline_offset);
         hashF32(hasher, text.inline_math_height_factor);
@@ -1922,7 +1923,7 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, package
                 try appendMathAtom(ctx, atoms, run.text, text, packages, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.color, text.font_size, null, run.strikethrough),
+            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough),
             .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough),
             .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough),
             .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough),

@@ -94,6 +94,11 @@ fn md_code(obj: Object, font_size_name: Number, line_height_name: Number, pad_x_
   return obj
 end
 
+fn md_bold(obj: Object, color_name: Color?) -> Object
+  obj.text_markdown_bold_color = color_name
+  return obj
+end
+
 fn md_table(obj: Object, pad_x_name: Number, pad_y_name: Number, border_name: Color, line_width_name: Number, header_fill_name: Color, alt_row_fill_name: Color? = none) -> Object
   obj.text_markdown_table_cell_pad_x = pad_x_name
   obj.text_markdown_table_cell_pad_y = pad_y_name

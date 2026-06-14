@@ -1012,6 +1012,16 @@ test "compiler semantics: Color is a static type" {
         \\
     , "text_color", "0.2,0.26666668,0.33333334");
 
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = text("**bold**")
+        \\  body.text_markdown_bold_color = c"#884422"
+        \\end
+        \\
+    , "text_markdown_bold_color", "0.53333336,0.26666668,0.13333334");
+
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
@@ -1021,6 +1031,16 @@ test "compiler semantics: Color is a static type" {
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text_markdown_bold_color = "red"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_bold_color' expects Color?, got String");
 }
 
 test "compiler semantics: optional fields accept none and coalesce" {

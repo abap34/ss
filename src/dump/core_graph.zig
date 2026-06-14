@@ -208,6 +208,7 @@ fn writeOptionalTextPaint(object: *json.Object, maybe_text: ?core.render_policy.
     try text.floatField("line_height", text_spec.line_height, "{d:.1}");
     try writeColor(&text, "color", text_spec.color);
     try writeColor(&text, "link_color", text_spec.link_color);
+    try writeOptionalColor(&text, "markdown_bold_color", text_spec.markdown_bold_color);
     try text.floatField("link_underline_width", text_spec.link_underline_width, "{d:.1}");
     try text.floatField("link_underline_offset", text_spec.link_underline_offset, "{d:.1}");
     try text.floatField("inline_math_height_factor", text_spec.inline_math_height_factor, "{d:.4}");

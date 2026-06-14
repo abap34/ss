@@ -172,6 +172,7 @@ fn appendText(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
     try op.putFloat(allocator, "line_height", text.line_height);
     try op.putColor(allocator, "color", text.color);
     try op.putColor(allocator, "link_color", text.link_color);
+    try op.putOptionalColor(allocator, "markdown_bold_color", text.markdown_bold_color);
     try op.putBool(allocator, "wrap", text.wrap);
     try doc.ops.append(allocator, op);
 }

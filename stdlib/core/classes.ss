@@ -46,6 +46,7 @@ type Text = object {
   text_line_height: Number? = none
   text_color: Color = c"0.08,0.08,0.08"
   text_link_color: Color = c"0.1,0.25,0.75"
+  text_markdown_bold_color: Color? = none
   text_link_underline_width: Number = 0.8
   text_link_underline_offset: Number = -1.5
   text_inline_math_height_factor: Number = 1.02

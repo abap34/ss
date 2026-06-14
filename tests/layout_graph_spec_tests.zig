@@ -24,6 +24,12 @@ fn expectFloat(expected: f32, actual: f32) !void {
     try testing.expectApproxEqAbs(expected, actual, 0.0001);
 }
 
+fn expectColor(expected_r: f32, expected_g: f32, expected_b: f32, actual: core.render_policy.Color) !void {
+    try expectFloat(expected_r, actual.r);
+    try expectFloat(expected_g, actual.g);
+    try expectFloat(expected_b, actual.b);
+}
+
 fn expectSelfConstraintSize(expected: f32, actual: graph.SelfConstraint) !void {
     switch (actual) {
         .size => |size| try expectFloat(expected, size),
@@ -675,6 +681,21 @@ test "render policy: invalid numeric properties fall back before rendering" {
     try expectFloat(0, resolved.underline.width);
     try expectFloat(0, resolved.rule.line_width);
     try testing.expect(resolved.rule.dash == null);
+}
+
+test "render policy: markdown bold color is optional and resolves as text paint" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "**Hello**");
+
+    var resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
+    try testing.expect(resolved.text.?.markdown_bold_color == null);
+
+    try ir.setNodeProperty(object, "text_markdown_bold_color", "0.2,0.4,0.6");
+    resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
+    try expectColor(0.2, 0.4, 0.6, resolved.text.?.markdown_bold_color.?);
 }
 
 test "render policy: math alignment applies to markdown and vector math" {
