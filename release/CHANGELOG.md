@@ -4,6 +4,13 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-14
+
+### Changed
+
+- Refined the default theme with presentation-scale typography, clearer
+  code/math/media framing, additional theme helpers, and tuned heading spacing.
+
 ## [0.5.2] - 2026-06-14
 
 ### Added
