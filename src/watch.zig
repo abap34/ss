@@ -15,6 +15,7 @@ pub const Options = struct {
     asset_base_dir: []const u8,
     project_file: ?[]const u8 = null,
     jobs: ?usize = null,
+    cache_id: ?[]const u8 = null,
     interval_ms: u64 = 500,
 };
 
@@ -53,7 +54,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 return false;
             };
             var progress = utils.progress.Progress.init(7);
-            const render_options = app.RenderOptions{ .jobs = options.jobs };
+            const render_options = app.RenderOptions{ .jobs = options.jobs, .cache_id = options.cache_id };
             app.writePdfForFileWithAssetBaseAndOptions(
                 io,
                 allocator,

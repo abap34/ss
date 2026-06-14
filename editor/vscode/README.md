@@ -105,7 +105,7 @@ The preview asks the language server for `ss/projectInfo`, writes a snapshot of
 open `.ss` buffers under `.ss-cache/vscode-projects/`, and refreshes a PDF with:
 
 ```sh
-ss render <snapshot-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base>
+ss render <snapshot-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base> --cache-id <project-entry>
 ```
 
 With the default `[editor.preview].open = "vscode"`, the extension opens its own

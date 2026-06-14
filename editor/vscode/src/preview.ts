@@ -248,6 +248,8 @@ export class LivePreview implements vscode.Disposable {
       paths.tempPdf,
       "--asset-base-dir",
       snapshot.assetBaseDir,
+      "--cache-id",
+      entryPath,
       ...settings.extraRenderArgs,
     ];
     this.output.appendLine(`[preview] ${command} ${args.join(" ")}`);
