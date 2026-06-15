@@ -34,7 +34,7 @@ fn/! head(title_text: String) -> Object
   rule.layout_spacing_after = 48
   pin_l(rule, 72)
   pin_r(rule, 72)
-  below(rule, title, 14)
+  below(rule, title, 10)
   return title
 end
 
