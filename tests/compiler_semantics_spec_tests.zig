@@ -2934,6 +2934,31 @@ test "compiler semantics: stdlib numbering formats numbered items" {
     , "Claim 2: B");
 }
 
+test "compiler semantics: stdlib numbering waits for wrapped numbered items" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\fn/! captioned(text_value: String) -> Object
+        \\  let item = numbered_item("claim", text_value)
+        \\  item.text_size = 12
+        \\  return item
+        \\end
+        \\
+        \\document
+        \\  numbering!("claim", "Claim {number}: {text}")
+        \\end
+        \\
+        \\page one
+        \\  captioned!("A")
+        \\end
+        \\
+        \\page two
+        \\  captioned!("B")
+        \\end
+        \\
+    , "Claim 2: B");
+}
+
 test "compiler semantics: stdlib numbering keeps source text across repeated formatting" {
     try expectObjectContent(
         \\import std:themes/default as *
