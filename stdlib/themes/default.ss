@@ -103,6 +103,10 @@ fn/! code(text_value: String, language_name: String = "python") -> Object
   return code
 end
 
+fn/! code_file(path_value: String, language_name: String = "plain") -> Object
+  return code(readlines(path_value), language_name)
+end
+
 fn toc(title_text: String) -> Object
   let title = head(title_text)
   let list = toc_obj()

@@ -80,6 +80,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const new = try ctx.evalStringArg(call, 2);
             break :blk .{ .string = try ctx.ownString(try replaceAll(ctx.ir.allocator, text, old, new)) };
         },
+        .readlines => blk: {
+            const path = try ctx.evalStringArg(call, 0);
+            break :blk .{ .string = try ctx.readlines(path) };
+        },
         .foreach => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             errdefer target.deinit(ctx.ir.allocator);

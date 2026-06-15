@@ -56,6 +56,7 @@ fn buildSourceWithAssetFixtures(source: []const u8) !void {
     const slide_path = try std.fs.path.join(allocator, &.{ root, "case.ss" });
     const image_path = try std.fs.path.join(allocator, &.{ root, "image.svg" });
     const pdf_path = try std.fs.path.join(allocator, &.{ root, "doc.pdf" });
+    const snippet_path = try std.fs.path.join(allocator, &.{ root, "snippet.zig" });
     try std.Io.Dir.cwd().writeFile(testing.io, .{
         .sub_path = image_path,
         .data =
@@ -69,8 +70,55 @@ fn buildSourceWithAssetFixtures(source: []const u8) !void {
         .data = "%PDF-1.7\n1 0 obj <<>> endobj\ntrailer <<>>\n%%EOF\n",
         .flags = .{ .truncate = true },
     });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = snippet_path,
+        .data = "pub fn main() void {}\n",
+        .flags = .{ .truncate = true },
+    });
 
     try compiler_semantics.buildSource(testing.io, allocator, slide_path, source);
+}
+
+fn expectObjectContentWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    const slide_path = try std.fs.path.join(allocator, &.{ root, "case.ss" });
+    const file_path = try std.fs.path.join(allocator, &.{ root, file_name });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = file_path,
+        .data = file_content,
+        .flags = .{ .truncate = true },
+    });
+
+    try compiler_semantics.expectObjectContent(testing.io, allocator, slide_path, source, expected);
+}
+
+fn expectObjectPropertyWithFile(source: []const u8, file_name: []const u8, file_content: []const u8, key: []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    const slide_path = try std.fs.path.join(allocator, &.{ root, "case.ss" });
+    const file_path = try std.fs.path.join(allocator, &.{ root, file_name });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = file_path,
+        .data = file_content,
+        .flags = .{ .truncate = true },
+    });
+
+    try compiler_semantics.expectObjectProperty(testing.io, allocator, slide_path, source, key, expected);
 }
 
 fn expectBuildFails(source: []const u8) !void {
@@ -409,6 +457,7 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  mathtex!("x^2")
         \\  code_l!("const x = 1", "zig")
         \\  code!("print('x')", "python")
+        \\  code_file!("snippet.zig", "zig")
         \\  note!("note")
         \\  pageno!()
         \\end
@@ -447,6 +496,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  text!("Body")
         \\  tex!("x^2")
         \\  code!("print('x')", "python")
+        \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
         \\end
         \\
@@ -466,6 +516,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  subhead!("Subhead")
         \\  text!("Body")
         \\  code!("print('x')", "python")
+        \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
         \\end
         \\
@@ -488,6 +539,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  image!("image.svg")
         \\  pdf!("doc.pdf")
         \\  code!("print('x')", "python")
+        \\  code_file!("snippet.zig", "zig")
         \\  note!("note")
         \\  toc!("Contents")
         \\end
@@ -497,6 +549,24 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\end
         \\
     );
+}
+
+test "compiler semantics: code_file reads source text from asset base" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page code
+        \\  code_file!("snippet.zig", "zig")
+        \\end
+        \\
+    ;
+    const snippet =
+        \\pub fn main() void {}
+        \\
+    ;
+
+    try expectObjectContentWithFile(source, "snippet.zig", snippet, snippet);
+    try expectObjectPropertyWithFile(source, "snippet.zig", snippet, "language", "zig");
 }
 
 test "compiler semantics: import as star introduces bare names" {

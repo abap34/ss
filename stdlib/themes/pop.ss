@@ -70,6 +70,10 @@ fn/! code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, 108, 108, 18, 14, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
 end
 
+fn/! code_file(path_value: String, language_name: String = "plain") -> Object
+  return code(readlines(path_value), language_name)
+end
+
 fn/! note(text_value: String) -> Object
   return inset(note_obj(text_value), 124, 124)
 end

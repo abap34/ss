@@ -419,6 +419,10 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .report_error, .report_warning => try summary.addWrite(.{ .kind = .diagnostics }),
+            .readlines => {
+                try summary.addRead(.{ .kind = .asset });
+                try summary.addWrite(.{ .kind = .diagnostics });
+            },
             .require_asset_exists => {
                 try summary.addRead(.{ .kind = .asset });
                 try summary.addWrite(.{ .kind = .diagnostics });
