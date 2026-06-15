@@ -144,6 +144,7 @@ pub const Analyzer = struct {
     variable_scope: ResourceScope,
     visiting: FunctionVisitSet,
     string_bindings: std.StringHashMap([]const u8),
+    owned_strings: std.ArrayList([]const u8),
     local_variables: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
@@ -157,12 +158,15 @@ pub const Analyzer = struct {
             .variable_scope = variable_scope,
             .visiting = FunctionVisitSet.init(allocator),
             .string_bindings = std.StringHashMap([]const u8).init(allocator),
+            .owned_strings = .empty,
             .local_variables = std.StringHashMap(void).init(allocator),
         };
     }
 
     pub fn deinit(self: *Analyzer) void {
         self.local_variables.deinit();
+        for (self.owned_strings.items) |value| self.allocator.free(value);
+        self.owned_strings.deinit(self.allocator);
         self.string_bindings.deinit();
         self.visiting.deinit();
     }
@@ -463,7 +467,7 @@ pub const Analyzer = struct {
                 .old = previous,
             });
             if (index < call.args.items.len) {
-                if (literalStringExpr(self, call.args.items[index])) |value| {
+                if (try literalStringExpr(self, call.args.items[index])) |value| {
                     try self.string_bindings.put(param.name, value);
                 } else {
                     _ = self.string_bindings.remove(param.name);
@@ -487,7 +491,7 @@ pub const Analyzer = struct {
                 summary.reads_layout = true;
             },
             .content => try summary.addRead(Resource.property(null, "content")),
-            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(null, literalStringArg(self, call, 1))),
+            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(null, try literalStringArg(self, call, 1))),
             .set_content => {
                 try summary.addWrite(Resource.property(null, "content"));
                 summary.writes_layout_input = true;
@@ -501,7 +505,7 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .new => {
-                try summary.addWrite(Resource.objects(literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.objects(try literalStringArg(self, call, 1)));
                 try summary.addWrite(Resource.property(null, "content"));
                 summary.writes_layout_input = true;
             },
@@ -510,7 +514,7 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .set_prop => {
-                try summary.addWrite(Resource.property(null, literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.property(null, try literalStringArg(self, call, 1)));
                 summary.writes_layout_input = true;
             },
             .equal, .constraints => {
@@ -586,7 +590,7 @@ pub const Analyzer = struct {
     }
 
     fn applySelectSummary(self: *Analyzer, summary: *AccessSummary, call: ast.CallExpr) !void {
-        const query_name = literalStringArg(self, call, 1) orelse {
+        const query_name = (try literalStringArg(self, call, 1)) orelse {
             try summary.addRead(Resource.objects(null));
             try summary.addSelectionRead(Resource.objects(null));
             return;
@@ -599,7 +603,7 @@ pub const Analyzer = struct {
             .document_pages => try summary.addSelectionRead(Resource.pageIndex(null)),
             .page_objects_by_role,
             .document_objects_by_role,
-            => try summary.addSelectionRead(Resource.objects(literalStringArg(self, call, 2))),
+            => try summary.addSelectionRead(Resource.objects(try literalStringArg(self, call, 2))),
             .children,
             .descendants,
             .self_object,
@@ -611,18 +615,82 @@ pub const Analyzer = struct {
     }
 };
 
-fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) ?[]const u8 {
+fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const u8 {
     if (index >= call.args.items.len) return null;
-    return literalStringExpr(self, call.args.items[index]);
+    return try literalStringExpr(self, call.args.items[index]);
 }
 
-fn literalStringExpr(self: *Analyzer, expr: ast.Expr) ?[]const u8 {
+fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
     return switch (expr) {
         .string => |value| value,
         .color => |value| value,
         .ident => |name| self.string_bindings.get(name),
+        .call => |call| try literalStringCall(self, call),
         else => null,
     };
+}
+
+fn literalStringCall(self: *Analyzer, call: ast.CallExpr) anyerror!?[]const u8 {
+    const descriptor = self.sema.callCallee(call.callee) orelse return null;
+    return switch (descriptor) {
+        .primitive => |primitive| switch (primitive.op) {
+            .concat => try literalConcat(self, call),
+            else => null,
+        },
+        .function => |resolved| try literalStringFunctionCall(self, resolved, call),
+    };
+}
+
+fn literalConcat(self: *Analyzer, call: ast.CallExpr) !?[]const u8 {
+    if (call.args.items.len != 2) return null;
+    const left = (try literalStringExpr(self, call.args.items[0])) orelse return null;
+    const right = (try literalStringExpr(self, call.args.items[1])) orelse return null;
+    return try ownString(self, try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ left, right }));
+}
+
+fn literalStringFunctionCall(
+    self: *Analyzer,
+    resolved: semantic_env.ResolvedFunction,
+    call: ast.CallExpr,
+) !?[]const u8 {
+    if (self.visiting.contains(resolved.key)) return null;
+    try self.visiting.put(resolved.key, {});
+    defer _ = self.visiting.remove(resolved.key);
+
+    var bindings = std.ArrayList(Analyzer.StringBindingRestore).empty;
+    defer {
+        var index = bindings.items.len;
+        while (index > 0) {
+            index -= 1;
+            const binding = bindings.items[index];
+            if (binding.had_old) {
+                self.string_bindings.put(binding.name, binding.old.?) catch {};
+            } else {
+                _ = self.string_bindings.remove(binding.name);
+            }
+        }
+        bindings.deinit(self.allocator);
+    }
+    try self.bindLiteralStringArgs(resolved.decl, call, &bindings);
+
+    const previous = self.sema;
+    self.sema = self.sema.forModule(resolved.module_id);
+    defer self.sema = previous;
+
+    for (resolved.decl.statements.items) |stmt| {
+        switch (stmt.kind) {
+            .return_expr => |expr| return try literalStringExpr(self, expr),
+            .return_void => return null,
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn ownString(self: *Analyzer, value: []const u8) ![]const u8 {
+    errdefer self.allocator.free(value);
+    try self.owned_strings.append(self.allocator, value);
+    return value;
 }
 
 pub fn callableNamePlacesObjects(name: []const u8) bool {
