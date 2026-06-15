@@ -609,7 +609,6 @@ fn builtinType(name: []const u8) ?ast.Type {
     if (std.mem.eql(u8, name, "Document")) return ast.Type.document;
     if (std.mem.eql(u8, name, "Page")) return ast.Type.page;
     if (std.mem.eql(u8, name, "Object")) return ast.Type.object;
-    if (std.mem.eql(u8, name, "Metadata")) return ast.Type.metadata;
     if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
     if (std.mem.eql(u8, name, "String")) return ast.Type.string;
     if (std.mem.eql(u8, name, "Color")) return ast.Type.color;

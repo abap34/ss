@@ -5,9 +5,7 @@ const ast = @import("ast");
 
 const Allocator = model.Allocator;
 const NodeId = model.NodeId;
-const MetadataId = model.MetadataId;
 const Node = model.Node;
-const Metadata = model.Metadata;
 const NodeKind = model.NodeKind;
 const Role = model.Role;
 const ObjectKind = model.ObjectKind;
@@ -149,7 +147,6 @@ pub const Ir = struct {
     definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
     nodes: std.ArrayList(Node),
-    metadata: std.ArrayList(Metadata),
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     constraints: std.ArrayList(Constraint),
@@ -158,7 +155,6 @@ pub const Ir = struct {
     constraint_failures: std.ArrayList(ConstraintFailure),
     runtime_strings: std.ArrayList([]u8),
     next_id: NodeId,
-    next_metadata_id: MetadataId,
     document_id: NodeId,
 
     pub fn init(
@@ -181,7 +177,6 @@ pub const Ir = struct {
             .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
             .nodes = .empty,
-            .metadata = .empty,
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .constraints = .empty,
@@ -190,7 +185,6 @@ pub const Ir = struct {
             .constraint_failures = .empty,
             .runtime_strings = .empty,
             .next_id = 1,
-            .next_metadata_id = 1,
             .document_id = 0,
         };
         errdefer ir.deinitPartial();
@@ -237,8 +231,6 @@ pub const Ir = struct {
         self.contains.deinit();
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
-        for (self.metadata.items) |*metadata| metadata.deinit(self.allocator);
-        self.metadata.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
@@ -276,10 +268,6 @@ pub const Ir = struct {
             node.deinit(self.allocator);
         }
         self.nodes.deinit(self.allocator);
-        for (self.metadata.items) |*metadata| {
-            metadata.deinit(self.allocator);
-        }
-        self.metadata.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
         self.clearDiagnostics();
@@ -355,12 +343,6 @@ pub const Ir = struct {
     fn freshId(self: *Ir) !NodeId {
         const id = self.next_id;
         self.next_id += 1;
-        return id;
-    }
-
-    fn freshMetadataId(self: *Ir) MetadataId {
-        const id = self.next_metadata_id;
-        self.next_metadata_id += 1;
         return id;
     }
 
@@ -659,53 +641,6 @@ pub const Ir = struct {
         node.content_owned = true;
     }
 
-    pub fn emitMetadata(self: *Ir, target: Value, kind: []const u8, value: []const u8, origin: ?[]const u8) !MetadataId {
-        const page_id: ?NodeId = switch (target) {
-            .document => null,
-            .page => |id| id,
-            .object => |id| self.parentPageOf(id) orelse return error.MissingParentPage,
-            else => return error.InvalidValueTag,
-        };
-        return try self.addMetadata(kind, value, page_id, origin);
-    }
-
-    pub fn addMetadata(self: *Ir, kind: []const u8, value: []const u8, page_id: ?NodeId, origin: ?[]const u8) !MetadataId {
-        const id = self.freshMetadataId();
-        try self.metadata.append(self.allocator, .{
-            .id = id,
-            .kind = try self.copyString(kind),
-            .value = try self.copyString(value),
-            .page_id = page_id,
-            .origin = try self.copyOptionalString(origin),
-        });
-        return id;
-    }
-
-    pub fn metadataById(self: *Ir, id: MetadataId) ?*Metadata {
-        if (id != 0) {
-            const index: usize = @intCast(id - 1);
-            if (index < self.metadata.items.len and self.metadata.items[index].id == id) {
-                return &self.metadata.items[index];
-            }
-        }
-        for (self.metadata.items) |*item| {
-            if (item.id == id) return item;
-        }
-        return null;
-    }
-
-    pub fn metadataContent(self: *Ir, id: MetadataId) ![]const u8 {
-        return (self.metadataById(id) orelse return error.UnknownMetadata).value;
-    }
-
-    pub fn metadataKind(self: *Ir, id: MetadataId) ![]const u8 {
-        return (self.metadataById(id) orelse return error.UnknownMetadata).kind;
-    }
-
-    pub fn metadataPage(self: *Ir, id: MetadataId) !NodeId {
-        return (self.metadataById(id) orelse return error.UnknownMetadata).page_id orelse return error.MissingParentPage;
-    }
-
     fn makeNodeWithOrigin(
         self: *Ir,
         page_id: NodeId,
@@ -952,7 +887,6 @@ pub const Ir = struct {
             .document => .document,
             .page => .page,
             .object => .object,
-            .metadata => .metadata,
             .selection => .selection,
             .anchor => .anchor,
             .function => .function,
@@ -1026,26 +960,6 @@ pub const Ir = struct {
         var selection = Selection.init(.page, provenance);
         for (self.page_order.items) |page_id| {
             try selection.ids.append(allocator, page_id);
-        }
-        return selection;
-    }
-
-    pub fn selectDocumentMetadataByKind(self: *Ir, allocator: Allocator, kind: []const u8, provenance: []const u8) !Selection {
-        var selection = Selection.init(.metadata, provenance);
-        for (self.metadata.items) |item| {
-            if (std.mem.eql(u8, item.kind, kind)) {
-                try selection.ids.append(allocator, item.id);
-            }
-        }
-        return selection;
-    }
-
-    pub fn selectPageMetadataByKind(self: *Ir, allocator: Allocator, page_id: NodeId, kind: []const u8, provenance: []const u8) !Selection {
-        var selection = Selection.init(.metadata, provenance);
-        for (self.metadata.items) |item| {
-            if (item.page_id != null and item.page_id.? == page_id and std.mem.eql(u8, item.kind, kind)) {
-                try selection.ids.append(allocator, item.id);
-            }
         }
         return selection;
     }

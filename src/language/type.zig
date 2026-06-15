@@ -16,7 +16,6 @@ pub const Type = struct {
         document,
         page,
         object,
-        metadata,
         selection,
         anchor,
         function,
@@ -36,7 +35,6 @@ pub const Type = struct {
     pub const document = Type{ .kind = .document };
     pub const page = Type{ .kind = .page };
     pub const object = Type{ .kind = .object };
-    pub const metadata = Type{ .kind = .metadata };
     pub const anchor = Type{ .kind = .anchor };
     pub const function = Type{ .kind = .function };
     pub const string = Type{ .kind = .string };
@@ -296,7 +294,6 @@ pub const Type = struct {
             .document => "Document",
             .page => "Page",
             .object => "Object",
-            .metadata => "Metadata",
             .selection => "Selection",
             .anchor => "Anchor",
             .function => "Function",

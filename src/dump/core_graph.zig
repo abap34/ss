@@ -20,20 +20,6 @@ pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
     try nodes.end();
 }
 
-pub fn writeMetadataField(root: *json.Object, items: []const core.Metadata) !void {
-    var array = try root.arrayField("metadata");
-    for (items) |metadata| {
-        var item = try array.objectItem();
-        try item.intField("id", metadata.id);
-        try item.stringField("kind", metadata.kind);
-        try item.stringField("value", metadata.value);
-        try item.optionalIntField("page_id", metadata.page_id);
-        try item.optionalStringField("origin", metadata.origin);
-        try item.end();
-    }
-    try array.end();
-}
-
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sema: anytype, node: core.Node) !void {
     const render = core.render_policy.resolveWithEnv(ir, &node, sema);
     const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and node.content != null;

@@ -202,7 +202,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 .selection => |sel| switch (sel.item_tag) {
                     .object => .{ .object = sel.first() orelse return error.EmptySelection },
                     .page => .{ .page = sel.first() orelse return error.EmptySelection },
-                    .metadata => .{ .metadata = sel.first() orelse return error.EmptySelection },
                 },
                 else => return error.ExpectedSelection,
             };
@@ -269,36 +268,6 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .content => blk: {
             const object_id = try ctx.evalObjectArg(call, 0);
             break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
-        },
-        .emit_metadata => blk: {
-            var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
-            defer target.deinit(ctx.ir.allocator);
-            const kind = try ctx.evalStringArg(call, 1);
-            const value = try ctx.evalStringArg(call, 2);
-            break :blk .{ .metadata = try ctx.emitMetadata(target, kind, value) };
-        },
-        .metadata_in_document => blk: {
-            const document_id = try evalDocumentArg(ctx, call, 0);
-            _ = document_id;
-            const kind = try ctx.evalStringArg(call, 1);
-            break :blk .{ .selection = try ctx.metadataInDocument(kind) };
-        },
-        .metadata_on_page => blk: {
-            const page_id = try evalPageArg(ctx, call, 0);
-            const kind = try ctx.evalStringArg(call, 1);
-            break :blk .{ .selection = try ctx.metadataOnPage(page_id, kind) };
-        },
-        .metadata_content => blk: {
-            const metadata_id = try evalMetadataArg(ctx, call, 0);
-            break :blk .{ .string = try ctx.metadataContent(metadata_id) };
-        },
-        .metadata_kind => blk: {
-            const metadata_id = try evalMetadataArg(ctx, call, 0);
-            break :blk .{ .string = try ctx.metadataKind(metadata_id) };
-        },
-        .metadata_page => blk: {
-            const metadata_id = try evalMetadataArg(ctx, call, 0);
-            break :blk .{ .page = try ctx.metadataPage(metadata_id) };
         },
         .prop => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
@@ -531,7 +500,6 @@ fn itemValue(tag: core.SelectionItemTag, id: core.NodeId) core.Value {
     return switch (tag) {
         .page => .{ .page = id },
         .object => .{ .object = id },
-        .metadata => .{ .metadata = id },
     };
 }
 
@@ -728,15 +696,6 @@ fn evalDocumentArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.NodeId 
     defer value.deinit(ctx.ir.allocator);
     return switch (value) {
         .document => |id| id,
-        else => error.InvalidValueTag,
-    };
-}
-
-fn evalMetadataArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.MetadataId {
-    var value = try ctx.evalExprValue(call.args.items[index]);
-    defer value.deinit(ctx.ir.allocator);
-    return switch (value) {
-        .metadata => |id| id,
         else => error.InvalidValueTag,
     };
 }

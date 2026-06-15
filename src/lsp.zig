@@ -1602,7 +1602,7 @@ fn isKeyword(word: []const u8) bool {
 }
 
 fn isBuiltinType(word: []const u8) bool {
-    const types = [_][]const u8{ "document", "page", "object", "selection", "metadata", "anchor", "string", "number", "bool", "boolean", "constraints", "void", "Void" };
+    const types = [_][]const u8{ "document", "page", "object", "selection", "anchor", "string", "number", "bool", "boolean", "constraints", "void", "Void" };
     for (types) |name| if (std.mem.eql(u8, word, name)) return true;
     return false;
 }

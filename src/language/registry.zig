@@ -37,12 +37,6 @@ pub const PrimitiveCall = enum {
     frame_width,
     frame_height,
     content,
-    emit_metadata,
-    metadata_in_document,
-    metadata_on_page,
-    metadata_content,
-    metadata_kind,
-    metadata_page,
     prop,
     has_prop,
     prop_eq,
@@ -100,7 +94,6 @@ pub const PrimitiveResultPolicy = enum {
     selection_algebra,
     select_query,
     target_arg,
-    metadata_selection,
     group_object,
     object_from_role_arg,
 };
@@ -157,12 +150,6 @@ const primitive_descriptors = [_]PrimitiveDescriptor{
     .{ .op = .frame_width, .name = "frame_width", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.number, .summary = "Return the solved width for an object" },
     .{ .op = .frame_height, .name = "frame_height", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.number, .summary = "Return the solved height for an object" },
     .{ .op = .content, .name = "content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"object"}, .arg_types = &.{Type.object}, .result_type = Type.string, .summary = "Return an object's textual content" },
-    .{ .op = .emit_metadata, .name = "emit_metadata", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "kind", "value" }, .arg_types = &.{ Type.any, Type.string, Type.string }, .result_type = Type.metadata, .summary = "Append a metadata fact associated with a document, page, or object" },
-    .{ .op = .metadata_in_document, .name = "metadata_in_document", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "document", "kind" }, .arg_types = &.{ Type.document, Type.string }, .result_type = Type.selection(.any), .result_policy = .metadata_selection, .summary = "Select metadata facts by kind across the whole document" },
-    .{ .op = .metadata_on_page, .name = "metadata_on_page", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "page", "kind" }, .arg_types = &.{ Type.page, Type.string }, .result_type = Type.selection(.any), .result_policy = .metadata_selection, .summary = "Select metadata facts by kind on one page" },
-    .{ .op = .metadata_content, .name = "metadata_content", .min_arity = 1, .max_arity = 1, .arg_names = &.{"metadata"}, .arg_types = &.{Type.metadata}, .result_type = Type.string, .summary = "Return a metadata fact's textual value" },
-    .{ .op = .metadata_kind, .name = "metadata_kind", .min_arity = 1, .max_arity = 1, .arg_names = &.{"metadata"}, .arg_types = &.{Type.metadata}, .result_type = Type.string, .summary = "Return a metadata fact's kind" },
-    .{ .op = .metadata_page, .name = "metadata_page", .min_arity = 1, .max_arity = 1, .arg_names = &.{"metadata"}, .arg_types = &.{Type.metadata}, .result_type = Type.page, .summary = "Return the page associated with a metadata fact" },
     .{ .op = .prop, .name = "prop", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "default" }, .arg_types = &.{ Type.any, Type.string, Type.string }, .result_type = Type.string, .summary = "Read a property from a document, page, or object, falling back to a default" },
     .{ .op = .has_prop, .name = "has_prop", .min_arity = 2, .max_arity = 2, .arg_names = &.{ "target", "key" }, .arg_types = &.{ Type.any, Type.string }, .result_type = Type.boolean, .summary = "Return whether a document, page, or object has a property" },
     .{ .op = .prop_eq, .name = "prop_eq", .min_arity = 3, .max_arity = 3, .arg_names = &.{ "target", "key", "value" }, .arg_types = &.{ Type.any, Type.string, Type.string }, .result_type = Type.boolean, .summary = "Return whether a property equals a string value" },
@@ -229,7 +216,6 @@ pub fn primitiveArgType(descriptor: PrimitiveDescriptor, index: usize) ?Type {
 
 pub fn primitiveResultType(descriptor: PrimitiveDescriptor) ?Type {
     return switch (descriptor.result_policy) {
-        .metadata_selection => Type.selection(.metadata),
         .declared,
         .first_selection_item,
         .first_arg,

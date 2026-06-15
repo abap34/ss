@@ -632,7 +632,6 @@ fn primitiveResultTypeInfo(
             const selection_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
             var info = switch (selection_info.ty.param) {
                 .page => infoFromType(Type.page),
-                .metadata => infoFromType(Type.metadata),
                 .object, .any, .none => infoFromType(Type.object),
                 else => infoFromType(Type.object),
             };
@@ -659,7 +658,6 @@ fn primitiveResultTypeInfo(
                 .object_class = target_info.object_class,
             };
         },
-        .metadata_selection => return infoFromType(Type.selection(.metadata)),
         .declared, .group_object, .object_from_role_arg => {},
     }
 
@@ -707,7 +705,6 @@ fn validateCallbackShape(
     }
     const item_type = switch (selection_info.ty.param) {
         .page => Type.page,
-        .metadata => Type.metadata,
         .object => if (selection_info.object_class orelse selection_info.ty.param_class_name) |class_name| Type.objectClass(class_name) else Type.object,
         .any, .none => Type.object,
         else => Type.any,
