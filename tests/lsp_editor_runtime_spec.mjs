@@ -22,6 +22,7 @@ await testStdlibDefinitionOutsideWorkspace();
 await testLspConfiguration();
 await testLspDebouncesDocumentChanges();
 await testConstraintConflictDiagnosticMatchesCli();
+await testDependencyQueryDiagnostic();
 await testBrokenProjectConfigKeepsCompletionAlive();
 
 async function testStdlibDefinitionOutsideWorkspace() {
@@ -242,6 +243,36 @@ end
         !diagnostics.some((diagnostic) => diagnostic.code === "unresolved_frame"),
         `secondary unresolved frame diagnostics leaked through: ${JSON.stringify(diagnostics)}`,
       );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDependencyQueryDiagnostic() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-dep-query-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+page sample
+let t = title!("A")
+;; ^dep?
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      const query = diagnostics.find((diagnostic) => diagnostic.code === "DependencyQuery");
+      assert(query, `dependency query diagnostic missing: ${JSON.stringify(diagnostics)}`);
+      assert(query.message.includes("DependencyQuery:"), `dependency query message missing header: ${JSON.stringify(query)}`);
+      assert(query.message.includes("write Variable(*, t)"), `dependency query message missing variable write: ${JSON.stringify(query)}`);
+      assert(query.range.start.line === 4, `dependency query diagnostic pointed at wrong line: ${JSON.stringify(query)}`);
     });
   } finally {
     await rm(project, { recursive: true, force: true });

@@ -445,6 +445,20 @@ test "compiler semantics: stdlib theme toc works through default aliases" {
     );
 }
 
+test "compiler semantics: dependency query comments report statement summaries" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page sample
+        \\  let t = title!("A")
+        \\  ;; ^dep?
+        \\end
+        \\
+    ;
+    try expectDiagnostic(source, "bytes:", "DependencyQuery:");
+    try expectDiagnostic(source, "bytes:", "write Variable(*, t)");
+}
+
 test "compiler semantics: stdlib core components build when called directly" {
     try buildSourceWithAssetFixtures(
         \\import std:core/components
