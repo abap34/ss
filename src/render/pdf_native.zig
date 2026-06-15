@@ -1,5 +1,7 @@
 const std = @import("std");
 const core = @import("core");
+const utils = @import("utils");
+const build_options = @import("build_options");
 
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
@@ -8,6 +10,42 @@ const wrap_layout = core.render_wrap;
 const c = @cImport({
     @cInclude("pdf.h");
 });
+
+const TSLanguage = opaque {};
+const TSParser = opaque {};
+const TSTree = opaque {};
+const TSQuery = opaque {};
+const TSQueryCursor = opaque {};
+
+const TSQueryError = enum(c_int) {
+    none = 0,
+    syntax = 1,
+    node_type = 2,
+    field = 3,
+    capture = 4,
+    structure = 5,
+    language = 6,
+};
+
+const TSNode = extern struct {
+    context: [4]u32,
+    id: ?*const anyopaque,
+    tree: ?*const TSTree,
+};
+
+const TSQueryCapture = extern struct {
+    node: TSNode,
+    index: u32,
+};
+
+const TSQueryMatch = extern struct {
+    id: u32,
+    pattern_index: u16,
+    capture_count: u16,
+    captures: [*c]const TSQueryCapture,
+};
+
+extern fn tree_sitter_ss() *const TSLanguage;
 
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
@@ -38,7 +76,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v10";
+const page_pdf_cache_version = "ss-native-page-pdf-v11";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -55,6 +93,7 @@ const DrawContext = struct {
     pdf: *c.SsPdf,
     asset_base_dir: []const u8,
     cache_dir: []const u8,
+    highlight_languages: []const utils.highlight.Language,
 };
 
 const Atom = struct {
@@ -115,6 +154,45 @@ pub const RenderOptions = struct {
     keep_temps: bool = false,
     cache_dir: []const u8 = ".ss-cache/render",
     cache_id: ?[]const u8 = null,
+    highlight_languages: []const utils.highlight.Language = &.{},
+};
+
+const HighlightSpan = struct {
+    start: usize,
+    end: usize,
+    color: Color,
+};
+
+const HighlightLanguageHandle = struct {
+    language: *const TSLanguage,
+    library: ?std.DynLib = null,
+
+    fn deinit(self: *HighlightLanguageHandle) void {
+        if (self.library) |*library| library.close();
+    }
+};
+
+const TreeSitterRuntime = struct {
+    library: std.DynLib,
+    parser_new: *const fn () callconv(.c) ?*TSParser,
+    parser_delete: *const fn (*TSParser) callconv(.c) void,
+    parser_set_language: *const fn (*TSParser, *const TSLanguage) callconv(.c) bool,
+    parser_parse_string: *const fn (*TSParser, ?*const TSTree, [*c]const u8, u32) callconv(.c) ?*TSTree,
+    tree_delete: *const fn (*TSTree) callconv(.c) void,
+    tree_root_node: *const fn (*const TSTree) callconv(.c) TSNode,
+    query_new: *const fn (*const TSLanguage, [*c]const u8, u32, *u32, *TSQueryError) callconv(.c) ?*TSQuery,
+    query_delete: *const fn (*TSQuery) callconv(.c) void,
+    query_capture_name_for_id: *const fn (*const TSQuery, u32, *u32) callconv(.c) ?[*]const u8,
+    query_cursor_new: *const fn () callconv(.c) ?*TSQueryCursor,
+    query_cursor_delete: *const fn (*TSQueryCursor) callconv(.c) void,
+    query_cursor_exec: *const fn (*TSQueryCursor, *const TSQuery, TSNode) callconv(.c) void,
+    query_cursor_next_capture: *const fn (*TSQueryCursor, *TSQueryMatch, *u32) callconv(.c) bool,
+    node_start_byte: *const fn (TSNode) callconv(.c) u32,
+    node_end_byte: *const fn (TSNode) callconv(.c) u32,
+
+    fn deinit(self: *TreeSitterRuntime) void {
+        self.library.close();
+    }
 };
 
 const RenderOp = struct {
@@ -250,6 +328,7 @@ const RenderDag = struct {
     io: std.Io,
     asset_base_dir: []const u8,
     cache_dir: []const u8,
+    highlight_languages: []const utils.highlight.Language,
     progress: ?RenderProgress,
 };
 
@@ -293,6 +372,7 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
         .pdf = undefined,
         .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
         .cache_dir = asset_cache_dir,
+        .highlight_languages = options.highlight_languages,
     };
 
     var declaration_index = try declarations.build(allocator, ir);
@@ -793,10 +873,32 @@ fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(File
     hashF32(&hasher, PageLayout.width);
     hashF32(&hasher, PageLayout.height);
     hashF32(&hasher, raster_cache_scale);
+    try hashHighlightLanguages(ctx, asset_fingerprints, &hasher);
     hashOptionalColor(&hasher, background);
     hashUsize(&hasher, ops.len);
     for (ops) |*op| try hashRenderOp(ctx, asset_fingerprints, &hasher, op);
     return hasher.final();
+}
+
+fn hashHighlightLanguages(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash) !void {
+    hashUsize(hasher, ctx.highlight_languages.len);
+    for (ctx.highlight_languages) |language| {
+        hashString(hasher, language.name);
+        hashString(hasher, language.parser);
+        hashString(hasher, language.query);
+        hashOptionalString(hasher, language.library);
+        hashOptionalString(hasher, language.symbol);
+        if (!std.mem.startsWith(u8, language.query, "builtin:")) {
+            const fingerprint = try assetFileFingerprint(ctx, asset_fingerprints, language.query);
+            hashBool(hasher, fingerprint.present);
+            hashU64(hasher, fingerprint.digest);
+        }
+        if (language.library) |library| {
+            const fingerprint = try assetFileFingerprint(ctx, asset_fingerprints, library);
+            hashBool(hasher, fingerprint.present);
+            hashU64(hasher, fingerprint.digest);
+        }
+    }
 }
 
 fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, op: *const RenderOp) !void {
@@ -917,6 +1019,16 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
         hashOptionalColor(hasher, text.markdown_code_stroke);
         hashF32(hasher, text.markdown_code_line_width);
         hashF32(hasher, text.markdown_code_radius);
+        hashOptionalColor(hasher, text.markdown_code_plain_color);
+        hashOptionalColor(hasher, text.markdown_code_keyword_color);
+        hashOptionalColor(hasher, text.markdown_code_function_color);
+        hashOptionalColor(hasher, text.markdown_code_type_color);
+        hashOptionalColor(hasher, text.markdown_code_constant_color);
+        hashOptionalColor(hasher, text.markdown_code_number_color);
+        hashOptionalColor(hasher, text.markdown_code_variable_color);
+        hashOptionalColor(hasher, text.markdown_code_operator_color);
+        hashOptionalColor(hasher, text.markdown_code_comment_color);
+        hashOptionalColor(hasher, text.markdown_code_string_color);
         hashF32(hasher, text.markdown_table_cell_pad_x);
         hashF32(hasher, text.markdown_table_cell_pad_y);
         hashOptionalColor(hasher, text.markdown_table_border);
@@ -948,6 +1060,12 @@ fn hashOptionalCodePaint(hasher: *std.hash.Wyhash, maybe: ?CodePaint) void {
         if (code.language) |language| hashString(hasher, language);
         hashColor(hasher, code.plain);
         hashColor(hasher, code.keyword);
+        hashColor(hasher, code.function);
+        hashColor(hasher, code.type);
+        hashColor(hasher, code.constant);
+        hashColor(hasher, code.number);
+        hashColor(hasher, code.variable);
+        hashColor(hasher, code.operator);
         hashColor(hasher, code.comment);
         hashColor(hasher, code.string);
     }
@@ -1240,6 +1358,7 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
         .io = ctx.io,
         .asset_base_dir = ctx.asset_base_dir,
         .cache_dir = ctx.cache_dir,
+        .highlight_languages = ctx.highlight_languages,
         .progress = progress,
     };
 
@@ -1315,6 +1434,7 @@ fn renderDagWorker(work: *RenderDag) void {
                 .pdf = undefined,
                 .asset_base_dir = work.asset_base_dir,
                 .cache_dir = work.cache_dir,
+                .highlight_languages = work.highlight_languages,
             };
             renderOnePage(&ctx, &work.plan.pages[page_index]) catch |err| {
                 work.failed.store(true, .seq_cst);
@@ -1336,6 +1456,7 @@ fn renderDagWorker(work: *RenderDag) void {
                 .pdf = undefined,
                 .asset_base_dir = work.asset_base_dir,
                 .cache_dir = work.cache_dir,
+                .highlight_languages = &.{},
             };
             preloadOne(&ctx, work.plan.artifact_tasks[artifact_index]) catch |err| {
                 work.failed.store(true, .seq_cst);
@@ -1385,6 +1506,7 @@ fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
         .pdf = pdf,
         .asset_base_dir = parent_ctx.asset_base_dir,
         .cache_dir = parent_ctx.cache_dir,
+        .highlight_languages = parent_ctx.highlight_languages,
     };
 
     c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
@@ -1834,6 +1956,7 @@ fn preloadWorker(work: *PreloadWork) void {
             .pdf = work.pdf,
             .asset_base_dir = work.asset_base_dir,
             .cache_dir = work.cache_dir,
+            .highlight_languages = &.{},
         };
         preloadOne(&ctx, work.tasks[index]) catch |err| {
             work.failed.store(true, .seq_cst);
@@ -2086,7 +2209,6 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
 }
 
 fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
-    const lines = block.paragraph.?.lines.items;
     const placement = markdownCodeBlockPlacement(x, baseline_bl, width, core.markdown.codeBlockPhysicalLineCount(block), text);
     const frame = placement.frame;
 
@@ -2108,22 +2230,34 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         text.markdown_code_line_width,
     );
 
-    var cursor_bl = placement.first_baseline_bl;
-    for (lines) |line| {
-        var plain = std.ArrayList(u8).empty;
-        defer plain.deinit(ctx.allocator);
-        for (line.runs.items) |run| try plain.appendSlice(ctx.allocator, run.text);
-        if (plain.items.len == 0) {
-            cursor_bl -= text.markdown_code_line_height;
-            continue;
+    const source = try markdownCodeBlockContent(ctx.allocator, block);
+    defer ctx.allocator.free(source);
+    const code_paint = CodePaint{
+        .language = block.language,
+        .plain = text.markdown_code_plain_color orelse text.color,
+        .keyword = text.markdown_code_keyword_color orelse text.link_color,
+        .function = text.markdown_code_function_color orelse text.markdown_code_keyword_color orelse text.link_color,
+        .type = text.markdown_code_type_color orelse text.markdown_code_keyword_color orelse text.link_color,
+        .constant = text.markdown_code_constant_color orelse text.markdown_code_keyword_color orelse text.link_color,
+        .number = text.markdown_code_number_color orelse text.markdown_code_constant_color orelse text.link_color,
+        .variable = text.markdown_code_variable_color orelse text.markdown_code_plain_color orelse text.color,
+        .operator = text.markdown_code_operator_color orelse text.markdown_code_keyword_color orelse text.link_color,
+        .comment = text.markdown_code_comment_color orelse Color{ .r = 0.38, .g = 0.42, .b = 0.48 },
+        .string = text.markdown_code_string_color orelse text.markdown_bold_color orelse text.link_color,
+    };
+    if (block.language) |language| {
+        if (highlightLanguageFor(ctx, language) != null) {
+            try drawHighlightedCodeLines(ctx, x + text.markdown_code_pad_x, placement.first_baseline_bl, @max(width - text.markdown_code_pad_x * 2, 1), source, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height, code_paint, text.emoji_spacing, true);
+            return placement.next_baseline_bl;
         }
+    }
 
-        var physical = std.mem.splitScalar(u8, plain.items, '\n');
-        while (physical.next()) |segment| {
-            if (segment.len == 0 and physical.index == null and plain.items[plain.items.len - 1] == '\n') break;
-            _ = try drawCodeTextAtTop(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, text.color, text.emoji_spacing);
-            cursor_bl -= text.markdown_code_line_height;
-        }
+    var cursor_bl = placement.first_baseline_bl;
+    var physical = std.mem.splitScalar(u8, source, '\n');
+    while (physical.next()) |segment| {
+        if (segment.len == 0 and physical.index == null and source.len > 0 and source[source.len - 1] == '\n') break;
+        _ = try drawCodeTextAtTop(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, code_paint.plain, text.emoji_spacing);
+        cursor_bl -= text.markdown_code_line_height;
     }
     return placement.next_baseline_bl;
 }
@@ -2144,6 +2278,17 @@ fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, physical_lin
         .first_baseline_bl = box_top - text.markdown_code_pad_y - text.markdown_code_font_size,
         .next_baseline_bl = box_bottom - text.font_size,
     };
+}
+
+fn markdownCodeBlockContent(allocator: Allocator, block: *const Block) ![]u8 {
+    const paragraph = block.paragraph orelse return allocator.dupe(u8, "");
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (paragraph.lines.items, 0..) |line, line_index| {
+        for (line.runs.items) |run| try out.appendSlice(allocator, run.text);
+        if (line_index + 1 < paragraph.lines.items.len) try out.append(allocator, '\n');
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
@@ -2633,14 +2778,303 @@ fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: A
     c.ss_pdf_stroke_line(ctx.pdf, x, y, x + @max(atom.width, 1), y, line_width, atom.color.r, atom.color.g, atom.color.b, 0, 0);
 }
 
+fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.highlight.Language {
+    for (ctx.highlight_languages) |*configured| {
+        if (std.ascii.eqlIgnoreCase(configured.name, language)) return configured;
+    }
+    return null;
+}
+
+fn drawTreeSitterCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: CodePaint, font_size: f32, line_height: f32) !void {
+    const first_baseline_bl = baselineBlForBox(frame, font_size);
+    try drawHighlightedCodeLines(ctx, frame.x, first_baseline_bl, frame.width, content, text.code_font, font_size, line_height, code, text.emoji_spacing, false);
+}
+
+fn drawHighlightedCodeLines(
+    ctx: *DrawContext,
+    x: f32,
+    first_baseline_bl: f32,
+    width: f32,
+    content: []const u8,
+    font: FontFace,
+    font_size: f32,
+    line_height: f32,
+    code: CodePaint,
+    emoji_spacing: f32,
+    trim_trailing_empty_line: bool,
+) !void {
+    const language = code.language orelse {
+        var cursor_bl = first_baseline_bl;
+        var plain_lines = std.mem.splitScalar(u8, content, '\n');
+        while (plain_lines.next()) |line| {
+            if (trim_trailing_empty_line and line.len == 0 and plain_lines.index == null and content.len > 0 and content[content.len - 1] == '\n') break;
+            _ = try drawCodeTextAtTop(ctx, x, baselineTop(cursor_bl, font_size), width, line_height, line, font, font_size, code.plain, emoji_spacing);
+            cursor_bl -= line_height;
+        }
+        return;
+    };
+
+    var spans = try collectTreeSitterHighlightSpans(ctx, language, content, code);
+    defer spans.deinit(ctx.allocator);
+
+    var cursor_bl = first_baseline_bl;
+    var offset: usize = 0;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        if (trim_trailing_empty_line and line.len == 0 and lines.index == null and content.len > 0 and content[content.len - 1] == '\n') break;
+        const line_start = offset;
+        const line_end = line_start + line.len;
+        try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, spans.items, font, font_size, line_height, code.plain, emoji_spacing);
+        cursor_bl -= line_height;
+        offset = @min(line_end + 1, content.len);
+    }
+}
+
+fn drawHighlightedCodeLine(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    width: f32,
+    content: []const u8,
+    line_start: usize,
+    line_end: usize,
+    spans: []const HighlightSpan,
+    font: FontFace,
+    font_size: f32,
+    line_height: f32,
+    plain_color: Color,
+    emoji_spacing: f32,
+) !void {
+    var cursor_x = x;
+    var pos = line_start;
+    while (pos < line_end and cursor_x < x + width) {
+        var next = nextHighlightBoundary(spans, pos, line_end);
+        if (next <= pos) next = @min(pos + 1, line_end);
+        const color = highlightColorAt(spans, pos, next) orelse plain_color;
+        try drawCodeSegment(ctx, &cursor_x, y_top, content[pos..next], font, font_size, line_height, color, emoji_spacing);
+        pos = next;
+    }
+}
+
+fn collectTreeSitterHighlightSpans(ctx: *DrawContext, language_name: []const u8, content: []const u8, code: CodePaint) !std.ArrayList(HighlightSpan) {
+    var spans = std.ArrayList(HighlightSpan).empty;
+    errdefer spans.deinit(ctx.allocator);
+    const configured = highlightLanguageFor(ctx, language_name) orelse return spans;
+    if (content.len > std.math.maxInt(u32)) return spans;
+
+    var runtime = try loadTreeSitterRuntime();
+    defer runtime.deinit();
+
+    var handle = try loadTreeSitterLanguage(ctx, configured);
+    defer handle.deinit();
+
+    var query_source = try loadHighlightQuerySource(ctx, configured);
+    defer query_source.deinit(ctx.allocator);
+
+    const parser = runtime.parser_new() orelse return error.TreeSitterParserCreateFailed;
+    defer runtime.parser_delete(parser);
+    if (!runtime.parser_set_language(parser, handle.language)) return error.TreeSitterLanguageRejected;
+    const tree = runtime.parser_parse_string(parser, null, @ptrCast(content.ptr), @intCast(content.len)) orelse return error.TreeSitterParseFailed;
+    defer runtime.tree_delete(tree);
+
+    var query_error_offset: u32 = 0;
+    var query_error_type: TSQueryError = .none;
+    const query = runtime.query_new(handle.language, @ptrCast(query_source.text.ptr), @intCast(query_source.text.len), &query_error_offset, &query_error_type) orelse return error.TreeSitterQueryFailed;
+    defer runtime.query_delete(query);
+
+    const cursor = runtime.query_cursor_new() orelse return error.TreeSitterQueryCursorCreateFailed;
+    defer runtime.query_cursor_delete(cursor);
+    runtime.query_cursor_exec(cursor, query, runtime.tree_root_node(tree));
+
+    var match: TSQueryMatch = undefined;
+    var capture_index: u32 = 0;
+    while (runtime.query_cursor_next_capture(cursor, &match, &capture_index)) {
+        if (capture_index >= match.capture_count) continue;
+        const capture = match.captures[capture_index];
+        var capture_name_len: u32 = 0;
+        const capture_name_ptr = runtime.query_capture_name_for_id(query, capture.index, &capture_name_len) orelse continue;
+        const capture_name = @as([*]const u8, @ptrCast(capture_name_ptr))[0..capture_name_len];
+        const color = colorForCapture(code, capture_name) orelse continue;
+        const start: usize = runtime.node_start_byte(capture.node);
+        const end: usize = runtime.node_end_byte(capture.node);
+        if (start >= end or end > content.len) continue;
+        try spans.append(ctx.allocator, .{ .start = start, .end = end, .color = color });
+    }
+
+    std.mem.sort(HighlightSpan, spans.items, {}, highlightSpanLessThan);
+    return spans;
+}
+
+const LoadedHighlightQuery = struct {
+    text: []const u8,
+    owned: bool = false,
+
+    fn deinit(self: *LoadedHighlightQuery, allocator: Allocator) void {
+        if (self.owned) allocator.free(self.text);
+    }
+};
+
+fn loadHighlightQuerySource(ctx: *DrawContext, configured: *const utils.highlight.Language) !LoadedHighlightQuery {
+    if (std.mem.eql(u8, configured.query, "builtin:ss")) {
+        return .{ .text = build_options.ss_highlight_query };
+    }
+    return .{
+        .text = try std.Io.Dir.cwd().readFileAlloc(ctx.io, configured.query, ctx.allocator, .limited(1024 * 1024)),
+        .owned = true,
+    };
+}
+
+fn loadTreeSitterLanguage(ctx: *DrawContext, configured: *const utils.highlight.Language) !HighlightLanguageHandle {
+    if (configured.library == null and std.ascii.eqlIgnoreCase(configured.parser, "ss")) {
+        return .{ .language = tree_sitter_ss() };
+    }
+
+    const library_path = configured.library orelse return error.TreeSitterLibraryRequired;
+    var library = try std.DynLib.open(library_path);
+    errdefer library.close();
+
+    const symbol_name = if (configured.symbol) |symbol|
+        try ctx.allocator.dupeZ(u8, symbol)
+    else
+        try defaultTreeSitterSymbol(ctx.allocator, configured.parser);
+    defer ctx.allocator.free(symbol_name);
+
+    const LanguageFn = *const fn () callconv(.c) *const TSLanguage;
+    const language_fn = library.lookup(LanguageFn, symbol_name) orelse return error.TreeSitterSymbolNotFound;
+    return .{
+        .language = language_fn(),
+        .library = library,
+    };
+}
+
+fn loadTreeSitterRuntime() !TreeSitterRuntime {
+    const candidates = [_][]const u8{
+        "libtree-sitter.dylib",
+        "/opt/homebrew/lib/libtree-sitter.dylib",
+        "/usr/local/lib/libtree-sitter.dylib",
+        "libtree-sitter.so",
+        "libtree-sitter.so.0",
+        "tree-sitter.dll",
+    };
+
+    for (candidates) |candidate| {
+        var library = std.DynLib.open(candidate) catch continue;
+        errdefer library.close();
+        return .{
+            .library = library,
+            .parser_new = try lookupTreeSitterSymbol(&library, *const fn () callconv(.c) ?*TSParser, "ts_parser_new"),
+            .parser_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSParser) callconv(.c) void, "ts_parser_delete"),
+            .parser_set_language = try lookupTreeSitterSymbol(&library, *const fn (*TSParser, *const TSLanguage) callconv(.c) bool, "ts_parser_set_language"),
+            .parser_parse_string = try lookupTreeSitterSymbol(&library, *const fn (*TSParser, ?*const TSTree, [*c]const u8, u32) callconv(.c) ?*TSTree, "ts_parser_parse_string"),
+            .tree_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSTree) callconv(.c) void, "ts_tree_delete"),
+            .tree_root_node = try lookupTreeSitterSymbol(&library, *const fn (*const TSTree) callconv(.c) TSNode, "ts_tree_root_node"),
+            .query_new = try lookupTreeSitterSymbol(&library, *const fn (*const TSLanguage, [*c]const u8, u32, *u32, *TSQueryError) callconv(.c) ?*TSQuery, "ts_query_new"),
+            .query_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSQuery) callconv(.c) void, "ts_query_delete"),
+            .query_capture_name_for_id = try lookupTreeSitterSymbol(&library, *const fn (*const TSQuery, u32, *u32) callconv(.c) ?[*]const u8, "ts_query_capture_name_for_id"),
+            .query_cursor_new = try lookupTreeSitterSymbol(&library, *const fn () callconv(.c) ?*TSQueryCursor, "ts_query_cursor_new"),
+            .query_cursor_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSQueryCursor) callconv(.c) void, "ts_query_cursor_delete"),
+            .query_cursor_exec = try lookupTreeSitterSymbol(&library, *const fn (*TSQueryCursor, *const TSQuery, TSNode) callconv(.c) void, "ts_query_cursor_exec"),
+            .query_cursor_next_capture = try lookupTreeSitterSymbol(&library, *const fn (*TSQueryCursor, *TSQueryMatch, *u32) callconv(.c) bool, "ts_query_cursor_next_capture"),
+            .node_start_byte = try lookupTreeSitterSymbol(&library, *const fn (TSNode) callconv(.c) u32, "ts_node_start_byte"),
+            .node_end_byte = try lookupTreeSitterSymbol(&library, *const fn (TSNode) callconv(.c) u32, "ts_node_end_byte"),
+        };
+    }
+
+    return error.TreeSitterRuntimeUnavailable;
+}
+
+fn lookupTreeSitterSymbol(library: *std.DynLib, comptime T: type, name: [:0]const u8) !T {
+    return library.lookup(T, name) orelse error.TreeSitterRuntimeSymbolNotFound;
+}
+
+fn defaultTreeSitterSymbol(allocator: Allocator, parser_name: []const u8) ![:0]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try out.appendSlice(allocator, "tree_sitter_");
+    for (parser_name) |byte| {
+        try out.append(allocator, if (std.ascii.isAlphanumeric(byte)) byte else '_');
+    }
+    return allocator.dupeZ(u8, out.items);
+}
+
+fn colorForCapture(code: CodePaint, capture_name: []const u8) ?Color {
+    const base = captureBaseName(capture_name);
+    if (std.mem.eql(u8, base, "comment")) return code.comment;
+    if (std.mem.eql(u8, base, "string")) return code.string;
+    if (std.mem.eql(u8, base, "keyword")) return code.keyword;
+    if (std.mem.eql(u8, base, "function") or std.mem.eql(u8, base, "method")) return code.function;
+    if (std.mem.eql(u8, base, "type")) return code.type;
+    if (std.mem.eql(u8, base, "constant") or std.mem.eql(u8, base, "attribute")) return code.constant;
+    if (std.mem.eql(u8, base, "number")) return code.number;
+    if (std.mem.eql(u8, base, "variable") or
+        std.mem.eql(u8, base, "property") or
+        std.mem.eql(u8, base, "namespace"))
+    {
+        return code.variable;
+    }
+    if (std.mem.eql(u8, base, "operator") or std.mem.eql(u8, base, "punctuation")) return code.operator;
+    return null;
+}
+
+fn captureBaseName(capture_name: []const u8) []const u8 {
+    const dot = std.mem.indexOfScalar(u8, capture_name, '.') orelse return capture_name;
+    return capture_name[0..dot];
+}
+
+fn highlightSpanLessThan(_: void, lhs: HighlightSpan, rhs: HighlightSpan) bool {
+    if (lhs.start != rhs.start) return lhs.start < rhs.start;
+    const lhs_len = lhs.end - lhs.start;
+    const rhs_len = rhs.end - rhs.start;
+    return lhs_len < rhs_len;
+}
+
+fn nextHighlightBoundary(spans: []const HighlightSpan, pos: usize, line_end: usize) usize {
+    var next = line_end;
+    for (spans) |span| {
+        if (span.end <= pos or span.start >= line_end) continue;
+        if (span.start > pos) next = @min(next, span.start);
+        if (span.start <= pos and span.end > pos) next = @min(next, span.end);
+    }
+    return next;
+}
+
+fn highlightColorAt(spans: []const HighlightSpan, start: usize, end: usize) ?Color {
+    var best: ?HighlightSpan = null;
+    for (spans) |span| {
+        if (span.start > start or span.end < end) continue;
+        if (best == null or highlightSpanMoreSpecific(span, best.?)) {
+            best = span;
+        }
+    }
+    return if (best) |span| span.color else null;
+}
+
+fn highlightSpanMoreSpecific(candidate: HighlightSpan, current: HighlightSpan) bool {
+    const candidate_len = candidate.end - candidate.start;
+    const current_len = current.end - current.start;
+    if (candidate_len != current_len) return candidate_len < current_len;
+    return candidate.start >= current.start;
+}
+
 fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: TextPaint, code: ?CodePaint) !void {
     const code_paint = code orelse CodePaint{
         .language = null,
         .plain = text.color,
         .keyword = text.color,
+        .function = text.color,
+        .type = text.color,
+        .constant = text.color,
+        .number = text.color,
+        .variable = text.color,
+        .operator = text.color,
         .comment = text.color,
         .string = text.color,
     };
+    if (code_paint.language) |language| {
+        if (highlightLanguageFor(ctx, language) != null) {
+            return drawTreeSitterCodeBlock(ctx, frame, content, text, code_paint, text.font_size, text.line_height);
+        }
+    }
     var cursor_bl = baselineBlForBox(frame, text.font_size);
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
@@ -2930,6 +3364,7 @@ fn mergeWorker(work: *MergeWork) void {
             .pdf = undefined,
             .asset_base_dir = ".",
             .cache_dir = work.cache_dir,
+            .highlight_languages = &.{},
         };
         const chunk = work.chunks[index];
         mergePdfInputsToCache(&ctx, chunk.inputs, chunk.single_page_inputs, chunk.output) catch |err| {

@@ -206,6 +206,12 @@ fn appendCode(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
     try op.put(allocator, "language", code.language orelse "");
     try op.putColor(allocator, "plain", code.plain);
     try op.putColor(allocator, "keyword", code.keyword);
+    try op.putColor(allocator, "function", code.function);
+    try op.putColor(allocator, "type", code.type);
+    try op.putColor(allocator, "constant", code.constant);
+    try op.putColor(allocator, "number", code.number);
+    try op.putColor(allocator, "variable", code.variable);
+    try op.putColor(allocator, "operator", code.operator);
     try op.putColor(allocator, "comment", code.comment);
     try op.putColor(allocator, "string", code.string);
     try doc.ops.append(allocator, op);

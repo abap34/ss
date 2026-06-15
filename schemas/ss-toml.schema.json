@@ -240,6 +240,40 @@
           }
         }
       }
+    },
+    "highlight": {
+      "type": "object",
+      "description": "Tree-sitter based code highlighting settings.",
+      "additionalProperties": false,
+      "properties": {
+        "languages": {
+          "type": "object",
+          "description": "Mapping from code language names to tree-sitter parsers and highlight queries.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["parser", "query"],
+            "properties": {
+              "parser": {
+                "type": "string",
+                "description": "Parser name. \"ss\" uses the bundled ss parser unless library is set."
+              },
+              "query": {
+                "type": "string",
+                "description": "Highlight query path resolved relative to ss.toml, or a builtin query such as \"builtin:ss\"."
+              },
+              "library": {
+                "type": "string",
+                "description": "Optional dynamic library path for an external tree-sitter parser, resolved relative to ss.toml."
+              },
+              "symbol": {
+                "type": "string",
+                "description": "Optional parser symbol. Defaults to tree_sitter_<parser> with non-alphanumeric characters replaced by underscores."
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

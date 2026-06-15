@@ -32,12 +32,12 @@ end
 
 fn/! text(text_value: String) -> Object
   let body = body_obj(text_value)
-  md_code(body, 18, 24, 12, 10, c"0.94,0.94,0.94", c"0.78,0.78,0.78", 1.0, 0)
+  md_code(body, 18, 24, 12, 10, docctx().code_theme_fill ?? c"0.94,0.94,0.94", docctx().code_theme_stroke ?? c"0.78,0.78,0.78", 1.0, 0)
   return body
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
-  return code_box(text_value, language_name, 102, 102, 12, 10, c"0.94,0.94,0.94", c"0.78,0.78,0.78", 1.0, 0)
+  return code_box(text_value, language_name, 102, 102, 12, 10, docctx().code_theme_fill ?? c"0.94,0.94,0.94", docctx().code_theme_stroke ?? c"0.78,0.78,0.78", 1.0, 0)
 end
 
 fn/! code_file(path_value: String, language_name: String = "plain") -> Object

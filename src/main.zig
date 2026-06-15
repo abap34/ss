@@ -583,6 +583,7 @@ fn runResolvedWatch(
         .output_path = output_path,
         .asset_base_dir = resolved.asset_base_dir,
         .project_file = resolved.project_file,
+        .highlight_languages = resolved.highlight.languages,
         .jobs = options.jobs,
         .cache_id = options.cache_id,
         .interval_ms = options.interval_ms,
@@ -654,7 +655,11 @@ fn run(init: std.process.Init) !void {
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         try validateOutputParentOrCliError(io, output_path);
         var progress = utils.progress.Progress.init(7);
-        const render_options = app.RenderOptions{ .jobs = options.jobs, .cache_id = options.cache_id };
+        const render_options = app.RenderOptions{
+            .jobs = options.jobs,
+            .cache_id = options.cache_id,
+            .highlight_languages = resolved.highlight.languages,
+        };
         try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
         return;
     }

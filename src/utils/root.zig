@@ -6,3 +6,4 @@ pub const color = @import("color.zig");
 pub const progress = @import("progress.zig");
 pub const render_cache = @import("render_cache.zig");
 pub const io = @import("io.zig");
+pub const highlight = @import("highlight.zig");

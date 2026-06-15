@@ -80,3 +80,90 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expect(!cfg.page_guide.enabled);
     try testing.expect(!cfg.page_guide.gutter_icon);
 }
+
+test "project spec: highlight languages parse from ss.toml" {
+    var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[highlight.languages.ss]
+        \\parser = "ss"
+        \\query = "builtin:ss"
+        \\
+        \\[highlight.languages.julia]
+        \\parser = "julia"
+        \\query = "queries/julia/highlights.scm"
+        \\library = "parsers/libtree-sitter-julia.dylib"
+        \\symbol = "tree_sitter_julia"
+        \\
+    );
+    defer cfg.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), cfg.highlight.languages.len);
+    try testing.expectEqualStrings("ss", cfg.highlight.languages[0].name);
+    try testing.expectEqualStrings("ss", cfg.highlight.languages[0].parser);
+    try testing.expectEqualStrings("builtin:ss", cfg.highlight.languages[0].query);
+    try testing.expect(cfg.highlight.languages[0].library == null);
+    try testing.expectEqualStrings("julia", cfg.highlight.languages[1].name);
+    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/queries/julia/highlights.scm", cfg.highlight.languages[1].query);
+    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/parsers/libtree-sitter-julia.dylib", cfg.highlight.languages[1].library.?);
+    try testing.expectEqualStrings("tree_sitter_julia", cfg.highlight.languages[1].symbol.?);
+}
+
+test "project spec: explicit input discovers ss.toml from input directory" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const project_dir = try std.fs.path.join(allocator, &.{ root, "deck" });
+    defer allocator.free(project_dir);
+    const slide_dir = try std.fs.path.join(allocator, &.{ project_dir, "slides" });
+    defer allocator.free(slide_dir);
+    try std.Io.Dir.cwd().createDirPath(testing.io, slide_dir);
+
+    const project_path = try std.fs.path.join(allocator, &.{ project_dir, "ss.toml" });
+    defer allocator.free(project_path);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = project_path,
+        .data =
+        \\[project]
+        \\entry = "ignored.ss"
+        \\asset_base_dir = "assets"
+        \\
+        \\[highlight.languages.ss]
+        \\parser = "ss"
+        \\query = "builtin:ss"
+        \\
+        ,
+        .flags = .{ .truncate = true },
+    });
+
+    const input_path = try std.fs.path.join(allocator, &.{ slide_dir, "main.ss" });
+    defer allocator.free(input_path);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = input_path,
+        .data = "page main\nend\n",
+        .flags = .{ .truncate = true },
+    });
+
+    var resolved = try project.resolve(allocator, testing.io, input_path, null, null);
+    defer resolved.deinit(allocator);
+
+    const expected_input = try project.absolutePath(allocator, input_path);
+    defer allocator.free(expected_input);
+    const expected_project = try project.absolutePath(allocator, project_path);
+    defer allocator.free(expected_project);
+    const asset_base_path = try std.fs.path.join(allocator, &.{ project_dir, "assets" });
+    defer allocator.free(asset_base_path);
+    const expected_asset_base = try project.absolutePath(allocator, asset_base_path);
+    defer allocator.free(expected_asset_base);
+
+    try testing.expectEqualStrings(expected_input, resolved.entry_path);
+    try testing.expectEqualStrings(expected_project, resolved.project_file.?);
+    try testing.expectEqualStrings(expected_asset_base, resolved.asset_base_dir);
+    try testing.expectEqual(@as(usize, 1), resolved.highlight.languages.len);
+    try testing.expectEqualStrings("ss", resolved.highlight.languages[0].name);
+    try testing.expectEqualStrings("builtin:ss", resolved.highlight.languages[0].query);
+}

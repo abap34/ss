@@ -1174,6 +1174,39 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectProperty(source, "text_font_weight", "700");
 }
 
+test "compiler semantics: code theme helpers set code and markdown colors" {
+    try buildSource(
+        \\import std:themes/default as *
+        \\
+        \\document
+        \\  code_theme_all(code_theme_one_dark())
+        \\end
+        \\
+        \\page ok
+        \\  code!("fn demo() -> Void\nend", "ss")
+        \\  text!("```ss\nfn demo() -> Void\nend\n```")
+        \\end
+        \\
+    );
+
+    const explicit_source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let snippet = code("fn demo() -> Void\nend", "ss")
+        \\  code_theme(snippet, code_theme_one_dark())
+        \\  let body = text("```ss\nfn demo() -> Void\nend\n```")
+        \\  code_theme(body, code_theme_one_dark())
+        \\end
+        \\
+    ;
+    try expectObjectProperty(explicit_source, "code_keyword_color", "0.7764706,0.47058824,0.8666667");
+    try expectObjectProperty(explicit_source, "code_function_color", "0.38039216,0.6862745,0.9372549");
+    try expectObjectProperty(explicit_source, "text_markdown_code_keyword_color", "0.7764706,0.47058824,0.8666667");
+    try expectObjectProperty(explicit_source, "text_markdown_code_function_color", "0.38039216,0.6862745,0.9372549");
+    try expectObjectProperty(explicit_source, "text_markdown_code_fill", "0.15686275,0.17254902,0.20392157");
+}
+
 test "compiler semantics: structured style value members are typed" {
     try expectObjectProperty(
         \\import std:themes/default as *

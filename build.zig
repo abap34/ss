@@ -36,13 +36,16 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "commit", commit);
     build_options.addOption([]const u8, "source_stdlib_dir", source_stdlib_dir);
     build_options.addOption([]const u8, "installed_stdlib_dir", installed_stdlib_dir);
+    const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
+        @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
+    build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
 
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
     addPdfPkgConfigPath(b);
 
-    const modules = createProjectModules(ctx, md4c_src, b.path(md4c_src));
+    const modules = createProjectModules(ctx, md4c_src, b.path(md4c_src), build_options);
     const exe_mod = createCliModule(ctx, modules, build_options);
     const exe = b.addExecutable(.{
         .name = "ss",
@@ -65,7 +68,7 @@ pub fn build(b: *std.Build) void {
     addTestStep(ctx, modules, build_options, exe);
 }
 
-fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath) ProjectModules {
+fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options) ProjectModules {
     const utils_mod = createModule(ctx, "src/utils/root.zig", &.{}, null);
     const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
     const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
@@ -85,6 +88,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("model", model_mod),
         import("language_type", language_type_mod),
     }, true);
+    core_mod.addOptions("build_options", build_options);
     core_mod.addIncludePath(md4c_include);
     core_mod.addCSourceFiles(.{
         .root = ctx.b.path(md4c_src),
@@ -333,6 +337,10 @@ fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
     });
+    module.addCSourceFile(.{
+        .file = b.path("editor/tree-sitter-ss/src/parser.c"),
+    });
+    module.addIncludePath(b.path("editor/tree-sitter-ss/src"));
 }
 
 fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module) void {

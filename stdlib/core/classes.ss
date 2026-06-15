@@ -53,6 +53,16 @@ record TextStyle {
   markdown_code_stroke: Color? = none
   markdown_code_line_width: Number = 1
   markdown_code_radius: Number = 10
+  markdown_code_plain_color: Color? = none
+  markdown_code_keyword_color: Color? = none
+  markdown_code_function_color: Color? = none
+  markdown_code_type_color: Color? = none
+  markdown_code_constant_color: Color? = none
+  markdown_code_number_color: Color? = none
+  markdown_code_variable_color: Color? = none
+  markdown_code_operator_color: Color? = none
+  markdown_code_comment_color: Color? = none
+  markdown_code_string_color: Color? = none
   markdown_table_cell_pad_x: Number = 10
   markdown_table_cell_pad_y: Number = 7
   markdown_table_border: Color = c"0.82,0.84,0.88"
@@ -73,9 +83,21 @@ record MathStyle {
 
 record CodeStyle {
   plain_color: Color = c"0.12,0.12,0.12"
-  keyword_color: Color = c"0.1725,0.3451,0.7882"
+  keyword_color: Color = c"#cf222e"
+  function_color: Color = c"#8250df"
+  type_color: Color = c"#953800"
+  constant_color: Color = c"#0550ae"
+  number_color: Color = c"#0550ae"
+  variable_color: Color = c"0.12,0.12,0.12"
+  operator_color: Color = c"#0550ae"
   comment_color: Color = c"0.3059,0.5412,0.3608"
   string_color: Color = c"0.6980,0.2549,0.2157"
+}
+
+record CodeHighlightTheme {
+  code: CodeStyle = CodeStyle {}
+  fill: Color? = none
+  stroke: Color? = none
 }
 
 record ChromeStyle {
@@ -114,6 +136,18 @@ type Doc = object {
   logo_scale: Number = 1
   watermark: String? = none
   math_align: Align = Align.center
+  code_theme_plain_color: Color? = none
+  code_theme_keyword_color: Color? = none
+  code_theme_function_color: Color? = none
+  code_theme_type_color: Color? = none
+  code_theme_constant_color: Color? = none
+  code_theme_number_color: Color? = none
+  code_theme_variable_color: Color? = none
+  code_theme_operator_color: Color? = none
+  code_theme_comment_color: Color? = none
+  code_theme_string_color: Color? = none
+  code_theme_fill: Color? = none
+  code_theme_stroke: Color? = none
 }
 
 type PageContext = object {
@@ -174,6 +208,16 @@ type Text = object {
   text_markdown_code_stroke: Color? = none
   text_markdown_code_line_width: Number = 1
   text_markdown_code_radius: Number = 10
+  text_markdown_code_plain_color: Color? = none
+  text_markdown_code_keyword_color: Color? = none
+  text_markdown_code_function_color: Color? = none
+  text_markdown_code_type_color: Color? = none
+  text_markdown_code_constant_color: Color? = none
+  text_markdown_code_number_color: Color? = none
+  text_markdown_code_variable_color: Color? = none
+  text_markdown_code_operator_color: Color? = none
+  text_markdown_code_comment_color: Color? = none
+  text_markdown_code_string_color: Color? = none
   text_markdown_table_cell_pad_x: Number = 10
   text_markdown_table_cell_pad_y: Number = 7
   text_markdown_table_border: Color = c"0.82,0.84,0.88"
@@ -303,7 +347,13 @@ type Code = object {
   wrap: WrapMode = WrapMode.off
   language: String = "plain"
   code_plain_color: Color = c"0.12,0.12,0.12"
-  code_keyword_color: Color = c"0.1725,0.3451,0.7882"
+  code_keyword_color: Color = c"#cf222e"
+  code_function_color: Color = c"#8250df"
+  code_type_color: Color = c"#953800"
+  code_constant_color: Color = c"#0550ae"
+  code_number_color: Color = c"#0550ae"
+  code_variable_color: Color = c"0.12,0.12,0.12"
+  code_operator_color: Color = c"#0550ae"
   code_comment_color: Color = c"0.3059,0.5412,0.3608"
   code_string_color: Color = c"0.6980,0.2549,0.2157"
 }

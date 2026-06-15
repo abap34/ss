@@ -31,7 +31,9 @@ fn/! subhead(subtitle_text: String) -> Object
 end
 
 fn/! text(text_value: String) -> Object
-  return body_obj(text_value)
+  let body = body_obj(text_value)
+  md_code(body, 18, 24, 14, 12, docctx().code_theme_fill ?? c"1,0.9647,0.9294", docctx().code_theme_stroke ?? c"1,0.7373,0.3843", 1.4, 16)
+  return body
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
@@ -67,7 +69,7 @@ fn/! pdf(path_value: String, factor: Number = 1) -> Object
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
-  return code_box(text_value, language_name, 108, 108, 18, 14, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
+  return code_box(text_value, language_name, 108, 108, 18, 14, docctx().code_theme_fill ?? c"1,0.9647,0.9294", docctx().code_theme_stroke ?? c"1,0.7373,0.3843", 1.4, 16)
 end
 
 fn/! code_file(path_value: String, language_name: String = "plain") -> Object
