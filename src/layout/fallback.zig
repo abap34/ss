@@ -225,8 +225,8 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
         if (index != units.items.len - 1) total_height += unit.spacing_after;
     }
 
-    const center_offset = verticalCenterOffset(ir, workspace.graph.page_id);
-    var current_top = PageLayout.height / 2 - center_offset + total_height / 2;
+    const band = try centerStackAvailableBand(ir, workspace, &components);
+    var current_top = centerStackTopWithinBand(band, total_height, verticalCenterOffset(ir, workspace.graph.page_id));
     for (units.items) |unit| {
         try appendVerticalComponentPlacementConstraints(
             allocator,
@@ -243,6 +243,82 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
     }
 
     return constraints;
+}
+
+const VerticalBand = struct {
+    bottom: f32,
+    top: f32,
+};
+
+fn centerStackTopWithinBand(band: VerticalBand, total_height: f32, center_offset: f32) f32 {
+    var top = PageLayout.height / 2 - center_offset + total_height / 2;
+    if (band.top <= band.bottom) return top;
+
+    const band_height = band.top - band.bottom;
+    if (band_height < total_height) return band.top;
+
+    if (top > band.top) top = band.top;
+    if (top - total_height < band.bottom) top = band.bottom + total_height;
+    return top;
+}
+
+fn centerStackAvailableBand(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+) !VerticalBand {
+    var band = VerticalBand{ .bottom = 0, .top = PageLayout.height };
+    var seen = try ir.allocator.alloc(bool, workspace.graph.len());
+    defer ir.allocator.free(seen);
+    @memset(seen, false);
+
+    for (workspace.graph.child_ids, 0..) |_, index| {
+        const root = components.findConst(index);
+        if (seen[root]) continue;
+        seen[root] = true;
+        if (!components.isPageDependent(root)) continue;
+
+        const bounds = try componentVerticalBounds(ir, workspace, components, root) orelse continue;
+        const center = (bounds.bottom + bounds.top) / 2;
+        if (center >= PageLayout.height / 2) {
+            band.top = @min(band.top, bounds.bottom);
+        } else {
+            band.bottom = @max(band.bottom, bounds.top);
+        }
+    }
+
+    if (band.top <= band.bottom) return .{ .bottom = 0, .top = PageLayout.height };
+    return band;
+}
+
+const ComponentVerticalBounds = struct {
+    bottom: f32,
+    top: f32,
+};
+
+fn componentVerticalBounds(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+) !?ComponentVerticalBounds {
+    var bottom: ?f32 = null;
+    var top: ?f32 = null;
+
+    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, state, index| {
+        if (!components.contains(component_root, index)) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (groups.isGroupNode(node)) continue;
+        const node_bottom = state.start orelse continue;
+        const node_top = state.end orelse continue;
+        if (bottom == null or node_bottom < bottom.?) bottom = node_bottom;
+        if (top == null or node_top > top.?) top = node_top;
+    }
+
+    return .{
+        .bottom = bottom orelse return null,
+        .top = top orelse return null,
+    };
 }
 
 fn verticalComponentPolicy() graph.ComponentPolicy {

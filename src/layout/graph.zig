@@ -538,9 +538,6 @@ pub const ComponentSet = struct {
         if (anchorAxis(source.anchor) != self.workspace.axis) return;
 
         const source_index = self.workspace.indexOf(source.node_id) orelse return;
-        const source_node = ir.getNode(source.node_id) orelse return error.UnknownNode;
-        if (!isGroupNode(source_node)) return;
-
         self.merge(target_index, source_index);
     }
 };
