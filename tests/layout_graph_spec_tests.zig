@@ -506,6 +506,63 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     try expectFloat(model.PageLayout.height / 2, (row_top + row_bottom) / 2);
 }
 
+test "layout solver: centered vflow clamps below fixed top components only when needed" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+
+    const page = try ir.addPage("Page");
+    const header = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
+
+    try ir.setNodeProperty(header, "layout_line_height", "44");
+    try ir.setNodeProperty(header, "layout_spacing_after", "40");
+    try ir.setNodeProperty(body, "layout_line_height", "580");
+    try ir.addAnchorConstraint(header, .top, .{ .page = .top }, -56, "header-top");
+
+    try solver.solveLayout(&ir);
+
+    const header_node = ir.getNode(header).?;
+    const body_node = ir.getNode(body).?;
+    const header_bottom = header_node.frame.y;
+    const body_top = body_node.frame.y + body_node.frame.height;
+    try expectFloat(header_bottom, body_top);
+}
+
+test "layout solver: centered vflow preserves page center for side-by-side rows" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+
+    const page = try ir.addPage("Page");
+    const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const rule = try ir.makeObject(page, "rule", null, .text, .text, "");
+    const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
+    const pipe_child = try ir.makeObject(page, "pipe", null, .text, .text, "Pipe");
+    const pipe = try ir.makeGroupWithOrigin(page, true, &.{pipe_child}, "pipe-group");
+
+    try ir.setNodeProperty(title, "layout_line_height", "44");
+    try ir.setNodeProperty(rule, "layout_line_height", "4");
+    try ir.setNodeProperty(rule, "layout_spacing_after", "48");
+    try ir.setNodeProperty(body, "layout_line_height", "360");
+    try ir.setNodeProperty(pipe_child, "layout_line_height", "360");
+    try ir.addAnchorConstraint(title, .top, .{ .page = .top }, -56, "title-top");
+    try ir.addAnchorConstraint(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -14, "rule-below-title");
+    try ir.addAnchorConstraint(pipe, .right, .{ .page = .right }, -100, "pipe-right");
+    try ir.addAnchorConstraint(pipe, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 0, "align-row-top");
+
+    try solver.solveLayout(&ir);
+
+    const body_node = ir.getNode(body).?;
+    const pipe_node = ir.getNode(pipe).?;
+    const body_center = body_node.frame.y + body_node.frame.height / 2;
+    const pipe_center = pipe_node.frame.y + pipe_node.frame.height / 2;
+    try expectFloat(body_center, pipe_center);
+    try expectFloat(model.PageLayout.height / 2, body_center);
+}
+
 test "layout solver: explicit anchor conflicts and negative sizes are rejected" {
     var conflict = try initEmptyIr();
     defer conflict.deinit();
