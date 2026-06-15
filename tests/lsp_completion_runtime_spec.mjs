@@ -117,7 +117,7 @@ end
       uri,
       version: 2,
       range: { start: { line: 3, character: 0 }, end: { line: 3, character: 4 } },
-      text: "pag",
+      text: "type",
     });
     const brokenDiagnostics = await brokenDiagnosticsPromise;
     assert(brokenDiagnostics.params.diagnostics.length > 0, "ranged didChange did not publish diagnostics for broken source");
@@ -133,7 +133,7 @@ end
     client.changeDocumentRange({
       uri,
       version: 3,
-      range: { start: { line: 3, character: 0 }, end: { line: 3, character: 3 } },
+      range: { start: { line: 3, character: 0 }, end: { line: 3, character: 4 } },
       text: "page",
     });
     const fixedDiagnostics = await fixedDiagnosticsPromise;

@@ -20,6 +20,15 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
     }
     try types.end();
 
+    var records = try object.arrayField("records");
+    for (index.records.items) |record| {
+        var item = try records.objectItem();
+        try item.stringField("name", record.name);
+        try item.intField("moduleId", record.module_id);
+        try item.end();
+    }
+    try records.end();
+
     var classes = try object.arrayField("classes");
     for (index.classes.items) |class| {
         var item = try classes.objectItem();
@@ -51,6 +60,18 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
         try item.end();
     }
     try fields.end();
+
+    var record_fields = try object.arrayField("recordFields");
+    for (index.record_fields.items) |field| {
+        var item = try record_fields.objectItem();
+        try item.stringField("name", field.name);
+        try item.stringField("record", field.record_name);
+        try item.stringField("type", field.value_type);
+        try item.optionalStringField("defaultProperty", field.default_property_value);
+        try item.intField("moduleId", field.module_id);
+        try item.end();
+    }
+    try record_fields.end();
 
     try object.end();
 }

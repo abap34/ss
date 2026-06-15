@@ -23,6 +23,20 @@ pub const FieldDescriptor = struct {
     module_id: core.SourceModuleId,
 };
 
+pub const RecordDescriptor = struct {
+    name: []const u8,
+    module_id: core.SourceModuleId,
+};
+
+pub const RecordFieldDescriptor = struct {
+    name: []const u8,
+    record_name: []const u8,
+    value_type: []const u8,
+    default_value: ?*const ast.Expr,
+    default_property_value: ?[]const u8,
+    module_id: core.SourceModuleId,
+};
+
 pub const TypeDescriptor = struct {
     name: []const u8,
     cases: []const []const u8,
@@ -32,9 +46,12 @@ pub const TypeDescriptor = struct {
 pub const DeclarationIndex = struct {
     allocator: std.mem.Allocator,
     types: std.ArrayList(TypeDescriptor),
+    records: std.ArrayList(RecordDescriptor),
     classes: std.ArrayList(ClassDescriptor),
     roles: std.ArrayList(RoleDescriptor),
     fields: std.ArrayList(FieldDescriptor),
+    record_fields: std.ArrayList(RecordFieldDescriptor),
+    record_by_name: std.StringHashMap(usize),
     class_by_name: std.StringHashMap(usize),
     role_by_name: std.StringHashMap(usize),
 
@@ -42,9 +59,12 @@ pub const DeclarationIndex = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
+            .records = .empty,
             .classes = .empty,
             .roles = .empty,
             .fields = .empty,
+            .record_fields = .empty,
+            .record_by_name = std.StringHashMap(usize).init(allocator),
             .class_by_name = std.StringHashMap(usize).init(allocator),
             .role_by_name = std.StringHashMap(usize).init(allocator),
         };
@@ -52,11 +72,23 @@ pub const DeclarationIndex = struct {
 
     pub fn deinit(self: *DeclarationIndex) void {
         self.types.deinit(self.allocator);
+        self.records.deinit(self.allocator);
         self.classes.deinit(self.allocator);
         self.roles.deinit(self.allocator);
         self.fields.deinit(self.allocator);
+        self.record_fields.deinit(self.allocator);
+        self.record_by_name.deinit();
         self.class_by_name.deinit();
         self.role_by_name.deinit();
+    }
+
+    pub fn recordByName(self: *const DeclarationIndex, name: []const u8) ?RecordDescriptor {
+        const index = self.record_by_name.get(name) orelse return null;
+        return self.records.items[index];
+    }
+
+    pub fn recordExists(self: *const DeclarationIndex, name: []const u8) bool {
+        return self.record_by_name.contains(name);
     }
 
     pub fn classByName(self: *const DeclarationIndex, name: []const u8) ?ClassDescriptor {
@@ -107,6 +139,17 @@ pub const DeclarationIndex = struct {
         while (index > 0) {
             index -= 1;
             const descriptor = self.fields.items[index];
+            if (std.mem.eql(u8, descriptor.name, field_name)) return descriptor;
+        }
+        return null;
+    }
+
+    pub fn recordField(self: *const DeclarationIndex, record_name: []const u8, field_name: []const u8) ?RecordFieldDescriptor {
+        var index = self.record_fields.items.len;
+        while (index > 0) {
+            index -= 1;
+            const descriptor = self.record_fields.items[index];
+            if (!std.mem.eql(u8, descriptor.record_name, record_name)) continue;
             if (std.mem.eql(u8, descriptor.name, field_name)) return descriptor;
         }
         return null;
@@ -198,6 +241,54 @@ pub fn classExists(ir: *const core.Ir, class_name: []const u8) bool {
     return false;
 }
 
+pub fn recordExists(ir: *const core.Ir, record_name: []const u8) bool {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.records.items) |decl| {
+            if (std.mem.eql(u8, decl.name, record_name)) return true;
+        }
+    }
+    return false;
+}
+
+pub fn findRecord(ir: *const core.Ir, record_name: []const u8) ?RecordDescriptor {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.records.items) |decl| {
+            if (std.mem.eql(u8, decl.name, record_name)) return .{ .name = decl.name, .module_id = module.id };
+        }
+    }
+    return null;
+}
+
+pub fn findRecordField(ir: *const core.Ir, record_name: []const u8, field_name: []const u8) ?RecordFieldDescriptor {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.records.items) |decl| {
+            if (!std.mem.eql(u8, decl.name, record_name)) continue;
+            for (decl.fields.items) |field| {
+                if (std.mem.eql(u8, field.name, field_name)) {
+                    return .{
+                        .name = field.name,
+                        .record_name = record_name,
+                        .value_type = field.value_type,
+                        .default_value = field.default_value,
+                        .default_property_value = field.default_property_value,
+                        .module_id = module.id,
+                    };
+                }
+            }
+        }
+    }
+    return null;
+}
+
 pub fn findClassBase(ir: *const core.Ir, class_name: []const u8) ?[]const u8 {
     var index = ir.module_order.items.len;
     while (index > 0) {
@@ -244,6 +335,16 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         });
     }
 
+    for (module.program.records.items) |decl| {
+        const record_index = index.records.items.len;
+        try index.records.append(index.allocator, .{
+            .name = decl.name,
+            .module_id = module.id,
+        });
+        try index.record_by_name.put(decl.name, record_index);
+        try appendRecordFields(index, module.id, decl.name, decl.fields.items);
+    }
+
     for (module.program.objects.items) |decl| {
         const class_index = index.classes.items.len;
         try index.classes.append(index.allocator, .{
@@ -260,7 +361,19 @@ fn indexModule(index: *DeclarationIndex, module: *const core.SourceModule) !void
         try appendRoles(index, module.id, extension.target, extension.roles.items);
         try appendFields(index, module.id, extension.target, extension.fields.items);
     }
+}
 
+fn appendRecordFields(index: *DeclarationIndex, module_id: core.SourceModuleId, record_name: []const u8, fields: []const ast.ObjectFieldDecl) !void {
+    for (fields) |field| {
+        try index.record_fields.append(index.allocator, .{
+            .name = field.name,
+            .record_name = record_name,
+            .value_type = field.value_type,
+            .default_value = field.default_value,
+            .default_property_value = field.default_property_value,
+            .module_id = module_id,
+        });
+    }
 }
 
 fn appendRoles(index: *DeclarationIndex, module_id: core.SourceModuleId, class_name: []const u8, roles: []const []const u8) !void {

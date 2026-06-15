@@ -931,13 +931,14 @@ pub const Ir = struct {
             .function => .function,
             .string => .string,
             .enum_case => .enum_case,
+            .record => .record,
             .number => .number,
             .boolean => .boolean,
             .constraints => .constraints,
             .void => .void,
         };
         if (actual != expected) {
-            std.debug.print("value type mismatch in {s}: expected {s}, got {s}\n", .{
+            std.debug.print("runtime value type mismatch in {s}: expected {s}, got {s}\n", .{
                 context,
                 @tagName(expected),
                 @tagName(actual),

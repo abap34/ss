@@ -154,6 +154,24 @@ pub const SemanticEnv = struct {
         return false;
     }
 
+    pub fn record(self: *const SemanticEnv, name: []const u8) ?declarations.RecordDescriptor {
+        if (self.declarations) |index| return index.recordByName(name);
+        if (self.ir) |ir| return declarations.findRecord(ir, name);
+        return null;
+    }
+
+    pub fn recordExists(self: *const SemanticEnv, name: []const u8) bool {
+        if (self.declarations) |index| return index.recordExists(name);
+        if (self.ir) |ir| return declarations.recordExists(ir, name);
+        return false;
+    }
+
+    pub fn recordField(self: *const SemanticEnv, record_name: []const u8, field_name: []const u8) ?declarations.RecordFieldDescriptor {
+        if (self.declarations) |index| return index.recordField(record_name, field_name);
+        if (self.ir) |ir| return declarations.findRecordField(ir, record_name, field_name);
+        return null;
+    }
+
     pub fn roleClass(self: *const SemanticEnv, role_name: []const u8) ?[]const u8 {
         if (self.declarations) |index| return index.roleClass(role_name);
         if (self.ir) |ir| return declarations.findRoleClass(ir, role_name);
@@ -253,6 +271,7 @@ pub const SemanticEnv = struct {
 
     pub fn resolveTypeName(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
         if (builtinType(name)) |ty| return ty;
+        if (self.recordExists(name)) return ast.Type.recordType(name);
         if (self.classExists(name)) return ast.Type.objectClass(name);
         if (self.enumDescriptor(module_id, name) != null) return ast.Type.enumType(name);
         return null;

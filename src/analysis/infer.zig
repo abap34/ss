@@ -108,10 +108,47 @@ fn exprInfoWithOptions(
         .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin, options),
         .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin, options),
         .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin, options),
+        .record => |record| try inferRecordInfo(allocator, ir, sema, env, record, origin, options),
         .member => |member| try inferMemberInfo(allocator, ir, sema, env, member, origin, options),
         .optional_check => |check| try inferOptionalCheckInfo(allocator, ir, sema, env, check.target.*, origin, options),
         .coalesce => |coalesce| try inferCoalesceInfo(allocator, ir, sema, env, coalesce, origin, options),
     };
+}
+
+fn inferRecordInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    record: ast.RecordExpr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !TypeInfo {
+    const record_decl = sema.record(record.type_name) orelse {
+        try addUserReport(ir, origin, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
+        return error.InvalidType;
+    };
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+    for (record.fields.items) |field_expr| {
+        if (seen.contains(field_expr.name)) {
+            try addUserReport(ir, origin, "DuplicateRecordField: field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
+            return error.InvalidType;
+        }
+        try seen.put(field_expr.name, {});
+        const field = sema.recordField(record.type_name, field_expr.name) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
+            return error.InvalidType;
+        };
+        var expected = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
+            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+            return error.InvalidType;
+        };
+        defer expected.deinit(allocator);
+        const actual = try exprInfoWithOptions(allocator, ir, sema, env, field_expr.value, origin, options);
+        try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+    }
+    return infoFromType(Type.recordType(record_decl.name));
 }
 
 fn inferMemberInfo(
@@ -134,6 +171,24 @@ fn inferMemberInfo(
     }
 
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, member.target.*, origin, options);
+    if (target_info.ty.kind == .record) {
+        const record_name = target_info.ty.class_name orelse {
+            try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
+            return error.InvalidType;
+        };
+        const field = sema.recordField(record_name, member.name) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member.name });
+            return error.InvalidType;
+        };
+        var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
+            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+            return error.InvalidType;
+        };
+        defer field_type.deinit(allocator);
+        var result_type = try field_type.clone(allocator);
+        errdefer result_type.deinit(allocator);
+        return infoFromType(result_type);
+    }
     if (!isPropertyTarget(target_info)) {
         try addUserReport(ir, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
         return error.InvalidType;

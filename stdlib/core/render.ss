@@ -41,25 +41,33 @@ fn md_link(label: String, href: String) -> String
 end
 
 fn scale(obj: Object, factor: Number) -> Object
-  obj.asset_scale = factor
+  obj.asset = AssetStyle { scale = factor }
   return obj
 end
 
 fn txt_p(obj: Object, family_name: String, font_size_name: Number, line_height_name: Number, color_name: Color, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
-  obj.text_font_family = family_name
-  obj.text_font_weight = weight_name
-  obj.text_font_style = style_name
-  obj.text_font_stretch = stretch_name
-  obj.text_size = font_size_name
-  obj.text_color = color_name
+  obj.text = TextStyle {
+    font = FontFace {
+      family = family_name
+      weight = weight_name
+      style = style_name
+      stretch = stretch_name
+    }
+    size = font_size_name
+    color = color_name
+  }
   return obj
 end
 
 fn font(obj: Object, family_name: String, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
-  obj.text_font_family = family_name
-  obj.text_font_weight = weight_name
-  obj.text_font_style = style_name
-  obj.text_font_stretch = stretch_name
+  obj.text = TextStyle {
+    font = FontFace {
+      family = family_name
+      weight = weight_name
+      style = style_name
+      stretch = stretch_name
+    }
+  }
   return obj
 end
 
@@ -68,18 +76,24 @@ fn fonts(obj: Object, family_stack: String) -> Object
 end
 
 fn code_font(obj: Object, family_name: String, weight_name: Number = 400, style_name: FontStyle = FontStyle.normal, stretch_name: FontStretch = FontStretch.normal) -> Object
-  obj.text_code_font_family = family_name
-  obj.text_code_font_weight = weight_name
-  obj.text_code_font_style = style_name
-  obj.text_code_font_stretch = stretch_name
+  obj.text = TextStyle {
+    code_font = FontFace {
+      family = family_name
+      weight = weight_name
+      style = style_name
+      stretch = stretch_name
+    }
+  }
   return obj
 end
 
 fn txt_flow(obj: Object, font_size_name: Number, line_height_name: Number, spacing_after_name: Number, left_name: Number, right_name: Number) -> Object
-  obj.layout_spacing_after = spacing_after_name
-  obj.layout_x = left_name
-  obj.layout_right_inset = right_name
-  obj.wrap = WrapMode.on
+  obj.layout = LayoutStyle {
+    spacing_after = spacing_after_name
+    x = left_name
+    right_inset = right_name
+    wrap = WrapMode.on
+  }
   return obj
 end
 
@@ -90,56 +104,66 @@ fn txt(obj: Object, family_name: String, font_size_name: Number, line_height_nam
 end
 
 fn md_code(obj: Object, font_size_name: Number, line_height_name: Number, pad_x_name: Number, pad_y_name: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
-  obj.text_markdown_code_font_size = font_size_name
-  obj.text_markdown_code_line_height = line_height_name
-  obj.text_markdown_code_pad_x = pad_x_name
-  obj.text_markdown_code_pad_y = pad_y_name
-  obj.text_markdown_code_fill = fill_name
-  obj.text_markdown_code_stroke = stroke_name
-  obj.text_markdown_code_line_width = line_width_name
-  obj.text_markdown_code_radius = radius_name
+  obj.text = TextStyle {
+    markdown_code_font_size = font_size_name
+    markdown_code_line_height = line_height_name
+    markdown_code_pad_x = pad_x_name
+    markdown_code_pad_y = pad_y_name
+    markdown_code_fill = fill_name
+    markdown_code_stroke = stroke_name
+    markdown_code_line_width = line_width_name
+    markdown_code_radius = radius_name
+  }
   return obj
 end
 
 fn md_bold(obj: Object, color_name: Color?) -> Object
-  obj.text_markdown_bold_color = color_name
+  obj.text = TextStyle { markdown_bold_color = color_name }
   return obj
 end
 
 fn md_table(obj: Object, pad_x_name: Number, pad_y_name: Number, border_name: Color, line_width_name: Number, header_fill_name: Color, alt_row_fill_name: Color? = none) -> Object
-  obj.text_markdown_table_cell_pad_x = pad_x_name
-  obj.text_markdown_table_cell_pad_y = pad_y_name
-  obj.text_markdown_table_border = border_name
-  obj.text_markdown_table_line_width = line_width_name
-  obj.text_markdown_table_header_fill = header_fill_name
-  obj.text_markdown_table_alt_row_fill = alt_row_fill_name
+  obj.text = TextStyle {
+    markdown_table_cell_pad_x = pad_x_name
+    markdown_table_cell_pad_y = pad_y_name
+    markdown_table_border = border_name
+    markdown_table_line_width = line_width_name
+    markdown_table_header_fill = header_fill_name
+    markdown_table_alt_row_fill = alt_row_fill_name
+  }
   return obj
 end
 
 fn box(obj: Object, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
-  obj.chrome_fill = fill_name
-  obj.chrome_stroke = stroke_name
-  obj.chrome_line_width = line_width_name
-  obj.chrome_radius = radius_name
+  obj.chrome = ChromeStyle {
+    fill = fill_name
+    stroke = stroke_name
+    line_width = line_width_name
+    radius = radius_name
+  }
   return obj
 end
 
 fn under(obj: Object, color_name: Color?, line_width_name: Number, offset_name: Number) -> Object
-  obj.underline_color = color_name
-  obj.underline_width = line_width_name
-  obj.underline_offset = offset_name
+  obj.underline = UnderlineStyle {
+    color = color_name
+    width = line_width_name
+    offset = offset_name
+  }
   return obj
 end
 
 fn rule_l(obj: Object, stroke_name: Color?, line_width_name: Number, dash_name: String) -> Object
-  obj.rule_stroke = stroke_name
-  obj.rule_line_width = line_width_name
-  obj.rule_dash = dash_name
+  obj.rule = RuleStyle {
+    stroke = stroke_name
+    line_width = line_width_name
+    dash = dash_name
+  }
   return obj
 end
 
 fn fit(obj: Object, policy_name: FitPolicy) -> Object
-  obj.fit = policy_name
+  obj.layout = LayoutStyle { fit = policy_name }
   return obj
 end
 

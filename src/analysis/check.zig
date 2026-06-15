@@ -65,6 +65,12 @@ const PageContextRequirement = struct {
                 break :blk if (try self.functionRequiresPage(resolved.key, resolved.decl)) .{ .function = resolved.decl } else null;
             },
             .string, .color, .number, .boolean, .none, .enum_case => null,
+            .record => |record| blk: {
+                for (record.fields.items) |field| {
+                    if (try self.exprRequirement(scope, field.value)) |requirement| break :blk requirement;
+                }
+                break :blk null;
+            },
             .call => |call| blk: {
                 if (!call.callee.isQualified()) {
                     if (registry.lookupPrimitiveCall(call.callee.name)) |descriptor| {

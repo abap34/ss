@@ -214,6 +214,16 @@ pub const Analyzer = struct {
         return switch (value) {
             .ident, .string, .color, .number, .boolean, .none, .enum_case => AccessSummary.init(self.allocator),
             .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
+            .record => |record| blk: {
+                var summary = AccessSummary.init(self.allocator);
+                errdefer summary.deinit();
+                for (record.fields.items) |field| {
+                    var nested = try self.analyzeExpr(field.value);
+                    defer nested.deinit();
+                    try summary.merge(nested);
+                }
+                break :blk summary;
+            },
             .apply => |apply| blk: {
                 var summary = try self.analyzeExpr(apply.callee.*);
                 errdefer summary.deinit();

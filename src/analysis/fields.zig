@@ -17,6 +17,10 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
         const module = ir.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
         try checkObjectNamesUnique(allocator, ir, origin_path, module.program.objects.items);
+        try checkRecordNamesUnique(allocator, ir, origin_path, module.program.records.items);
+        for (module.program.records.items) |record_decl| {
+            try checkRecordDeclaration(allocator, ir, sema, module.id, origin_path, record_decl);
+        }
         for (module.program.objects.items) |object_decl| {
             try checkObjectDeclaration(allocator, ir, sema, module.id, origin_path, object_decl);
             try checkRolesUnique(allocator, ir, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
@@ -26,6 +30,36 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
             try checkRolesUnique(allocator, ir, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
     }
+}
+
+fn checkRecordNamesUnique(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    origin_path: []const u8,
+    records: []const ast.RecordDecl,
+) !void {
+    var names = std.StringHashMap(void).init(allocator);
+    defer names.deinit();
+    for (records) |record_decl| {
+        if (names.contains(record_decl.name)) {
+            const origin = try statementOrigin(allocator, origin_path, record_decl.span);
+            defer allocator.free(origin);
+            try addUserReport(ir, origin, "DuplicateRecordType: record type '{s}' is already defined in this module", .{record_decl.name});
+            return error.InvalidType;
+        }
+        try names.put(record_decl.name, {});
+    }
+}
+
+fn checkRecordDeclaration(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
+    origin_path: []const u8,
+    record_decl: ast.RecordDecl,
+) !void {
+    try checkObjectFields(allocator, ir, sema, module_id, origin_path, record_decl.fields.items);
 }
 
 fn checkObjectNamesUnique(
