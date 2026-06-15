@@ -467,6 +467,45 @@ test "layout solver: constrained group source forms one fallback unit" {
     try expectFloat(left_title_node.frame.y - title_spacing, left_body_node.frame.y + left_body_node.frame.height);
 }
 
+test "layout solver: centered vflow treats vertically aligned groups as one row" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+
+    const page = try ir.addPage("Page");
+    const left_title = try ir.makeObject(page, "left-title", null, .text, .text, "Left");
+    const left_body = try ir.makeObject(page, "left-body", null, .text, .text, "Body");
+    const right_title = try ir.makeObject(page, "right-title", null, .text, .text, "Right");
+    const right_body = try ir.makeObject(page, "right-body", null, .text, .text, "Body");
+    const left_group = try ir.makeGroupWithOrigin(ir.document_id, false, &.{ left_title, left_body }, "left-group");
+    const right_group = try ir.makeGroupWithOrigin(ir.document_id, false, &.{ right_title, right_body }, "right-group");
+
+    try ir.setNodeProperty(left_title, "layout_line_height", "40");
+    try ir.setNodeProperty(left_body, "layout_line_height", "200");
+    try ir.setNodeProperty(right_title, "layout_line_height", "40");
+    try ir.setNodeProperty(right_body, "layout_line_height", "200");
+    try ir.setNodeProperty(left_title, "layout_spacing_after", "20");
+    try ir.setNodeProperty(right_title, "layout_spacing_after", "20");
+    try ir.setNodeProperty(left_body, "layout_spacing_after", "0");
+    try ir.setNodeProperty(right_body, "layout_spacing_after", "0");
+
+    try ir.addAnchorConstraint(right_group, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-left-group");
+    try ir.addAnchorConstraint(right_group, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-centers");
+
+    try ir.finalize();
+
+    const left_group_node = ir.getNode(left_group).?;
+    const right_group_node = ir.getNode(right_group).?;
+    const left_center = left_group_node.frame.y + left_group_node.frame.height / 2;
+    const right_center = right_group_node.frame.y + right_group_node.frame.height / 2;
+    try expectFloat(left_center, right_center);
+
+    const row_top = @max(left_group_node.frame.y + left_group_node.frame.height, right_group_node.frame.y + right_group_node.frame.height);
+    const row_bottom = @min(left_group_node.frame.y, right_group_node.frame.y);
+    try expectFloat(model.PageLayout.height / 2, (row_top + row_bottom) / 2);
+}
+
 test "layout solver: explicit anchor conflicts and negative sizes are rejected" {
     var conflict = try initEmptyIr();
     defer conflict.deinit();

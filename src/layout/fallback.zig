@@ -142,7 +142,7 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
     if (workspace.graph.len() == 0) return constraints;
 
     const allocator = ir.allocator;
-    var components = try workspace.dependencyComponents(allocator, ir, .{ .include_containment = true, .skip_group_targets = true });
+    var components = try workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
     defer components.deinit();
 
     const local_tops = try allocator.alloc(?f32, workspace.graph.len());
@@ -207,7 +207,7 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
     if (workspace.graph.len() == 0) return constraints;
 
     const allocator = ir.allocator;
-    var components = try workspace.dependencyComponents(allocator, ir, .{ .include_containment = true, .skip_group_targets = true });
+    var components = try workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
     defer components.deinit();
 
     const local_tops = try allocator.alloc(?f32, workspace.graph.len());
@@ -243,6 +243,13 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
     }
 
     return constraints;
+}
+
+fn verticalComponentPolicy() graph.ComponentPolicy {
+    return .{
+        .include_containment = true,
+        .group_targets = .group_dependencies,
+    };
 }
 
 fn collectVerticalComponentUnits(

@@ -27,7 +27,13 @@ pub const ConstraintClass = enum {
 
 pub const ComponentPolicy = struct {
     include_containment: bool = false,
-    skip_group_targets: bool = false,
+    group_targets: GroupTargetPolicy = .include,
+};
+
+pub const GroupTargetPolicy = enum {
+    include,
+    ignore,
+    group_dependencies,
 };
 
 pub const SolveOptions = struct {
@@ -495,7 +501,14 @@ pub const ComponentSet = struct {
                     }
                     continue;
                 },
-                .group_target => if (policy.skip_group_targets) continue,
+                .group_target => switch (policy.group_targets) {
+                    .include => {},
+                    .ignore => continue,
+                    .group_dependencies => {
+                        try self.mergeGroupTargetDependency(ir, constraint);
+                        continue;
+                    },
+                },
                 .normal, .page_source, .group_source => {},
             }
             if (self.workspace.indexOf(constraint.target_node)) |target_index| {
@@ -511,6 +524,24 @@ pub const ComponentSet = struct {
                 }
             }
         }
+    }
+
+    fn mergeGroupTargetDependency(self: *ComponentSet, ir: anytype, constraint: Constraint) !void {
+        const target_index = self.workspace.indexOf(constraint.target_node) orelse return;
+        const target_node = ir.getNode(constraint.target_node) orelse return error.UnknownNode;
+        if (!isGroupNode(target_node)) return;
+
+        const source = switch (constraint.source) {
+            .page => return,
+            .node => |node_source| node_source,
+        };
+        if (anchorAxis(source.anchor) != self.workspace.axis) return;
+
+        const source_index = self.workspace.indexOf(source.node_id) orelse return;
+        const source_node = ir.getNode(source.node_id) orelse return error.UnknownNode;
+        if (!isGroupNode(source_node)) return;
+
+        self.merge(target_index, source_index);
     }
 };
 
