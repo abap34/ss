@@ -146,10 +146,13 @@ export class LspClient {
     return result;
   }
 
-  waitForDiagnostics(uri) {
+  waitForDiagnostics(uri, predicate = () => true, label = `diagnostics for ${uri}`) {
     return this.waitForNotification(
-      (message) => message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri,
-      `diagnostics for ${uri}`,
+      (message) =>
+        message.method === "textDocument/publishDiagnostics" &&
+        message.params?.uri === uri &&
+        predicate(message.params.diagnostics, message),
+      label,
     );
   }
 
