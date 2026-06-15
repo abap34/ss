@@ -1270,29 +1270,29 @@ const Parser = struct {
         };
         errdefer target.deinit(self.allocator);
 
-        self.skipInlineSpaces();
-        if (self.eof() or self.source[self.pos] != '.') {
-            target.deinit(self.allocator);
-            self.pos = saved;
-            return null;
+        while (true) {
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != '.') {
+                target.deinit(self.allocator);
+                self.pos = saved;
+                return null;
+            }
+            self.pos += 1;
+            self.skipInlineSpaces();
+            const member_name = try self.parseIdentifier();
+            self.skipTrivia();
+            if (!self.eof() and self.source[self.pos] == '=' and (self.pos + 1 >= self.source.len or self.source[self.pos + 1] != '=')) {
+                self.pos += 1;
+                const value = try self.parseExpr();
+                try self.consumeStatementTerminator();
+                const call = if (std.mem.eql(u8, member_name, "content")) blk: {
+                    self.allocator.free(member_name);
+                    break :blk try self.makeCall2("set_content", target, value);
+                } else try self.makeCall3("set_prop", target, .{ .string = member_name }, value);
+                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
+            }
+            target = try self.makeMemberExpr(target, member_name);
         }
-        self.pos += 1;
-        self.skipInlineSpaces();
-        const member_name = try self.parseIdentifier();
-        self.skipTrivia();
-        if (self.eof() or self.source[self.pos] != '=' or (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=')) {
-            target.deinit(self.allocator);
-            self.pos = saved;
-            return null;
-        }
-        self.pos += 1;
-        const value = try self.parseExpr();
-        try self.consumeStatementTerminator();
-        const call = if (std.mem.eql(u8, member_name, "content"))
-            try self.makeCall2("set_content", target, value)
-        else
-            try self.makeCall3("set_prop", target, .{ .string = member_name }, value);
-        return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
     }
 
     fn parseCallTargetExpr(self: *Parser) !Expr {
@@ -1308,6 +1308,10 @@ const Parser = struct {
     fn parseMemberExprAfterTarget(self: *Parser, target: Expr) !Expr {
         try self.expectChar('.');
         const member_name = try self.parseIdentifier();
+        return try self.makeMemberExpr(target, member_name);
+    }
+
+    fn makeMemberExpr(self: *Parser, target: Expr, member_name: []const u8) !Expr {
         const target_ptr = try self.allocator.create(Expr);
         errdefer self.allocator.destroy(target_ptr);
         target_ptr.* = target;
