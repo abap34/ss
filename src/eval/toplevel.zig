@@ -186,9 +186,10 @@ const ScheduleGraph = struct {
         try collectScheduledUnits(ir, ir.projectModule(), graph.document, &ir.functions, &graph.units, &collected_modules, &source_order);
         try validateScheduledUnits(graph.document, graph.units.items);
         try buildScheduleEdges(allocator, graph.units.items, &graph.edges);
-        graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items) catch |err| {
+        var cycle_hint: ?usize = null;
+        graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle_hint) catch |err| {
             if (err == error.ScheduledDependencyCycle and graph.units.items.len != 0) {
-                try addUnitErrorDiagnostic(graph.document, graph.units.items[0], lowerErrorMessage(err));
+                try addUnitErrorDiagnostic(graph.document, graph.units.items[cycle_hint orelse 0], lowerErrorMessage(err));
             }
             return err;
         };
@@ -485,7 +486,12 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
     }
 }
 
-fn scheduleFromEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit, edges: []const ScheduleEdge) ![]usize {
+fn scheduleFromEdges(
+    allocator: std.mem.Allocator,
+    units: []const ScheduledUnit,
+    edges: []const ScheduleEdge,
+    cycle_hint: *?usize,
+) ![]usize {
     const count = units.len;
     const indegree = try allocator.alloc(usize, count);
     defer allocator.free(indegree);
@@ -506,7 +512,15 @@ fn scheduleFromEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit,
             if (done[index] or indegree[index] != 0) continue;
             if (best == null or unit.source_order < units[best.?].source_order) best = index;
         }
-        const next = best orelse return error.ScheduledDependencyCycle;
+        const next = best orelse {
+            var candidate: ?usize = null;
+            for (units, 0..) |unit, index| {
+                if (done[index] or indegree[index] == 0) continue;
+                if (candidate == null or unit.source_order < units[candidate.?].source_order) candidate = index;
+            }
+            cycle_hint.* = candidate;
+            return error.ScheduledDependencyCycle;
+        };
         done[next] = true;
         out[produced] = next;
         produced += 1;

@@ -2973,6 +2973,40 @@ test "compiler semantics: stdlib numbering waits for wrapped numbered items" {
     , "Claim 2: B");
 }
 
+test "compiler semantics: stdlib numbering waits for placed numbered items" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  let item = numbered_item("claim", "A")
+        \\  place!(item)
+        \\end
+        \\
+        \\document
+        \\  numbering!("claim", "Claim {number}: {text}")
+        \\end
+        \\
+    , "Claim 1: A");
+}
+
+test "compiler semantics: document object counts wait for titles on any page" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  let bonus = 100
+        \\  let n_title_plus_bonus = selection_count(doc_objs(docctx(), "title")) + bonus
+        \\  text!(str(n_title_plus_bonus))
+        \\  title!("A")
+        \\end
+        \\
+        \\page two
+        \\  title!("B")
+        \\end
+        \\
+    , "102");
+}
+
 test "compiler semantics: stdlib numbering keeps source text across repeated formatting" {
     try expectObjectContent(
         \\import std:themes/default as *

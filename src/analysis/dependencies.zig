@@ -238,6 +238,7 @@ pub const Analyzer = struct {
     variable_scope: ResourceScope,
     visiting: FunctionVisitSet,
     string_bindings: std.StringHashMap([]const u8),
+    object_role_bindings: std.StringHashMap([]const u8),
     owned_strings: std.ArrayList([]const u8),
     local_variables: std.StringHashMap(void),
 
@@ -252,6 +253,7 @@ pub const Analyzer = struct {
             .variable_scope = variable_scope,
             .visiting = FunctionVisitSet.init(allocator),
             .string_bindings = std.StringHashMap([]const u8).init(allocator),
+            .object_role_bindings = std.StringHashMap([]const u8).init(allocator),
             .owned_strings = .empty,
             .local_variables = std.StringHashMap(void).init(allocator),
         };
@@ -261,6 +263,7 @@ pub const Analyzer = struct {
         self.local_variables.deinit();
         for (self.owned_strings.items) |value| self.allocator.free(value);
         self.owned_strings.deinit(self.allocator);
+        self.object_role_bindings.deinit();
         self.string_bindings.deinit();
         self.visiting.deinit();
     }
@@ -304,6 +307,11 @@ pub const Analyzer = struct {
                     switch (let_policy) {
                         .scheduled => try summary.addWrite(Resource.variable(self.variable_scope, binding.name)),
                         .local => try self.local_variables.put(binding.name, {}),
+                    }
+                    if (try self.objectRoleExpr(binding.expr)) |role_name| {
+                        try self.object_role_bindings.put(binding.name, role_name);
+                    } else {
+                        _ = self.object_role_bindings.remove(binding.name);
                     }
                 }
             },
@@ -353,10 +361,16 @@ pub const Analyzer = struct {
         var snapshot = try self.cloneLocalVariables();
         const current = self.local_variables;
         self.local_variables = snapshot;
+        var role_snapshot = try self.cloneObjectRoles();
+        const current_roles = self.object_role_bindings;
+        self.object_role_bindings = role_snapshot;
         defer {
             snapshot = self.local_variables;
             self.local_variables = current;
             snapshot.deinit();
+            role_snapshot = self.object_role_bindings;
+            self.object_role_bindings = current_roles;
+            role_snapshot.deinit();
         }
         return try self.analyzeStatements(statements, .local);
     }
@@ -437,10 +451,7 @@ pub const Analyzer = struct {
                 var summary = try self.callArgs(call);
                 errdefer summary.deinit();
                 if (callableNamePlacesObjects(call.callee.name)) summary.places_objects = true;
-                const previous = self.sema;
-                self.sema = self.sema.forModule(resolved.module_id);
-                defer self.sema = previous;
-                break :blk try self.functionCall(resolved.key, resolved.decl, call, summary);
+                break :blk try self.functionCall(resolved.key, resolved.module_id, resolved.decl, call, summary);
             },
             .primitive => |primitive| try self.primitiveCall(call, primitive),
         };
@@ -457,28 +468,53 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn functionCall(self: *Analyzer, key: core.FunctionKey, func: ast.FunctionDecl, call: ast.CallExpr, initial_summary: AccessSummary) anyerror!AccessSummary {
+    fn functionCall(
+        self: *Analyzer,
+        key: core.FunctionKey,
+        module_id: core.SourceModuleId,
+        func: ast.FunctionDecl,
+        call: ast.CallExpr,
+        initial_summary: AccessSummary,
+    ) anyerror!AccessSummary {
         var summary = initial_summary;
         errdefer summary.deinit();
         if (self.visiting.contains(key)) return summary;
         try self.visiting.put(key, {});
         defer _ = self.visiting.remove(key);
 
-        var bindings = std.ArrayList(StringBindingRestore).empty;
+        var string_bindings = std.ArrayList(StringBindingRestore).empty;
+        var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
         defer {
-            var index = bindings.items.len;
+            var index = object_role_bindings.items.len;
             while (index > 0) {
                 index -= 1;
-                const binding = bindings.items[index];
+                const binding = object_role_bindings.items[index];
+                if (binding.had_old) {
+                    self.object_role_bindings.put(binding.name, binding.old.?) catch {};
+                } else {
+                    _ = self.object_role_bindings.remove(binding.name);
+                }
+            }
+            object_role_bindings.deinit(self.allocator);
+
+            index = string_bindings.items.len;
+            while (index > 0) {
+                index -= 1;
+                const binding = string_bindings.items[index];
                 if (binding.had_old) {
                     self.string_bindings.put(binding.name, binding.old.?) catch {};
                 } else {
                     _ = self.string_bindings.remove(binding.name);
                 }
             }
-            bindings.deinit(self.allocator);
+            string_bindings.deinit(self.allocator);
         }
-        try self.bindLiteralStringArgs(func, call, &bindings);
+        try self.bindLiteralStringArgs(func, call, &string_bindings);
+        try self.bindObjectRoleArgs(func, call, &object_role_bindings);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(module_id);
+        defer self.sema = previous;
 
         const body = try self.withFunctionLocals(func, summary);
         summary = AccessSummary.init(self.allocator);
@@ -508,10 +544,16 @@ pub const Analyzer = struct {
         var snapshot = try self.cloneLocalVariables();
         const current = self.local_variables;
         self.local_variables = snapshot;
+        var role_snapshot = try self.cloneObjectRoles();
+        const current_roles = self.object_role_bindings;
+        self.object_role_bindings = role_snapshot;
         defer {
             snapshot = self.local_variables;
             self.local_variables = current;
             snapshot.deinit();
+            role_snapshot = self.object_role_bindings;
+            self.object_role_bindings = current_roles;
+            role_snapshot.deinit();
         }
         for (func.params.items) |param| try self.local_variables.put(param.name, {});
         var body = try self.analyzeStatements(func.statements.items, .local);
@@ -524,10 +566,16 @@ pub const Analyzer = struct {
         var snapshot = try self.cloneLocalVariables();
         const current = self.local_variables;
         self.local_variables = snapshot;
+        var role_snapshot = try self.cloneObjectRoles();
+        const current_roles = self.object_role_bindings;
+        self.object_role_bindings = role_snapshot;
         defer {
             snapshot = self.local_variables;
             self.local_variables = current;
             snapshot.deinit();
+            role_snapshot = self.object_role_bindings;
+            self.object_role_bindings = current_roles;
+            role_snapshot.deinit();
         }
         for (lambda.params.items) |param| try self.local_variables.put(param.name, {});
         return try self.analyzeExpr(lambda.body.*);
@@ -538,6 +586,14 @@ pub const Analyzer = struct {
         errdefer clone.deinit();
         var iter = self.local_variables.iterator();
         while (iter.next()) |entry| try clone.put(entry.key_ptr.*, {});
+        return clone;
+    }
+
+    fn cloneObjectRoles(self: *Analyzer) !std.StringHashMap([]const u8) {
+        var clone = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer clone.deinit();
+        var iter = self.object_role_bindings.iterator();
+        while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         return clone;
     }
 
@@ -572,6 +628,31 @@ pub const Analyzer = struct {
         }
     }
 
+    fn bindObjectRoleArgs(
+        self: *Analyzer,
+        func: ast.FunctionDecl,
+        call: ast.CallExpr,
+        restores: *std.ArrayList(StringBindingRestore),
+    ) !void {
+        for (func.params.items, 0..) |param, index| {
+            const previous = self.object_role_bindings.get(param.name);
+            try restores.append(self.allocator, .{
+                .name = param.name,
+                .had_old = previous != null,
+                .old = previous,
+            });
+            if (index < call.args.items.len) {
+                if (try self.objectRoleExpr(call.args.items[index])) |role_name| {
+                    try self.object_role_bindings.put(param.name, role_name);
+                } else {
+                    _ = self.object_role_bindings.remove(param.name);
+                }
+            } else {
+                _ = self.object_role_bindings.remove(param.name);
+            }
+        }
+    }
+
     fn primitiveCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
         if (descriptor.callback != null) return try self.primitiveCallbackCall(call, descriptor);
 
@@ -600,11 +681,10 @@ pub const Analyzer = struct {
             },
             .new => {
                 try summary.addWrite(Resource.objects(try literalStringArg(self, call, 1)));
-                try summary.addWrite(Resource.property(null, "content"));
                 summary.writes_layout_input = true;
             },
             .place_on => {
-                try summary.addWrite(Resource.objects(null));
+                try summary.addWrite(Resource.objects(try self.objectRoleArg(call, 1)));
                 summary.writes_layout_input = true;
             },
             .set_prop => {
@@ -647,10 +727,7 @@ pub const Analyzer = struct {
                     } else if (self.sema.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
                         var initial_summary = AccessSummary.init(self.allocator);
                         errdefer initial_summary.deinit();
-                        const previous = self.sema;
-                        self.sema = self.sema.forModule(callback.module_id);
-                        defer self.sema = previous;
-                        callback_summary = try self.functionCall(callback.key, callback.decl, .{
+                        callback_summary = try self.functionCall(callback.key, callback.module_id, callback.decl, .{
                             .callee = ast.CallableName.bare(callback_name),
                             .args = .empty,
                         }, initial_summary);
@@ -706,6 +783,103 @@ pub const Analyzer = struct {
             .parent_page,
             => try summary.addRead(Resource.pageIndex(null)),
         }
+    }
+
+    fn objectRoleArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const u8 {
+        if (index >= call.args.items.len) return null;
+        return try self.objectRoleExpr(call.args.items[index]);
+    }
+
+    fn objectRoleExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
+        return switch (expr) {
+            .ident => |name| blk: {
+                if (self.object_role_bindings.get(name)) |role_name| break :blk role_name;
+                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                    break :blk try self.objectRoleConst(resolved);
+                }
+                break :blk null;
+            },
+            .call => |call| try self.objectRoleCall(call),
+            else => null,
+        };
+    }
+
+    fn objectRoleCall(self: *Analyzer, call: ast.CallExpr) anyerror!?[]const u8 {
+        const descriptor = self.sema.callCallee(call.callee) orelse return null;
+        return switch (descriptor) {
+            .primitive => |primitive| switch (primitive.op) {
+                .new => try literalStringArg(self, call, 1),
+                .group => "group",
+                .place_on => try self.objectRoleArg(call, 1),
+                else => null,
+            },
+            .function => |resolved| try self.objectRoleFunctionCall(resolved, call),
+        };
+    }
+
+    fn objectRoleConst(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!?[]const u8 {
+        if (self.visiting.contains(resolved.key)) return null;
+        try self.visiting.put(resolved.key, {});
+        defer _ = self.visiting.remove(resolved.key);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+
+        return try self.objectRoleExpr(resolved.decl.value);
+    }
+
+    fn objectRoleFunctionCall(
+        self: *Analyzer,
+        resolved: semantic_env.ResolvedFunction,
+        call: ast.CallExpr,
+    ) anyerror!?[]const u8 {
+        if (self.visiting.contains(resolved.key)) return null;
+        try self.visiting.put(resolved.key, {});
+        defer _ = self.visiting.remove(resolved.key);
+
+        var string_bindings = std.ArrayList(StringBindingRestore).empty;
+        var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
+        defer {
+            var index = object_role_bindings.items.len;
+            while (index > 0) {
+                index -= 1;
+                const binding = object_role_bindings.items[index];
+                if (binding.had_old) {
+                    self.object_role_bindings.put(binding.name, binding.old.?) catch {};
+                } else {
+                    _ = self.object_role_bindings.remove(binding.name);
+                }
+            }
+            object_role_bindings.deinit(self.allocator);
+
+            index = string_bindings.items.len;
+            while (index > 0) {
+                index -= 1;
+                const binding = string_bindings.items[index];
+                if (binding.had_old) {
+                    self.string_bindings.put(binding.name, binding.old.?) catch {};
+                } else {
+                    _ = self.string_bindings.remove(binding.name);
+                }
+            }
+            string_bindings.deinit(self.allocator);
+        }
+        try self.bindLiteralStringArgs(resolved.decl, call, &string_bindings);
+        try self.bindObjectRoleArgs(resolved.decl, call, &object_role_bindings);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+
+        for (resolved.decl.statements.items) |stmt| {
+            switch (stmt.kind) {
+                .return_expr => |expr| return try self.objectRoleExpr(expr),
+                .return_void => return null,
+                else => {},
+            }
+        }
+        return null;
     }
 };
 
