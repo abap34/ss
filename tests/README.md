@@ -36,5 +36,5 @@ detail or underspecified:
   clarified;
 - exact generated internal page names beyond their reserved prefix and
   source-sensitive uniqueness;
-- ordering of diagnostics or metadata unless that order is part of the user
+- ordering of diagnostics unless that order is part of the user
   surface.

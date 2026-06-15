@@ -45,7 +45,6 @@ const builtin_type_names = [_][]const u8{
     "Document",
     "Page",
     "Object",
-    "Metadata",
     "Anchor",
     "String",
     "Color",

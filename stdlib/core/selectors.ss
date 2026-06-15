@@ -36,30 +36,6 @@ fn doc_objs(doc: Document, role_name: String) -> Selection<Object>
   return select(doc, "document_objects_by_role", role_name)
 end
 
-fn mark(kind_name: String, value_text: String) -> Metadata
-  return emit_metadata(pagectx(), kind_name, value_text)
-end
-
-fn doc_mark(kind_name: String, value_text: String) -> Metadata
-  return emit_metadata(docctx(), kind_name, value_text)
-end
-
-fn doc_marks(doc: Document, kind_name: String) -> Selection<Metadata>
-  return metadata_in_document(doc, kind_name)
-end
-
-fn page_marks(page_value: Page, kind_name: String) -> Selection<Metadata>
-  return metadata_on_page(page_value, kind_name)
-end
-
-fn mark_text(item: Metadata) -> String
-  return metadata_content(item)
-end
-
-fn mark_page(item: Metadata) -> Page
-  return metadata_page(item)
-end
-
 fn page_of(obj: Object) -> Page
   return select(obj, "parent_page")
 end

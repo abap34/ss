@@ -54,9 +54,6 @@ test "language registry spec: query output types are declared in the registry" {
 
     const objects = registry.lookupQueryOp("page_objects_by_role").?;
     try testing.expect(Type.eql(Type.selection(.object), registry.queryOutputType(objects)));
-
-    const metadata = registry.lookupPrimitiveCall("metadata_in_document").?;
-    try testing.expect(Type.eql(Type.selection(.metadata), registry.primitiveResultType(metadata).?));
 }
 
 test "language registry spec: stdlib helpers are not kernel primitives" {

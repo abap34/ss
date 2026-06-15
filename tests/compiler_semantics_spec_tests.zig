@@ -2946,24 +2946,6 @@ test "compiler semantics: function values cannot be stored as properties" {
     );
 }
 
-test "compiler semantics: function values cannot be stored as metadata content" {
-    try expectBuildFails(
-        \\import std:themes/default as *
-        \\
-        \\fn id(x: Number) -> Number
-        \\  return x
-        \\end
-        \\
-        \\document
-        \\  emit_metadata(docctx(), "kind", id)
-        \\end
-        \\
-        \\page bad
-        \\end
-        \\
-    );
-}
-
 test "compiler semantics: function-value recursion is rejected" {
     try expectBuildFails(
         \\import std:themes/default as *

@@ -626,10 +626,6 @@ const Parser = struct {
             return ast.Type.page;
         }
         if (std.mem.eql(u8, name, "Object")) return try self.parseObjectType(name);
-        if (std.mem.eql(u8, name, "Metadata")) {
-            self.allocator.free(name);
-            return ast.Type.metadata;
-        }
         if (std.mem.eql(u8, name, "Anchor")) {
             self.allocator.free(name);
             return ast.Type.anchor;

@@ -13,7 +13,6 @@ pub const ResourceKind = enum {
     graph_objects,
     property,
     content,
-    metadata,
     constraints,
     render_env,
     diagnostics,
@@ -385,8 +384,6 @@ pub const Analyzer = struct {
                 summary.reads_layout = true;
             },
             .content => try summary.addRead(Resource.content(null)),
-            .emit_metadata => try summary.addWrite(.{ .kind = .metadata }),
-            .metadata_in_document, .metadata_on_page, .metadata_content, .metadata_kind, .metadata_page => try summary.addRead(.{ .kind = .metadata }),
             .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(literalStringArg(self, call, 1))),
             .set_content => {
                 try summary.addWrite(Resource.content(null));
