@@ -951,6 +951,39 @@ test "syntax spec: member expressions stay in the AST" {
     }
 }
 
+test "syntax spec: chained member assignment targets the enclosing expression" {
+    var parsed = try parse(
+        \\page Members
+        \\  let pipe = make_pipe()
+        \\  pipe.middle.text_color = c"#ff0000"
+        \\  pipe.middle.content = pipe.middle.content ++ "!"
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    const color_set = try expectCall(statements[1].kind.expr_stmt, "set_prop", 3);
+    const color_target = try expectMember(color_set.args.items[0], "middle");
+    switch (color_target.target.*) {
+        .ident => |name| try testing.expectEqualStrings("pipe", name),
+        else => return error.ExpectedIdentifier,
+    }
+    try expectString(color_set.args.items[1], "text_color");
+    try expectColor(color_set.args.items[2], "1,0,0");
+
+    const content_set = try expectCall(statements[2].kind.expr_stmt, "set_content", 2);
+    const content_target = try expectMember(content_set.args.items[0], "middle");
+    switch (content_target.target.*) {
+        .ident => |name| try testing.expectEqualStrings("pipe", name),
+        else => return error.ExpectedIdentifier,
+    }
+    const concat = try expectCall(content_set.args.items[1], "concat", 2);
+    const read_content = try expectMember(concat.args.items[0], "content");
+    _ = try expectMember(read_content.target.*, "middle");
+    try expectString(concat.args.items[1], "!");
+}
+
 test "syntax spec: place is an ordinary identifier and bind is removed" {
     var parsed = try parse(
         \\page Placement

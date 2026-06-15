@@ -2163,6 +2163,36 @@ test "compiler semantics: member sugar reads and writes properties and content" 
     , "footer");
 }
 
+test "compiler semantics: chained member assignment writes through record fields" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\record Parts {
+        \\  root: Object
+        \\  middle: Object
+        \\}
+        \\
+        \\fn make_parts() -> Parts
+        \\  let middle = text("middle")
+        \\  return Parts {
+        \\    root = group(middle)
+        \\    middle = middle
+        \\  }
+        \\end
+        \\
+        \\page ok
+        \\  let parts = make_parts()
+        \\  place!(parts.root)
+        \\  parts.middle.content = "changed"
+        \\  parts.middle.text_color = c"#ff0000"
+        \\end
+        \\
+    ;
+
+    try expectObjectContent(source, "changed");
+    try expectObjectProperty(source, "text_color", "1,0,0");
+}
+
 test "compiler semantics: member reads materialize typed property values" {
     try expectObjectContent(
         \\import std:themes/default as *
