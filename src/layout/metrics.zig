@@ -75,7 +75,7 @@ pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
         const line_width = if (wrap)
             measuredTextAdvance(ir.allocator, line, plain_font, style)
         else
-            measuredTextWidth(ir.allocator, line, plain_font, style);
+            measuredTextDrawExtent(ir.allocator, line, plain_font, style);
         max_width = @max(max_width, line_width);
     }
     if (max_width <= 0) max_width = fallbackGlyphAdvance(style);
@@ -513,8 +513,28 @@ fn fontForRun(fonts: font_model.TextFaces, kind: markdown.RunKind) font_model.Fa
 }
 
 fn measuredTextWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
-    const measured = text_measure.width(allocator, text, font, style.font_size) catch 0;
+    const measured = text_measure.advanceWidth(allocator, text, font, style.font_size) catch 0;
     return if (measured > 0) measured else fallbackTextAdvance(style, text);
+}
+
+fn measuredTextVisualWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
+    const measured = text_measure.visualWidth(allocator, text, font, style.font_size) catch 0;
+    return if (measured > 0) measured else fallbackTextAdvance(style, text);
+}
+
+fn measuredTextDrawExtent(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
+    var advance: f32 = 0;
+    var extent: f32 = 0;
+    var saw_token = false;
+    var tokenizer = MeasureTokenizer.init(text);
+    while (tokenizer.next()) |token| {
+        const token_advance = measuredTextWidth(allocator, token, font, style);
+        const token_visual_width = measuredTextVisualWidth(allocator, token, font, style);
+        extent = @max(extent, advance + @max(token_advance, token_visual_width));
+        advance += token_advance;
+        saw_token = true;
+    }
+    return if (saw_token) extent else 0;
 }
 
 fn measuredTextAdvance(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {

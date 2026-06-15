@@ -527,6 +527,14 @@ double ss_text_measure_text(const char *text, const char *font_family, int font_
     return width;
 }
 
+double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
+    static GMutex measure_mutex;
+    g_mutex_lock(&measure_mutex);
+    const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 1);
+    g_mutex_unlock(&measure_mutex);
+    return width;
+}
+
 int ss_png_size(const char *path, double *width, double *height) {
     cairo_surface_t *surface = cairo_image_surface_create_from_png(path);
     if (surface == NULL || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {

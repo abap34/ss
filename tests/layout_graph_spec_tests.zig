@@ -634,6 +634,28 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
     try expectFloat(34, content.height);
 }
 
+test "layout metrics: unwrapped text width includes visual glyph bounds" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "コンポーネントの集合と絶対位置");
+    try ir.setNodeProperty(object, "text_size", "24");
+    try ir.setNodeProperty(object, "chrome_pad_x", "20");
+
+    const node = ir.getNode(object).?;
+    const style = core.layout.style.textMetricsForNode(&ir, node);
+    const font = core.font.textFacesForNode(&ir, node).normal;
+    var atom_width: f32 = 0;
+    var utf8 = try std.unicode.Utf8View.init(node.content.?);
+    var iterator = utf8.iterator();
+    while (iterator.nextCodepointSlice()) |slice| {
+        atom_width += try core.render_text_measure.advanceWidth(testing.allocator, slice, font, style.font_size);
+    }
+
+    try testing.expect(metrics.intrinsicWidth(&ir, node) >= atom_width + 40);
+}
+
 test "layout solver: group chrome padding expands tight group bounds" {
     var ir = try initEmptyIr();
     defer ir.deinit();

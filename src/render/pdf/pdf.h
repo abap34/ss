@@ -89,6 +89,7 @@ int ss_pdf_draw_text_baseline(
 double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
+double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 int ss_png_size(const char *path, double *width, double *height);
 int ss_pdf_draw_png(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_svg_size(const char *path, double *width, double *height);
