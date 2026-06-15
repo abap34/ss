@@ -112,7 +112,11 @@ end
     assertPropertyCompletion(unimportedBrokenCompletion, "unimported library broken completion");
     await client.waitForDiagnostics(themeTempUri);
 
-    const brokenDiagnosticsPromise = client.waitForDiagnostics(uri);
+    const brokenDiagnosticsPromise = client.waitForDiagnostics(
+      uri,
+      (diagnostics) => diagnostics.length > 0,
+      "non-empty diagnostics for broken ranged didChange source",
+    );
     client.changeDocumentRange({
       uri,
       version: 2,
@@ -129,7 +133,11 @@ end
     assertUniqueCompletionLabels(brokenCompletion, "broken-source completion");
     assertCompletionHas(brokenCompletion, "module_label!", "broken-source completion");
 
-    const fixedDiagnosticsPromise = client.waitForDiagnostics(uri);
+    const fixedDiagnosticsPromise = client.waitForDiagnostics(
+      uri,
+      (diagnostics) => diagnostics.length === 0,
+      "empty diagnostics after restoring ranged didChange source",
+    );
     client.changeDocumentRange({
       uri,
       version: 3,
