@@ -2586,6 +2586,18 @@ test "compiler semantics: scheduled document statements share document scope" {
     , "from document scope");
 }
 
+test "compiler semantics: scheduled page statements share page scope" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  let label = "from page scope"
+        \\  text(label)
+        \\end
+        \\
+    , "from page scope");
+}
+
 test "compiler semantics: document blocks preserve top-level order" {
     try expectObjectContent(
         \\import std:themes/default as *

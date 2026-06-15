@@ -144,9 +144,10 @@ const ScheduledUnit = struct {
             stmt: Statement,
             index: usize,
         },
-        page: struct {
-            decl: PageDecl,
+        page_statement: struct {
+            stmt: Statement,
             page_id: core.NodeId,
+            index: usize,
         },
     };
 
@@ -323,7 +324,13 @@ pub fn evalIr(allocator: std.mem.Allocator, ir: *core.Ir) !void {
         while (iter.next()) |state| state.deinit(allocator);
         document_states.deinit();
     }
-    for (graph.order) |unit_index| try executeScheduledUnit(ir, &ir.functions, &closures, &document_states, graph.units.items[unit_index]);
+    var page_states = std.AutoHashMap(core.NodeId, PageExecutionState).init(allocator);
+    defer {
+        var iter = page_states.valueIterator();
+        while (iter.next()) |state| state.deinit(allocator);
+        page_states.deinit();
+    }
+    for (graph.order) |unit_index| try executeScheduledUnit(ir, &ir.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
 }
 
 fn collectScheduledUnits(
@@ -342,7 +349,7 @@ fn collectScheduledUnits(
 
     if (module.program.top_level_items.items.len == 0) {
         try appendDocumentStatementUnits(core_ir, module, functions, units, source_order, 0, module.program.document_statements.items.len);
-        for (module.program.pages.items) |page| try appendPageUnit(core_ir.allocator, module, document, functions, units, source_order, page);
+        for (module.program.pages.items) |page| try appendPageStatementUnits(core_ir.allocator, module, document, functions, units, source_order, page);
         return;
     }
 
@@ -361,7 +368,7 @@ fn collectScheduledUnits(
             },
             .page => |page_index| {
                 if (page_index >= module.program.pages.items.len) continue;
-                try appendPageUnit(core_ir.allocator, module, document, functions, units, source_order, module.program.pages.items[page_index]);
+                try appendPageStatementUnits(core_ir.allocator, module, document, functions, units, source_order, module.program.pages.items[page_index]);
             },
         }
     }
@@ -403,7 +410,7 @@ fn appendDocumentStatementUnits(
     }
 }
 
-fn appendPageUnit(
+fn appendPageStatementUnits(
     allocator: std.mem.Allocator,
     module: *const core.SourceModule,
     document: *core.Ir,
@@ -414,23 +421,29 @@ fn appendPageUnit(
 ) !void {
     const page_id = try document.addPage(page.name);
     const sema = SemanticEnv.init(document, null, functions).forModule(module.id);
-    var analyzer = dependencies.Analyzer.init(allocator, &sema);
+    var analyzer = dependencies.Analyzer.initWithScope(allocator, &sema, .{ .page = page_id });
     defer analyzer.deinit();
-    const summary = try analyzer.page(page);
-    errdefer {
-        var owned = summary;
-        owned.deinit();
+    for (page.statements.items, 0..) |stmt, stmt_index| {
+        const summary = try analyzer.statement(stmt);
+        errdefer {
+            var owned = summary;
+            owned.deinit();
+        }
+        try units.append(allocator, .{
+            .module_id = module.id,
+            .source = module.source,
+            .path = module.path orelse module.spec,
+            .source_order = source_order.*,
+            .span = stmt.span,
+            .summary = summary,
+            .kind = .{ .page_statement = .{
+                .stmt = stmt,
+                .page_id = page_id,
+                .index = stmt_index,
+            } },
+        });
+        source_order.* += 1;
     }
-    try units.append(allocator, .{
-        .module_id = module.id,
-        .source = module.source,
-        .path = module.path orelse module.spec,
-        .source_order = source_order.*,
-        .span = page.span,
-        .summary = summary,
-        .kind = .{ .page = .{ .decl = page, .page_id = page_id } },
-    });
-    source_order.* += 1;
 }
 
 fn validateScheduledUnits(ir: *core.Ir, units: []const ScheduledUnit) !void {
@@ -456,16 +469,17 @@ fn validateScheduledUnits(ir: *core.Ir, units: []const ScheduledUnit) !void {
 
 fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit, edges: *std.ArrayList(ScheduleEdge)) !void {
     for (units, 0..) |left, left_index| {
-        for (units, 0..) |right, right_index| {
-            if (left_index == right_index) continue;
-            if (!sameDocumentStatementSequence(left, right) or left.source_order < right.source_order) {
-                try addResourceScheduleEdges(allocator, edges, left.summary, right.summary, left_index, right_index);
-            }
-            if (unitKindIsPage(left) and unitKindIsDocumentStatement(right) and documentStatementNeedsPageBody(right.summary)) {
+        for (units[left_index + 1 ..], left_index + 1..) |right, right_index| {
+            const left_needs_right_structure = summaryReadsStructuralWrite(left.summary, right.summary);
+            const right_needs_left_structure = summaryReadsStructuralWrite(right.summary, left.summary);
+            if (left_needs_right_structure and right_needs_left_structure) {
+                try addSourceOrderEdge(allocator, units, edges, left_index, right_index);
+            } else if (left_needs_right_structure) {
+                try addScheduleEdge(allocator, edges, right_index, left_index);
+            } else if (right_needs_left_structure) {
                 try addScheduleEdge(allocator, edges, left_index, right_index);
-            }
-            if (consecutiveDocumentStatements(left, right)) {
-                try addScheduleEdge(allocator, edges, left_index, right_index);
+            } else if (summariesConflict(left.summary, right.summary)) {
+                try addSourceOrderEdge(allocator, units, edges, left_index, right_index);
             }
         }
     }
@@ -505,22 +519,51 @@ fn scheduleFromEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit,
     return out;
 }
 
-fn addResourceScheduleEdges(
-    allocator: std.mem.Allocator,
-    edges: *std.ArrayList(ScheduleEdge),
-    left: dependencies.AccessSummary,
-    right: dependencies.AccessSummary,
-    from: usize,
-    to: usize,
-) !void {
-    for (left.writes.items) |write| {
-        if (!resourceNeedsScheduleEdge(write)) continue;
-        for (right.reads.items) |read| {
-            if (!resourceNeedsScheduleEdge(read)) continue;
-            if (write.intersects(read)) {
-                try addScheduleEdge(allocator, edges, from, to);
-            }
+fn summaryReadsStructuralWrite(reader: dependencies.AccessSummary, writer: dependencies.AccessSummary) bool {
+    for (reader.reads.items) |read| {
+        if (!resourceIsStructural(read)) continue;
+        for (writer.writes.items) |write| {
+            if (read.intersects(write)) return true;
         }
+    }
+    return false;
+}
+
+fn resourceIsStructural(resource: dependencies.Resource) bool {
+    return switch (resource.kind) {
+        .objects, .page_index => true,
+        .variable, .property => false,
+    };
+}
+
+fn summariesConflict(left: dependencies.AccessSummary, right: dependencies.AccessSummary) bool {
+    for (left.writes.items) |write| {
+        for (right.reads.items) |read| {
+            if (write.intersects(read)) return true;
+        }
+        for (right.writes.items) |right_write| {
+            if (write.intersects(right_write)) return true;
+        }
+    }
+    for (left.reads.items) |read| {
+        for (right.writes.items) |write| {
+            if (read.intersects(write)) return true;
+        }
+    }
+    return false;
+}
+
+fn addSourceOrderEdge(
+    allocator: std.mem.Allocator,
+    units: []const ScheduledUnit,
+    edges: *std.ArrayList(ScheduleEdge),
+    left_index: usize,
+    right_index: usize,
+) !void {
+    if (units[left_index].source_order <= units[right_index].source_order) {
+        try addScheduleEdge(allocator, edges, left_index, right_index);
+    } else {
+        try addScheduleEdge(allocator, edges, right_index, left_index);
     }
 }
 
@@ -539,61 +582,6 @@ fn addScheduleEdge(
     });
 }
 
-fn resourceNeedsScheduleEdge(resource: dependencies.Resource) bool {
-    return switch (resource.kind) {
-        .graph_pages, .graph_objects => true,
-        .property, .content, .constraints, .render_env, .diagnostics, .layout, .asset => false,
-    };
-}
-
-fn unitKindIsPage(unit: ScheduledUnit) bool {
-    return switch (unit.kind) {
-        .page => true,
-        .document_statement => false,
-    };
-}
-
-fn unitKindIsDocumentStatement(unit: ScheduledUnit) bool {
-    return switch (unit.kind) {
-        .document_statement => true,
-        .page => false,
-    };
-}
-
-fn sameDocumentStatementSequence(left: ScheduledUnit, right: ScheduledUnit) bool {
-    if (left.module_id != right.module_id) return false;
-    return switch (left.kind) {
-        .document_statement => switch (right.kind) {
-            .document_statement => true,
-            .page => false,
-        },
-        .page => false,
-    };
-}
-
-fn consecutiveDocumentStatements(left: ScheduledUnit, right: ScheduledUnit) bool {
-    if (left.module_id != right.module_id) return false;
-    const left_index = switch (left.kind) {
-        .document_statement => |stmt| stmt.index,
-        .page => return false,
-    };
-    const right_index = switch (right.kind) {
-        .document_statement => |stmt| stmt.index,
-        .page => return false,
-    };
-    return left_index + 1 == right_index;
-}
-
-fn documentStatementNeedsPageBody(summary: dependencies.AccessSummary) bool {
-    for (summary.reads.items) |resource| {
-        if (resource.kind == .graph_objects) return true;
-    }
-    for (summary.writes.items) |resource| {
-        if (resource.kind == .graph_objects) return true;
-    }
-    return false;
-}
-
 const DocumentExecutionState = struct {
     env: std.StringHashMap(core.Value),
     last_code_like: ?core.NodeId = null,
@@ -607,11 +595,14 @@ const DocumentExecutionState = struct {
     }
 };
 
+const PageExecutionState = DocumentExecutionState;
+
 fn executeScheduledUnit(
     ir: *core.Ir,
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
     document_states: *std.AutoHashMap(core.SourceModuleId, DocumentExecutionState),
+    page_states: *std.AutoHashMap(core.NodeId, PageExecutionState),
     unit: ScheduledUnit,
 ) !void {
     const previous_module_id = active_module_id;
@@ -624,7 +615,11 @@ fn executeScheduledUnit(
             if (!entry.found_existing) entry.value_ptr.* = DocumentExecutionState.init(ir.allocator);
             try executeScheduledDocumentStatement(ir, functions, closures, entry.value_ptr, document_statement.stmt);
         },
-        .page => |page| try executePageBody(page.decl, page.page_id, ir, functions, closures),
+        .page_statement => |page_statement| {
+            const entry = try page_states.getOrPut(page_statement.page_id);
+            if (!entry.found_existing) entry.value_ptr.* = PageExecutionState.init(ir.allocator);
+            try executeScheduledPageStatement(ir, functions, closures, entry.value_ptr, page_statement.page_id, page_statement.stmt);
+        },
     }
 }
 
@@ -637,6 +632,35 @@ fn executeScheduledDocumentStatement(
 ) !void {
     const error_count = diagnosticErrorCount(ir);
     const flow = executeStatement(ir, ir.document_id, .document, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
+        var owns_origin = true;
+        const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
+            owns_origin = false;
+            break :blk "bytes:0-1";
+        };
+        defer if (owns_origin) ir.allocator.free(origin);
+        if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
+        return err;
+    };
+    switch (flow) {
+        .none => {},
+        .returned => |value| {
+            var owned = value;
+            owned.deinit(ir.allocator);
+            return error.ReturnOutsideFunction;
+        },
+    }
+}
+
+fn executeScheduledPageStatement(
+    ir: *core.Ir,
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    state: *PageExecutionState,
+    page_id: core.NodeId,
+    stmt: Statement,
+) !void {
+    const error_count = diagnosticErrorCount(ir);
+    const flow = executeStatement(ir, page_id, .page, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
         var owns_origin = true;
         const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
             owns_origin = false;

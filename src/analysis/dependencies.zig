@@ -4,46 +4,71 @@ const core = @import("core");
 
 const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
+const names = @import("../language/names.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 pub const ResourceKind = enum {
-    graph_pages,
-    graph_objects,
+    variable,
+    objects,
     property,
-    content,
-    constraints,
-    render_env,
-    diagnostics,
-    layout,
-    asset,
+    page_index,
+};
+
+pub const ResourceScope = union(enum) {
+    any,
+    document: core.SourceModuleId,
+    page: core.NodeId,
+
+    pub fn intersects(self: ResourceScope, other: ResourceScope) bool {
+        return switch (self) {
+            .any => true,
+            .document => |left| switch (other) {
+                .any => true,
+                .document => |right| left == right,
+                .page => false,
+            },
+            .page => |left| switch (other) {
+                .any => true,
+                .document => false,
+                .page => |right| left == right,
+            },
+        };
+    }
 };
 
 pub const Resource = struct {
     kind: ResourceKind,
+    scope: ResourceScope = .any,
+    owner: ?[]const u8 = null,
     key: ?[]const u8 = null,
 
     pub fn intersects(self: Resource, other: Resource) bool {
         if (self.kind != other.kind) return false;
-        if (self.key == null or other.key == null) return true;
-        return std.mem.eql(u8, self.key.?, other.key.?);
+        if (!self.scope.intersects(other.scope)) return false;
+        if (self.owner != null and other.owner != null and !std.mem.eql(u8, self.owner.?, other.owner.?)) return false;
+        if (self.key != null and other.key != null and !std.mem.eql(u8, self.key.?, other.key.?)) return false;
+        return true;
     }
 
-    pub fn graphPages() Resource {
-        return .{ .kind = .graph_pages };
+    pub fn variable(scope: ResourceScope, name: []const u8) Resource {
+        return .{ .kind = .variable, .scope = scope, .key = name };
     }
 
-    pub fn graphObjects(role_name: ?[]const u8) Resource {
-        return .{ .kind = .graph_objects, .key = role_name };
+    pub fn objects(role_name: ?[]const u8) Resource {
+        return .{ .kind = .objects, .key = role_name };
     }
 
-    pub fn property(key: ?[]const u8) Resource {
-        return .{ .kind = .property, .key = key };
+    pub fn property(owner: ?[]const u8, key: ?[]const u8) Resource {
+        return .{ .kind = .property, .owner = owner, .key = key };
     }
 
-    pub fn content(role_name: ?[]const u8) Resource {
-        return .{ .kind = .content, .key = role_name };
+    pub fn pageIndex(page_id: ?core.NodeId) Resource {
+        return .{
+            .kind = .page_index,
+            .scope = if (page_id) |id| .{ .page = id } else .any,
+        };
     }
 };
 
@@ -108,57 +133,68 @@ fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), re
     try list.append(allocator, resource);
 }
 
+const LetPolicy = enum {
+    scheduled,
+    local,
+};
+
 pub const Analyzer = struct {
     allocator: std.mem.Allocator,
     sema: SemanticEnv,
+    variable_scope: ResourceScope,
     visiting: FunctionVisitSet,
     string_bindings: std.StringHashMap([]const u8),
+    local_variables: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
+        return initWithScope(allocator, sema, .{ .document = sema.module_id });
+    }
+
+    pub fn initWithScope(allocator: std.mem.Allocator, sema: *const SemanticEnv, variable_scope: ResourceScope) Analyzer {
         return .{
             .allocator = allocator,
             .sema = sema.*,
+            .variable_scope = variable_scope,
             .visiting = FunctionVisitSet.init(allocator),
             .string_bindings = std.StringHashMap([]const u8).init(allocator),
+            .local_variables = std.StringHashMap(void).init(allocator),
         };
     }
 
     pub fn deinit(self: *Analyzer) void {
+        self.local_variables.deinit();
         self.string_bindings.deinit();
         self.visiting.deinit();
     }
 
     pub fn documentStatements(self: *Analyzer, items: []const ast.Statement) anyerror!AccessSummary {
-        return try self.analyzeStatements(items);
+        return try self.analyzeStatements(items, .scheduled);
     }
 
     pub fn page(self: *Analyzer, page_decl: ast.PageDecl) anyerror!AccessSummary {
-        var summary = try self.analyzeStatements(page_decl.statements.items);
-        errdefer summary.deinit();
-        summary.writes_layout_input = true;
-        return summary;
+        return try self.analyzeStatements(page_decl.statements.items, .scheduled);
     }
 
     pub fn functionBody(self: *Analyzer, func: ast.FunctionDecl) anyerror!AccessSummary {
-        return try self.analyzeStatements(func.statements.items);
+        return try self.withFunctionLocals(func, AccessSummary.init(self.allocator));
     }
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
-        return try self.analyzeStatement(stmt);
+        return try self.analyzeStatement(stmt, .scheduled);
     }
 
-    fn analyzeStatements(self: *Analyzer, items: []const ast.Statement) anyerror!AccessSummary {
+    fn analyzeStatements(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
         for (items) |stmt| {
-            var nested = try self.analyzeStatement(stmt);
+            var nested = try self.analyzeStatement(stmt, let_policy);
             defer nested.deinit();
             try summary.merge(nested);
         }
         return summary;
     }
 
-    fn analyzeStatement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
+    fn analyzeStatement(self: *Analyzer, stmt: ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
         switch (stmt.kind) {
@@ -166,6 +202,12 @@ pub const Analyzer = struct {
                 var expr = try self.analyzeExpr(binding.expr);
                 defer expr.deinit();
                 try summary.merge(expr);
+                if (!names.isDiscardBindingName(binding.name)) {
+                    switch (let_policy) {
+                        .scheduled => try summary.addWrite(Resource.variable(self.variable_scope, binding.name)),
+                        .local => try self.local_variables.put(binding.name, {}),
+                    }
+                }
             },
             .return_expr => |expr| {
                 var nested = try self.analyzeExpr(expr);
@@ -174,20 +216,21 @@ pub const Analyzer = struct {
             },
             .return_void => {},
             .property_set => |property_set| {
+                try self.addVariableRead(&summary, property_set.object_name);
                 var expr = try self.analyzeExpr(property_set.value);
                 defer expr.deinit();
                 try summary.merge(expr);
-                try summary.addWrite(Resource.property(property_set.property_name));
+                try summary.addWrite(Resource.property(null, property_set.property_name));
                 summary.writes_layout_input = true;
             },
             .if_stmt => |if_stmt| {
                 var condition = try self.analyzeExpr(if_stmt.condition);
                 defer condition.deinit();
                 try summary.merge(condition);
-                var then_summary = try self.analyzeStatements(if_stmt.then_statements.items);
+                var then_summary = try self.withLocalSnapshot(if_stmt.then_statements.items);
                 defer then_summary.deinit();
                 try summary.merge(then_summary);
-                var else_summary = try self.analyzeStatements(if_stmt.else_statements.items);
+                var else_summary = try self.withLocalSnapshot(if_stmt.else_statements.items);
                 defer else_summary.deinit();
                 try summary.merge(else_summary);
             },
@@ -202,23 +245,34 @@ pub const Analyzer = struct {
                     defer nested.deinit();
                     try summary.merge(nested);
                 }
-                try summary.addWrite(.{ .kind = .constraints });
                 summary.writes_layout_input = true;
             },
         }
         return summary;
     }
 
+    fn withLocalSnapshot(self: *Analyzer, statements: []const ast.Statement) !AccessSummary {
+        var snapshot = try self.cloneLocalVariables();
+        const current = self.local_variables;
+        self.local_variables = snapshot;
+        defer {
+            snapshot = self.local_variables;
+            self.local_variables = current;
+            snapshot.deinit();
+        }
+        return try self.analyzeStatements(statements, .local);
+    }
+
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
             .ident => |name| blk: {
-                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
-                    break :blk try self.constValue(resolved);
-                }
-                break :blk AccessSummary.init(self.allocator);
+                var summary = AccessSummary.init(self.allocator);
+                errdefer summary.deinit();
+                try self.addVariableRead(&summary, name);
+                break :blk summary;
             },
             .string, .color, .number, .boolean, .none, .enum_case => AccessSummary.init(self.allocator),
-            .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
+            .lambda => |lambda| try self.withLambdaLocals(lambda),
             .record => |record| blk: {
                 var summary = AccessSummary.init(self.allocator);
                 errdefer summary.deinit();
@@ -242,7 +296,7 @@ pub const Analyzer = struct {
             .member => |member| blk: {
                 var summary = try self.analyzeExpr(member.target.*);
                 errdefer summary.deinit();
-                try summary.addRead(Resource.property(member.name));
+                try summary.addRead(Resource.property(null, member.name));
                 break :blk summary;
             },
             .optional_check => |check| try self.analyzeExpr(check.target.*),
@@ -256,6 +310,18 @@ pub const Analyzer = struct {
             },
             .call => |call| try self.analyzeCall(call),
         };
+    }
+
+    fn addVariableRead(self: *Analyzer, summary: *AccessSummary, name: []const u8) !void {
+        if (self.local_variables.contains(name)) return;
+        if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+            var nested = try self.constValue(resolved);
+            defer nested.deinit();
+            try summary.merge(nested);
+            return;
+        }
+        if (self.sema.resolvedFunction(ast.CallableName.bare(name)) != null) return;
+        try summary.addRead(Resource.variable(self.variable_scope, name));
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
@@ -316,10 +382,9 @@ pub const Analyzer = struct {
         }
         try self.bindLiteralStringArgs(func, call, &bindings);
 
-        var body = try self.analyzeStatements(func.statements.items);
-        defer body.deinit();
-        try summary.merge(body);
-        return summary;
+        const body = try self.withFunctionLocals(func, summary);
+        summary = AccessSummary.init(self.allocator);
+        return body;
     }
 
     fn constValue(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AccessSummary {
@@ -337,6 +402,45 @@ pub const Analyzer = struct {
         defer nested.deinit();
         try summary.merge(nested);
         return summary;
+    }
+
+    fn withFunctionLocals(self: *Analyzer, func: ast.FunctionDecl, initial_summary: AccessSummary) !AccessSummary {
+        var summary = initial_summary;
+        errdefer summary.deinit();
+        var snapshot = try self.cloneLocalVariables();
+        const current = self.local_variables;
+        self.local_variables = snapshot;
+        defer {
+            snapshot = self.local_variables;
+            self.local_variables = current;
+            snapshot.deinit();
+        }
+        for (func.params.items) |param| try self.local_variables.put(param.name, {});
+        var body = try self.analyzeStatements(func.statements.items, .local);
+        defer body.deinit();
+        try summary.merge(body);
+        return summary;
+    }
+
+    fn withLambdaLocals(self: *Analyzer, lambda: ast.LambdaExpr) !AccessSummary {
+        var snapshot = try self.cloneLocalVariables();
+        const current = self.local_variables;
+        self.local_variables = snapshot;
+        defer {
+            snapshot = self.local_variables;
+            self.local_variables = current;
+            snapshot.deinit();
+        }
+        for (lambda.params.items) |param| try self.local_variables.put(param.name, {});
+        return try self.analyzeExpr(lambda.body.*);
+    }
+
+    fn cloneLocalVariables(self: *Analyzer) !std.StringHashMap(void) {
+        var clone = std.StringHashMap(void).init(self.allocator);
+        errdefer clone.deinit();
+        var iter = self.local_variables.iterator();
+        while (iter.next()) |entry| try clone.put(entry.key_ptr.*, {});
+        return clone;
     }
 
     const StringBindingRestore = struct {
@@ -378,52 +482,46 @@ pub const Analyzer = struct {
         if (descriptor.places_objects) summary.places_objects = true;
         switch (descriptor.op) {
             .select => try self.applySelectSummary(&summary, call),
-            .page_index, .page_count => try summary.addRead(Resource.graphPages()),
+            .page_index, .page_count => try summary.addRead(Resource.pageIndex(null)),
             .frame_x, .frame_y, .frame_width, .frame_height => {
-                try summary.addRead(.{ .kind = .layout });
                 summary.reads_layout = true;
             },
-            .content => try summary.addRead(Resource.content(null)),
-            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(literalStringArg(self, call, 1))),
+            .content => try summary.addRead(Resource.property(null, "content")),
+            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(null, literalStringArg(self, call, 1))),
             .set_content => {
-                try summary.addWrite(Resource.content(null));
+                try summary.addWrite(Resource.property(null, "content"));
                 summary.writes_layout_input = true;
             },
             .group => {
-                try summary.addWrite(Resource.graphObjects("group"));
+                try summary.addWrite(Resource.objects("group"));
                 summary.writes_layout_input = true;
             },
             .new_page => {
-                try summary.addWrite(Resource.graphPages());
+                try summary.addWrite(Resource.pageIndex(null));
                 summary.writes_layout_input = true;
             },
             .new => {
-                try summary.addWrite(Resource.graphObjects(literalStringArg(self, call, 1)));
-                try summary.addWrite(Resource.content(literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.objects(literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.property(null, "content"));
                 summary.writes_layout_input = true;
             },
             .place_on => {
-                try summary.addWrite(Resource.graphObjects(null));
+                try summary.addWrite(Resource.objects(null));
                 summary.writes_layout_input = true;
             },
             .set_prop => {
-                try summary.addWrite(Resource.property(literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.property(null, literalStringArg(self, call, 1)));
                 summary.writes_layout_input = true;
             },
-            .extend_render_env => try summary.addWrite(.{ .kind = .render_env }),
             .equal, .constraints => {
-                try summary.addWrite(.{ .kind = .constraints });
                 summary.writes_layout_input = true;
             },
-            .report_error, .report_warning => try summary.addWrite(.{ .kind = .diagnostics }),
-            .readlines => {
-                try summary.addRead(.{ .kind = .asset });
-                try summary.addWrite(.{ .kind = .diagnostics });
-            },
-            .require_asset_exists => {
-                try summary.addRead(.{ .kind = .asset });
-                try summary.addWrite(.{ .kind = .diagnostics });
-            },
+            .extend_render_env,
+            .report_error,
+            .report_warning,
+            .readlines,
+            .require_asset_exists,
+            => {},
             else => {},
         }
         return summary;
@@ -461,7 +559,7 @@ pub const Analyzer = struct {
                     }
                 },
                 .lambda => |lambda| {
-                    callback_summary = try self.analyzeExpr(lambda.body.*);
+                    callback_summary = try self.withLambdaLocals(lambda);
                 },
                 else => {
                     var callback_expr = try self.analyzeExpr(call.args.items[callback_spec.function_arg_index]);
@@ -489,26 +587,26 @@ pub const Analyzer = struct {
 
     fn applySelectSummary(self: *Analyzer, summary: *AccessSummary, call: ast.CallExpr) !void {
         const query_name = literalStringArg(self, call, 1) orelse {
-            try summary.addRead(Resource.graphObjects(null));
-            try summary.addSelectionRead(Resource.graphObjects(null));
+            try summary.addRead(Resource.objects(null));
+            try summary.addSelectionRead(Resource.objects(null));
             return;
         };
         const query = registry.lookupQueryOp(query_name) orelse {
-            try summary.addRead(Resource.graphObjects(null));
+            try summary.addRead(Resource.objects(null));
             return;
         };
         switch (query.op) {
-            .document_pages => try summary.addSelectionRead(Resource.graphPages()),
+            .document_pages => try summary.addSelectionRead(Resource.pageIndex(null)),
             .page_objects_by_role,
             .document_objects_by_role,
-            => try summary.addSelectionRead(Resource.graphObjects(literalStringArg(self, call, 2))),
+            => try summary.addSelectionRead(Resource.objects(literalStringArg(self, call, 2))),
             .children,
             .descendants,
             .self_object,
-            => try summary.addSelectionRead(Resource.graphObjects(null)),
+            => try summary.addSelectionRead(Resource.objects(null)),
             .previous_page,
             .parent_page,
-            => try summary.addRead(Resource.graphPages()),
+            => try summary.addRead(Resource.pageIndex(null)),
         }
     }
 };
