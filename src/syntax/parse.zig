@@ -14,6 +14,7 @@ const TypeDecl = ast.TypeDecl;
 const RecordDecl = ast.RecordDecl;
 const ObjectDecl = ast.ObjectDecl;
 const ObjectExtensionDecl = ast.ObjectExtensionDecl;
+const ConstDecl = ast.ConstDecl;
 const FunctionDecl = ast.FunctionDecl;
 const PageDecl = ast.PageDecl;
 const Statement = ast.Statement;
@@ -118,7 +119,7 @@ const Parser = struct {
             } else if (try self.consumeKeyword("const")) {
                 imports_allowed = false;
                 const constant = try self.parseConstAfterKeyword(item_start);
-                try program.functions.append(self.allocator, constant);
+                try program.constants.append(self.allocator, constant);
             } else if (try self.consumeKeyword("type")) {
                 imports_allowed = false;
                 const type_item = try self.parseTypeItemAfterKeyword(item_start);
@@ -274,7 +275,7 @@ const Parser = struct {
         return placed;
     }
 
-    fn parseConstAfterKeyword(self: *Parser, start: usize) !FunctionDecl {
+    fn parseConstAfterKeyword(self: *Parser, start: usize) !ConstDecl {
         const name = try self.parseIdentifier();
         self.skipInlineSpaces();
         if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
@@ -283,24 +284,14 @@ const Parser = struct {
         const result_type = try self.parseTypeAnnotation();
         self.skipTrivia();
         try self.expectChar('=');
-        const expr_start = self.pos;
         const expr = try self.parseExpr();
         try self.consumeStatementTerminator();
 
-        var statements = std.ArrayList(Statement).empty;
-        errdefer statements.deinit(self.allocator);
-        try statements.append(self.allocator, .{
-            .span = .{ .start = expr_start, .end = self.pos },
-            .kind = .{ .return_expr = expr },
-        });
-
         return .{
-            .kind = .constant,
             .name = name,
             .span = .{ .start = start, .end = self.pos },
-            .params = std.ArrayList(ast.ParamDecl).empty,
-            .result_type = result_type,
-            .statements = statements,
+            .value_type = result_type,
+            .value = expr,
         };
     }
 

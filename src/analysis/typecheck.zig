@@ -42,9 +42,11 @@ pub const ProgramIndex = struct {
     module_order: std.ArrayList(core.SourceModuleId),
     project_implicit_import_ids: std.ArrayList(core.SourceModuleId),
     project_import_ids: std.ArrayList(core.SourceModuleId),
+    constants: core.ConstMap,
     functions: core.FunctionMap,
 
     pub fn deinit(self: *ProgramIndex) void {
+        self.constants.deinit();
         self.functions.deinit();
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
@@ -71,6 +73,19 @@ pub fn collectFunctionsFromPrograms(
     return functions;
 }
 
+pub fn collectConstantsFromPrograms(
+    allocator: std.mem.Allocator,
+    programs: []const *const ast.Program,
+) !core.ConstMap {
+    var constants = core.ConstMap.init(allocator);
+    for (programs, 0..) |program, module_index| {
+        for (program.constants.items) |constant_decl| {
+            try constants.put(core.constKey(@intCast(module_index), constant_decl.name), constant_decl);
+        }
+    }
+    return constants;
+}
+
 fn findModuleById(modules: []const core.SourceModule, module_id: core.SourceModuleId) ?core.SourceModule {
     for (modules) |module| {
         if (module.id == module_id) return module;
@@ -93,6 +108,17 @@ fn checkFunctionDefinitionsWithEnv(
     sema: *const SemanticEnv,
 ) !void {
     try calls.checkFunctionCallGraph(allocator, ir, sema);
+
+    var const_it = ir.constants.iterator();
+    while (const_it.next()) |entry| {
+        const module_id = entry.key_ptr.module_id;
+        const origin_path = blk: {
+            if (ir.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
+            break :blk "";
+        };
+        const module_sema = sema.forModule(module_id);
+        try checker.checkConst(allocator, ir, &module_sema, origin_path, entry.value_ptr.*);
+    }
 
     var it = sema.functions.iterator();
     while (it.next()) |entry| {
@@ -121,8 +147,9 @@ pub fn typecheckProgram(
     declaration_index.deinit();
     declaration_index = next_declaration_index;
     sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
+    try rebuildConstDeclarations(allocator, ir);
     try rebuildFunctionDeclarations(allocator, ir);
-    try checkDuplicateFunctionDeclarations(allocator, ir);
+    try checkDuplicateValueDeclarations(allocator, ir);
     try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checkTypeAnnotations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
@@ -259,6 +286,13 @@ fn checkTypeAnnotations(
             try checkTypeAnnotation(ir, sema, module_id, func.result_type, origin);
         }
 
+        for (module.program.constants.items) |constant_decl| {
+            const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
+            defer allocator.free(origin);
+            try checkTypeAnnotation(ir, sema, module_id, constant_decl.value_type, origin);
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, constant_decl.value);
+        }
+
         for (module.program.document_statements.items) |stmt| {
             try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt);
         }
@@ -293,6 +327,10 @@ fn resolveProgramTypeReferences(
     }
     for (program.functions.items) |*func| {
         try resolveFunctionTypeReferences(func, module_id, sema);
+    }
+    for (program.constants.items) |*constant_decl| {
+        try resolveTypeReference(&constant_decl.value_type, module_id, sema);
+        try resolveExprTypeReferences(&constant_decl.value, module_id, sema);
     }
     for (program.document_statements.items) |*stmt| {
         try resolveStatementTypeReferences(stmt, module_id, sema);
@@ -398,6 +436,11 @@ fn resolveProgramEnumCasesAndDefaults(
     }
     for (program.functions.items) |*func| {
         try resolveFunctionEnumCases(allocator, module_id, sema, func);
+    }
+    for (program.constants.items) |*constant_decl| {
+        var env = TypeEnv.init(allocator);
+        defer env.deinit();
+        try resolveExprEnumCases(allocator, module_id, sema, &env, &constant_decl.value);
     }
     {
         var env = TypeEnv.init(allocator);
@@ -631,7 +674,7 @@ fn resolveMemberAsEnumCase(
 ) !bool {
     switch (member.target.*) {
         .ident => |enum_name| {
-            if (env.get(enum_name) != null or sema.function(enum_name) != null) return false;
+            if (env.get(enum_name) != null or sema.function(enum_name) != null or sema.constant(enum_name) != null) return false;
             if (!sema.enumHasCase(module_id, enum_name, member.name)) return false;
             const target = member.target;
             const case_name = member.name;
@@ -675,6 +718,18 @@ fn resolveTypeReference(
         },
         .optional => if (ty.optional_child) |child| try resolveTypeReference(child, module_id, sema),
         else => {},
+    }
+}
+
+fn rebuildConstDeclarations(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+) !void {
+    _ = allocator;
+    ir.constants.clearRetainingCapacity();
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        try appendConstDeclarations(&ir.constants, module.program, module.id);
     }
 }
 
@@ -788,7 +843,7 @@ fn reportUnknownType(ir: *core.Ir, origin: []const u8, type_name: []const u8) !v
     return error.UnknownType;
 }
 
-fn checkDuplicateFunctionDeclarations(
+fn checkDuplicateValueDeclarations(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {
@@ -807,6 +862,17 @@ fn checkDuplicateFunctionDeclarations(
                 return error.DiagnosticsFailed;
             }
             try names.put(func.name, {});
+        }
+        for (module.program.constants.items) |constant_decl| {
+            if (names.contains(constant_decl.name)) {
+                const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateValue: value '{s}' is already defined in this module", .{constant_decl.name}) },
+                });
+                return error.DiagnosticsFailed;
+            }
+            try names.put(constant_decl.name, {});
         }
     }
 }
@@ -955,6 +1021,16 @@ fn appendFunctionDeclarations(
     }
 }
 
+fn appendConstDeclarations(
+    constants: *core.ConstMap,
+    program: ast.Program,
+    module_id: core.SourceModuleId,
+) !void {
+    for (program.constants.items) |constant_decl| {
+        try constants.put(core.constKey(module_id, constant_decl.name), constant_decl);
+    }
+}
+
 pub fn buildIr(
     allocator: std.mem.Allocator,
     input_path: []const u8,
@@ -988,6 +1064,8 @@ pub fn buildIrWithOptions(
     project_program.* = ast.Program.init();
     errdefer ir.deinit();
 
+    ir.constants = index.constants;
+    index.constants = core.ConstMap.init(allocator);
     ir.functions = index.functions;
     index.functions = core.FunctionMap.init(allocator);
     ir.module_order = index.module_order;
@@ -1007,6 +1085,7 @@ pub fn buildIrWithOptions(
         const sema = SemanticEnv.init(&ir, &declaration_index, &ir.functions);
         try resolveTypeReferences(allocator, &ir, &sema);
         try resolveEnumCaseExpressionsAndDefaults(allocator, &ir, &sema);
+        try rebuildConstDeclarations(allocator, &ir);
         try rebuildFunctionDeclarations(allocator, &ir);
     }
     var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {
@@ -1074,6 +1153,7 @@ pub fn loadProgramIndexWithOptions(
         .module_order = graph.module_order,
         .project_implicit_import_ids = graph.project_implicit_import_ids,
         .project_import_ids = graph.project_import_ids,
+        .constants = core.ConstMap.init(allocator),
         .functions = core.FunctionMap.init(allocator),
     };
     graph.modules = .empty;
@@ -1085,8 +1165,10 @@ pub fn loadProgramIndexWithOptions(
 
     for (index.module_order.items) |module_id| {
         const module = findModuleById(index.modules.items, module_id) orelse continue;
+        try appendConstDeclarations(&index.constants, module.program, module.id);
         try appendFunctionDeclarations(&index.functions, module.program, module.id);
     }
+    try appendConstDeclarations(&index.constants, project_program, 0);
     try appendFunctionDeclarations(&index.functions, project_program, 0);
     return index;
 }

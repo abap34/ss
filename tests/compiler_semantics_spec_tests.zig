@@ -2568,6 +2568,47 @@ test "compiler semantics: constants can hold function values" {
     , "3");
 }
 
+test "compiler semantics: constants are evaluated once as value bindings" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\record Parts {
+        \\  root: Object
+        \\  middle: Object
+        \\}
+        \\
+        \\fn make_parts() -> Parts
+        \\  let middle = text("middle")
+        \\  return Parts {
+        \\    root = group(middle)
+        \\    middle = middle
+        \\  }
+        \\end
+        \\
+        \\const parts: Parts = make_parts()
+        \\
+        \\page ok
+        \\  parts.middle.content = "changed"
+        \\  parts.middle.text_color = c"#ff0000"
+        \\  place!(parts.root)
+        \\end
+        \\
+    ;
+
+    try expectObjectContent(source, "changed");
+    try expectObjectProperty(source, "text_color", "1,0,0");
+}
+
+test "compiler semantics: constants cannot require a page context" {
+    try expectDiagnostic(
+        \\const current: Page = pagectx()
+        \\
+        \\page ok
+        \\end
+        \\
+    , "case.ss:bytes:", "NoCurrentPage: 'pagectx' is only valid inside a page block");
+}
+
 test "compiler semantics: returned lambdas are directly applicable" {
     try expectObjectContent(
         \\import std:themes/default as *

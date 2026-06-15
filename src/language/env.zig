@@ -17,8 +17,20 @@ pub const ResolvedFunction = struct {
     decl: ast.FunctionDecl,
 };
 
+pub const ResolvedConst = struct {
+    key: core.FunctionKey,
+    module_id: core.SourceModuleId,
+    decl: ast.ConstDecl,
+};
+
 pub const FunctionResolution = union(enum) {
     found: ResolvedFunction,
+    unknown,
+    unknown_alias: []const u8,
+};
+
+pub const ConstResolution = union(enum) {
+    found: ResolvedConst,
     unknown,
     unknown_alias: []const u8,
 };
@@ -84,6 +96,20 @@ pub const SemanticEnv = struct {
         };
     }
 
+    pub fn constant(self: *const SemanticEnv, name: []const u8) ?ast.ConstDecl {
+        return switch (self.resolveConst(ast.CallableName.bare(name))) {
+            .found => |resolved| resolved.decl,
+            else => null,
+        };
+    }
+
+    pub fn resolvedConst(self: *const SemanticEnv, callee: ast.CallableName) ?ResolvedConst {
+        return switch (self.resolveConst(callee)) {
+            .found => |resolved| resolved,
+            else => null,
+        };
+    }
+
     pub fn resolveFunction(self: *const SemanticEnv, callee: ast.CallableName) FunctionResolution {
         if (callee.qualifier) |alias| {
             const module_id = self.resolveAlias(alias) orelse return .{ .unknown_alias = alias };
@@ -110,8 +136,38 @@ pub const SemanticEnv = struct {
         return .unknown;
     }
 
+    pub fn resolveConst(self: *const SemanticEnv, callee: ast.CallableName) ConstResolution {
+        if (callee.qualifier) |alias| {
+            const module_id = self.resolveAlias(alias) orelse return .{ .unknown_alias = alias };
+            return if (self.findConstInModule(module_id, callee.name)) |resolved|
+                .{ .found = resolved }
+            else
+                .unknown;
+        }
+
+        if (self.findConstInModule(self.module_id, callee.name)) |resolved| return .{ .found = resolved };
+        if (self.ir) |ir| {
+            const module = ir.moduleById(self.module_id) orelse return .unknown;
+            switch (self.resolveExplicitOpenConst(module, callee.name)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => {},
+            }
+            switch (self.resolveImplicitOpenConst(module, callee.name)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => return .unknown,
+            }
+        } else if (self.findConstByName(callee.name)) |resolved| {
+            return .{ .found = resolved };
+        }
+        return .unknown;
+    }
+
     pub fn hasFunction(self: *const SemanticEnv, name: []const u8) bool {
         return self.function(name) != null;
+    }
+
+    pub fn hasConst(self: *const SemanticEnv, name: []const u8) bool {
+        return self.constant(name) != null;
     }
 
     pub fn primitive(self: *const SemanticEnv, name: []const u8) ?registry.PrimitiveDescriptor {
@@ -345,6 +401,17 @@ pub const SemanticEnv = struct {
         return null;
     }
 
+    fn findConstInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ResolvedConst {
+        const ir = self.ir orelse return self.findConstByName(name);
+        const module = ir.moduleById(module_id) orelse return null;
+        for (module.program.constants.items) |constant_decl| {
+            if (!std.mem.eql(u8, constant_decl.name, name)) continue;
+            const key = self.findConstKey(module_id, name) orelse core.constKey(module_id, constant_decl.name);
+            return .{ .key = key, .module_id = module_id, .decl = constant_decl };
+        }
+        return null;
+    }
+
     fn resolveExplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
         var index = module.program.imports.items.len;
         while (index > 0) {
@@ -369,6 +436,37 @@ pub const SemanticEnv = struct {
             const imported_id = module.implicit_import_ids.items[index];
             var stack = ModuleVisitStack{};
             switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => {},
+            }
+        }
+        return .unknown;
+    }
+
+    fn resolveExplicitOpenConst(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) ConstResolution {
+        var index = module.program.imports.items.len;
+        while (index > 0) {
+            index -= 1;
+            const import_decl = module.program.imports.items[index];
+            if (!import_decl.mode.unqualified) continue;
+            if (index >= module.resolved_import_ids.items.len) continue;
+            const imported_id = module.resolved_import_ids.items[index];
+            var stack = ModuleVisitStack{};
+            switch (self.resolveOpenConstInModule(imported_id, name, &stack)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => {},
+            }
+        }
+        return .unknown;
+    }
+
+    fn resolveImplicitOpenConst(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) ConstResolution {
+        var index = module.implicit_import_ids.items.len;
+        while (index > 0) {
+            index -= 1;
+            const imported_id = module.implicit_import_ids.items[index];
+            var stack = ModuleVisitStack{};
+            switch (self.resolveOpenConstInModule(imported_id, name, &stack)) {
                 .found => |resolved| return .{ .found = resolved },
                 else => {},
             }
@@ -404,8 +502,50 @@ pub const SemanticEnv = struct {
         return .unknown;
     }
 
+    fn resolveOpenConstInModule(
+        self: *const SemanticEnv,
+        module_id: core.SourceModuleId,
+        name: []const u8,
+        stack: *ModuleVisitStack,
+    ) ConstResolution {
+        const ir = self.ir orelse return if (self.findConstByName(name)) |resolved| .{ .found = resolved } else .unknown;
+        if (!stack.push(module_id)) return .unknown;
+        defer stack.pop();
+
+        if (self.findConstInModule(module_id, name)) |resolved| return .{ .found = resolved };
+
+        const module = ir.moduleById(module_id) orelse return .unknown;
+        var index = module.program.imports.items.len;
+        while (index > 0) {
+            index -= 1;
+            const import_decl = module.program.imports.items[index];
+            if (!import_decl.mode.unqualified) continue;
+            if (index >= module.resolved_import_ids.items.len) continue;
+            const imported_id = module.resolved_import_ids.items[index];
+            switch (self.resolveOpenConstInModule(imported_id, name, stack)) {
+                .found => |resolved| return .{ .found = resolved },
+                else => {},
+            }
+        }
+        return .unknown;
+    }
+
     fn findFunctionByName(self: *const SemanticEnv, name: []const u8) ?ResolvedFunction {
         var iterator = self.functions.iterator();
+        while (iterator.next()) |entry| {
+            if (!std.mem.eql(u8, entry.value_ptr.name, name)) continue;
+            return .{
+                .key = entry.key_ptr.*,
+                .module_id = entry.key_ptr.module_id,
+                .decl = entry.value_ptr.*,
+            };
+        }
+        return null;
+    }
+
+    fn findConstByName(self: *const SemanticEnv, name: []const u8) ?ResolvedConst {
+        const ir = self.ir orelse return null;
+        var iterator = ir.constants.iterator();
         while (iterator.next()) |entry| {
             if (!std.mem.eql(u8, entry.value_ptr.name, name)) continue;
             return .{
@@ -420,6 +560,13 @@ pub const SemanticEnv = struct {
     fn findFunctionKey(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.FunctionKey {
         const key = core.functionKey(module_id, name);
         if (self.functions.contains(key)) return key;
+        return null;
+    }
+
+    fn findConstKey(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?core.FunctionKey {
+        const ir = self.ir orelse return null;
+        const key = core.constKey(module_id, name);
+        if (ir.constants.contains(key)) return key;
         return null;
     }
 };

@@ -9,7 +9,7 @@ const json = @import("utils").json;
 pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
-        if (userFunctionNameExists(ir, descriptor.name)) continue;
+        if (userValueNameExists(ir, descriptor.name)) continue;
         try writePrimitiveFunction(allocator, &functions, descriptor);
     }
     var function_iterator = ir.functions.iterator();
@@ -17,11 +17,22 @@ pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir:
         try writeUserFunction(allocator, &functions, ir, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
     }
     try functions.end();
+
+    var constants = try root.arrayField("constants");
+    var const_iterator = ir.constants.iterator();
+    while (const_iterator.next()) |entry| {
+        try writeUserConst(allocator, &constants, ir, entry.value_ptr.name, entry.value_ptr.*, entry.key_ptr.module_id);
+    }
+    try constants.end();
 }
 
-fn userFunctionNameExists(ir: *const core.Ir, name: []const u8) bool {
+fn userValueNameExists(ir: *const core.Ir, name: []const u8) bool {
     var iterator = ir.functions.iterator();
     while (iterator.next()) |entry| {
+        if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
+    }
+    var const_iterator = ir.constants.iterator();
+    while (const_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
     return false;
@@ -94,7 +105,7 @@ fn writeUserFunction(
 
     var item = try functions.objectItem();
     try item.stringField("name", name);
-    try item.enumTagField("kind", func.kind);
+    try item.stringField("kind", "function");
     try item.stringField("signature", signature);
     const result_label = try func.result_type.formatAlloc(allocator);
     defer allocator.free(result_label);
@@ -117,5 +128,37 @@ fn writeUserFunction(
         try params.stringItem(label);
     }
     try params.end();
+    try item.end();
+}
+
+fn writeUserConst(
+    allocator: std.mem.Allocator,
+    constants: *json.Array,
+    ir: *core.Ir,
+    name: []const u8,
+    constant_decl: ast.ConstDecl,
+    module_id: core.SourceModuleId,
+) !void {
+    const signature = try editor.formatConstSignature(allocator, name, constant_decl);
+    defer allocator.free(signature);
+
+    var item = try constants.objectItem();
+    try item.stringField("name", name);
+    try item.stringField("kind", "constant");
+    try item.stringField("signature", signature);
+    const result_label = try constant_decl.value_type.formatAlloc(allocator);
+    defer allocator.free(result_label);
+    try item.stringField("resultType", result_label);
+    if (ir.moduleById(module_id)) |module| {
+        try item.enumTagField("source", module.kind);
+        try item.intField("moduleId", module.id);
+        try item.stringField("moduleSpec", module.spec);
+        try item.optionalStringField("file", module.path);
+    } else {
+        try item.stringField("source", "unknown");
+        try item.intField("moduleId", module_id);
+        try item.nullField("file");
+    }
+    try item.stringField("summary", "");
     try item.end();
 }

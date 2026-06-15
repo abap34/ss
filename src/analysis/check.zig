@@ -29,11 +29,13 @@ const PageContextRequirement = struct {
     const Requirement = union(enum) {
         primitive: registry.PrimitiveDescriptor,
         function: ast.FunctionDecl,
+        constant: ast.ConstDecl,
 
         fn displayName(self: Requirement) []const u8 {
             return switch (self) {
                 .primitive => |descriptor| descriptor.name,
                 .function => |func| func.name,
+                .constant => |constant_decl| constant_decl.name,
             };
         }
     };
@@ -61,6 +63,9 @@ const PageContextRequirement = struct {
         return switch (expr) {
             .ident => |name| blk: {
                 if (scope.contains(name)) break :blk null;
+                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                    break :blk if (try self.constRequiresPage(resolved.key, resolved.decl)) .{ .constant = resolved.decl } else null;
+                }
                 const resolved = self.sema.resolvedFunction(ast.CallableName.bare(name)) orelse break :blk null;
                 break :blk if (try self.functionRequiresPage(resolved.key, resolved.decl)) .{ .function = resolved.decl } else null;
             },
@@ -79,6 +84,9 @@ const PageContextRequirement = struct {
                 }
                 if (self.sema.resolvedFunction(call.callee)) |resolved| {
                     if (try self.functionRequiresPage(resolved.key, resolved.decl)) break :blk .{ .function = resolved.decl };
+                }
+                if (self.sema.resolvedConst(call.callee)) |resolved| {
+                    if (try self.constRequiresPage(resolved.key, resolved.decl)) break :blk .{ .constant = resolved.decl };
                 }
                 for (call.args.items) |arg| {
                     if (try self.exprRequirement(scope, arg)) |requirement| break :blk requirement;
@@ -121,6 +129,19 @@ const PageContextRequirement = struct {
         defer _ = self.visiting.remove(key);
 
         const requires = try self.functionBodyRequiresPage(func);
+        try self.memo.put(key, requires);
+        return requires;
+    }
+
+    fn constRequiresPage(self: *PageContextRequirement, key: core.FunctionKey, constant_decl: ast.ConstDecl) anyerror!bool {
+        if (self.memo.get(key)) |cached| return cached;
+        if (self.visiting.contains(key)) return false;
+        try self.visiting.put(key, {});
+        defer _ = self.visiting.remove(key);
+
+        var scope = NameScope.init(self.allocator);
+        defer scope.deinit();
+        const requires = (try self.exprRequirement(&scope, constant_decl.value)) != null;
         try self.memo.put(key, requires);
         return requires;
     }
@@ -235,6 +256,28 @@ pub fn checkFunction(
     for (func.statements.items) |stmt| {
         try checkStatement(allocator, ir, sema, origin_path, &env, func.result_type, stmt);
     }
+}
+
+pub fn checkConst(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    origin_path: []const u8,
+    constant_decl: ast.ConstDecl,
+) !void {
+    const origin = try statementOrigin(allocator, origin_path, constant_decl.span);
+    defer allocator.free(origin);
+
+    var env = TypeEnv.init(allocator);
+    defer env.deinit();
+    var scope = NameScope.init(allocator);
+    defer scope.deinit();
+    var page_context = PageContextRequirement.init(allocator, sema);
+    defer page_context.deinit();
+
+    try rejectPageOnlyExpr(ir, .document, origin, &page_context, &scope, constant_decl.value);
+    const actual = try inferExprInfo(allocator, ir, sema, &env, constant_decl.value, origin);
+    try ensureType(ir, allocator, actual, constant_decl.value_type, origin, .UnmatchedReturnType);
 }
 
 pub fn checkPageStatements(

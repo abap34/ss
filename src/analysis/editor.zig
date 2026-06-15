@@ -11,10 +11,6 @@ const source_utils = utils.source;
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
-fn isConst(func: ast.FunctionDecl) bool {
-    return func.kind == .constant;
-}
-
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
@@ -80,7 +76,6 @@ pub fn formatUserSignature(
 ) ![]const u8 {
     const result_label = try func.result_type.formatAlloc(allocator);
     defer allocator.free(result_label);
-    if (isConst(func)) return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, result_label });
 
     var params = std.ArrayList(u8).empty;
     defer params.deinit(allocator);
@@ -91,6 +86,16 @@ pub fn formatUserSignature(
         try params.appendSlice(allocator, label);
     }
     return std.fmt.allocPrint(allocator, "{s}({s}) -> {s}", .{ name, params.items, result_label });
+}
+
+pub fn formatConstSignature(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    constant_decl: ast.ConstDecl,
+) ![]const u8 {
+    const result_label = try constant_decl.value_type.formatAlloc(allocator);
+    defer allocator.free(result_label);
+    return std.fmt.allocPrint(allocator, "const {s}: {s}", .{ name, result_label });
 }
 
 pub fn formatUserParam(allocator: std.mem.Allocator, param: ast.ParamDecl) ![]const u8 {
@@ -183,17 +188,21 @@ fn collectDefinitionsFromProgram(
     definitions: *std.ArrayList(core.Definition),
 ) !void {
     for (program.functions.items) |func| {
-        const keyword = if (isConst(func)) "const" else "fn";
-        const kind: core.DefinitionKind = if (isConst(func)) .constant else .function;
-        if (findIdentifierOffsetAfterKeyword(source, func.span.start, keyword, func.name)) |location| {
+        if (findIdentifierOffsetAfterKeyword(source, func.span.start, "fn", func.name)) |location| {
             const loc = utils.err.computeLineColumn(source, location.offset);
-            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, 0, source.len, kind, module_id, file, .module, null);
+            try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, 0, source.len, .function, module_id, file, .module, null);
         }
         if (include_variables) {
             const scope = analysis_scope.functionScope(func);
             for (func.statements.items) |stmt| {
                 try collectDefinitionsFromStatement(allocator, source, module_id, stmt, definitions, scope, func.span.end);
             }
+        }
+    }
+    for (program.constants.items) |constant_decl| {
+        if (findIdentifierOffsetAfterKeyword(source, constant_decl.span.start, "const", constant_decl.name)) |location| {
+            const loc = utils.err.computeLineColumn(source, location.offset);
+            try putDefinition(allocator, definitions, constant_decl.name, loc.line, loc.column, location.offset, location.length, 0, source.len, .constant, module_id, file, .module, null);
         }
     }
     if (include_variables) {
@@ -300,6 +309,9 @@ fn collectProgramHints(
         for (func.statements.items) |stmt| {
             try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
         }
+    }
+    for (program.constants.items) |constant_decl| {
+        try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, constant_decl.span, constant_decl.value);
     }
     for (program.document_statements.items) |stmt| {
         try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);

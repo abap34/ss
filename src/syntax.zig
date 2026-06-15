@@ -2,6 +2,7 @@ const ast = @import("ast");
 
 pub const Program = ast.Program;
 pub const PageDecl = ast.PageDecl;
+pub const ConstDecl = ast.ConstDecl;
 pub const FunctionDecl = ast.FunctionDecl;
 pub const ParamDecl = ast.ParamDecl;
 pub const CallExpr = ast.CallExpr;

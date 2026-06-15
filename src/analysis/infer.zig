@@ -29,10 +29,6 @@ const InferenceOptions = struct {
     validate_contracts: bool = true,
 };
 
-fn isConst(func: ast.FunctionDecl) bool {
-    return func.kind == .constant;
-}
-
 fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
@@ -96,8 +92,10 @@ fn exprInfoWithOptions(
         },
         .ident => |name| blk: {
             if (env.get(name)) |info| break :blk info;
+            if (sema.resolvedConst(ast.CallableName.bare(name))) |constant_decl| {
+                break :blk infoFromType(constant_decl.decl.value_type);
+            }
             if (sema.function(name)) |func| {
-                if (isConst(func)) break :blk infoFromType(func.result_type);
                 var info = infoFromType(try functionTypeForDecl(allocator, func));
                 info.function_labels = try singleFunctionLabel(allocator, func.name);
                 break :blk info;
@@ -302,16 +300,13 @@ fn inferCallInfo(
             }
         }
     }
-    if (sema.resolvedFunction(call.callee)) |resolved| {
-        const func = resolved.decl;
-        if (isConst(func) and func.result_type.kind == .function and func.result_type.fn_result != null) {
-            const callee_sema = sema.forModule(resolved.module_id);
-            const const_info = try inferUserFunctionReturnInfo(allocator, ir, &callee_sema, env, func, .{
-                .callee = call.callee,
-                .args = std.ArrayList(ast.Expr).empty,
-            }, sema, origin, options);
+    if (sema.resolvedConst(call.callee)) |resolved| {
+        const const_info = infoFromType(resolved.decl.value_type);
+        if (const_info.ty.kind == .function and const_info.ty.fn_result != null) {
             return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin, options);
         }
+        try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
+        return error.UnknownFunction;
     }
     const descriptor = sema.callCallee(call.callee) orelse {
         try reportCallResolutionFailure(allocator, ir, sema, call.callee, origin);
@@ -395,10 +390,6 @@ fn inferUserCallInfo(
     func: ast.FunctionDecl,
     options: InferenceOptions,
 ) !TypeInfo {
-    if (isConst(func)) {
-        try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
-        return error.UnknownFunction;
-    }
     const min_arity = contracts.requiredParamCount(func);
     const max_arity = func.params.items.len;
     if (call.args.items.len < min_arity or call.args.items.len > max_arity) {

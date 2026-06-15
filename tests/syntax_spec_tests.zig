@@ -290,12 +290,26 @@ test "syntax spec: function signatures preserve types and trailing defaults" {
 
     try testing.expectEqual(@as(usize, 1), program.functions.items.len);
     const choose = program.functions.items[0];
-    try testing.expectEqual(ast.FunctionDecl.Kind.function, choose.kind);
     try testing.expectEqualStrings("choose", choose.name);
     try testing.expectEqual(@as(usize, 2), choose.params.items.len);
     try testing.expectEqual(Type.boolean.kind, choose.params.items[0].ty.kind);
     try testing.expectEqual(Type.string.kind, choose.params.items[1].ty.kind);
     try testing.expect(choose.params.items[1].default_value != null);
+}
+
+test "syntax spec: constants are top-level value declarations" {
+    var parsed = try parse(
+        \\const accent: Color = c"#ff0000"
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 0), parsed.program.functions.items.len);
+    try testing.expectEqual(@as(usize, 1), parsed.program.constants.items.len);
+    const accent = parsed.program.constants.items[0];
+    try testing.expectEqualStrings("accent", accent.name);
+    try testing.expectEqual(Type.Kind.color, accent.value_type.kind);
+    try expectColor(accent.value, "1,0,0");
 }
 
 test "syntax spec: non-host functions must return on at least one complete path" {
