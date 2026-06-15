@@ -287,6 +287,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.InvalidArity => "InvalidArity: wrong number of arguments",
         error.InvalidValueTag => "InvalidValueTag: value has the wrong semantic kind",
         error.RecursiveFunction => "RecursiveFunction: recursive functions are not allowed",
+        error.RecursiveConst => "RecursiveConst: recursive constants are not allowed",
         error.EmptySelection => "EmptySelection: selection is empty",
         error.InvalidSelectionItemType => "InvalidSelectionItemType: selection item kinds do not match",
         error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
@@ -905,14 +906,11 @@ fn evalExpr(
         .ident => |name| blk: {
             if (env.get(name)) |value| break :blk try value.clone(ir.allocator);
             const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
+            if (sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                break :blk try evalConstValue(ir, page_id, context, mode, functions, closures, current_origin, resolved);
+            }
             if (sema.resolvedFunction(ast.CallableName.bare(name))) |resolved| {
                 const func = resolved.decl;
-                if (func.kind == .constant) {
-                    break :blk try invokeUserFunctionValueInModule(ir, page_id, context, mode, env, functions, closures, resolved.module_id, func, current_origin, .{
-                        .callee = ast.CallableName.bare(name),
-                        .args = std.ArrayList(Expr).empty,
-                    });
-                }
                 break :blk .{ .function = try eval_functions.functionRefForInModule(ir.allocator, resolved.module_id, func) };
             }
             try reportUnknownIdentifier(ir, name, current_origin);
@@ -944,6 +942,46 @@ fn evalExpr(
             break :blk try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.fallback.*);
         },
     };
+}
+
+fn evalConstValue(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    current_origin: []const u8,
+    resolved: semantic_env.ResolvedConst,
+) anyerror!core.Value {
+    if (ir.const_values.get(resolved.key)) |value| return try value.clone(ir.allocator);
+    if (ir.const_eval_states.get(resolved.key)) |state| {
+        if (state == 1) return error.RecursiveConst;
+    }
+    try ir.const_eval_states.put(resolved.key, 1);
+    var state_committed = false;
+    errdefer {
+        if (!state_committed) _ = ir.const_eval_states.remove(resolved.key);
+    }
+
+    var local_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer deinitValueEnv(ir.allocator, &local_env);
+
+    const previous_module_id = active_module_id;
+    active_module_id = resolved.module_id;
+    defer active_module_id = previous_module_id;
+
+    const start_node_count = ir.nodeCount();
+    var value = try evalExpr(ir, page_id, context, mode, &local_env, functions, closures, current_origin, resolved.decl.value);
+    var value_moved = false;
+    errdefer if (!value_moved) value.deinit(ir.allocator);
+    try value_contracts.ensureValueConformsToType(ir, page_id, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
+    try connectValueObjects(ir, value, start_node_count);
+    try ir.const_values.put(resolved.key, value);
+    value_moved = true;
+    try ir.const_eval_states.put(resolved.key, 2);
+    state_committed = true;
+    return try ir.const_values.get(resolved.key).?.clone(ir.allocator);
 }
 
 fn evalMember(
@@ -1121,6 +1159,21 @@ fn evalCall(
         }
     }
     const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
+    if (sema.resolvedConst(call.callee)) |resolved| {
+        var const_value = try evalConstValue(ir, page_id, context, mode, functions, closures, current_origin, resolved);
+        defer const_value.deinit(ir.allocator);
+        const function = switch (const_value) {
+            .function => |function| function,
+            else => {
+                try reportUnknownFunction(ir, call.callee.name, current_origin);
+                return error.UnknownFunction;
+            },
+        };
+        var args = try evalCallArgs(ir, page_id, context, mode, env, functions, closures, current_origin, call.args.items);
+        defer args.deinit(ir.allocator);
+        defer deinitValues(ir.allocator, args.items);
+        return try invokeFunctionRef(ir, page_id, context, mode, env, functions, closures, function, current_origin, args.items);
+    }
     const descriptor = sema.callCallee(call.callee) orelse {
         try reportUnknownCallable(ir, &sema, call.callee, current_origin);
         return error.UnknownFunction;
@@ -1128,25 +1181,6 @@ fn evalCall(
     return switch (descriptor) {
         .function => |resolved| blk: {
             const func = resolved.decl;
-            if (func.kind == .constant) {
-                if (func.result_type.kind == .function) {
-                    var const_value = try invokeUserFunctionValueInModule(ir, page_id, context, mode, env, functions, closures, resolved.module_id, func, current_origin, .{
-                        .callee = call.callee,
-                        .args = std.ArrayList(Expr).empty,
-                    });
-                    defer const_value.deinit(ir.allocator);
-                    const function = switch (const_value) {
-                        .function => |function| function,
-                        else => return error.InvalidValueTag,
-                    };
-                    var args = try evalCallArgs(ir, page_id, context, mode, env, functions, closures, current_origin, call.args.items);
-                    defer args.deinit(ir.allocator);
-                    defer deinitValues(ir.allocator, args.items);
-                    break :blk try invokeFunctionRef(ir, page_id, context, mode, env, functions, closures, function, current_origin, args.items);
-                }
-                try reportUnknownFunction(ir, call.callee.name, current_origin);
-                return error.UnknownFunction;
-            }
             try eval_functions.requireReturnsValue(func);
             break :blk try invokeUserFunctionValueInModule(ir, page_id, context, mode, env, functions, closures, resolved.module_id, func, current_origin, call);
         },
@@ -1990,6 +2024,16 @@ fn connectReturnedObject(ir: *core.Ir, value: core.Value, start_node_count: usiz
     }
 }
 
+fn connectValueObjects(ir: *core.Ir, value: core.Value, start_node_count: usize) !void {
+    switch (value) {
+        .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count),
+        .record => |record| {
+            for (record.fields.items) |field| try connectValueObjects(ir, field.value, start_node_count);
+        },
+        else => {},
+    }
+}
+
 fn discardStatementValue(ir: *core.Ir, value: core.Value) !void {
     switch (value) {
         .object => |id| try ir.discardObjectSubtree(id),
@@ -2019,10 +2063,6 @@ fn executeCallStatement(
         return;
     };
     const func = resolved.decl;
-    if (func.kind == .constant) {
-        _ = try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call);
-        return;
-    }
     try validateUserFunctionArity(ir, call.args.items.len, func, current_origin);
 
     var local_env = try cloneValueEnv(ir.allocator, env);

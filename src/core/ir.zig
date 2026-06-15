@@ -56,8 +56,15 @@ pub const FunctionKeyContext = struct {
 };
 
 pub const FunctionMap = std.HashMap(FunctionKey, ast.FunctionDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+pub const ConstMap = std.HashMap(FunctionKey, ast.ConstDecl, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+pub const ConstValueMap = std.HashMap(FunctionKey, Value, FunctionKeyContext, std.hash_map.default_max_load_percentage);
+pub const ConstEvalStateMap = std.HashMap(FunctionKey, u8, FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
 pub fn functionKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
+    return .{ .module_id = module_id, .name = name };
+}
+
+pub fn constKey(module_id: SourceModuleId, name: []const u8) FunctionKey {
     return .{ .module_id = module_id, .name = name };
 }
 
@@ -135,6 +142,9 @@ pub const Ir = struct {
     modules: std.ArrayList(SourceModule),
     module_order: std.ArrayList(SourceModuleId),
     project_module_id: SourceModuleId,
+    constants: ConstMap,
+    const_values: ConstValueMap,
+    const_eval_states: ConstEvalStateMap,
     functions: FunctionMap,
     definitions: std.ArrayList(Definition),
     hints: std.ArrayList(InlayHint),
@@ -164,6 +174,9 @@ pub const Ir = struct {
             .modules = .empty,
             .module_order = .empty,
             .project_module_id = 0,
+            .constants = ConstMap.init(allocator),
+            .const_values = ConstValueMap.init(allocator),
+            .const_eval_states = ConstEvalStateMap.init(allocator),
             .functions = FunctionMap.init(allocator),
             .definitions = .empty,
             .hints = std.ArrayList(InlayHint).empty,
@@ -211,6 +224,13 @@ pub const Ir = struct {
     fn deinitPartial(self: *Ir) void {
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
+        self.constants.deinit();
+        {
+            var iterator = self.const_values.valueIterator();
+            while (iterator.next()) |value| value.deinit(self.allocator);
+        }
+        self.const_values.deinit();
+        self.const_eval_states.deinit();
         self.functions.deinit();
         self.definitions.deinit(self.allocator);
         self.hints.deinit(self.allocator);
@@ -230,6 +250,13 @@ pub const Ir = struct {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
+        self.constants.deinit();
+        {
+            var iterator = self.const_values.valueIterator();
+            while (iterator.next()) |value| value.deinit(self.allocator);
+        }
+        self.const_values.deinit();
+        self.const_eval_states.deinit();
         self.functions.deinit();
         for (self.definitions.items) |definition| {
             self.allocator.free(definition.name);

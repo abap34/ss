@@ -59,6 +59,7 @@ const LabelContext = struct {
 };
 
 const LabelMap = std.HashMap(Label, void, LabelContext, std.hash_map.default_max_load_percentage);
+const ConstVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 const LambdaMap = std.AutoHashMap(ast.Span, ast.LambdaExpr);
 const LambdaCaptureMap = std.AutoHashMap(ast.Span, std.ArrayList(FunctionEnv));
 
@@ -122,6 +123,7 @@ const Analyzer = struct {
     sema: SemanticEnv,
     states: std.StringHashMap(u8),
     returns: std.StringHashMap(LabelSet),
+    const_visiting: ConstVisitSet,
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
 
@@ -132,12 +134,22 @@ const Analyzer = struct {
             .sema = sema.*,
             .states = std.StringHashMap(u8).init(allocator),
             .returns = std.StringHashMap(LabelSet).init(allocator),
+            .const_visiting = ConstVisitSet.init(allocator),
             .lambda_exprs = LambdaMap.init(allocator),
             .lambda_captures = LambdaCaptureMap.init(allocator),
         };
     }
 
     fn checkAll(self: *Analyzer) !void {
+        var const_it = self.ir.constants.iterator();
+        while (const_it.next()) |entry| {
+            var labels = try self.constLabels(.{
+                .key = entry.key_ptr.*,
+                .module_id = entry.key_ptr.module_id,
+                .decl = entry.value_ptr.*,
+            });
+            labels.deinit();
+        }
         var it = self.sema.functions.iterator();
         while (it.next()) |entry| {
             const func = entry.value_ptr.*;
@@ -251,12 +263,11 @@ const Analyzer = struct {
         switch (expr) {
             .ident => |name| {
                 if (env.get(name)) |labels| return try labels.clone(self.allocator);
+                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                    return try self.constLabels(resolved);
+                }
                 if (self.sema.resolvedFunction(ast.CallableName.bare(name))) |resolved| {
                     const label = self.namedLabel(resolved.key);
-                    if (resolved.decl.kind == .constant) {
-                        const empty_env = FunctionEnv.init(self.allocator);
-                        return try self.enter(.{ .label = label, .env = empty_env, .owner = resolved.decl, .module_id = resolved.module_id });
-                    }
                     return try LabelSet.singleton(self.allocator, label);
                 }
                 return LabelSet.init(self.allocator);
@@ -304,6 +315,11 @@ const Analyzer = struct {
         }
 
         const descriptor = self.sema.callCallee(call.callee) orelse {
+            if (self.sema.resolvedConst(call.callee)) |resolved| {
+                const callee_labels = try self.constLabels(resolved);
+                const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
+                return try self.invokeLabels(callee_labels, arg_labels.items, owner);
+            }
             const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
             _ = arg_labels;
             return LabelSet.init(self.allocator);
@@ -314,10 +330,6 @@ const Analyzer = struct {
                 const func = resolved.decl;
                 const label = self.namedLabel(resolved.key);
                 const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);
-                if (func.kind == .constant and func.result_type.kind == .function) {
-                    const const_labels = try self.invokeNamed(label, resolved.module_id, func, &.{});
-                    return try self.invokeLabels(const_labels, arg_labels.items, owner);
-                }
                 return try self.invokeNamed(label, resolved.module_id, func, arg_labels.items);
             },
             .primitive => |primitive| {
@@ -421,6 +433,19 @@ const Analyzer = struct {
         return try self.enter(.{ .label = label, .env = env, .owner = func, .module_id = module_id });
     }
 
+    fn constLabels(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!LabelSet {
+        if (self.const_visiting.contains(resolved.key)) return LabelSet.init(self.allocator);
+        try self.const_visiting.put(resolved.key, {});
+        defer _ = self.const_visiting.remove(resolved.key);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+
+        const env = FunctionEnv.init(self.allocator);
+        return try self.exprLabels(resolved.decl.value, &env, null);
+    }
+
     fn bindParams(self: *Analyzer, env: *FunctionEnv, params: []const ast.ParamDecl, args: []const LabelSet) !void {
         _ = self;
         var index: usize = 0;
@@ -502,6 +527,7 @@ pub fn checkFunctionCallGraph(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var analyzer = Analyzer.init(arena.allocator(), ir, sema);
+    defer analyzer.const_visiting.deinit();
     try analyzer.checkAll();
 }
 

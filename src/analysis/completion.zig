@@ -121,6 +121,7 @@ pub const Index = struct {
     allocator: std.mem.Allocator,
     modules: []ModuleInfo = &.{},
     functions: []FunctionInfo = &.{},
+    constants: []FunctionInfo = &.{},
     variables: []VariableInfo = &.{},
     fields: []FieldInfo = &.{},
     classes: []ClassInfo = &.{},
@@ -133,6 +134,7 @@ pub const Index = struct {
 
         out.modules = try buildModules(allocator, ir);
         out.functions = try buildFunctions(allocator, ir);
+        out.constants = try buildConstants(allocator, ir);
         out.variables = try buildVariables(allocator, ir);
 
         var decls = try declarations.build(allocator, ir);
@@ -150,6 +152,7 @@ pub const Index = struct {
         errdefer out.deinit();
         out.modules = try cloneModules(allocator, self.modules);
         out.functions = try cloneFunctions(allocator, self.functions);
+        out.constants = try cloneFunctions(allocator, self.constants);
         out.variables = try cloneVariables(allocator, self.variables);
         out.fields = try cloneFields(allocator, self.fields);
         out.classes = try cloneClasses(allocator, self.classes);
@@ -178,6 +181,13 @@ pub const Index = struct {
             self.allocator.free(item.documentation);
         }
         self.allocator.free(self.functions);
+        for (self.constants) |item| {
+            self.allocator.free(item.name);
+            self.allocator.free(item.signature);
+            self.allocator.free(item.result_type);
+            self.allocator.free(item.documentation);
+        }
+        self.allocator.free(self.constants);
         for (self.variables) |item| {
             self.allocator.free(item.name);
             self.allocator.free(item.type_label);
@@ -363,7 +373,7 @@ fn buildFunctions(allocator: std.mem.Allocator, ir: *core.Ir) ![]FunctionInfo {
         out.deinit(allocator);
     }
     for (registry.primitiveDescriptors()) |descriptor| {
-        if (userFunctionNameExists(ir, descriptor.name)) continue;
+        if (userValueNameExists(ir, descriptor.name)) continue;
         const signature: []u8 = @constCast(try editor.formatPrimitiveSignature(allocator, descriptor));
         errdefer allocator.free(signature);
         const result_type: []u8 = @constCast(if (registry.primitiveResultType(descriptor)) |ty|
@@ -398,9 +408,42 @@ fn buildFunctions(allocator: std.mem.Allocator, ir: *core.Ir) ![]FunctionInfo {
     return out.toOwnedSlice(allocator);
 }
 
-fn userFunctionNameExists(ir: *const core.Ir, name: []const u8) bool {
+fn buildConstants(allocator: std.mem.Allocator, ir: *core.Ir) ![]FunctionInfo {
+    var out = std.ArrayList(FunctionInfo).empty;
+    errdefer {
+        for (out.items) |item| {
+            allocator.free(item.name);
+            allocator.free(item.signature);
+            allocator.free(item.result_type);
+            allocator.free(item.documentation);
+        }
+        out.deinit(allocator);
+    }
+    var iterator = ir.constants.iterator();
+    while (iterator.next()) |entry| {
+        const constant_decl = entry.value_ptr.*;
+        const signature: []u8 = @constCast(try editor.formatConstSignature(allocator, constant_decl.name, constant_decl));
+        errdefer allocator.free(signature);
+        const result_type: []u8 = @constCast(try constant_decl.value_type.formatAlloc(allocator));
+        errdefer allocator.free(result_type);
+        try out.append(allocator, .{
+            .name = try allocator.dupe(u8, constant_decl.name),
+            .signature = signature,
+            .result_type = result_type,
+            .documentation = try allocator.dupe(u8, ""),
+            .module_id = entry.key_ptr.module_id,
+        });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn userValueNameExists(ir: *const core.Ir, name: []const u8) bool {
     var iterator = ir.functions.iterator();
     while (iterator.next()) |entry| {
+        if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
+    }
+    var const_iterator = ir.constants.iterator();
+    while (const_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
     }
     return false;
@@ -697,6 +740,15 @@ fn appendModuleFunctions(builder: *CandidateBuilder, index: *const Index, module
             .documentation = function.documentation,
         });
     }
+    for (index.constants) |constant_decl| {
+        if (constant_decl.module_id != module_id) continue;
+        try builder.add(.{
+            .label = constant_decl.name,
+            .kind = .variable,
+            .detail = constant_decl.signature,
+            .documentation = constant_decl.documentation,
+        });
+    }
 }
 
 fn appendVisibleFunctions(builder: *CandidateBuilder, index: *const Index, allocator: std.mem.Allocator, doc_path: []const u8) !void {
@@ -716,6 +768,10 @@ fn appendVisibleFunctions(builder: *CandidateBuilder, index: *const Index, alloc
         for (index.functions) |function| {
             if (function.module_id != null) continue;
             try appendFunctionCandidate(builder, function);
+        }
+        for (index.constants) |constant_decl| {
+            if (constant_decl.module_id != null) continue;
+            try appendConstCandidate(builder, constant_decl);
         }
         return;
     }
@@ -737,6 +793,9 @@ fn appendOpenFunctions(
     for (index.functions) |function| {
         if (function.module_id == module.id) try appendFunctionCandidate(builder, function);
     }
+    for (index.constants) |constant_decl| {
+        if (constant_decl.module_id == module.id) try appendConstCandidate(builder, constant_decl);
+    }
     var i = module.imports.len;
     while (i > 0) {
         i -= 1;
@@ -754,6 +813,15 @@ fn appendFunctionCandidate(builder: *CandidateBuilder, function: FunctionInfo) !
         .kind = .function,
         .detail = function.signature,
         .documentation = function.documentation,
+    });
+}
+
+fn appendConstCandidate(builder: *CandidateBuilder, constant_decl: FunctionInfo) !void {
+    try builder.add(.{
+        .label = constant_decl.name,
+        .kind = .variable,
+        .detail = constant_decl.signature,
+        .documentation = constant_decl.documentation,
     });
 }
 

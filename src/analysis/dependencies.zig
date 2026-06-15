@@ -212,7 +212,13 @@ pub const Analyzer = struct {
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
-            .ident, .string, .color, .number, .boolean, .none, .enum_case => AccessSummary.init(self.allocator),
+            .ident => |name| blk: {
+                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                    break :blk try self.constValue(resolved);
+                }
+                break :blk AccessSummary.init(self.allocator);
+            },
+            .string, .color, .number, .boolean, .none, .enum_case => AccessSummary.init(self.allocator),
             .lambda => |lambda| try self.analyzeExpr(lambda.body.*),
             .record => |record| blk: {
                 var summary = AccessSummary.init(self.allocator);
@@ -254,6 +260,14 @@ pub const Analyzer = struct {
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
+        if (self.sema.resolvedConst(call.callee)) |resolved| {
+            var summary = try self.callArgs(call);
+            errdefer summary.deinit();
+            var const_summary = try self.constValue(resolved);
+            defer const_summary.deinit();
+            try summary.merge(const_summary);
+            return summary;
+        }
         const descriptor = self.sema.callCallee(call.callee) orelse return try self.callArgs(call);
         return switch (descriptor) {
             .function => |resolved| blk: {
@@ -306,6 +320,23 @@ pub const Analyzer = struct {
         var body = try self.analyzeStatements(func.statements.items);
         defer body.deinit();
         try summary.merge(body);
+        return summary;
+    }
+
+    fn constValue(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AccessSummary {
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        if (self.visiting.contains(resolved.key)) return summary;
+        try self.visiting.put(resolved.key, {});
+        defer _ = self.visiting.remove(resolved.key);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+
+        var nested = try self.analyzeExpr(resolved.decl.value);
+        defer nested.deinit();
+        try summary.merge(nested);
         return summary;
     }
 
@@ -414,7 +445,9 @@ pub const Analyzer = struct {
         if (call.args.items.len > callback_spec.function_arg_index) {
             switch (call.args.items[callback_spec.function_arg_index]) {
                 .ident => |callback_name| {
-                    if (self.sema.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
+                    if (self.sema.resolvedConst(ast.CallableName.bare(callback_name))) |callback| {
+                        callback_summary = try self.constValue(callback);
+                    } else if (self.sema.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
                         var initial_summary = AccessSummary.init(self.allocator);
                         errdefer initial_summary.deinit();
                         const previous = self.sema;

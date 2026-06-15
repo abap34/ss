@@ -12,13 +12,14 @@ pub const Program = struct {
     records: std.ArrayList(RecordDecl),
     objects: std.ArrayList(ObjectDecl),
     object_extensions: std.ArrayList(ObjectExtensionDecl),
+    constants: std.ArrayList(ConstDecl),
     functions: std.ArrayList(FunctionDecl),
     document_blocks: std.ArrayList(DocumentBlockDecl),
     document_statements: std.ArrayList(Statement),
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .object_extensions = .empty, .constants = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
@@ -36,6 +37,8 @@ pub const Program = struct {
         self.objects.deinit(allocator);
         for (self.object_extensions.items) |*extension| extension.deinit(allocator);
         self.object_extensions.deinit(allocator);
+        for (self.constants.items) |*constant| constant.deinit(allocator);
+        self.constants.deinit(allocator);
         for (self.functions.items) |*func| func.deinit(allocator);
         self.functions.deinit(allocator);
         self.document_blocks.deinit(allocator);
@@ -155,13 +158,20 @@ pub const DocumentBlockDecl = struct {
     span: Span,
 };
 
-pub const FunctionDecl = struct {
-    pub const Kind = enum {
-        function,
-        constant,
-    };
+pub const ConstDecl = struct {
+    name: []const u8,
+    span: Span,
+    value_type: Type,
+    value: Expr,
 
-    kind: Kind = .function,
+    pub fn deinit(self: *ConstDecl, allocator: Allocator) void {
+        allocator.free(self.name);
+        self.value_type.deinit(allocator);
+        self.value.deinit(allocator);
+    }
+};
+
+pub const FunctionDecl = struct {
     name: []const u8,
     span: Span,
     params: std.ArrayList(ParamDecl),
@@ -187,7 +197,6 @@ pub const FunctionDecl = struct {
         }
 
         return .{
-            .kind = self.kind,
             .name = try allocator.dupe(u8, name),
             .span = span,
             .params = params,

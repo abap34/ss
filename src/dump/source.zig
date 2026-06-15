@@ -110,11 +110,23 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.object_extensions.items) |extension| try writeObjectExtension(&object_extensions, extension);
     try object_extensions.end();
 
+    var constants = try program_object.arrayField("constants");
+    for (program.constants.items) |constant_decl| {
+        var item = try constants.objectItem();
+        try item.stringField("name", constant_decl.name);
+        try writeSpan(&item, constant_decl.span);
+        const value_label = try constant_decl.value_type.formatAlloc(allocator);
+        defer allocator.free(value_label);
+        try item.stringField("type", value_label);
+        try writeExpr(allocator, &item, "value", constant_decl.value);
+        try item.end();
+    }
+    try constants.end();
+
     var functions = try program_object.arrayField("functions");
     for (program.functions.items) |func| {
         var item = try functions.objectItem();
         try item.stringField("name", func.name);
-        try item.enumTagField("kind", func.kind);
         try writeSpan(&item, func.span);
         const result_label = try func.result_type.formatAlloc(allocator);
         defer allocator.free(result_label);
