@@ -9,6 +9,7 @@ pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
     top_level_items: std.ArrayList(TopLevelItem),
     types: std.ArrayList(TypeDecl),
+    records: std.ArrayList(RecordDecl),
     objects: std.ArrayList(ObjectDecl),
     object_extensions: std.ArrayList(ObjectExtensionDecl),
     functions: std.ArrayList(FunctionDecl),
@@ -17,7 +18,7 @@ pub const Program = struct {
     pages: std.ArrayList(PageDecl),
 
     pub fn init() Program {
-        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
+        return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .object_extensions = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
     }
 
     pub fn deinit(self: *Program, allocator: Allocator) void {
@@ -29,6 +30,8 @@ pub const Program = struct {
         self.top_level_items.deinit(allocator);
         for (self.types.items) |*type_decl| type_decl.deinit(allocator);
         self.types.deinit(allocator);
+        for (self.records.items) |*record| record.deinit(allocator);
+        self.records.deinit(allocator);
         for (self.objects.items) |*object| object.deinit(allocator);
         self.objects.deinit(allocator);
         for (self.object_extensions.items) |*extension| extension.deinit(allocator);
@@ -106,6 +109,18 @@ pub const ObjectDecl = struct {
         if (self.base) |base| allocator.free(base);
         for (self.roles.items) |role| allocator.free(role);
         self.roles.deinit(allocator);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+};
+
+pub const RecordDecl = struct {
+    name: []const u8,
+    fields: std.ArrayList(ObjectFieldDecl),
+    span: Span,
+
+    pub fn deinit(self: *RecordDecl, allocator: Allocator) void {
+        allocator.free(self.name);
         for (self.fields.items) |*field| field.deinit(allocator);
         self.fields.deinit(allocator);
     }
@@ -354,6 +369,49 @@ pub const MemberExpr = struct {
     }
 };
 
+pub const RecordFieldExpr = struct {
+    name: []const u8,
+    value: Expr,
+
+    pub fn deinit(self: *RecordFieldExpr, allocator: Allocator) void {
+        allocator.free(self.name);
+        self.value.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordFieldExpr, allocator: Allocator) anyerror!RecordFieldExpr {
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .value = try self.value.clone(allocator),
+        };
+    }
+};
+
+pub const RecordExpr = struct {
+    type_name: []const u8,
+    fields: std.ArrayList(RecordFieldExpr),
+
+    pub fn deinit(self: *RecordExpr, allocator: Allocator) void {
+        allocator.free(self.type_name);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordExpr, allocator: Allocator) anyerror!RecordExpr {
+        var fields = std.ArrayList(RecordFieldExpr).empty;
+        errdefer {
+            for (fields.items) |*field| field.deinit(allocator);
+            fields.deinit(allocator);
+        }
+        for (self.fields.items) |field| {
+            try fields.append(allocator, try field.clone(allocator));
+        }
+        return .{
+            .type_name = try allocator.dupe(u8, self.type_name),
+            .fields = fields,
+        };
+    }
+};
+
 pub const EnumCaseExpr = struct {
     enum_name: []const u8,
     case_name: []const u8,
@@ -430,6 +488,7 @@ pub const Expr = union(enum) {
     apply: ApplyExpr,
     lambda: LambdaExpr,
     member: MemberExpr,
+    record: RecordExpr,
     enum_case: EnumCaseExpr,
     optional_check: OptionalCheckExpr,
     coalesce: CoalesceExpr,
@@ -441,6 +500,7 @@ pub const Expr = union(enum) {
             .apply => |*apply| apply.deinit(allocator),
             .lambda => |*lambda| lambda.deinit(allocator),
             .member => |*member| member.deinit(allocator),
+            .record => |*record| record.deinit(allocator),
             .enum_case => |*enum_case| enum_case.deinit(allocator),
             .optional_check => |*check| check.deinit(allocator),
             .coalesce => |*coalesce| coalesce.deinit(allocator),
@@ -460,6 +520,7 @@ pub const Expr = union(enum) {
             .apply => |apply| .{ .apply = try apply.clone(allocator) },
             .lambda => |lambda| .{ .lambda = try lambda.clone(allocator) },
             .member => |member| .{ .member = try member.clone(allocator) },
+            .record => |record| .{ .record = try record.clone(allocator) },
             .enum_case => |enum_case| .{ .enum_case = try enum_case.clone(allocator) },
             .optional_check => |check| .{ .optional_check = try check.clone(allocator) },
             .coalesce => |coalesce| .{ .coalesce = try coalesce.clone(allocator) },

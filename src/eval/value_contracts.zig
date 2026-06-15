@@ -14,6 +14,7 @@ pub fn runtimeKind(value: core.Value) core.ValueTag {
         .function => .function,
         .string => .string,
         .enum_case => .enum_case,
+        .record => .record,
         .number => .number,
         .boolean => .boolean,
         .constraints => .constraints,
@@ -91,6 +92,13 @@ pub fn valueConformsToType(value: core.Value, expected: ast.Type) bool {
             else => false,
         };
     }
+    if (expected.kind == .record) {
+        const expected_name = expected.class_name orelse return false;
+        return switch (value) {
+            .record => |record| std.mem.eql(u8, record.type_name, expected_name),
+            else => false,
+        };
+    }
     const expected_kind = expectedRuntimeKind(expected) orelse return false;
     return runtimeKind(value) == expected_kind;
 }
@@ -107,6 +115,7 @@ fn expectedRuntimeKind(expected: ast.Type) ?core.ValueTag {
         .function => .function,
         .string, .color => .string,
         .enum_type => .enum_case,
+        .record => .record,
         .number => .number,
         .boolean => .boolean,
         .constraints => .constraints,

@@ -24,7 +24,7 @@ pub fn expected(err: anyerror) ?[]const u8 {
         error.UnterminatedString => "closing string delimiter",
         error.InvalidColorLiteral => "valid color literal",
         error.UnknownAnchor => "known anchor name",
-        error.InvalidValueTag => "value type",
+        error.InvalidValueTag => "runtime value type",
         error.InvalidTypeAnnotation => "type annotation",
         error.ExpectedTypeAnnotation => "type annotation",
         error.AssignmentRequiresLet => "'let name = expr' for variable bindings",

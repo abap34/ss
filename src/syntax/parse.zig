@@ -11,6 +11,7 @@ const color_utils = utils.color;
 const Allocator = std.mem.Allocator;
 const Program = ast.Program;
 const TypeDecl = ast.TypeDecl;
+const RecordDecl = ast.RecordDecl;
 const ObjectDecl = ast.ObjectDecl;
 const ObjectExtensionDecl = ast.ObjectExtensionDecl;
 const FunctionDecl = ast.FunctionDecl;
@@ -128,6 +129,10 @@ const Parser = struct {
                     },
                     .object => |object_decl| try program.objects.append(self.allocator, object_decl),
                 }
+            } else if (try self.consumeKeyword("record")) {
+                imports_allowed = false;
+                const record_decl = try self.parseRecordDeclAfterKeyword(item_start);
+                try program.records.append(self.allocator, record_decl);
             } else if (try self.consumeKeyword("extend")) {
                 imports_allowed = false;
                 const extension = try self.parseObjectExtensionAfterKeyword(item_start);
@@ -372,6 +377,65 @@ const Parser = struct {
         try self.parseObjectMembers(&decl.base, null, &decl.roles, &decl.fields);
         decl.span.end = self.pos;
         return decl;
+    }
+
+    fn parseRecordDeclAfterKeyword(self: *Parser, start: usize) !RecordDecl {
+        const name = try self.parseIdentifier();
+        return try self.parseRecordDeclBody(start, name);
+    }
+
+    fn parseRecordDeclBody(self: *Parser, start: usize, name: []const u8) !RecordDecl {
+        self.skipTrivia();
+        try self.expectChar('{');
+        var decl = RecordDecl{
+            .name = name,
+            .fields = .empty,
+            .span = .{ .start = start, .end = start },
+        };
+        errdefer decl.deinit(self.allocator);
+        try self.parseRecordMembers(&decl.fields);
+        decl.span.end = self.pos;
+        return decl;
+    }
+
+    fn parseRecordMembers(self: *Parser, fields: *std.ArrayList(ast.ObjectFieldDecl)) !void {
+        self.skipTrivia();
+        while (!self.eof() and !self.peekChar('}')) {
+            const member_start = self.pos;
+            const name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
+            self.pos += 1;
+            self.skipInlineSpaces();
+            const type_start = self.pos;
+            while (!self.eof() and self.source[self.pos] != '=' and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
+                if (self.lineCommentStart()) break;
+                self.pos += 1;
+            }
+            const type_text = trimRightSpaces(self.source[type_start..self.pos]);
+            if (type_text.len == 0) return self.fail(error.ExpectedTypeAnnotation);
+            var default_value: ?*Expr = null;
+            var default_property_value: ?[]const u8 = null;
+            self.skipInlineSpaces();
+            if (!self.eof() and self.source[self.pos] == '=') {
+                self.pos += 1;
+                self.skipInlineSpaces();
+                const parsed_default = try self.parseObjectFieldDefault();
+                default_value = parsed_default.expr;
+                default_property_value = parsed_default.property_value;
+            }
+            try fields.append(self.allocator, .{
+                .name = name,
+                .value_type = try self.allocator.dupe(u8, type_text),
+                .default_value = default_value,
+                .default_property_value = default_property_value,
+                .span = .{ .start = member_start, .end = self.pos },
+            });
+            try self.consumeStatementTerminator();
+            self.skipTrivia();
+        }
+        try self.expectChar('}');
+        try self.consumeStatementTerminator();
     }
 
     fn parseObjectMembers(
@@ -1034,6 +1098,9 @@ const Parser = struct {
                 return .{ .boolean = value };
             }
         }
+        if (!name.isQualified() and !self.eof() and self.source[self.pos] == '{') {
+            return try self.parseRecordLiteralAfterName(name.name);
+        }
         if (!self.eof() and self.source[self.pos] == '(') {
             return .{ .call = try self.parseCallAfterName(name) };
         }
@@ -1048,6 +1115,38 @@ const Parser = struct {
             return .{ .ident = name.name };
         }
         return .{ .ident = name.name };
+    }
+
+    fn parseRecordLiteralAfterName(self: *Parser, type_name: []const u8) !Expr {
+        try self.expectChar('{');
+        var fields = std.ArrayList(ast.RecordFieldExpr).empty;
+        errdefer {
+            self.allocator.free(type_name);
+            for (fields.items) |*field| field.deinit(self.allocator);
+            fields.deinit(self.allocator);
+        }
+        self.skipTrivia();
+        while (!self.eof() and !self.peekChar('}')) {
+            const field_name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            try self.expectChar('=');
+            const value = try self.parseExpr();
+            try fields.append(self.allocator, .{
+                .name = field_name,
+                .value = value,
+            });
+            self.skipTrivia();
+            if (!self.eof() and self.source[self.pos] == ',') {
+                self.pos += 1;
+                self.skipTrivia();
+                continue;
+            }
+        }
+        try self.expectChar('}');
+        return .{ .record = .{
+            .type_name = type_name,
+            .fields = fields,
+        } };
     }
 
     fn startsLambdaExpr(self: *Parser) bool {
@@ -1529,6 +1628,7 @@ const Parser = struct {
             "fn",
             "const",
             "type",
+            "record",
             "protocol",
             "extend",
             "if",

@@ -184,6 +184,26 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
             try names.put(object_decl.name, "object");
         }
 
+        for (module.program.records.items) |record_decl| {
+            if (isBuiltinTypeName(record_decl.name)) {
+                const origin = try originForModuleSpan(allocator, origin_path, record_decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{record_decl.name}) },
+                });
+                return error.UnknownType;
+            }
+            if (names.get(record_decl.name)) |existing_kind| {
+                const origin = try originForModuleSpan(allocator, origin_path, record_decl.span);
+                defer allocator.free(origin);
+                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, record_decl.name }) },
+                });
+                return error.UnknownType;
+            }
+            try names.put(record_decl.name, "record");
+        }
+
         for (module.program.types.items) |decl| {
             if (isBuiltinTypeName(decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, decl.span);
@@ -266,6 +286,11 @@ fn resolveProgramTypeReferences(
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
+    for (program.records.items) |*record_decl| {
+        for (record_decl.fields.items) |*field| {
+            if (field.default_value) |default_value| try resolveExprTypeReferences(default_value, module_id, sema);
+        }
+    }
     for (program.functions.items) |*func| {
         try resolveFunctionTypeReferences(func, module_id, sema);
     }
@@ -334,6 +359,9 @@ fn resolveExprTypeReferences(
             for (lambda.params.items) |*param| try resolveParamTypeReference(param, module_id, sema);
             try resolveExprTypeReferences(lambda.body, module_id, sema);
         },
+        .record => |*record| {
+            for (record.fields.items) |*field| try resolveExprTypeReferences(&field.value, module_id, sema);
+        },
         .member => |*member| try resolveExprTypeReferences(member.target, module_id, sema),
         .optional_check => |*check| try resolveExprTypeReferences(check.target, module_id, sema),
         .coalesce => |*coalesce| {
@@ -361,6 +389,9 @@ fn resolveProgramEnumCasesAndDefaults(
 ) !void {
     for (program.objects.items) |*object_decl| {
         try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, object_decl.fields.items);
+    }
+    for (program.records.items) |*record_decl| {
+        try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, record_decl.fields.items);
     }
     for (program.object_extensions.items) |*extension| {
         try resolveObjectFieldEnumCasesAndDefaults(allocator, module_id, sema, extension.fields.items);
@@ -419,9 +450,77 @@ fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]
         .boolean => |value| try allocator.dupe(u8, if (value) "true" else "false"),
         .none => try allocator.dupe(u8, "none"),
         .enum_case => |case| try allocator.dupe(u8, case.case_name),
+        .record => |record| try staticRecordDefaultPropertyValue(allocator, record),
         .call => |call| try staticNumericDefaultPropertyValue(allocator, call),
         else => null,
     };
+}
+
+fn staticRecordDefaultPropertyValue(allocator: std.mem.Allocator, record: ast.RecordExpr) !?[]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    if (!try appendStaticTaggedExprJson(allocator, &out, .{ .record = record })) return null;
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendStaticTaggedExprJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr) !bool {
+    switch (expr) {
+        .none => try out.appendSlice(allocator, "{\"kind\":\"none\"}"),
+        .string, .color => |text| {
+            try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
+            try appendJsonString(allocator, out, text);
+            try out.append(allocator, '}');
+        },
+        .enum_case => |case| {
+            try out.appendSlice(allocator, "{\"kind\":\"enum\",\"type\":");
+            try appendJsonString(allocator, out, case.enum_name);
+            try out.appendSlice(allocator, ",\"case\":");
+            try appendJsonString(allocator, out, case.case_name);
+            try out.append(allocator, '}');
+        },
+        .number => |value| {
+            try out.appendSlice(allocator, "{\"kind\":\"number\",\"value\":");
+            try appendFloatText(allocator, out, value);
+            try out.append(allocator, '}');
+        },
+        .boolean => |value| try out.appendSlice(allocator, if (value) "{\"kind\":\"bool\",\"value\":true}" else "{\"kind\":\"bool\",\"value\":false}"),
+        .record => |record| {
+            try out.appendSlice(allocator, "{\"kind\":\"record\",\"type\":");
+            try appendJsonString(allocator, out, record.type_name);
+            try out.appendSlice(allocator, ",\"fields\":[");
+            for (record.fields.items, 0..) |field, index| {
+                if (index > 0) try out.append(allocator, ',');
+                try out.appendSlice(allocator, "{\"name\":");
+                try appendJsonString(allocator, out, field.name);
+                try out.appendSlice(allocator, ",\"explicit\":true");
+                try out.appendSlice(allocator, ",\"value\":");
+                if (!try appendStaticTaggedExprJson(allocator, out, field.value)) return false;
+                try out.append(allocator, '}');
+            }
+            try out.appendSlice(allocator, "]}");
+        },
+        .call => |call| {
+            if (!std.mem.eql(u8, call.callee.name, "neg") or call.args.items.len != 1) return false;
+            if (call.args.items[0] != .number) return false;
+            try out.appendSlice(allocator, "{\"kind\":\"number\",\"value\":-");
+            try appendFloatText(allocator, out, call.args.items[0].number);
+            try out.append(allocator, '}');
+        },
+        else => return false,
+    }
+    return true;
+}
+
+fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+    const escaped = try std.json.Stringify.valueAlloc(allocator, text, .{});
+    defer allocator.free(escaped);
+    try out.appendSlice(allocator, escaped);
+}
+
+fn appendFloatText(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f32) !void {
+    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    defer allocator.free(text);
+    try out.appendSlice(allocator, text);
 }
 
 fn staticNumericDefaultPropertyValue(allocator: std.mem.Allocator, call: ast.CallExpr) !?[]const u8 {
@@ -511,6 +610,9 @@ fn resolveExprEnumCases(
             if (try resolveMemberAsEnumCase(allocator, module_id, sema, env, expr, member)) return;
             try resolveExprEnumCases(allocator, module_id, sema, env, member.target);
         },
+        .record => |*record| {
+            for (record.fields.items) |*field| try resolveExprEnumCases(allocator, module_id, sema, env, &field.value);
+        },
         .optional_check => |*check| try resolveExprEnumCases(allocator, module_id, sema, env, check.target),
         .coalesce => |*coalesce| {
             try resolveExprEnumCases(allocator, module_id, sema, env, coalesce.target);
@@ -560,7 +662,11 @@ fn resolveTypeReference(
     switch (ty.kind) {
         .object => if (ty.class_name) |name| {
             if (!sema.classExists(name)) {
-                if (sema.enumDescriptor(module_id, name) != null) ty.* = ast.Type.enumType(name);
+                if (sema.recordExists(name)) {
+                    ty.* = ast.Type.recordType(name);
+                } else if (sema.enumDescriptor(module_id, name) != null) {
+                    ty.* = ast.Type.enumType(name);
+                }
             }
         },
         .function => {
@@ -634,6 +740,9 @@ fn checkExprTypeAnnotations(
             }
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, lambda.body.*);
         },
+        .record => |record| {
+            for (record.fields.items) |field| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value);
+        },
         .member => |member| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, member.target.*),
         .optional_check => |check| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, check.target.*),
         .coalesce => |coalesce| {
@@ -655,7 +764,10 @@ fn checkTypeAnnotation(
         if (ty.optional_child) |child| try checkTypeAnnotation(ir, sema, module_id, child.*, origin);
         return;
     }
-    if (ty.class_name) |class_name| {
+    if (ty.kind == .record) {
+        const record_name = ty.class_name orelse return;
+        if (!sema.recordExists(record_name)) return reportUnknownType(ir, origin, record_name);
+    } else if (ty.class_name) |class_name| {
         if (!sema.classExists(class_name)) {
             return reportUnknownType(ir, origin, class_name);
         }

@@ -178,6 +178,7 @@ pub const ValueTag = enum {
     function,
     string,
     enum_case,
+    record,
     number,
     boolean,
     constraints,
@@ -280,6 +281,57 @@ pub const EnumCaseValue = struct {
     case_name: []const u8,
 };
 
+pub const RecordFieldValue = struct {
+    name: []const u8,
+    value: Value,
+    explicit: bool = true,
+
+    pub fn deinit(self: *RecordFieldValue, allocator: Allocator) void {
+        self.value.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordFieldValue, allocator: Allocator) anyerror!RecordFieldValue {
+        return .{
+            .name = self.name,
+            .value = try self.value.clone(allocator),
+            .explicit = self.explicit,
+        };
+    }
+};
+
+pub const RecordValue = struct {
+    type_name: []const u8,
+    fields: std.ArrayList(RecordFieldValue),
+
+    pub fn init(type_name: []const u8) RecordValue {
+        return .{
+            .type_name = type_name,
+            .fields = .empty,
+        };
+    }
+
+    pub fn deinit(self: *RecordValue, allocator: Allocator) void {
+        for (self.fields.items) |*item| item.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordValue, allocator: Allocator) anyerror!RecordValue {
+        var copied = RecordValue.init(self.type_name);
+        errdefer copied.deinit(allocator);
+        for (self.fields.items) |item| {
+            try copied.fields.append(allocator, try item.clone(allocator));
+        }
+        return copied;
+    }
+
+    pub fn field(self: RecordValue, name: []const u8) ?Value {
+        for (self.fields.items) |item| {
+            if (std.mem.eql(u8, item.name, name)) return item.value;
+        }
+        return null;
+    }
+};
+
 pub const Value = union(ValueTag) {
     none: void,
     document: NodeId,
@@ -291,6 +343,7 @@ pub const Value = union(ValueTag) {
     function: FunctionRef,
     string: []const u8,
     enum_case: EnumCaseValue,
+    record: RecordValue,
     number: f32,
     boolean: bool,
     constraints: ConstraintSet,
@@ -300,12 +353,13 @@ pub const Value = union(ValueTag) {
         switch (self.*) {
             .selection => |*selection| selection.deinit(allocator),
             .function => |*function| function.deinit(allocator),
+            .record => |*record| record.deinit(allocator),
             .constraints => |*constraints| constraints.deinit(allocator),
             else => {},
         }
     }
 
-    pub fn clone(self: Value, allocator: Allocator) !Value {
+    pub fn clone(self: Value, allocator: Allocator) anyerror!Value {
         return switch (self) {
             .none => .{ .none = {} },
             .document => |id| .{ .document = id },
@@ -317,6 +371,7 @@ pub const Value = union(ValueTag) {
             .function => |function| .{ .function = try function.clone(allocator) },
             .string => |text| .{ .string = text },
             .enum_case => |enum_case| .{ .enum_case = enum_case },
+            .record => |record| .{ .record = try record.clone(allocator) },
             .number => |number| .{ .number = number },
             .boolean => |boolean| .{ .boolean = boolean },
             .constraints => |constraints| .{ .constraints = try constraints.clone(allocator) },
@@ -331,7 +386,7 @@ pub const Value = union(ValueTag) {
             .object => |id| id,
             .metadata => |id| id,
             .selection => |selection| selection.first(),
-            .none, .anchor, .function, .string, .enum_case, .number, .boolean, .constraints, .void => null,
+            .none, .anchor, .function, .string, .enum_case, .record, .number, .boolean, .constraints, .void => null,
         };
     }
 };

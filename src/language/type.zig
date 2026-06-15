@@ -26,6 +26,7 @@ pub const Type = struct {
         boolean,
         constraints,
         enum_type,
+        record,
         optional,
         void,
     };
@@ -50,6 +51,10 @@ pub const Type = struct {
 
     pub fn enumType(name: []const u8) Type {
         return .{ .kind = .enum_type, .enum_name = name };
+    }
+
+    pub fn recordType(name: []const u8) Type {
+        return .{ .kind = .record, .class_name = name };
     }
 
     pub fn optional(allocator: std.mem.Allocator, child: Type) !Type {
@@ -180,6 +185,11 @@ pub const Type = struct {
                 actual.kind == .enum_type and
                 optionalStringEql(expected.enum_name, actual.enum_name);
         }
+        if (expected.kind == .record or actual.kind == .record) {
+            return expected.kind == .record and
+                actual.kind == .record and
+                optionalStringEql(expected.class_name, actual.class_name);
+        }
         if (expected.kind != actual.kind) return false;
         if (expected.kind == .function) {
             if (expected.fn_result == null or actual.fn_result == null) return false;
@@ -267,6 +277,10 @@ pub const Type = struct {
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.kind)),
+            .record => if (self.class_name) |name|
+                try out.appendSlice(allocator, name)
+            else
+                try out.appendSlice(allocator, displayName(self.kind)),
             else => try out.appendSlice(allocator, displayName(self.kind)),
         }
     }
@@ -292,6 +306,7 @@ pub const Type = struct {
             .boolean => "Bool",
             .constraints => "Constraints",
             .enum_type => "Enum",
+            .record => "Record",
             .optional => "Optional",
             .void => "Void",
         };

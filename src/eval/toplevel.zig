@@ -930,6 +930,7 @@ fn evalExpr(
         .call => |call| try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call),
         .apply => |apply| try evalApply(ir, page_id, context, mode, env, functions, closures, current_origin, apply),
         .lambda => |lambda| try evalLambda(env, closures, lambda),
+        .record => |record| try evalRecord(ir, page_id, context, mode, env, functions, closures, current_origin, record),
         .member => |member| try evalMember(ir, page_id, context, mode, env, functions, closures, current_origin, member),
         .optional_check => |check| blk: {
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, check.target.*);
@@ -958,6 +959,10 @@ fn evalMember(
 ) !core.Value {
     var target = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, member.target.*);
     defer target.deinit(ir.allocator);
+    if (target == .record) {
+        const value = target.record.field(member.name) orelse return .{ .none = {} };
+        return try value.clone(ir.allocator);
+    }
     if (std.mem.eql(u8, member.name, "content")) {
         const object_id = try resolveValueObjectId(ir, mode, target);
         return .{ .string = ir.getNode(object_id).?.content orelse "" };
@@ -975,13 +980,88 @@ fn evalMember(
     const field = sema.field(class_name, member.name) orelse return .{ .string = value };
     var field_type = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse return .{ .string = value };
     defer field_type.deinit(ir.allocator);
-    return typedPropertyValue(value, field_type);
+    return typedPropertyValue(ir.allocator, value, field_type);
 }
 
-fn typedPropertyValue(value: []const u8, ty: ast.Type) !core.Value {
+fn evalRecord(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    current_origin: []const u8,
+    record: ast.RecordExpr,
+) !core.Value {
+    const resolved = findRecordDecl(ir, record.type_name) orelse {
+        try reportNamedResolutionError(ir, error.UnknownType, "record type", record.type_name, current_origin);
+        return error.UnknownType;
+    };
+    const caller_module_id = active_module_id;
+    defer active_module_id = caller_module_id;
+
+    var value = core.RecordValue.init(resolved.decl.name);
+    errdefer value.deinit(ir.allocator);
+
+    var default_env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer deinitValueEnv(ir.allocator, &default_env);
+    active_module_id = resolved.module_id;
+    for (resolved.decl.fields.items) |field| {
+        const default_expr = field.default_value orelse continue;
+        const field_value = try evalExpr(ir, page_id, context, mode, &default_env, functions, closures, current_origin, default_expr.*);
+        try putRecordFieldValue(ir.allocator, &value, field.name, field_value, false);
+    }
+
+    active_module_id = caller_module_id;
+    for (record.fields.items) |field| {
+        const field_value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, field.value);
+        try putRecordFieldValue(ir.allocator, &value, field.name, field_value, true);
+    }
+    return .{ .record = value };
+}
+
+const ResolvedRecordDecl = struct {
+    decl: *const ast.RecordDecl,
+    module_id: core.SourceModuleId,
+};
+
+fn findRecordDecl(ir: *const core.Ir, type_name: []const u8) ?ResolvedRecordDecl {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.records.items) |*decl| {
+            if (std.mem.eql(u8, decl.name, type_name)) return .{
+                .decl = decl,
+                .module_id = module.id,
+            };
+        }
+    }
+    return null;
+}
+
+fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, name: []const u8, value: core.Value, explicit: bool) !void {
+    var owned = value;
+    errdefer owned.deinit(allocator);
+    for (record.fields.items) |*field| {
+        if (!std.mem.eql(u8, field.name, name)) continue;
+        field.value.deinit(allocator);
+        field.value = owned;
+        field.explicit = explicit;
+        return;
+    }
+    try record.fields.append(allocator, .{
+        .name = name,
+        .value = owned,
+        .explicit = explicit,
+    });
+}
+
+fn typedPropertyValue(allocator: std.mem.Allocator, value: []const u8, ty: ast.Type) !core.Value {
     if (ty.kind == .optional) {
         const child = ty.optional_child orelse return .{ .string = value };
-        return typedPropertyValue(value, child.*);
+        return typedPropertyValue(allocator, value, child.*);
     }
     return switch (ty.kind) {
         .none => .{ .none = {} },
@@ -990,6 +1070,20 @@ fn typedPropertyValue(value: []const u8, ty: ast.Type) !core.Value {
             .enum_name = ty.enum_name orelse "",
             .case_name = value,
         } },
+        .record => blk: {
+            var parsed = try eval_value.parsePropertyValue(allocator, value);
+            if (parsed != .record) {
+                parsed.deinit(allocator);
+                return error.InvalidValueTag;
+            }
+            if (ty.class_name) |expected| {
+                if (!std.mem.eql(u8, parsed.record.type_name, expected)) {
+                    parsed.deinit(allocator);
+                    return error.InvalidValueTag;
+                }
+            }
+            break :blk parsed;
+        },
         .number => .{ .number = std.fmt.parseFloat(f32, value) catch return error.InvalidValueTag },
         .boolean => blk: {
             if (std.mem.eql(u8, value, "true")) break :blk .{ .boolean = true };

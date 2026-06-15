@@ -98,6 +98,10 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     }
     try types.end();
 
+    var records = try program_object.arrayField("records");
+    for (program.records.items) |record_decl| try writeRecordDeclaration(&records, record_decl);
+    try records.end();
+
     var objects = try program_object.arrayField("objects");
     for (program.objects.items) |object_decl| try writeObjectDeclaration(&objects, object_decl);
     try objects.end();
@@ -182,6 +186,14 @@ fn writeObjectDeclaration(objects: *json.Array, object_decl: ast.ObjectDecl) !vo
     try item.end();
 }
 
+fn writeRecordDeclaration(records: *json.Array, record_decl: ast.RecordDecl) !void {
+    var item = try records.objectItem();
+    try item.stringField("name", record_decl.name);
+    try writeObjectFieldsField(&item, record_decl.fields.items);
+    try writeSpan(&item, record_decl.span);
+    try item.end();
+}
+
 fn writeObjectExtension(extensions: *json.Array, extension: ast.ObjectExtensionDecl) !void {
     var item = try extensions.objectItem();
     try item.stringField("target", extension.target);
@@ -257,6 +269,11 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
         .lambda => |lambda| {
             try object.stringField("exprKind", "lambda");
             try object.intField("paramCount", lambda.params.items.len);
+        },
+        .record => |record| {
+            try object.stringField("exprKind", "record");
+            try object.stringField("type", record.type_name);
+            try object.intField("fieldCount", record.fields.items.len);
         },
         .member => |member| {
             try object.stringField("exprKind", "member");
@@ -406,6 +423,18 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             }
             try params.end();
             try writeExpr(allocator, item, "body", lambda.body.*);
+        },
+        .record => |record| {
+            try item.stringField("kind", "record");
+            try item.stringField("type", record.type_name);
+            var fields = try item.arrayField("fields");
+            for (record.fields.items) |field| {
+                var field_item = try fields.objectItem();
+                try field_item.stringField("name", field.name);
+                try writeExpr(allocator, &field_item, "value", field.value);
+                try field_item.end();
+            }
+            try fields.end();
         },
         .member => |member| {
             try item.stringField("kind", "member");

@@ -266,6 +266,16 @@ const Analyzer = struct {
                 const label = try self.registerLambda(lambda, env);
                 return try LabelSet.singleton(self.allocator, label);
             },
+            .record => |record| {
+                var labels = LabelSet.init(self.allocator);
+                errdefer labels.deinit();
+                for (record.fields.items) |field| {
+                    var nested = try self.exprLabels(field.value, env, owner);
+                    defer nested.deinit();
+                    try labels.unionWith(nested);
+                }
+                return labels;
+            },
             .call => |call| return try self.callLabels(call, env, owner),
             .apply => |apply| {
                 const callee_labels = try self.exprLabels(apply.callee.*, env, owner);

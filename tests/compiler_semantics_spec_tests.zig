@@ -1084,6 +1084,77 @@ test "compiler semantics: Color is a static type" {
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_bold_color' expects Color?, got String");
 }
 
+test "compiler semantics: structured style values expand to render properties" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = text("style")
+        \\  body.text = TextStyle {
+        \\    size = 33
+        \\    color = c"#123456"
+        \\    font = FontFace { family = "Menlo", weight = 700 }
+        \\  }
+        \\end
+        \\
+    ;
+    try expectObjectProperty(source, "text_size", "33");
+    try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
+    try expectObjectProperty(source, "text_font_family", "Menlo");
+    try expectObjectProperty(source, "text_font_weight", "700");
+}
+
+test "compiler semantics: structured style value members are typed" {
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = text("style")
+        \\  let style = TextStyle { size = 31 }
+        \\  body.text_size = style.size
+        \\end
+        \\
+    , "text_size", "31");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = text("bad")
+        \\  body.text = FontFace { family = "Menlo" }
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text' expects TextStyle, got FontFace");
+}
+
+test "compiler semantics: user record declarations define typed record values" {
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\
+        \\record CaptionStyle {
+        \\  size: Number = 18
+        \\  color: Color = c"0.2,0.2,0.2"
+        \\}
+        \\
+        \\fn large(style: CaptionStyle) -> CaptionStyle
+        \\  return CaptionStyle {
+        \\    size = style.size + 4
+        \\    color = style.color
+        \\  }
+        \\end
+        \\
+        \\page ok
+        \\  let body = text("caption")
+        \\  let style = large(CaptionStyle { size = 20 })
+        \\  body.text = TextStyle {
+        \\    size = style.size
+        \\    color = style.color
+        \\  }
+        \\end
+        \\
+    , "text_size", "24");
+}
+
 test "compiler semantics: optional fields accept none and coalesce" {
     try buildSource(
         \\import std:themes/default as *

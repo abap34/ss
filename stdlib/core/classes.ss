@@ -7,6 +7,103 @@ type Align = left | center | right
 type FontStyle = normal | oblique | italic
 type FontStretch = ultra_condensed | extra_condensed | condensed | semi_condensed | normal | semi_expanded | expanded | extra_expanded | ultra_expanded
 
+record FontFace {
+  family: String = "Helvetica"
+  weight: Number = 400
+  style: FontStyle = FontStyle.normal
+  stretch: FontStretch = FontStretch.normal
+}
+
+record LayoutStyle {
+  font_size: Number? = none
+  line_height: Number? = none
+  spacing_after: Number = 32
+  x: Number = 96
+  right_inset: Number = 96
+  wrap: WrapMode = WrapMode.on
+  fit: FitPolicy = FitPolicy.warn
+}
+
+record TextStyle {
+  parse: TextParseMode = TextParseMode.inline
+  font: FontFace = FontFace { family = "Helvetica" }
+  bold_weight: Number = 700
+  italic_style: FontStyle = FontStyle.italic
+  code_font: FontFace = FontFace { family = "Courier" }
+  size: Number = 20
+  line_height: Number? = none
+  color: Color = c"0.08,0.08,0.08"
+  link_color: Color = c"0.1,0.25,0.75"
+  markdown_bold_color: Color? = none
+  link_underline_width: Number = 0.8
+  link_underline_offset: Number = -1.5
+  inline_math_height_factor: Number = 1.02
+  inline_math_spacing: Number = 0.08
+  display_math_height_factor: Number = 2
+  math_align: Align = Align.center
+  emoji_spacing: Number = 0.12
+  markdown_block_gap: Number = 8
+  markdown_list_inset: Number = 8
+  markdown_list_indent: Number = 26
+  markdown_code_font_size: Number = 15
+  markdown_code_line_height: Number = 20
+  markdown_code_pad_x: Number = 12
+  markdown_code_pad_y: Number = 10
+  markdown_code_fill: Color? = none
+  markdown_code_stroke: Color? = none
+  markdown_code_line_width: Number = 1
+  markdown_code_radius: Number = 10
+  markdown_table_cell_pad_x: Number = 10
+  markdown_table_cell_pad_y: Number = 7
+  markdown_table_border: Color = c"0.82,0.84,0.88"
+  markdown_table_line_width: Number = 0.8
+  markdown_table_header_fill: Color = c"0.94,0.96,0.98"
+  markdown_table_alt_row_fill: Color? = none
+  cjk_bold_passes: Number = 1
+  cjk_bold_dx: Number = 0.05
+}
+
+record MathStyle {
+  scale: Number = 1
+  block_line_height: Number = 22
+  block_min_height: Number = 30
+  block_vertical_padding: Number = 2
+  align: Align = Align.center
+}
+
+record CodeStyle {
+  plain_color: Color = c"0.12,0.12,0.12"
+  keyword_color: Color = c"0.1725,0.3451,0.7882"
+  comment_color: Color = c"0.3059,0.5412,0.3608"
+  string_color: Color = c"0.6980,0.2549,0.2157"
+}
+
+record ChromeStyle {
+  fill: Color? = none
+  stroke: Color? = none
+  line_width: Number = 1
+  radius: Number = 10
+  pad_x: Number = 0
+  pad_y: Number = 0
+}
+
+record UnderlineStyle {
+  color: Color? = none
+  width: Number = 1
+  offset: Number = -2
+}
+
+record RuleStyle {
+  stroke: Color? = none
+  line_width: Number = 1
+  dash: String = ""
+}
+
+record AssetStyle {
+  scale: Number = 1
+  width: Number? = none
+}
+
 type Doc = object {
   layout_v: LayoutPolicy = LayoutPolicy.top_flow
   layout_v_center_offset: Number = 0
@@ -26,6 +123,7 @@ type PageContext = object {
 type Flow = object {
   render_kind: RenderKind = RenderKind.text
   text_parse: TextParseMode = TextParseMode.none
+  layout: LayoutStyle
   wrap: WrapMode = WrapMode.on
   layout_font_size: Number? = none
   layout_line_height: Number? = none
@@ -40,6 +138,8 @@ type Flow = object {
 type Text = object {
   base = Flow
 
+  text: TextStyle
+  underline: UnderlineStyle
   text_parse: TextParseMode = TextParseMode.inline
   text_font_family: String = "Helvetica"
   text_font_weight: Number = 400
@@ -187,6 +287,7 @@ type Code = object {
   base = Text
   roles = ["code"]
 
+  code: CodeStyle
   render_kind: RenderKind = RenderKind.code
   text_parse: TextParseMode = TextParseMode.none
   text_font_family: String = "Courier"
@@ -211,6 +312,7 @@ type Math = object {
   base = Text
   roles = ["math"]
 
+  math: MathStyle
   render_kind: RenderKind = RenderKind.vector_math
   text_parse: TextParseMode = TextParseMode.none
   text_font_family: String = "Courier"
@@ -239,6 +341,7 @@ type Fig = object {
   base = Text
   roles = ["figure"]
 
+  asset: AssetStyle
   text_font_family: String = "Courier"
   text_size: Number = 16
   text_line_height: Number? = none
@@ -272,6 +375,7 @@ type Panel = object {
   base = Flow
   roles = ["panel"]
 
+  chrome: ChromeStyle
   render_kind: RenderKind = RenderKind.chrome_only
   layout_font_size: Number = 4
   layout_line_height: Number = 4
@@ -291,6 +395,7 @@ type Rule = object {
   base = Panel
   roles = ["rule"]
 
+  rule: RuleStyle
   rule_stroke: Color? = none
   rule_line_width: Number = 1
   rule_dash: String = ""

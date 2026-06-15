@@ -113,6 +113,19 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
         .boolean => |value| allocator.dupe(u8, if (value) "true" else "false"),
         .none => allocator.dupe(u8, "none"),
         .enum_case => |case| std.fmt.allocPrint(allocator, "{s}.{s}", .{ case.enum_name, case.case_name }),
+        .record => |record| blk: {
+            var fields = std.ArrayList(u8).empty;
+            defer fields.deinit(allocator);
+            for (record.fields.items, 0..) |field, index| {
+                if (index != 0) try fields.appendSlice(allocator, ", ");
+                const text = try formatExpr(allocator, field.value);
+                defer allocator.free(text);
+                try fields.appendSlice(allocator, field.name);
+                try fields.appendSlice(allocator, " = ");
+                try fields.appendSlice(allocator, text);
+            }
+            break :blk std.fmt.allocPrint(allocator, "{s} {{ {s} }}", .{ record.type_name, fields.items });
+        },
         .call => |call| blk: {
             const callee = try call.callee.displayAlloc(allocator);
             defer allocator.free(callee);
