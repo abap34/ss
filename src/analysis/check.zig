@@ -211,6 +211,12 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     });
 }
 
+fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+    if (!env.contains(name)) return;
+    try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
+    return error.DuplicateBinding;
+}
+
 pub fn checkPageNamesUnique(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
@@ -246,6 +252,7 @@ pub fn checkFunction(
     const func_origin = try statementOrigin(allocator, origin_path, func.span);
     defer allocator.free(func_origin);
     for (func.params.items) |param| {
+        try rejectDuplicateBinding(ir, &env, param.name, func_origin);
         if (param.default_value) |default_value| {
             const info = try inferExprInfo(allocator, ir, sema, &env, default_value.*, func_origin);
             try ensureType(ir, allocator, info, param.ty, func_origin, .UnmatchedArgumentType);
@@ -326,10 +333,12 @@ fn checkTopLevelStatement(
     defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
+            const binds_name = !language_names.isDiscardBindingName(binding.name);
+            if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, binding.expr);
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try rejectVoidValue(ir, info, origin);
-            if (language_names.isDiscardBindingName(binding.name)) return;
+            if (!binds_name) return;
             try env.put(binding.name, info);
             try scope.put(binding.name);
         },
@@ -451,9 +460,11 @@ fn checkStatement(
     defer allocator.free(origin);
     switch (stmt.kind) {
         .let_binding => |binding| {
+            const binds_name = !language_names.isDiscardBindingName(binding.name);
+            if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
             const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
             try rejectVoidValue(ir, info, origin);
-            if (language_names.isDiscardBindingName(binding.name)) return;
+            if (!binds_name) return;
             try env.put(binding.name, info);
         },
         .return_expr => |expr| {

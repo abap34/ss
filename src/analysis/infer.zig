@@ -37,6 +37,12 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     });
 }
 
+fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+    if (!env.contains(name)) return;
+    try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
+    return error.DuplicateBinding;
+}
+
 fn originPathForFunction(sema: *const SemanticEnv, func: ast.FunctionDecl) []const u8 {
     _ = func;
     const ir = sema.ir orelse return "";
@@ -271,6 +277,7 @@ fn inferLambdaInfo(
     const param_types = try allocator.alloc(Type, lambda.params.items.len);
     defer allocator.free(param_types);
     for (lambda.params.items, 0..) |param, index| {
+        try rejectDuplicateBinding(ir, &local_env, param.name, origin);
         param_types[index] = param.ty;
         try local_env.put(param.name, infoFromType(param.ty));
     }
@@ -562,8 +569,10 @@ fn inferReturnInfoFromStatements(
         defer allocator.free(origin);
         switch (stmt.kind) {
             .let_binding => |binding| {
+                const binds_name = !language_names.isDiscardBindingName(binding.name);
+                if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
                 const info = try exprInfoWithOptions(allocator, ir, sema, env, binding.expr, origin, options);
-                if (language_names.isDiscardBindingName(binding.name)) continue;
+                if (!binds_name) continue;
                 try env.put(binding.name, info);
             },
             .return_expr => |expr| {
