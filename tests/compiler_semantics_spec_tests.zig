@@ -724,12 +724,94 @@ test "compiler semantics: branch-local let bindings do not escape their branch" 
         \\page ok
         \\  let x = "a"
         \\  if true
-        \\    let x = 1
+        \\    let branch_value = 1
         \\  end
         \\  let y = concat(x, "b")
         \\end
         \\
     );
+}
+
+test "compiler semantics: let rebinding is rejected" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let x = "a"
+        \\  let x = "b"
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
+}
+
+test "compiler semantics: branch let cannot shadow visible bindings" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let x = "a"
+        \\  if true
+        \\    let x = "b"
+        \\  end
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
+}
+
+test "compiler semantics: duplicate function parameters are rejected" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn bad(x: String, x: String) -> String
+        \\  return x
+        \\end
+        \\
+        \\page ok
+        \\  text(bad("a", "b"))
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
+}
+
+test "compiler semantics: function let cannot shadow parameters" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn bad(x: String) -> String
+        \\  let x = "b"
+        \\  return x
+        \\end
+        \\
+        \\page ok
+        \\  text(bad("a"))
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
+}
+
+test "compiler semantics: duplicate lambda parameters are rejected" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let f = (x: String, x: String) |-> x
+        \\  text(f("a", "b"))
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
+}
+
+test "compiler semantics: lambda parameters cannot shadow visible bindings" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let x = "outer"
+        \\  let f = (x: String) |-> x
+        \\  text(f("inner"))
+        \\end
+        \\
+    , "case.ss:bytes:", "DuplicateBinding: binding 'x' is already defined in this scope");
 }
 
 test "compiler semantics: selection values can be reused after lookup" {
