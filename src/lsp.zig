@@ -2192,7 +2192,7 @@ fn appendLocationObject(allocator: std.mem.Allocator, out: *std.ArrayList(u8), u
 
 fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
     return switch (diagnostic.data) {
-        .user_report => "user_report",
+        .user_report => |data| if (std.mem.startsWith(u8, data.message, "DependencyQuery:")) "DependencyQuery" else "user_report",
         .asset_not_found => "asset_not_found",
         .asset_invalid => "asset_invalid",
         .type_mismatch => |data| @tagName(data.code),

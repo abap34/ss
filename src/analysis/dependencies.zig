@@ -126,6 +126,100 @@ pub const AccessSummary = struct {
     }
 };
 
+pub fn formatAccessSummary(allocator: std.mem.Allocator, summary: AccessSummary) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "DependencyQuery:");
+    var wrote_item = false;
+    for (summary.reads.items) |resource| {
+        try appendAccessLine(allocator, &out, "read", resource);
+        wrote_item = true;
+    }
+    for (summary.writes.items) |resource| {
+        try appendAccessLine(allocator, &out, "write", resource);
+        wrote_item = true;
+    }
+    if (summary.reads_layout) {
+        try appendFlagLine(allocator, &out, "reads_layout");
+        wrote_item = true;
+    }
+    if (summary.writes_layout_input) {
+        try appendFlagLine(allocator, &out, "writes_layout_input");
+        wrote_item = true;
+    }
+    if (summary.places_objects) {
+        try appendFlagLine(allocator, &out, "places_objects");
+        wrote_item = true;
+    }
+    if (summary.invalid_selection_mutation != null) {
+        try appendFlagLine(allocator, &out, "invalid_selection_mutation");
+        wrote_item = true;
+    }
+    if (!wrote_item) try out.appendSlice(allocator, "\n  no reads, writes, or flags");
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendAccessLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), access: []const u8, resource: Resource) !void {
+    try out.appendSlice(allocator, "\n  ");
+    try out.appendSlice(allocator, access);
+    try out.appendSlice(allocator, " ");
+    try appendResource(allocator, out, resource);
+}
+
+fn appendFlagLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), flag: []const u8) !void {
+    try out.appendSlice(allocator, "\n  flag ");
+    try out.appendSlice(allocator, flag);
+}
+
+fn appendResource(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resource: Resource) !void {
+    switch (resource.kind) {
+        .variable => {
+            try out.appendSlice(allocator, "Variable(");
+            try appendScope(allocator, out, resource.scope);
+            try out.appendSlice(allocator, ", ");
+            try appendOptionalName(allocator, out, resource.key);
+            try out.append(allocator, ')');
+        },
+        .objects => {
+            try out.appendSlice(allocator, "Objects(");
+            try appendOptionalName(allocator, out, resource.key);
+            try out.append(allocator, ')');
+        },
+        .property => {
+            try out.appendSlice(allocator, "Property(");
+            try appendOptionalName(allocator, out, resource.owner);
+            try out.appendSlice(allocator, ", ");
+            try appendOptionalName(allocator, out, resource.key);
+            try out.append(allocator, ')');
+        },
+        .page_index => {
+            try out.appendSlice(allocator, "PageIndex(");
+            try appendScope(allocator, out, resource.scope);
+            try out.append(allocator, ')');
+        },
+    }
+}
+
+fn appendScope(allocator: std.mem.Allocator, out: *std.ArrayList(u8), scope: ResourceScope) !void {
+    switch (scope) {
+        .any => try out.appendSlice(allocator, "*"),
+        .document => |id| {
+            const text = try std.fmt.allocPrint(allocator, "document:{d}", .{id});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
+        },
+        .page => |id| {
+            const text = try std.fmt.allocPrint(allocator, "page:{d}", .{id});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
+        },
+    }
+}
+
+fn appendOptionalName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ?[]const u8) !void {
+    try out.appendSlice(allocator, value orelse "*");
+}
+
 fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), resource: Resource) !void {
     for (list.items) |existing| {
         if (existing.intersects(resource) and resource.intersects(existing)) return;

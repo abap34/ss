@@ -160,6 +160,111 @@ pub fn typecheckProgram(
         const module_sema = sema.forModule(module_id);
         try checker.checkPageStatements(allocator, ir, &module_sema, checker.originPathForModule(module), module.program);
     }
+    try addDependencyQueryDiagnostics(allocator, ir, &sema);
+}
+
+const DependencyQuery = struct {
+    span: ast.Span,
+};
+
+const DependencyQueryTarget = struct {
+    stmt: ast.Statement,
+    scope: dependencies.ResourceScope,
+};
+
+fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, ir: *core.Ir, sema: *const SemanticEnv) !void {
+    for (ir.module_order.items) |module_id| {
+        const module = ir.moduleById(module_id) orelse continue;
+        const module_sema = sema.forModule(module_id);
+        var query_iter = DependencyQueryIterator.init(module.source);
+        while (query_iter.next()) |query| {
+            const target = dependencyQueryTarget(module, query.span.start) orelse continue;
+            var analyzer = dependencies.Analyzer.initWithScope(allocator, &module_sema, target.scope);
+            defer analyzer.deinit();
+            var summary = try analyzer.statement(target.stmt);
+            defer summary.deinit();
+            const message = try dependencies.formatAccessSummary(ir.allocator, summary);
+            errdefer ir.allocator.free(message);
+            const origin = try queryOrigin(allocator, module, query.span);
+            defer allocator.free(origin);
+            try ir.addValidationDiagnostic(.warning, null, null, origin, .{
+                .user_report = .{ .message = message },
+            });
+        }
+    }
+}
+
+const DependencyQueryIterator = struct {
+    source: []const u8,
+    offset: usize = 0,
+
+    fn init(source: []const u8) DependencyQueryIterator {
+        return .{ .source = source };
+    }
+
+    fn next(self: *DependencyQueryIterator) ?DependencyQuery {
+        while (self.offset < self.source.len) {
+            const line_start = self.offset;
+            var line_end = line_start;
+            while (line_end < self.source.len and self.source[line_end] != '\n') line_end += 1;
+            self.offset = if (line_end < self.source.len) line_end + 1 else line_end;
+
+            const line = self.source[line_start..line_end];
+            const comment_index = std.mem.indexOf(u8, line, ";;") orelse continue;
+            const comment = line[comment_index + 2 ..];
+            const marker_index = std.mem.indexOf(u8, comment, "^dep?") orelse continue;
+            const start = line_start + comment_index + 2 + marker_index;
+            return .{ .span = .{ .start = start, .end = start + "^dep?".len } };
+        }
+        return null;
+    }
+};
+
+fn dependencyQueryTarget(module: *const core.SourceModule, query_start: usize) ?DependencyQueryTarget {
+    var best: ?DependencyQueryTarget = null;
+    var best_end: usize = 0;
+    for (module.program.document_statements.items) |stmt| {
+        updateDependencyQueryTarget(&best, &best_end, stmt, .{ .document = module.id }, query_start);
+    }
+    for (module.program.pages.items) |page| {
+        for (page.statements.items) |stmt| {
+            updateDependencyQueryTarget(&best, &best_end, stmt, .any, query_start);
+        }
+    }
+    for (module.program.functions.items) |func| {
+        for (func.statements.items) |stmt| {
+            updateDependencyQueryTarget(&best, &best_end, stmt, .any, query_start);
+        }
+    }
+    return best;
+}
+
+fn updateDependencyQueryTarget(
+    best: *?DependencyQueryTarget,
+    best_end: *usize,
+    stmt: ast.Statement,
+    scope: dependencies.ResourceScope,
+    query_start: usize,
+) void {
+    if (stmt.span.end <= query_start and stmt.span.end >= best_end.*) {
+        best.* = .{ .stmt = stmt, .scope = scope };
+        best_end.* = stmt.span.end;
+    }
+    switch (stmt.kind) {
+        .if_stmt => |if_stmt| {
+            for (if_stmt.then_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, scope, query_start);
+            for (if_stmt.else_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, scope, query_start);
+        },
+        else => {},
+    }
+}
+
+fn queryOrigin(allocator: std.mem.Allocator, module: *const core.SourceModule, span: ast.Span) ![]const u8 {
+    const origin_path = checker.originPathForModule(module);
+    if (origin_path.len != 0) {
+        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ origin_path, span.start, span.end });
+    }
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
 fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir) !void {
