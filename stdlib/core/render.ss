@@ -117,6 +117,174 @@ fn md_code(obj: Object, font_size_name: Number, line_height_name: Number, pad_x_
   return obj
 end
 
+fn code_theme_github_light() -> CodeHighlightTheme
+  return CodeHighlightTheme {
+    code = CodeStyle {
+      plain_color = c"#24292f"
+      keyword_color = c"#cf222e"
+      function_color = c"#8250df"
+      type_color = c"#953800"
+      constant_color = c"#0550ae"
+      number_color = c"#0550ae"
+      variable_color = c"#24292f"
+      operator_color = c"#0550ae"
+      comment_color = c"#6e7781"
+      string_color = c"#0a3069"
+    }
+    fill = c"#f6f8fa"
+    stroke = c"#d0d7de"
+  }
+end
+
+fn code_theme_github_dark() -> CodeHighlightTheme
+  return CodeHighlightTheme {
+    code = CodeStyle {
+      plain_color = c"#c9d1d9"
+      keyword_color = c"#ff7b72"
+      function_color = c"#d2a8ff"
+      type_color = c"#ffa657"
+      constant_color = c"#79c0ff"
+      number_color = c"#79c0ff"
+      variable_color = c"#c9d1d9"
+      operator_color = c"#79c0ff"
+      comment_color = c"#8b949e"
+      string_color = c"#a5d6ff"
+    }
+    fill = c"#0d1117"
+    stroke = c"#30363d"
+  }
+end
+
+fn code_theme_solarized_light() -> CodeHighlightTheme
+  return CodeHighlightTheme {
+    code = CodeStyle {
+      plain_color = c"#657b83"
+      keyword_color = c"#859900"
+      function_color = c"#268bd2"
+      type_color = c"#b58900"
+      constant_color = c"#2aa198"
+      number_color = c"#d33682"
+      variable_color = c"#657b83"
+      operator_color = c"#859900"
+      comment_color = c"#93a1a1"
+      string_color = c"#2aa198"
+    }
+    fill = c"#fdf6e3"
+    stroke = c"#eee8d5"
+  }
+end
+
+fn code_theme_solarized_dark() -> CodeHighlightTheme
+  return CodeHighlightTheme {
+    code = CodeStyle {
+      plain_color = c"#839496"
+      keyword_color = c"#859900"
+      function_color = c"#268bd2"
+      type_color = c"#b58900"
+      constant_color = c"#2aa198"
+      number_color = c"#d33682"
+      variable_color = c"#839496"
+      operator_color = c"#859900"
+      comment_color = c"#586e75"
+      string_color = c"#2aa198"
+    }
+    fill = c"#002b36"
+    stroke = c"#073642"
+  }
+end
+
+fn code_theme_one_dark() -> CodeHighlightTheme
+  return CodeHighlightTheme {
+    code = CodeStyle {
+      plain_color = c"#abb2bf"
+      keyword_color = c"#c678dd"
+      function_color = c"#61afef"
+      type_color = c"#e5c07b"
+      constant_color = c"#d19a66"
+      number_color = c"#d19a66"
+      variable_color = c"#abb2bf"
+      operator_color = c"#56b6c2"
+      comment_color = c"#5c6370"
+      string_color = c"#98c379"
+    }
+    fill = c"#282c34"
+    stroke = c"#3e4451"
+  }
+end
+
+fn code_theme_monokai() -> CodeHighlightTheme
+  return CodeHighlightTheme {
+    code = CodeStyle {
+      plain_color = c"#f8f8f2"
+      keyword_color = c"#f92672"
+      function_color = c"#a6e22e"
+      type_color = c"#66d9ef"
+      constant_color = c"#ae81ff"
+      number_color = c"#ae81ff"
+      variable_color = c"#f8f8f2"
+      operator_color = c"#f92672"
+      comment_color = c"#75715e"
+      string_color = c"#e6db74"
+    }
+    fill = c"#272822"
+    stroke = c"#49483e"
+  }
+end
+
+fn code_theme(obj: Object, theme: CodeHighlightTheme) -> Object
+  let style = theme.code
+  obj.code = style
+  obj.text = TextStyle {
+    markdown_code_fill = theme.fill
+    markdown_code_stroke = theme.stroke
+    markdown_code_plain_color = style.plain_color
+    markdown_code_keyword_color = style.keyword_color
+    markdown_code_function_color = style.function_color
+    markdown_code_type_color = style.type_color
+    markdown_code_constant_color = style.constant_color
+    markdown_code_number_color = style.number_color
+    markdown_code_variable_color = style.variable_color
+    markdown_code_operator_color = style.operator_color
+    markdown_code_comment_color = style.comment_color
+    markdown_code_string_color = style.string_color
+  }
+  return obj
+end
+
+fn code_theme_all(theme: CodeHighlightTheme) -> Void
+  let style = theme.code
+  let doc = docctx()
+  doc.code_theme_plain_color = style.plain_color
+  doc.code_theme_keyword_color = style.keyword_color
+  doc.code_theme_function_color = style.function_color
+  doc.code_theme_type_color = style.type_color
+  doc.code_theme_constant_color = style.constant_color
+  doc.code_theme_number_color = style.number_color
+  doc.code_theme_variable_color = style.variable_color
+  doc.code_theme_operator_color = style.operator_color
+  doc.code_theme_comment_color = style.comment_color
+  doc.code_theme_string_color = style.string_color
+  doc.code_theme_fill = theme.fill
+  doc.code_theme_stroke = theme.stroke
+end
+
+fn code_theme_page(theme: CodeHighlightTheme) -> Void
+  let style = theme.code
+  let page_value = pagectx()
+  page_value.code_theme_plain_color = style.plain_color
+  page_value.code_theme_keyword_color = style.keyword_color
+  page_value.code_theme_function_color = style.function_color
+  page_value.code_theme_type_color = style.type_color
+  page_value.code_theme_constant_color = style.constant_color
+  page_value.code_theme_number_color = style.number_color
+  page_value.code_theme_variable_color = style.variable_color
+  page_value.code_theme_operator_color = style.operator_color
+  page_value.code_theme_comment_color = style.comment_color
+  page_value.code_theme_string_color = style.string_color
+  page_value.code_theme_fill = theme.fill
+  page_value.code_theme_stroke = theme.stroke
+end
+
 fn md_bold(obj: Object, color_name: Color?) -> Object
   obj.text = TextStyle { markdown_bold_color = color_name }
   return obj

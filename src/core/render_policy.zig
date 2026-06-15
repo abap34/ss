@@ -63,6 +63,16 @@ pub const TextPaint = struct {
     markdown_code_stroke: ?Color,
     markdown_code_line_width: f32,
     markdown_code_radius: f32,
+    markdown_code_plain_color: ?Color,
+    markdown_code_keyword_color: ?Color,
+    markdown_code_function_color: ?Color,
+    markdown_code_type_color: ?Color,
+    markdown_code_constant_color: ?Color,
+    markdown_code_number_color: ?Color,
+    markdown_code_variable_color: ?Color,
+    markdown_code_operator_color: ?Color,
+    markdown_code_comment_color: ?Color,
+    markdown_code_string_color: ?Color,
     markdown_table_cell_pad_x: f32,
     markdown_table_cell_pad_y: f32,
     markdown_table_border: ?Color,
@@ -87,6 +97,12 @@ pub const CodePaint = struct {
     language: ?[]const u8,
     plain: Color,
     keyword: Color,
+    function: Color,
+    type: Color,
+    constant: Color,
+    number: Color,
+    variable: Color,
+    operator: Color,
     comment: Color,
     string: Color,
 };
@@ -144,7 +160,7 @@ pub fn resolveWithEnv(ir: anytype, node: *const Node, sema: anytype) ResolvedRen
         .kind = kind,
         .text = resolveTextWithEnv(ir, node, kind, sema),
         .math = resolveMathWithEnv(ir, node, kind, sema),
-        .code = resolveCodeWithEnv(node, kind, sema),
+        .code = resolveCodeWithEnv(ir, node, kind, sema),
         .chrome = resolveChromeWithEnv(node, sema),
         .underline = resolveUnderlineWithEnv(node, sema),
         .rule = resolveRuleWithEnv(node, sema),
@@ -206,10 +222,20 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .markdown_code_line_height = positiveFloatProperty(ir, node, "text_markdown_code_line_height") orelse layout_style.line_height,
         .markdown_code_pad_x = nonNegativeFloatProperty(ir, node, "text_markdown_code_pad_x") orelse 0,
         .markdown_code_pad_y = nonNegativeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 0,
-        .markdown_code_fill = parseColorProperty(ir, node, "text_markdown_code_fill"),
-        .markdown_code_stroke = parseColorProperty(ir, node, "text_markdown_code_stroke"),
+        .markdown_code_fill = themedColorProperty(ir, node, "text_markdown_code_fill", "code_theme_fill"),
+        .markdown_code_stroke = themedColorProperty(ir, node, "text_markdown_code_stroke", "code_theme_stroke"),
         .markdown_code_line_width = nonNegativeFloatProperty(ir, node, "text_markdown_code_line_width") orelse 0,
         .markdown_code_radius = nonNegativeFloatProperty(ir, node, "text_markdown_code_radius") orelse 0,
+        .markdown_code_plain_color = themedColorProperty(ir, node, "text_markdown_code_plain_color", "code_theme_plain_color"),
+        .markdown_code_keyword_color = themedColorProperty(ir, node, "text_markdown_code_keyword_color", "code_theme_keyword_color"),
+        .markdown_code_function_color = themedColorProperty(ir, node, "text_markdown_code_function_color", "code_theme_function_color"),
+        .markdown_code_type_color = themedColorProperty(ir, node, "text_markdown_code_type_color", "code_theme_type_color"),
+        .markdown_code_constant_color = themedColorProperty(ir, node, "text_markdown_code_constant_color", "code_theme_constant_color"),
+        .markdown_code_number_color = themedColorProperty(ir, node, "text_markdown_code_number_color", "code_theme_number_color"),
+        .markdown_code_variable_color = themedColorProperty(ir, node, "text_markdown_code_variable_color", "code_theme_variable_color"),
+        .markdown_code_operator_color = themedColorProperty(ir, node, "text_markdown_code_operator_color", "code_theme_operator_color"),
+        .markdown_code_comment_color = themedColorProperty(ir, node, "text_markdown_code_comment_color", "code_theme_comment_color"),
+        .markdown_code_string_color = themedColorProperty(ir, node, "text_markdown_code_string_color", "code_theme_string_color"),
         .markdown_table_cell_pad_x = nonNegativeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
         .markdown_table_cell_pad_y = nonNegativeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
         .markdown_table_border = parseColorProperty(ir, node, "text_markdown_table_border"),
@@ -236,13 +262,19 @@ fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
 
 fn resolveCode(ir: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     if (kind != .code) return null;
-    const plain = parseColorProperty(ir, node, "code_plain_color") orelse parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR;
+    const plain = themedColorProperty(ir, node, "code_plain_color", "code_theme_plain_color") orelse parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR;
     return .{
         .language = class_fields.property(ir, node, "language"),
         .plain = plain,
-        .keyword = parseColorProperty(ir, node, "code_keyword_color") orelse plain,
-        .comment = parseColorProperty(ir, node, "code_comment_color") orelse plain,
-        .string = parseColorProperty(ir, node, "code_string_color") orelse plain,
+        .keyword = themedColorProperty(ir, node, "code_keyword_color", "code_theme_keyword_color") orelse plain,
+        .function = themedColorProperty(ir, node, "code_function_color", "code_theme_function_color") orelse plain,
+        .type = themedColorProperty(ir, node, "code_type_color", "code_theme_type_color") orelse plain,
+        .constant = themedColorProperty(ir, node, "code_constant_color", "code_theme_constant_color") orelse plain,
+        .number = themedColorProperty(ir, node, "code_number_color", "code_theme_number_color") orelse plain,
+        .variable = themedColorProperty(ir, node, "code_variable_color", "code_theme_variable_color") orelse plain,
+        .operator = themedColorProperty(ir, node, "code_operator_color", "code_theme_operator_color") orelse plain,
+        .comment = themedColorProperty(ir, node, "code_comment_color", "code_theme_comment_color") orelse plain,
+        .string = themedColorProperty(ir, node, "code_string_color", "code_theme_string_color") orelse plain,
     };
 }
 
@@ -279,10 +311,20 @@ fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
         .markdown_code_line_height = positiveFloatPropertyWithEnv(node, "text_markdown_code_line_height", sema) orelse layout_style.line_height,
         .markdown_code_pad_x = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_pad_x", sema) orelse 0,
         .markdown_code_pad_y = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_pad_y", sema) orelse 0,
-        .markdown_code_fill = parseColorPropertyWithEnv(node, "text_markdown_code_fill", sema),
-        .markdown_code_stroke = parseColorPropertyWithEnv(node, "text_markdown_code_stroke", sema),
+        .markdown_code_fill = themedColorPropertyWithEnv(ir, node, "text_markdown_code_fill", "code_theme_fill", sema),
+        .markdown_code_stroke = themedColorPropertyWithEnv(ir, node, "text_markdown_code_stroke", "code_theme_stroke", sema),
         .markdown_code_line_width = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_line_width", sema) orelse 0,
         .markdown_code_radius = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_radius", sema) orelse 0,
+        .markdown_code_plain_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_plain_color", "code_theme_plain_color", sema),
+        .markdown_code_keyword_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_keyword_color", "code_theme_keyword_color", sema),
+        .markdown_code_function_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_function_color", "code_theme_function_color", sema),
+        .markdown_code_type_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_type_color", "code_theme_type_color", sema),
+        .markdown_code_constant_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_constant_color", "code_theme_constant_color", sema),
+        .markdown_code_number_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_number_color", "code_theme_number_color", sema),
+        .markdown_code_variable_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_variable_color", "code_theme_variable_color", sema),
+        .markdown_code_operator_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_operator_color", "code_theme_operator_color", sema),
+        .markdown_code_comment_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_comment_color", "code_theme_comment_color", sema),
+        .markdown_code_string_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_string_color", "code_theme_string_color", sema),
         .markdown_table_cell_pad_x = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_x", sema) orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
         .markdown_table_cell_pad_y = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_y", sema) orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
         .markdown_table_border = parseColorPropertyWithEnv(node, "text_markdown_table_border", sema),
@@ -307,15 +349,21 @@ fn resolveMathWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
     };
 }
 
-fn resolveCodeWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?CodePaint {
+fn resolveCodeWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?CodePaint {
     if (kind != .code) return null;
-    const plain = parseColorPropertyWithEnv(node, "code_plain_color", sema) orelse parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR;
+    const plain = themedColorPropertyWithEnv(ir, node, "code_plain_color", "code_theme_plain_color", sema) orelse parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR;
     return .{
         .language = class_fields.propertyWithEnv(node, "language", sema),
         .plain = plain,
-        .keyword = parseColorPropertyWithEnv(node, "code_keyword_color", sema) orelse plain,
-        .comment = parseColorPropertyWithEnv(node, "code_comment_color", sema) orelse plain,
-        .string = parseColorPropertyWithEnv(node, "code_string_color", sema) orelse plain,
+        .keyword = themedColorPropertyWithEnv(ir, node, "code_keyword_color", "code_theme_keyword_color", sema) orelse plain,
+        .function = themedColorPropertyWithEnv(ir, node, "code_function_color", "code_theme_function_color", sema) orelse plain,
+        .type = themedColorPropertyWithEnv(ir, node, "code_type_color", "code_theme_type_color", sema) orelse plain,
+        .constant = themedColorPropertyWithEnv(ir, node, "code_constant_color", "code_theme_constant_color", sema) orelse plain,
+        .number = themedColorPropertyWithEnv(ir, node, "code_number_color", "code_theme_number_color", sema) orelse plain,
+        .variable = themedColorPropertyWithEnv(ir, node, "code_variable_color", "code_theme_variable_color", sema) orelse plain,
+        .operator = themedColorPropertyWithEnv(ir, node, "code_operator_color", "code_theme_operator_color", sema) orelse plain,
+        .comment = themedColorPropertyWithEnv(ir, node, "code_comment_color", "code_theme_comment_color", sema) orelse plain,
+        .string = themedColorPropertyWithEnv(ir, node, "code_string_color", "code_theme_string_color", sema) orelse plain,
     };
 }
 
@@ -504,6 +552,45 @@ fn parseColorProperty(ir: anytype, node: *const Node, key: []const u8) ?Color {
 
 fn parseColorPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?Color {
     const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    return parseColor(value);
+}
+
+fn themedColorProperty(ir: anytype, node: *const Node, key: []const u8, theme_key: []const u8) ?Color {
+    if (explicitColorProperty(node, key)) |color| return color;
+    if (node.kind == .object) {
+        if (ir.parentPageOf(node.id)) |page_id| {
+            if (ir.getNode(page_id)) |page| {
+                if (explicitColorProperty(page, theme_key)) |color| return color;
+            }
+        }
+    }
+    if (node.kind == .object or node.kind == .page) {
+        if (ir.getNode(ir.document_id)) |document| {
+            if (explicitColorProperty(document, theme_key)) |color| return color;
+        }
+    }
+    return parseColorProperty(ir, node, key);
+}
+
+fn themedColorPropertyWithEnv(ir: anytype, node: *const Node, key: []const u8, theme_key: []const u8, sema: anytype) ?Color {
+    if (explicitColorProperty(node, key)) |color| return color;
+    if (node.kind == .object) {
+        if (ir.parentPageOf(node.id)) |page_id| {
+            if (ir.getNode(page_id)) |page| {
+                if (explicitColorProperty(page, theme_key)) |color| return color;
+            }
+        }
+    }
+    if (node.kind == .object or node.kind == .page) {
+        if (ir.getNode(ir.document_id)) |document| {
+            if (explicitColorProperty(document, theme_key)) |color| return color;
+        }
+    }
+    return parseColorPropertyWithEnv(node, key, sema);
+}
+
+fn explicitColorProperty(node: *const Node, key: []const u8) ?Color {
+    const value = model.nodeProperty(node, key) orelse return null;
     return parseColor(value);
 }
 

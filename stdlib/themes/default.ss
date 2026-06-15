@@ -3,7 +3,7 @@ import std:themes/base as *
 fn body_style(body: Object) -> Object
   txt(body, "Helvetica", 24, 31, c"0.07,0.08,0.10", 28, 96, 96)
   md_bold(body, c"0.05,0.30,0.58")
-  md_code(body, 19, 25, 12, 9, c"0.965,0.975,0.988", c"0.78,0.84,0.92", 0.9, 6)
+  md_code(body, 19, 25, 12, 9, docctx().code_theme_fill ?? c"0.965,0.975,0.988", docctx().code_theme_stroke ?? c"0.78,0.84,0.92", 0.9, 6)
   md_table(body, 12, 9, c"0.76,0.82,0.90", 0.8, c"0.90,0.94,0.98", c"0.985,0.990,0.996")
   return body
 end
@@ -96,7 +96,7 @@ fn/! pdf(path_value: String, factor: Number = 1) -> Object
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
-  let code = code_box(text_value, language_name, 96, 96, 16, 12, c"0.965,0.975,0.988", c"0.78,0.84,0.92", 0.9, 8)
+  let code = code_box(text_value, language_name, 96, 96, 16, 12, docctx().code_theme_fill ?? c"0.965,0.975,0.988", docctx().code_theme_stroke ?? c"0.78,0.84,0.92", 0.9, 8)
   code.text_size = 16
   code.text_code_font_family = "Menlo"
   code.layout_spacing_after = 30

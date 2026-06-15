@@ -14,6 +14,7 @@ pub const Options = struct {
     output_path: ?[]const u8 = null,
     asset_base_dir: []const u8,
     project_file: ?[]const u8 = null,
+    highlight_languages: []const utils.highlight.Language = &.{},
     jobs: ?usize = null,
     cache_id: ?[]const u8 = null,
     interval_ms: u64 = 500,
@@ -54,7 +55,11 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 return false;
             };
             var progress = utils.progress.Progress.init(7);
-            const render_options = app.RenderOptions{ .jobs = options.jobs, .cache_id = options.cache_id };
+            const render_options = app.RenderOptions{
+                .jobs = options.jobs,
+                .cache_id = options.cache_id,
+                .highlight_languages = options.highlight_languages,
+            };
             app.writePdfForFileWithAssetBaseAndOptions(
                 io,
                 allocator,
@@ -86,6 +91,7 @@ pub fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !
         mixBytes(&hash, project_file);
         try mixStatFile(io, &hash, project_file);
     }
+    try mixHighlightLanguageStats(io, &hash, options.highlight_languages);
     try mixModuleDependencyStats(io, allocator, &hash, options);
 
     var dir = std.Io.Dir.cwd().openDir(io, options.asset_base_dir, .{ .iterate = true }) catch |err| {
@@ -114,6 +120,23 @@ pub fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !
     }
 
     return hash;
+}
+
+fn mixHighlightLanguageStats(io: std.Io, hash: *u64, languages: []const utils.highlight.Language) !void {
+    mixValue(usize, hash, languages.len);
+    for (languages) |language| {
+        mixBytes(hash, language.name);
+        mixBytes(hash, language.parser);
+        mixBytes(hash, language.query);
+        mixOptionalBytes(hash, language.library);
+        mixOptionalBytes(hash, language.symbol);
+        if (!std.mem.startsWith(u8, language.query, "builtin:")) {
+            try mixStatFile(io, hash, language.query);
+        }
+        if (language.library) |library| {
+            try mixStatFile(io, hash, library);
+        }
+    }
 }
 
 fn mixModuleDependencyStats(io: std.Io, allocator: std.mem.Allocator, hash: *u64, options: Options) !void {
@@ -225,4 +248,9 @@ fn mixBytes(hash: *u64, bytes: []const u8) void {
         hash.* ^= byte;
         hash.* *%= 1099511628211;
     }
+}
+
+fn mixOptionalBytes(hash: *u64, value: ?[]const u8) void {
+    mixValue(bool, hash, value != null);
+    if (value) |bytes| mixBytes(hash, bytes);
 }

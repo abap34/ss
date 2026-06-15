@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils");
+const highlight = utils.highlight;
 
 pub const Config = struct {
     path: []u8,
@@ -9,12 +10,14 @@ pub const Config = struct {
     lsp: LspConfig = .{},
     preview: PreviewConfig = .{},
     page_guide: PageGuideConfig = .{},
+    highlight: highlight.Config = .{},
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
         allocator.free(self.dir);
         allocator.free(self.entry);
         allocator.free(self.asset_base_dir);
+        self.highlight.deinit(allocator);
     }
 };
 
@@ -65,12 +68,14 @@ pub const Resolved = struct {
     asset_base_dir: []u8,
     project_file: ?[]u8 = null,
     project_dir: ?[]u8 = null,
+    highlight: highlight.Config = .{},
 
     pub fn deinit(self: *Resolved, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
         allocator.free(self.asset_base_dir);
         if (self.project_file) |path| allocator.free(path);
         if (self.project_dir) |dir| allocator.free(dir);
+        self.highlight.deinit(allocator);
     }
 };
 
@@ -85,6 +90,8 @@ pub fn resolve(
         try loadProjectArgument(allocator, io, arg)
     else if (input_path == null)
         try discover(allocator, io, ".")
+    else if (input_path) |input|
+        try discoverForInput(allocator, io, input)
     else
         null;
     defer if (config) |*cfg| cfg.deinit(allocator);
@@ -113,7 +120,15 @@ pub fn resolve(
         .asset_base_dir = asset_base_dir,
         .project_file = if (config) |cfg| try allocator.dupe(u8, cfg.path) else null,
         .project_dir = if (config) |cfg| try allocator.dupe(u8, cfg.dir) else null,
+        .highlight = if (config) |cfg| try cfg.highlight.clone(allocator) else .{},
     };
+}
+
+fn discoverForInput(allocator: std.mem.Allocator, io: std.Io, input_path: []const u8) !?Config {
+    const absolute = try absolutePath(allocator, input_path);
+    defer allocator.free(absolute);
+    const dir = std.fs.path.dirname(absolute) orelse ".";
+    return try discover(allocator, io, dir);
 }
 
 pub fn discover(allocator: std.mem.Allocator, io: std.Io, start_dir: []const u8) !?Config {
@@ -187,6 +202,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
         .lsp = parseLspConfig(source),
         .preview = parsePreviewConfig(source),
         .page_guide = parsePageGuideConfig(source),
+        .highlight = try parseHighlightConfig(allocator, dir, source),
     };
 }
 
@@ -239,6 +255,99 @@ fn parsePreviewOpenMode(source: []const u8, section: []const u8, key: []const u8
     if (std.mem.eql(u8, value, "external")) return .external;
     if (std.mem.eql(u8, value, "vscode")) return .vscode;
     return default;
+}
+
+fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, source: []const u8) !highlight.Config {
+    var languages = std.ArrayList(highlight.Language).empty;
+    errdefer {
+        for (languages.items) |*language| language.deinit(allocator);
+        languages.deinit(allocator);
+    }
+
+    var current: ?HighlightLanguageBuilder = null;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line_raw| {
+        const comment_start = tomlCommentStart(line_raw);
+        const line = std.mem.trim(u8, line_raw[0..comment_start], " \t\r");
+        if (line.len == 0) continue;
+
+        if (line[0] == '[') {
+            try finishHighlightLanguage(allocator, project_dir, &languages, &current);
+            current = null;
+            if (highlightLanguageSectionName(line)) |name| {
+                current = .{ .name = name };
+            }
+            continue;
+        }
+
+        if (current) |*builder| {
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const key = std.mem.trim(u8, line[0..eq], " \t");
+            const value = parseTomlStringValue(std.mem.trim(u8, line[eq + 1 ..], " \t")) orelse continue;
+            if (std.mem.eql(u8, key, "parser")) {
+                builder.parser = value;
+            } else if (std.mem.eql(u8, key, "query")) {
+                builder.query = value;
+            } else if (std.mem.eql(u8, key, "library")) {
+                builder.library = value;
+            } else if (std.mem.eql(u8, key, "symbol")) {
+                builder.symbol = value;
+            }
+        }
+    }
+    try finishHighlightLanguage(allocator, project_dir, &languages, &current);
+
+    return .{ .languages = try languages.toOwnedSlice(allocator) };
+}
+
+const HighlightLanguageBuilder = struct {
+    name: []const u8,
+    parser: ?[]const u8 = null,
+    query: ?[]const u8 = null,
+    library: ?[]const u8 = null,
+    symbol: ?[]const u8 = null,
+};
+
+fn finishHighlightLanguage(
+    allocator: std.mem.Allocator,
+    project_dir: []const u8,
+    languages: *std.ArrayList(highlight.Language),
+    current: *?HighlightLanguageBuilder,
+) !void {
+    const builder = current.* orelse return;
+    current.* = null;
+    const parser = builder.parser orelse return;
+    const query = builder.query orelse return;
+
+    var language = highlight.Language{
+        .name = try allocator.dupe(u8, builder.name),
+        .parser = try allocator.dupe(u8, parser),
+        .query = try resolveHighlightValue(allocator, project_dir, query),
+        .library = if (builder.library) |value| try resolveAgainst(allocator, project_dir, value) else null,
+        .symbol = if (builder.symbol) |value| try allocator.dupe(u8, value) else null,
+    };
+    errdefer language.deinit(allocator);
+    try languages.append(allocator, language);
+}
+
+fn resolveHighlightValue(allocator: std.mem.Allocator, project_dir: []const u8, value: []const u8) ![]u8 {
+    if (std.mem.startsWith(u8, value, "builtin:")) return allocator.dupe(u8, value);
+    return resolveAgainst(allocator, project_dir, value);
+}
+
+fn highlightLanguageSectionName(line: []const u8) ?[]const u8 {
+    if (line.len < 2 or line[0] != '[' or line[line.len - 1] != ']') return null;
+    const section = line[1 .. line.len - 1];
+    const prefix = "highlight.languages.";
+    if (!std.mem.startsWith(u8, section, prefix)) return null;
+    const name = section[prefix.len..];
+    if (name.len == 0) return null;
+    return name;
+}
+
+fn parseTomlStringValue(value: []const u8) ?[]const u8 {
+    if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return null;
+    return value[1 .. value.len - 1];
 }
 
 fn parseBool(source: []const u8, section: []const u8, key: []const u8, default: bool) bool {
