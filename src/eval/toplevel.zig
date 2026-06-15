@@ -21,6 +21,7 @@ const Expr = ast.Expr;
 const CallExpr = ast.CallExpr;
 const AnchorRef = ast.AnchorRef;
 const SemanticEnv = semantic_env.SemanticEnv;
+const MAX_READLINES_BYTES = 1024 * 1024;
 
 const ExecFlow = union(enum) {
     none,
@@ -1311,6 +1312,23 @@ const BuiltinContext = struct {
         return try self.ir.ownString(text);
     }
 
+    pub fn readlines(self: *BuiltinContext, requested: []const u8) ![]const u8 {
+        const resolved = try resolveAssetPath(self.ir.allocator, self.ir.asset_base_dir, requested);
+        defer self.ir.allocator.free(resolved);
+
+        const bytes = readTextFileAlloc(self.ir.allocator, resolved) catch |err| {
+            const message = try std.fmt.allocPrint(
+                self.ir.allocator,
+                "ReadlinesFailed: could not read {s} (resolved to {s}): {s}",
+                .{ requested, resolved, @errorName(err) },
+            );
+            defer self.ir.allocator.free(message);
+            try self.emitDiagnosticReport(.@"error", message);
+            return try self.ir.copyString("");
+        };
+        return try self.ir.ownString(bytes);
+    }
+
     pub fn materializeForUse(self: *BuiltinContext, value: core.Value) !core.Value {
         return try normalizeForUse(self.ir, self.mode, value);
     }
@@ -1575,6 +1593,30 @@ fn fitSize(width: f32, height: f32, max_width: f32, max_height: f32) struct { wi
 fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {
     if (std.fs.path.isAbsolute(requested)) return allocator.dupe(u8, requested);
     return std.fs.path.join(allocator, &.{ base_dir, requested });
+}
+
+fn readTextFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const zpath = try allocator.dupeZ(u8, path);
+    defer allocator.free(zpath);
+
+    const fd = std.c.open(zpath.ptr, .{ .ACCMODE = .RDONLY }, @as(std.c.mode_t, 0));
+    if (fd < 0) return error.FileNotFound;
+    defer _ = std.c.close(fd);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+
+    var buf: [8192]u8 = undefined;
+    while (true) {
+        const read_len = std.c.read(fd, &buf, buf.len);
+        if (read_len < 0) return error.FileReadFailed;
+        if (read_len == 0) break;
+        const count: usize = @intCast(read_len);
+        if (out.items.len + count > MAX_READLINES_BYTES) return error.FileTooLarge;
+        try out.appendSlice(allocator, buf[0..count]);
+    }
+
+    return try out.toOwnedSlice(allocator);
 }
 
 fn evalSelectCall(

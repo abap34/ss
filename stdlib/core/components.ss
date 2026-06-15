@@ -133,6 +133,10 @@ fn/! code(text_value: String, language_name: String = "python") -> Object
   return code
 end
 
+fn/! code_file(path_value: String, language_name: String = "plain") -> Object
+  return code(readlines(path_value), language_name)
+end
+
 fn/! note(text_value: String) -> Object
   return flow(note_obj(text_value), 120, 120)
 end

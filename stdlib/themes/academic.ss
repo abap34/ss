@@ -40,6 +40,10 @@ fn/! code(text_value: String, language_name: String = "python") -> Object
   return code_box(text_value, language_name, 102, 102, 12, 10, c"0.94,0.94,0.94", c"0.78,0.78,0.78", 1.0, 0)
 end
 
+fn/! code_file(path_value: String, language_name: String = "plain") -> Object
+  return code(readlines(path_value), language_name)
+end
+
 fn toc(title_text: String) -> Object
   let title = head(title_text)
   let list = toc_obj()
