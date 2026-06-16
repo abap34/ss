@@ -64,6 +64,15 @@ pub const Object = struct {
         try writeBytes(self.sink, if (value) "true" else "false");
     }
 
+    pub fn optionalBoolField(self: *Object, key: []const u8, value: ?bool) !void {
+        try self.fieldName(key);
+        if (value) |boolean| {
+            try writeBytes(self.sink, if (boolean) "true" else "false");
+        } else {
+            try writeBytes(self.sink, "null");
+        }
+    }
+
     pub fn nullField(self: *Object, key: []const u8) !void {
         try self.fieldName(key);
         try writeBytes(self.sink, "null");
@@ -91,6 +100,15 @@ pub const Object = struct {
         try self.fieldName(key);
         if (value) |tagged| {
             try string(self.allocator, self.sink, @tagName(tagged));
+        } else {
+            try writeBytes(self.sink, "null");
+        }
+    }
+
+    pub fn optionalFloatField(self: *Object, key: []const u8, value: ?f32, comptime fmt: []const u8) !void {
+        try self.fieldName(key);
+        if (value) |number| {
+            try float(self.allocator, self.sink, number, fmt);
         } else {
             try writeBytes(self.sink, "null");
         }
