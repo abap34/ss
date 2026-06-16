@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ss layout trace</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --text: #17202a;
+  --muted: #657080;
+  --line: #d9dee7;
+  --accent: #1f7a8c;
+  --warn: #b75d00;
+  --good: #2b7a3d;
+  --active: #a33a3a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --panel: #181d23;
+    --text: #e7ecf3;
+    --muted: #a6b0bf;
+    --line: #303743;
+    --accent: #79c7d7;
+    --warn: #f0a55a;
+    --good: #86d49a;
+    --active: #ee8a8a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+header {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+h1 {
+  margin: 0;
+  font-size: 20px;
+}
+main { padding: 18px 22px; }
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.field {
+  display: grid;
+  gap: 4px;
+}
+.field span {
+  font-size: 12px;
+  color: var(--muted);
+}
+select,
+input[type="file"] {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 5px 8px;
+}
+input[type="range"] {
+  width: 220px;
+  accent-color: var(--accent);
+}
+button.icon-button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+}
+button.icon-button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.step-label {
+  min-width: 72px;
+  color: var(--muted);
+  padding-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(280px, 420px);
+  gap: 16px;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+}
+.panel h2 {
+  margin: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+}
+.visual {
+  padding: 14px;
+}
+.canvas-wrap {
+  width: 100%;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.swatch {
+  width: 16px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+}
+.swatch.partial {
+  border-color: var(--warn);
+  border-style: dashed;
+}
+.swatch.current {
+  border-color: var(--active);
+  background: color-mix(in srgb, var(--active) 28%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--active) 28%, transparent);
+}
+.messages { max-height: 72vh; overflow: auto; padding: 10px; }
+.message { border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; margin-bottom: 8px; background: color-mix(in srgb, var(--panel) 86%, var(--bg)); }
+.message b { display: block; margin-bottom: 3px; font-size: 13px; }
+.message .meta { color: var(--muted); font-size: 12px; }
+.message.default { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.message.propagation { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.null,
+.empty {
+  color: var(--muted);
+}
+.empty {
+  padding: 24px;
+}
+@media (prefers-color-scheme: dark) {
+  canvas { background: #0c0f12; }
+}
+@media (max-width: 820px) {
+  .layout { grid-template-columns: 1fr; }
+  input[type="range"] { width: 160px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="toolbar">
+    <label class="field"><span>JSON</span><input id="file" type="file" accept="application/json,.json"></label>
+    <label class="field"><span>Page</span><select id="page"></select></label>
+    <label class="field"><span>Axis</span><select id="axis"></select></label>
+    <label class="field"><span>Run</span><select id="run"></select></label>
+    <label class="field"><span>Step</span><input id="step" type="range" min="0" max="0" value="0"></label>
+    <span class="step-label" id="step-label">0 / 0</span>
+    <button class="icon-button" id="play" type="button" title="Play" aria-label="Play" disabled>▶</button>
+    <label class="field"><span>Speed</span><select id="speed"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option></select></label>
+  </div>
+  <section class="layout">
+    <div class="panel">
+      <h2>Canvas</h2>
+      <div class="visual">
+        <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
+        <div class="legend" id="legend"></div>
+      </div>
+    </div>
+    <div class="panel"><h2>Updates</h2><div class="messages" id="messages"></div></div>
+  </section>
+</main>
+<script>
+const els = {
+  file: document.getElementById("file"),
+  page: document.getElementById("page"),
+  axis: document.getElementById("axis"),
+  run: document.getElementById("run"),
+  step: document.getElementById("step"),
+  stepLabel: document.getElementById("step-label"),
+  play: document.getElementById("play"),
+  speed: document.getElementById("speed"),
+  canvas: document.getElementById("canvas"),
+  legend: document.getElementById("legend"),
+  messages: document.getElementById("messages"),
+};
+
+let data = { schema: 1, kind: "ss-layout-trace", events: [] };
+let selected = 0;
+let playbackTimer = null;
+
+function events() {
+  return Array.isArray(data.events) ? data.events : [];
+}
+
+function prepareData() {
+  events().forEach((event, index) => { event._index = index; });
+}
+
+function uniq(values) {
+  return [...new Set(values)].sort((a, b) => String(a).localeCompare(String(b), "en", { numeric: true }));
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+}
+
+function fill(select, values, label) {
+  const current = select.value;
+  select.innerHTML = `<option value="">${label}</option>` + values.map((value) => {
+    const text = escapeHtml(String(value));
+    return `<option value="${text}">${text}</option>`;
+  }).join("");
+  if (values.map(String).includes(current)) select.value = current;
+}
+
+function axisLabel(value) {
+  return value || "";
+}
+
+function anchorLabel(value) {
+  return value || "";
+}
+
+function filtered() {
+  return events().filter((event) =>
+    (!els.page.value || String(event.page) === els.page.value) &&
+    (!els.axis.value || event.axis === els.axis.value) &&
+    (!els.run.value || String(event.run) === els.run.value)
+  );
+}
+
+function filteredSteps() {
+  const steps = [];
+  const list = filtered();
+  for (const event of list) {
+    const messages = event.messages || [];
+    for (let index = 0; index < messages.length; index += 1) {
+      steps.push({ event, message: messages[index], messageIndex: index });
+    }
+  }
+  if (list.length) {
+    steps.push({ event: list[list.length - 1], message: null, messageIndex: null, checkpoint: true });
+  }
+  return steps;
+}
+
+function renderFilters() {
+  fill(els.page, uniq(events().map((event) => event.page)), "All");
+  fill(els.axis, uniq(events().map((event) => event.axis)), "All");
+  fill(els.run, uniq(events().map((event) => event.run)), "All");
+}
+
+function playbackDelay() {
+  return 700 / Math.max(Number(els.speed.value) || 1, 0.25);
+}
+
+function setPlayButton(playing) {
+  els.play.textContent = playing ? "⏸" : "▶";
+  els.play.title = playing ? "Pause" : "Play";
+  els.play.setAttribute("aria-label", els.play.title);
+}
+
+function stopPlayback() {
+  if (playbackTimer != null) {
+    clearInterval(playbackTimer);
+    playbackTimer = null;
+  }
+  setPlayButton(false);
+}
+
+function playbackTick() {
+  const list = filteredSteps();
+  if (!list.length || selected >= list.length - 1) {
+    stopPlayback();
+    return;
+  }
+  selected += 1;
+  render();
+}
+
+function startPlayback() {
+  const list = filteredSteps();
+  if (!list.length) return;
+  if (selected >= list.length - 1) selected = 0;
+  stopPlayback();
+  setPlayButton(true);
+  playbackTimer = setInterval(playbackTick, playbackDelay());
+}
+
+function restartPlayback() {
+  if (playbackTimer == null) return;
+  startPlayback();
+}
+
+function renderStep(list) {
+  if (!list.length) {
+    stopPlayback();
+    els.play.disabled = true;
+    els.step.disabled = true;
+    els.step.value = 0;
+    els.step.max = 0;
+    els.stepLabel.textContent = "0 / 0";
+    els.messages.innerHTML = '<div class="empty">Load a trace JSON file.</div>';
+    drawCanvas(null);
+    return;
+  }
+
+  selected = Math.max(0, Math.min(selected, list.length - 1));
+  els.play.disabled = false;
+  els.step.disabled = false;
+  els.step.max = String(list.length - 1);
+  els.step.value = String(selected);
+  els.stepLabel.textContent = `${selected + 1} / ${list.length}`;
+
+  const current = list[selected];
+  drawCanvas(current);
+  renderMessages(current);
+}
+
+function endpointLabel(endpoint) {
+  if (!endpoint) return "";
+  const name = endpoint.type === "page" ? "page" : (endpoint.name || `#${endpoint.id}`);
+  return `${name}.${anchorLabel(endpoint.anchor)}`;
+}
+
+function signedOffset(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || Math.abs(number) < 0.005) return "";
+  return number > 0 ? ` + ${number.toFixed(1)}` : ` - ${Math.abs(number).toFixed(1)}`;
+}
+
+function constraintLabel(constraint) {
+  if (!constraint) return "constraint";
+  return `${endpointLabel(constraint.source)}${signedOffset(constraint.offset)} = ${endpointLabel(constraint.target)}`;
+}
+
+function messageText(message) {
+  if (message.kind === "default_constraint") {
+    return `Default constraint added: ${constraintLabel(message.constraint)}`;
+  }
+  return `${constraintLabel(message.constraint)} propagated ${endpointLabel(message.from)} -> ${endpointLabel(message.to)}`;
+}
+
+function renderMessages(step) {
+  const event = step.event;
+  const message = step.message;
+  const heading = `<div class="message"><b>page ${event.page}, ${axisLabel(event.axis)}, pass ${event.pass || "-"}</b><span class="meta">${event.changed ? "changed" : "stable"}</span></div>`;
+  if (step.checkpoint) {
+    els.messages.innerHTML = heading + '<div class="message"><b>final state</b><div>All available frames after the selected filters.</div></div>';
+    return;
+  }
+  if (!message) {
+    els.messages.innerHTML = heading + '<div class="empty">No update for this step.</div>';
+    return;
+  }
+  const className = message.kind === "default_constraint" ? "default" : "propagation";
+  const label = message.kind === "default_constraint" ? "default constraint" : "propagation";
+  els.messages.innerHTML = heading + `<div class="message ${className}"><b>${label}</b><div>${escapeHtml(messageText(message))}</div><div class="meta">${message.soft ? "soft" : "explicit"}, ${axisLabel(message.axis)}</div></div>`;
+}
+
+function pageSize(event) {
+  return {
+    width: Number(event?.page_width || data.page_size?.width || 1280),
+    height: Number(event?.page_height || data.page_size?.height || 720),
+  };
+}
+
+function axisStart(state) {
+  if (state.start != null) return Number(state.start);
+  if (state.end != null && state.size != null) return Number(state.end) - Number(state.size);
+  if (state.center != null && state.size != null) return Number(state.center) - Number(state.size) / 2;
+  return null;
+}
+
+function axisSize(state) {
+  if (state.size != null) return Number(state.size);
+  if (state.start != null && state.end != null) return Number(state.end) - Number(state.start);
+  return null;
+}
+
+function finite(value) {
+  return Number.isFinite(value);
+}
+
+function ensureFrame(map, state) {
+  let frame = map.get(state.id);
+  if (!frame) {
+    frame = {
+      id: state.id,
+      name: state.name || String(state.id),
+      role: state.role || "",
+      kind: state.kind || "",
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      hComplete: false,
+      vComplete: false,
+    };
+    map.set(state.id, frame);
+  }
+  frame.name = state.name || frame.name;
+  frame.role = state.role || frame.role;
+  frame.kind = state.kind || frame.kind;
+  return frame;
+}
+
+function applyState(frame, event, state) {
+  const start = axisStart(state);
+  const size = axisSize(state);
+  const complete = state.start != null && state.size != null && state.end != null && state.center != null;
+  if (event.axis === "horizontal") {
+    frame.x = start;
+    frame.width = size;
+    frame.hComplete = complete;
+  } else if (event.axis === "vertical") {
+    frame.y = start;
+    frame.height = size;
+    frame.vComplete = complete;
+  }
+}
+
+function applyMessageState(map, event, message) {
+  if (!message) return;
+  if (Array.isArray(message.states) && message.states.length) {
+    for (const state of message.states) {
+      applyState(ensureFrame(map, state), event, state);
+    }
+    return;
+  }
+  if (!message.affected || !message.state) return;
+  const frame = ensureFrame(map, message.affected);
+  applyState(frame, event, message.state);
+}
+
+function snapshotForStep(step) {
+  const map = new Map();
+  const event = step.event;
+  if (step.checkpoint) {
+    for (const item of events()) {
+      if (item._index > event._index) break;
+      if (item.page !== event.page) continue;
+      for (const state of item.states || []) applyState(ensureFrame(map, state), item, state);
+    }
+    return [...map.values()];
+  }
+  for (const item of events()) {
+    if (item._index > event._index) break;
+    if (item.page !== event.page) continue;
+    if (item._index < event._index) {
+      for (const state of item.states || []) applyState(ensureFrame(map, state), item, state);
+      continue;
+    }
+    const messages = item.messages || [];
+    for (let index = 0; index <= step.messageIndex && index < messages.length; index += 1) {
+      applyMessageState(map, item, messages[index]);
+    }
+  }
+  return [...map.values()];
+}
+
+function css(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function canvasPoint(page, frame) {
+  return {
+    x: frame.x,
+    y: page.height - frame.y - frame.height,
+    width: frame.width,
+    height: frame.height,
+  };
+}
+
+function drawLabel(ctx, rect, text) {
+  if (rect.width < 64 || rect.height < 24) return;
+  ctx.save();
+  ctx.fillStyle = css("--text") || "#17202a";
+  ctx.globalAlpha = 0.86;
+  ctx.font = '18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textBaseline = "top";
+  ctx.fillText(String(text).slice(0, 28), rect.x + 6, rect.y + 5, Math.max(rect.width - 12, 1));
+  ctx.restore();
+}
+
+function frameCenter(page, frame) {
+  const rect = canvasPoint(page, frame);
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+}
+
+function endpointAxis(anchor) {
+  return anchor === "left" || anchor === "right" || anchor === "center_x" ? "horizontal" : "vertical";
+}
+
+function pageAnchorValue(page, endpoint) {
+  switch (endpoint.anchor) {
+    case "left": return { axis: "horizontal", value: 0 };
+    case "right": return { axis: "horizontal", value: page.width };
+    case "center_x": return { axis: "horizontal", value: page.width / 2 };
+    case "bottom": return { axis: "vertical", value: page.height };
+    case "top": return { axis: "vertical", value: 0 };
+    case "center_y": return { axis: "vertical", value: page.height / 2 };
+    default: return null;
+  }
+}
+
+function frameAnchorValue(page, frame, endpoint) {
+  if (!frame) return null;
+  switch (endpoint.anchor) {
+    case "left": return finite(frame.x) ? { axis: "horizontal", value: frame.x } : null;
+    case "right": return finite(frame.x) && finite(frame.width) ? { axis: "horizontal", value: frame.x + frame.width } : null;
+    case "center_x": return finite(frame.x) && finite(frame.width) ? { axis: "horizontal", value: frame.x + frame.width / 2 } : null;
+    case "bottom": return finite(frame.y) ? { axis: "vertical", value: page.height - frame.y } : null;
+    case "top": return finite(frame.y) && finite(frame.height) ? { axis: "vertical", value: page.height - frame.y - frame.height } : null;
+    case "center_y": return finite(frame.y) && finite(frame.height) ? { axis: "vertical", value: page.height - frame.y - frame.height / 2 } : null;
+    default: return null;
+  }
+}
+
+function frameGuideValues(page, frame) {
+  const guides = [];
+  if (finite(frame.x)) guides.push({ axis: "horizontal", value: frame.x });
+  if (finite(frame.x) && finite(frame.width)) {
+    guides.push({ axis: "horizontal", value: frame.x + frame.width / 2 });
+    guides.push({ axis: "horizontal", value: frame.x + frame.width });
+  }
+  if (finite(frame.y)) guides.push({ axis: "vertical", value: page.height - frame.y });
+  if (finite(frame.y) && finite(frame.height)) {
+    guides.push({ axis: "vertical", value: page.height - frame.y - frame.height / 2 });
+    guides.push({ axis: "vertical", value: page.height - frame.y - frame.height });
+  }
+  return guides;
+}
+
+function drawGuideLine(ctx, page, guide, color, width, alpha, dash) {
+  if (!finite(guide.value)) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = width;
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  if (guide.axis === "horizontal") {
+    ctx.moveTo(guide.value, 0);
+    ctx.lineTo(guide.value, page.height);
+  } else {
+    ctx.moveTo(0, guide.value);
+    ctx.lineTo(page.width, guide.value);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFrameGuides(ctx, page, frame, color, width, alpha, dash) {
+  for (const guide of frameGuideValues(page, frame)) {
+    drawGuideLine(ctx, page, guide, color, width, alpha, dash);
+  }
+}
+
+function drawCurrentBands(ctx, page, frame, color) {
+  const hasH = finite(frame.x) && finite(frame.width) && frame.width > 0;
+  const hasV = finite(frame.y) && finite(frame.height) && frame.height > 0;
+  if (!hasH && !hasV) return;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.16;
+  if (hasH) ctx.fillRect(frame.x, 0, frame.width, page.height);
+  if (hasV) {
+    const y = page.height - frame.y - frame.height;
+    ctx.fillRect(0, y, page.width, frame.height);
+  }
+  if (hasH && hasV) {
+    const rect = canvasPoint(page, frame);
+    ctx.globalAlpha = 0.24;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  }
+  ctx.restore();
+}
+
+function drawCurrentOutline(ctx, page, frame, color) {
+  const hasH = finite(frame.x) && finite(frame.width) && frame.width > 0;
+  const hasV = finite(frame.y) && finite(frame.height) && frame.height > 0;
+  if (!hasH && !hasV) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.98;
+  ctx.lineWidth = 9;
+  ctx.setLineDash([]);
+  if (hasH && hasV) {
+    const rect = canvasPoint(page, frame);
+    ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  } else if (hasH) {
+    ctx.strokeRect(frame.x, 0, frame.width, page.height);
+  } else {
+    const y = page.height - frame.y - frame.height;
+    ctx.strokeRect(0, y, page.width, frame.height);
+  }
+  ctx.restore();
+}
+
+function drawEndpointMarker(ctx, page, framesById, endpoint, color) {
+  if (!endpoint) return;
+  const value = endpoint.type === "page" ? pageAnchorValue(page, endpoint) : frameAnchorValue(page, framesById.get(endpoint.id), endpoint);
+  if (!value || !finite(value.value)) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.95;
+  ctx.lineWidth = 8;
+  ctx.setLineDash([24, 8]);
+  if (value.axis === "horizontal") {
+    ctx.beginPath();
+    ctx.moveTo(value.value, 0);
+    ctx.lineTo(value.value, page.height);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(0, value.value);
+    ctx.lineTo(page.width, value.value);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawConnector(ctx, page, framesById, message) {
+  const fromId = message?.from?.type === "node" ? message.from.id : null;
+  const toId = message?.to?.type === "node" ? message.to.id : null;
+  if (fromId == null || toId == null) return;
+  const from = framesById.get(fromId);
+  const to = framesById.get(toId);
+  if (!from || !to) return;
+  if (!(finite(from.x) && finite(from.y) && finite(from.width) && finite(from.height))) return;
+  if (!(finite(to.x) && finite(to.y) && finite(to.width) && finite(to.height))) return;
+  const a = frameCenter(page, from);
+  const b = frameCenter(page, to);
+  ctx.save();
+  ctx.strokeStyle = css("--active") || "#a33a3a";
+  ctx.globalAlpha = 0.96;
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawCanvas(step) {
+  const event = step?.event || null;
+  const page = pageSize(event);
+  const canvas = els.canvas;
+  const parent = canvas.parentElement;
+  const cssWidth = Math.max(320, Math.floor(parent.getBoundingClientRect().width || 640));
+  const cssHeight = Math.max(180, Math.round(cssWidth * page.height / page.width));
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.height = `${cssHeight}px`;
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr * cssWidth / page.width, 0, 0, dpr * cssHeight / page.height, 0, 0);
+  ctx.clearRect(0, 0, page.width, page.height);
+  ctx.fillStyle = getComputedStyle(canvas).backgroundColor || "#fff";
+  ctx.fillRect(0, 0, page.width, page.height);
+  ctx.strokeStyle = css("--line") || "#d8dde5";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, page.width, page.height);
+  ctx.setLineDash([10, 8]);
+  ctx.strokeStyle = "rgba(104,114,130,.35)";
+  ctx.strokeRect(60, 60, page.width - 120, page.height - 120);
+  ctx.setLineDash([]);
+
+  if (!event) {
+    els.legend.innerHTML = "";
+    return;
+  }
+
+  const frames = snapshotForStep(step).sort((a, b) => ((b.width || 0) * (b.height || 0)) - ((a.width || 0) * (a.height || 0)));
+  const framesById = new Map(frames.map((frame) => [frame.id, frame]));
+  const message = step.message;
+  const fromId = message?.from?.type === "node" ? message.from.id : null;
+  const toId = message?.to?.type === "node" ? message.to.id : null;
+  const affectedId = message?.affected?.type === "node" ? message.affected.id : null;
+  let full = 0;
+  let partial = 0;
+
+  for (const frame of frames) {
+    drawFrameGuides(ctx, page, frame, css("--muted") || "#657080", 2, 0.2, [10, 10]);
+  }
+  for (const frame of frames) {
+    const isFrom = frame.id === fromId;
+    const isTo = frame.id === toId || frame.id === affectedId;
+    if (isFrom || isTo) {
+      drawCurrentBands(ctx, page, frame, isTo ? (css("--active") || "#a33a3a") : (css("--warn") || "#b75d00"));
+    }
+  }
+
+  for (const frame of frames) {
+    const hasH = finite(frame.x) && finite(frame.width) && frame.width > 0;
+    const hasV = finite(frame.y) && finite(frame.height) && frame.height > 0;
+    const isFrom = frame.id === fromId;
+    const isTo = frame.id === toId || frame.id === affectedId;
+    const current = isFrom || isTo;
+
+    if (hasH && hasV) {
+      const rect = canvasPoint(page, frame);
+      full += 1;
+      ctx.save();
+      ctx.globalAlpha = current ? 0.3 : frame.hComplete && frame.vComplete ? 0.12 : 0.06;
+      ctx.fillStyle = css("--accent") || "#1f7a8c";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.globalAlpha = current ? 1 : 0.82;
+      ctx.strokeStyle = isTo ? (css("--active") || "#a33a3a") : isFrom ? (css("--warn") || "#b75d00") : (css("--accent") || "#1f7a8c");
+      ctx.lineWidth = current ? 6 : 2;
+      ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+      drawLabel(ctx, rect, frame.name);
+      ctx.restore();
+    } else if (hasH) {
+      partial += 1;
+      ctx.save();
+      ctx.setLineDash([12, 8]);
+      ctx.strokeStyle = css("--warn") || "#b75d00";
+      ctx.globalAlpha = current ? 0.92 : 0.56;
+      ctx.lineWidth = current ? 7 : 2;
+      ctx.strokeRect(frame.x, 0, frame.width, page.height);
+      ctx.restore();
+    } else if (hasV) {
+      partial += 1;
+      const y = page.height - frame.y - frame.height;
+      ctx.save();
+      ctx.setLineDash([12, 8]);
+      ctx.strokeStyle = css("--warn") || "#b75d00";
+      ctx.globalAlpha = current ? 0.92 : 0.56;
+      ctx.lineWidth = current ? 7 : 2;
+      ctx.strokeRect(0, y, page.width, frame.height);
+      ctx.restore();
+    }
+  }
+
+  for (const frame of frames) {
+    const isFrom = frame.id === fromId;
+    const isTo = frame.id === toId || frame.id === affectedId;
+    if (isFrom || isTo) {
+      const color = isTo ? (css("--active") || "#a33a3a") : (css("--warn") || "#b75d00");
+      drawFrameGuides(ctx, page, frame, color, 6, 0.9, [24, 8]);
+      drawCurrentOutline(ctx, page, frame, color);
+    }
+  }
+
+  drawEndpointMarker(ctx, page, framesById, message?.from, css("--warn") || "#b75d00");
+  drawEndpointMarker(ctx, page, framesById, message?.to, css("--active") || "#a33a3a");
+  drawConnector(ctx, page, framesById, message);
+  els.legend.innerHTML =
+    `<span class="key"><span class="swatch"></span>rect ${full}</span>` +
+    `<span class="key"><span class="swatch partial"></span>one-axis ${partial}</span>` +
+    '<span class="key"><span class="swatch current"></span>current</span>';
+}
+
+function render() {
+  const list = filteredSteps();
+  renderStep(list);
+}
+
+async function loadTrace(nextData) {
+  stopPlayback();
+  data = nextData;
+  prepareData();
+  selected = 0;
+  renderFilters();
+  render();
+}
+
+els.file.onchange = async () => {
+  const file = els.file.files[0];
+  if (!file) return;
+  await loadTrace(JSON.parse(await file.text()));
+};
+
+for (const select of [els.page, els.axis, els.run]) {
+  select.onchange = () => {
+    stopPlayback();
+    selected = 0;
+    render();
+  };
+}
+
+els.step.oninput = () => {
+  stopPlayback();
+  selected = Number(els.step.value);
+  render();
+};
+
+els.play.onclick = () => {
+  if (playbackTimer == null) {
+    startPlayback();
+  } else {
+    stopPlayback();
+  }
+};
+
+els.speed.onchange = restartPlayback;
+
+window.addEventListener("resize", () => {
+  const list = filteredSteps();
+  if (list.length) drawCanvas(list[Math.min(selected, list.length - 1)]);
+});
+
+async function loadFromQuery() {
+  const url = new URL(location.href);
+  const tracePath = url.searchParams.get("json");
+  if (!tracePath) return false;
+  const response = await fetch(tracePath);
+  await loadTrace(await response.json());
+  return true;
+}
+
+renderFilters();
+render();
+loadFromQuery().catch((error) => {
+  els.messages.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+});
+</script>
+</body>
+</html>

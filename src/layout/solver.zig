@@ -5,6 +5,7 @@ const graph = @import("graph.zig");
 const groups = @import("groups.zig");
 const metrics = @import("metrics.zig");
 const style_defaults = @import("style.zig");
+const layout_trace = @import("trace.zig");
 
 const NodeId = model.NodeId;
 const AxisState = model.AxisState;
@@ -15,6 +16,9 @@ const ConstraintTolerance = graph.ConstraintTolerance;
 pub const SolveOptions = graph.SolveOptions;
 
 pub fn solveLayout(ir: anytype) !void {
+    layout_trace.beginSolve(ir.allocator);
+    defer layout_trace.endSolve(ir.allocator);
+
     for (ir.nodes.items) |*node| {
         switch (node.kind) {
             .document => {},
@@ -56,6 +60,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
 
     var horizontal_fallback = try fallback.buildHorizontalConstraints(ir, &horizontal);
     defer horizontal_fallback.deinit(ir.allocator);
+    layout_trace.recordDefaultConstraints(ir.allocator, &horizontal, horizontal_fallback.items);
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(ir, &horizontal);
     try settleHorizontalAxis(ir, &horizontal);
@@ -68,6 +73,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
     try solvePageAxis(ir, &vertical);
     var vertical_fallback = try fallback.buildVerticalConstraints(ir, &vertical);
     defer vertical_fallback.deinit(ir.allocator);
+    layout_trace.recordDefaultConstraints(ir.allocator, &vertical, vertical_fallback.items);
     vertical.soft_constraints = vertical_fallback.items;
     try solvePageAxis(ir, &vertical);
 
@@ -167,11 +173,20 @@ pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !void {
 }
 
 pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+    const trace_enabled = layout_trace.shouldTraceAxisPass(workspace);
+    const run_id = if (trace_enabled) layout_trace.nextRunId() else 0;
+    if (trace_enabled) layout_trace.axisPassBegin(ir.allocator, ir, workspace, run_id);
+
     var pass: usize = 0;
+    var iteration_count: usize = 0;
+    var converged = false;
     while (pass < 32) : (pass += 1) {
+        iteration_count = pass + 1;
         var changed = false;
         var local_pass: usize = 0;
+        var local_iterations: usize = 0;
         while (local_pass < 32) : (local_pass += 1) {
+            local_iterations += 1;
             var local_changed = false;
 
             for (workspace.states) |*state| {
@@ -194,21 +209,50 @@ pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, 
             if (!local_changed) break;
         }
 
-        changed = (try groups.updateAxisStates(ir, workspace)) or changed;
-        changed = (try groups.applyTargetConstraintsWithOptions(ir, workspace, options)) or changed;
+        const group_bounds_changed = try groups.updateAxisStates(ir, workspace);
+        changed = group_bounds_changed or changed;
+        const group_targets_changed = try groups.applyTargetConstraintsWithOptions(ir, workspace, options);
+        changed = group_targets_changed or changed;
 
+        var group_sources_changed = false;
         for (ir.constraints.items) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            changed = (try applyAxisConstraint(ir, workspace, constraint, false, options)) or changed;
+            const applied = try applyAxisConstraint(ir, workspace, constraint, false, options);
+            group_sources_changed = applied or group_sources_changed;
+            changed = applied or changed;
         }
 
+        var soft_group_sources_changed = false;
         for (workspace.soft_constraints) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
-            changed = (try applyAxisConstraint(ir, workspace, constraint, true, options)) or changed;
+            const applied = try applyAxisConstraint(ir, workspace, constraint, true, options);
+            soft_group_sources_changed = applied or soft_group_sources_changed;
+            changed = applied or changed;
         }
 
-        if (!changed) break;
+        if (trace_enabled) {
+            layout_trace.axisPassIteration(
+                ir.allocator,
+                ir,
+                run_id,
+                workspace,
+                pass,
+                local_iterations,
+                changed,
+                group_bounds_changed,
+                group_targets_changed,
+                group_sources_changed,
+                soft_group_sources_changed,
+            );
+        }
+
+        if (!changed) {
+            converged = true;
+            break;
+        }
     }
+
+    if (trace_enabled) layout_trace.axisPassEnd(ir.allocator, ir, run_id, workspace, iteration_count, converged);
 }
 
 fn reconcileAxisStateLocalized(ir: anytype, page_id: NodeId, state: *AxisState, options: SolveOptions) !bool {
@@ -280,7 +324,7 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
                 return false;
             }
             if (is_soft and workspace.states[target_index].size != null) return false;
-            return graph.setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
+            const applied = graph.setAxisSize(&workspace.states[target_index], size, constraint) catch |err| {
                 if (is_soft) return false;
                 if (options.record_diagnostics) {
                     if (err != error.ConstraintConflict) {
@@ -289,6 +333,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
                 }
                 return false;
             };
+            if (applied) layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+            return applied;
         },
     }
 
@@ -305,6 +351,7 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
     if (!is_soft and canMoveDefaultSizedAnchor(ir, workspace, target_index)) {
         if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+            layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
             return true;
         }
     }
@@ -312,20 +359,23 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
     if (!is_soft and shouldReplaceDefaultGeometry(ir, workspace, target_index, constraint.target_anchor)) {
         if (graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
             _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+            layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
             return true;
         }
     }
 
-    return graph.setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint) catch |err| {
+    const applied = graph.setAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint) catch |err| {
         if (!is_soft and err == error.ConstraintConflict and canMoveDefaultSizedAnchor(ir, workspace, target_index)) {
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
         if (!is_soft and err == error.ConstraintConflict and canReplaceDuplicateDefaultAnchor(ir, workspace, target_index, constraint.target_anchor)) {
             if (try graph.moveDefaultSizedAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
@@ -333,6 +383,7 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
             const existing = graph.axisAnchorSource(workspace.states[target_index], constraint.target_anchor);
             if (existing != null and constraintInSlice(workspace.soft_constraints, existing.?) and graph.replaceAxisAnchor(&workspace.states[target_index], constraint.target_anchor, target_value, constraint)) {
                 _ = graph.reconcileAxisState(&workspace.states[target_index]) catch {};
+                layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
                 return true;
             }
         }
@@ -344,6 +395,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
         }
         return false;
     };
+    if (applied) layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, false);
+    return applied;
 }
 
 fn canMoveDefaultSizedAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
@@ -440,7 +493,7 @@ fn applyReverseAxisConstraint(
     }
 
     const target_value = graph.axisAnchorValue(target_state, constraint.target_anchor) orelse return false;
-    return graph.setAxisAnchor(&workspace.states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
+    const applied = graph.setAxisAnchor(&workspace.states[source_index], node_source.anchor, target_value - constraint.offset, constraint) catch |err| {
         if (options.record_diagnostics) {
             if (err != error.ConstraintConflict) {
                 ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(workspace.states[source_index], node_source.anchor), .negative_size);
@@ -448,6 +501,8 @@ fn applyReverseAxisConstraint(
         }
         return false;
     };
+    if (applied) layout_trace.recordConstraintPropagation(ir.allocator, workspace, constraint, is_soft, true);
+    return applied;
 }
 
 fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph) !void {
