@@ -54,7 +54,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 std.debug.print("watch: render requires an output path\n", .{});
                 return false;
             };
-            var progress = utils.progress.Progress.init(7);
+            var progress = utils.progress.Progress.init(8);
             const render_options = app.RenderOptions{
                 .jobs = options.jobs,
                 .cache_id = options.cache_id,

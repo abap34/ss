@@ -639,10 +639,10 @@ fn run(init: std.process.Init) !void {
         defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
-            var progress = utils.progress.Progress.init(7);
+            var progress = utils.progress.Progress.init(8);
             try app.writeIrJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
         } else {
-            var progress = utils.progress.Progress.init(7);
+            var progress = utils.progress.Progress.init(8);
             try app.printIrJsonForFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, &progress);
         }
         return;
@@ -654,7 +654,7 @@ fn run(init: std.process.Init) !void {
         defer resolved.deinit(allocator);
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         try validateOutputParentOrCliError(io, output_path);
-        var progress = utils.progress.Progress.init(7);
+        var progress = utils.progress.Progress.init(8);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
             .cache_id = options.cache_id,

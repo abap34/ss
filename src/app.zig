@@ -44,11 +44,11 @@ pub fn buildFileWithAssetBaseAndOverlay(
     else
         try utils.fs.readFileAlloc(io, allocator, path);
     errdefer allocator.free(source);
-    if (progress) |p| p.step("Read source");
+    if (progress) |p| p.step("Read inputs");
 
     var program = try parseSource(allocator, source, path);
     errdefer program.deinit(allocator);
-    if (progress) |p| p.step("Parse");
+    if (progress) |p| p.step("Parse source");
 
     var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
         if (err == error.UnknownImport) {
@@ -80,7 +80,7 @@ pub fn buildFileWithAssetBaseAndOverlay(
         }
         return err;
     };
-    if (progress) |p| p.step("Load index");
+    if (progress) |p| p.step("Load modules");
 
     var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
         if (err == error.UnknownImport) {
@@ -115,14 +115,20 @@ pub fn buildFileWithAssetBaseAndOverlay(
         return error.DiagnosticsFailed;
     }
 
-    lowering.lowerToIr(&ir) catch |err| {
+    lowering.evaluateDocument(&ir) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        return err;
+    };
+    if (progress) |p| p.step("Evaluate document");
+
+    lowering.solveLayout(&ir) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), &ir, err, core.formatConstraint),
             else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir),
         }
         return err;
     };
-    if (progress) |p| p.step("Lower and solve");
+    if (progress) |p| p.step("Solve layout");
     error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
     if (error_report.hasIrErrors(&ir)) return error.DiagnosticsFailed;
     return ir;
@@ -190,7 +196,7 @@ pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, inpu
     const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
     defer allocator.free(pdf_data);
     try utils.render_cache.pruneFromEnv(io, allocator);
-    progress.step("Render PDF");
+    progress.step("Render pages");
     try utils.fs.writeFile(io, output_path, pdf_data);
     progress.step("Write PDF");
 }
@@ -205,7 +211,7 @@ pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.All
     const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
     defer allocator.free(pdf_data);
     try utils.render_cache.pruneFromEnv(io, allocator);
-    progress.step("Render PDF");
+    progress.step("Render pages");
     try utils.fs.writeFile(io, output_path, pdf_data);
     progress.step("Write PDF");
 }
