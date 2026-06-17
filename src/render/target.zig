@@ -12,8 +12,6 @@ pub const CoordinateSpace = struct {
     y_axis: []const u8 = "down",
 };
 
-pub const HtmlOptions = struct {};
-
 pub const PdfOptions = struct {
     keep_temps: bool = false,
     cache_dir: []const u8 = ".ss-cache/render",

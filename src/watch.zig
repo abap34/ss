@@ -15,6 +15,7 @@ pub const Options = struct {
     asset_base_dir: []const u8,
     project_file: ?[]const u8 = null,
     cache_id: ?[]const u8 = null,
+    render_format: app.RenderFormat = .pdf,
     highlight_languages: []const utils.highlight.Language = &.{},
     interval_ms: u64 = 500,
 };
@@ -55,10 +56,11 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
             };
             var progress = utils.progress.Progress.init(8);
             const render_options = app.RenderOptions{
+                .format = options.render_format,
                 .cache_id = options.cache_id,
                 .highlight_languages = options.highlight_languages,
             };
-            app.writePdfForFileWithAssetBaseAndOptions(
+            app.writeRenderFileWithAssetBaseAndOptions(
                 io,
                 allocator,
                 options.input_path,

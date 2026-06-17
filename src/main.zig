@@ -10,70 +10,157 @@ const error_report = utils.err;
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--cache-id ID]
+        \\  ss <command> [arguments]
+        \\  ss help [command]
         \\
         \\Commands:
-        \\  help
-        \\    Show this help message
-        \\  check [input.ss]
-        \\    Parse and type-check; print diagnostics when needed
-        \\  dump [input.ss] [output.json]
-        \\    Print IR JSON, or write it when output path is given
-        \\  render [input.ss] [output.pdf]
-        \\    Render PDF to the specified path
-        \\  init [dir]
-        \\    Create a new ss.toml and starter slide deck
-        \\  doctor
-        \\    Check project discovery and render tool availability
-        \\  lsp
-        \\    Run the ss language server over stdio
-        \\  watch check [input.ss]
-        \\    Re-run check when the project changes
-        \\  watch render [input.ss] [output.pdf]
-        \\    Re-render PDF when the project changes
-        \\  cache clear
-        \\    Clear the managed render cache under .ss-cache/render
-        \\  cache stats
-        \\    Print managed render cache file, directory, and size totals
+        \\  check [input.ss]                       Parse and type-check
+        \\  dump [input.ss] [output.json]          Write IR JSON
+        \\  render [input.ss] [output]             Render PDF or HTML
+        \\  init [dir]                             Create ss.toml and starter slides
+        \\  doctor                                 Check project and render tools
+        \\  lsp                                    Run the language server over stdio
+        \\  watch check [input.ss]                 Re-run check when files change
+        \\  watch render [input.ss] [output]       Re-render PDF or HTML when files change
+        \\  cache stats                            Show render cache size
+        \\  cache clear                            Clear the managed render cache
         \\
-        \\Flags:
-        \\  --version, -V
-        \\    Show the ss version and source commit
-        \\  --asset-base-dir DIR
-        \\    Resolve relative assets/themes from DIR instead of the input file directory
-        \\  --project FILE_OR_DIR
-        \\    Resolve the entrypoint and asset base from ss.toml
-        \\  --output FILE
-        \\    Write dump/render output to FILE when the input comes from ss.toml
-        \\  --cache-id ID
-        \\    Stable render cache identity for snapshot-based render inputs
-        \\  --interval-ms N
-        \\    Poll interval for watch commands
-        \\  --entry FILE
-        \\    Entry file to create with ss init
-        \\  --force
-        \\    Allow ss init to overwrite generated files
-        \\  --strict
-        \\    Make ss doctor exit non-zero when it finds issues
+        \\Global:
+        \\  --version, -V                          Show the ss version and source commit
+        \\
+        \\Project flags:
+        \\  --project FILE_OR_DIR                  Resolve entrypoint and asset base from ss.toml
+        \\  --asset-base-dir DIR                   Resolve relative assets from DIR
+        \\
+        \\Render flags:
+        \\  --format pdf|html                      Select render output format
+        \\  --output FILE                          Write output to FILE
+        \\  --cache-id ID                          Stable PDF page cache identity
+        \\
+        \\Other flags:
+        \\  --interval-ms N                        Poll interval for watch commands
+        \\  --entry FILE                           Entry file for ss init
+        \\  --force                                Allow ss init to overwrite generated files
+        \\  --strict                               Make ss doctor fail when it finds issues
         \\
         \\Examples:
         \\  ss help
+        \\  ss help render
         \\  ss check slide.ss
         \\  ss dump slide.ss
         \\  ss dump slide.ss out.json
         \\  ss dump --project . --output .ss-cache/dump.json
-        \\  ss render slide.ss out.pdf
-        \\  ss render --project . --output .ss-cache/render.pdf
+        \\  ss render slide.ss slide.pdf
+        \\  ss render slide.ss slide.html
+        \\  ss render slide.ss --format html
+        \\  ss render --project . --output slide.pdf
+        \\  ss render --project . --format html --output slide.html
         \\  ss init slides
         \\  ss doctor --project slides
         \\  ss watch check slide.ss
-        \\  ss watch render slide.ss out.pdf
+        \\  ss watch render slide.ss slide.pdf
         \\  ss cache clear
         \\  ss cache stats
         \\  zig build run -- check slide.ss
-        \\  zig build run -- render slide.ss out.pdf
+        \\  zig build run -- render slide.ss slide.pdf
         \\
     , .{});
+}
+
+fn usageFor(command: []const u8) !void {
+    if (std.mem.eql(u8, command, "check")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss check [input.ss] [--project FILE_OR_DIR] [--asset-base-dir DIR]
+            \\
+            \\Parse, load modules, type-check, evaluate, and solve layout.
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "dump")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss dump [input.ss] [output.json]
+            \\  ss dump [input.ss] --output output.json
+            \\
+            \\Write compiler IR JSON for tooling and debugging.
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "render")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss render [input.ss] [output]
+            \\  ss render [input.ss] --output output --format pdf|html
+            \\
+            \\Render a deck as PDF or static HTML. Without --format, .html and .htm outputs select HTML;
+            \\other outputs select PDF. Without an output path, ss writes input.pdf or input.html.
+            \\
+            \\Examples:
+            \\  ss render slide.ss slide.pdf
+            \\  ss render slide.ss slide.html
+            \\  ss render slide.ss --format html
+            \\  ss render --project . --output slide.pdf
+            \\  ss render --project . --format html --output slide.html
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "watch")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss watch check [input.ss] [--interval-ms N]
+            \\  ss watch render [input.ss] [output] [--format pdf|html] [--interval-ms N]
+            \\
+            \\Poll project inputs and rerun check or render after changes.
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "init")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss init [dir] [--entry FILE] [--force]
+            \\
+            \\Create an ss.toml and a starter slide deck.
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "doctor")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss doctor [input.ss] [--project FILE_OR_DIR] [--asset-base-dir DIR] [--strict]
+            \\
+            \\Check project discovery and external render tools.
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "cache")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss cache stats
+            \\  ss cache clear
+            \\
+            \\Inspect or clear the managed render cache under .ss-cache/render.
+            \\
+        , .{});
+        return;
+    }
+    if (std.mem.eql(u8, command, "lsp")) {
+        std.debug.print(
+            \\Usage:
+            \\  ss lsp
+            \\
+            \\Run the ss language server over stdio.
+            \\
+        , .{});
+        return;
+    }
+    return failUsage("unknown help topic: {s}", .{command});
 }
 
 fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
@@ -130,7 +217,44 @@ const CommandOptions = struct {
     asset_base_dir: ?[]const u8 = null,
     project_path: ?[]const u8 = null,
     cache_id: ?[]const u8 = null,
+    render_format: ?app.RenderFormat = null,
     interval_ms: u64 = 500,
+};
+
+const CommandMode = enum {
+    check,
+    dump,
+    render,
+    watch_check,
+    watch_render,
+
+    fn allowsOutput(self: CommandMode) bool {
+        return switch (self) {
+            .dump, .render, .watch_render => true,
+            .check, .watch_check => false,
+        };
+    }
+
+    fn allowsRenderFormat(self: CommandMode) bool {
+        return switch (self) {
+            .render, .watch_render => true,
+            .check, .dump, .watch_check => false,
+        };
+    }
+
+    fn allowsCacheId(self: CommandMode) bool {
+        return switch (self) {
+            .render, .watch_render => true,
+            .check, .dump, .watch_check => false,
+        };
+    }
+
+    fn allowsInterval(self: CommandMode) bool {
+        return switch (self) {
+            .watch_check, .watch_render => true,
+            .check, .dump, .render => false,
+        };
+    }
 };
 
 const InitOptions = struct {
@@ -146,7 +270,7 @@ const DoctorOptions = struct {
     strict: bool = false,
 };
 
-fn parseCommandOptions(args: []const []const u8) !CommandOptions {
+fn parseCommandOptions(args: []const []const u8, mode: CommandMode) !CommandOptions {
     var options = CommandOptions{};
     var positional_index: usize = 0;
     var i: usize = 0;
@@ -165,6 +289,7 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             continue;
         }
         if (std.mem.eql(u8, arg, "--output")) {
+            if (!mode.allowsOutput()) return failUsage("--output is not valid for this command", .{});
             if (i + 1 >= args.len) return failUsage("missing value for --output", .{});
             if (options.output_path != null) return failUsage("output path specified more than once", .{});
             options.output_path = args[i + 1];
@@ -172,12 +297,22 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             continue;
         }
         if (std.mem.eql(u8, arg, "--cache-id")) {
+            if (!mode.allowsCacheId()) return failUsage("--cache-id is only valid for render commands", .{});
             if (i + 1 >= args.len) return failUsage("missing value for --cache-id", .{});
             options.cache_id = args[i + 1];
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--format")) {
+            if (!mode.allowsRenderFormat()) return failUsage("--format is only valid for render commands", .{});
+            if (i + 1 >= args.len) return failUsage("missing value for --format", .{});
+            if (options.render_format != null) return failUsage("render format specified more than once", .{});
+            options.render_format = try parseRenderFormat(args[i + 1]);
+            i += 1;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--interval-ms")) {
+            if (!mode.allowsInterval()) return failUsage("--interval-ms is only valid for watch commands", .{});
             if (i + 1 >= args.len) return failUsage("missing value for --interval-ms", .{});
             options.interval_ms = std.fmt.parseUnsigned(u64, args[i + 1], 10) catch {
                 return failUsage("invalid --interval-ms value: {s}", .{args[i + 1]});
@@ -190,6 +325,7 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         switch (positional_index) {
             0 => options.input_path = arg,
             1 => {
+                if (!mode.allowsOutput()) return failUsage("too many arguments: {s}", .{arg});
                 if (options.output_path != null) return failUsage("output path specified more than once", .{});
                 options.output_path = arg;
             },
@@ -198,6 +334,12 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         positional_index += 1;
     }
     return options;
+}
+
+fn parseRenderFormat(value: []const u8) !app.RenderFormat {
+    if (std.mem.eql(u8, value, "pdf")) return .pdf;
+    if (std.mem.eql(u8, value, "html")) return .html;
+    return failUsage("unknown render format: {s}", .{value});
 }
 
 fn parseInitOptions(args: []const []const u8) !InitOptions {
@@ -281,7 +423,7 @@ fn starterSlideTemplate() []const u8 {
     \\let title = head! "First slide"
     \\let body = text! <<
     \\- Edit slide.ss.
-    \\- Run `ss render --project . --output deck.pdf`.
+    \\- Run `ss render --project . --output slide.pdf`.
     \\>>
     \\
     \\~ body.top == title.bottom - 32
@@ -329,7 +471,7 @@ fn initProject(io: std.Io, allocator: std.mem.Allocator, options: InitOptions) !
     std.debug.print("created ss project: {s}\n", .{options.dir});
     std.debug.print("  {s}\n", .{project_path});
     std.debug.print("  {s}\n", .{entry_path});
-    std.debug.print("\nnext:\n  ss render --project {s} --output deck.pdf\n", .{options.dir});
+    std.debug.print("\nnext:\n  ss render --project {s} --output slide.pdf\n", .{options.dir});
 }
 
 fn relativePathEscapesRoot(path: []const u8) bool {
@@ -561,8 +703,10 @@ fn runResolvedWatch(
     options: CommandOptions,
     resolved: *const project.Resolved,
 ) !void {
+    const render_format = resolveRenderFormat(options);
+    try validateRenderOptionCombination(render_format, options);
     const output_path = if (mode == .render)
-        options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
+        options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, renderExtension(render_format))
     else
         options.output_path;
     if (output_path) |path| try validateOutputParentOrCliError(io, path);
@@ -572,9 +716,32 @@ fn runResolvedWatch(
         .asset_base_dir = resolved.asset_base_dir,
         .project_file = resolved.project_file,
         .cache_id = options.cache_id,
+        .render_format = render_format,
         .highlight_languages = resolved.highlight.languages,
         .interval_ms = options.interval_ms,
     });
+}
+
+fn resolveRenderFormat(options: CommandOptions) app.RenderFormat {
+    if (options.render_format) |format| return format;
+    if (options.output_path) |output_path| {
+        const ext = std.fs.path.extension(output_path);
+        if (std.ascii.eqlIgnoreCase(ext, ".html") or std.ascii.eqlIgnoreCase(ext, ".htm")) return .html;
+    }
+    return .pdf;
+}
+
+fn validateRenderOptionCombination(format: app.RenderFormat, options: CommandOptions) !void {
+    if (format == .html and options.cache_id != null) {
+        return failUsage("--cache-id is only valid for PDF render output", .{});
+    }
+}
+
+fn renderExtension(format: app.RenderFormat) []const u8 {
+    return switch (format) {
+        .pdf => "pdf",
+        .html => "html",
+    };
 }
 
 fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
@@ -604,16 +771,24 @@ fn run(init: std.process.Init) !void {
 
     const cmd = args[1];
     if (std.mem.eql(u8, cmd, "help")) {
+        if (args.len >= 3) {
+            try usageFor(args[2]);
+            return;
+        }
         usage();
         return;
     }
-    if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V") or std.mem.eql(u8, cmd, "version")) {
+    if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V")) {
         version();
         return;
     }
 
     if (std.mem.eql(u8, cmd, "check")) {
-        const options = try parseCommandOptions(args[2..]);
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("check");
+            return;
+        }
+        const options = try parseCommandOptions(args[2..], .check);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         try app.checkFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir);
@@ -621,7 +796,11 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "dump")) {
-        const options = try parseCommandOptions(args[2..]);
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("dump");
+            return;
+        }
+        const options = try parseCommandOptions(args[2..], .dump);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
@@ -636,38 +815,61 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "render")) {
-        const options = try parseCommandOptions(args[2..]);
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("render");
+            return;
+        }
+        const options = try parseCommandOptions(args[2..], .render);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
-        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
+        const render_format = resolveRenderFormat(options);
+        try validateRenderOptionCombination(render_format, options);
+        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, renderExtension(render_format));
         try validateOutputParentOrCliError(io, output_path);
         var progress = utils.progress.Progress.init(8);
         const render_options = app.RenderOptions{
+            .format = render_format,
             .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
-        try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
+        try app.writeRenderFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "init")) {
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("init");
+            return;
+        }
         const options = try parseInitOptions(args[2..]);
         try initProject(io, allocator, options);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "doctor")) {
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("doctor");
+            return;
+        }
         const options = try parseDoctorOptions(args[2..]);
         try runDoctor(io, allocator, environ, options);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "lsp")) {
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("lsp");
+            return;
+        }
         try lsp.run(io, std.heap.smp_allocator);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "watch")) {
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("watch");
+            return;
+        }
         if (args.len < 3) {
             return failUsage("missing watch mode", .{});
         }
@@ -678,12 +880,16 @@ fn run(init: std.process.Init) !void {
         else {
             return failUsage("unknown watch mode: {s}", .{args[2]});
         };
-        const options = try parseCommandOptions(args[3..]);
+        const options = try parseCommandOptions(args[3..], if (mode == .render) .watch_render else .watch_check);
         try runWatchCommand(io, allocator, mode, options);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "cache")) {
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--help")) {
+            try usageFor("cache");
+            return;
+        }
         if (args.len == 3 and std.mem.eql(u8, args[2], "clear")) {
             utils.render_cache.clear(io, allocator) catch |err| switch (err) {
                 error.ActiveRenderCacheLease => return failCli("render cache is currently in use", .{}),
