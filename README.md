@@ -59,26 +59,33 @@ In many slide description languages, defining something like a page number view
 inside the language itself is hard. The computation has to inspect the
 whole document after pages and objects have been created.
 
-The standard library's page number helper is written in ss and uses that
-document-wide view of the deck. A deck can request it like this:
+A page number helper can be written in ss and uses that
+document-wide view of the deck like this:
 
 ```ss
 import std:themes/default as *
 
-page page1
-text!("This is page 1.")
-end
-
-page page2
-text!("This is page 2.")
+fn add_pageno!() -> Void
+  foreach(
+    pages(docctx()),
+    (p: Page) |->  place_on!(p, text(str(page_index(p))))
+  )
 end
 
 document
-pagenos!()
+add_pageno!()
+end
+
+page page1
+text! "This is page 1."
+end
+
+page page2
+text! "This is page 2."
 end
 ```
 
-ss analyzes dependencies across the whole program.
+ss-compiler analyzes dependencies across the whole program.
 This enables ss to infer that `pagenos!()` depends on the page list,
 so the function is evaluated only after the pages become available.
 
@@ -136,16 +143,17 @@ Create `slide.ss`:
 ```ss
 import std:themes/default as *
 
+document
+vflow_doc(LayoutPolicy.center)
+pagenos!()
+end
+
 page title
-cover!(
-  "Hello, ss",
-  "Write slides as programs.",
-  "v0.5.3"
-)
+h1! "Hello, ss!"
 end
 
 page body
-let title = head!("Why ss?")
+let title = head! "Why ss?"
 let body = text! <<
 - Components are ordinary definitions.
 - Layout can be constrained when needed.
@@ -153,10 +161,6 @@ let body = text! <<
 >>
 
 ~ body.top == title.bottom - 36
-end
-
-document
-pagenos!()
 end
 ```
 
@@ -377,21 +381,3 @@ The standalone grammar package lives under `editor/tree-sitter-ss/`.
 Contributions to ss are very welcome!
 
 If you want to contribute, please open an issue or a pull request. For major changes, please open an issue first to discuss what you would like to change.
-
-
-## Roadmap
-
-- [ ] Installation
-  - [ ] apt?
-  - [ ] Nix?
-- [ ] Registry
-  - [ ] Host Registry
-  - [ ] Theme Store (with Preview)
-  - [ ] Component Store (with Preview)
-- [ ] GUI
-  - [ ] Edit location in GUI
-  - [ ] Reflect GUI Edit to Source
-  - [ ] Editor for ss
-- [ ] More Target
-  - [ ] PPTX
-- [ ] Documentation
