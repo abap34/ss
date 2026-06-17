@@ -10,7 +10,7 @@ They intentionally assert:
 - IR ownership and graph operations used across compiler stages;
 - page-local layout graph semantics, constraint classification, and axis state
   reconciliation;
-- smoke-check acceptance for stdlib, themes, and demo decks through
+- smoke-check acceptance for stdlib, themes, and fixture projects through
   `zig build test`.
 - focused LSP editor regressions through `tests/lsp_*_runtime_spec.mjs`, also
   wired into `zig build test`.

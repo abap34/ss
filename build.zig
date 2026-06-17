@@ -40,7 +40,6 @@ pub fn build(b: *std.Build) void {
     const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
-
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
@@ -116,6 +115,7 @@ fn createCliModule(ctx: BuildContext, modules: ProjectModules, build_options: *S
     const module = createCommonModule(ctx, "src/main.zig", modules, true);
     module.addOptions("build_options", build_options);
     addNativePdfHeadersAndLibraries(ctx.b, module);
+    addBuiltinHighlightParser(ctx.b, module);
     return module;
 }
 
@@ -194,7 +194,9 @@ fn addTestStep(
         import("compiler", compiler_mod),
     }, true);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
+    watch_mod.addOptions("build_options", build_options);
     addNativePdfHeadersAndLibraries(b, watch_mod);
+    addBuiltinHighlightParser(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch_spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
@@ -343,6 +345,9 @@ fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
     });
+}
+
+fn addBuiltinHighlightParser(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("editor/tree-sitter-ss/src/parser.c"),
     });
