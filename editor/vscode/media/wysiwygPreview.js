@@ -22,6 +22,10 @@
   let useFitWidth = true;
   let scale = 1;
   let lastRenderedScale = 1;
+  let displayPagesByPageId = new Map();
+  let displayPagesByIndex = new Map();
+  let objectsByPageId = new Map();
+  let resourcesById = new Map();
 
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -30,6 +34,7 @@
     }
     if (message.type === "snapshot") {
       snapshot = message.snapshot;
+      rebuildSnapshotIndexes();
       const displayPages = snapshot.display && snapshot.display.pages ? snapshot.display.pages.length : 0;
       const displayItems = snapshot.display && snapshot.display.pages ? snapshot.display.pages.reduce((sum, page) => sum + (page.items || []).length, 0) : 0;
       reportLog("snapshot pages=" + (snapshot.pages || []).length + " objects=" + (snapshot.objects || []).length + " displayPages=" + displayPages + " displayItems=" + displayItems + " diagnostics=" + (snapshot.diagnostics || []).length);
@@ -105,6 +110,33 @@
     } catch (error) {
       reportError("render failed: " + errorMessage(error));
       setStatus("Failed to render preview");
+    }
+  }
+
+  function rebuildSnapshotIndexes() {
+    displayPagesByPageId = new Map();
+    displayPagesByIndex = new Map();
+    objectsByPageId = new Map();
+    resourcesById = new Map();
+
+    const displayPages = snapshot && snapshot.display ? snapshot.display.pages || [] : [];
+    for (const page of displayPages) {
+      displayPagesByPageId.set(page.pageId, page);
+      displayPagesByIndex.set(page.index, page);
+    }
+
+    for (const object of snapshot.objects || []) {
+      const pageObjects = objectsByPageId.get(object.pageId);
+      if (pageObjects) {
+        pageObjects.push(object);
+      } else {
+        objectsByPageId.set(object.pageId, [object]);
+      }
+    }
+
+    const resources = snapshot && snapshot.display ? snapshot.display.resources || [] : [];
+    for (const resource of resources) {
+      resourcesById.set(resource.id, resource);
     }
   }
 
@@ -440,17 +472,15 @@
   }
 
   function displayPageFor(page) {
-    const displayPages = snapshot && snapshot.display ? snapshot.display.pages || [] : [];
-    return displayPages.find((candidate) => candidate.pageId === page.id || candidate.index === page.index);
+    return displayPagesByPageId.get(page.id) || displayPagesByIndex.get(page.index);
   }
 
   function objectsForPage(pageId) {
-    return (snapshot.objects || []).filter((object) => object.pageId === pageId);
+    return objectsByPageId.get(pageId) || [];
   }
 
   function resourceById(id) {
-    const resources = snapshot && snapshot.display ? snapshot.display.resources || [] : [];
-    return resources.find((resource) => resource.id === id);
+    return resourcesById.get(id);
   }
 
   function svgPoint(svg, event) {
