@@ -3,10 +3,12 @@ import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace
 import { PageGuideDecorations } from "./pageGuide";
 import { LivePreview } from "./preview";
 import { projectSettings } from "./projectConfig";
+import { WysiwygPreview } from "./wysiwygPreview";
 
 let client: LanguageClient | undefined;
 let pageGuide: PageGuideDecorations | undefined;
 let preview: LivePreview | undefined;
+let wysiwygPreview: WysiwygPreview | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -14,10 +16,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   outputChannel = output;
   pageGuide = new PageGuideDecorations();
   preview = new LivePreview(context, output, () => client);
+  wysiwygPreview = new WysiwygPreview(context, output, () => client);
 
-  context.subscriptions.push(output, pageGuide, preview);
+  context.subscriptions.push(output, pageGuide, preview, wysiwygPreview);
   context.subscriptions.push(vscode.commands.registerCommand("ss.preview.live", () => {
     preview?.open(vscode.window.activeTextEditor?.document);
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("ss.preview.wysiwyg", () => {
+    wysiwygPreview?.open(vscode.window.activeTextEditor?.document);
   }));
   context.subscriptions.push(vscode.commands.registerCommand("ss.checkCurrentFile", async () => {
     const document = vscode.window.activeTextEditor?.document;
@@ -43,6 +49,8 @@ export async function deactivate(): Promise<void> {
   pageGuide = undefined;
   preview?.dispose();
   preview = undefined;
+  wysiwygPreview?.dispose();
+  wysiwygPreview = undefined;
   await stopLanguageClient();
   outputChannel = undefined;
 }

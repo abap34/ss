@@ -28,6 +28,7 @@
   "activationEvents": [
     "onLanguage:ss-slide",
     "onCommand:ss.preview.live",
+    "onCommand:ss.preview.wysiwyg",
     "onCommand:ss.checkCurrentFile"
   ],
   "categories": [
@@ -72,6 +73,10 @@
         "title": "ss: Open Live Preview"
       },
       {
+        "command": "ss.preview.wysiwyg",
+        "title": "ss: Open WYSIWYG Preview"
+      },
+      {
         "command": "ss.checkCurrentFile",
         "title": "ss: Check Current File"
       }
@@ -82,11 +87,19 @@
           "command": "ss.preview.live",
           "when": "resourceLangId == ss-slide",
           "group": "navigation"
+        },
+        {
+          "command": "ss.preview.wysiwyg",
+          "when": "resourceLangId == ss-slide",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
         {
           "command": "ss.preview.live"
+        },
+        {
+          "command": "ss.preview.wysiwyg"
         },
         {
           "command": "ss.checkCurrentFile"
