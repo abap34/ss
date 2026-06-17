@@ -162,6 +162,60 @@ button:hover {
   vector-effect: non-scaling-stroke;
 }
 
+.relations {
+  pointer-events: none;
+}
+
+.relationLine {
+  stroke: #7c3aed;
+  stroke-linecap: round;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.relation.nodeSource .relationLine {
+  stroke: #f59e0b;
+}
+
+.relation.fallback .relationLine {
+  stroke-dasharray: 6 4;
+}
+
+.relation.fallback.pageSource .relationLine {
+  stroke: #7c3aed;
+}
+
+.relation.fallback.nodeSource .relationLine {
+  stroke: #f59e0b;
+  stroke-dasharray: 6 4;
+}
+
+.anchorMarker circle {
+  fill: #ffffff;
+  stroke: #7c3aed;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.relation.nodeSource .anchorMarker circle {
+  stroke: #f59e0b;
+}
+
+.anchorMarker text,
+.relationLabel {
+  fill: #111827;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: #ffffff;
+  stroke-width: 3px;
+  user-select: none;
+}
+
+.relationLabel {
+  font-size: 12px;
+}
+
 .objectLabel {
   fill: #0969da;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -185,6 +239,11 @@ button:hover {
 .object.dragging .objectRect {
   fill: rgb(47 129 247 / 16%);
   stroke: #0969da;
+}
+
+.object.selected .objectRect {
+  fill: rgb(124 58 237 / 12%);
+  stroke: #7c3aed;
 }
 
 .empty {

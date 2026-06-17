@@ -25,7 +25,10 @@
   let displayPagesByPageId = new Map();
   let displayPagesByIndex = new Map();
   let objectsByPageId = new Map();
+  let objectsById = new Map();
   let resourcesById = new Map();
+  let relationsByPageId = new Map();
+  let selectedObjectId = undefined;
 
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -117,7 +120,9 @@
     displayPagesByPageId = new Map();
     displayPagesByIndex = new Map();
     objectsByPageId = new Map();
+    objectsById = new Map();
     resourcesById = new Map();
+    relationsByPageId = new Map();
 
     const displayPages = snapshot && snapshot.display ? snapshot.display.pages || [] : [];
     for (const page of displayPages) {
@@ -126,6 +131,7 @@
     }
 
     for (const object of snapshot.objects || []) {
+      objectsById.set(object.id, object);
       const pageObjects = objectsByPageId.get(object.pageId);
       if (pageObjects) {
         pageObjects.push(object);
@@ -137,6 +143,15 @@
     const resources = snapshot && snapshot.display ? snapshot.display.resources || [] : [];
     for (const resource of resources) {
       resourcesById.set(resource.id, resource);
+    }
+
+    for (const relation of snapshot.relations || []) {
+      const pageRelations = relationsByPageId.get(relation.pageId);
+      if (pageRelations) {
+        pageRelations.push(relation);
+      } else {
+        relationsByPageId.set(relation.pageId, [relation]);
+      }
     }
   }
 
@@ -182,7 +197,12 @@
     overlaySvg.dataset.pageId = String(page.id);
     surface.appendChild(overlaySvg);
 
-    for (const object of objectsForPage(page.id)) {
+    const relationsGroup = document.createElementNS(svgNamespace, "g");
+    relationsGroup.classList.add("relations");
+    overlaySvg.appendChild(relationsGroup);
+    renderRelations(overlaySvg, page.id);
+
+    for (const object of objectsForPage(page.id).slice().sort(objectHitOrder)) {
       overlaySvg.appendChild(renderObject(overlaySvg, object));
     }
 
@@ -339,10 +359,16 @@
   function renderObject(svg, object) {
     const group = document.createElementNS(svgNamespace, "g");
     group.classList.add("object");
+    if (selectedObjectId === object.id) {
+      group.classList.add("selected");
+    }
     if (object.interaction && object.interaction.movable) {
       group.classList.add("movable");
     } else {
       group.classList.add("locked");
+    }
+    if (isGroupObject(object)) {
+      group.classList.add("groupObject");
     }
     group.dataset.objectId = String(object.id);
 
@@ -368,11 +394,13 @@
   }
 
   function beginDrag(event, svg, object, group) {
+    event.preventDefault();
+    selectObject(svg, object);
     if (!object.interaction || !object.interaction.movable) {
       setStatus(object.interaction && object.interaction.message ? object.interaction.message : "");
+      reportLog("select locked node=" + object.id);
       return;
     }
-    event.preventDefault();
     group.setPointerCapture(event.pointerId);
     const point = svgPoint(svg, event);
     drag = {
@@ -383,8 +411,9 @@
       startPoint: point,
       initialFrame: { ...object.frame },
       currentFrame: { ...object.frame },
+      relative: event.shiftKey,
     };
-    reportLog("drag start node=" + object.id + " x=" + object.frame.x.toFixed(1) + " y=" + object.frame.y.toFixed(1));
+    reportLog("drag start node=" + object.id + " mode=" + (drag.relative ? "relative" : "absolute") + " x=" + object.frame.x.toFixed(1) + " y=" + object.frame.y.toFixed(1));
     group.classList.add("dragging");
     group.addEventListener("pointermove", updateDrag);
     group.addEventListener("pointerup", endDrag);
@@ -398,6 +427,7 @@
     const point = svgPoint(drag.svg, event);
     const dx = point.x - drag.startPoint.x;
     const dy = point.y - drag.startPoint.y;
+    drag.relative = event.shiftKey;
     drag.currentFrame = {
       ...drag.initialFrame,
       x: drag.initialFrame.x + dx,
@@ -419,7 +449,8 @@
       return;
     }
     const object = completed.object;
-    reportLog("drag end node=" + object.id + " snapshot=" + snapshot.snapshotId + " version=" + snapshot.documentVersion + " dx=" + dx.toFixed(1) + " dy=" + dy.toFixed(1) + " x=" + completed.currentFrame.x.toFixed(1) + " y=" + completed.currentFrame.y.toFixed(1));
+    const mode = event.shiftKey || completed.relative ? "relative" : "absolute";
+    reportLog("drag end node=" + object.id + " mode=" + mode + " snapshot=" + snapshot.snapshotId + " version=" + snapshot.documentVersion + " dx=" + dx.toFixed(1) + " dy=" + dy.toFixed(1) + " x=" + completed.currentFrame.x.toFixed(1) + " y=" + completed.currentFrame.y.toFixed(1));
     vscode.postMessage({
       type: "gesture",
       snapshotId: snapshot.snapshotId,
@@ -433,6 +464,7 @@
       },
       gesture: {
         kind: "translate",
+        mode,
         coordinateSpace: "page",
         fromBounds: completed.initialFrame,
         toBounds: completed.currentFrame,
@@ -471,12 +503,158 @@
     label.setAttribute("y", String(Math.max(12, frame.y + 14)));
   }
 
+  function selectObject(svg, object) {
+    if (selectedObjectId === object.id) {
+      updateSelectionClasses(svg);
+      renderRelations(svg, object.pageId);
+      return;
+    }
+    selectedObjectId = object.id;
+    updateSelectionClasses(svg);
+    renderRelations(svg, object.pageId);
+  }
+
+  function updateSelectionClasses(svg) {
+    for (const node of svg.querySelectorAll(".object")) {
+      node.classList.toggle("selected", Number.parseInt(node.dataset.objectId || "0", 10) === selectedObjectId);
+    }
+  }
+
+  function renderRelations(svg, pageId) {
+    const group = svg.querySelector(".relations");
+    if (!group) {
+      return;
+    }
+    group.replaceChildren();
+    if (selectedObjectId === undefined) {
+      return;
+    }
+    const page = (snapshot.pages || []).find((candidate) => candidate.id === pageId);
+    if (!page) {
+      return;
+    }
+    for (const relation of relationsForPage(pageId)) {
+      if (relation.targetNode !== selectedObjectId && relation.sourceNode !== selectedObjectId) {
+        continue;
+      }
+      const element = renderRelation(page, relation);
+      if (element) {
+        group.appendChild(element);
+      }
+    }
+  }
+
+  function renderRelation(page, relation) {
+    const target = objectById(relation.targetNode);
+    if (!target) {
+      return undefined;
+    }
+    const targetPoint = anchorPoint(target.frame, relation.targetAnchor, page.frame, undefined);
+    const sourcePoint = relation.sourceKind === "page"
+      ? anchorPoint(page.frame, relation.sourceAnchor, page.frame, targetPoint)
+      : anchorPointForObject(relation.sourceNode, relation.sourceAnchor, page.frame);
+    if (!sourcePoint || !targetPoint) {
+      return undefined;
+    }
+
+    const group = document.createElementNS(svgNamespace, "g");
+    group.classList.add("relation");
+    group.classList.add(relation.kind === "fallback" ? "fallback" : "explicit");
+    group.classList.add(relation.sourceKind === "page" ? "pageSource" : "nodeSource");
+    group.classList.add(relation.axis === "vertical" ? "vertical" : "horizontal");
+
+    const line = document.createElementNS(svgNamespace, "line");
+    line.classList.add("relationLine");
+    line.setAttribute("x1", String(sourcePoint.x));
+    line.setAttribute("y1", String(sourcePoint.y));
+    line.setAttribute("x2", String(targetPoint.x));
+    line.setAttribute("y2", String(targetPoint.y));
+    group.appendChild(line);
+
+    group.appendChild(anchorMarker(sourcePoint, relation.sourceAnchor, "source"));
+    group.appendChild(anchorMarker(targetPoint, relation.targetAnchor, "target"));
+
+    const label = document.createElementNS(svgNamespace, "text");
+    label.classList.add("relationLabel");
+    label.textContent = relation.targetAnchor;
+    label.setAttribute("x", String((sourcePoint.x + targetPoint.x) / 2 + 4));
+    label.setAttribute("y", String((sourcePoint.y + targetPoint.y) / 2 - 4));
+    group.appendChild(label);
+    return group;
+  }
+
+  function anchorMarker(point, anchor, role) {
+    const group = document.createElementNS(svgNamespace, "g");
+    group.classList.add("anchorMarker");
+    group.classList.add(role);
+    const dot = document.createElementNS(svgNamespace, "circle");
+    dot.setAttribute("cx", String(point.x));
+    dot.setAttribute("cy", String(point.y));
+    dot.setAttribute("r", "3.5");
+    group.appendChild(dot);
+
+    const text = document.createElementNS(svgNamespace, "text");
+    text.textContent = anchor;
+    text.setAttribute("x", String(point.x + 5));
+    text.setAttribute("y", String(point.y - 5));
+    group.appendChild(text);
+    return group;
+  }
+
+  function anchorPointForObject(nodeId, anchor, pageFrame) {
+    const object = objectById(nodeId);
+    return object ? anchorPoint(object.frame, anchor, pageFrame, undefined) : undefined;
+  }
+
+  function anchorPoint(frame, anchor, pageFrame, reference) {
+    if (anchor === "left") {
+      return { x: frame.x, y: reference ? reference.y : frame.y + frame.height / 2 };
+    }
+    if (anchor === "right") {
+      return { x: frame.x + frame.width, y: reference ? reference.y : frame.y + frame.height / 2 };
+    }
+    if (anchor === "center_x") {
+      return { x: frame.x + frame.width / 2, y: reference ? reference.y : frame.y + frame.height / 2 };
+    }
+    if (anchor === "top") {
+      return { x: reference ? reference.x : frame.x + frame.width / 2, y: frame.y };
+    }
+    if (anchor === "bottom") {
+      return { x: reference ? reference.x : frame.x + frame.width / 2, y: frame.y + frame.height };
+    }
+    if (anchor === "center_y") {
+      return { x: reference ? reference.x : frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
+    }
+    return { x: pageFrame.width / 2, y: pageFrame.height / 2 };
+  }
+
   function displayPageFor(page) {
     return displayPagesByPageId.get(page.id) || displayPagesByIndex.get(page.index);
   }
 
   function objectsForPage(pageId) {
     return objectsByPageId.get(pageId) || [];
+  }
+
+  function objectHitOrder(a, b) {
+    const aGroup = isGroupObject(a);
+    const bGroup = isGroupObject(b);
+    if (aGroup !== bGroup) {
+      return aGroup ? -1 : 1;
+    }
+    return 0;
+  }
+
+  function isGroupObject(object) {
+    return object && object.role === "group";
+  }
+
+  function objectById(id) {
+    return objectsById.get(id);
+  }
+
+  function relationsForPage(pageId) {
+    return relationsByPageId.get(pageId) || [];
   }
 
   function resourceById(id) {

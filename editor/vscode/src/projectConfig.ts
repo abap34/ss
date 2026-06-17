@@ -8,6 +8,15 @@ export interface ProjectSettings {
   pageGuide: PageGuideSettings;
 }
 
+export interface ProjectEntry {
+  projectFile: string;
+  entryUri: vscode.Uri;
+}
+
+export type ProjectEntryResolution =
+  { ok: true; entry: ProjectEntry } |
+  { ok: false; message: string };
+
 export interface LspSettings {
   enabled: boolean;
   debounceMs: number;
@@ -136,6 +145,37 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
       boundaryBackground: boolValue(table, "editor.page_guide", "boundary_background", defaultSettings.pageGuide.boundaryBackground),
       gutterIcon: boolValue(table, "editor.page_guide", "gutter_icon", defaultSettings.pageGuide.gutterIcon),
       overviewRuler: boolValue(table, "editor.page_guide", "overview_ruler", defaultSettings.pageGuide.overviewRuler),
+    },
+  };
+}
+
+export function projectEntry(uri: vscode.Uri | undefined): ProjectEntry | undefined {
+  const result = resolveProjectEntry(uri);
+  return result.ok ? result.entry : undefined;
+}
+
+export function resolveProjectEntry(uri: vscode.Uri | undefined): ProjectEntryResolution {
+  const projectFile = findProjectFile(uri);
+  if (!projectFile) {
+    return { ok: false, message: "ss.toml was not found." };
+  }
+  const source = readProjectFile(projectFile);
+  if (source === undefined) {
+    return { ok: false, message: `Failed to read ${projectFile}.` };
+  }
+  const entry = stringValue(parseTomlSubset(source), "project", "entry", "");
+  if (!entry) {
+    return { ok: false, message: `${projectFile} does not define [project].entry.` };
+  }
+  const entryPath = path.isAbsolute(entry) ? entry : path.resolve(path.dirname(projectFile), entry);
+  if (!fs.existsSync(entryPath)) {
+    return { ok: false, message: `[project].entry does not exist: ${entryPath}` };
+  }
+  return {
+    ok: true,
+    entry: {
+      projectFile,
+      entryUri: vscode.Uri.file(entryPath),
     },
   };
 }

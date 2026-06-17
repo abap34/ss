@@ -35,6 +35,7 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try dump_render_doc.writeField(allocator, &root, ir);
     try dump_layout.writeContainsField(&root, &ir.contains);
     try dump_layout.writeConstraintsField(&root, ir.constraints.items);
+    try dump_layout.writeLayoutRelationsField(allocator, &root, ir);
     try writeDiagnosticsField(&root, ir.diagnostics.items);
 
     try root.end();

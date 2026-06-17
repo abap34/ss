@@ -8,6 +8,7 @@ export interface PreviewSnapshot {
   coordinateSpace: CoordinateSpace;
   pages: PreviewPage[];
   objects: PreviewObject[];
+  relations: PreviewRelation[];
   display: HtmlDisplay;
   diagnostics: unknown[];
 }
@@ -117,6 +118,7 @@ export interface PreviewObject {
   pageId: number;
   kind: string;
   label: string;
+  role?: string;
   frame: PreviewFrame;
   source?: PreviewSource | null;
   interaction: {
@@ -125,6 +127,20 @@ export interface PreviewObject {
     message?: string | null;
   };
 }
+
+export interface PreviewRelation {
+  kind: "explicit" | "fallback" | string;
+  pageId: number;
+  axis: "horizontal" | "vertical" | string;
+  targetNode: number;
+  targetAnchor: PreviewAnchor;
+  sourceKind: "page" | "node" | string;
+  sourceNode: number | null;
+  sourceAnchor: PreviewAnchor;
+  offset: number;
+}
+
+export type PreviewAnchor = "left" | "right" | "top" | "bottom" | "center_x" | "center_y" | string;
 
 export interface PreviewSource {
   uri: string;
