@@ -11,6 +11,7 @@ const BuildContext = struct {
 };
 
 const ProjectModules = struct {
+    cache: *Module,
     utils: *Module,
     model: *Module,
     language_type: *Module,
@@ -69,7 +70,10 @@ pub fn build(b: *std.Build) void {
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options) ProjectModules {
-    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{}, null);
+    const cache_mod = createModule(ctx, "src/cache/root.zig", &.{}, true);
+    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{
+        import("cache", cache_mod),
+    }, null);
     const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
     const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
         import("model", model_mod),
@@ -97,6 +101,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     addNativePdfBackend(ctx.b, core_mod);
 
     return .{
+        .cache = cache_mod,
         .utils = utils_mod,
         .model = model_mod,
         .language_type = language_type_mod,
@@ -230,6 +235,7 @@ fn createModule(
 
 fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: ProjectModules, link_libc: ?bool) *Module {
     return createModule(ctx, root_source_file, &.{
+        import("cache", modules.cache),
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
