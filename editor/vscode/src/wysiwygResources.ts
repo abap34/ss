@@ -37,13 +37,16 @@ export function prepareSnapshotForWebview(
   snapshot: PreviewSnapshot,
   allowedRoots: vscode.Uri[],
 ): PreviewSnapshot {
+  const allowedFileRoots = allowedRoots
+    .filter((root) => root.scheme === "file")
+    .map((root) => path.resolve(root.fsPath));
   return {
     ...snapshot,
     display: {
       ...snapshot.display,
       resources: (snapshot.display?.resources ?? []).map((resource) => {
         const uri = vscode.Uri.file(resource.path);
-        if (!isAllowedResource(uri.fsPath, allowedRoots)) {
+        if (!isAllowedResource(uri.fsPath, allowedFileRoots)) {
           return { ...resource };
         }
         return {
@@ -55,13 +58,9 @@ export function prepareSnapshotForWebview(
   };
 }
 
-function isAllowedResource(resourcePath: string, allowedRoots: vscode.Uri[]): boolean {
+function isAllowedResource(resourcePath: string, allowedFileRoots: string[]): boolean {
   const normalized = path.resolve(resourcePath);
-  return allowedRoots.some((root) => {
-    if (root.scheme !== "file") {
-      return false;
-    }
-    const base = path.resolve(root.fsPath);
+  return allowedFileRoots.some((base) => {
     return normalized === base || normalized.startsWith(base + path.sep);
   });
 }
