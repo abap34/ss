@@ -10,7 +10,7 @@ const error_report = utils.err;
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--jobs N] [--cache-id ID]
+        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--cache-id ID]
         \\
         \\Commands:
         \\  help
@@ -45,8 +45,6 @@ fn usage() void {
         \\    Resolve the entrypoint and asset base from ss.toml
         \\  --output FILE
         \\    Write dump/render output to FILE when the input comes from ss.toml
-        \\  --jobs N
-        \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
         \\  --cache-id ID
         \\    Stable render cache identity for snapshot-based render inputs
         \\  --interval-ms N
@@ -131,7 +129,6 @@ const CommandOptions = struct {
     output_path: ?[]const u8 = null,
     asset_base_dir: ?[]const u8 = null,
     project_path: ?[]const u8 = null,
-    jobs: ?usize = null,
     cache_id: ?[]const u8 = null,
     interval_ms: u64 = 500,
 };
@@ -171,15 +168,6 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             if (i + 1 >= args.len) return failUsage("missing value for --output", .{});
             if (options.output_path != null) return failUsage("output path specified more than once", .{});
             options.output_path = args[i + 1];
-            i += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--jobs")) {
-            if (i + 1 >= args.len) return failUsage("missing value for --jobs", .{});
-            options.jobs = std.fmt.parseUnsigned(usize, args[i + 1], 10) catch {
-                return failUsage("invalid --jobs value: {s}", .{args[i + 1]});
-            };
-            if (options.jobs.? == 0) return failUsage("--jobs must be greater than zero", .{});
             i += 1;
             continue;
         }
@@ -583,9 +571,8 @@ fn runResolvedWatch(
         .output_path = output_path,
         .asset_base_dir = resolved.asset_base_dir,
         .project_file = resolved.project_file,
-        .highlight_languages = resolved.highlight.languages,
-        .jobs = options.jobs,
         .cache_id = options.cache_id,
+        .highlight_languages = resolved.highlight.languages,
         .interval_ms = options.interval_ms,
     });
 }
@@ -656,7 +643,6 @@ fn run(init: std.process.Init) !void {
         try validateOutputParentOrCliError(io, output_path);
         var progress = utils.progress.Progress.init(8);
         const render_options = app.RenderOptions{
-            .jobs = options.jobs,
             .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
