@@ -30,6 +30,7 @@ jobs:
             libcairo2-dev \
             librsvg2-dev \
             libpango1.0-dev \
+            libtree-sitter0 \
             pkg-config \
             qpdf \
             xz-utils
