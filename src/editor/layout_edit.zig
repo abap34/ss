@@ -40,6 +40,13 @@ const AnchorLine = struct {
     line: Line,
 };
 
+pub const AnchorRelation = struct {
+    target_anchor: []const u8,
+    source_name: []const u8,
+    source_anchor: []const u8,
+    offset: f64,
+};
+
 pub fn absoluteTopLeft(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -60,9 +67,22 @@ pub fn absoluteTopLeftWithPageIndex(
     left: f64,
     top_from_page_top: f64,
 ) !?Result {
+    const relations = [_]AnchorRelation{
+        .{ .target_anchor = "left", .source_name = "page", .source_anchor = "left", .offset = left },
+        .{ .target_anchor = "top", .source_name = "page", .source_anchor = "top", .offset = -top_from_page_top },
+    };
+    return anchorRelationsWithPageIndex(allocator, source, page_name, page_index, object_name, &relations);
+}
+
+pub fn anchorRelationsWithPageIndex(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    page_name: []const u8,
+    page_index: ?i64,
+    object_name: []const u8,
+    relations: []const AnchorRelation,
+) !?Result {
     const page = findPageBlock(source, page_name, page_index) orelse return null;
-    const left_line = findDirectConstraint(source, page, object_name, "left");
-    const top_line = findDirectConstraint(source, page, object_name, "top");
 
     var edits = std.ArrayList(TextEdit).empty;
     errdefer {
@@ -70,20 +90,45 @@ pub fn absoluteTopLeftWithPageIndex(
         edits.deinit(allocator);
     }
 
-    if (left_line) |line| {
-        try edits.append(allocator, try replaceLineEdit(allocator, line.line, page.indent, object_name, "left", "page.left", .plus, left));
+    var replaced_left = false;
+    var replaced_top = false;
+    var missing = std.ArrayList(AnchorRelation).empty;
+    defer missing.deinit(allocator);
+
+    for (relations) |relation| {
+        const existing_line = findDirectConstraint(source, page, object_name, relation.target_anchor);
+        if (existing_line) |line| {
+            try edits.append(allocator, try replaceLineEdit(
+                allocator,
+                line.line,
+                page.indent,
+                object_name,
+                relation.target_anchor,
+                relation.source_name,
+                relation.source_anchor,
+                relation.offset,
+            ));
+            if (std.mem.eql(u8, relation.target_anchor, "left")) replaced_left = true;
+            if (std.mem.eql(u8, relation.target_anchor, "top")) replaced_top = true;
+        } else {
+            try missing.append(allocator, relation);
+        }
     }
-    if (top_line) |line| {
-        try edits.append(allocator, try replaceLineEdit(allocator, line.line, page.indent, object_name, "top", "page.top", .minus, top_from_page_top));
-    }
-    if (left_line == null or top_line == null) {
+
+    if (missing.items.len != 0) {
         var text = std.ArrayList(u8).empty;
         errdefer text.deinit(allocator);
-        if (left_line == null) {
-            try appendConstraintLine(allocator, &text, page.indent, object_name, "left", "page.left", .plus, left);
-        }
-        if (top_line == null) {
-            try appendConstraintLine(allocator, &text, page.indent, object_name, "top", "page.top", .minus, top_from_page_top);
+        for (missing.items) |relation| {
+            try appendConstraintLine(
+                allocator,
+                &text,
+                page.indent,
+                object_name,
+                relation.target_anchor,
+                relation.source_name,
+                relation.source_anchor,
+                relation.offset,
+            );
         }
         try edits.append(allocator, .{
             .start_line = page.end_line.index,
@@ -96,8 +141,8 @@ pub fn absoluteTopLeftWithPageIndex(
 
     return .{
         .edits = try edits.toOwnedSlice(allocator),
-        .replaced_left = left_line != null,
-        .replaced_top = top_line != null,
+        .replaced_left = replaced_left,
+        .replaced_top = replaced_top,
     };
 }
 
@@ -130,21 +175,19 @@ pub fn applyEdits(allocator: std.mem.Allocator, source: []const u8, edits: []con
     return out.toOwnedSlice(allocator);
 }
 
-const Sign = enum { plus, minus };
-
 fn replaceLineEdit(
     allocator: std.mem.Allocator,
     line: Line,
     indent: []const u8,
     object_name: []const u8,
     target_anchor: []const u8,
+    source_name: []const u8,
     source_anchor: []const u8,
-    sign: Sign,
-    amount: f64,
+    offset: f64,
 ) !TextEdit {
     var text = std.ArrayList(u8).empty;
     errdefer text.deinit(allocator);
-    try appendConstraintLineWithoutTrailingNewline(allocator, &text, indent, object_name, target_anchor, source_anchor, sign, amount);
+    try appendConstraintLineWithoutTrailingNewline(allocator, &text, indent, object_name, target_anchor, source_name, source_anchor, offset);
     return .{
         .start_line = line.index,
         .start_character = 0,
@@ -160,11 +203,11 @@ fn appendConstraintLine(
     indent: []const u8,
     object_name: []const u8,
     target_anchor: []const u8,
+    source_name: []const u8,
     source_anchor: []const u8,
-    sign: Sign,
-    amount: f64,
+    offset: f64,
 ) !void {
-    try appendConstraintLineWithoutTrailingNewline(allocator, out, indent, object_name, target_anchor, source_anchor, sign, amount);
+    try appendConstraintLineWithoutTrailingNewline(allocator, out, indent, object_name, target_anchor, source_name, source_anchor, offset);
     try out.append(allocator, '\n');
 }
 
@@ -174,11 +217,11 @@ fn appendConstraintLineWithoutTrailingNewline(
     indent: []const u8,
     object_name: []const u8,
     target_anchor: []const u8,
+    source_name: []const u8,
     source_anchor: []const u8,
-    sign: Sign,
-    amount: f64,
+    offset: f64,
 ) !void {
-    const number = try formatNumber(allocator, @abs(amount));
+    const number = try formatNumber(allocator, @abs(offset));
     defer allocator.free(number);
     try out.appendSlice(allocator, indent);
     try out.appendSlice(allocator, "~ ");
@@ -186,9 +229,10 @@ fn appendConstraintLineWithoutTrailingNewline(
     try out.append(allocator, '.');
     try out.appendSlice(allocator, target_anchor);
     try out.appendSlice(allocator, " == ");
+    try out.appendSlice(allocator, source_name);
+    try out.append(allocator, '.');
     try out.appendSlice(allocator, source_anchor);
-    const use_minus = (sign == .minus and amount >= 0) or (sign == .plus and amount < 0);
-    try out.appendSlice(allocator, if (use_minus) " - " else " + ");
+    try out.appendSlice(allocator, if (offset < 0) " - " else " + ");
     try out.appendSlice(allocator, number);
 }
 

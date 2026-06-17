@@ -1,13 +1,25 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import {
-  ClientProvider,
   LayoutEditResult,
   PreviewSnapshot,
   ProtocolRange,
   ProtocolWorkspaceEdit,
   WebviewMessage,
 } from "./wysiwygProtocol";
+import {
+  ClientProvider,
+  DependencySession,
+  documentForSession,
+  documentForUri,
+  ignoreGeneratedPath,
+  normalizePath,
+  requestProjectInfo,
+  resolveProjectInfo,
+  sessionDependsOn,
+  updateDependencySession,
+} from "./previewShared";
+import { projectSettings, resolveProjectEntry } from "./projectConfig";
 import { localResourceRoots, localResourceRootsForSnapshot, prepareSnapshotForWebview } from "./wysiwygResources";
 import { errorMessage, logWysiwyg, showWysiwygLog } from "./wysiwygLogging";
 
@@ -21,15 +33,30 @@ export class WysiwygPreview implements vscode.Disposable {
     private readonly clientProvider: ClientProvider,
   ) {
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
-      const key = event.document.uri.toString();
-      const panel = this.panels.get(key);
-      if (event.document.languageId === "ss-slide" && panel) {
-        panel.scheduleRefresh(event.document);
+      if (event.document.languageId === "ss-slide" && projectSettings(event.document.uri).preview.refreshOnEdit) {
+        this.scheduleAffectedDocument(event.document);
+      }
+    }));
+    this.disposables.push(vscode.workspace.onDidSaveTextDocument((document) => {
+      if (document.languageId === "ss-slide" && projectSettings(document.uri).preview.refreshOnSave) {
+        this.scheduleAffectedDocument(document, 0);
       }
     }));
     this.disposables.push(vscode.workspace.onDidCloseTextDocument((document) => {
       this.panels.get(document.uri.toString())?.dispose();
     }));
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*.ss");
+    const projectWatcher = vscode.workspace.createFileSystemWatcher("**/ss.toml");
+    this.disposables.push(
+      watcher,
+      projectWatcher,
+      watcher.onDidChange((uri) => this.scheduleAffectedUri(uri, 0)),
+      watcher.onDidCreate((uri) => this.scheduleAffectedUri(uri, 0)),
+      watcher.onDidDelete((uri) => this.scheduleAffectedUri(uri, 0)),
+      projectWatcher.onDidChange((uri) => this.scheduleProjectConfigChange(uri, 0)),
+      projectWatcher.onDidCreate((uri) => this.scheduleProjectConfigChange(uri, 0)),
+      projectWatcher.onDidDelete((uri) => this.scheduleProjectConfigChange(uri, 0)),
+    );
   }
 
   dispose(): void {
@@ -47,8 +74,15 @@ export class WysiwygPreview implements vscode.Disposable {
   }
 
   private async openAsync(document: vscode.TextDocument | undefined): Promise<void> {
-    if (!document || document.languageId !== "ss-slide" || document.uri.scheme !== "file") {
-      void vscode.window.showWarningMessage("Open an .ss file to start WYSIWYG preview.");
+    const resolved = await this.resolvePreviewDocument(document);
+    if (!resolved.document) {
+      logWysiwyg(this.output, "open failed", resolved.message ?? "WYSIWYG preview could not find an entry document.");
+      void vscode.window.showErrorMessage(resolved.message ?? "WYSIWYG preview could not find an entry document.");
+      return;
+    }
+    document = resolved.document;
+    if (!projectSettings(document.uri).preview.enabled) {
+      void vscode.window.showWarningMessage("ss preview is disabled by ss.toml [editor.preview].enabled.");
       return;
     }
 
@@ -61,21 +95,92 @@ export class WysiwygPreview implements vscode.Disposable {
       return;
     }
 
-    logWysiwyg(this.output, "open", `${document.uri.toString()} version=${document.version}`);
+    logWysiwyg(this.output, "open", `${document.uri.toString()} version=${document.version}${resolved.projectFile ? ` project=${resolved.projectFile}` : ""}`);
     const panel = WysiwygPreviewPanel.create(this.context, this.output, this.clientProvider, document, () => {
       this.panels.delete(key);
     });
     this.panels.set(key, panel);
     panel.refresh(document);
   }
+
+  private async resolvePreviewDocument(document: vscode.TextDocument | undefined): Promise<{ document?: vscode.TextDocument; projectFile?: string; message?: string }> {
+    const project = resolveProjectEntry(document?.uri);
+    const fallbackProject = project.ok ? project : (document ? resolveProjectEntry(undefined) : project);
+    if (fallbackProject.ok) {
+      try {
+        const entryDocument = await vscode.workspace.openTextDocument(fallbackProject.entry.entryUri);
+        if (entryDocument.languageId !== "ss-slide" || entryDocument.uri.scheme !== "file") {
+          return { message: `[project].entry is not an .ss document: ${fallbackProject.entry.entryUri.fsPath}` };
+        }
+        return { document: entryDocument, projectFile: fallbackProject.entry.projectFile };
+      } catch (error) {
+        return { message: `Failed to open [project].entry: ${errorMessage(error)}` };
+      }
+    }
+
+    if (document?.languageId === "ss-slide" && document.uri.scheme === "file") {
+      return { document };
+    }
+    return { message: fallbackProject.message };
+  }
+
+  private scheduleAffectedDocument(document: vscode.TextDocument, delayMs?: number): void {
+    this.scheduleAffectedPath(document.uri.fsPath, delayMs, document);
+  }
+
+  private scheduleAffectedUri(uri: vscode.Uri, delayMs?: number): void {
+    if (uri.scheme !== "file" || ignoreGeneratedPath(uri.fsPath)) {
+      return;
+    }
+    this.scheduleAffectedPath(uri.fsPath, delayMs);
+  }
+
+  private scheduleProjectConfigChange(uri: vscode.Uri, delayMs?: number): void {
+    if (uri.scheme !== "file" || ignoreGeneratedPath(uri.fsPath)) {
+      return;
+    }
+    for (const key of this.panels.keys()) {
+      const document = documentForSession(key);
+      if (document) {
+        this.panels.get(key)?.scheduleRefresh(document, delayMs);
+      }
+    }
+  }
+
+  private scheduleAffectedPath(changedPath: string, delayMs?: number, changedDocument?: vscode.TextDocument): void {
+    const normalized = normalizePath(changedPath);
+    const scheduled = new Set<string>();
+    if (changedDocument) {
+      const directKey = changedDocument.uri.toString();
+      const direct = this.panels.get(directKey);
+      if (direct) {
+        direct.scheduleRefresh(changedDocument, delayMs);
+        scheduled.add(directKey);
+      }
+    }
+
+    for (const [key, panel] of this.panels) {
+      if (scheduled.has(key) || !sessionDependsOn(panel, normalized)) {
+        continue;
+      }
+      const document = documentForSession(key);
+      if (!document || !projectSettings(document.uri).preview.refreshOnDependencyChange) {
+        continue;
+      }
+      panel.scheduleRefresh(document, delayMs);
+      scheduled.add(key);
+    }
+  }
 }
 
-class WysiwygPreviewPanel implements vscode.Disposable {
+class WysiwygPreviewPanel implements vscode.Disposable, DependencySession {
   private disposed = false;
   private snapshot?: PreviewSnapshot;
   private refreshTimer?: NodeJS.Timeout;
   private refreshSerial = 0;
   private readonly disposables: vscode.Disposable[] = [];
+  entryPath?: string;
+  dependencyPaths?: Set<string>;
 
   private constructor(
     private readonly context: vscode.ExtensionContext,
@@ -119,18 +224,25 @@ class WysiwygPreviewPanel implements vscode.Disposable {
     this.panel.reveal(vscode.ViewColumn.Beside, true);
   }
 
-  scheduleRefresh(document: vscode.TextDocument): void {
+  scheduleRefresh(document: vscode.TextDocument, delayMs?: number): void {
+    const settings = projectSettings(document.uri).preview;
+    if (!settings.enabled) {
+      return;
+    }
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer);
     }
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
       this.refresh(document);
-    }, 120);
+    }, delayMs ?? settings.debounceMs);
   }
 
   refresh(document = documentForUri(this.sourceUri)): void {
     if (this.disposed || !document) {
+      return;
+    }
+    if (!projectSettings(document.uri).preview.enabled) {
       return;
     }
     const serial = this.refreshSerial + 1;
@@ -180,6 +292,14 @@ class WysiwygPreviewPanel implements vscode.Disposable {
     }
     const started = Date.now();
     try {
+      const projectInfo = resolveProjectInfo(document, await requestProjectInfo(this.clientProvider, document, (message) => {
+        this.log("projectInfo failed", message);
+      }));
+      updateDependencySession(this, projectInfo.entryPath, projectInfo.localModules);
+      if (this.disposed || serial !== this.refreshSerial) {
+        this.log("previewSnapshot ignored", `serial=${serial}`);
+        return;
+      }
       this.log("previewSnapshot request", `serial=${serial} version=${document.version}`);
       const snapshot = await client.sendRequest<PreviewSnapshot>("ss/previewSnapshot", {
         schemaVersion: 1,
@@ -189,12 +309,18 @@ class WysiwygPreviewPanel implements vscode.Disposable {
         this.log("previewSnapshot ignored", `serial=${serial}`);
         return;
       }
-      this.snapshot = snapshot;
       this.panel.title = previewTitle(document.uri);
       const displayItems = snapshot.display?.pages?.reduce((sum, page) => sum + (page.items?.length ?? 0), 0) ?? 0;
       const resources = snapshot.display?.resources?.length ?? 0;
       this.log("previewSnapshot result", `serial=${serial} snapshot=${snapshot.snapshotId} pages=${snapshot.pages.length} objects=${snapshot.objects.length} displayItems=${displayItems} resources=${resources} diagnostics=${snapshot.diagnostics.length} elapsed=${Date.now() - started}ms`);
+      if (!isRenderableSnapshot(snapshot)) {
+        const reason = snapshot.diagnostics.length > 0 ? `${snapshot.diagnostics.length} diagnostics` : "empty preview";
+        this.log("previewSnapshot retained previous", `serial=${serial} reason=${reason}`);
+        this.postStatus(this.snapshot ? `Preview not updated: ${reason}` : `Preview unavailable: ${reason}`);
+        return;
+      }
       const prepared = this.prepareSnapshot(snapshot);
+      this.snapshot = snapshot;
       const resourceUris = prepared.display?.resources?.filter((resource) => resource.uri).length ?? 0;
       const relativeResources = prepared.display?.resources?.filter((resource) => !path.isAbsolute(resource.path)).length ?? 0;
       this.log("previewSnapshot resources", `resources=${resources} webviewUris=${resourceUris} missingUris=${resources - resourceUris} relativePaths=${relativeResources}`);
@@ -353,8 +479,8 @@ async function revealSource(uriText: string, range: ProtocolRange): Promise<void
   editor.revealRange(selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
-function documentForUri(uri: vscode.Uri): vscode.TextDocument | undefined {
-  return vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
+function isRenderableSnapshot(snapshot: PreviewSnapshot): boolean {
+  return snapshot.pages.length > 0 && (snapshot.display?.pages?.length ?? 0) > 0;
 }
 
 function previewTitle(uri: vscode.Uri): string {

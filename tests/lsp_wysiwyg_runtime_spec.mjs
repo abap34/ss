@@ -9,7 +9,9 @@ await testPreviewSnapshotReflectsOpenDocument();
 await testPreviewSnapshotPreservesTextLineLayout();
 await testPreviewSnapshotUsesTreeSitterCodeHighlighting();
 await testPreviewSnapshotReturnsImageResources();
+await testPreviewSnapshotReturnsLayoutRelations();
 await testLayoutEditInsertsAbsoluteTopLeftConstraints();
+await testLayoutEditUpdatesRelativeRelation();
 await testLayoutEditMovesFlowObjectWithTableContent();
 await testLayoutEditFindsGeneratedPageSourceBlock();
 await testLayoutEditRejectsStaleAndUnsupportedRequests();
@@ -189,6 +191,46 @@ end
   }
 }
 
+async function testPreviewSnapshotReturnsLayoutRelations() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-relations-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+page sample
+let a = text!("A")
+let b = text!("B")
+~ b.left == a.right + 10
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source, version: 1 });
+      await diagnosticsPromise;
+
+      const snapshot = await previewSnapshot(client, uri, 1);
+      const a = snapshot.objects.find((object) => object.label === "a");
+      const b = snapshot.objects.find((object) => object.label === "b");
+      assert(a && b, `objects were missing: ${JSON.stringify(snapshot.objects)}`);
+      assert(Array.isArray(snapshot.relations), `relations were missing: ${JSON.stringify(snapshot)}`);
+      assert(snapshot.relations.some((relation) =>
+        relation.kind === "explicit" &&
+        relation.targetNode === b.id &&
+        relation.targetAnchor === "left" &&
+        relation.sourceNode === a.id &&
+        relation.sourceAnchor === "right"
+      ), `explicit relation was missing: ${JSON.stringify(snapshot.relations)}`);
+      assert(snapshot.relations.some((relation) => relation.kind === "fallback"), `fallback relation was missing: ${JSON.stringify(snapshot.relations)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testLayoutEditInsertsAbsoluteTopLeftConstraints() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-edit-"));
   try {
@@ -226,6 +268,48 @@ end
       const moved = next.objects.find((object) => object.label === "a");
       assert(moved, `moved object a was missing: ${JSON.stringify(next.objects)}`);
       assert(near(moved.frame.x, 120) && near(moved.frame.y, 80), `moved frame was not applied: ${JSON.stringify(moved.frame)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testLayoutEditUpdatesRelativeRelation() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-relative-edit-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+page sample
+let a = text!("A")
+let b = text!("B")
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source, version: 1 });
+      await diagnosticsPromise;
+
+      const snapshot = await previewSnapshot(client, uri, 1);
+      const target = snapshot.objects.find((object) => object.label === "b");
+      assert(target, `target b was missing: ${JSON.stringify(snapshot.objects)}`);
+      assert(snapshot.relations.some((relation) => relation.kind === "fallback" && relation.targetNode === target.id && relation.axis === "vertical"), `vertical fallback relation was missing: ${JSON.stringify(snapshot.relations)}`);
+      const toBounds = { ...target.frame, y: target.frame.y + 24 };
+      const result = await layoutEdit(client, uri, 1, snapshot.snapshotId, target, toBounds, "relative");
+      assert(result.status === "ok", `relative layoutEdit did not return ok: ${JSON.stringify(result)}`);
+
+      const edited = applyWorkspaceEdit(source, result.workspaceEdit, uri);
+      assert(/~ b\.top == a\.bottom [+-] /.test(edited), `relative top constraint was not inserted: ${edited}`);
+
+      client.changeDocument({ uri, version: 2, text: edited });
+      const next = await previewSnapshot(client, uri, 2);
+      const moved = next.objects.find((object) => object.label === "b");
+      assert(moved, `moved object b was missing: ${JSON.stringify(next.objects)}`);
+      assert(near(moved.frame.y, toBounds.y), `relative edit did not move b to requested y: ${JSON.stringify(moved.frame)} expected=${JSON.stringify(toBounds)}`);
     });
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -396,7 +480,7 @@ function previewSnapshot(client, uri, version) {
   });
 }
 
-function layoutEdit(client, uri, version, snapshotId, target, toBounds) {
+function layoutEdit(client, uri, version, snapshotId, target, toBounds, mode = "absolute") {
   return client.request("ss/layoutEdit", {
     schemaVersion: 1,
     textDocument: { uri, version },
@@ -407,6 +491,7 @@ function layoutEdit(client, uri, version, snapshotId, target, toBounds) {
     },
     gesture: {
       kind: "translate",
+      mode,
       coordinateSpace: "page",
       fromBounds: target.frame,
       toBounds,

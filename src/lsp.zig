@@ -281,9 +281,9 @@ const Server = struct {
 
         var config: ?project.Config = null;
         if (project_path) |path| {
-            config = project.loadFile(self.allocator, self.io, path) catch |err| blk: {
+            config = project.loadFile(self.allocator, self.io, path) catch |err| {
                 try self.addProjectConfigDiagnostic(diagnostics, path, err);
-                break :blk null;
+                return try self.emptySnapshotForPath(changed_abs);
             };
         }
         defer if (config) |*cfg| cfg.deinit(self.allocator);
@@ -400,6 +400,25 @@ const Server = struct {
         snapshot.display_json = renderDisplayJson(self.allocator, self.io, entry_path, &ir, if (config) |cfg| cfg.highlight.languages else &.{}) catch null;
         snapshot.completion_index = analysis_completion.Index.fromIr(self.allocator, &ir) catch null;
         return snapshot;
+    }
+
+    fn emptySnapshotForPath(self: *Server, path: []const u8) !Snapshot {
+        const entry_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(entry_path);
+        const asset_base_dir = try dirnameAlloc(self.allocator, entry_path);
+        errdefer self.allocator.free(asset_base_dir);
+
+        self.snapshot_serial +%= 1;
+        const fingerprint = self.sourceRevisionFingerprint(path);
+        const snapshot_id = try std.fmt.allocPrint(self.allocator, "{x}-{x}", .{ self.snapshot_serial, fingerprint });
+        errdefer self.allocator.free(snapshot_id);
+
+        return .{
+            .id = snapshot_id,
+            .entry_path = entry_path,
+            .asset_base_dir = asset_base_dir,
+            .module_paths = .empty,
+        };
     }
 
     fn sourceRevisionFingerprint(self: *Server, changed_abs: []const u8) u64 {
@@ -1832,6 +1851,7 @@ const PreviewObject = struct {
     page_index: i64,
     page_label: []const u8,
     label: []const u8,
+    role: []const u8,
     kind: []const u8,
     frame: PreviewFrame,
     source: ?PreviewSource = null,
@@ -1840,13 +1860,27 @@ const PreviewObject = struct {
     has_top_constraint: bool = false,
 };
 
+const PreviewRelation = struct {
+    kind: []const u8,
+    page_id: i64,
+    axis: []const u8,
+    target_node: i64,
+    target_anchor: []const u8,
+    source_kind: []const u8,
+    source_node: ?i64,
+    source_anchor: []const u8,
+    offset: f64,
+};
+
 const PreviewModel = struct {
     pages: std.ArrayList(PreviewPage) = .empty,
     objects: std.ArrayList(PreviewObject) = .empty,
+    relations: std.ArrayList(PreviewRelation) = .empty,
 
     fn deinit(self: *PreviewModel, allocator: std.mem.Allocator) void {
         self.pages.deinit(allocator);
         self.objects.deinit(allocator);
+        self.relations.deinit(allocator);
     }
 };
 
@@ -1912,6 +1946,13 @@ fn previewSnapshotJson(server: *Server, snapshot: *const Snapshot, diagnostics: 
     }
     try out.append(server.allocator, ']');
 
+    try out.appendSlice(server.allocator, ",\"relations\":[");
+    for (model.relations.items, 0..) |relation, index| {
+        if (index != 0) try out.append(server.allocator, ',');
+        try appendPreviewRelation(server.allocator, &out, relation);
+    }
+    try out.append(server.allocator, ']');
+
     try out.appendSlice(server.allocator, ",\"display\":");
     if (snapshot.display_json) |display_json| {
         try out.appendSlice(server.allocator, display_json);
@@ -1931,7 +1972,7 @@ fn previewSnapshotJson(server: *Server, snapshot: *const Snapshot, diagnostics: 
 fn previewSnapshotEmptyJson(allocator: std.mem.Allocator, message: []const u8) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, "{\"schemaVersion\":1,\"snapshotId\":\"\",\"entryUri\":\"\",\"documentVersion\":null,\"coordinateSpace\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"xAxis\":\"right\",\"yAxis\":\"down\"},\"pages\":[],\"objects\":[],\"display\":");
+    try out.appendSlice(allocator, "{\"schemaVersion\":1,\"snapshotId\":\"\",\"entryUri\":\"\",\"documentVersion\":null,\"coordinateSpace\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"xAxis\":\"right\",\"yAxis\":\"down\"},\"pages\":[],\"objects\":[],\"relations\":[],\"display\":");
     try render_compile.appendEmptyHtmlDisplay(allocator, &out);
     try out.appendSlice(allocator, ",\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":1}},\"severity\":1,\"source\":\"ss\",\"code\":\"InvalidRequest\",\"message\":");
     try appendJsonString(allocator, &out, message);
@@ -1976,6 +2017,7 @@ fn layoutEditResult(server: *Server, params: ?JsonValue) ![]const u8 {
     const gesture = objectField(p, "gesture") orelse return try layoutEditStatusJson(server.allocator, "rejected", "missing gesture");
     const gesture_kind = stringField(gesture, "kind") orelse "";
     if (!std.mem.eql(u8, gesture_kind, "translate")) return try layoutEditStatusJson(server.allocator, "unsupported", "only translate gestures are supported");
+    const gesture_mode = stringField(gesture, "mode") orelse "absolute";
     const to_frame = parseFrame(objectFieldObject(gesture, "toBounds") orelse return try layoutEditStatusJson(server.allocator, "rejected", "gesture toBounds is missing"));
 
     var parsed = std.json.parseFromSlice(JsonValue, server.allocator, snapshot.dump_json orelse "", .{}) catch {
@@ -2010,12 +2052,26 @@ fn layoutEditResult(server: *Server, params: ?JsonValue) ![]const u8 {
     const source_ptr = server.documents.getPtr(entry_key) orelse return try layoutEditStatusJson(server.allocator, "unsupported", "entry document is not open");
     const source = source_ptr.*;
 
-    var edit_result = (try layout_edit.absoluteTopLeftWithPageIndex(server.allocator, source, object.page_label, object.page_index, object_name, to_frame.x, to_frame.y)) orelse {
-        return try layoutEditStatusJson(server.allocator, "unsupported", "page block was not found in the entry file");
+    var edit_result = blk: {
+        if (std.mem.eql(u8, gesture_mode, "absolute")) {
+            break :blk (try layout_edit.absoluteTopLeftWithPageIndex(server.allocator, source, object.page_label, object.page_index, object_name, to_frame.x, to_frame.y)) orelse {
+                return try layoutEditStatusJson(server.allocator, "unsupported", "page block was not found in the entry file");
+            };
+        }
+        if (std.mem.eql(u8, gesture_mode, "relative")) {
+            const relation_edits = (try relativeAnchorEdits(server.allocator, &model, object, to_frame)) orelse {
+                return try layoutEditStatusJson(server.allocator, "unsupported", "target object has no editable layout relation for relative movement");
+            };
+            defer server.allocator.free(relation_edits);
+            break :blk (try layout_edit.anchorRelationsWithPageIndex(server.allocator, source, object.page_label, object.page_index, object_name, relation_edits)) orelse {
+                return try layoutEditStatusJson(server.allocator, "unsupported", "page block was not found in the entry file");
+            };
+        }
+        return try layoutEditStatusJson(server.allocator, "unsupported", "unsupported translate mode");
     };
     defer edit_result.deinit(server.allocator);
 
-    if ((object.has_left_constraint and !edit_result.replaced_left) or (object.has_top_constraint and !edit_result.replaced_top)) {
+    if (std.mem.eql(u8, gesture_mode, "absolute") and ((object.has_left_constraint and !edit_result.replaced_left) or (object.has_top_constraint and !edit_result.replaced_top))) {
         return try layoutEditStatusJson(server.allocator, "unsupported", "existing layout constraint is not directly editable by layoutEdit v1");
     }
 
@@ -2074,6 +2130,7 @@ fn buildPreviewModel(server: *Server, snapshot: *const Snapshot, root: *const Js
             .page_index = page.index,
             .page_label = page.label,
             .label = editable_name orelse stringField(node, "role") orelse stringField(node, "name") orelse "object",
+            .role = stringField(node, "role") orelse stringField(node, "name") orelse "object",
             .kind = stringField(node, "object_kind") orelse stringField(node, "payload_kind") orelse "unknown",
             .frame = .{
                 .x = numberField(node, "x") orelse 0,
@@ -2095,6 +2152,28 @@ fn buildPreviewModel(server: *Server, snapshot: *const Snapshot, root: *const Js
             const object = findPreviewObjectMutable(&model, target_id) orelse continue;
             if (std.mem.eql(u8, target_anchor, "left")) object.has_left_constraint = true;
             if (std.mem.eql(u8, target_anchor, "top")) object.has_top_constraint = true;
+        }
+    }
+
+    if (arrayFieldObject(root, "layout_relations")) |relations| {
+        for (relations.items) |*item| {
+            if (item.* != .object) continue;
+            const relation = &item.object;
+            const target_node = intField(relation, "target_node") orelse continue;
+            const target_anchor = stringField(relation, "target_anchor") orelse continue;
+            const source_kind = stringField(relation, "source_kind") orelse continue;
+            const source_anchor = stringField(relation, "source_anchor") orelse continue;
+            try model.relations.append(server.allocator, .{
+                .kind = stringField(relation, "kind") orelse "explicit",
+                .page_id = intField(relation, "page_id") orelse 0,
+                .axis = stringField(relation, "axis") orelse anchorAxisName(target_anchor),
+                .target_node = target_node,
+                .target_anchor = target_anchor,
+                .source_kind = source_kind,
+                .source_node = intField(relation, "source_node"),
+                .source_anchor = source_anchor,
+                .offset = numberField(relation, "offset") orelse 0,
+            });
         }
     }
 
@@ -2164,6 +2243,8 @@ fn appendPreviewObject(server: *Server, snapshot: *const Snapshot, out: *std.Arr
     try appendJsonString(allocator, out, object.kind);
     try out.appendSlice(allocator, ",\"label\":");
     try appendJsonString(allocator, out, object.label);
+    try out.appendSlice(allocator, ",\"role\":");
+    try appendJsonString(allocator, out, object.role);
     try out.appendSlice(allocator, ",\"frame\":");
     try appendPreviewFrame(allocator, out, object.frame);
     try out.appendSlice(allocator, ",\"source\":");
@@ -2194,6 +2275,32 @@ fn appendPreviewObject(server: *Server, snapshot: *const Snapshot, out: *std.Arr
     try out.appendSlice(allocator, "}}");
 }
 
+fn appendPreviewRelation(allocator: std.mem.Allocator, out: *std.ArrayList(u8), relation: PreviewRelation) !void {
+    try out.appendSlice(allocator, "{\"kind\":");
+    try appendJsonString(allocator, out, relation.kind);
+    try out.appendSlice(allocator, ",\"pageId\":");
+    try appendInt(allocator, out, relation.page_id);
+    try out.appendSlice(allocator, ",\"axis\":");
+    try appendJsonString(allocator, out, relation.axis);
+    try out.appendSlice(allocator, ",\"targetNode\":");
+    try appendInt(allocator, out, relation.target_node);
+    try out.appendSlice(allocator, ",\"targetAnchor\":");
+    try appendJsonString(allocator, out, relation.target_anchor);
+    try out.appendSlice(allocator, ",\"sourceKind\":");
+    try appendJsonString(allocator, out, relation.source_kind);
+    try out.appendSlice(allocator, ",\"sourceNode\":");
+    if (relation.source_node) |node_id| {
+        try appendInt(allocator, out, node_id);
+    } else {
+        try out.appendSlice(allocator, "null");
+    }
+    try out.appendSlice(allocator, ",\"sourceAnchor\":");
+    try appendJsonString(allocator, out, relation.source_anchor);
+    try out.appendSlice(allocator, ",\"offset\":");
+    try appendFloat(allocator, out, relation.offset);
+    try out.append(allocator, '}');
+}
+
 fn appendPreviewFrame(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frame: PreviewFrame) !void {
     try out.appendSlice(allocator, "{\"x\":");
     try appendFloat(allocator, out, frame.x);
@@ -2204,6 +2311,116 @@ fn appendPreviewFrame(allocator: std.mem.Allocator, out: *std.ArrayList(u8), fra
     try out.appendSlice(allocator, ",\"height\":");
     try appendFloat(allocator, out, frame.height);
     try out.append(allocator, '}');
+}
+
+fn relativeAnchorEdits(allocator: std.mem.Allocator, model: *const PreviewModel, object: PreviewObject, to_frame: PreviewFrame) !?[]layout_edit.AnchorRelation {
+    const page = findPreviewPage(model, object.page_id) orelse return null;
+    var relations = try allocator.alloc(layout_edit.AnchorRelation, 2);
+    errdefer allocator.free(relations);
+    var count: usize = 0;
+
+    if (!near(object.frame.x, to_frame.x, 0.25)) {
+        const relation = findTargetRelation(model, object.id, "horizontal") orelse {
+            allocator.free(relations);
+            return null;
+        };
+        relations[count] = anchorRelationEdit(model, page, relation, to_frame) catch {
+            allocator.free(relations);
+            return null;
+        };
+        count += 1;
+    }
+
+    if (!near(object.frame.y, to_frame.y, 0.25)) {
+        const relation = findTargetRelation(model, object.id, "vertical") orelse {
+            allocator.free(relations);
+            return null;
+        };
+        relations[count] = anchorRelationEdit(model, page, relation, to_frame) catch {
+            allocator.free(relations);
+            return null;
+        };
+        count += 1;
+    }
+
+    if (count == 0) {
+        allocator.free(relations);
+        return null;
+    }
+
+    return try allocator.realloc(relations, count);
+}
+
+fn anchorRelationEdit(model: *const PreviewModel, page: PreviewPage, relation: PreviewRelation, to_frame: PreviewFrame) !layout_edit.AnchorRelation {
+    const source_name = sourceNameForRelation(model, relation) orelse return error.UnsupportedRelativeSource;
+    const target_value = anchorValueForFrame(to_frame, page.frame, relation.target_anchor) orelse return error.UnsupportedAnchor;
+    const source_value = sourceValueForRelation(model, page, relation) orelse return error.UnsupportedRelativeSource;
+    return .{
+        .target_anchor = relation.target_anchor,
+        .source_name = source_name,
+        .source_anchor = relation.source_anchor,
+        .offset = target_value - source_value,
+    };
+}
+
+fn findTargetRelation(model: *const PreviewModel, target_node: i64, axis: []const u8) ?PreviewRelation {
+    var fallback_relation: ?PreviewRelation = null;
+    for (model.relations.items) |relation| {
+        if (relation.target_node != target_node) continue;
+        if (!relationAxisMatches(relation, axis)) continue;
+        if (relation.source_node != null and relation.source_node.? == target_node) continue;
+        if (std.mem.eql(u8, relation.kind, "explicit")) return relation;
+        if (fallback_relation == null and std.mem.eql(u8, relation.kind, "fallback")) fallback_relation = relation;
+    }
+    return fallback_relation;
+}
+
+fn relationAxisMatches(relation: PreviewRelation, axis: []const u8) bool {
+    if (std.mem.eql(u8, relation.axis, axis)) return true;
+    return std.mem.eql(u8, anchorAxisName(relation.target_anchor), axis);
+}
+
+fn sourceNameForRelation(model: *const PreviewModel, relation: PreviewRelation) ?[]const u8 {
+    if (std.mem.eql(u8, relation.source_kind, "page")) return "page";
+    if (!std.mem.eql(u8, relation.source_kind, "node")) return null;
+    const source_node = relation.source_node orelse return null;
+    const source = findPreviewObject(model, source_node) orelse return null;
+    return source.editable_name;
+}
+
+fn sourceValueForRelation(model: *const PreviewModel, page: PreviewPage, relation: PreviewRelation) ?f64 {
+    if (std.mem.eql(u8, relation.source_kind, "page")) {
+        return anchorValueForPage(page.frame, relation.source_anchor);
+    }
+    if (!std.mem.eql(u8, relation.source_kind, "node")) return null;
+    const source_node = relation.source_node orelse return null;
+    const source = findPreviewObject(model, source_node) orelse return null;
+    return anchorValueForFrame(source.frame, page.frame, relation.source_anchor);
+}
+
+fn anchorValueForFrame(frame: PreviewFrame, page_frame: PreviewFrame, anchor: []const u8) ?f64 {
+    if (std.mem.eql(u8, anchor, "left")) return frame.x;
+    if (std.mem.eql(u8, anchor, "right")) return frame.x + frame.width;
+    if (std.mem.eql(u8, anchor, "center_x")) return frame.x + frame.width / 2;
+    if (std.mem.eql(u8, anchor, "top")) return page_frame.height - frame.y;
+    if (std.mem.eql(u8, anchor, "bottom")) return page_frame.height - frame.y - frame.height;
+    if (std.mem.eql(u8, anchor, "center_y")) return page_frame.height - frame.y - frame.height / 2;
+    return null;
+}
+
+fn anchorValueForPage(page_frame: PreviewFrame, anchor: []const u8) ?f64 {
+    if (std.mem.eql(u8, anchor, "left")) return 0;
+    if (std.mem.eql(u8, anchor, "right")) return page_frame.width;
+    if (std.mem.eql(u8, anchor, "center_x")) return page_frame.width / 2;
+    if (std.mem.eql(u8, anchor, "top")) return page_frame.height;
+    if (std.mem.eql(u8, anchor, "bottom")) return 0;
+    if (std.mem.eql(u8, anchor, "center_y")) return page_frame.height / 2;
+    return null;
+}
+
+fn anchorAxisName(anchor: []const u8) []const u8 {
+    if (std.mem.eql(u8, anchor, "left") or std.mem.eql(u8, anchor, "right") or std.mem.eql(u8, anchor, "center_x")) return "horizontal";
+    return "vertical";
 }
 
 fn layoutEditStatusJson(allocator: std.mem.Allocator, status: []const u8, message: []const u8) ![]const u8 {
