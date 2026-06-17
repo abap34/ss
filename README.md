@@ -377,3 +377,21 @@ The standalone grammar package lives under `editor/tree-sitter-ss/`.
 Contributions to ss are very welcome!
 
 If you want to contribute, please open an issue or a pull request. For major changes, please open an issue first to discuss what you would like to change.
+
+
+## Roadmap
+
+- [ ] Installation
+  - [ ] apt?
+  - [ ] Nix?
+- [ ] Registry
+  - [ ] Host Registry
+  - [ ] Theme Store (with Preview)
+  - [ ] Component Store (with Preview)
+- [ ] GUI
+  - [ ] Edit location in GUI
+  - [ ] Reflect GUI Edit to Source
+  - [ ] Editor for ss
+- [ ] More Target
+  - [ ] PPTX
+- [ ] Documentation
