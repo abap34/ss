@@ -4,13 +4,22 @@ const ast = @import("ast");
 const parser = @import("syntax.zig");
 const lowering = @import("lowering.zig");
 const pdf = @import("render/pdf.zig");
+const render_compile = @import("render/compile.zig");
+const render_html = @import("render/html.zig");
+const render_target = @import("render/target.zig");
 const dump = @import("dump.zig");
 const typecheck = @import("analysis/typecheck.zig");
 const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
 const error_report = utils.err;
 
-pub const RenderOptions = pdf.RenderOptions;
+pub const RenderFormat = render_target.Target;
+pub const RenderOptions = struct {
+    format: RenderFormat = .pdf,
+    cache_dir: []const u8 = ".ss-cache/render",
+    cache_id: ?[]const u8 = null,
+    highlight_languages: []const utils.highlight.Language = &.{},
+};
 const Progress = utils.progress.Progress;
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
@@ -186,34 +195,49 @@ pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
     progress.step("Write JSON");
 }
 
-pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
-    return writePdfForFileWithOptions(io, allocator, input_path, output_path, .{}, progress);
-}
-
-pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
-    var ir = try buildFile(io, allocator, input_path, progress);
-    defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
-    defer allocator.free(pdf_data);
-    try utils.render_cache.pruneFromEnv(io, allocator);
-    progress.step("Render pages");
-    try utils.fs.writeFile(io, output_path, pdf_data);
-    progress.step("Write PDF");
-}
-
-pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    return writePdfForFileWithAssetBaseAndOptions(io, allocator, input_path, asset_base_dir, output_path, .{}, progress);
-}
-
-pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
+pub fn writeRenderFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
-    defer allocator.free(pdf_data);
+    const data = switch (options.format) {
+        .pdf => try renderPdfData(allocator, io, &ir, options, progress),
+        .html => try renderHtmlData(allocator, io, &ir, options),
+    };
+    defer allocator.free(data);
     try utils.render_cache.pruneFromEnv(io, allocator);
-    progress.step("Render pages");
-    try utils.fs.writeFile(io, output_path, pdf_data);
-    progress.step("Write PDF");
+    progress.step(switch (options.format) {
+        .pdf => "Render pages",
+        .html => "Render HTML",
+    });
+    try utils.fs.writeFile(io, output_path, data);
+    progress.step(switch (options.format) {
+        .pdf => "Write PDF",
+        .html => "Write HTML",
+    });
+}
+
+fn renderPdfData(allocator: std.mem.Allocator, io: std.Io, ir: *core.Ir, options: RenderOptions, progress: *Progress) ![]const u8 {
+    return pdf.renderDocumentToPdfWithOptions(allocator, io, ir, .{
+        .cache_dir = options.cache_dir,
+        .cache_id = options.cache_id,
+        .highlight_languages = options.highlight_languages,
+    }, progressCallback(progress));
+}
+
+fn renderHtmlData(allocator: std.mem.Allocator, io: std.Io, ir: *core.Ir, options: RenderOptions) ![]const u8 {
+    const artifact_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "shared" });
+    defer allocator.free(artifact_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(io, artifact_cache_dir);
+    var document = try render_compile.sceneFromIr(allocator, ir, .{
+        .target = .html,
+        .io = io,
+        .cache_dir = artifact_cache_dir,
+        .highlight_languages = options.highlight_languages,
+    });
+    defer document.deinit(allocator);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try render_html.appendDocumentFromScene(allocator, &out, &document);
+    return out.toOwnedSlice(allocator);
 }
 
 fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {
