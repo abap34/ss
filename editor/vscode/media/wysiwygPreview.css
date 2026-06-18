@@ -65,6 +65,27 @@ button:hover {
   white-space: nowrap;
 }
 
+.modeBadge {
+  flex: 0 0 auto;
+  min-width: 74px;
+  padding: 2px 8px;
+  border: 1px solid rgb(47 129 247 / 55%);
+  border-radius: 4px;
+  color: #0969da;
+  background: rgb(47 129 247 / 12%);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+body.relativeMode .modeBadge {
+  border-color: rgb(245 158 11 / 75%);
+  color: #b45309;
+  background: rgb(245 158 11 / 18%);
+}
+
 .pages {
   min-height: 0;
   overflow: auto;
@@ -86,6 +107,11 @@ button:hover {
   border: 1px solid var(--vscode-panel-border, #454545);
   background: #ffffff;
   box-shadow: 0 2px 12px rgb(0 0 0 / 28%);
+}
+
+body.relativeMode .pageSurface {
+  outline: 2px solid rgb(245 158 11 / 65%);
+  outline-offset: 2px;
 }
 
 .pageDisplay,
@@ -239,6 +265,12 @@ button:hover {
 .object.dragging .objectRect {
   fill: rgb(47 129 247 / 16%);
   stroke: #0969da;
+}
+
+.object.relativeDrag .objectRect,
+body.relativeMode .object.selected .objectRect {
+  fill: rgb(245 158 11 / 18%);
+  stroke: #f59e0b;
 }
 
 .object.selected .objectRect {
