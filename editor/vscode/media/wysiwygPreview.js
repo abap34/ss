@@ -4,6 +4,7 @@
   const vscode = acquireVsCodeApi();
   const pagesElement = document.getElementById("pages");
   const statusElement = document.getElementById("status");
+  const editModeElement = document.getElementById("editMode");
   const refreshButton = document.getElementById("refresh");
   const showLogButton = document.getElementById("showLog");
   const zoomOut = document.getElementById("zoomOut");
@@ -29,6 +30,9 @@
   let resourcesById = new Map();
   let relationsByPageId = new Map();
   let selectedObjectId = undefined;
+  let shiftDown = false;
+  let nextGestureRequestId = 1;
+  const pendingGestures = new Map();
 
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -47,6 +51,9 @@
     if (message.type === "status") {
       setStatus(message.message || "");
     }
+    if (message.type === "layout-edit-result") {
+      finishPendingGesture(message);
+    }
   });
 
   window.addEventListener("resize", () => {
@@ -60,6 +67,22 @@
       resizeTimer = undefined;
       renderCurrent(captureView());
     }, 120);
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Shift") {
+      setShiftDown(true);
+    }
+  });
+
+  window.addEventListener("keyup", (event) => {
+    if (event.key === "Shift") {
+      setShiftDown(false);
+    }
+  });
+
+  window.addEventListener("blur", () => {
+    setShiftDown(false);
   });
 
   refreshButton.addEventListener("click", () => {
@@ -76,6 +99,7 @@
   });
 
   setControls(false);
+  setEditMode(false);
   vscode.postMessage({ type: "ready" });
   reportLog("ready");
 
@@ -413,8 +437,11 @@
       currentFrame: { ...object.frame },
       relative: event.shiftKey,
     };
+    shiftDown = event.shiftKey;
+    setEditMode(drag.relative);
     reportLog("drag start node=" + object.id + " mode=" + (drag.relative ? "relative" : "absolute") + " x=" + object.frame.x.toFixed(1) + " y=" + object.frame.y.toFixed(1));
     group.classList.add("dragging");
+    group.classList.toggle("relativeDrag", drag.relative);
     group.addEventListener("pointermove", updateDrag);
     group.addEventListener("pointerup", endDrag);
     group.addEventListener("pointercancel", cancelDrag);
@@ -428,6 +455,9 @@
     const dx = point.x - drag.startPoint.x;
     const dy = point.y - drag.startPoint.y;
     drag.relative = event.shiftKey;
+    shiftDown = event.shiftKey;
+    setEditMode(drag.relative);
+    drag.group.classList.toggle("relativeDrag", drag.relative);
     drag.currentFrame = {
       ...drag.initialFrame,
       x: drag.initialFrame.x + dx,
@@ -450,9 +480,18 @@
     }
     const object = completed.object;
     const mode = event.shiftKey || completed.relative ? "relative" : "absolute";
+    const requestId = nextGestureRequestId++;
+    pendingGestures.set(requestId, {
+      objectId: object.id,
+      pageId: object.pageId,
+      group: completed.group,
+      initialFrame: completed.initialFrame,
+    });
+    completed.group.dataset.pendingGestureId = String(requestId);
     reportLog("drag end node=" + object.id + " mode=" + mode + " snapshot=" + snapshot.snapshotId + " version=" + snapshot.documentVersion + " dx=" + dx.toFixed(1) + " dy=" + dy.toFixed(1) + " x=" + completed.currentFrame.x.toFixed(1) + " y=" + completed.currentFrame.y.toFixed(1));
     vscode.postMessage({
       type: "gesture",
+      requestId,
       snapshotId: snapshot.snapshotId,
       selection: {
         primaryNodeId: object.id,
@@ -473,6 +512,36 @@
     });
   }
 
+  function finishPendingGesture(message) {
+    const requestId = Number(message.requestId);
+    const pending = pendingGestures.get(requestId);
+    if (!pending) {
+      return;
+    }
+    pendingGestures.delete(requestId);
+    const group = currentObjectGroup(pending);
+    const ownsGroup = group && group.dataset.pendingGestureId === String(requestId);
+    if (ownsGroup) {
+      delete group.dataset.pendingGestureId;
+    }
+    if (message.status === "ok") {
+      reportLog("layout edit accepted request=" + requestId + " node=" + pending.objectId);
+      return;
+    }
+    if (ownsGroup) {
+      moveObjectGroup(group, pending.initialFrame);
+      reportLog("layout edit reverted request=" + requestId + " status=" + message.status + " node=" + pending.objectId);
+    }
+  }
+
+  function currentObjectGroup(pending) {
+    if (pending.group && pending.group.isConnected) {
+      return pending.group;
+    }
+    const page = pagesElement.querySelector('.pageOverlay[data-page-id="' + pending.pageId + '"]');
+    return page ? page.querySelector('.object[data-object-id="' + pending.objectId + '"]') : undefined;
+  }
+
   function cancelDrag(event) {
     if (!drag || event.pointerId !== drag.pointerId) {
       return;
@@ -487,11 +556,13 @@
       return;
     }
     drag.group.classList.remove("dragging");
+    drag.group.classList.remove("relativeDrag");
     drag.group.releasePointerCapture(drag.pointerId);
     drag.group.removeEventListener("pointermove", updateDrag);
     drag.group.removeEventListener("pointerup", endDrag);
     drag.group.removeEventListener("pointercancel", cancelDrag);
     drag = undefined;
+    setEditMode(shiftDown);
   }
 
   function moveObjectGroup(group, frame) {
@@ -737,6 +808,25 @@
 
   function setStatus(message) {
     statusElement.textContent = message;
+  }
+
+  function setShiftDown(value) {
+    shiftDown = value;
+    if (drag) {
+      drag.relative = value;
+      drag.group.classList.toggle("relativeDrag", value);
+    }
+    setEditMode(value);
+  }
+
+  function setEditMode(relative) {
+    document.body.classList.toggle("relativeMode", relative);
+    if (!editModeElement) {
+      return;
+    }
+    editModeElement.textContent = relative ? "Relative" : "Absolute";
+    editModeElement.title = relative ? "Relative layout edit" : "Absolute layout edit";
+    editModeElement.setAttribute("aria-label", relative ? "Relative layout edit" : "Absolute layout edit");
   }
 
   function setEmpty(text) {

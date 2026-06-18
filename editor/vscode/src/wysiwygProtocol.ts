@@ -184,6 +184,6 @@ export type WebviewMessage =
   { type: "ready" } |
   { type: "refresh" } |
   { type: "show-log" } |
-  { type: "gesture"; snapshotId: string; selection: unknown; gesture: unknown } |
+  { type: "gesture"; requestId?: number; snapshotId: string; selection: unknown; gesture: unknown } |
   { type: "reveal-source"; uri: string; range: ProtocolRange } |
   { type: "log"; message?: string };

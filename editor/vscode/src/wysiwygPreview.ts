@@ -336,11 +336,13 @@ class WysiwygPreviewPanel implements vscode.Disposable, DependencySession {
     const document = documentForUri(this.sourceUri);
     if (!client || !document || !this.snapshot) {
       this.postStatus("Preview is not ready.");
+      this.postLayoutEditResult(message, "rejected", "Preview is not ready.");
       return;
     }
     if (this.snapshot.documentVersion !== null && document.version !== this.snapshot.documentVersion) {
       this.log("layoutEdit skipped", `document version changed since snapshot snapshotVersion=${this.snapshot.documentVersion} currentVersion=${document.version}`);
       this.postStatus("Refreshing before layout edit");
+      this.postLayoutEditResult(message, "stale", "Refreshing before layout edit");
       this.scheduleRefresh(document);
       return;
     }
@@ -358,6 +360,7 @@ class WysiwygPreviewPanel implements vscode.Disposable, DependencySession {
       this.log("layoutEdit result", `status=${result.status}${result.message ? ` message=${result.message}` : ""}`);
       if (result.status !== "ok") {
         this.postStatus(result.message ?? result.status);
+        this.postLayoutEditResult(message, result.status, result.message);
         if (result.status === "stale") {
           this.scheduleRefresh(document);
         }
@@ -365,14 +368,17 @@ class WysiwygPreviewPanel implements vscode.Disposable, DependencySession {
       }
       if (!result.workspaceEdit) {
         this.postStatus("Language server returned no edit.");
+        this.postLayoutEditResult(message, "rejected", "Language server returned no edit.");
         return;
       }
       const applied = await vscode.workspace.applyEdit(toWorkspaceEdit(result.workspaceEdit));
       this.log("workspaceEdit applied", `applied=${applied}`);
       if (!applied) {
         this.postStatus("VS Code did not apply the edit.");
+        this.postLayoutEditResult(message, "rejected", "VS Code did not apply the edit.");
         return;
       }
+      this.postLayoutEditResult(message, "ok", undefined);
       const nextDocument = documentForUri(this.sourceUri);
       if (nextDocument) {
         this.scheduleRefresh(nextDocument);
@@ -380,11 +386,24 @@ class WysiwygPreviewPanel implements vscode.Disposable, DependencySession {
     } catch (error) {
       this.log("layoutEdit failed", errorMessage(error));
       this.postStatus(errorMessage(error));
+      this.postLayoutEditResult(message, "rejected", errorMessage(error));
     }
   }
 
   private postStatus(message: string): void {
     void this.panel.webview.postMessage({ type: "status", message });
+  }
+
+  private postLayoutEditResult(message: Extract<WebviewMessage, { type: "gesture" }>, status: LayoutEditResult["status"], detail: string | undefined): void {
+    if (message.requestId === undefined) {
+      return;
+    }
+    void this.panel.webview.postMessage({
+      type: "layout-edit-result",
+      requestId: message.requestId,
+      status,
+      message: detail,
+    });
   }
 
   private log(event: string, detail = ""): void {
@@ -429,6 +448,7 @@ class WysiwygPreviewPanel implements vscode.Disposable, DependencySession {
     <button id="fitWidth" type="button" title="Fit width">Fit</button>
     <button id="zoomIn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
     <span id="zoomValue">100%</span>
+    <span id="editMode" class="modeBadge" aria-live="polite">Absolute</span>
     <span id="status"></span>
   </div>
   <main id="pages" class="pages"></main>
