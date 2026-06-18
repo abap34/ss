@@ -342,6 +342,11 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
                 try item.nullField("offset");
             }
         },
+        .discard_constraints => |decl| {
+            try item.stringField("kind", "discard_constraints");
+            try item.stringField("object_name", decl.object_name);
+            try writeDiscardSelector(&item, decl.selector);
+        },
         .property_set => |property_set| {
             try item.stringField("kind", "property_set");
             try item.stringField("object_name", property_set.object_name);
@@ -360,6 +365,22 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
         },
     }
     try item.end();
+}
+
+fn writeDiscardSelector(object: *json.Object, selector: ast.ConstraintDiscardDecl.Selector) !void {
+    switch (selector) {
+        .anchor => |anchor| {
+            try object.stringField("selector_kind", "anchor");
+            try object.stringField("anchor", @tagName(anchor));
+        },
+        .axis => |axis| {
+            try object.stringField("selector_kind", "axis");
+            try object.stringField("axis", @tagName(axis));
+        },
+        .position => {
+            try object.stringField("selector_kind", "position");
+        },
+    }
 }
 
 fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorRef) !void {

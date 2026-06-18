@@ -173,6 +173,7 @@ const PageContextRequirement = struct {
             .return_void => false,
             .property_set => |property_set| (try self.exprRequirement(scope, property_set.value)) != null,
             .constrain => |constraint| if (constraint.offset) |offset| (try self.exprRequirement(scope, offset)) != null else false,
+            .discard_constraints => false,
             .expr_stmt => |expr| (try self.exprRequirement(scope, expr)) != null,
             .if_stmt => |if_stmt| blk: {
                 if ((try self.exprRequirement(scope, if_stmt.condition)) != null) break :blk true;
@@ -390,6 +391,13 @@ fn checkTopLevelStatement(
                 try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
+        .discard_constraints => |decl| {
+            if (context != .page) {
+                try addUserReport(ir, origin, "NoCurrentPage: constraint discard is only valid inside a page block", .{});
+                return error.NoCurrentPage;
+            }
+            try validateConstraintDiscardDecl(allocator, ir, env, origin, decl);
+        },
     }
 }
 
@@ -437,6 +445,22 @@ fn validateAnchorRef(
                 try ensureType(ir, allocator, info, Type.object, origin, .UnmatchedArgumentType);
             }
         },
+    }
+}
+
+fn validateConstraintDiscardDecl(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    env: *TypeEnv,
+    origin: []const u8,
+    decl: ast.ConstraintDiscardDecl,
+) !void {
+    const info = env.get(decl.object_name) orelse {
+        try addUserReport(ir, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{decl.object_name});
+        return error.UnknownIdentifier;
+    };
+    if (!isObjectLike(info)) {
+        try ensureType(ir, allocator, info, Type.object, origin, .UnmatchedArgumentType);
     }
 }
 
@@ -502,5 +526,6 @@ fn checkStatement(
                 try ensureType(ir, allocator, actual, Type.number, origin, .UnmatchedArgumentType);
             }
         },
+        .discard_constraints => |decl| try validateConstraintDiscardDecl(allocator, ir, env, origin, decl),
     }
 }

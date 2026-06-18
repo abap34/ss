@@ -64,6 +64,12 @@ pub const Constraint = struct {
     origin: ?[]const u8 = null,
 };
 
+pub const ConstraintDiscardSelector = union(enum) {
+    anchor: Anchor,
+    axis: Axis,
+    position,
+};
+
 pub const ConstraintFailureKind = enum {
     conflict,
     negative_size,

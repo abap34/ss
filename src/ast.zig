@@ -556,6 +556,17 @@ pub const ConstraintDecl = struct {
     }
 };
 
+pub const ConstraintDiscardDecl = struct {
+    object_name: []const u8,
+    selector: Selector,
+
+    pub const Selector = union(enum) {
+        anchor: core.Anchor,
+        axis: core.Axis,
+        position,
+    };
+};
+
 pub const Statement = struct {
     span: Span,
     kind: Kind,
@@ -568,6 +579,7 @@ pub const Statement = struct {
         return_expr: Expr,
         return_void,
         constrain: ConstraintDecl,
+        discard_constraints: ConstraintDiscardDecl,
         property_set: struct {
             object_name: []const u8,
             property_name: []const u8,
@@ -587,6 +599,7 @@ pub const Statement = struct {
             .return_expr => |*expr| expr.deinit(allocator),
             .return_void => {},
             .constrain => |*decl| decl.deinit(allocator),
+            .discard_constraints => {},
             .property_set => |*property_set| property_set.value.deinit(allocator),
             .if_stmt => |*if_stmt| {
                 if_stmt.condition.deinit(allocator);

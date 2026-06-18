@@ -260,7 +260,9 @@ end
       assert(result.status === "ok", `layoutEdit did not return ok: ${JSON.stringify(result)}`);
 
       const edited = applyWorkspaceEdit(source, result.workspaceEdit, uri);
+      assert(edited.includes("!~ a.horizontal"), `horizontal discard was not inserted: ${edited}`);
       assert(edited.includes("~ a.left == page.left + 120"), `left constraint was not inserted: ${edited}`);
+      assert(edited.includes("!~ a.vertical"), `vertical discard was not inserted: ${edited}`);
       assert(edited.includes("~ a.top == page.top - 80"), `top constraint was not inserted: ${edited}`);
 
       client.changeDocument({ uri, version: 2, text: edited });
@@ -303,6 +305,7 @@ end
       assert(result.status === "ok", `relative layoutEdit did not return ok: ${JSON.stringify(result)}`);
 
       const edited = applyWorkspaceEdit(source, result.workspaceEdit, uri);
+      assert(edited.includes("!~ b.top"), `relative top discard was not inserted: ${edited}`);
       assert(/~ b\.top == a\.bottom [+-] /.test(edited), `relative top constraint was not inserted: ${edited}`);
 
       client.changeDocument({ uri, version: 2, text: edited });
@@ -359,7 +362,9 @@ end
       assert(result.status === "ok", `layoutEdit rejected table flow object: ${JSON.stringify(result)}`);
 
       const edited = applyWorkspaceEdit(source, result.workspaceEdit, uri);
+      assert(edited.includes("!~ t2.horizontal"), `horizontal discard was not inserted for t2: ${edited}`);
       assert(edited.includes("~ t2.left == page.left + 146"), `left constraint was not inserted for t2: ${edited}`);
+      assert(edited.includes("!~ t2.vertical"), `vertical discard was not inserted for t2: ${edited}`);
       assert(edited.includes("~ t2.top == page.top - 238.4"), `top constraint was not inserted for t2: ${edited}`);
 
       client.changeDocument({ uri, version: 2, text: edited });
@@ -404,7 +409,9 @@ end
       assert(result.status === "ok", `layoutEdit did not edit generated page source block: ${JSON.stringify(result)}`);
       const edited = applyWorkspaceEdit(source, result.workspaceEdit, uri);
       const secondPage = edited.slice(edited.indexOf("let b = text!"));
+      assert(secondPage.includes("!~ b.horizontal"), `horizontal discard was not inserted into the second page block: ${edited}`);
       assert(secondPage.includes("~ b.left == page.left + 144"), `left constraint was not inserted into the second page block: ${edited}`);
+      assert(secondPage.includes("!~ b.vertical"), `vertical discard was not inserted into the second page block: ${edited}`);
       assert(secondPage.includes("~ b.top == page.top - 96"), `top constraint was not inserted into the second page block: ${edited}`);
     });
   } finally {
@@ -445,7 +452,10 @@ end
       assert(missingTarget.status === "unsupported", `missing target was not unsupported: ${JSON.stringify(missingTarget)}`);
 
       const helperEdit = await layoutEdit(client, uri, 1, snapshot.snapshotId, target, { ...target.frame, x: 30, y: 30 });
-      assert(helperEdit.status === "unsupported", `helper-derived constraints were not unsupported: ${JSON.stringify(helperEdit)}`);
+      assert(helperEdit.status === "ok", `helper-derived constraints were not editable through discard: ${JSON.stringify(helperEdit)}`);
+      const edited = applyWorkspaceEdit(source, helperEdit.workspaceEdit, uri);
+      assert(edited.includes("!~ a.horizontal"), `helper horizontal discard was not inserted: ${edited}`);
+      assert(edited.includes("!~ a.vertical"), `helper vertical discard was not inserted: ${edited}`);
     });
   } finally {
     await rm(project, { recursive: true, force: true });

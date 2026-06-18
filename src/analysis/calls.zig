@@ -252,6 +252,7 @@ const Analyzer = struct {
                 .constrain => |decl| if (decl.offset) |expr| {
                     _ = try self.exprLabels(expr, env, owner);
                 },
+                .discard_constraints => {},
                 .expr_stmt => |expr| {
                     _ = try self.exprLabels(expr, env, owner);
                 },

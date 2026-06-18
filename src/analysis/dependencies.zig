@@ -353,6 +353,10 @@ pub const Analyzer = struct {
                 }
                 summary.writes_layout_input = true;
             },
+            .discard_constraints => |decl| {
+                try self.addVariableRead(&summary, decl.object_name);
+                summary.writes_layout_input = true;
+            },
         }
         return summary;
     }

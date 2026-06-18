@@ -39,6 +39,14 @@ pub const VariableObjectClassExpectation = struct {
     object_class: ?[]const u8,
 };
 
+pub const ConstraintExpectation = struct {
+    target_content: []const u8,
+    target_anchor: []const u8,
+    source_content: ?[]const u8 = null,
+    source_anchor: []const u8,
+    offset: f32,
+};
+
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
@@ -228,6 +236,25 @@ pub fn expectDumpContains(
     }
 }
 
+pub fn expectConstraints(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    present: []const ConstraintExpectation,
+    absent: []const ConstraintExpectation,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    for (present) |expected| {
+        if (!try constraintExists(&ir, expected)) return error.ExpectedConstraintMissing;
+    }
+    for (absent) |expected| {
+        if (try constraintExists(&ir, expected)) return error.UnexpectedConstraintPresent;
+    }
+}
+
 pub fn expectVariableObjectClasses(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -250,6 +277,42 @@ pub fn expectVariableObjectClasses(
     for (expected) |item| {
         if (!dumpVariableObjectClassMatches(&variables.array, item)) return error.ExpectedDumpTextMissing;
     }
+}
+
+fn constraintExists(ir: *const core.Ir, expected: ConstraintExpectation) !bool {
+    const target_anchor = std.meta.stringToEnum(core.Anchor, expected.target_anchor) orelse return error.UnknownAnchorName;
+    const source_anchor = std.meta.stringToEnum(core.Anchor, expected.source_anchor) orelse return error.UnknownAnchorName;
+    const target_id = findObjectByContent(ir, expected.target_content) orelse return error.ExpectedObjectContentMissing;
+    const source_id = if (expected.source_content) |content| findObjectByContent(ir, content) orelse return error.ExpectedObjectContentMissing else null;
+
+    for (ir.constraints.items) |constraint| {
+        if (constraint.target_node != target_id) continue;
+        if (constraint.target_anchor != target_anchor) continue;
+        if (!std.math.approxEqAbs(f32, constraint.offset, expected.offset, 0.001)) continue;
+        switch (constraint.source) {
+            .page => |anchor| {
+                if (source_id != null) continue;
+                if (anchor != source_anchor) continue;
+                return true;
+            },
+            .node => |source| {
+                const expected_source_id = source_id orelse continue;
+                if (source.node_id != expected_source_id) continue;
+                if (source.anchor != source_anchor) continue;
+                return true;
+            },
+        }
+    }
+    return false;
+}
+
+fn findObjectByContent(ir: *const core.Ir, content: []const u8) ?core.NodeId {
+    for (ir.nodes.items) |node| {
+        if (node.kind != .object) continue;
+        const node_content = node.content orelse continue;
+        if (std.mem.eql(u8, node_content, content)) return node.id;
+    }
+    return null;
 }
 
 fn dumpVariableObjectClassMatches(variables: *const std.json.Array, expected: VariableObjectClassExpectation) bool {

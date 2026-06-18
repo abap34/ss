@@ -896,6 +896,11 @@ const Parser = struct {
         if (try self.consumeKeyword("bind")) {
             return self.failAt(start, error.BindRemoved);
         }
+        if (self.consumeConstraintDiscardMarker()) {
+            const decl = try self.parseConstraintDiscardDecl();
+            try self.consumeStatementTerminator();
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .discard_constraints = decl } };
+        }
         if (self.consumeConstraintMarker()) {
             const decl = try self.parseMemberConstraintDecl();
             try self.consumeStatementTerminator();
@@ -1372,6 +1377,27 @@ const Parser = struct {
         return .{ .target = target_anchor, .source = source, .offset = offset };
     }
 
+    fn parseConstraintDiscardDecl(self: *Parser) !ast.ConstraintDiscardDecl {
+        const object_name = try self.parseIdentifier();
+        if (std.mem.eql(u8, object_name, "page")) return self.fail(error.PageCannotBeConstraintTarget);
+        self.skipInlineSpaces();
+        try self.expectChar('.');
+        const member_name = try self.parseIdentifier();
+        if (names.parseAnchorName(member_name)) |anchor| {
+            return .{ .object_name = object_name, .selector = .{ .anchor = anchor } };
+        }
+        if (std.mem.eql(u8, member_name, "horizontal")) {
+            return .{ .object_name = object_name, .selector = .{ .axis = .horizontal } };
+        }
+        if (std.mem.eql(u8, member_name, "vertical")) {
+            return .{ .object_name = object_name, .selector = .{ .axis = .vertical } };
+        }
+        if (std.mem.eql(u8, member_name, "position")) {
+            return .{ .object_name = object_name, .selector = .position };
+        }
+        return self.fail(error.UnknownAnchor);
+    }
+
     const ConstraintMemberRef = struct {
         anchor_ref: AnchorRef,
         dimension: ?struct {
@@ -1674,6 +1700,13 @@ const Parser = struct {
         self.skipInlineSpaces();
         if (self.eof() or self.source[self.pos] != '~') return false;
         self.pos += 1;
+        return true;
+    }
+
+    fn consumeConstraintDiscardMarker(self: *Parser) bool {
+        self.skipInlineSpaces();
+        if (!self.startsWith("!~")) return false;
+        self.pos += 2;
         return true;
     }
 

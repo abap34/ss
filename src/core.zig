@@ -10,6 +10,7 @@ pub const PayloadKind = model.PayloadKind;
 pub const Anchor = model.Anchor;
 pub const ConstraintSource = model.ConstraintSource;
 pub const Constraint = model.Constraint;
+pub const ConstraintDiscardSelector = model.ConstraintDiscardSelector;
 pub const AnchorValue = model.AnchorValue;
 pub const Frame = model.Frame;
 pub const Axis = model.Axis;
