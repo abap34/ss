@@ -10,6 +10,13 @@
 !release/docker/render/Dockerfile.dockerignore
 !release/docker/render/docker-entrypoint.sh
 
+!editor
+!editor/tree-sitter-ss
+!editor/tree-sitter-ss/src
+!editor/tree-sitter-ss/src/**
+!editor/tree-sitter-ss/queries
+!editor/tree-sitter-ss/queries/highlights.scm
+
 !scripts
 !scripts/setup-md4c.sh
 
