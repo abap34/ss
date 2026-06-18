@@ -14,6 +14,7 @@ const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSet = model.ConstraintSet;
 const ConstraintSource = model.ConstraintSource;
+const ConstraintDiscardSelector = model.ConstraintDiscardSelector;
 const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
 const ValueTag = model.ValueTag;
@@ -700,6 +701,17 @@ pub const Ir = struct {
         try self.constraints.appendSlice(self.allocator, constraints.items.items);
     }
 
+    pub fn discardConstraints(self: *Ir, target_node: NodeId, selector: ConstraintDiscardSelector) void {
+        var write_index: usize = 0;
+        for (self.constraints.items) |constraint| {
+            if (!constraintDiscardMatches(target_node, selector, constraint)) {
+                self.constraints.items[write_index] = constraint;
+                write_index += 1;
+            }
+        }
+        self.constraints.shrinkRetainingCapacity(write_index);
+    }
+
     pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
         const failure: ConstraintFailure = .{
             .kind = kind,
@@ -1100,5 +1112,28 @@ fn constraintSourceEq(a: ConstraintSource, b: ConstraintSource) bool {
             .page => false,
             .node => |b_node| a_node.node_id == b_node.node_id and a_node.anchor == b_node.anchor,
         },
+    };
+}
+
+fn constraintDiscardMatches(target_node: NodeId, selector: ConstraintDiscardSelector, constraint: Constraint) bool {
+    if (constraint.target_node != target_node) return false;
+    return switch (selector) {
+        .anchor => |anchor| constraint.target_anchor == anchor,
+        .axis => |axis| constraintAnchorAxis(constraint.target_anchor) == axis and isPlacementConstraint(target_node, constraint),
+        .position => isPlacementConstraint(target_node, constraint),
+    };
+}
+
+fn isPlacementConstraint(target_node: NodeId, constraint: Constraint) bool {
+    return switch (constraint.source) {
+        .page => true,
+        .node => |source| source.node_id != target_node,
+    };
+}
+
+fn constraintAnchorAxis(anchor: Anchor) model.Axis {
+    return switch (anchor) {
+        .left, .right, .center_x => .horizontal,
+        .top, .bottom, .center_y => .vertical,
     };
 }

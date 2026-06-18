@@ -200,6 +200,21 @@ fn expectDumpContains(source: []const u8, expected: []const []const u8) !void {
     try compiler_semantics.expectDumpContains(testing.io, allocator, path, source, expected);
 }
 
+fn expectConstraints(
+    source: []const u8,
+    present: []const compiler_semantics.ConstraintExpectation,
+    absent: []const compiler_semantics.ConstraintExpectation,
+) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectConstraints(testing.io, allocator, path, source, present, absent);
+}
+
 fn expectVariableObjectClasses(source: []const u8, expected: []const compiler_semantics.VariableObjectClassExpectation) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3919,6 +3934,192 @@ test "compiler semantics: explicit layout conflicts are rejected" {
         \\  let a = text("a")
         \\  place!(a)
         \\  ~ a.left == a.right + 10
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: constraint discard removes earlier layout input" {
+    const anchor_source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let a = text("a")
+        \\  place!(a)
+        \\  ~ a.left == page.left + 100
+        \\  ~ a.left == page.right - 80
+        \\  !~ a.left
+        \\  !~ a.left
+        \\  ~ a.left == page.left + 120
+        \\end
+        \\
+    ;
+    try expectConstraints(
+        anchor_source,
+        &.{
+            .{ .target_content = "a", .target_anchor = "left", .source_anchor = "left", .offset = 120 },
+        },
+        &.{
+            .{ .target_content = "a", .target_anchor = "left", .source_anchor = "left", .offset = 100 },
+            .{ .target_content = "a", .target_anchor = "left", .source_anchor = "right", .offset = -80 },
+        },
+    );
+
+    const axis_source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let a = text("a")
+        \\  place!(a)
+        \\  ~ a.left == page.left + 100
+        \\  ~ a.right == a.left + 200
+        \\  !~ a.horizontal
+        \\  ~ a.left == page.left + 120
+        \\end
+        \\
+    ;
+    try expectConstraints(
+        axis_source,
+        &.{
+            .{ .target_content = "a", .target_anchor = "left", .source_anchor = "left", .offset = 120 },
+            .{ .target_content = "a", .target_anchor = "right", .source_content = "a", .source_anchor = "left", .offset = 200 },
+        },
+        &.{
+            .{ .target_content = "a", .target_anchor = "left", .source_anchor = "left", .offset = 100 },
+        },
+    );
+}
+
+test "compiler semantics: constraint discard rewrites relative object relations" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let title = text("title")
+        \\  place!(title)
+        \\  let body = text("body")
+        \\  place!(body)
+        \\  ~ body.top == title.bottom - 20
+        \\  !~ body.top
+        \\  ~ body.top == title.bottom - 36
+        \\end
+        \\
+    ;
+    try expectConstraints(
+        source,
+        &.{
+            .{ .target_content = "body", .target_anchor = "top", .source_content = "title", .source_anchor = "bottom", .offset = -36 },
+        },
+        &.{
+            .{ .target_content = "body", .target_anchor = "top", .source_content = "title", .source_anchor = "bottom", .offset = -20 },
+        },
+    );
+}
+
+test "compiler semantics: constraint discard overrides stdlib layout helpers" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let item = tl(text("item"), 72, 56)
+        \\  place!(item)
+        \\  !~ item.position
+        \\  ~ item.left == page.left + 140
+        \\  ~ item.top == page.top - 90
+        \\end
+        \\
+    ;
+    try expectConstraints(
+        source,
+        &.{
+            .{ .target_content = "item", .target_anchor = "left", .source_anchor = "left", .offset = 140 },
+            .{ .target_content = "item", .target_anchor = "top", .source_anchor = "top", .offset = -90 },
+        },
+        &.{
+            .{ .target_content = "item", .target_anchor = "left", .source_anchor = "left", .offset = 72 },
+            .{ .target_content = "item", .target_anchor = "top", .source_anchor = "top", .offset = -56 },
+        },
+    );
+}
+
+test "compiler semantics: constraint discard reaches through layered user helpers" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\fn pin_base(node: Object) -> Object
+        \\  return tl(node, 11, 22)
+        \\end
+        \\
+        \\fn pin_mid(node: Object) -> Object
+        \\  return pin_base(node)
+        \\end
+        \\
+        \\fn pin_top!(text_value: String) -> Object
+        \\  return pin_mid(text(text_value))
+        \\end
+        \\
+        \\page ok
+        \\  let deep = pin_top!("deep")
+        \\  place!(deep)
+        \\  !~ deep.position
+        \\  ~ deep.left == page.left + 80
+        \\  ~ deep.top == page.top - 120
+        \\end
+        \\
+    ;
+    try expectConstraints(
+        source,
+        &.{
+            .{ .target_content = "deep", .target_anchor = "left", .source_anchor = "left", .offset = 80 },
+            .{ .target_content = "deep", .target_anchor = "top", .source_anchor = "top", .offset = -120 },
+        },
+        &.{
+            .{ .target_content = "deep", .target_anchor = "left", .source_anchor = "left", .offset = 11 },
+            .{ .target_content = "deep", .target_anchor = "top", .source_anchor = "top", .offset = -22 },
+        },
+    );
+}
+
+test "compiler semantics: constraint discard keeps same-object size constraints for axis selectors" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let box = text("box")
+        \\  place!(box)
+        \\  inset_x(box, 40, 60)
+        \\  fix_w(box, 240)
+        \\  !~ box.horizontal
+        \\  ~ box.left == page.left + 88
+        \\end
+        \\
+    ;
+    try expectConstraints(
+        source,
+        &.{
+            .{ .target_content = "box", .target_anchor = "left", .source_anchor = "left", .offset = 88 },
+            .{ .target_content = "box", .target_anchor = "right", .source_content = "box", .source_anchor = "left", .offset = 240 },
+        },
+        &.{
+            .{ .target_content = "box", .target_anchor = "left", .source_anchor = "left", .offset = 40 },
+            .{ .target_content = "box", .target_anchor = "right", .source_anchor = "right", .offset = -60 },
+        },
+    );
+}
+
+test "compiler semantics: constraint discard requires page context and object target" {
+    try expectBuildFails(
+        \\import std:themes/default as *
+        \\
+        \\!~ missing.left
+        \\
+    );
+
+    try expectBuildFails(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  !~ missing.left
         \\end
         \\
     );

@@ -598,6 +598,7 @@ fn inferReturnInfoFromStatements(
             .constrain => |decl| {
                 if (decl.offset) |expr| _ = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
             },
+            .discard_constraints => {},
         }
     }
 }

@@ -474,6 +474,7 @@ fn resolveStatementTypeReferences(
         .constrain => |*constraint| {
             if (constraint.offset) |*offset| try resolveExprTypeReferences(offset, module_id, sema);
         },
+        .discard_constraints => {},
         .property_set => |*property_set| try resolveExprTypeReferences(&property_set.value, module_id, sema),
         .if_stmt => |*if_stmt| {
             try resolveExprTypeReferences(&if_stmt.condition, module_id, sema);
@@ -715,6 +716,7 @@ fn resolveStatementEnumCases(
         .constrain => |*constraint| {
             if (constraint.offset) |*offset| try resolveExprEnumCases(allocator, module_id, sema, env, offset);
         },
+        .discard_constraints => {},
         .property_set => |*property_set| try resolveExprEnumCases(allocator, module_id, sema, env, &property_set.value),
         .if_stmt => |*if_stmt| {
             try resolveExprEnumCases(allocator, module_id, sema, env, &if_stmt.condition);
@@ -863,6 +865,7 @@ fn checkStatementTypeAnnotations(
         .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
         .return_void => {},
         .property_set => |property_set| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.value),
+        .discard_constraints => {},
         .if_stmt => |if_stmt| {
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, if_stmt.condition);
             for (if_stmt.then_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested);
@@ -1312,6 +1315,7 @@ fn collectVariableTypesFromStatement(
         .property_set => |property_set| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
         },
+        .discard_constraints => {},
         .if_stmt => |if_stmt| {
             const condition = try inferExprInfo(allocator, diagnostic_ir, sema, env, if_stmt.condition, origin);
             try semantic_types.ensureType(diagnostic_ir, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
@@ -1364,6 +1368,7 @@ fn collectScopedVariableTypesFromStatement(
         .property_set => |property_set| {
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
         },
+        .discard_constraints => {},
         .if_stmt => |if_stmt| {
             const condition = try inferExprInfo(allocator, diagnostic_ir, sema, env, if_stmt.condition, origin);
             try semantic_types.ensureType(diagnostic_ir, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);

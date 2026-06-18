@@ -2071,10 +2071,6 @@ fn layoutEditResult(server: *Server, params: ?JsonValue) ![]const u8 {
     };
     defer edit_result.deinit(server.allocator);
 
-    if (std.mem.eql(u8, gesture_mode, "absolute") and ((object.has_left_constraint and !edit_result.replaced_left) or (object.has_top_constraint and !edit_result.replaced_top))) {
-        return try layoutEditStatusJson(server.allocator, "unsupported", "existing layout constraint is not directly editable by layoutEdit v1");
-    }
-
     const edited_source = try layout_edit.applyEdits(server.allocator, source, edit_result.edits);
     errdefer server.allocator.free(edited_source);
     const old_source = source_ptr.*;

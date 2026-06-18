@@ -14,8 +14,6 @@ pub const TextEdit = struct {
 
 pub const Result = struct {
     edits: []TextEdit,
-    replaced_left: bool,
-    replaced_top: bool,
 
     pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
         for (self.edits) |*edit| edit.deinit(allocator);
@@ -31,13 +29,8 @@ const Line = struct {
 };
 
 const PageBlock = struct {
-    start_line: Line,
     end_line: Line,
     indent: []const u8,
-};
-
-const AnchorLine = struct {
-    line: Line,
 };
 
 pub const AnchorRelation = struct {
@@ -67,11 +60,30 @@ pub fn absoluteTopLeftWithPageIndex(
     left: f64,
     top_from_page_top: f64,
 ) !?Result {
-    const relations = [_]AnchorRelation{
-        .{ .target_anchor = "left", .source_name = "page", .source_anchor = "left", .offset = left },
-        .{ .target_anchor = "top", .source_name = "page", .source_anchor = "top", .offset = -top_from_page_top },
+    const page = findPageBlock(source, page_name, page_index) orelse return null;
+    var text = std.ArrayList(u8).empty;
+    errdefer text.deinit(allocator);
+    try appendDiscardLine(allocator, &text, page.indent, object_name, "horizontal");
+    try appendConstraintLine(allocator, &text, page.indent, object_name, "left", "page", "left", left);
+    try appendDiscardLine(allocator, &text, page.indent, object_name, "vertical");
+    try appendConstraintLine(allocator, &text, page.indent, object_name, "top", "page", "top", -top_from_page_top);
+
+    var edits = std.ArrayList(TextEdit).empty;
+    errdefer {
+        for (edits.items) |*edit| edit.deinit(allocator);
+        edits.deinit(allocator);
+    }
+    try edits.append(allocator, .{
+        .start_line = page.end_line.index,
+        .start_character = 0,
+        .end_line = page.end_line.index,
+        .end_character = 0,
+        .text = try text.toOwnedSlice(allocator),
+    });
+
+    return .{
+        .edits = try edits.toOwnedSlice(allocator),
     };
-    return anchorRelationsWithPageIndex(allocator, source, page_name, page_index, object_name, &relations);
 }
 
 pub fn anchorRelationsWithPageIndex(
@@ -90,59 +102,31 @@ pub fn anchorRelationsWithPageIndex(
         edits.deinit(allocator);
     }
 
-    var replaced_left = false;
-    var replaced_top = false;
-    var missing = std.ArrayList(AnchorRelation).empty;
-    defer missing.deinit(allocator);
-
+    var text = std.ArrayList(u8).empty;
+    errdefer text.deinit(allocator);
     for (relations) |relation| {
-        const existing_line = findDirectConstraint(source, page, object_name, relation.target_anchor);
-        if (existing_line) |line| {
-            try edits.append(allocator, try replaceLineEdit(
-                allocator,
-                line.line,
-                page.indent,
-                object_name,
-                relation.target_anchor,
-                relation.source_name,
-                relation.source_anchor,
-                relation.offset,
-            ));
-            if (std.mem.eql(u8, relation.target_anchor, "left")) replaced_left = true;
-            if (std.mem.eql(u8, relation.target_anchor, "top")) replaced_top = true;
-        } else {
-            try missing.append(allocator, relation);
-        }
+        try appendDiscardLine(allocator, &text, page.indent, object_name, relation.target_anchor);
+        try appendConstraintLine(
+            allocator,
+            &text,
+            page.indent,
+            object_name,
+            relation.target_anchor,
+            relation.source_name,
+            relation.source_anchor,
+            relation.offset,
+        );
     }
-
-    if (missing.items.len != 0) {
-        var text = std.ArrayList(u8).empty;
-        errdefer text.deinit(allocator);
-        for (missing.items) |relation| {
-            try appendConstraintLine(
-                allocator,
-                &text,
-                page.indent,
-                object_name,
-                relation.target_anchor,
-                relation.source_name,
-                relation.source_anchor,
-                relation.offset,
-            );
-        }
-        try edits.append(allocator, .{
-            .start_line = page.end_line.index,
-            .start_character = 0,
-            .end_line = page.end_line.index,
-            .end_character = 0,
-            .text = try text.toOwnedSlice(allocator),
-        });
-    }
+    try edits.append(allocator, .{
+        .start_line = page.end_line.index,
+        .start_character = 0,
+        .end_line = page.end_line.index,
+        .end_character = 0,
+        .text = try text.toOwnedSlice(allocator),
+    });
 
     return .{
         .edits = try edits.toOwnedSlice(allocator),
-        .replaced_left = replaced_left,
-        .replaced_top = replaced_top,
     };
 }
 
@@ -175,28 +159,6 @@ pub fn applyEdits(allocator: std.mem.Allocator, source: []const u8, edits: []con
     return out.toOwnedSlice(allocator);
 }
 
-fn replaceLineEdit(
-    allocator: std.mem.Allocator,
-    line: Line,
-    indent: []const u8,
-    object_name: []const u8,
-    target_anchor: []const u8,
-    source_name: []const u8,
-    source_anchor: []const u8,
-    offset: f64,
-) !TextEdit {
-    var text = std.ArrayList(u8).empty;
-    errdefer text.deinit(allocator);
-    try appendConstraintLineWithoutTrailingNewline(allocator, &text, indent, object_name, target_anchor, source_name, source_anchor, offset);
-    return .{
-        .start_line = line.index,
-        .start_character = 0,
-        .end_line = line.index,
-        .end_character = line.text.len,
-        .text = try text.toOwnedSlice(allocator),
-    };
-}
-
 fn appendConstraintLine(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -208,6 +170,21 @@ fn appendConstraintLine(
     offset: f64,
 ) !void {
     try appendConstraintLineWithoutTrailingNewline(allocator, out, indent, object_name, target_anchor, source_name, source_anchor, offset);
+    try out.append(allocator, '\n');
+}
+
+fn appendDiscardLine(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    indent: []const u8,
+    object_name: []const u8,
+    selector: []const u8,
+) !void {
+    try out.appendSlice(allocator, indent);
+    try out.appendSlice(allocator, "!~ ");
+    try out.appendSlice(allocator, object_name);
+    try out.append(allocator, '.');
+    try out.appendSlice(allocator, selector);
     try out.append(allocator, '\n');
 }
 
@@ -266,7 +243,7 @@ fn findPageBlock(source: []const u8, page_name: []const u8, page_index: ?i64) ?P
             }
             if (std.mem.eql(u8, body_trimmed, "end")) {
                 if (nested_depth == 0) {
-                    return .{ .start_line = line, .end_line = body_line, .indent = indent orelse "  " };
+                    return .{ .end_line = body_line, .indent = indent orelse "  " };
                 }
                 nested_depth -= 1;
                 continue;
@@ -283,36 +260,6 @@ fn isPageDeclaration(trimmed: []const u8) bool {
     return trimmed.len == "page".len or std.ascii.isWhitespace(trimmed["page".len]);
 }
 
-fn findDirectConstraint(source: []const u8, page: PageBlock, object_name: []const u8, anchor: []const u8) ?AnchorLine {
-    var lines = LineIterator.init(source);
-    while (lines.next()) |line| {
-        if (line.index <= page.start_line.index) continue;
-        if (line.index >= page.end_line.index) return null;
-        if (matchesDirectConstraint(line.text, object_name, anchor)) return .{ .line = line };
-    }
-    return null;
-}
-
-fn matchesDirectConstraint(line: []const u8, object_name: []const u8, anchor: []const u8) bool {
-    var rest = std.mem.trim(u8, line, " \t\r");
-    if (rest.len == 0 or rest[0] != '~') return false;
-    rest = trimLeft(rest[1..], " \t");
-    if (!consume(&rest, object_name)) return false;
-    if (!consume(&rest, ".")) return false;
-    if (!consume(&rest, anchor)) return false;
-    rest = trimLeft(rest, " \t");
-    if (!consume(&rest, "==")) return false;
-    rest = trimLeft(rest, " \t");
-    if (!consume(&rest, "page.")) return false;
-    return consume(&rest, anchor);
-}
-
-fn consume(rest: *[]const u8, prefix: []const u8) bool {
-    if (!std.mem.startsWith(u8, rest.*, prefix)) return false;
-    rest.* = rest.*[prefix.len..];
-    return true;
-}
-
 fn leadingWhitespace(text: []const u8) usize {
     var index: usize = 0;
     while (index < text.len and (text[index] == ' ' or text[index] == '\t')) index += 1;
@@ -326,12 +273,6 @@ fn startsNestedBlock(trimmed: []const u8) bool {
         if (std.mem.startsWith(u8, trimmed, keyword) and trimmed.len > keyword.len and std.ascii.isWhitespace(trimmed[keyword.len])) return true;
     }
     return false;
-}
-
-fn trimLeft(text: []const u8, cutset: []const u8) []const u8 {
-    var index: usize = 0;
-    while (index < text.len and std.mem.indexOfScalar(u8, cutset, text[index]) != null) index += 1;
-    return text[index..];
 }
 
 fn offsetFromLineCharacter(source: []const u8, target_line: usize, target_character: usize) usize {
