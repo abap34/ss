@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core");
 
 const json = @import("utils").json;
+const layout = core.layout;
 
 pub fn writePageOrderField(root: *json.Object, page_order: []const core.NodeId) !void {
     var array = try root.arrayField("page_order");
@@ -31,6 +32,81 @@ pub fn writeConstraintsField(root: *json.Object, constraints: []const core.Const
         try item.end();
     }
     try array.end();
+}
+
+pub fn writeLayoutRelationsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+    var array = try root.arrayField("layout_relations");
+    for (ir.constraints.items) |constraint| {
+        const page_id = ir.parentPageOf(constraint.target_node) orelse continue;
+        var item = try array.objectItem();
+        try item.stringField("kind", "explicit");
+        try item.intField("page_id", page_id);
+        try item.enumTagField("axis", layout.anchorAxis(constraint.target_anchor));
+        try writeConstraintFields(&item, constraint, "target_node", "source_node", "node");
+        try item.end();
+    }
+
+    for (ir.page_order.items) |page_id| {
+        try writeFallbackRelationsForPage(allocator, &array, ir, page_id);
+    }
+    try array.end();
+}
+
+fn writeFallbackRelationsForPage(allocator: std.mem.Allocator, array: *json.Array, ir: *core.Ir, page_id: core.NodeId) !void {
+    var page_graph = try layout.graph.PageLayoutGraph.init(allocator, ir, page_id);
+    defer page_graph.deinit();
+    if (page_graph.len() == 0) return;
+
+    var horizontal = try emptyAxisWorkspace(allocator, &page_graph, .horizontal);
+    defer horizontal.deinit();
+    try solveAxisForFallbackDump(ir, &horizontal);
+    var horizontal_fallback = try layout.fallback.buildHorizontalConstraints(ir, &horizontal);
+    defer horizontal_fallback.deinit(allocator);
+    try writeFallbackRelationItems(array, page_id, .horizontal, horizontal_fallback.items);
+
+    var vertical = try emptyAxisWorkspace(allocator, &page_graph, .vertical);
+    defer vertical.deinit();
+    try solveAxisForFallbackDump(ir, &vertical);
+    var vertical_fallback = try layout.fallback.buildVerticalConstraints(ir, &vertical);
+    defer vertical_fallback.deinit(allocator);
+    try writeFallbackRelationItems(array, page_id, .vertical, vertical_fallback.items);
+}
+
+fn emptyAxisWorkspace(allocator: std.mem.Allocator, page_graph: *const layout.graph.PageLayoutGraph, axis: core.Axis) !layout.graph.AxisWorkspace {
+    const states = try allocator.alloc(core.AxisState, page_graph.len());
+    errdefer allocator.free(states);
+    for (states) |*state| state.* = .{};
+    return .{
+        .allocator = allocator,
+        .graph = page_graph,
+        .axis = axis,
+        .states = states,
+    };
+}
+
+fn solveAxisForFallbackDump(ir: *core.Ir, workspace: *layout.graph.AxisWorkspace) !void {
+    try layout.solver.runPageAxisPassWithOptions(ir, workspace, .{ .record_diagnostics = false });
+    for (workspace.graph.child_ids, workspace.states) |child_id, *state| {
+        if (state.size != null) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        state.size = switch (workspace.axis) {
+            .horizontal => node.frame.width,
+            .vertical => node.frame.height,
+        };
+        state.size_is_default = true;
+    }
+    try layout.solver.runPageAxisPassWithOptions(ir, workspace, .{ .record_diagnostics = false });
+}
+
+fn writeFallbackRelationItems(array: *json.Array, page_id: core.NodeId, axis: core.Axis, constraints: []const core.Constraint) !void {
+    for (constraints) |constraint| {
+        var item = try array.objectItem();
+        try item.stringField("kind", "fallback");
+        try item.intField("page_id", page_id);
+        try item.enumTagField("axis", axis);
+        try writeConstraintFields(&item, constraint, "target_node", "source_node", "node");
+        try item.end();
+    }
 }
 
 fn writeConstraintFields(

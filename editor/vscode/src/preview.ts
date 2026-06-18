@@ -3,20 +3,23 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { LanguageClient } from "vscode-languageclient/node";
 import { PdfPreviewPanel } from "./pdfPreviewPanel";
 import { PdfPreviewServer } from "./pdfPreviewServer";
+import {
+  ClientProvider,
+  DependencySession,
+  documentForSession,
+  ignoreGeneratedPath,
+  normalizePath,
+  requestProjectInfo,
+  resolveProjectInfo,
+  sessionDependsOn,
+  uniquePaths,
+  updateDependencySession,
+} from "./previewShared";
 import { projectSettings } from "./projectConfig";
 
-type ClientProvider = () => LanguageClient | undefined;
-
-interface ProjectInfo {
-  entryPath?: string;
-  assetBaseDir?: string;
-  localModules?: string[];
-}
-
-interface PreviewSession {
+interface PreviewSession extends DependencySession {
   wantsPreview: boolean;
   externalOpened: boolean;
   rendering: boolean;
@@ -24,8 +27,6 @@ interface PreviewSession {
   pdfPath?: string;
   renderId: number;
   timer?: NodeJS.Timeout;
-  entryPath?: string;
-  dependencyPaths?: Set<string>;
   panel?: PdfPreviewPanel;
 }
 
@@ -220,12 +221,11 @@ export class LivePreview implements vscode.Disposable {
     const renderId = session.renderId + 1;
     session.renderId = renderId;
 
-    const projectInfo = await this.projectInfo(document);
-    const entryPath = projectInfo.entryPath ?? document.uri.fsPath;
-    const assetBaseDir = projectInfo.assetBaseDir ?? path.dirname(entryPath);
-    const localModules = projectInfo.localModules ?? [];
-    session.entryPath = normalizePath(entryPath);
-    session.dependencyPaths = new Set(unique([entryPath, ...localModules]).map(normalizePath));
+    const projectInfo = resolveProjectInfo(document, await requestProjectInfo(this.clientProvider, document, (message) => {
+      this.output.appendLine(`[preview] projectInfo failed: ${message}`);
+    }));
+    const { entryPath, assetBaseDir, localModules } = projectInfo;
+    updateDependencySession(session, entryPath, localModules);
     if (!this.renderIsCurrent(key, renderId)) {
       return;
     }
@@ -279,21 +279,6 @@ export class LivePreview implements vscode.Disposable {
     return Boolean(current && current.renderId === renderId);
   }
 
-  private async projectInfo(document: vscode.TextDocument): Promise<ProjectInfo> {
-    const client = this.clientProvider();
-    if (!client) {
-      return {};
-    }
-    try {
-      return await client.sendRequest<ProjectInfo>("ss/projectInfo", {
-        textDocument: { uri: document.uri.toString() },
-      });
-    } catch (error) {
-      this.output.appendLine(`[preview] projectInfo failed: ${String(error)}`);
-      return {};
-    }
-  }
-
   private async writeSnapshot(entryPath: string, assetBaseDir: string, modules: string[], renderId: number): Promise<Snapshot> {
     const entryUri = vscode.Uri.file(entryPath);
     const workspaceRoot = vscode.workspace.getWorkspaceFolder(entryUri)?.uri.fsPath ?? path.dirname(entryPath);
@@ -302,7 +287,7 @@ export class LivePreview implements vscode.Disposable {
     const snapshotDir = path.join(snapshotRoot, `${process.pid}-${renderId}`);
     await fs.promises.rm(snapshotDir, { recursive: true, force: true });
     await copyDirectory(assetBaseDir, snapshotDir);
-    const paths = unique([entryPath, ...modules, ...vscode.workspace.textDocuments.filter((doc) => doc.languageId === "ss-slide" && doc.uri.scheme === "file").map((doc) => doc.uri.fsPath)]);
+    const paths = uniquePaths([entryPath, ...modules, ...vscode.workspace.textDocuments.filter((doc) => doc.languageId === "ss-slide" && doc.uri.scheme === "file").map((doc) => doc.uri.fsPath)]);
     for (const sourcePath of paths) {
       const text = openDocumentText(sourcePath) ?? await fs.promises.readFile(sourcePath, "utf8").catch(() => undefined);
       if (text === undefined) {
@@ -434,35 +419,6 @@ export class LivePreview implements vscode.Disposable {
 
 function stableHash(text: string): string {
   return crypto.createHash("sha1").update(text).digest("hex").slice(0, 12);
-}
-
-function normalizePath(filePath: string): string {
-  return path.resolve(filePath);
-}
-
-function sessionDependsOn(session: PreviewSession, changedPath: string): boolean {
-  if (session.entryPath === changedPath) {
-    return true;
-  }
-  return session.dependencyPaths?.has(changedPath) ?? false;
-}
-
-function ignoreGeneratedPath(filePath: string): boolean {
-  return path.resolve(filePath).split(path.sep).some((part) =>
-    part === ".ss-cache" ||
-    part === ".git" ||
-    part === ".zig-cache" ||
-    part === "node_modules" ||
-    part === "zig-out"
-  );
-}
-
-function documentForSession(key: string): vscode.TextDocument | undefined {
-  return vscode.workspace.textDocuments.find((document) => document.uri.toString() === key);
-}
-
-function unique(paths: string[]): string[] {
-  return [...new Set(paths.map((item) => path.resolve(item)))];
 }
 
 function safeRelative(root: string, filePath: string): string {

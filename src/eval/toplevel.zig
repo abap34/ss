@@ -2043,6 +2043,15 @@ fn executeStatement(
             } else 0;
             try ir.addAnchorConstraint(target.node_id, target.anchor, source, offset, origin);
         },
+        .discard_constraints => |decl| {
+            if (context != .page) return error.NoCurrentPage;
+            const value = env.get(decl.object_name) orelse {
+                try reportUnknownIdentifier(ir, decl.object_name, origin);
+                return error.UnknownIdentifier;
+            };
+            const object_id = try resolveValueObjectId(ir, mode, value);
+            ir.discardConstraints(object_id, constraintDiscardSelector(decl.selector));
+        },
         .expr_stmt => |expr| switch (expr) {
             .call => |call| {
                 const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
@@ -2071,6 +2080,14 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
         .object => |id| last_code_like.* = id,
         else => {},
     }
+}
+
+fn constraintDiscardSelector(selector: ast.ConstraintDiscardDecl.Selector) core.ConstraintDiscardSelector {
+    return switch (selector) {
+        .anchor => |anchor| .{ .anchor = anchor },
+        .axis => |axis| .{ .axis = axis },
+        .position => .position,
+    };
 }
 
 fn connectReturnedObject(ir: *core.Ir, value: core.Value, start_node_count: usize) !void {

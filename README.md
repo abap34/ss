@@ -167,7 +167,7 @@ end
 Then run:
 
 ```sh
-ss render --project . --output deck.pdf
+ss render --project . --output slide.pdf
 ```
 
 `entry` is required. `asset_base_dir` defaults to the entry file's parent
@@ -258,7 +258,7 @@ docker run --rm \
   -v "$PWD:/workspace" \
   -w /workspace \
   ghcr.io/abap34/ss-render:v0 \
-  render slides/deck.ss .ss-cache/deck.pdf
+  render slides/deck.ss slides/deck.pdf
 ```
 
 The repository also includes a GitHub Action for rendering matching `.ss` files
@@ -281,12 +281,12 @@ to PDFs with the same Docker image:
 | `ss help`                                 | Show help.                                                       |
 | `ss check [input.ss]`                     | Parse, load modules, and type-check a deck.                      |
 | `ss dump [input.ss] [output.json]`        | Write compiler/IR metadata for tooling and debugging.            |
-| `ss render [input.ss] [output.pdf]`       | Render a PDF.                                                    |
+| `ss render [input.ss] [output]`           | Render a PDF or static HTML.                                     |
 | `ss init [dir]`                           | Create an `ss.toml` and starter slide deck.                      |
 | `ss doctor`                               | Check project discovery and render tool availability.            |
 | `ss lsp`                                  | Run the stdio language server.                                   |
 | `ss watch check [input.ss]`               | Re-run checks as project files change.                           |
-| `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change.                         |
+| `ss watch render [input.ss] [output]`     | Re-render a PDF or static HTML as project files change.           |
 | `ss cache stats`                          | Show managed render cache file count, directory count, and size. |
 | `ss cache clear`                          | Clear the managed render cache under `.ss-cache/render`.         |
 
@@ -297,8 +297,9 @@ ss check slide.ss
 ss init slides
 ss doctor --project slides
 ss dump --project . --output .ss-cache/deck.json
-ss render --project . --output .ss-cache/deck.pdf
-ss watch render slide.ss .ss-cache/deck.pdf
+ss render --project . --output slide.pdf
+ss render --project . --format html --output slide.html
+ss watch render slide.ss slide.pdf
 ss cache stats
 ```
 
@@ -313,6 +314,10 @@ ss cache stats
 
 `ss lsp` discovers the project from the `.ss` file opened by the editor,
 searching upward from that file's directory for the nearest `ss.toml`.
+
+`ss render` selects PDF by default. An output ending in `.html` or `.htm`
+selects static HTML, and `--format pdf|html` overrides extension-based
+selection.
 
 ### Render Cache
 

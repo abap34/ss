@@ -11,6 +11,8 @@ const dump = @import("dump.zig");
 const utils = @import("utils");
 const analysis_completion = @import("analysis/completion.zig");
 const lsp_scope = @import("lsp/scope.zig");
+const layout_edit = @import("editor/layout_edit.zig");
+const render_compile = @import("render/compile.zig");
 
 const JsonValue = std.json.Value;
 const JsonObject = std.json.ObjectMap;
@@ -31,19 +33,23 @@ const RequestPosition = struct {
 };
 
 const Snapshot = struct {
+    id: []u8,
     entry_path: []u8,
     asset_base_dir: []u8,
     lsp: project.LspConfig = .{},
     preview: project.PreviewConfig = .{},
     page_guide: project.PageGuideConfig = .{},
     dump_json: ?[]u8 = null,
+    display_json: ?[]u8 = null,
     completion_index: ?analysis_completion.Index = null,
     module_paths: std.ArrayList([]u8),
 
     fn deinit(self: *Snapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.id);
         allocator.free(self.entry_path);
         allocator.free(self.asset_base_dir);
         if (self.dump_json) |json| allocator.free(json);
+        if (self.display_json) |json| allocator.free(json);
         if (self.completion_index) |*index| index.deinit();
         for (self.module_paths.items) |path| allocator.free(path);
         self.module_paths.deinit(allocator);
@@ -73,7 +79,9 @@ const Server = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     documents: std.StringHashMap([]u8),
+    document_versions: std.StringHashMap(i64),
     snapshot: ?Snapshot = null,
+    snapshot_serial: u64 = 0,
     last_good_completion: ?CompletionCache = null,
     document_completion_cache: std.StringHashMap(DocumentCompletionCache),
     published_diagnostic_uris: std.StringHashMap(void),
@@ -86,6 +94,7 @@ const Server = struct {
             .io = io,
             .allocator = allocator,
             .documents = std.StringHashMap([]u8).init(allocator),
+            .document_versions = std.StringHashMap(i64).init(allocator),
             .document_completion_cache = std.StringHashMap(DocumentCompletionCache).init(allocator),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
         };
@@ -98,6 +107,7 @@ const Server = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.documents.deinit();
+        deinitVersionMap(self.allocator, &self.document_versions);
         if (self.snapshot) |*snapshot| snapshot.deinit(self.allocator);
         if (self.last_good_completion) |*cache| cache.deinit(self.allocator);
         deinitCompletionIndexMap(self.allocator, &self.document_completion_cache);
@@ -105,7 +115,7 @@ const Server = struct {
         self.clearPendingRebuild();
     }
 
-    fn replaceDocument(self: *Server, uri: []const u8, text: []const u8) !void {
+    fn replaceDocument(self: *Server, uri: []const u8, text: []const u8, version: ?i64) !void {
         const path = try pathFromUri(self.allocator, uri);
         errdefer self.allocator.free(path);
         const source = try self.allocator.dupe(u8, text);
@@ -115,20 +125,21 @@ const Server = struct {
             self.allocator.free(entry.value);
         }
         try self.documents.put(path, source);
+        if (version) |value| try self.setDocumentVersionPath(path, value);
     }
 
     fn applyDocumentChange(self: *Server, uri: []const u8, change: *const JsonObject) !void {
         const text = stringField(change, "text") orelse "";
         const range = objectFieldObject(change, "range") orelse {
-            try self.replaceDocument(uri, text);
+            try self.replaceDocument(uri, text, null);
             return;
         };
         const start = objectFieldObject(range, "start") orelse {
-            try self.replaceDocument(uri, text);
+            try self.replaceDocument(uri, text, null);
             return;
         };
         const end = objectFieldObject(range, "end") orelse {
-            try self.replaceDocument(uri, text);
+            try self.replaceDocument(uri, text, null);
             return;
         };
 
@@ -161,7 +172,27 @@ const Server = struct {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
         }
+        if (self.document_versions.fetchRemove(path)) |entry| self.allocator.free(entry.key);
         self.removeDocumentCompletionCache(path);
+    }
+
+    fn setDocumentVersion(self: *Server, uri: []const u8, version: i64) !void {
+        const path = try pathFromUri(self.allocator, uri);
+        defer self.allocator.free(path);
+        try self.setDocumentVersionPath(path, version);
+    }
+
+    fn setDocumentVersionPath(self: *Server, path: []const u8, version: i64) !void {
+        const key = try project.absolutePath(self.allocator, path);
+        errdefer self.allocator.free(key);
+        if (self.document_versions.fetchRemove(key)) |entry| self.allocator.free(entry.key);
+        try self.document_versions.put(key, version);
+    }
+
+    fn documentVersionForPath(self: *const Server, path: []const u8) ?i64 {
+        const key = project.absolutePath(self.allocator, path) catch return null;
+        defer self.allocator.free(key);
+        return self.document_versions.get(key);
     }
 
     fn sourceForPath(self: *Server, path: []const u8) ?[]const u8 {
@@ -250,9 +281,9 @@ const Server = struct {
 
         var config: ?project.Config = null;
         if (project_path) |path| {
-            config = project.loadFile(self.allocator, self.io, path) catch |err| blk: {
+            config = project.loadFile(self.allocator, self.io, path) catch |err| {
                 try self.addProjectConfigDiagnostic(diagnostics, path, err);
-                break :blk null;
+                return try self.emptySnapshotForPath(changed_abs);
             };
         }
         defer if (config) |*cfg| cfg.deinit(self.allocator);
@@ -261,7 +292,13 @@ const Server = struct {
         const asset_base_dir = if (config) |cfg| try self.allocator.dupe(u8, cfg.asset_base_dir) else try dirnameAlloc(self.allocator, entry_path);
         errdefer self.allocator.free(asset_base_dir);
 
+        self.snapshot_serial +%= 1;
+        const fingerprint = self.sourceRevisionFingerprint(changed_abs);
+        const snapshot_id = try std.fmt.allocPrint(self.allocator, "{x}-{x}", .{ self.snapshot_serial, fingerprint });
+        errdefer self.allocator.free(snapshot_id);
+
         var snapshot = Snapshot{
+            .id = snapshot_id,
             .entry_path = entry_path,
             .asset_base_dir = asset_base_dir,
             .lsp = if (config) |cfg| cfg.lsp else .{},
@@ -360,8 +397,46 @@ const Server = struct {
         }
 
         snapshot.dump_json = dump.toOwnedString(self.allocator, &ir) catch null;
+        snapshot.display_json = renderDisplayJson(self.allocator, self.io, entry_path, &ir, if (config) |cfg| cfg.highlight.languages else &.{}) catch null;
         snapshot.completion_index = analysis_completion.Index.fromIr(self.allocator, &ir) catch null;
         return snapshot;
+    }
+
+    fn emptySnapshotForPath(self: *Server, path: []const u8) !Snapshot {
+        const entry_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(entry_path);
+        const asset_base_dir = try dirnameAlloc(self.allocator, entry_path);
+        errdefer self.allocator.free(asset_base_dir);
+
+        self.snapshot_serial +%= 1;
+        const fingerprint = self.sourceRevisionFingerprint(path);
+        const snapshot_id = try std.fmt.allocPrint(self.allocator, "{x}-{x}", .{ self.snapshot_serial, fingerprint });
+        errdefer self.allocator.free(snapshot_id);
+
+        return .{
+            .id = snapshot_id,
+            .entry_path = entry_path,
+            .asset_base_dir = asset_base_dir,
+            .module_paths = .empty,
+        };
+    }
+
+    fn sourceRevisionFingerprint(self: *Server, changed_abs: []const u8) u64 {
+        var hash = std.hash.Wyhash.init(0);
+        hash.update(changed_abs);
+        var doc_iterator = self.documents.iterator();
+        while (doc_iterator.next()) |entry| {
+            hash.update(entry.key_ptr.*);
+            hash.update(entry.value_ptr.*);
+        }
+        var version_iterator = self.document_versions.iterator();
+        while (version_iterator.next()) |entry| {
+            hash.update(entry.key_ptr.*);
+            var buf: [8]u8 = undefined;
+            std.mem.writeInt(i64, &buf, entry.value_ptr.*, .little);
+            hash.update(&buf);
+        }
+        return hash.final();
     }
 
     fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {
@@ -511,6 +586,32 @@ fn deinitStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void)) 
     var iterator = set.keyIterator();
     while (iterator.next()) |key| allocator.free(key.*);
     set.deinit();
+}
+
+fn deinitVersionMap(allocator: std.mem.Allocator, map: *std.StringHashMap(i64)) void {
+    var iterator = map.keyIterator();
+    while (iterator.next()) |key| allocator.free(key.*);
+    map.deinit();
+}
+
+fn renderDisplayJson(allocator: std.mem.Allocator, io: std.Io, entry_path: []const u8, ir: *core.Ir, highlight_languages: []const utils.highlight.Language) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    const cache_dir = try htmlArtifactCacheDir(allocator, entry_path);
+    defer allocator.free(cache_dir);
+    try std.Io.Dir.cwd().createDirPath(io, cache_dir);
+    try render_compile.appendHtmlDisplayFromIr(allocator, &out, io, ir, .{
+        .cache_dir = cache_dir,
+        .highlight_languages = highlight_languages,
+    });
+    return out.toOwnedSlice(allocator);
+}
+
+fn htmlArtifactCacheDir(allocator: std.mem.Allocator, entry_path: []const u8) ![]u8 {
+    const entry_abs = try project.absolutePath(allocator, entry_path);
+    defer allocator.free(entry_abs);
+    const entry_dir = std.fs.path.dirname(entry_abs) orelse ".";
+    return std.fs.path.join(allocator, &.{ entry_dir, ".ss-cache", "render", "artifacts", "shared" });
 }
 
 fn deinitCompletionIndexMap(allocator: std.mem.Allocator, map: *std.StringHashMap(DocumentCompletionCache)) void {
@@ -769,7 +870,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         if (params) |p| if (objectField(p, "textDocument")) |doc| {
             if (stringField(doc, "uri")) |uri| {
                 const text = stringField(doc, "text") orelse "";
-                try server.replaceDocument(uri, text);
+                try server.replaceDocument(uri, text, intField(doc, "version"));
                 const path = try pathFromUri(server.allocator, uri);
                 defer server.allocator.free(path);
                 try server.rebuildImmediately(path);
@@ -784,6 +885,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
                     for (changes.items) |*change| {
                         if (change.* == .object) try server.applyDocumentChange(uri, &change.object);
                     }
+                    if (intField(doc, "version")) |version| try server.setDocumentVersion(uri, version);
                     const path = try pathFromUri(server.allocator, uri);
                     defer server.allocator.free(path);
                     try server.scheduleRebuild(path);
@@ -873,6 +975,18 @@ fn handleMessage(server: *Server, body: []const u8) !void {
     }
     if (std.mem.eql(u8, method, "ss/projectInfo")) {
         const result = try projectInfoResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/previewSnapshot")) {
+        const result = try previewSnapshotResult(server, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/layoutEdit")) {
+        const result = try layoutEditResult(server, params);
         defer server.allocator.free(result);
         try respond(server.allocator, id, result);
         return;
@@ -1709,6 +1823,731 @@ fn projectInfoResult(server: *Server, params: ?JsonValue) ![]const u8 {
         }
     }
     return try projectInfoJson(server.allocator, if (server.snapshot) |*snapshot| snapshot else null);
+}
+
+const PreviewFrame = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+const PreviewSource = struct {
+    path: []const u8,
+    span: utils.err.ByteSpan,
+    range: LspRange,
+};
+
+const PreviewPage = struct {
+    id: i64,
+    index: i64,
+    label: []const u8,
+    frame: PreviewFrame,
+};
+
+const PreviewObject = struct {
+    id: i64,
+    page_id: i64,
+    page_index: i64,
+    page_label: []const u8,
+    label: []const u8,
+    role: []const u8,
+    kind: []const u8,
+    frame: PreviewFrame,
+    source: ?PreviewSource = null,
+    editable_name: ?[]const u8 = null,
+    has_left_constraint: bool = false,
+    has_top_constraint: bool = false,
+};
+
+const PreviewRelation = struct {
+    kind: []const u8,
+    page_id: i64,
+    axis: []const u8,
+    target_node: i64,
+    target_anchor: []const u8,
+    source_kind: []const u8,
+    source_node: ?i64,
+    source_anchor: []const u8,
+    offset: f64,
+};
+
+const PreviewModel = struct {
+    pages: std.ArrayList(PreviewPage) = .empty,
+    objects: std.ArrayList(PreviewObject) = .empty,
+    relations: std.ArrayList(PreviewRelation) = .empty,
+
+    fn deinit(self: *PreviewModel, allocator: std.mem.Allocator) void {
+        self.pages.deinit(allocator);
+        self.objects.deinit(allocator);
+        self.relations.deinit(allocator);
+    }
+};
+
+fn previewSnapshotResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try previewSnapshotEmptyJson(server.allocator, "missing textDocument");
+    defer server.allocator.free(doc_path);
+
+    server.clearPendingRebuild();
+    var diagnostics = DiagnosticSet.init(server.allocator);
+    defer diagnostics.deinit();
+
+    var snapshot = try server.buildSnapshot(doc_path, &diagnostics);
+    errdefer snapshot.deinit(server.allocator);
+    if (snapshot.dump_json != null) try server.rememberCompletionSnapshot(&snapshot);
+    if (server.snapshot) |*old| old.deinit(server.allocator);
+    server.snapshot = snapshot;
+
+    return try previewSnapshotJson(server, &server.snapshot.?, &diagnostics);
+}
+
+fn previewSnapshotJson(server: *Server, snapshot: *const Snapshot, diagnostics: *const DiagnosticSet) ![]const u8 {
+    var parsed_dump: ?std.json.Parsed(JsonValue) = null;
+    defer if (parsed_dump) |*parsed| parsed.deinit();
+
+    var model = PreviewModel{};
+    defer model.deinit(server.allocator);
+
+    if (snapshot.dump_json) |json| {
+        parsed_dump = std.json.parseFromSlice(JsonValue, server.allocator, json, .{}) catch null;
+        if (parsed_dump) |*parsed| if (parsed.value == .object) {
+            model = try buildPreviewModel(server, snapshot, &parsed.value.object);
+        };
+    }
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(server.allocator);
+    const entry_uri = try uriFromPath(server.allocator, snapshot.entry_path);
+    defer server.allocator.free(entry_uri);
+
+    try out.appendSlice(server.allocator, "{\"schemaVersion\":1,\"snapshotId\":");
+    try appendJsonString(server.allocator, &out, snapshot.id);
+    try out.appendSlice(server.allocator, ",\"entryUri\":");
+    try appendJsonString(server.allocator, &out, entry_uri);
+    try out.appendSlice(server.allocator, ",\"documentVersion\":");
+    if (server.documentVersionForPath(snapshot.entry_path)) |version| {
+        try appendInt(server.allocator, &out, version);
+    } else {
+        try out.appendSlice(server.allocator, "null");
+    }
+    try out.appendSlice(server.allocator, ",\"coordinateSpace\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"xAxis\":\"right\",\"yAxis\":\"down\"}");
+
+    try out.appendSlice(server.allocator, ",\"pages\":[");
+    for (model.pages.items, 0..) |page, index| {
+        if (index != 0) try out.append(server.allocator, ',');
+        try appendPreviewPage(server.allocator, &out, page);
+    }
+    try out.append(server.allocator, ']');
+
+    try out.appendSlice(server.allocator, ",\"objects\":[");
+    for (model.objects.items, 0..) |object, index| {
+        if (index != 0) try out.append(server.allocator, ',');
+        try appendPreviewObject(server, snapshot, &out, object);
+    }
+    try out.append(server.allocator, ']');
+
+    try out.appendSlice(server.allocator, ",\"relations\":[");
+    for (model.relations.items, 0..) |relation, index| {
+        if (index != 0) try out.append(server.allocator, ',');
+        try appendPreviewRelation(server.allocator, &out, relation);
+    }
+    try out.append(server.allocator, ']');
+
+    try out.appendSlice(server.allocator, ",\"display\":");
+    if (snapshot.display_json) |display_json| {
+        try out.appendSlice(server.allocator, display_json);
+    } else {
+        try render_compile.appendEmptyHtmlDisplay(server.allocator, &out);
+    }
+
+    try out.appendSlice(server.allocator, ",\"diagnostics\":[");
+    for (diagnostics.items.items, 0..) |diagnostic, index| {
+        if (index != 0) try out.append(server.allocator, ',');
+        try diagnostic.appendJson(server.allocator, &out);
+    }
+    try out.appendSlice(server.allocator, "]}");
+    return out.toOwnedSlice(server.allocator);
+}
+
+fn previewSnapshotEmptyJson(allocator: std.mem.Allocator, message: []const u8) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "{\"schemaVersion\":1,\"snapshotId\":\"\",\"entryUri\":\"\",\"documentVersion\":null,\"coordinateSpace\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"xAxis\":\"right\",\"yAxis\":\"down\"},\"pages\":[],\"objects\":[],\"relations\":[],\"display\":");
+    try render_compile.appendEmptyHtmlDisplay(allocator, &out);
+    try out.appendSlice(allocator, ",\"diagnostics\":[{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":1}},\"severity\":1,\"source\":\"ss\",\"code\":\"InvalidRequest\",\"message\":");
+    try appendJsonString(allocator, &out, message);
+    try out.appendSlice(allocator, "}]}");
+    return out.toOwnedSlice(allocator);
+}
+
+fn layoutEditResult(server: *Server, params: ?JsonValue) ![]const u8 {
+    const p = params orelse return try layoutEditStatusJson(server.allocator, "rejected", "missing request params");
+    if (p != .object) return try layoutEditStatusJson(server.allocator, "rejected", "request params must be an object");
+    const root = &p.object;
+
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try layoutEditStatusJson(server.allocator, "rejected", "missing textDocument");
+    defer server.allocator.free(doc_path);
+
+    if (intField(objectField(p, "textDocument") orelse root, "version")) |request_version| {
+        if (server.documentVersionForPath(doc_path)) |known_version| {
+            if (known_version != request_version) {
+                const message = try std.fmt.allocPrint(server.allocator, "document version is stale: request={d}, current={d}", .{ request_version, known_version });
+                defer server.allocator.free(message);
+                return try layoutEditStatusJson(server.allocator, "stale", message);
+            }
+        }
+    }
+
+    const snapshot_id = stringField(root, "snapshotId") orelse return try layoutEditStatusJson(server.allocator, "stale", "missing snapshotId");
+    const snapshot = if (server.snapshot) |*value| value else return try layoutEditStatusJson(server.allocator, "stale", "no preview snapshot is available");
+    if (!std.mem.eql(u8, snapshot.id, snapshot_id)) {
+        const message = try std.fmt.allocPrint(server.allocator, "preview snapshot is stale: request={s}, current={s}", .{ snapshot_id, snapshot.id });
+        defer server.allocator.free(message);
+        return try layoutEditStatusJson(server.allocator, "stale", message);
+    }
+    if (!samePath(server.allocator, snapshot.entry_path, doc_path)) return try layoutEditStatusJson(server.allocator, "unsupported", "layoutEdit v1 edits the entry file only");
+
+    const selection = objectField(p, "selection") orelse return try layoutEditStatusJson(server.allocator, "rejected", "missing selection");
+    const targets = arrayFieldObject(selection, "targets") orelse return try layoutEditStatusJson(server.allocator, "rejected", "missing selection targets");
+    if (targets.items.len == 0 or targets.items[0] != .object) return try layoutEditStatusJson(server.allocator, "rejected", "selection target is missing");
+    const target = &targets.items[0].object;
+    const target_id = intField(target, "nodeId") orelse return try layoutEditStatusJson(server.allocator, "rejected", "target nodeId is missing");
+    const initial_frame = parseFrame(objectFieldObject(target, "initialFrame") orelse return try layoutEditStatusJson(server.allocator, "rejected", "target initialFrame is missing"));
+
+    const gesture = objectField(p, "gesture") orelse return try layoutEditStatusJson(server.allocator, "rejected", "missing gesture");
+    const gesture_kind = stringField(gesture, "kind") orelse "";
+    if (!std.mem.eql(u8, gesture_kind, "translate")) return try layoutEditStatusJson(server.allocator, "unsupported", "only translate gestures are supported");
+    const gesture_mode = stringField(gesture, "mode") orelse "absolute";
+    const to_frame = parseFrame(objectFieldObject(gesture, "toBounds") orelse return try layoutEditStatusJson(server.allocator, "rejected", "gesture toBounds is missing"));
+
+    var parsed = std.json.parseFromSlice(JsonValue, server.allocator, snapshot.dump_json orelse "", .{}) catch {
+        return try layoutEditStatusJson(server.allocator, "stale", "current snapshot has no dump");
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return try layoutEditStatusJson(server.allocator, "stale", "current snapshot dump is invalid");
+    var model = try buildPreviewModel(server, snapshot, &parsed.value.object);
+    defer model.deinit(server.allocator);
+
+    const object = findPreviewObject(&model, target_id) orelse return try layoutEditStatusJson(server.allocator, "unsupported", "target object is not in the preview snapshot");
+    if (!frameNear(object.frame, initial_frame, 0.5)) {
+        const message = try std.fmt.allocPrint(server.allocator, "target frame changed since the gesture started: current=({d:.2},{d:.2},{d:.2},{d:.2}), initial=({d:.2},{d:.2},{d:.2},{d:.2})", .{
+            object.frame.x,
+            object.frame.y,
+            object.frame.width,
+            object.frame.height,
+            initial_frame.x,
+            initial_frame.y,
+            initial_frame.width,
+            initial_frame.height,
+        });
+        defer server.allocator.free(message);
+        return try layoutEditStatusJson(server.allocator, "stale", message);
+    }
+    const object_name = object.editable_name orelse return try layoutEditStatusJson(server.allocator, "unsupported", "target object is not a direct page object variable in the entry file");
+    if (object.source == null) return try layoutEditStatusJson(server.allocator, "unsupported", "target object has no source location");
+    if (!samePath(server.allocator, object.source.?.path, snapshot.entry_path)) return try layoutEditStatusJson(server.allocator, "unsupported", "target object source is not the entry file");
+
+    const entry_key = try project.absolutePath(server.allocator, snapshot.entry_path);
+    defer server.allocator.free(entry_key);
+    const source_ptr = server.documents.getPtr(entry_key) orelse return try layoutEditStatusJson(server.allocator, "unsupported", "entry document is not open");
+    const source = source_ptr.*;
+
+    var edit_result = blk: {
+        if (std.mem.eql(u8, gesture_mode, "absolute")) {
+            break :blk (try layout_edit.absoluteTopLeftWithPageIndex(server.allocator, source, object.page_label, object.page_index, object_name, to_frame.x, to_frame.y)) orelse {
+                return try layoutEditStatusJson(server.allocator, "unsupported", "page block was not found in the entry file");
+            };
+        }
+        if (std.mem.eql(u8, gesture_mode, "relative")) {
+            const relation_edits = (try relativeAnchorEdits(server.allocator, &model, object, to_frame)) orelse {
+                return try layoutEditStatusJson(server.allocator, "unsupported", "target object has no editable layout relation for relative movement");
+            };
+            defer server.allocator.free(relation_edits);
+            break :blk (try layout_edit.anchorRelationsWithPageIndex(server.allocator, source, object.page_label, object.page_index, object_name, relation_edits)) orelse {
+                return try layoutEditStatusJson(server.allocator, "unsupported", "page block was not found in the entry file");
+            };
+        }
+        return try layoutEditStatusJson(server.allocator, "unsupported", "unsupported translate mode");
+    };
+    defer edit_result.deinit(server.allocator);
+
+    const edited_source = try layout_edit.applyEdits(server.allocator, source, edit_result.edits);
+    errdefer server.allocator.free(edited_source);
+    const old_source = source_ptr.*;
+    source_ptr.* = edited_source;
+    defer {
+        source_ptr.* = old_source;
+        server.allocator.free(edited_source);
+    }
+
+    if (!try verifyLayoutEditPosition(server, snapshot.entry_path, target_id, to_frame)) {
+        return try layoutEditStatusJson(server.allocator, "rejected", "generated edit did not place the object at the requested frame");
+    }
+
+    return try layoutEditWorkspaceEditJson(server.allocator, entry_key, edit_result.edits);
+}
+
+fn buildPreviewModel(server: *Server, snapshot: *const Snapshot, root: *const JsonObject) !PreviewModel {
+    var model = PreviewModel{};
+    errdefer model.deinit(server.allocator);
+
+    const nodes = arrayFieldObject(root, "nodes") orelse return model;
+    if (arrayFieldObject(root, "page_order")) |page_order| {
+        for (page_order.items, 0..) |item, order_index| {
+            const page_id = jsonInt(item) orelse continue;
+            const node = findNodeObject(nodes, page_id) orelse continue;
+            const kind = stringField(node, "kind") orelse "";
+            if (!std.mem.eql(u8, kind, "page")) continue;
+            const width = numberField(node, "width") orelse 0;
+            const height = numberField(node, "height") orelse 0;
+            try model.pages.append(server.allocator, .{
+                .id = page_id,
+                .index = intField(node, "page_index") orelse @as(i64, @intCast(order_index + 1)),
+                .label = stringField(node, "name") orelse "page",
+                .frame = .{ .x = 0, .y = 0, .width = width, .height = height },
+            });
+        }
+    }
+
+    for (nodes.items) |*item| {
+        if (item.* != .object) continue;
+        const node = &item.object;
+        const kind = stringField(node, "kind") orelse "";
+        if (!std.mem.eql(u8, kind, "object")) continue;
+        const node_id = intField(node, "id") orelse continue;
+        const page = containingPage(root, &model, node_id) orelse continue;
+        const width = numberField(node, "width") orelse 0;
+        const height = numberField(node, "height") orelse 0;
+        const source = try previewSourceFromOrigin(server, snapshot, stringField(node, "origin"));
+        const editable_name = editableVariableName(server, snapshot, root, page.label, source);
+        try model.objects.append(server.allocator, .{
+            .id = node_id,
+            .page_id = page.id,
+            .page_index = page.index,
+            .page_label = page.label,
+            .label = editable_name orelse stringField(node, "role") orelse stringField(node, "name") orelse "object",
+            .role = stringField(node, "role") orelse stringField(node, "name") orelse "object",
+            .kind = stringField(node, "object_kind") orelse stringField(node, "payload_kind") orelse "unknown",
+            .frame = .{
+                .x = numberField(node, "x") orelse 0,
+                .y = page.frame.height - (numberField(node, "y") orelse 0) - height,
+                .width = width,
+                .height = height,
+            },
+            .source = source,
+            .editable_name = editable_name,
+        });
+    }
+
+    if (arrayFieldObject(root, "constraints")) |constraints| {
+        for (constraints.items) |*item| {
+            if (item.* != .object) continue;
+            const constraint = &item.object;
+            const target_id = intField(constraint, "target_node") orelse continue;
+            const target_anchor = stringField(constraint, "target_anchor") orelse continue;
+            const object = findPreviewObjectMutable(&model, target_id) orelse continue;
+            if (std.mem.eql(u8, target_anchor, "left")) object.has_left_constraint = true;
+            if (std.mem.eql(u8, target_anchor, "top")) object.has_top_constraint = true;
+        }
+    }
+
+    if (arrayFieldObject(root, "layout_relations")) |relations| {
+        for (relations.items) |*item| {
+            if (item.* != .object) continue;
+            const relation = &item.object;
+            const target_node = intField(relation, "target_node") orelse continue;
+            const target_anchor = stringField(relation, "target_anchor") orelse continue;
+            const source_kind = stringField(relation, "source_kind") orelse continue;
+            const source_anchor = stringField(relation, "source_anchor") orelse continue;
+            try model.relations.append(server.allocator, .{
+                .kind = stringField(relation, "kind") orelse "explicit",
+                .page_id = intField(relation, "page_id") orelse 0,
+                .axis = stringField(relation, "axis") orelse anchorAxisName(target_anchor),
+                .target_node = target_node,
+                .target_anchor = target_anchor,
+                .source_kind = source_kind,
+                .source_node = intField(relation, "source_node"),
+                .source_anchor = source_anchor,
+                .offset = numberField(relation, "offset") orelse 0,
+            });
+        }
+    }
+
+    return model;
+}
+
+fn previewSourceFromOrigin(server: *Server, snapshot: *const Snapshot, origin: ?[]const u8) !?PreviewSource {
+    const text = origin orelse return null;
+    const located = utils.err.parseLocatedOrigin(text) orelse return null;
+    const path = located.path orelse snapshot.entry_path;
+
+    var owned_source: ?[]u8 = null;
+    defer if (owned_source) |source| server.allocator.free(source);
+    const source = server.sourceForPath(path) orelse blk: {
+        owned_source = utils.fs.readFileAlloc(server.io, server.allocator, path) catch return null;
+        break :blk owned_source.?;
+    };
+
+    return .{
+        .path = path,
+        .span = located.span,
+        .range = rangeFromSpan(source, located.span),
+    };
+}
+
+fn editableVariableName(server: *Server, snapshot: *const Snapshot, root: *const JsonObject, page_name: []const u8, source: ?PreviewSource) ?[]const u8 {
+    const src = source orelse return null;
+    if (!samePath(server.allocator, src.path, snapshot.entry_path)) return null;
+    const variables = arrayFieldObject(root, "variables") orelse return null;
+    for (variables.items) |*item| {
+        if (item.* != .object) continue;
+        const variable = &item.object;
+        const ty = stringField(variable, "type") orelse continue;
+        if (!std.mem.eql(u8, ty, "Object")) continue;
+        const scope_kind = stringField(variable, "scopeKind") orelse "";
+        if (!std.mem.eql(u8, scope_kind, "page")) continue;
+        const scope_name = stringField(variable, "scopeName") orelse "";
+        if (!std.mem.eql(u8, scope_name, page_name)) continue;
+        const span_start = intField(variable, "spanStart") orelse continue;
+        const span_end = intField(variable, "spanEnd") orelse continue;
+        if (span_start == @as(i64, @intCast(src.span.start)) and span_end == @as(i64, @intCast(src.span.end))) {
+            return stringField(variable, "name");
+        }
+    }
+    return null;
+}
+
+fn appendPreviewPage(allocator: std.mem.Allocator, out: *std.ArrayList(u8), page: PreviewPage) !void {
+    try out.appendSlice(allocator, "{\"id\":");
+    try appendInt(allocator, out, page.id);
+    try out.appendSlice(allocator, ",\"index\":");
+    try appendInt(allocator, out, page.index);
+    try out.appendSlice(allocator, ",\"label\":");
+    try appendJsonString(allocator, out, page.label);
+    try out.appendSlice(allocator, ",\"frame\":");
+    try appendPreviewFrame(allocator, out, page.frame);
+    try out.append(allocator, '}');
+}
+
+fn appendPreviewObject(server: *Server, snapshot: *const Snapshot, out: *std.ArrayList(u8), object: PreviewObject) !void {
+    const allocator = server.allocator;
+    try out.appendSlice(allocator, "{\"id\":");
+    try appendInt(allocator, out, object.id);
+    try out.appendSlice(allocator, ",\"pageId\":");
+    try appendInt(allocator, out, object.page_id);
+    try out.appendSlice(allocator, ",\"kind\":");
+    try appendJsonString(allocator, out, object.kind);
+    try out.appendSlice(allocator, ",\"label\":");
+    try appendJsonString(allocator, out, object.label);
+    try out.appendSlice(allocator, ",\"role\":");
+    try appendJsonString(allocator, out, object.role);
+    try out.appendSlice(allocator, ",\"frame\":");
+    try appendPreviewFrame(allocator, out, object.frame);
+    try out.appendSlice(allocator, ",\"source\":");
+    if (object.source) |source| {
+        const uri = try uriFromPath(allocator, source.path);
+        defer allocator.free(uri);
+        try out.appendSlice(allocator, "{\"uri\":");
+        try appendJsonString(allocator, out, uri);
+        try out.appendSlice(allocator, ",\"range\":");
+        try appendRange(allocator, out, source.range);
+        try out.append(allocator, '}');
+    } else {
+        try out.appendSlice(allocator, "null");
+    }
+    const movable = object.editable_name != null and object.source != null and samePath(allocator, object.source.?.path, snapshot.entry_path);
+    try out.appendSlice(allocator, ",\"interaction\":{\"selectable\":true,\"movable\":");
+    try appendBool(allocator, out, movable);
+    try out.appendSlice(allocator, ",\"message\":");
+    if (movable) {
+        try out.appendSlice(allocator, "null");
+    } else if (object.source == null) {
+        try appendJsonString(allocator, out, "source origin is unavailable");
+    } else if (!samePath(allocator, object.source.?.path, snapshot.entry_path)) {
+        try appendJsonString(allocator, out, "object source is not the entry file");
+    } else {
+        try appendJsonString(allocator, out, "object is not a direct page object variable");
+    }
+    try out.appendSlice(allocator, "}}");
+}
+
+fn appendPreviewRelation(allocator: std.mem.Allocator, out: *std.ArrayList(u8), relation: PreviewRelation) !void {
+    try out.appendSlice(allocator, "{\"kind\":");
+    try appendJsonString(allocator, out, relation.kind);
+    try out.appendSlice(allocator, ",\"pageId\":");
+    try appendInt(allocator, out, relation.page_id);
+    try out.appendSlice(allocator, ",\"axis\":");
+    try appendJsonString(allocator, out, relation.axis);
+    try out.appendSlice(allocator, ",\"targetNode\":");
+    try appendInt(allocator, out, relation.target_node);
+    try out.appendSlice(allocator, ",\"targetAnchor\":");
+    try appendJsonString(allocator, out, relation.target_anchor);
+    try out.appendSlice(allocator, ",\"sourceKind\":");
+    try appendJsonString(allocator, out, relation.source_kind);
+    try out.appendSlice(allocator, ",\"sourceNode\":");
+    if (relation.source_node) |node_id| {
+        try appendInt(allocator, out, node_id);
+    } else {
+        try out.appendSlice(allocator, "null");
+    }
+    try out.appendSlice(allocator, ",\"sourceAnchor\":");
+    try appendJsonString(allocator, out, relation.source_anchor);
+    try out.appendSlice(allocator, ",\"offset\":");
+    try appendFloat(allocator, out, relation.offset);
+    try out.append(allocator, '}');
+}
+
+fn appendPreviewFrame(allocator: std.mem.Allocator, out: *std.ArrayList(u8), frame: PreviewFrame) !void {
+    try out.appendSlice(allocator, "{\"x\":");
+    try appendFloat(allocator, out, frame.x);
+    try out.appendSlice(allocator, ",\"y\":");
+    try appendFloat(allocator, out, frame.y);
+    try out.appendSlice(allocator, ",\"width\":");
+    try appendFloat(allocator, out, frame.width);
+    try out.appendSlice(allocator, ",\"height\":");
+    try appendFloat(allocator, out, frame.height);
+    try out.append(allocator, '}');
+}
+
+fn relativeAnchorEdits(allocator: std.mem.Allocator, model: *const PreviewModel, object: PreviewObject, to_frame: PreviewFrame) !?[]layout_edit.AnchorRelation {
+    const page = findPreviewPage(model, object.page_id) orelse return null;
+    var relations = try allocator.alloc(layout_edit.AnchorRelation, 2);
+    errdefer allocator.free(relations);
+    var count: usize = 0;
+
+    if (!near(object.frame.x, to_frame.x, 0.25)) {
+        const relation = findTargetRelation(model, object.id, "horizontal") orelse {
+            allocator.free(relations);
+            return null;
+        };
+        relations[count] = anchorRelationEdit(model, page, relation, to_frame) catch {
+            allocator.free(relations);
+            return null;
+        };
+        count += 1;
+    }
+
+    if (!near(object.frame.y, to_frame.y, 0.25)) {
+        const relation = findTargetRelation(model, object.id, "vertical") orelse {
+            allocator.free(relations);
+            return null;
+        };
+        relations[count] = anchorRelationEdit(model, page, relation, to_frame) catch {
+            allocator.free(relations);
+            return null;
+        };
+        count += 1;
+    }
+
+    if (count == 0) {
+        allocator.free(relations);
+        return null;
+    }
+
+    return try allocator.realloc(relations, count);
+}
+
+fn anchorRelationEdit(model: *const PreviewModel, page: PreviewPage, relation: PreviewRelation, to_frame: PreviewFrame) !layout_edit.AnchorRelation {
+    const source_name = sourceNameForRelation(model, relation) orelse return error.UnsupportedRelativeSource;
+    const target_value = anchorValueForFrame(to_frame, page.frame, relation.target_anchor) orelse return error.UnsupportedAnchor;
+    const source_value = sourceValueForRelation(model, page, relation) orelse return error.UnsupportedRelativeSource;
+    return .{
+        .target_anchor = relation.target_anchor,
+        .source_name = source_name,
+        .source_anchor = relation.source_anchor,
+        .offset = target_value - source_value,
+    };
+}
+
+fn findTargetRelation(model: *const PreviewModel, target_node: i64, axis: []const u8) ?PreviewRelation {
+    var fallback_relation: ?PreviewRelation = null;
+    for (model.relations.items) |relation| {
+        if (relation.target_node != target_node) continue;
+        if (!relationAxisMatches(relation, axis)) continue;
+        if (relation.source_node != null and relation.source_node.? == target_node) continue;
+        if (std.mem.eql(u8, relation.kind, "explicit")) return relation;
+        if (fallback_relation == null and std.mem.eql(u8, relation.kind, "fallback")) fallback_relation = relation;
+    }
+    return fallback_relation;
+}
+
+fn relationAxisMatches(relation: PreviewRelation, axis: []const u8) bool {
+    if (std.mem.eql(u8, relation.axis, axis)) return true;
+    return std.mem.eql(u8, anchorAxisName(relation.target_anchor), axis);
+}
+
+fn sourceNameForRelation(model: *const PreviewModel, relation: PreviewRelation) ?[]const u8 {
+    if (std.mem.eql(u8, relation.source_kind, "page")) return "page";
+    if (!std.mem.eql(u8, relation.source_kind, "node")) return null;
+    const source_node = relation.source_node orelse return null;
+    const source = findPreviewObject(model, source_node) orelse return null;
+    return source.editable_name;
+}
+
+fn sourceValueForRelation(model: *const PreviewModel, page: PreviewPage, relation: PreviewRelation) ?f64 {
+    if (std.mem.eql(u8, relation.source_kind, "page")) {
+        return anchorValueForPage(page.frame, relation.source_anchor);
+    }
+    if (!std.mem.eql(u8, relation.source_kind, "node")) return null;
+    const source_node = relation.source_node orelse return null;
+    const source = findPreviewObject(model, source_node) orelse return null;
+    return anchorValueForFrame(source.frame, page.frame, relation.source_anchor);
+}
+
+fn anchorValueForFrame(frame: PreviewFrame, page_frame: PreviewFrame, anchor: []const u8) ?f64 {
+    if (std.mem.eql(u8, anchor, "left")) return frame.x;
+    if (std.mem.eql(u8, anchor, "right")) return frame.x + frame.width;
+    if (std.mem.eql(u8, anchor, "center_x")) return frame.x + frame.width / 2;
+    if (std.mem.eql(u8, anchor, "top")) return page_frame.height - frame.y;
+    if (std.mem.eql(u8, anchor, "bottom")) return page_frame.height - frame.y - frame.height;
+    if (std.mem.eql(u8, anchor, "center_y")) return page_frame.height - frame.y - frame.height / 2;
+    return null;
+}
+
+fn anchorValueForPage(page_frame: PreviewFrame, anchor: []const u8) ?f64 {
+    if (std.mem.eql(u8, anchor, "left")) return 0;
+    if (std.mem.eql(u8, anchor, "right")) return page_frame.width;
+    if (std.mem.eql(u8, anchor, "center_x")) return page_frame.width / 2;
+    if (std.mem.eql(u8, anchor, "top")) return page_frame.height;
+    if (std.mem.eql(u8, anchor, "bottom")) return 0;
+    if (std.mem.eql(u8, anchor, "center_y")) return page_frame.height / 2;
+    return null;
+}
+
+fn anchorAxisName(anchor: []const u8) []const u8 {
+    if (std.mem.eql(u8, anchor, "left") or std.mem.eql(u8, anchor, "right") or std.mem.eql(u8, anchor, "center_x")) return "horizontal";
+    return "vertical";
+}
+
+fn layoutEditStatusJson(allocator: std.mem.Allocator, status: []const u8, message: []const u8) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "{\"schemaVersion\":1,\"status\":");
+    try appendJsonString(allocator, &out, status);
+    try out.appendSlice(allocator, ",\"message\":");
+    try appendJsonString(allocator, &out, message);
+    try out.append(allocator, '}');
+    return out.toOwnedSlice(allocator);
+}
+
+fn layoutEditWorkspaceEditJson(allocator: std.mem.Allocator, path: []const u8, edits: []const layout_edit.TextEdit) ![]const u8 {
+    const uri = try uriFromPath(allocator, path);
+    defer allocator.free(uri);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "{\"schemaVersion\":1,\"status\":\"ok\",\"workspaceEdit\":{\"changes\":{");
+    try appendJsonString(allocator, &out, uri);
+    try out.appendSlice(allocator, ":[");
+    for (edits, 0..) |edit, index| {
+        if (index != 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, "{\"range\":{\"start\":{\"line\":");
+        try appendInt(allocator, &out, edit.start_line);
+        try out.appendSlice(allocator, ",\"character\":");
+        try appendInt(allocator, &out, edit.start_character);
+        try out.appendSlice(allocator, "},\"end\":{\"line\":");
+        try appendInt(allocator, &out, edit.end_line);
+        try out.appendSlice(allocator, ",\"character\":");
+        try appendInt(allocator, &out, edit.end_character);
+        try out.appendSlice(allocator, "}},\"newText\":");
+        try appendJsonString(allocator, &out, edit.text);
+        try out.append(allocator, '}');
+    }
+    try out.appendSlice(allocator, "]}}}");
+    return out.toOwnedSlice(allocator);
+}
+
+fn verifyLayoutEditPosition(server: *Server, entry_path: []const u8, target_id: i64, expected: PreviewFrame) !bool {
+    var diagnostics = DiagnosticSet.init(server.allocator);
+    defer diagnostics.deinit();
+    var snapshot = try server.buildSnapshot(entry_path, &diagnostics);
+    defer snapshot.deinit(server.allocator);
+    if (diagnostics.hasErrors()) return false;
+    const dump_json = snapshot.dump_json orelse return false;
+    var parsed = std.json.parseFromSlice(JsonValue, server.allocator, dump_json, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    var model = try buildPreviewModel(server, &snapshot, &parsed.value.object);
+    defer model.deinit(server.allocator);
+    const object = findPreviewObject(&model, target_id) orelse return false;
+    return positionNear(object.frame, expected, 0.5);
+}
+
+fn parseFrame(object: *const JsonObject) PreviewFrame {
+    return .{
+        .x = numberField(object, "x") orelse 0,
+        .y = numberField(object, "y") orelse 0,
+        .width = numberField(object, "width") orelse 0,
+        .height = numberField(object, "height") orelse 0,
+    };
+}
+
+fn frameNear(actual: PreviewFrame, expected: PreviewFrame, tolerance: f64) bool {
+    return near(actual.x, expected.x, tolerance) and
+        near(actual.y, expected.y, tolerance) and
+        near(actual.width, expected.width, tolerance) and
+        near(actual.height, expected.height, tolerance);
+}
+
+fn positionNear(actual: PreviewFrame, expected: PreviewFrame, tolerance: f64) bool {
+    return near(actual.x, expected.x, tolerance) and
+        near(actual.y, expected.y, tolerance);
+}
+
+fn near(a: f64, b: f64, tolerance: f64) bool {
+    return @abs(a - b) <= tolerance;
+}
+
+fn findPreviewObject(model: *const PreviewModel, id: i64) ?PreviewObject {
+    for (model.objects.items) |object| {
+        if (object.id == id) return object;
+    }
+    return null;
+}
+
+fn findPreviewObjectMutable(model: *PreviewModel, id: i64) ?*PreviewObject {
+    for (model.objects.items) |*object| {
+        if (object.id == id) return object;
+    }
+    return null;
+}
+
+fn findPreviewPage(model: *const PreviewModel, id: i64) ?PreviewPage {
+    for (model.pages.items) |page| {
+        if (page.id == id) return page;
+    }
+    return null;
+}
+
+fn containingPage(root: *const JsonObject, model: *const PreviewModel, child_id: i64) ?PreviewPage {
+    const contains = arrayFieldObject(root, "contains") orelse return null;
+    for (contains.items) |*item| {
+        if (item.* != .object) continue;
+        const entry = &item.object;
+        const parent_id = intField(entry, "parent") orelse continue;
+        const page = findPreviewPage(model, parent_id) orelse continue;
+        const children = arrayFieldObject(entry, "children") orelse continue;
+        for (children.items) |child| {
+            if ((jsonInt(child) orelse continue) == child_id) return page;
+        }
+    }
+    return null;
+}
+
+fn findNodeObject(nodes: *const JsonArray, id: i64) ?*const JsonObject {
+    for (nodes.items) |*item| {
+        if (item.* != .object) continue;
+        const node = &item.object;
+        if ((intField(node, "id") orelse continue) == id) return node;
+    }
+    return null;
+}
+
+fn jsonInt(value: JsonValue) ?i64 {
+    return switch (value) {
+        .integer => |v| v,
+        .float => |v| @intFromFloat(v),
+        else => null,
+    };
 }
 
 fn projectInfoJson(allocator: std.mem.Allocator, snapshot: ?*const Snapshot) ![]const u8 {

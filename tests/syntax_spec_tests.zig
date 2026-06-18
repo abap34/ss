@@ -878,6 +878,7 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
         \\  ~ box.width == 100
         \\  ~ box.left == page.left + 10
         \\  ~ box.right == page.right - 20
+        \\  !~ box.horizontal
         \\  box.left = "red"
         \\end
         \\
@@ -907,7 +908,14 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     const neg = try expectCall(right.offset.?, "neg", 1);
     try expectNumber(neg.args.items[0], 20);
 
-    const property = try expectCall(statements[4].kind.expr_stmt, "set_prop", 3);
+    const discard = statements[4].kind.discard_constraints;
+    try testing.expectEqualStrings("box", discard.object_name);
+    switch (discard.selector) {
+        .axis => |axis| try testing.expectEqual(.horizontal, axis),
+        else => return error.ExpectedConstraintDiscardAxis,
+    }
+
+    const property = try expectCall(statements[5].kind.expr_stmt, "set_prop", 3);
     switch (property.args.items[0]) {
         .ident => |name| try testing.expectEqualStrings("box", name),
         else => return error.ExpectedIdentifier,
@@ -918,6 +926,13 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     try expectParseError(error.ExpectedConstraintMarker,
         \\page Bad
         \\  box.left == page.left + 10
+        \\end
+        \\
+    );
+
+    try expectParseError(error.PageCannotBeConstraintTarget,
+        \\page Bad
+        \\  !~ page.left
         \\end
         \\
     );

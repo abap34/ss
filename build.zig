@@ -11,6 +11,7 @@ const BuildContext = struct {
 };
 
 const ProjectModules = struct {
+    cache: *Module,
     utils: *Module,
     model: *Module,
     language_type: *Module,
@@ -39,7 +40,6 @@ pub fn build(b: *std.Build) void {
     const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
-
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
         @panic("MD4C sources are missing; run `scripts/setup-md4c.sh` before `zig build`.");
@@ -69,7 +69,10 @@ pub fn build(b: *std.Build) void {
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options) ProjectModules {
-    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{}, null);
+    const cache_mod = createModule(ctx, "src/cache/root.zig", &.{}, true);
+    const utils_mod = createModule(ctx, "src/utils/root.zig", &.{
+        import("cache", cache_mod),
+    }, null);
     const model_mod = createModule(ctx, "src/core/model.zig", &.{}, null);
     const language_type_mod = createModule(ctx, "src/language/type.zig", &.{
         import("model", model_mod),
@@ -97,6 +100,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     addNativePdfBackend(ctx.b, core_mod);
 
     return .{
+        .cache = cache_mod,
         .utils = utils_mod,
         .model = model_mod,
         .language_type = language_type_mod,
@@ -111,6 +115,7 @@ fn createCliModule(ctx: BuildContext, modules: ProjectModules, build_options: *S
     const module = createCommonModule(ctx, "src/main.zig", modules, true);
     module.addOptions("build_options", build_options);
     addNativePdfHeadersAndLibraries(ctx.b, module);
+    addBuiltinHighlightParser(ctx.b, module);
     return module;
 }
 
@@ -189,7 +194,9 @@ fn addTestStep(
         import("compiler", compiler_mod),
     }, true);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
+    watch_mod.addOptions("build_options", build_options);
     addNativePdfHeadersAndLibraries(b, watch_mod);
+    addBuiltinHighlightParser(b, watch_mod);
     addModuleTest(ctx, test_step, "tests/watch_spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
@@ -230,6 +237,7 @@ fn createModule(
 
 fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: ProjectModules, link_libc: ?bool) *Module {
     return createModule(ctx, root_source_file, &.{
+        import("cache", modules.cache),
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
@@ -286,7 +294,9 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const node_spec_files = [_][]const u8{
         "tests/lsp_completion_runtime_spec.mjs",
         "tests/lsp_editor_runtime_spec.mjs",
+        "tests/lsp_wysiwyg_runtime_spec.mjs",
         "tests/render_cache_runtime_spec.mjs",
+        "tests/render_html_runtime_spec.mjs",
     };
 
     for (node_spec_files) |path| {
@@ -337,6 +347,9 @@ fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
     });
+}
+
+fn addBuiltinHighlightParser(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("editor/tree-sitter-ss/src/parser.c"),
     });
