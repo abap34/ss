@@ -38,6 +38,8 @@ ENV PATH="/opt/zig:${PATH}"
 WORKDIR /src
 COPY build.zig ./build.zig
 COPY release/VERSION ./release/VERSION
+COPY editor/tree-sitter-ss/src ./editor/tree-sitter-ss/src
+COPY editor/tree-sitter-ss/queries/highlights.scm ./editor/tree-sitter-ss/queries/highlights.scm
 COPY src ./src
 COPY stdlib ./stdlib
 COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh
