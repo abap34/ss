@@ -4,6 +4,34 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-18
+
+### Added
+
+- Added a layout trace viewer for inspecting solver output.
+- Added Tree-sitter-backed code highlighting and code file components.
+- Added structured style records, structured font face properties, standard
+  numbering helpers, and `foreach_enumerate`.
+- Added dependency query diagnostics and LSP type-name completion coverage.
+
+### Changed
+
+- Refined dependency scheduling around precise resources, literal role names,
+  duplicate bindings, constant value bindings, and chained member assignment.
+- Improved text measurement and layout solving with measured text widths,
+  stronger group constraint handling, and more reliable centered fallback
+  placement.
+- Removed metadata language support and split compiler progress reporting into
+  clearer phases.
+- Tuned the default theme and refreshed README guidance.
+
+### Fixed
+
+- Fixed constrained group layout solving, centered vertical flow rows, unwrapped
+  text width measurement, and centered layout fallback.
+- Fixed dependency scheduling for placed objects.
+- Fixed an LSP diagnostic wait race.
+
 ## [0.5.4] - 2026-06-15
 
 ### Changed
