@@ -297,6 +297,51 @@ test "syntax spec: function signatures preserve types and trailing defaults" {
     try testing.expect(choose.params.items[1].default_value != null);
 }
 
+test "syntax spec: functions can use expression bodies" {
+    var parsed = try parse(
+        \\fn square(x: Number) -> Number = x * x
+        \\
+        \\fn remember() -> Void =
+        \\  set_prop(
+        \\    docctx(),
+        \\    "footer_text",
+        \\    "remembered",
+        \\  )
+        \\
+        \\fn/! badge(text_value: String) -> Object = text(text_value)
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 4), parsed.program.functions.items.len);
+
+    const square = parsed.program.functions.items[0];
+    try testing.expectEqualStrings("square", square.name);
+    try testing.expectEqual(@as(usize, 1), square.statements.items.len);
+    _ = try expectCall(square.statements.items[0].kind.return_expr, "mul", 2);
+
+    const remember = parsed.program.functions.items[1];
+    try testing.expectEqualStrings("remember", remember.name);
+    try testing.expectEqual(@as(usize, 1), remember.statements.items.len);
+    _ = try expectCall(remember.statements.items[0].kind.expr_stmt, "set_prop", 3);
+
+    const badge = parsed.program.functions.items[2];
+    try testing.expectEqualStrings("badge", badge.name);
+    try testing.expectEqual(@as(usize, 1), badge.statements.items.len);
+    _ = try expectCall(badge.statements.items[0].kind.return_expr, "text", 1);
+
+    const placing = parsed.program.functions.items[3];
+    try testing.expectEqualStrings("badge!", placing.name);
+    _ = try expectCall(placing.statements.items[0].kind.return_expr, "place!", 1);
+}
+
+test "syntax spec: expression-bodied functions require an expression" {
+    try expectParseError(error.ExpectedIdentifier,
+        \\fn bad() -> Number =
+        \\
+    );
+}
+
 test "syntax spec: constants are top-level value declarations" {
     var parsed = try parse(
         \\const accent: Color = c"#ff0000"

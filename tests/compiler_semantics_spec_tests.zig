@@ -2688,6 +2688,64 @@ test "compiler semantics: void functions may finish without explicit return" {
     , "remembered");
 }
 
+test "compiler semantics: expression-bodied functions evaluate like return statements" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\fn bang(value: String) -> String = value ++ "!"
+        \\
+        \\fn remember() -> Void =
+        \\  set_prop(docctx(), "footer_text", bang("saved"))
+        \\
+        \\document
+        \\  remember()
+        \\end
+        \\
+        \\page one
+        \\  text!(docctx().footer_text ?? "missing")
+        \\end
+        \\
+    , "saved!");
+}
+
+test "compiler semantics: paired expression-bodied functions place returned objects" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\fn/! badge(value: String) -> Object = text(value)
+        \\
+        \\page one
+        \\  badge!("paired")
+        \\end
+        \\
+    , "paired");
+}
+
+test "compiler semantics: expression-bodied functions are checked against result types" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn bad_number() -> Number = "missing"
+        \\
+        \\page bad
+        \\  text!("bad")
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
+
+    try expectBuildFails(
+        \\import std:themes/default as *
+        \\
+        \\fn side_effect() -> Void =
+        \\  set_prop(docctx(), "footer_text", "done")
+        \\
+        \\page bad
+        \\  let value = side_effect()
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: bare return is only valid for void functions" {
     try buildSource(
         \\import std:themes/default as *
