@@ -13,6 +13,7 @@ class Ss < Formula
   depends_on "pango"
   depends_on "poppler"
   depends_on "qpdf"
+  depends_on "tree-sitter"
 
   resource "md4c" do
     url "https://codeload.github.com/mity/md4c/tar.gz/@MD4C_COMMIT@"

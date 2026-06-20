@@ -17,6 +17,10 @@
 !editor/tree-sitter-ss/queries
 !editor/tree-sitter-ss/queries/highlights.scm
 
+!third_party
+!third_party/tree-sitter-languages
+!third_party/tree-sitter-languages/**
+
 !scripts
 !scripts/setup-md4c.sh
 

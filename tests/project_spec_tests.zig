@@ -1,5 +1,6 @@
 const std = @import("std");
 const project = @import("project");
+const utils = @import("utils");
 
 const testing = std.testing;
 
@@ -99,15 +100,15 @@ test "project spec: highlight languages parse from ss.toml" {
     );
     defer cfg.deinit(testing.allocator);
 
-    try testing.expectEqual(@as(usize, 2), cfg.highlight.languages.len);
-    try testing.expectEqualStrings("ss", cfg.highlight.languages[0].name);
-    try testing.expectEqualStrings("ss", cfg.highlight.languages[0].parser);
-    try testing.expectEqualStrings("builtin:ss", cfg.highlight.languages[0].query);
-    try testing.expect(cfg.highlight.languages[0].library == null);
-    try testing.expectEqualStrings("julia", cfg.highlight.languages[1].name);
-    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/queries/julia/highlights.scm", cfg.highlight.languages[1].query);
-    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/parsers/libtree-sitter-julia.dylib", cfg.highlight.languages[1].library.?);
-    try testing.expectEqualStrings("tree_sitter_julia", cfg.highlight.languages[1].symbol.?);
+    try testing.expect(cfg.highlight.languages.len >= utils.highlight.builtin_languages.len);
+    const ss = findHighlightLanguage(cfg.highlight.languages, "ss").?;
+    try testing.expectEqualStrings("ss", ss.parser);
+    try testing.expectEqualStrings("builtin:ss", ss.query);
+    try testing.expect(ss.library == null);
+    const julia = findHighlightLanguage(cfg.highlight.languages, "julia").?;
+    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/queries/julia/highlights.scm", julia.query);
+    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/parsers/libtree-sitter-julia.dylib", julia.library.?);
+    try testing.expectEqualStrings("tree_sitter_julia", julia.symbol.?);
 }
 
 test "project spec: explicit input discovers ss.toml from input directory" {
@@ -163,7 +164,21 @@ test "project spec: explicit input discovers ss.toml from input directory" {
     try testing.expectEqualStrings(expected_input, resolved.entry_path);
     try testing.expectEqualStrings(expected_project, resolved.project_file.?);
     try testing.expectEqualStrings(expected_asset_base, resolved.asset_base_dir);
-    try testing.expectEqual(@as(usize, 1), resolved.highlight.languages.len);
-    try testing.expectEqualStrings("ss", resolved.highlight.languages[0].name);
-    try testing.expectEqualStrings("builtin:ss", resolved.highlight.languages[0].query);
+    try testing.expect(resolved.highlight.languages.len >= utils.highlight.builtin_languages.len);
+    const ss = findHighlightLanguage(resolved.highlight.languages, "ss").?;
+    try testing.expectEqualStrings("ss", ss.parser);
+    try testing.expectEqualStrings("builtin:ss", ss.query);
+    const julia = findHighlightLanguage(resolved.highlight.languages, "julia").?;
+    try testing.expectEqualStrings("julia", julia.parser);
+    try testing.expectEqualStrings("builtin:julia", julia.query);
+    const jl = findHighlightLanguage(resolved.highlight.languages, "jl").?;
+    try testing.expectEqualStrings("julia", jl.parser);
+    try testing.expectEqualStrings("builtin:julia", jl.query);
+}
+
+fn findHighlightLanguage(languages: []const utils.highlight.Language, name: []const u8) ?*const utils.highlight.Language {
+    for (languages) |*language| {
+        if (std.ascii.eqlIgnoreCase(language.name, name)) return language;
+    }
+    return null;
 }

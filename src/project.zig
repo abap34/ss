@@ -120,7 +120,7 @@ pub fn resolve(
         .asset_base_dir = asset_base_dir,
         .project_file = if (config) |cfg| try allocator.dupe(u8, cfg.path) else null,
         .project_dir = if (config) |cfg| try allocator.dupe(u8, cfg.dir) else null,
-        .highlight = if (config) |cfg| try cfg.highlight.clone(allocator) else .{},
+        .highlight = if (config) |cfg| try cfg.highlight.clone(allocator) else try highlight.defaultConfig(allocator),
     };
 }
 
@@ -194,6 +194,11 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
         try dirnameAlloc(allocator, entry);
     errdefer allocator.free(asset_base_dir);
 
+    var parsed_highlight = try parseHighlightConfig(allocator, dir, source);
+    defer parsed_highlight.deinit(allocator);
+    var highlight_config = try highlight.configWithDefaults(allocator, parsed_highlight.languages);
+    errdefer highlight_config.deinit(allocator);
+
     return .{
         .path = try allocator.dupe(u8, path),
         .dir = dir,
@@ -202,7 +207,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
         .lsp = parseLspConfig(source),
         .preview = parsePreviewConfig(source),
         .page_guide = parsePageGuideConfig(source),
-        .highlight = try parseHighlightConfig(allocator, dir, source),
+        .highlight = highlight_config,
     };
 }
 
