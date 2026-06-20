@@ -228,9 +228,42 @@ const Parser = struct {
         self.pos += 2;
         self.skipInlineSpaces();
         const result_type = try self.parseTypeAnnotation();
-        const statements = try self.parseBodyStatements();
+        const statements = try self.parseFunctionBody(result_type);
         if (result_type.kind != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
         return .{ .name = name, .span = .{ .start = start, .end = self.pos }, .params = params, .result_type = result_type, .statements = statements };
+    }
+
+    fn parseFunctionBody(self: *Parser, result_type: ast.Type) !std.ArrayList(Statement) {
+        self.skipInlineSpaces();
+        if (!self.eof() and self.source[self.pos] == '=') {
+            return try self.parseInlineFunctionBody(result_type);
+        }
+        return try self.parseBodyStatements();
+    }
+
+    fn parseInlineFunctionBody(self: *Parser, result_type: ast.Type) !std.ArrayList(Statement) {
+        var statements = std.ArrayList(Statement).empty;
+        errdefer {
+            for (statements.items) |*stmt| stmt.deinit(self.allocator);
+            statements.deinit(self.allocator);
+        }
+
+        const start = self.pos;
+        try self.expectChar('=');
+        self.skipTrivia();
+        var expr = try self.parseExpr();
+        var expr_moved = false;
+        errdefer if (!expr_moved) expr.deinit(self.allocator);
+        try self.consumeStatementTerminator();
+        try statements.append(self.allocator, .{
+            .span = .{ .start = start, .end = self.pos },
+            .kind = if (result_type.kind == .void)
+                .{ .expr_stmt = expr }
+            else
+                .{ .return_expr = expr },
+        });
+        expr_moved = true;
+        return statements;
     }
 
     fn makePairedPlacementFunction(self: *Parser, func: FunctionDecl) !FunctionDecl {
