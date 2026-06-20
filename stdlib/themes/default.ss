@@ -1,9 +1,17 @@
 import std:themes/base as *
 
+fn default_code_theme() -> CodeHighlightTheme
+  return code_theme_github_light()
+end
+
 fn body_style(body: Object) -> Object
+  let theme = default_code_theme()
+  let fill = theme.fill ?? c"#f6f8fa"
+  let stroke = theme.stroke ?? c"#d0d7de"
   txt(body, "Helvetica", 24, 31, c"0.07,0.08,0.10", 28, 96, 96)
   md_bold(body, c"0.05,0.30,0.58")
-  md_code(body, 19, 25, 12, 9, docctx().code_theme_fill ?? c"0.965,0.975,0.988", docctx().code_theme_stroke ?? c"0.78,0.84,0.92", 0.9, 6)
+  md_code(body, 19, 25, 12, 9, docctx().code_theme_fill ?? fill, docctx().code_theme_stroke ?? stroke, 0.9, 6)
+  code_theme(body, theme)
   md_table(body, 12, 9, c"0.76,0.82,0.90", 0.8, c"0.90,0.94,0.98", c"0.985,0.990,0.996")
   return body
 end
@@ -93,7 +101,11 @@ fn/! pdf(path_value: String, factor: Number = 1) -> Object
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
-  let code = code_box(text_value, language_name, 96, 96, 16, 12, docctx().code_theme_fill ?? c"0.965,0.975,0.988", docctx().code_theme_stroke ?? c"0.78,0.84,0.92", 0.9, 8)
+  let theme = default_code_theme()
+  let fill = theme.fill ?? c"#f6f8fa"
+  let stroke = theme.stroke ?? c"#d0d7de"
+  let code = code_box(text_value, language_name, 96, 96, 16, 12, docctx().code_theme_fill ?? fill, docctx().code_theme_stroke ?? stroke, 0.9, 8)
+  code_theme(code, theme)
   code.text_size = 16
   code.text_code_font_family = "Menlo"
   code.layout_spacing_after = 30

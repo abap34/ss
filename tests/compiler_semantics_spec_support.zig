@@ -211,6 +211,33 @@ pub fn expectBodyTextDefaults(
     return error.ExpectedObjectContentMissing;
 }
 
+pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    var declaration_index = try declarations.build(allocator, &ir);
+    defer declaration_index.deinit();
+    const sema = semantic_env.SemanticEnv.init(&ir, &declaration_index, &ir.functions);
+
+    for (ir.nodes.items) |node| {
+        if (node.kind != .object) continue;
+        const role = node.role orelse continue;
+        if (!std.mem.eql(u8, role, "code")) continue;
+        const render = core.render_policy.resolveWithEnv(&ir, &node, &sema);
+        const code = render.code orelse continue;
+        try expectColorDiffers(code.keyword, code.plain);
+        try expectColorDiffers(code.function, code.plain);
+        try expectColorDiffers(code.type, code.plain);
+        try expectColorDiffers(code.constant, code.plain);
+        try expectColorDiffers(code.number, code.plain);
+        try expectColorDiffers(code.operator, code.plain);
+        try expectColorDiffers(code.comment, code.plain);
+        try expectColorDiffers(code.string, code.plain);
+        return;
+    }
+    return error.ExpectedObjectContentMissing;
+}
+
 pub fn expectDumpContains(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -274,6 +301,17 @@ fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return std.mem.eql(u8, left.?, right.?);
+}
+
+fn expectColorDiffers(left: core.render_policy.Color, right: core.render_policy.Color) !void {
+    try std.testing.expect(!colorsEqual(left, right));
+}
+
+fn colorsEqual(left: core.render_policy.Color, right: core.render_policy.Color) bool {
+    const epsilon = 0.0001;
+    return @abs(left.r - right.r) <= epsilon and
+        @abs(left.g - right.g) <= epsilon and
+        @abs(left.b - right.b) <= epsilon;
 }
 
 pub fn expectOverlayDiagnostic(

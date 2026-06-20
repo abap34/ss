@@ -53,6 +53,19 @@ pub const BuiltinLanguage = struct {
     query: []const u8,
 };
 
+pub const CaptureRole = enum {
+    plain,
+    keyword,
+    function,
+    type,
+    constant,
+    number,
+    variable,
+    operator,
+    comment,
+    string,
+};
+
 pub const builtin_languages = [_]BuiltinLanguage{
     .{ .name = "ss", .parser = "ss", .query = "builtin:ss" },
     .{ .name = "bash", .parser = "bash", .query = "builtin:bash" },
@@ -130,4 +143,51 @@ fn languageIndex(languages: []const Language, name: []const u8) ?usize {
         if (std.ascii.eqlIgnoreCase(language.name, name)) return index;
     }
     return null;
+}
+
+pub fn roleForCapture(capture_name: []const u8) ?CaptureRole {
+    if (capture_name.len == 0) return null;
+    if (captureHasSegment(capture_name, "comment")) return .comment;
+    if (captureHasSegment(capture_name, "escape")) return .string;
+    if (captureHasSegment(capture_name, "string")) return .string;
+    if (captureHasSegment(capture_name, "character")) return .string;
+    if (captureHasSegment(capture_name, "operator")) return .operator;
+    if (captureHasSegment(capture_name, "punctuation")) return .operator;
+    if (captureHasSegment(capture_name, "delimiter")) return .operator;
+    if (captureHasSegment(capture_name, "keyword")) return .keyword;
+    if (captureHasSegment(capture_name, "import")) return .keyword;
+    if (captureHasSegment(capture_name, "media")) return .keyword;
+    if (captureHasSegment(capture_name, "supports")) return .keyword;
+    if (captureHasSegment(capture_name, "charset")) return .keyword;
+    if (captureHasSegment(capture_name, "keyframes")) return .keyword;
+    if (std.mem.eql(u8, capture_name, "cImport")) return .function;
+    if (captureHasSegment(capture_name, "function")) return .function;
+    if (captureHasSegment(capture_name, "method")) return .function;
+    if (captureHasSegment(capture_name, "macro")) return .function;
+    if (captureHasSegment(capture_name, "constructor")) return .type;
+    if (captureHasSegment(capture_name, "type")) return .type;
+    if (captureHasSegment(capture_name, "namespace")) return .type;
+    if (captureHasSegment(capture_name, "module")) return .type;
+    if (captureHasSegment(capture_name, "tag")) return .type;
+    if (captureHasSegment(capture_name, "number")) return .number;
+    if (captureHasSegment(capture_name, "float")) return .number;
+    if (captureHasSegment(capture_name, "constant")) return .constant;
+    if (captureHasSegment(capture_name, "boolean")) return .constant;
+    if (captureHasSegment(capture_name, "attribute")) return .constant;
+    if (captureHasSegment(capture_name, "label")) return .constant;
+    if (captureHasSegment(capture_name, "property")) return .variable;
+    if (captureHasSegment(capture_name, "field")) return .variable;
+    if (captureHasSegment(capture_name, "parameter")) return .variable;
+    if (captureHasSegment(capture_name, "member")) return .variable;
+    if (captureHasSegment(capture_name, "variable")) return .variable;
+    if (std.mem.startsWith(u8, capture_name, "_")) return .operator;
+    return null;
+}
+
+fn captureHasSegment(capture_name: []const u8, segment: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, capture_name, '.');
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, segment)) return true;
+    }
+    return false;
 }
