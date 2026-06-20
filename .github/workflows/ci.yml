@@ -104,6 +104,9 @@ jobs:
           qpdf --version
           git -C third_party/md4c rev-parse HEAD
 
+      - name: Check bundled tree-sitter language metadata
+        run: node scripts/update-tree-sitter-languages.mjs --check
+
       - name: Check release metadata
         run: release/tools/preflight.py
 
