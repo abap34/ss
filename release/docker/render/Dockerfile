@@ -16,6 +16,7 @@ RUN apt-get update \
         libcairo2-dev \
         librsvg2-dev \
         libpango1.0-dev \
+        libtree-sitter-dev \
         pkg-config \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -40,6 +41,7 @@ COPY build.zig ./build.zig
 COPY release/VERSION ./release/VERSION
 COPY editor/tree-sitter-ss/src ./editor/tree-sitter-ss/src
 COPY editor/tree-sitter-ss/queries/highlights.scm ./editor/tree-sitter-ss/queries/highlights.scm
+COPY third_party/tree-sitter-languages ./third_party/tree-sitter-languages
 COPY src ./src
 COPY stdlib ./stdlib
 COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh
@@ -67,6 +69,7 @@ RUN set -eu; \
         libpango-1.0-0 \
         libpangocairo-1.0-0 \
         librsvg2-2 \
+        libtree-sitter0 \
         poppler-utils \
         qpdf \
         texlive-full; \

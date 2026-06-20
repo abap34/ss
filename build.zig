@@ -20,6 +20,62 @@ const ProjectModules = struct {
     core: *Module,
 };
 
+const BundledHighlightQuery = struct {
+    option_name: []const u8,
+    path: []const u8,
+};
+
+const bundled_highlight_queries = [_]BundledHighlightQuery{
+    .{ .option_name = "bash_highlight_query", .path = "third_party/tree-sitter-languages/bash/queries/highlights.scm" },
+    .{ .option_name = "c_highlight_query", .path = "third_party/tree-sitter-languages/c/queries/highlights.scm" },
+    .{ .option_name = "cpp_highlight_query", .path = "third_party/tree-sitter-languages/cpp/queries/highlights.scm" },
+    .{ .option_name = "css_highlight_query", .path = "third_party/tree-sitter-languages/css/queries/highlights.scm" },
+    .{ .option_name = "go_highlight_query", .path = "third_party/tree-sitter-languages/go/queries/highlights.scm" },
+    .{ .option_name = "html_highlight_query", .path = "third_party/tree-sitter-languages/html/queries/highlights.scm" },
+    .{ .option_name = "java_highlight_query", .path = "third_party/tree-sitter-languages/java/queries/highlights.scm" },
+    .{ .option_name = "javascript_highlight_query", .path = "third_party/tree-sitter-languages/javascript/queries/highlights.scm" },
+    .{ .option_name = "json_highlight_query", .path = "third_party/tree-sitter-languages/json/queries/highlights.scm" },
+    .{ .option_name = "julia_highlight_query", .path = "third_party/tree-sitter-languages/julia/queries/highlights.scm" },
+    .{ .option_name = "python_highlight_query", .path = "third_party/tree-sitter-languages/python/queries/highlights.scm" },
+    .{ .option_name = "rust_highlight_query", .path = "third_party/tree-sitter-languages/rust/queries/highlights.scm" },
+    .{ .option_name = "toml_highlight_query", .path = "third_party/tree-sitter-languages/toml/queries/highlights.scm" },
+    .{ .option_name = "typescript_highlight_query", .path = "third_party/tree-sitter-languages/typescript/queries/highlights.scm" },
+    .{ .option_name = "yaml_highlight_query", .path = "third_party/tree-sitter-languages/yaml/queries/highlights.scm" },
+    .{ .option_name = "zig_highlight_query", .path = "third_party/tree-sitter-languages/zig/queries/highlights.scm" },
+};
+
+const bundled_tree_sitter_sources = [_][]const u8{
+    "third_party/tree-sitter-languages/bash/src/parser.c",
+    "third_party/tree-sitter-languages/bash/src/scanner.c",
+    "third_party/tree-sitter-languages/c/src/parser.c",
+    "third_party/tree-sitter-languages/cpp/src/parser.c",
+    "third_party/tree-sitter-languages/cpp/src/scanner.c",
+    "third_party/tree-sitter-languages/css/src/parser.c",
+    "third_party/tree-sitter-languages/css/src/scanner.c",
+    "third_party/tree-sitter-languages/go/src/parser.c",
+    "third_party/tree-sitter-languages/html/src/parser.c",
+    "third_party/tree-sitter-languages/html/src/scanner.c",
+    "third_party/tree-sitter-languages/java/src/parser.c",
+    "third_party/tree-sitter-languages/javascript/src/parser.c",
+    "third_party/tree-sitter-languages/javascript/src/scanner.c",
+    "third_party/tree-sitter-languages/json/src/parser.c",
+    "third_party/tree-sitter-languages/julia/src/parser.c",
+    "third_party/tree-sitter-languages/julia/src/scanner.c",
+    "third_party/tree-sitter-languages/python/src/parser.c",
+    "third_party/tree-sitter-languages/python/src/scanner.c",
+    "third_party/tree-sitter-languages/rust/src/parser.c",
+    "third_party/tree-sitter-languages/rust/src/scanner.c",
+    "third_party/tree-sitter-languages/toml/src/parser.c",
+    "third_party/tree-sitter-languages/toml/src/scanner.c",
+    "third_party/tree-sitter-languages/typescript/typescript/src/parser.c",
+    "third_party/tree-sitter-languages/typescript/typescript/src/scanner.c",
+    "third_party/tree-sitter-languages/typescript/tsx/src/parser.c",
+    "third_party/tree-sitter-languages/typescript/tsx/src/scanner.c",
+    "third_party/tree-sitter-languages/yaml/src/parser.c",
+    "third_party/tree-sitter-languages/yaml/src/scanner.c",
+    "third_party/tree-sitter-languages/zig/src/parser.c",
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -39,6 +95,11 @@ pub fn build(b: *std.Build) void {
     const ss_highlight_query = b.build_root.handle.readFileAlloc(b.graph.io, "editor/tree-sitter-ss/queries/highlights.scm", b.allocator, .limited(64 * 1024)) catch
         @panic("editor/tree-sitter-ss/queries/highlights.scm is missing.");
     build_options.addOption([]const u8, "ss_highlight_query", ss_highlight_query);
+    for (bundled_highlight_queries) |query| {
+        const source = b.build_root.handle.readFileAlloc(b.graph.io, query.path, b.allocator, .limited(128 * 1024)) catch
+            @panic("bundled tree-sitter highlight query is missing.");
+        build_options.addOption([]const u8, query.option_name, source);
+    }
 
     const md4c_src = "third_party/md4c/src";
     b.build_root.handle.access(b.graph.io, md4c_src ++ "/md4c.c", .{}) catch
@@ -177,6 +238,7 @@ fn addTestStep(
     }, true);
     addModuleTest(ctx, test_step, "tests/project_spec_tests.zig", &.{
         import("project", modules.project),
+        import("utils", modules.utils),
     }, null);
     const compiler_mod = createCommonModule(ctx, "src/compiler.zig", modules, true);
     const lsp_scope_mod = createModule(ctx, "src/lsp/scope.zig", &.{
@@ -341,12 +403,18 @@ fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("editor/tree-sitter-ss/src/parser.c"),
     });
+    for (bundled_tree_sitter_sources) |source| {
+        module.addCSourceFile(.{
+            .file = b.path(source),
+        });
+    }
     module.addIncludePath(b.path("editor/tree-sitter-ss/src"));
 }
 
 fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module) void {
     module.addIncludePath(b.path("src/render/pdf"));
     module.linkSystemLibrary("ss-pdf", .{ .use_pkg_config = .force });
+    module.linkSystemLibrary("tree-sitter", .{ .use_pkg_config = .force });
 }
 
 fn readReleaseVersion(b: *std.Build) ![]const u8 {

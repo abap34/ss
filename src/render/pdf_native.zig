@@ -46,6 +46,39 @@ const TSQueryMatch = extern struct {
 };
 
 extern fn tree_sitter_ss() *const TSLanguage;
+extern fn tree_sitter_bash() *const TSLanguage;
+extern fn tree_sitter_c() *const TSLanguage;
+extern fn tree_sitter_cpp() *const TSLanguage;
+extern fn tree_sitter_css() *const TSLanguage;
+extern fn tree_sitter_go() *const TSLanguage;
+extern fn tree_sitter_html() *const TSLanguage;
+extern fn tree_sitter_java() *const TSLanguage;
+extern fn tree_sitter_javascript() *const TSLanguage;
+extern fn tree_sitter_json() *const TSLanguage;
+extern fn tree_sitter_julia() *const TSLanguage;
+extern fn tree_sitter_python() *const TSLanguage;
+extern fn tree_sitter_rust() *const TSLanguage;
+extern fn tree_sitter_toml() *const TSLanguage;
+extern fn tree_sitter_typescript() *const TSLanguage;
+extern fn tree_sitter_tsx() *const TSLanguage;
+extern fn tree_sitter_yaml() *const TSLanguage;
+extern fn tree_sitter_zig() *const TSLanguage;
+
+extern fn ts_parser_new() ?*TSParser;
+extern fn ts_parser_delete(*TSParser) void;
+extern fn ts_parser_set_language(*TSParser, *const TSLanguage) bool;
+extern fn ts_parser_parse_string(*TSParser, ?*const TSTree, [*c]const u8, u32) ?*TSTree;
+extern fn ts_tree_delete(*TSTree) void;
+extern fn ts_tree_root_node(*const TSTree) TSNode;
+extern fn ts_query_new(*const TSLanguage, [*c]const u8, u32, *u32, *TSQueryError) ?*TSQuery;
+extern fn ts_query_delete(*TSQuery) void;
+extern fn ts_query_capture_name_for_id(*const TSQuery, u32, *u32) ?[*]const u8;
+extern fn ts_query_cursor_new() ?*TSQueryCursor;
+extern fn ts_query_cursor_delete(*TSQueryCursor) void;
+extern fn ts_query_cursor_exec(*TSQueryCursor, *const TSQuery, TSNode) void;
+extern fn ts_query_cursor_next_capture(*TSQueryCursor, *TSQueryMatch, *u32) bool;
+extern fn ts_node_start_byte(TSNode) u32;
+extern fn ts_node_end_byte(TSNode) u32;
 
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
@@ -76,7 +109,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v11";
+const page_pdf_cache_version = "ss-native-page-pdf-v12";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -208,7 +241,6 @@ const HighlightLanguageHandle = struct {
 };
 
 const TreeSitterRuntime = struct {
-    library: std.DynLib,
     parser_new: *const fn () callconv(.c) ?*TSParser,
     parser_delete: *const fn (*TSParser) callconv(.c) void,
     parser_set_language: *const fn (*TSParser, *const TSLanguage) callconv(.c) bool,
@@ -226,7 +258,7 @@ const TreeSitterRuntime = struct {
     node_end_byte: *const fn (TSNode) callconv(.c) u32,
 
     fn deinit(self: *TreeSitterRuntime) void {
-        self.library.close();
+        _ = self;
     }
 };
 
@@ -2704,18 +2736,39 @@ const LoadedHighlightQuery = struct {
 };
 
 fn loadHighlightQuerySource(ctx: *DrawContext, configured: *const utils.highlight.Language) !LoadedHighlightQuery {
-    if (std.mem.eql(u8, configured.query, "builtin:ss")) {
-        return .{ .text = build_options.ss_highlight_query };
-    }
+    if (builtinHighlightQuery(configured.query)) |query| return .{ .text = query };
     return .{
         .text = try std.Io.Dir.cwd().readFileAlloc(ctx.io, configured.query, ctx.allocator, .limited(1024 * 1024)),
         .owned = true,
     };
 }
 
+fn builtinHighlightQuery(query: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, query, "builtin:ss")) return build_options.ss_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:bash")) return build_options.bash_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:c")) return build_options.c_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:cpp")) return build_options.cpp_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:css")) return build_options.css_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:go")) return build_options.go_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:html")) return build_options.html_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:java")) return build_options.java_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:javascript")) return build_options.javascript_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:json")) return build_options.json_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:julia")) return build_options.julia_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:python")) return build_options.python_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:rust")) return build_options.rust_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:toml")) return build_options.toml_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:typescript")) return build_options.typescript_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:yaml")) return build_options.yaml_highlight_query;
+    if (std.mem.eql(u8, query, "builtin:zig")) return build_options.zig_highlight_query;
+    return null;
+}
+
 fn loadTreeSitterLanguage(ctx: *DrawContext, configured: *const utils.highlight.Language) !HighlightLanguageHandle {
-    if (configured.library == null and std.ascii.eqlIgnoreCase(configured.parser, "ss")) {
-        return .{ .language = tree_sitter_ss() };
+    if (configured.library == null) {
+        if (builtinTreeSitterLanguage(configured.parser)) |language| {
+            return .{ .language = language };
+        }
     }
 
     const library_path = configured.library orelse return error.TreeSitterLibraryRequired;
@@ -2736,44 +2789,57 @@ fn loadTreeSitterLanguage(ctx: *DrawContext, configured: *const utils.highlight.
     };
 }
 
-fn loadTreeSitterRuntime() !TreeSitterRuntime {
-    const candidates = [_][]const u8{
-        "libtree-sitter.dylib",
-        "/opt/homebrew/lib/libtree-sitter.dylib",
-        "/usr/local/lib/libtree-sitter.dylib",
-        "libtree-sitter.so",
-        "libtree-sitter.so.0",
-        "tree-sitter.dll",
-    };
-
-    for (candidates) |candidate| {
-        var library = std.DynLib.open(candidate) catch continue;
-        errdefer library.close();
-        return .{
-            .library = library,
-            .parser_new = try lookupTreeSitterSymbol(&library, *const fn () callconv(.c) ?*TSParser, "ts_parser_new"),
-            .parser_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSParser) callconv(.c) void, "ts_parser_delete"),
-            .parser_set_language = try lookupTreeSitterSymbol(&library, *const fn (*TSParser, *const TSLanguage) callconv(.c) bool, "ts_parser_set_language"),
-            .parser_parse_string = try lookupTreeSitterSymbol(&library, *const fn (*TSParser, ?*const TSTree, [*c]const u8, u32) callconv(.c) ?*TSTree, "ts_parser_parse_string"),
-            .tree_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSTree) callconv(.c) void, "ts_tree_delete"),
-            .tree_root_node = try lookupTreeSitterSymbol(&library, *const fn (*const TSTree) callconv(.c) TSNode, "ts_tree_root_node"),
-            .query_new = try lookupTreeSitterSymbol(&library, *const fn (*const TSLanguage, [*c]const u8, u32, *u32, *TSQueryError) callconv(.c) ?*TSQuery, "ts_query_new"),
-            .query_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSQuery) callconv(.c) void, "ts_query_delete"),
-            .query_capture_name_for_id = try lookupTreeSitterSymbol(&library, *const fn (*const TSQuery, u32, *u32) callconv(.c) ?[*]const u8, "ts_query_capture_name_for_id"),
-            .query_cursor_new = try lookupTreeSitterSymbol(&library, *const fn () callconv(.c) ?*TSQueryCursor, "ts_query_cursor_new"),
-            .query_cursor_delete = try lookupTreeSitterSymbol(&library, *const fn (*TSQueryCursor) callconv(.c) void, "ts_query_cursor_delete"),
-            .query_cursor_exec = try lookupTreeSitterSymbol(&library, *const fn (*TSQueryCursor, *const TSQuery, TSNode) callconv(.c) void, "ts_query_cursor_exec"),
-            .query_cursor_next_capture = try lookupTreeSitterSymbol(&library, *const fn (*TSQueryCursor, *TSQueryMatch, *u32) callconv(.c) bool, "ts_query_cursor_next_capture"),
-            .node_start_byte = try lookupTreeSitterSymbol(&library, *const fn (TSNode) callconv(.c) u32, "ts_node_start_byte"),
-            .node_end_byte = try lookupTreeSitterSymbol(&library, *const fn (TSNode) callconv(.c) u32, "ts_node_end_byte"),
-        };
-    }
-
-    return error.TreeSitterRuntimeUnavailable;
+fn builtinTreeSitterLanguage(parser: []const u8) ?*const TSLanguage {
+    if (std.ascii.eqlIgnoreCase(parser, "ss")) return tree_sitter_ss();
+    if (std.ascii.eqlIgnoreCase(parser, "bash")) return tree_sitter_bash();
+    if (std.ascii.eqlIgnoreCase(parser, "sh")) return tree_sitter_bash();
+    if (std.ascii.eqlIgnoreCase(parser, "shell")) return tree_sitter_bash();
+    if (std.ascii.eqlIgnoreCase(parser, "c")) return tree_sitter_c();
+    if (std.ascii.eqlIgnoreCase(parser, "cpp")) return tree_sitter_cpp();
+    if (std.ascii.eqlIgnoreCase(parser, "c++")) return tree_sitter_cpp();
+    if (std.ascii.eqlIgnoreCase(parser, "cc")) return tree_sitter_cpp();
+    if (std.ascii.eqlIgnoreCase(parser, "css")) return tree_sitter_css();
+    if (std.ascii.eqlIgnoreCase(parser, "go")) return tree_sitter_go();
+    if (std.ascii.eqlIgnoreCase(parser, "golang")) return tree_sitter_go();
+    if (std.ascii.eqlIgnoreCase(parser, "html")) return tree_sitter_html();
+    if (std.ascii.eqlIgnoreCase(parser, "java")) return tree_sitter_java();
+    if (std.ascii.eqlIgnoreCase(parser, "javascript")) return tree_sitter_javascript();
+    if (std.ascii.eqlIgnoreCase(parser, "js")) return tree_sitter_javascript();
+    if (std.ascii.eqlIgnoreCase(parser, "json")) return tree_sitter_json();
+    if (std.ascii.eqlIgnoreCase(parser, "julia")) return tree_sitter_julia();
+    if (std.ascii.eqlIgnoreCase(parser, "jl")) return tree_sitter_julia();
+    if (std.ascii.eqlIgnoreCase(parser, "python")) return tree_sitter_python();
+    if (std.ascii.eqlIgnoreCase(parser, "py")) return tree_sitter_python();
+    if (std.ascii.eqlIgnoreCase(parser, "rust")) return tree_sitter_rust();
+    if (std.ascii.eqlIgnoreCase(parser, "rs")) return tree_sitter_rust();
+    if (std.ascii.eqlIgnoreCase(parser, "toml")) return tree_sitter_toml();
+    if (std.ascii.eqlIgnoreCase(parser, "typescript")) return tree_sitter_typescript();
+    if (std.ascii.eqlIgnoreCase(parser, "ts")) return tree_sitter_typescript();
+    if (std.ascii.eqlIgnoreCase(parser, "tsx")) return tree_sitter_tsx();
+    if (std.ascii.eqlIgnoreCase(parser, "yaml")) return tree_sitter_yaml();
+    if (std.ascii.eqlIgnoreCase(parser, "yml")) return tree_sitter_yaml();
+    if (std.ascii.eqlIgnoreCase(parser, "zig")) return tree_sitter_zig();
+    return null;
 }
 
-fn lookupTreeSitterSymbol(library: *std.DynLib, comptime T: type, name: [:0]const u8) !T {
-    return library.lookup(T, name) orelse error.TreeSitterRuntimeSymbolNotFound;
+fn loadTreeSitterRuntime() !TreeSitterRuntime {
+    return .{
+        .parser_new = ts_parser_new,
+        .parser_delete = ts_parser_delete,
+        .parser_set_language = ts_parser_set_language,
+        .parser_parse_string = ts_parser_parse_string,
+        .tree_delete = ts_tree_delete,
+        .tree_root_node = ts_tree_root_node,
+        .query_new = ts_query_new,
+        .query_delete = ts_query_delete,
+        .query_capture_name_for_id = ts_query_capture_name_for_id,
+        .query_cursor_new = ts_query_cursor_new,
+        .query_cursor_delete = ts_query_cursor_delete,
+        .query_cursor_exec = ts_query_cursor_exec,
+        .query_cursor_next_capture = ts_query_cursor_next_capture,
+        .node_start_byte = ts_node_start_byte,
+        .node_end_byte = ts_node_end_byte,
+    };
 }
 
 fn defaultTreeSitterSymbol(allocator: Allocator, parser_name: []const u8) ![:0]u8 {

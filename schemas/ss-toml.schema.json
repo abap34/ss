@@ -243,12 +243,12 @@
     },
     "highlight": {
       "type": "object",
-      "description": "Tree-sitter based code highlighting settings.",
+      "description": "Tree-sitter based code highlighting settings. Common languages are bundled by default; entries here add or override languages.",
       "additionalProperties": false,
       "properties": {
         "languages": {
           "type": "object",
-          "description": "Mapping from code language names to tree-sitter parsers and highlight queries.",
+          "description": "Mapping from code language names to tree-sitter parsers and highlight queries. A name matching a bundled language overrides that default.",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
@@ -256,11 +256,11 @@
             "properties": {
               "parser": {
                 "type": "string",
-                "description": "Parser name. \"ss\" uses the bundled ss parser unless library is set."
+                "description": "Parser name. Bundled parser names include ss, bash, c, cpp, css, go, html, java, javascript, json, julia, python, rust, toml, typescript, tsx, yaml, and zig unless library is set."
               },
               "query": {
                 "type": "string",
-                "description": "Highlight query path resolved relative to ss.toml, or a builtin query such as \"builtin:ss\"."
+                "description": "Highlight query path resolved relative to ss.toml, or a builtin query such as \"builtin:python\"."
               },
               "library": {
                 "type": "string",

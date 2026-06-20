@@ -46,3 +46,88 @@ pub const Config = struct {
         return .{ .languages = try languages.toOwnedSlice(allocator) };
     }
 };
+
+pub const BuiltinLanguage = struct {
+    name: []const u8,
+    parser: []const u8,
+    query: []const u8,
+};
+
+pub const builtin_languages = [_]BuiltinLanguage{
+    .{ .name = "ss", .parser = "ss", .query = "builtin:ss" },
+    .{ .name = "bash", .parser = "bash", .query = "builtin:bash" },
+    .{ .name = "sh", .parser = "bash", .query = "builtin:bash" },
+    .{ .name = "shell", .parser = "bash", .query = "builtin:bash" },
+    .{ .name = "c", .parser = "c", .query = "builtin:c" },
+    .{ .name = "cpp", .parser = "cpp", .query = "builtin:cpp" },
+    .{ .name = "c++", .parser = "cpp", .query = "builtin:cpp" },
+    .{ .name = "cc", .parser = "cpp", .query = "builtin:cpp" },
+    .{ .name = "css", .parser = "css", .query = "builtin:css" },
+    .{ .name = "go", .parser = "go", .query = "builtin:go" },
+    .{ .name = "golang", .parser = "go", .query = "builtin:go" },
+    .{ .name = "html", .parser = "html", .query = "builtin:html" },
+    .{ .name = "java", .parser = "java", .query = "builtin:java" },
+    .{ .name = "javascript", .parser = "javascript", .query = "builtin:javascript" },
+    .{ .name = "js", .parser = "javascript", .query = "builtin:javascript" },
+    .{ .name = "json", .parser = "json", .query = "builtin:json" },
+    .{ .name = "julia", .parser = "julia", .query = "builtin:julia" },
+    .{ .name = "jl", .parser = "julia", .query = "builtin:julia" },
+    .{ .name = "python", .parser = "python", .query = "builtin:python" },
+    .{ .name = "py", .parser = "python", .query = "builtin:python" },
+    .{ .name = "rust", .parser = "rust", .query = "builtin:rust" },
+    .{ .name = "rs", .parser = "rust", .query = "builtin:rust" },
+    .{ .name = "toml", .parser = "toml", .query = "builtin:toml" },
+    .{ .name = "typescript", .parser = "typescript", .query = "builtin:typescript" },
+    .{ .name = "ts", .parser = "typescript", .query = "builtin:typescript" },
+    .{ .name = "tsx", .parser = "tsx", .query = "builtin:typescript" },
+    .{ .name = "yaml", .parser = "yaml", .query = "builtin:yaml" },
+    .{ .name = "yml", .parser = "yaml", .query = "builtin:yaml" },
+    .{ .name = "zig", .parser = "zig", .query = "builtin:zig" },
+};
+
+pub fn defaultConfig(allocator: std.mem.Allocator) !Config {
+    return configWithDefaults(allocator, &.{});
+}
+
+pub fn configWithDefaults(allocator: std.mem.Allocator, overrides: []const Language) !Config {
+    var languages = std.ArrayList(Language).empty;
+    errdefer {
+        for (languages.items) |*language| language.deinit(allocator);
+        languages.deinit(allocator);
+    }
+
+    for (builtin_languages) |language| {
+        try languages.append(allocator, try cloneBuiltinLanguage(allocator, language));
+    }
+    for (overrides) |language| {
+        if (languageIndex(languages.items, language.name)) |index| {
+            const replacement = try language.clone(allocator);
+            languages.items[index].deinit(allocator);
+            languages.items[index] = replacement;
+        } else {
+            try languages.append(allocator, try language.clone(allocator));
+        }
+    }
+
+    return .{ .languages = try languages.toOwnedSlice(allocator) };
+}
+
+fn cloneBuiltinLanguage(allocator: std.mem.Allocator, language: BuiltinLanguage) !Language {
+    const name = try allocator.dupe(u8, language.name);
+    errdefer allocator.free(name);
+    const parser = try allocator.dupe(u8, language.parser);
+    errdefer allocator.free(parser);
+    const query = try allocator.dupe(u8, language.query);
+    return .{
+        .name = name,
+        .parser = parser,
+        .query = query,
+    };
+}
+
+fn languageIndex(languages: []const Language, name: []const u8) ?usize {
+    for (languages, 0..) |language, index| {
+        if (std.ascii.eqlIgnoreCase(language.name, name)) return index;
+    }
+    return null;
+}

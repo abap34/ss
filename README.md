@@ -175,6 +175,10 @@ directory when omitted.
 
 The JSON Schema for `ss.toml` lives at `schemas/ss-toml.schema.json`. TOML
 language servers such as Taplo can use it for completion and validation.
+Code blocks in common languages use bundled tree-sitter parsers by default.
+Use `[highlight.languages.<name>]` only when adding or overriding a language.
+The exact bundled language names are listed in
+`third_party/tree-sitter-languages/README.md`.
 
 ## Installation
 
@@ -199,6 +203,7 @@ ss has the following dependencies:
 | Cairo headers and library | Native PDF drawing. |
 | Pango headers and library | Text shaping and layout. |
 | librsvg headers and library | SVG rendering. |
+| tree-sitter headers and library | Built-in syntax highlighting for code blocks. |
 | `qpdf` | PDF assembly and normalization. |
 | `magick` | Raster image conversion, when raster assets need conversion or resizing. |
 | `pdftocairo` | PDF/vector asset conversion, including rendered LaTeX math conversion. |
@@ -219,14 +224,14 @@ zig build -Doptimize=ReleaseSafe install --prefix ~/.local
 Example Homebrew command for the non-TeX dependencies:
 
 ```sh
-brew install pkgconf cairo pango librsvg qpdf poppler imagemagick
+brew install pkgconf cairo pango librsvg tree-sitter qpdf poppler imagemagick
 ```
 
 Example apt command for the non-TeX dependencies on Ubuntu/Debian:
 
 ```sh
 sudo apt-get install -y \
-  pkg-config libcairo2-dev libpango1.0-dev librsvg2-dev \
+  pkg-config libcairo2-dev libpango1.0-dev librsvg2-dev libtree-sitter-dev \
   qpdf poppler-utils imagemagick
 ```
 
