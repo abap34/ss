@@ -778,6 +778,26 @@ pub const Ir = struct {
         try self.addDiagnostic(diagnostic);
     }
 
+    pub fn addRenderDiagnostic(
+        self: *Ir,
+        severity: DiagnosticSeverity,
+        page_id: ?NodeId,
+        node_id: ?NodeId,
+        origin: ?[]const u8,
+        data: Diagnostic.Data,
+    ) !void {
+        var diagnostic = Diagnostic{
+            .phase = .render,
+            .severity = severity,
+            .page_id = page_id,
+            .node_id = node_id,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
+            .data = data,
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.addDiagnostic(diagnostic);
+    }
+
     pub fn addUnplacedObjectWarnings(self: *Ir) !void {
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.attached or node.discarded) continue;

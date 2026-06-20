@@ -193,7 +193,7 @@ pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []c
 pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
+    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options, progress);
     defer allocator.free(pdf_data);
     try utils.render_cache.pruneFromEnv(io, allocator);
     progress.step("Render pages");
@@ -208,12 +208,26 @@ pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
 pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    const pdf_data = try pdf.renderDocumentToPdfWithOptions(allocator, io, &ir, options, progressCallback(progress));
+    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options, progress);
     defer allocator.free(pdf_data);
     try utils.render_cache.pruneFromEnv(io, allocator);
     progress.step("Render pages");
     try utils.fs.writeFile(io, output_path, pdf_data);
     progress.step("Write PDF");
+}
+
+fn renderPdfOrPrintDiagnostics(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    options: RenderOptions,
+    progress: *Progress,
+) ![]const u8 {
+    return pdf.renderDocumentToPdfWithOptions(allocator, io, ir, options, progressCallback(progress)) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+        return err;
+    };
 }
 
 fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {

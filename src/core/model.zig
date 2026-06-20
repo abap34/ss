@@ -423,6 +423,10 @@ pub const Diagnostic = struct {
             reason: []const u8,
             payload_kind: ?PayloadKind = null,
         },
+        render_failed: struct {
+            reason: []const u8,
+            payload_kind: ?PayloadKind = null,
+        },
         type_mismatch: struct {
             code: TypeMismatchCode,
             expected: ValueTag,
@@ -457,6 +461,7 @@ pub const Diagnostic = struct {
                 allocator.free(data.resolved_path);
             },
             .asset_invalid => |data| allocator.free(data.reason),
+            .render_failed => |data| allocator.free(data.reason),
             else => {},
         }
     }

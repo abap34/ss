@@ -287,6 +287,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/lsp_completion_runtime_spec.mjs",
         "tests/lsp_editor_runtime_spec.mjs",
         "tests/render_cache_runtime_spec.mjs",
+        "tests/render_diagnostics_runtime_spec.mjs",
     };
 
     for (node_spec_files) |path| {

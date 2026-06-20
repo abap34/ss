@@ -2195,6 +2195,7 @@ fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
         .user_report => |data| if (std.mem.startsWith(u8, data.message, "DependencyQuery:")) "DependencyQuery" else "user_report",
         .asset_not_found => "asset_not_found",
         .asset_invalid => "asset_invalid",
+        .render_failed => "render_failed",
         .type_mismatch => |data| @tagName(data.code),
         .recursive_function => "RecursiveFunction",
         .unresolved_frame => "unresolved_frame",

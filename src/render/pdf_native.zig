@@ -83,6 +83,7 @@ const external_command_timeout = std.Io.Clock.Duration{
     .raw = std.Io.Duration.fromSeconds(120),
     .clock = .awake,
 };
+const command_failure_output_limit: usize = 1600;
 const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
@@ -94,6 +95,7 @@ const DrawContext = struct {
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
+    command_failure: ?*CommandFailureSink = null,
 };
 
 const Atom = struct {
@@ -132,8 +134,8 @@ const IconSpec = struct {
 
 const PreloadTask = union(enum) {
     math: MathPreload,
-    icon: []const u8,
-    vector_pdf: []const u8,
+    icon: IconPreload,
+    vector_pdf: VectorPdfPreload,
     raster: RasterPreload,
 };
 
@@ -141,12 +143,45 @@ const MathPreload = struct {
     source: []const u8,
     preamble: []const TexPreambleEntry,
     kind: MathKind,
+    target: RenderDiagnosticTarget = .{},
 };
 
 const RasterPreload = struct {
     source: []const u8,
     target_width: f32,
     target_height: f32,
+    target: RenderDiagnosticTarget = .{},
+};
+
+const IconPreload = struct {
+    source: []const u8,
+    target: RenderDiagnosticTarget = .{},
+};
+
+const VectorPdfPreload = struct {
+    source: []const u8,
+    target: RenderDiagnosticTarget = .{},
+};
+
+const RenderDiagnosticTarget = struct {
+    page_id: ?core.NodeId = null,
+    node_id: ?core.NodeId = null,
+    origin: ?[]const u8 = null,
+    payload_kind: ?core.PayloadKind = null,
+};
+
+const CommandFailureSink = struct {
+    allocator: Allocator,
+    message: ?[]u8 = null,
+
+    fn deinit(self: *CommandFailureSink) void {
+        if (self.message) |message| self.allocator.free(message);
+    }
+
+    fn record(self: *CommandFailureSink, message: []const u8) !void {
+        if (self.message != null) return;
+        self.message = try self.allocator.dupe(u8, message);
+    }
 };
 
 pub const RenderOptions = struct {
@@ -196,6 +231,7 @@ const TreeSitterRuntime = struct {
 };
 
 const RenderOp = struct {
+    page_id: core.NodeId,
     node_id: core.NodeId,
     frame: Frame,
     content: []const u8,
@@ -204,6 +240,8 @@ const RenderOp = struct {
     parse_mode: core.markdown.ParseMode,
     tex_preamble: []const TexPreambleEntry,
     math_kind: MathKind = .block,
+    origin: ?[]const u8 = null,
+    payload_kind: ?core.PayloadKind = null,
 
     fn deinit(self: *RenderOp, allocator: Allocator) void {
         allocator.free(self.tex_preamble);
@@ -298,17 +336,6 @@ const PreviousGeneration = struct {
     }
 };
 
-const PreloadWork = struct {
-    tasks: []const PreloadTask,
-    next_index: std.atomic.Value(usize) = .init(0),
-    completed: std.atomic.Value(usize) = .init(0),
-    failed: std.atomic.Value(bool) = .init(false),
-    io: std.Io,
-    pdf: *c.SsPdf,
-    asset_base_dir: []const u8,
-    cache_dir: []const u8,
-};
-
 pub const RenderProgress = struct {
     context: *anyopaque,
     artifactCompleted: *const fn (context: *anyopaque, completed: usize, total: usize) void,
@@ -387,9 +414,19 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
         plan.deinit();
     }
 
-    try executeRenderDag(&ctx, &plan, options, progress);
+    executeRenderDag(&ctx, &plan, options, progress) catch |err| {
+        try collectPlanRenderDiagnostics(&ctx, ir, &plan, err);
+        return error.DiagnosticsFailed;
+    };
     try writeRenderManifest(&ctx, &plan);
-    try assembleRenderPlan(&ctx, &plan, options, progress);
+    var assembly_failure = CommandFailureSink{ .allocator = ir.allocator };
+    defer assembly_failure.deinit();
+    var assembly_ctx = ctx;
+    assembly_ctx.command_failure = &assembly_failure;
+    assembleRenderPlan(&assembly_ctx, &plan, options, progress) catch |err| {
+        try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
+        return error.DiagnosticsFailed;
+    };
     try publishRenderGeneration(&ctx, &plan);
 
     return try std.Io.Dir.cwd().readFileAlloc(io, plan.final_pdf_path, allocator, .unlimited);
@@ -484,6 +521,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                 var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
                 defer env.deinit(ctx.allocator);
                 var op = RenderOp{
+                    .page_id = page.id,
                     .node_id = node.id,
                     .frame = node.frame,
                     .content = node.content orelse "",
@@ -492,6 +530,8 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                     .parse_mode = core.markdown.parseModeForNode(ir, node),
                     .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
                     .math_kind = mathKindForNode(node),
+                    .origin = node.origin,
+                    .payload_kind = node.payload_kind,
                 };
                 errdefer op.deinit(ctx.allocator);
                 try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
@@ -1165,19 +1205,24 @@ fn collectOpPreloads(
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
 ) !void {
+    const target = opDiagnosticTarget(op);
     switch (op.render.kind) {
-        .text => if (op.render.text != null) try collectTextOpPreloads(ctx, op, tasks, seen, page_deps),
+        .text => if (op.render.text != null) try collectTextOpPreloads(ctx, op, target, tasks, seen, page_deps),
         .vector_math => {
             try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, op.content),
                 .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
                 .kind = op.math_kind,
+                .target = target,
             } });
         },
         .vector_asset => {
             const source = try resolveAssetPath(ctx, op.content);
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".pdf")) {
-                try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .vector_pdf = source });
+                try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .vector_pdf = .{
+                    .source = source,
+                    .target = target,
+                } });
             } else {
                 ctx.allocator.free(source);
             }
@@ -1192,6 +1237,7 @@ fn collectOpPreloads(
                     .source = source,
                     .target_width = content_frame.width * raster_cache_scale,
                     .target_height = content_frame.height * raster_cache_scale,
+                    .target = target,
                 } });
             }
         },
@@ -1199,9 +1245,19 @@ fn collectOpPreloads(
     }
 }
 
+fn opDiagnosticTarget(op: *const RenderOp) RenderDiagnosticTarget {
+    return .{
+        .page_id = op.page_id,
+        .node_id = op.node_id,
+        .origin = op.origin,
+        .payload_kind = op.payload_kind,
+    };
+}
+
 fn collectTextOpPreloads(
     ctx: *DrawContext,
     op: *const RenderOp,
+    target: RenderDiagnosticTarget,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
@@ -1211,12 +1267,12 @@ fn collectTextOpPreloads(
         .block => {
             var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
             defer doc.deinit();
-            try collectMarkdownBlockPreloadsForPlan(ctx, doc.blocks.items, op.tex_preamble, tasks, seen, page_deps);
+            try collectMarkdownBlockPreloadsForPlan(ctx, doc.blocks.items, op.tex_preamble, target, tasks, seen, page_deps);
         },
         .inline_text => {
             var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
             defer layout.deinit(ctx.allocator);
-            try collectLinePreloadsForPlan(ctx, layout.lines.items, op.tex_preamble, tasks, seen, page_deps);
+            try collectLinePreloadsForPlan(ctx, layout.lines.items, op.tex_preamble, target, tasks, seen, page_deps);
         },
     }
 }
@@ -1225,6 +1281,7 @@ fn collectMarkdownBlockPreloadsForPlan(
     ctx: *DrawContext,
     blocks: []const *Block,
     preamble: []const TexPreambleEntry,
+    target: RenderDiagnosticTarget,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
@@ -1232,17 +1289,17 @@ fn collectMarkdownBlockPreloadsForPlan(
     for (blocks) |block| {
         switch (block.kind) {
             .paragraph, .code_block => if (block.paragraph) |paragraph| {
-                try collectLinePreloadsForPlan(ctx, paragraph.lines.items, preamble, tasks, seen, page_deps);
+                try collectLinePreloadsForPlan(ctx, paragraph.lines.items, preamble, target, tasks, seen, page_deps);
             },
             .bullet_list, .ordered_list => if (block.list) |list| {
                 for (list.items.items) |item| {
-                    try collectMarkdownBlockPreloadsForPlan(ctx, item.blocks.items, preamble, tasks, seen, page_deps);
+                    try collectMarkdownBlockPreloadsForPlan(ctx, item.blocks.items, preamble, target, tasks, seen, page_deps);
                 }
             },
             .table => if (block.table) |table| {
                 for (table.rows.items) |row| {
                     for (row.cells.items) |cell| {
-                        try collectLinePreloadsForPlan(ctx, cell.lines.items, preamble, tasks, seen, page_deps);
+                        try collectLinePreloadsForPlan(ctx, cell.lines.items, preamble, target, tasks, seen, page_deps);
                     }
                 }
             },
@@ -1254,6 +1311,7 @@ fn collectLinePreloadsForPlan(
     ctx: *DrawContext,
     lines: []const Line,
     preamble: []const TexPreambleEntry,
+    target: RenderDiagnosticTarget,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
@@ -1274,6 +1332,7 @@ fn collectLinePreloadsForPlan(
                             .source = try ctx.allocator.dupe(u8, source),
                             .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                             .kind = .display,
+                            .target = target,
                         } });
                     }
                     continue;
@@ -1282,9 +1341,13 @@ fn collectLinePreloadsForPlan(
                     .source = try ctx.allocator.dupe(u8, run.text),
                     .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                     .kind = .inline_math,
+                    .target = target,
                 } }),
                 .icon => if (run.icon) |source| try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{
-                    .icon = try ctx.allocator.dupe(u8, source),
+                    .icon = .{
+                        .source = try ctx.allocator.dupe(u8, source),
+                        .target = target,
+                    },
                 }),
                 else => {},
             }
@@ -1322,6 +1385,66 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
         if (existing == value) return;
     }
     try values.append(allocator, value);
+}
+
+fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const RenderPlan, original_err: anyerror) !void {
+    ir.clearDiagnosticsForPhase(.render);
+    var added = false;
+    for (plan.artifact_tasks, 0..) |task, index| {
+        if (index < plan.artifact_cached.len and plan.artifact_cached[index]) continue;
+        if (try preloadTaskCached(ctx, task)) continue;
+
+        var sink = CommandFailureSink{ .allocator = ir.allocator };
+        defer sink.deinit();
+        var diagnostic_ctx = ctx.*;
+        diagnostic_ctx.command_failure = &sink;
+        preloadOne(&diagnostic_ctx, task) catch |err| {
+            try addPreloadRenderDiagnostic(ir, task, err, sink.message);
+            added = true;
+        };
+    }
+
+    if (!added) try addGenericRenderDiagnostic(ir, original_err, null);
+}
+
+fn addPreloadRenderDiagnostic(ir: *core.Ir, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
+    const target = preloadTaskTarget(task);
+    const detail = maybe_message orelse @errorName(err);
+    const reason = try std.fmt.allocPrint(ir.allocator, "{s}: {s}", .{ preloadTaskLabel(task), detail });
+    try ir.addRenderDiagnostic(.@"error", target.page_id, target.node_id, target.origin, .{
+        .render_failed = .{
+            .reason = reason,
+            .payload_kind = target.payload_kind,
+        },
+    });
+}
+
+fn addGenericRenderDiagnostic(ir: *core.Ir, err: anyerror, maybe_message: ?[]const u8) !void {
+    const detail = maybe_message orelse @errorName(err);
+    const reason = try std.fmt.allocPrint(ir.allocator, "render backend: {s}", .{detail});
+    try ir.addRenderDiagnostic(.@"error", null, null, null, .{
+        .render_failed = .{
+            .reason = reason,
+        },
+    });
+}
+
+fn preloadTaskTarget(task: PreloadTask) RenderDiagnosticTarget {
+    return switch (task) {
+        .math => |math| math.target,
+        .icon => |icon| icon.target,
+        .vector_pdf => |asset| asset.target,
+        .raster => |raster| raster.target,
+    };
+}
+
+fn preloadTaskLabel(task: PreloadTask) []const u8 {
+    return switch (task) {
+        .math => "math expression",
+        .icon => "icon",
+        .vector_pdf => "PDF asset",
+        .raster => "raster asset",
+    };
 }
 
 fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
@@ -1366,9 +1489,12 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     defer ctx.allocator.free(threads);
 
     var started: usize = 0;
+    var joined = false;
     errdefer {
-        work.failed.store(true, .seq_cst);
-        for (threads[0..started]) |thread| thread.join();
+        if (!joined) {
+            work.failed.store(true, .seq_cst);
+            for (threads[0..started]) |thread| thread.join();
+        }
     }
 
     while (started < worker_count) : (started += 1) {
@@ -1394,6 +1520,7 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     }
 
     for (threads[0..started]) |thread| thread.join();
+    joined = true;
 
     if (progress) |p| {
         const artifacts_done = work.completed_artifacts.load(.acquire);
@@ -1436,9 +1563,8 @@ fn renderDagWorker(work: *RenderDag) void {
                 .cache_dir = work.cache_dir,
                 .highlight_languages = work.highlight_languages,
             };
-            renderOnePage(&ctx, &work.plan.pages[page_index]) catch |err| {
+            renderOnePage(&ctx, &work.plan.pages[page_index]) catch {
                 work.failed.store(true, .seq_cst);
-                std.debug.print("native pdf: page render failed ({s})\n", .{@errorName(err)});
                 break;
             };
             work.page_done[page_index].store(true, .release);
@@ -1458,9 +1584,8 @@ fn renderDagWorker(work: *RenderDag) void {
                 .cache_dir = work.cache_dir,
                 .highlight_languages = &.{},
             };
-            preloadOne(&ctx, work.plan.artifact_tasks[artifact_index]) catch |err| {
+            preloadOne(&ctx, work.plan.artifact_tasks[artifact_index]) catch {
                 work.failed.store(true, .seq_cst);
-                std.debug.print("native pdf: preload failed ({s})\n", .{@errorName(err)});
                 break;
             };
             work.artifact_done[artifact_index].store(true, .release);
@@ -1549,217 +1674,10 @@ fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
     }
 }
 
-fn drawPage(ctx: *DrawContext, ir: *core.Ir, sema: anytype, page: *const core.Node) !void {
-    if (core.render_policy.resolvePageBackgroundWithEnv(ir, page, sema)) |fill| {
-        c.ss_pdf_fill_rect(ctx.pdf, 0, 0, PageLayout.width, PageLayout.height, fill.r, fill.g, fill.b);
-    }
-
-    if (ir.contains.get(page.id)) |children| {
-        for (children.items) |child_id| {
-            const node = ir.getNode(child_id) orelse continue;
-            if (node.kind != .object or !node.attached) continue;
-            const render = core.render_policy.resolveWithEnv(ir, node, sema);
-            if (render.kind == .chrome_only) try drawObjectResolved(ctx, ir, node, render);
-        }
-        for (children.items) |child_id| {
-            const node = ir.getNode(child_id) orelse continue;
-            if (node.kind != .object or !node.attached) continue;
-            const render = core.render_policy.resolveWithEnv(ir, node, sema);
-            if (render.kind != .chrome_only) try drawObjectResolved(ctx, ir, node, render);
-        }
-    }
-}
-
-fn preloadRenderCache(ctx: *DrawContext, ir: *core.Ir, sema: anytype, progress: ?RenderProgress) !void {
-    var tasks = std.ArrayList(PreloadTask).empty;
-    defer tasks.deinit(ctx.allocator);
-    defer freePreloadTasks(ctx.allocator, tasks.items);
-
-    var seen = std.StringHashMap(void).init(ctx.allocator);
-    defer {
-        var key_it = seen.keyIterator();
-        while (key_it.next()) |key| ctx.allocator.free(key.*);
-        seen.deinit();
-    }
-
-    const page_count = ir.page_order.items.len;
-    for (ir.page_order.items[0..page_count]) |page_id| {
-        const page = ir.getNode(page_id) orelse continue;
-        if (ir.contains.get(page.id)) |children| {
-            for (children.items) |child_id| {
-                const node = ir.getNode(child_id) orelse continue;
-                if (node.kind != .object or !node.attached) continue;
-                const render = core.render_policy.resolveWithEnv(ir, node, sema);
-                try collectNodePreloads(ctx, ir, node, render, &tasks, &seen);
-            }
-        }
-    }
-
-    try runPreloadTasks(ctx, tasks.items, progress);
-}
-
-fn collectNodePreloads(
-    ctx: *DrawContext,
-    ir: *core.Ir,
-    node: *const core.Node,
-    render: ResolvedRender,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(void),
-) !void {
-    switch (render.kind) {
-        .text => if (render.text) |text| try collectTextPreloads(ctx, ir, node, text, tasks, seen),
-        .vector_math => {
-            var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
-            defer env.deinit(ctx.allocator);
-            try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, node.content orelse ""),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
-                .kind = mathKindForNode(node),
-            } });
-        },
-        .vector_asset => {
-            const source = try resolveAssetPath(ctx, node.content orelse "");
-            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".pdf")) {
-                try registerPreloadTask(ctx, tasks, seen, .{ .vector_pdf = source });
-            } else {
-                ctx.allocator.free(source);
-            }
-        },
-        .raster_asset => {
-            const source = try resolveAssetPath(ctx, node.content orelse "");
-            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
-                ctx.allocator.free(source);
-            } else {
-                const content_frame = contentFrameForRender(node.frame, render);
-                try registerPreloadTask(ctx, tasks, seen, .{ .raster = .{
-                    .source = source,
-                    .target_width = content_frame.width * raster_cache_scale,
-                    .target_height = content_frame.height * raster_cache_scale,
-                } });
-            }
-        },
-        .code, .chrome_only => {},
-    }
-}
-
-fn collectTextPreloads(
-    ctx: *DrawContext,
-    ir: *core.Ir,
-    node: *const core.Node,
-    text: TextPaint,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(void),
-) !void {
-    _ = text;
-    const content = node.content orelse "";
-    var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
-    defer env.deinit(ctx.allocator);
-    if (core.markdown.shouldParseBlocksNode(ir, node)) {
-        var doc = try core.markdown.parseMarkdownDocumentForNode(ctx.allocator, ir, node, content);
-        defer doc.deinit();
-        try collectMarkdownBlockPreloads(ctx, doc.blocks.items, env.tex_preamble.items, tasks, seen);
-        return;
-    }
-
-    var layout = try core.markdown.parseTextLayoutForNode(ctx.allocator, ir, node, content);
-    defer layout.deinit(ctx.allocator);
-    try collectLinePreloads(ctx, layout.lines.items, env.tex_preamble.items, tasks, seen);
-}
-
-fn collectMarkdownBlockPreloads(
-    ctx: *DrawContext,
-    blocks: []const *Block,
-    preamble: []const TexPreambleEntry,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(void),
-) !void {
-    for (blocks) |block| {
-        switch (block.kind) {
-            .paragraph, .code_block => if (block.paragraph) |paragraph| {
-                try collectLinePreloads(ctx, paragraph.lines.items, preamble, tasks, seen);
-            },
-            .bullet_list, .ordered_list => if (block.list) |list| {
-                for (list.items.items) |item| {
-                    try collectMarkdownBlockPreloads(ctx, item.blocks.items, preamble, tasks, seen);
-                }
-            },
-            .table => if (block.table) |table| {
-                for (table.rows.items) |row| {
-                    for (row.cells.items) |cell| {
-                        try collectLinePreloads(ctx, cell.lines.items, preamble, tasks, seen);
-                    }
-                }
-            },
-        }
-    }
-}
-
-fn collectLinePreloads(
-    ctx: *DrawContext,
-    lines: []const Line,
-    preamble: []const TexPreambleEntry,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(void),
-) !void {
-    for (lines) |line| {
-        const runs = line.runs.items;
-        var index: usize = 0;
-        while (index < runs.len) {
-            const run = runs[index];
-            switch (run.kind) {
-                .display_math => {
-                    const start = index;
-                    while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
-                    const source = try displayMathSource(ctx.allocator, runs[start..index]);
-                    defer ctx.allocator.free(source);
-                    if (source.len > 0) {
-                        try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
-                            .source = try ctx.allocator.dupe(u8, source),
-                            .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
-                            .kind = .display,
-                        } });
-                    }
-                    continue;
-                },
-                .math => try registerPreloadTask(ctx, tasks, seen, .{ .math = .{
-                    .source = try ctx.allocator.dupe(u8, run.text),
-                    .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
-                    .kind = .inline_math,
-                } }),
-                .icon => if (run.icon) |source| try registerPreloadTask(ctx, tasks, seen, .{
-                    .icon = try ctx.allocator.dupe(u8, source),
-                }),
-                else => {},
-            }
-            index += 1;
-        }
-    }
-}
-
 fn cloneTexPreambleEntries(allocator: Allocator, preamble: []const TexPreambleEntry) ![]const TexPreambleEntry {
     const cloned = try allocator.alloc(TexPreambleEntry, preamble.len);
     @memcpy(cloned, preamble);
     return cloned;
-}
-
-fn registerPreloadTask(
-    ctx: *DrawContext,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(void),
-    task: PreloadTask,
-) !void {
-    const key = try preloadTaskKey(ctx, task);
-    errdefer {
-        ctx.allocator.free(key);
-        freePreloadTask(ctx.allocator, task);
-    }
-    if (seen.contains(key)) {
-        ctx.allocator.free(key);
-        freePreloadTask(ctx.allocator, task);
-        return;
-    }
-    try seen.put(key, {});
-    try tasks.append(ctx.allocator, task);
 }
 
 fn freePreloadTasks(allocator: Allocator, tasks: []const PreloadTask) void {
@@ -1772,8 +1690,8 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
             allocator.free(math.source);
             allocator.free(math.preamble);
         },
-        .icon => |source| allocator.free(source),
-        .vector_pdf => |source| allocator.free(source),
+        .icon => |icon| allocator.free(icon.source),
+        .vector_pdf => |asset| allocator.free(asset.source),
         .raster => |raster| allocator.free(raster.source),
     }
 }
@@ -1781,18 +1699,10 @@ fn freePreloadTask(allocator: Allocator, task: PreloadTask) void {
 fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     return switch (task) {
         .math => |math| cachedMathPath(ctx, math.source, math.preamble, math.kind, "svg"),
-        .icon => |source| cachedIconPath(ctx, source, "svg"),
-        .vector_pdf => |source| cachedAssetPath(ctx, "pdf", source, "svg"),
+        .icon => |icon| cachedIconPath(ctx, icon.source, "svg"),
+        .vector_pdf => |asset| cachedAssetPath(ctx, "pdf", asset.source, "svg"),
         .raster => |raster| cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png"),
     };
-}
-
-fn countMissingPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask) !usize {
-    var missing: usize = 0;
-    for (tasks) |task| {
-        if (!try preloadTaskCached(ctx, task)) missing += 1;
-    }
-    return missing;
 }
 
 fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask, pages: []const RenderPage) !PreloadCacheState {
@@ -1828,13 +1738,13 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
             defer ctx.allocator.free(out);
             return fileExists(out);
         },
-        .icon => |source| {
-            const out = try cachedIconPath(ctx, source, "svg");
+        .icon => |icon| {
+            const out = try cachedIconPath(ctx, icon.source, "svg");
             defer ctx.allocator.free(out);
             return fileExists(out);
         },
-        .vector_pdf => |source| {
-            const out = try cachedAssetPath(ctx, "pdf", source, "svg");
+        .vector_pdf => |asset| {
+            const out = try cachedAssetPath(ctx, "pdf", asset.source, "svg");
             defer ctx.allocator.free(out);
             return fileExists(out);
         },
@@ -1854,13 +1764,13 @@ fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
             defer ctx.allocator.free(out);
             return (try cachedSvgAsset(ctx, out)) != null;
         },
-        .icon => |source| {
-            const out = try cachedIconPath(ctx, source, "svg");
+        .icon => |icon| {
+            const out = try cachedIconPath(ctx, icon.source, "svg");
             defer ctx.allocator.free(out);
             return (try cachedSvgAsset(ctx, out)) != null;
         },
-        .vector_pdf => |source| {
-            const out = try cachedAssetPath(ctx, "pdf", source, "svg");
+        .vector_pdf => |asset| {
+            const out = try cachedAssetPath(ctx, "pdf", asset.source, "svg");
             defer ctx.allocator.free(out);
             return (try cachedSvgAsset(ctx, out)) != null;
         },
@@ -1884,102 +1794,18 @@ fn rasterSourceFitsTarget(ctx: *DrawContext, source: []const u8, target_width: f
         source_height <= @as(f64, @floatCast(target_height));
 }
 
-fn runPreloadTasks(ctx: *DrawContext, tasks: []const PreloadTask, progress: ?RenderProgress) !void {
-    if (tasks.len == 0) return;
-    const missing_count = try countMissingPreloadTasks(ctx, tasks);
-    const worker_count = preloadWorkerCount(tasks.len, missing_count, .{});
-    if (worker_count <= 1) return runPreloadTasksSequential(ctx, tasks, progress);
-
-    var work = PreloadWork{
-        .tasks = tasks,
-        .io = ctx.io,
-        .pdf = ctx.pdf,
-        .asset_base_dir = ctx.asset_base_dir,
-        .cache_dir = ctx.cache_dir,
-    };
-
-    if (progress) |p| p.artifactCompleted(p.context, 0, tasks.len);
-
-    var threads = try ctx.allocator.alloc(std.Thread, worker_count);
-    defer ctx.allocator.free(threads);
-
-    var started: usize = 0;
-    errdefer {
-        work.failed.store(true, .seq_cst);
-        for (threads[0..started]) |thread| thread.join();
-    }
-
-    while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, preloadWorker, .{&work});
-    }
-
-    var last_reported: usize = 0;
-    while (true) {
-        const completed = work.completed.load(.acquire);
-        if (progress) |p| {
-            if (completed != last_reported) {
-                p.artifactCompleted(p.context, completed, tasks.len);
-                last_reported = completed;
-            }
-        }
-        if (completed >= tasks.len or work.failed.load(.seq_cst)) break;
-        std.Io.sleep(ctx.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
-    }
-
-    for (threads[0..started]) |thread| thread.join();
-
-    const completed = work.completed.load(.acquire);
-    if (progress) |p| {
-        if (completed != last_reported) p.artifactCompleted(p.context, completed, tasks.len);
-    }
-
-    if (work.failed.load(.seq_cst)) return NativePdfError.AssetConversionFailed;
-}
-
-fn runPreloadTasksSequential(ctx: *DrawContext, tasks: []const PreloadTask, progress: ?RenderProgress) !void {
-    if (progress) |p| p.artifactCompleted(p.context, 0, tasks.len);
-    for (tasks, 0..) |task, index| {
-        try preloadOne(ctx, task);
-        if (progress) |p| p.artifactCompleted(p.context, index + 1, tasks.len);
-    }
-}
-
-fn preloadWorker(work: *PreloadWork) void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-    defer arena.deinit();
-    while (!work.failed.load(.monotonic)) {
-        const index = work.next_index.fetchAdd(1, .monotonic);
-        if (index >= work.tasks.len) break;
-        var ctx = DrawContext{
-            .allocator = arena.allocator(),
-            .io = work.io,
-            .pdf = work.pdf,
-            .asset_base_dir = work.asset_base_dir,
-            .cache_dir = work.cache_dir,
-            .highlight_languages = &.{},
-        };
-        preloadOne(&ctx, work.tasks[index]) catch |err| {
-            work.failed.store(true, .seq_cst);
-            std.debug.print("native pdf: preload failed ({s})\n", .{@errorName(err)});
-            break;
-        };
-        _ = work.completed.fetchAdd(1, .release);
-        _ = arena.reset(.retain_capacity);
-    }
-}
-
 fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
     switch (task) {
         .math => |math| {
             const svg = try renderMathToSvg(ctx, math.source, math.preamble, math.kind);
             ctx.allocator.free(svg.path);
         },
-        .icon => |source| {
-            const svg = try renderIconToSvg(ctx, source);
+        .icon => |icon| {
+            const svg = try renderIconToSvg(ctx, icon.source);
             ctx.allocator.free(svg.path);
         },
-        .vector_pdf => |source| {
-            const svg_path = try pdfToSvg(ctx, source);
+        .vector_pdf => |asset| {
+            const svg_path = try pdfToSvg(ctx, asset.source);
             ctx.allocator.free(svg_path);
         },
         .raster => |raster| {
@@ -2031,26 +1857,6 @@ fn autoCpuCount() usize {
 fn clampWorkerCount(value: usize, task_count: usize) usize {
     if (task_count == 0) return 0;
     return @min(@max(@as(usize, 1), value), task_count);
-}
-
-fn drawObjectResolved(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, render: ResolvedRender) !void {
-    try addDestination(ctx, core.nodeProperty(node, "link_id"), node.frame);
-    drawObjectChrome(ctx.pdf, node.frame, render);
-    const content_frame = contentFrameForRender(node.frame, render);
-    pushClipRect(ctx.pdf, content_frame);
-    defer popClip(ctx.pdf);
-    switch (render.kind) {
-        .text => if (render.text) |text| try drawTextNode(ctx, ir, node, content_frame, text),
-        .code => if (render.text) |text| {
-            var code_text = text;
-            code_text.font = text.code_font;
-            try drawCodeBlock(ctx, content_frame, node.content orelse "", code_text, render.code);
-        },
-        .chrome_only => {},
-        .vector_math => try drawVectorMath(ctx, ir, node, content_frame, node.content orelse "", render.math),
-        .vector_asset => try drawVectorAsset(ctx, content_frame, node.content orelse ""),
-        .raster_asset => try drawRasterAsset(ctx, content_frame, node.content orelse ""),
-    }
 }
 
 fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !void {
@@ -2126,23 +1932,6 @@ fn drawObjectChrome(pdf: *c.SsPdf, frame: Frame, render: ResolvedRender) void {
         const y = toTopY(frame.y + render.underline.offset);
         c.ss_pdf_stroke_line(pdf, frame.x, y, frame.x + frame.width, y, render.underline.width, color.r, color.g, color.b, 0, 0);
     }
-}
-
-fn drawTextNode(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame: Frame, text: TextPaint) !void {
-    const content = node.content orelse "";
-    var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
-    defer env.deinit(ctx.allocator);
-    if (core.markdown.shouldParseBlocksNode(ir, node)) {
-        var doc = try core.markdown.parseMarkdownDocumentForNode(ctx.allocator, ir, node, content);
-        defer doc.deinit();
-        _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, env.tex_preamble.items);
-        return;
-    }
-
-    var layout = try core.markdown.parseTextLayoutForNode(ctx.allocator, ir, node, content);
-    defer layout.deinit(ctx.allocator);
-    const baseline = baselineBlForBox(frame, text.font_size);
-    _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, env.tex_preamble.items);
 }
 
 fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPaint) !void {
@@ -3167,23 +2956,6 @@ fn isPythonKeyword(segment: []const u8) bool {
     return false;
 }
 
-fn drawVectorMath(ctx: *DrawContext, ir: *core.Ir, node: *const core.Node, frame: Frame, content: []const u8, math: ?MathPaint) !void {
-    var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
-    defer env.deinit(ctx.allocator);
-    const svg = try renderMathToSvg(ctx, content, env.tex_preamble.items, mathKindForNode(node));
-    defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, content, math);
-    const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
-    const draw_frame = Frame{
-        .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
-        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
-        .width = fitted.width,
-        .height = fitted.height,
-    };
-    const color = if (math) |m| m.color else Color{ .r = 0, .g = 0, .b = 0 };
-    try drawSvgFrameTinted(ctx, draw_frame, svg.path, color);
-}
-
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
@@ -3213,7 +2985,6 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
         try drawSvgFit(ctx, frame, svg_path);
         return;
     }
-    std.debug.print("native pdf: unsupported vector asset type: {s}\n", .{source});
     return NativePdfError.UnsupportedAssetType;
 }
 
@@ -3322,9 +3093,12 @@ fn runMergeChunks(
     defer ctx.allocator.free(threads);
 
     var started: usize = 0;
+    var joined = false;
     errdefer {
-        work.failed.store(true, .seq_cst);
-        for (threads[0..started]) |thread| thread.join();
+        if (!joined) {
+            work.failed.store(true, .seq_cst);
+            for (threads[0..started]) |thread| thread.join();
+        }
     }
 
     while (started < worker_count) : (started += 1) {
@@ -3344,6 +3118,7 @@ fn runMergeChunks(
     }
 
     for (threads[0..started]) |thread| thread.join();
+    joined = true;
 
     if (progress) |p| {
         const completed = work.completed.load(.acquire);
@@ -3367,9 +3142,8 @@ fn mergeWorker(work: *MergeWork) void {
             .highlight_languages = &.{},
         };
         const chunk = work.chunks[index];
-        mergePdfInputsToCache(&ctx, chunk.inputs, chunk.single_page_inputs, chunk.output) catch |err| {
+        mergePdfInputsToCache(&ctx, chunk.inputs, chunk.single_page_inputs, chunk.output) catch {
             work.failed.store(true, .seq_cst);
-            std.debug.print("native pdf: qpdf merge failed ({s})\n", .{@errorName(err)});
             break;
         };
         _ = work.completed.fetchAdd(1, .release);
@@ -3864,10 +3638,7 @@ fn normalizePdf(ctx: *DrawContext, pdf_path: []const u8) ![]const u8 {
     const out = try std.fmt.allocPrint(ctx.allocator, "{s}.qpdf.pdf", .{pdf_path});
     errdefer ctx.allocator.free(out);
     errdefer std.Io.Dir.cwd().deleteFile(ctx.io, out) catch {};
-    runCheckedAllowQpdfWarnings(ctx, &.{ "qpdf", pdf_path, out }, .inherit) catch |err| {
-        std.debug.print("native pdf: qpdf is required to normalize generated PDFs\n", .{});
-        return err;
-    };
+    try runCheckedAllowQpdfWarnings(ctx, &.{ "qpdf", pdf_path, out }, .inherit);
     return out;
 }
 
@@ -3985,7 +3756,11 @@ fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     const resolved = try resolveAssetPath(ctx, path);
     defer ctx.allocator.free(resolved);
     return std.Io.Dir.cwd().readFileAlloc(ctx.io, resolved, ctx.allocator, .unlimited) catch |err| {
-        std.debug.print("native pdf: TeX preamble file not found: {s} (resolved: {s})\n", .{ path, resolved });
+        if (ctx.command_failure) |sink| {
+            const message = try std.fmt.allocPrint(ctx.allocator, "TeX preamble file not found: {s} (resolved: {s})", .{ path, resolved });
+            defer ctx.allocator.free(message);
+            try sink.record(message);
+        }
         return err;
     };
 }
@@ -4172,9 +3947,9 @@ fn runCheckedWithOptions(ctx: *DrawContext, argv: []const []const u8, cwd: std.p
         .stderr_limit = .limited(128 * 1024),
         .timeout = .{ .duration = external_command_timeout },
     }) catch |err| {
-        std.debug.print("native pdf: failed to run command ({s}):", .{@errorName(err)});
-        for (argv) |arg| std.debug.print(" {s}", .{arg});
-        std.debug.print("\n", .{});
+        const message = try commandSpawnFailureMessage(ctx.allocator, argv, err);
+        defer ctx.allocator.free(message);
+        if (ctx.command_failure) |sink| try sink.record(message);
         return NativePdfError.AssetConversionFailed;
     };
     defer ctx.allocator.free(result.stdout);
@@ -4183,18 +3958,138 @@ fn runCheckedWithOptions(ctx: *DrawContext, argv: []const []const u8, cwd: std.p
         .exited => |code| if (code == 0 or (allow_qpdf_warning_exit and code == 3)) return,
         else => {},
     }
-    std.debug.print("native pdf: command failed (", .{});
-    switch (result.term) {
-        .exited => |code| std.debug.print("exit {d}", .{code}),
-        .signal => |signal| std.debug.print("signal {d}", .{@intFromEnum(signal)}),
-        .stopped => |signal| std.debug.print("stopped {d}", .{@intFromEnum(signal)}),
-        .unknown => |code| std.debug.print("unknown {d}", .{code}),
-    }
-    std.debug.print("):", .{});
-    for (argv) |arg| std.debug.print(" {s}", .{arg});
-    if (result.stdout.len > 0) std.debug.print("\nstdout:\n{s}", .{result.stdout});
-    std.debug.print("\nstderr:\n{s}\n", .{result.stderr});
+    const message = try commandTermFailureMessage(ctx.allocator, argv, result.term, result.stdout, result.stderr);
+    defer ctx.allocator.free(message);
+    if (ctx.command_failure) |sink| try sink.record(message);
     return NativePdfError.AssetConversionFailed;
+}
+
+fn commandSpawnFailureMessage(allocator: Allocator, argv: []const []const u8, err: anyerror) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "failed to run command (");
+    try out.appendSlice(allocator, @errorName(err));
+    try out.appendSlice(allocator, "):");
+    try appendCommandLine(allocator, &out, argv);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn commandTermFailureMessage(
+    allocator: Allocator,
+    argv: []const []const u8,
+    term: std.process.Child.Term,
+    stdout: []const u8,
+    stderr: []const u8,
+) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "command failed (");
+    try appendCommandTerm(allocator, &out, term);
+    try out.appendSlice(allocator, "):");
+    try appendCommandLine(allocator, &out, argv);
+    try appendCommandOutput(allocator, &out, "stdout", stdout);
+    try appendCommandOutput(allocator, &out, "stderr", stderr);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendCommandLine(allocator: Allocator, out: *std.ArrayList(u8), argv: []const []const u8) !void {
+    for (argv) |arg| {
+        try out.append(allocator, ' ');
+        try out.appendSlice(allocator, arg);
+    }
+}
+
+fn appendCommandTerm(allocator: Allocator, out: *std.ArrayList(u8), term: std.process.Child.Term) !void {
+    switch (term) {
+        .exited => |code| {
+            const text = try std.fmt.allocPrint(allocator, "exit {d}", .{code});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
+        },
+        .signal => |signal| {
+            const text = try std.fmt.allocPrint(allocator, "signal {d}", .{@intFromEnum(signal)});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
+        },
+        .stopped => |signal| {
+            const text = try std.fmt.allocPrint(allocator, "stopped {d}", .{@intFromEnum(signal)});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
+        },
+        .unknown => |code| {
+            const text = try std.fmt.allocPrint(allocator, "unknown {d}", .{code});
+            defer allocator.free(text);
+            try out.appendSlice(allocator, text);
+        },
+    }
+}
+
+fn appendCommandOutput(allocator: Allocator, out: *std.ArrayList(u8), label: []const u8, value: []const u8) !void {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return;
+    const summary = try commandOutputSummary(allocator, trimmed);
+    defer allocator.free(summary);
+    try out.append(allocator, '\n');
+    try out.appendSlice(allocator, label);
+    try out.appendSlice(allocator, ":\n");
+    try out.appendSlice(allocator, summary);
+}
+
+fn commandOutputSummary(allocator: Allocator, output: []const u8) ![]u8 {
+    var summary = std.ArrayList(u8).empty;
+    defer summary.deinit(allocator);
+
+    var include_following: usize = 0;
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        const trimmed_line = std.mem.trim(u8, line, " \t\r\n");
+        const interesting = commandOutputLineLooksRelevant(trimmed_line);
+        if (interesting) include_following = 2;
+        if (interesting or include_following > 0) {
+            try appendLimitedOutputLine(allocator, &summary, line);
+            if (!interesting and include_following > 0) include_following -= 1;
+            if (summary.items.len >= command_failure_output_limit) break;
+        }
+    }
+
+    if (summary.items.len > 0) return try summary.toOwnedSlice(allocator);
+    return try commandOutputTail(allocator, output);
+}
+
+fn commandOutputLineLooksRelevant(line: []const u8) bool {
+    if (line.len == 0) return false;
+    if (line[0] == '!') return true;
+    return containsAsciiIgnoreCase(line, "error") or
+        containsAsciiIgnoreCase(line, "failed") or
+        containsAsciiIgnoreCase(line, "fatal");
+}
+
+fn appendLimitedOutputLine(allocator: Allocator, out: *std.ArrayList(u8), line: []const u8) !void {
+    if (out.items.len != 0) try out.append(allocator, '\n');
+    const remaining = command_failure_output_limit - @min(out.items.len, command_failure_output_limit);
+    if (remaining == 0) return;
+    const end = @min(line.len, remaining);
+    try out.appendSlice(allocator, line[0..end]);
+}
+
+fn commandOutputTail(allocator: Allocator, output: []const u8) ![]u8 {
+    if (output.len <= command_failure_output_limit) return allocator.dupe(u8, output);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "... output truncated ...\n");
+    const start = output.len - command_failure_output_limit;
+    try out.appendSlice(allocator, output[start..]);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn containsAsciiIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (needle.len > haystack.len) return false;
+    var index: usize = 0;
+    while (index + needle.len <= haystack.len) : (index += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[index .. index + needle.len], needle)) return true;
+    }
+    return false;
 }
 
 fn fileExists(path: []const u8) bool {
