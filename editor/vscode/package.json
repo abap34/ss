@@ -23,7 +23,7 @@
     "compile": "node scripts/build.js",
     "watch": "node scripts/build.js --watch",
     "package": "npm run compile && vsce package",
-    "test": "npm run compile && node scripts/test-preview-server.js && node ../../scripts/check-ss-toml-schema.js"
+    "test": "npm run compile && node scripts/test-render-diagnostics.js && node scripts/test-preview-server.js && node ../../scripts/check-ss-toml-schema.js"
   },
   "activationEvents": [
     "onLanguage:ss-slide",

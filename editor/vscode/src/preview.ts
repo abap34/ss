@@ -7,6 +7,7 @@ import { LanguageClient } from "vscode-languageclient/node";
 import { PdfPreviewPanel } from "./pdfPreviewPanel";
 import { PdfPreviewServer } from "./pdfPreviewServer";
 import { projectSettings } from "./projectConfig";
+import { fallbackSsDiagnosticMessage, parseSsDiagnostics } from "./renderDiagnostics";
 
 type ClientProvider = () => LanguageClient | undefined;
 
@@ -26,6 +27,7 @@ interface PreviewSession {
   timer?: NodeJS.Timeout;
   entryPath?: string;
   dependencyPaths?: Set<string>;
+  diagnosticUris?: Set<string>;
   panel?: PdfPreviewPanel;
 }
 
@@ -34,12 +36,14 @@ interface Snapshot {
   assetBaseDir: string;
   cwd: string;
   snapshotDir: string;
+  pathMap: Record<string, string>;
 }
 
 export class LivePreview implements vscode.Disposable {
   private readonly sessions = new Map<string, PreviewSession>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly previewServer: PdfPreviewServer;
+  private readonly renderDiagnostics: vscode.DiagnosticCollection;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -47,6 +51,8 @@ export class LivePreview implements vscode.Disposable {
     private readonly clientProvider: ClientProvider,
   ) {
     this.previewServer = new PdfPreviewServer(context.extensionPath, output);
+    this.renderDiagnostics = vscode.languages.createDiagnosticCollection("ss-render");
+    this.disposables.push(this.renderDiagnostics);
     this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
       if (event.document.languageId === "ss-slide" && projectSettings(event.document.uri).preview.refreshOnEdit) {
         this.scheduleAffectedDocument(event.document);
@@ -263,10 +269,13 @@ export class LivePreview implements vscode.Disposable {
       return;
     }
     if (result.code !== 0) {
-      this.output.appendLine(result.stderr.trimEnd() || result.stdout.trimEnd() || `[preview] failed with exit code ${result.code}`);
+      const output = renderOutput(result);
+      this.output.appendLine(output || `[preview] failed with exit code ${result.code}`);
+      this.publishRenderDiagnostics(document, current, snapshot, output, result.code);
       await removeIfExists(paths.tempPdf);
       return;
     }
+    this.clearRenderDiagnostics(current);
     await fs.promises.copyFile(paths.tempPdf, paths.pdf);
     await removeIfExists(paths.tempPdf);
     current.pdfPath = paths.pdf;
@@ -302,6 +311,7 @@ export class LivePreview implements vscode.Disposable {
     const snapshotDir = path.join(snapshotRoot, `${process.pid}-${renderId}`);
     await fs.promises.rm(snapshotDir, { recursive: true, force: true });
     await copyDirectory(assetBaseDir, snapshotDir);
+    const pathMap: Record<string, string> = {};
     const paths = unique([entryPath, ...modules, ...vscode.workspace.textDocuments.filter((doc) => doc.languageId === "ss-slide" && doc.uri.scheme === "file").map((doc) => doc.uri.fsPath)]);
     for (const sourcePath of paths) {
       const text = openDocumentText(sourcePath) ?? await fs.promises.readFile(sourcePath, "utf8").catch(() => undefined);
@@ -310,6 +320,7 @@ export class LivePreview implements vscode.Disposable {
       }
       const relative = safeRelative(assetBaseDir, sourcePath);
       const target = path.join(snapshotDir, relative);
+      pathMap[normalizePath(target)] = normalizePath(sourcePath);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, text, "utf8");
     }
@@ -318,7 +329,47 @@ export class LivePreview implements vscode.Disposable {
       assetBaseDir: snapshotDir,
       cwd: workspaceRoot,
       snapshotDir,
+      pathMap,
     };
+  }
+
+  private publishRenderDiagnostics(
+    document: vscode.TextDocument,
+    session: PreviewSession,
+    snapshot: Snapshot,
+    output: string,
+    exitCode: number | null,
+  ): void {
+    this.clearRenderDiagnostics(session);
+    const grouped = parseRenderDiagnostics(output, snapshot.pathMap);
+    if (grouped.size === 0) {
+      const fallback = new vscode.Diagnostic(
+        new vscode.Range(0, 0, 0, 1),
+        fallbackSsDiagnosticMessage(output, exitCode),
+        vscode.DiagnosticSeverity.Error,
+      );
+      fallback.source = "ss render";
+      fallback.code = "RenderFailed";
+      grouped.set(document.uri.fsPath, [fallback]);
+    }
+
+    const uris = new Set<string>();
+    for (const [filePath, diagnostics] of grouped) {
+      const uri = vscode.Uri.file(filePath);
+      this.renderDiagnostics.set(uri, diagnostics);
+      uris.add(uri.toString());
+    }
+    session.diagnosticUris = uris;
+  }
+
+  private clearRenderDiagnostics(session: PreviewSession): void {
+    if (!session.diagnosticUris) {
+      return;
+    }
+    for (const uriText of session.diagnosticUris) {
+      this.renderDiagnostics.delete(vscode.Uri.parse(uriText));
+    }
+    session.diagnosticUris = undefined;
   }
 
   private previewPaths(document: vscode.TextDocument, renderId: number): { dir: string; stem: string; pdf: string; tempPdf: string } {
@@ -406,6 +457,7 @@ export class LivePreview implements vscode.Disposable {
     } else {
       session.panel = undefined;
     }
+    this.clearRenderDiagnostics(session);
     this.sessions.delete(key);
   }
 
@@ -438,6 +490,27 @@ function stableHash(text: string): string {
 
 function normalizePath(filePath: string): string {
   return path.resolve(filePath);
+}
+
+function renderOutput(result: { stdout: string; stderr: string }): string {
+  return [result.stderr.trimEnd(), result.stdout.trimEnd()].filter((part) => part.length > 0).join("\n");
+}
+
+function parseRenderDiagnostics(output: string, pathMap: Record<string, string>): Map<string, vscode.Diagnostic[]> {
+  const grouped = new Map<string, vscode.Diagnostic[]>();
+  for (const parsed of parseSsDiagnostics(output, pathMap)) {
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(parsed.line, parsed.character, parsed.line, parsed.character + 1),
+      parsed.message,
+      parsed.severity === "warning" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error,
+    );
+    diagnostic.source = "ss render";
+    diagnostic.code = parsed.code;
+    const items = grouped.get(parsed.filePath) ?? [];
+    items.push(diagnostic);
+    grouped.set(parsed.filePath, items);
+  }
+  return grouped;
 }
 
 function sessionDependsOn(session: PreviewSession, changedPath: string): boolean {

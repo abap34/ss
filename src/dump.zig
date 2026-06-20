@@ -71,6 +71,11 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
             try item.stringField("reason", data.reason);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
+        .render_failed => |data| {
+            try item.stringField("code", "render_failed");
+            try item.stringField("reason", data.reason);
+            try item.optionalEnumTagField("payload_kind", data.payload_kind);
+        },
         .type_mismatch => |data| {
             try item.stringField("code", @tagName(data.code));
             try item.stringField("expected", @tagName(data.expected));

@@ -398,6 +398,7 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
             .{ data.requested_path, data.resolved_path },
         ),
         .asset_invalid => |data| std.fmt.allocPrint(allocator, "InvalidAsset: {s}", .{data.reason}),
+        .render_failed => |data| std.fmt.allocPrint(allocator, "RenderFailed: {s}", .{data.reason}),
         .type_mismatch => |data| std.fmt.allocPrint(
             allocator,
             "{s}: expected {s}, got {s}",
