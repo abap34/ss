@@ -3,16 +3,31 @@
 These generated parsers and highlight queries are bundled so `ss` can highlight
 common code blocks without per-project parser libraries.
 
+Run this command to reproduce the checked-in bundle from the pinned commits:
+
+```sh
+npm ci --prefix editor/tree-sitter-ss
+node scripts/update-tree-sitter-languages.mjs
+```
+
+Run this command to advance every bundled parser to the current upstream HEAD:
+
+```sh
+npm ci --prefix editor/tree-sitter-ss
+node scripts/update-tree-sitter-languages.mjs --latest
+```
+
+The scheduled GitHub Actions workflow runs the `--latest` form and opens a pull
+request when upstream generated parsers or queries change.
+
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 `LICENSE` file.
 
-Parsers are generated from the listed upstream commits and kept compatible with
-tree-sitter language ABI 15.
+Parsers are generated from the listed upstream commits with tree-sitter CLI
+0.25.10 and kept compatible with tree-sitter language ABI 15.
 
 Default highlighting is enabled for these code block language names:
-`ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `go`, `golang`,
-`html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`,
-`rust`, `rs`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, and `zig`.
+`ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `go`, `golang`, `html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`, `rust`, `rs`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, `zig`.
 
 | Language | Upstream | Commit |
 | --- | --- | --- |
