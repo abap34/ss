@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./lsp_harness.mjs";
 
 await testRenderFailureProducesDiagnostic();
+await testRenderFailureWritesStructuredDiagnostic();
+await testInlineMathRenderFailureLocatesFormula();
+await testConcatenatedMathRenderFailureLocatesSourceLiteral();
 
 async function testRenderFailureProducesDiagnostic() {
   const project = await mkdtempProject("ss-render-diagnostics-");
@@ -27,9 +30,111 @@ end
     assert(result.code !== 0, "render should fail for an invalid artifact");
     assert(output.includes("RenderFailed:"), `render failure did not produce a render diagnostic:\n${output}`);
     assert(output.includes("Undefined control sequence"), `render diagnostic omitted command output summary:\n${output}`);
-    assert(output.includes("slide.ss:4:1"), `render diagnostic omitted source location:\n${output}`);
+    assert(output.includes("slide.ss:4:7"), `render diagnostic omitted formula source location:\n${output}`);
+    assert(output.includes('| tex!("\\notacommand")'), `render diagnostic omitted formula source excerpt:\n${output}`);
     assert(!output.includes("panic:"), `render failure should not panic:\n${output}`);
     assert(!output.includes("native pdf:"), `render failure should not bypass diagnostics:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testRenderFailureWritesStructuredDiagnostic() {
+  const project = await mkdtempProject("ss-render-diagnostics-json-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const diagnosticsPath = path.join(project, "diagnostics.json");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page bad
+text!("first $x$ second $\\notacommand$ third")
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs([
+      "render",
+      "slide.ss",
+      "out.pdf",
+      "--cache-id",
+      "render-diagnostics-json",
+      "--diagnostics-json",
+      diagnosticsPath,
+    ], project);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "render should fail for invalid inline math");
+    assert(output.includes("RenderFailed:"), `render failure did not print a render diagnostic:\n${output}`);
+
+    const payload = JSON.parse(await readFile(diagnosticsPath, "utf8"));
+    assert(payload.schema === 1, `unexpected diagnostics schema: ${JSON.stringify(payload)}`);
+    assert(payload.kind === "ss-diagnostics", `unexpected diagnostics kind: ${JSON.stringify(payload)}`);
+    assert(payload.diagnostics.length === 1, `unexpected diagnostics count: ${JSON.stringify(payload)}`);
+    const diagnostic = payload.diagnostics[0];
+    assert(diagnostic.phase === "render", `unexpected diagnostic phase: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.severity === "error", `unexpected diagnostic severity: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.code === "RenderFailed", `unexpected diagnostic code: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.path.endsWith("/slide.ss"), `unexpected diagnostic path: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.range.start.line === 3, `unexpected diagnostic start line: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.range.start.character === 25, `unexpected diagnostic start character: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.message.includes("Undefined control sequence"));
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testInlineMathRenderFailureLocatesFormula() {
+  const project = await mkdtempProject("ss-inline-math-diagnostics-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page bad
+text!("first $x$ second $\\notacommand$ third")
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "inline-math-diagnostics"], project);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "render should fail for invalid inline math");
+    assert(output.includes("RenderFailed:"), `inline math failure did not produce a render diagnostic:\n${output}`);
+    assert(output.includes("Undefined control sequence"), `inline math diagnostic omitted command output summary:\n${output}`);
+    assert(output.includes("slide.ss:4:26"), `inline math diagnostic did not point at the failing formula:\n${output}`);
+    assert(output.includes('| text!("first $x$ second $\\notacommand$ third")'), `inline math diagnostic omitted source excerpt:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testConcatenatedMathRenderFailureLocatesSourceLiteral() {
+  const project = await mkdtempProject("ss-concat-math-diagnostics-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page bad
+let prefix = "first $x$ second "
+text!(prefix ++ "$\\notacommand$ third")
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "concat-math-diagnostics"], project);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "render should fail for invalid concatenated inline math");
+    assert(output.includes("RenderFailed:"), `concatenated math failure did not produce a render diagnostic:\n${output}`);
+    assert(output.includes("Undefined control sequence"), `concatenated math diagnostic omitted command output summary:\n${output}`);
+    assert(output.includes("slide.ss:5:19"), `concatenated math diagnostic did not point at the source literal:\n${output}`);
+    assert(output.includes('| text!(prefix ++ "$\\notacommand$ third")'), `concatenated math diagnostic omitted source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

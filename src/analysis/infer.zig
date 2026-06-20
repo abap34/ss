@@ -78,9 +78,9 @@ fn exprInfoWithOptions(
     options: InferenceOptions,
 ) anyerror!TypeInfo {
     return switch (expr) {
-        .string => |text| blk: {
+        .string => |literal| blk: {
             var info = infoFromType(Type.string);
-            info.string_literal = text;
+            info.string_literal = literal.text;
             break :blk info;
         },
         .color => |text| blk: {
@@ -461,7 +461,7 @@ fn validateKnownPropertyKeyCall(
 ) !void {
     if (call.args.items.len < 2) return;
     const key = switch (call.args.items[1]) {
-        .string => |text| text,
+        .string => |literal| literal.text,
         else => {
             try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
             return error.InvalidType;
@@ -847,7 +847,7 @@ fn validateSetPropCall(
 ) !void {
     if (call.args.items.len < 3) return;
     const key = switch (call.args.items[1]) {
-        .string => |text| text,
+        .string => |literal| literal.text,
         else => {
             try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
             return error.InvalidType;

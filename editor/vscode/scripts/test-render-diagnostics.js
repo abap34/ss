@@ -18,44 +18,64 @@ esbuild.buildSync({
   target: "node18",
 });
 
-const { fallbackSsDiagnosticMessage, parseSsDiagnostics } = require(bundled);
+const { fallbackSsDiagnosticMessage, parseSsDiagnosticsJson } = require(bundled);
 
-testRenderFailureDiagnostic();
-testWarningDiagnostic();
+testStructuredRenderDiagnostic();
+testStructuredWarningDiagnostic();
 testFallbackMessage();
 
-function testRenderFailureDiagnostic() {
+function testStructuredRenderDiagnostic() {
   const snapshotPath = path.join(repoRoot, ".ss-cache", "preview", "snapshot", "slide.ss");
   const originalPath = path.join(repoRoot, "tests", "fixtures", "project-basic", "slide.ss");
-  const output = [
-    "\r[==============>   ] 7/8 Pages       0/1      \x1b[K",
-    `ERROR: ${snapshotPath}:4:1: RenderFailed: math expression: command failed (exit 1): pdflatex -interaction=nonstopmode -halt-on-error main.tex`,
-    "stdout:",
-    "! Undefined control sequence.",
-    "l.7 \\notacommand",
-    " 2 | ",
-    " 3 | page bad",
-    " 4 | tex!(\"\\notacommand\")",
-    "   | -------------------- RenderFailed: duplicate excerpt text",
-  ].join("\n");
+  const payload = JSON.stringify({
+    schema: 1,
+    kind: "ss-diagnostics",
+    diagnostics: [{
+      phase: "render",
+      severity: "error",
+      code: "RenderFailed",
+      message: "RenderFailed: math expression failed",
+      path: snapshotPath,
+      origin: `path:${snapshotPath}:bytes:10-20`,
+      range: {
+        start: { line: 10, character: 1 },
+        end: { line: 10, character: 10 },
+      },
+    }],
+  });
 
-  const diagnostics = parseSsDiagnostics(output, {
+  const diagnostics = parseSsDiagnosticsJson(payload, {
     [path.resolve(snapshotPath)]: path.resolve(originalPath),
   });
   assert.strictEqual(diagnostics.length, 1);
   assert.strictEqual(diagnostics[0].filePath, path.resolve(originalPath));
-  assert.strictEqual(diagnostics[0].line, 3);
-  assert.strictEqual(diagnostics[0].character, 0);
+  assert.strictEqual(diagnostics[0].line, 10);
+  assert.strictEqual(diagnostics[0].character, 1);
+  assert.strictEqual(diagnostics[0].endLine, 10);
+  assert.strictEqual(diagnostics[0].endCharacter, 10);
   assert.strictEqual(diagnostics[0].code, "RenderFailed");
   assert.strictEqual(diagnostics[0].severity, "error");
-  assert(diagnostics[0].message.includes("Undefined control sequence"));
-  assert(!diagnostics[0].message.includes("duplicate excerpt text"));
+  assert(diagnostics[0].message.includes("math expression failed"));
 }
 
-function testWarningDiagnostic() {
+function testStructuredWarningDiagnostic() {
   const sourcePath = path.join(repoRoot, "slide.ss");
-  const output = `WARNING: ${sourcePath}:2:3: ContentOverflow: object overflows its frame`;
-  const diagnostics = parseSsDiagnostics(output, {});
+  const payload = JSON.stringify({
+    schema: 1,
+    kind: "ss-diagnostics",
+    diagnostics: [{
+      phase: "render",
+      severity: "warning",
+      code: "ContentOverflow",
+      message: "object overflows its frame",
+      path: sourcePath,
+      range: {
+        start: { line: 1, character: 2 },
+        end: { line: 1, character: 3 },
+      },
+    }],
+  });
+  const diagnostics = parseSsDiagnosticsJson(payload, {});
   assert.strictEqual(diagnostics.length, 1);
   assert.strictEqual(diagnostics[0].filePath, sourcePath);
   assert.strictEqual(diagnostics[0].line, 1);

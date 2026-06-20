@@ -201,6 +201,9 @@ const RenderDiagnosticTarget = struct {
     node_id: ?core.NodeId = null,
     origin: ?[]const u8 = null,
     payload_kind: ?core.PayloadKind = null,
+    content_provenance: []const core.ContentProvenance = &.{},
+    content_start: ?usize = null,
+    content_end: ?usize = null,
 };
 
 const CommandFailureSink = struct {
@@ -267,6 +270,7 @@ const RenderOp = struct {
     node_id: core.NodeId,
     frame: Frame,
     content: []const u8,
+    content_provenance: []const core.ContentProvenance = &.{},
     link_id: ?[]const u8 = null,
     render: ResolvedRender,
     parse_mode: core.markdown.ParseMode,
@@ -557,6 +561,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                     .node_id = node.id,
                     .frame = node.frame,
                     .content = node.content orelse "",
+                    .content_provenance = node.content_provenance.items,
                     .link_id = core.nodeProperty(node, "link_id"),
                     .render = core.render_policy.resolveWithEnv(ir, node, sema),
                     .parse_mode = core.markdown.parseModeForNode(ir, node),
@@ -1245,7 +1250,7 @@ fn collectOpPreloads(
                 .source = try ctx.allocator.dupe(u8, op.content),
                 .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
                 .kind = op.math_kind,
-                .target = target,
+                .target = targetWithContentSpan(target, 0, op.content.len),
             } });
         },
         .vector_asset => {
@@ -1253,7 +1258,7 @@ fn collectOpPreloads(
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".pdf")) {
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .vector_pdf = .{
                     .source = source,
-                    .target = target,
+                    .target = targetWithContentSpan(target, 0, op.content.len),
                 } });
             } else {
                 ctx.allocator.free(source);
@@ -1269,7 +1274,7 @@ fn collectOpPreloads(
                     .source = source,
                     .target_width = content_frame.width * raster_cache_scale,
                     .target_height = content_frame.height * raster_cache_scale,
-                    .target = target,
+                    .target = targetWithContentSpan(target, 0, op.content.len),
                 } });
             }
         },
@@ -1283,7 +1288,26 @@ fn opDiagnosticTarget(op: *const RenderOp) RenderDiagnosticTarget {
         .node_id = op.node_id,
         .origin = op.origin,
         .payload_kind = op.payload_kind,
+        .content_provenance = op.content_provenance,
     };
+}
+
+fn targetWithContentSpan(target: RenderDiagnosticTarget, start: usize, end: usize) RenderDiagnosticTarget {
+    var refined = target;
+    refined.content_start = start;
+    refined.content_end = end;
+    return refined;
+}
+
+fn targetWithRunSpan(target: RenderDiagnosticTarget, runs: []const Run) RenderDiagnosticTarget {
+    if (runs.len == 0) return target;
+    var start = runs[0].source_start;
+    var end = runs[0].source_end;
+    for (runs[1..]) |run| {
+        start = @min(start, run.source_start);
+        end = @max(end, run.source_end);
+    }
+    return targetWithContentSpan(target, start, end);
 }
 
 fn collectTextOpPreloads(
@@ -1364,7 +1388,7 @@ fn collectLinePreloadsForPlan(
                             .source = try ctx.allocator.dupe(u8, source),
                             .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                             .kind = .display,
-                            .target = target,
+                            .target = targetWithRunSpan(target, runs[start..index]),
                         } });
                     }
                     continue;
@@ -1373,12 +1397,12 @@ fn collectLinePreloadsForPlan(
                     .source = try ctx.allocator.dupe(u8, run.text),
                     .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
                     .kind = .inline_math,
-                    .target = target,
+                    .target = targetWithContentSpan(target, run.source_start, run.source_end),
                 } }),
                 .icon => if (run.icon) |source| try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{
                     .icon = .{
                         .source = try ctx.allocator.dupe(u8, source),
-                        .target = target,
+                        .target = targetWithContentSpan(target, run.source_start, run.source_end),
                     },
                 }),
                 else => {},
@@ -1441,14 +1465,58 @@ fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const Re
 
 fn addPreloadRenderDiagnostic(ir: *core.Ir, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
     const target = preloadTaskTarget(task);
+    var origin = try preloadTaskDiagnosticOrigin(ir, target);
+    defer origin.deinit(ir.allocator);
     const detail = maybe_message orelse @errorName(err);
     const reason = try std.fmt.allocPrint(ir.allocator, "{s}: {s}", .{ preloadTaskLabel(task), detail });
-    try ir.addRenderDiagnostic(.@"error", target.page_id, target.node_id, target.origin, .{
+    try ir.addRenderDiagnostic(.@"error", target.page_id, target.node_id, origin.text, .{
         .render_failed = .{
             .reason = reason,
             .payload_kind = target.payload_kind,
         },
     });
+}
+
+const DiagnosticOrigin = struct {
+    text: ?[]const u8,
+    owned: bool = false,
+
+    fn deinit(self: *DiagnosticOrigin, allocator: Allocator) void {
+        if (self.owned) {
+            if (self.text) |text| allocator.free(text);
+        }
+    }
+};
+
+fn preloadTaskDiagnosticOrigin(ir: *core.Ir, target: RenderDiagnosticTarget) !DiagnosticOrigin {
+    if (target.content_start) |start| {
+        if (target.content_end) |end| {
+            if (try originForContentSpan(ir.allocator, target.content_provenance, start, end)) |origin| {
+                return .{ .text = origin, .owned = true };
+            }
+        }
+    }
+    return .{ .text = target.origin };
+}
+
+fn originForContentSpan(
+    allocator: Allocator,
+    entries: []const core.ContentProvenance,
+    content_start: usize,
+    content_end: usize,
+) !?[]const u8 {
+    const normalized_end = @max(content_end, content_start);
+    for (entries) |entry| {
+        if (content_start < entry.content_start or normalized_end > entry.content_end) continue;
+        const located = utils.err.parseLocatedOrigin(entry.origin) orelse continue;
+        const start = located.span.start + (content_start - entry.content_start);
+        const end = located.span.start + (normalized_end - entry.content_start);
+        if (located.path) |path| {
+            return try std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, start, end });
+        }
+        return try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, end });
+    }
+    return null;
 }
 
 fn addGenericRenderDiagnostic(ir: *core.Ir, err: anyerror, maybe_message: ?[]const u8) !void {

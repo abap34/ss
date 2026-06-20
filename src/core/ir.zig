@@ -13,6 +13,7 @@ const PayloadKind = model.PayloadKind;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSet = model.ConstraintSet;
+const ContentProvenance = model.ContentProvenance;
 const ConstraintSource = model.ConstraintSource;
 const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
@@ -154,6 +155,7 @@ pub const Ir = struct {
     last_constraint_failure: ?ConstraintFailure,
     constraint_failures: std.ArrayList(ConstraintFailure),
     runtime_strings: std.ArrayList([]u8),
+    string_provenance: std.AutoHashMap(usize, std.ArrayList(ContentProvenance)),
     next_id: NodeId,
     document_id: NodeId,
 
@@ -184,6 +186,7 @@ pub const Ir = struct {
             .last_constraint_failure = null,
             .constraint_failures = .empty,
             .runtime_strings = .empty,
+            .string_provenance = std.AutoHashMap(usize, std.ArrayList(ContentProvenance)).init(allocator),
             .next_id = 1,
             .document_id = 0,
         };
@@ -235,6 +238,7 @@ pub const Ir = struct {
         self.constraints.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.constraint_failures.deinit(self.allocator);
+        self.deinitStringProvenance();
         self.runtime_strings.deinit(self.allocator);
     }
 
@@ -273,13 +277,65 @@ pub const Ir = struct {
         self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.constraint_failures.deinit(self.allocator);
+        self.deinitStringProvenance();
         for (self.runtime_strings.items) |text| self.allocator.free(text);
         self.runtime_strings.deinit(self.allocator);
+    }
+
+    fn deinitStringProvenance(self: *Ir) void {
+        var iterator = self.string_provenance.valueIterator();
+        while (iterator.next()) |entries| self.deinitProvenanceList(entries);
+        self.string_provenance.deinit();
+    }
+
+    fn stringKey(text: []const u8) usize {
+        return @intFromPtr(text.ptr);
+    }
+
+    fn deinitProvenanceList(self: *Ir, entries: *std.ArrayList(ContentProvenance)) void {
+        for (entries.items) |*entry| entry.deinit(self.allocator);
+        entries.deinit(self.allocator);
+    }
+
+    fn cloneProvenanceList(self: *Ir, entries: []const ContentProvenance) !std.ArrayList(ContentProvenance) {
+        var cloned = std.ArrayList(ContentProvenance).empty;
+        errdefer self.deinitProvenanceList(&cloned);
+        for (entries) |entry| {
+            try cloned.append(self.allocator, try entry.clone(self.allocator));
+        }
+        return cloned;
+    }
+
+    pub fn setStringProvenance(self: *Ir, text: []const u8, entries: []const ContentProvenance) !void {
+        if (text.len == 0 or entries.len == 0) return;
+        var cloned = try self.cloneProvenanceList(entries);
+        errdefer self.deinitProvenanceList(&cloned);
+        const gop = try self.string_provenance.getOrPut(stringKey(text));
+        if (gop.found_existing) self.deinitProvenanceList(gop.value_ptr);
+        gop.value_ptr.* = cloned;
+    }
+
+    pub fn stringProvenance(self: *const Ir, text: []const u8) []const ContentProvenance {
+        if (text.len == 0) return &.{};
+        const entries = self.string_provenance.get(stringKey(text)) orelse return &.{};
+        return entries.items;
     }
 
     pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
         errdefer self.allocator.free(text);
         try self.runtime_strings.append(self.allocator, text);
+        return text;
+    }
+
+    pub fn ownStringWithProvenance(self: *Ir, text: []u8, entries: []const ContentProvenance) ![]const u8 {
+        errdefer self.allocator.free(text);
+        try self.runtime_strings.append(self.allocator, text);
+        var appended = true;
+        errdefer {
+            if (appended) _ = self.runtime_strings.pop();
+        }
+        try self.setStringProvenance(text, entries);
+        appended = false;
         return text;
     }
 
@@ -623,22 +679,49 @@ pub const Ir = struct {
         return nodeProperty(node, key);
     }
 
+    fn clearNodeContentProvenance(self: *Ir, node: *Node) void {
+        for (node.content_provenance.items) |*entry| entry.deinit(self.allocator);
+        node.content_provenance.clearRetainingCapacity();
+    }
+
+    fn appendNodeContentProvenance(self: *Ir, out: *std.ArrayList(ContentProvenance), entries: []const ContentProvenance, offset: usize) !void {
+        for (entries) |entry| {
+            try out.append(self.allocator, try entry.cloneWithOffset(self.allocator, offset));
+        }
+    }
+
     pub fn setNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
+        const provenance = self.stringProvenance(value);
+        var owned_provenance = try self.cloneProvenanceList(provenance);
+        errdefer self.deinitProvenanceList(&owned_provenance);
+        try self.setStringProvenance(owned_value, owned_provenance.items);
         if (node.content_owned) {
             if (node.content) |content| self.allocator.free(content);
         }
+        self.clearNodeContentProvenance(node);
         node.content = owned_value;
         node.content_owned = true;
+        node.content_provenance = owned_provenance;
     }
 
     pub fn appendNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         const current = node.content orelse "";
-        node.content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
+        var next_provenance = std.ArrayList(ContentProvenance).empty;
+        errdefer self.deinitProvenanceList(&next_provenance);
+        try self.appendNodeContentProvenance(&next_provenance, node.content_provenance.items, 0);
+        try self.appendNodeContentProvenance(&next_provenance, self.stringProvenance(value), current.len);
+        const next_content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
+        errdefer self.allocator.free(next_content);
+        try self.setStringProvenance(next_content, next_provenance.items);
         if (node.content_owned) self.allocator.free(current);
+        self.clearNodeContentProvenance(node);
+        node.content = next_content;
         node.content_owned = true;
+        node.content_provenance = next_provenance;
     }
 
     fn makeNodeWithOrigin(
@@ -658,6 +741,15 @@ pub const Ir = struct {
         const owned_role = try self.copyOptionalString(role);
         const owned_content = try self.copyOptionalString(content);
         const owned_origin = try self.copyOptionalString(origin);
+        var content_provenance = if (content) |value|
+            try self.cloneProvenanceList(self.stringProvenance(value))
+        else
+            std.ArrayList(ContentProvenance).empty;
+        var content_provenance_transferred = false;
+        errdefer {
+            if (!content_provenance_transferred) self.deinitProvenanceList(&content_provenance);
+        }
+        if (owned_content) |value| try self.setStringProvenance(value, content_provenance.items);
         try self.nodes.append(self.allocator, .{
             .id = obj_id,
             .kind = kind,
@@ -668,7 +760,9 @@ pub const Ir = struct {
             .payload_kind = payload_kind,
             .content = owned_content,
             .origin = owned_origin,
+            .content_provenance = content_provenance,
         });
+        content_provenance_transferred = true;
         if (attached) try self.addContainment(page_id, obj_id);
         return obj_id;
     }

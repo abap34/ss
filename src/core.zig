@@ -16,6 +16,7 @@ pub const Axis = model.Axis;
 pub const AxisState = model.AxisState;
 pub const Node = model.Node;
 pub const RenderEnvEntry = model.RenderEnvEntry;
+pub const ContentProvenance = model.ContentProvenance;
 pub const ValueTag = model.ValueTag;
 pub const SelectionItemTag = model.SelectionItemTag;
 pub const Selection = model.Selection;

@@ -890,7 +890,7 @@ fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const
 
 fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
     return switch (expr) {
-        .string => |value| value,
+        .string => |literal| literal.text,
         .color => |value| value,
         .ident => |name| self.string_bindings.get(name),
         .call => |call| try literalStringCall(self, call),

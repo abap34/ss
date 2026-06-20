@@ -923,14 +923,14 @@ const Parser = struct {
         }
 
         if (self.startsWith("<<")) {
-            const text = try self.parseChevronBlockString();
+            const text = try self.parseChevronBlockStringLiteral();
             const call = try self.makeUnaryStringCall(name, text);
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
         }
 
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
-            const text = try self.parseString();
+            const text = try self.parseStringLiteral();
             const call = try self.makeUnaryStringCall(name, text);
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
@@ -938,7 +938,7 @@ const Parser = struct {
 
         if (self.atStatementBoundary()) return self.failSpan(.{ .start = start, .end = start + name.name.len }, error.ZeroArgCallRequiresParens);
 
-        const text = try self.parseLineText();
+        const text = try self.parseLineTextLiteral();
         const call = try self.makeUnaryStringCall(name, text);
         try self.consumeStatementTerminator();
         return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
@@ -1064,10 +1064,10 @@ const Parser = struct {
             return .{ .color = try self.parseColorLiteralString() };
         }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
-            return .{ .string = try self.parseString() };
+            return .{ .string = try self.parseStringLiteral() };
         }
         if (self.startsWith("<<")) {
-            return .{ .string = try self.parseChevronBlockString() };
+            return .{ .string = try self.parseChevronBlockStringLiteral() };
         }
         if (self.startsNumberLiteral()) {
             return .{ .number = try self.parseNumber() };
@@ -1092,10 +1092,10 @@ const Parser = struct {
             return .{ .call = try self.parseCallAfterName(name) };
         }
         if (self.startsWith("<<")) {
-            return .{ .call = try self.makeUnaryStringCall(name, try self.parseChevronBlockString()) };
+            return .{ .call = try self.makeUnaryStringCall(name, try self.parseChevronBlockStringLiteral()) };
         }
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
-            return .{ .call = try self.makeUnaryStringCall(name, try self.parseString()) };
+            return .{ .call = try self.makeUnaryStringCall(name, try self.parseStringLiteral()) };
         }
         if (name.isQualified() or std.mem.endsWith(u8, name.name, "!")) return self.fail(error.ExpectedChar);
         if (!self.eof() and self.source[self.pos] != '(') {
@@ -1242,7 +1242,7 @@ const Parser = struct {
         return .{ .callee = name, .args = args };
     }
 
-    fn makeUnaryStringCall(self: *Parser, name: ast.CallableName, text: []const u8) !ast.CallExpr {
+    fn makeUnaryStringCall(self: *Parser, name: ast.CallableName, text: ast.StringLiteral) !ast.CallExpr {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, .{ .string = text });
@@ -1275,7 +1275,7 @@ const Parser = struct {
                 const call = if (std.mem.eql(u8, member_name, "content")) blk: {
                     self.allocator.free(member_name);
                     break :blk try self.makeCall2("set_content", target, value);
-                } else try self.makeCall3("set_prop", target, .{ .string = member_name }, value);
+                } else try self.makeCall3("set_prop", target, .{ .string = .{ .text = member_name } }, value);
                 return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
             }
             target = try self.makeMemberExpr(target, member_name);
@@ -1425,16 +1425,29 @@ const Parser = struct {
     }
 
     fn parseLineText(self: *Parser) ![]const u8 {
+        const literal = try self.parseLineTextLiteral();
+        return literal.text;
+    }
+
+    fn parseLineTextLiteral(self: *Parser) !ast.StringLiteral {
         self.skipInlineSpaces();
         const start = self.pos;
         while (!self.eof() and self.source[self.pos] != '\n') {
             self.pos += 1;
         }
         const raw = trimRightSpaces(self.source[start..self.pos]);
-        return self.allocator.dupe(u8, raw);
+        return .{
+            .text = try self.allocator.dupe(u8, raw),
+            .source_span = .{ .start = start, .end = start + raw.len },
+        };
     }
 
     fn parseChevronBlockString(self: *Parser) ![]const u8 {
+        const literal = try self.parseChevronBlockStringLiteral();
+        return literal.text;
+    }
+
+    fn parseChevronBlockStringLiteral(self: *Parser) !ast.StringLiteral {
         self.skipInlineSpaces();
         if (!self.startsWith("<<")) return self.fail(error.ExpectedString);
         self.pos += 2;
@@ -1445,8 +1458,15 @@ const Parser = struct {
         while (!self.eof()) {
             if (self.isChevronTerminatorAtCurrentLine()) {
                 const raw = self.source[content_start..self.pos];
+                const bounds = normalizedBlockStringBounds(raw);
                 self.consumeChevronTerminatorLine();
-                return self.allocator.dupe(u8, normalizeBlockString(raw));
+                return .{
+                    .text = try self.allocator.dupe(u8, raw[bounds.start..bounds.end]),
+                    .source_span = .{
+                        .start = content_start + bounds.start,
+                        .end = content_start + bounds.end,
+                    },
+                };
             }
             self.pos += 1;
         }
@@ -1518,6 +1538,11 @@ const Parser = struct {
     }
 
     fn parseString(self: *Parser) ![]const u8 {
+        const literal = try self.parseStringLiteral();
+        return literal.text;
+    }
+
+    fn parseStringLiteral(self: *Parser) !ast.StringLiteral {
         self.skipTrivia();
         if (self.startsWith("\"\"\"")) {
             self.pos += 3;
@@ -1527,8 +1552,15 @@ const Parser = struct {
             }
             if (self.eof()) return self.fail(error.UnterminatedString);
             const raw = self.source[start..self.pos];
+            const bounds = normalizedBlockStringBounds(raw);
             self.pos += 3;
-            return self.allocator.dupe(u8, normalizeBlockString(raw));
+            return .{
+                .text = try self.allocator.dupe(u8, raw[bounds.start..bounds.end]),
+                .source_span = .{
+                    .start = start + bounds.start,
+                    .end = start + bounds.end,
+                },
+            };
         }
 
         if (self.eof() or self.source[self.pos] != '"') return self.fail(error.ExpectedString);
@@ -1539,7 +1571,11 @@ const Parser = struct {
             const ch = self.source[self.pos];
             self.pos += 1;
             if (ch == '"') {
-                return self.allocator.dupe(u8, self.source[start .. self.pos - 1]);
+                const end = self.pos - 1;
+                return .{
+                    .text = try self.allocator.dupe(u8, self.source[start..end]),
+                    .source_span = .{ .start = start, .end = end },
+                };
             }
         }
         return self.fail(error.UnterminatedString);
@@ -1833,11 +1869,16 @@ fn statementReturns(stmt: Statement) bool {
 }
 
 fn normalizeBlockString(raw: []const u8) []const u8 {
+    const bounds = normalizedBlockStringBounds(raw);
+    return raw[bounds.start..bounds.end];
+}
+
+fn normalizedBlockStringBounds(raw: []const u8) ast.Span {
     var start: usize = 0;
     var end: usize = raw.len;
     if (start < end and raw[start] == '\n') start += 1;
     if (start < end and raw[end - 1] == '\n') end -= 1;
-    return raw[start..end];
+    return .{ .start = start, .end = end };
 }
 
 fn trimRightSpaces(raw: []const u8) []const u8 {

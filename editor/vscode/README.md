@@ -100,6 +100,12 @@ Add this to your workspace settings:
 
 ## Live Preview
 
+Open `.ss` documents are rendered through the same snapshot path used by live
+preview so render-phase failures appear in VS Code Diagnostics. This covers
+backend errors such as TeX math rendering failures. Opening or closing the PDF
+preview only controls the viewer; render diagnostics continue to use the normal
+editor refresh settings.
+
 Run `ss: Open Live Preview` from the command palette or the editor title button.
 The preview asks the language server for `ss/projectInfo`, writes a snapshot of
 open `.ss` buffers under `.ss-cache/vscode-projects/`, and refreshes a PDF with:

@@ -72,7 +72,14 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
         .concat => blk: {
             const left = try ctx.evalStringArg(call, 0);
             const right = try ctx.evalStringArg(call, 1);
-            break :blk .{ .string = try ctx.ownString(try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right })) };
+            var provenance = std.ArrayList(core.ContentProvenance).empty;
+            defer deinitContentProvenance(ctx.ir.allocator, &provenance);
+            try appendContentProvenance(ctx.ir.allocator, &provenance, ctx.ir.stringProvenance(left), 0);
+            try appendContentProvenance(ctx.ir.allocator, &provenance, ctx.ir.stringProvenance(right), left.len);
+            break :blk .{ .string = try ctx.ownStringWithProvenance(
+                try std.fmt.allocPrint(ctx.ir.allocator, "{s}{s}", .{ left, right }),
+                provenance.items,
+            ) };
         },
         .replace => blk: {
             const text = try ctx.evalStringArg(call, 0);
@@ -180,6 +187,8 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             defer snapshot.deinit(ctx.ir.allocator);
             var out = std.ArrayList(u8).empty;
             defer out.deinit(ctx.ir.allocator);
+            var provenance = std.ArrayList(core.ContentProvenance).empty;
+            defer deinitContentProvenance(ctx.ir.allocator, &provenance);
             for (snapshot.ids.items, 0..) |id, index| {
                 var args = std.ArrayList(core.Value).empty;
                 defer args.deinit(ctx.ir.allocator);
@@ -191,10 +200,14 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                     .string => |value| value,
                     else => return error.ExpectedStringArgument,
                 };
-                if (index > 0) try out.appendSlice(ctx.ir.allocator, separator);
+                if (index > 0) {
+                    try appendContentProvenance(ctx.ir.allocator, &provenance, ctx.ir.stringProvenance(separator), out.items.len);
+                    try out.appendSlice(ctx.ir.allocator, separator);
+                }
+                try appendContentProvenance(ctx.ir.allocator, &provenance, ctx.ir.stringProvenance(text), out.items.len);
                 try out.appendSlice(ctx.ir.allocator, text);
             }
-            break :blk .{ .string = try ctx.ownString(try out.toOwnedSlice(ctx.ir.allocator)) };
+            break :blk .{ .string = try ctx.ownStringWithProvenance(try out.toOwnedSlice(ctx.ir.allocator), provenance.items) };
         },
         .first => blk: {
             const selection = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
@@ -479,6 +492,22 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             break :blk .{ .object = object_id };
         },
     };
+}
+
+fn appendContentProvenance(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(core.ContentProvenance),
+    entries: []const core.ContentProvenance,
+    offset: usize,
+) !void {
+    for (entries) |entry| {
+        try out.append(allocator, try entry.cloneWithOffset(allocator, offset));
+    }
+}
+
+fn deinitContentProvenance(allocator: std.mem.Allocator, entries: *std.ArrayList(core.ContentProvenance)) void {
+    for (entries.items) |*entry| entry.deinit(allocator);
+    entries.deinit(allocator);
 }
 
 fn replaceAll(allocator: std.mem.Allocator, text: []const u8, old: []const u8, new: []const u8) ![]u8 {

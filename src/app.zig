@@ -13,6 +13,11 @@ const error_report = utils.err;
 pub const RenderOptions = pdf.RenderOptions;
 const Progress = utils.progress.Progress;
 
+pub const PdfWriteOptions = struct {
+    render: RenderOptions = .{},
+    diagnostics_json_path: ?[]const u8 = null,
+};
+
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     return buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
@@ -191,10 +196,15 @@ pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []c
 }
 
 pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
+    return writePdfForFileWithWriteOptions(io, allocator, input_path, output_path, .{ .render = options }, progress);
+}
+
+pub fn writePdfForFileWithWriteOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: PdfWriteOptions, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, input_path, progress);
     defer ir.deinit();
-    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options, progress);
+    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options.render, progress, options.diagnostics_json_path);
     defer allocator.free(pdf_data);
+    try writeDiagnosticsJsonIfRequested(io, allocator, &ir, options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
     progress.step("Render pages");
     try utils.fs.writeFile(io, output_path, pdf_data);
@@ -206,10 +216,15 @@ pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
 }
 
 pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
+    return writePdfForFileWithAssetBaseAndWriteOptions(io, allocator, input_path, asset_base_dir, output_path, .{ .render = options }, progress);
+}
+
+pub fn writePdfForFileWithAssetBaseAndWriteOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: PdfWriteOptions, progress: *Progress) !void {
     var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
     defer ir.deinit();
-    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options, progress);
+    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options.render, progress, options.diagnostics_json_path);
     defer allocator.free(pdf_data);
+    try writeDiagnosticsJsonIfRequested(io, allocator, &ir, options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
     progress.step("Render pages");
     try utils.fs.writeFile(io, output_path, pdf_data);
@@ -222,12 +237,21 @@ fn renderPdfOrPrintDiagnostics(
     ir: *core.Ir,
     options: RenderOptions,
     progress: *Progress,
+    diagnostics_json_path: ?[]const u8,
 ) ![]const u8 {
     return pdf.renderDocumentToPdfWithOptions(allocator, io, ir, options, progressCallback(progress)) catch |err| {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        try writeDiagnosticsJsonIfRequested(io, allocator, ir, diagnostics_json_path);
         if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
         return err;
     };
+}
+
+fn writeDiagnosticsJsonIfRequested(io: std.Io, allocator: std.mem.Allocator, ir: *core.Ir, diagnostics_json_path: ?[]const u8) !void {
+    const path = diagnostics_json_path orelse return;
+    const data = try error_report.irRenderDiagnosticsJson(allocator, ir.projectPath(), ir.projectSource(), ir);
+    defer allocator.free(data);
+    try utils.fs.writeFile(io, path, data);
 }
 
 fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {

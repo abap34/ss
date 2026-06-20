@@ -1,4 +1,5 @@
 const std = @import("std");
+const json = @import("json.zig");
 
 pub const Severity = enum {
     note,
@@ -202,38 +203,167 @@ pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diag
 
 pub fn printIrDiagnostics(path: []const u8, source: []const u8, ir: anytype) void {
     for (ir.diagnostics.items) |diagnostic| {
-        const message = formatIrDiagnostic(ir.allocator, diagnostic) catch @tagName(diagnostic.phase);
-        defer if (!std.mem.eql(u8, message, @tagName(diagnostic.phase))) ir.allocator.free(message);
-        var report_path = path;
-        var report_source = source;
-        const located = if (diagnostic.origin) |origin|
-            parseLocatedOrigin(origin)
-        else if (diagnostic.node_id) |node_id| blk: {
-            const node = ir.getNode(node_id) orelse break :blk null;
-            break :blk if (node.origin) |origin| parseLocatedOrigin(origin) else null;
-        } else null;
-        const span = if (located) |origin| blk: {
-            if (origin.path) |origin_path| {
-                if (ir.moduleByPathOrSpec(origin_path)) |module| {
-                    report_path = module.path orelse module.spec;
-                    report_source = module.source;
-                } else {
-                    report_path = origin_path;
-                }
-            }
-            break :blk origin.span;
-        } else null;
+        var resolved = resolveIrDiagnostic(ir.allocator, path, source, ir, diagnostic) catch {
+            print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = @tagName(diagnostic.phase),
+                .span = null,
+            });
+            continue;
+        };
+        defer resolved.deinit(ir.allocator);
         print(.{
-            .path = report_path,
-            .source = report_source,
-            .severity = switch (diagnostic.severity) {
-                .warning => .warning,
-                .@"error" => .@"error",
-            },
-            .message = message,
-            .span = span,
+            .path = resolved.path,
+            .source = resolved.source,
+            .severity = resolved.report_severity,
+            .message = resolved.message,
+            .span = resolved.span,
         });
     }
+}
+
+pub fn irRenderDiagnosticsJson(allocator: std.mem.Allocator, default_path: []const u8, default_source: []const u8, ir: anytype) ![]u8 {
+    return irDiagnosticsJson(allocator, default_path, default_source, ir, .{ .phase = "render" });
+}
+
+pub const DiagnosticsJsonOptions = struct {
+    phase: ?[]const u8 = null,
+};
+
+pub fn irDiagnosticsJson(
+    allocator: std.mem.Allocator,
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    options: DiagnosticsJsonOptions,
+) ![]u8 {
+    var buffer = std.ArrayList(u8).empty;
+    errdefer buffer.deinit(allocator);
+
+    var root = try json.Object.beginBuffer(allocator, &buffer);
+    try root.intField("schema", 1);
+    try root.stringField("kind", "ss-diagnostics");
+    var diagnostics = try root.arrayField("diagnostics");
+    for (ir.diagnostics.items) |diagnostic| {
+        if (options.phase) |phase| {
+            if (!std.mem.eql(u8, @tagName(diagnostic.phase), phase)) continue;
+        }
+        var resolved = try resolveIrDiagnostic(allocator, default_path, default_source, ir, diagnostic);
+        defer resolved.deinit(allocator);
+        try writeIrDiagnosticJson(&diagnostics, resolved, diagnostic);
+    }
+    try diagnostics.end();
+    try root.end();
+    try json.appendNewline(&buffer, allocator);
+    return buffer.toOwnedSlice(allocator);
+}
+
+const ResolvedIrDiagnostic = struct {
+    phase: []const u8,
+    severity: []const u8,
+    report_severity: Severity,
+    code: []const u8,
+    message: []const u8,
+    path: []const u8,
+    source: []const u8,
+    span: ?ByteSpan,
+
+    fn deinit(self: *ResolvedIrDiagnostic, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+    }
+};
+
+fn resolveIrDiagnostic(
+    allocator: std.mem.Allocator,
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    diagnostic: anytype,
+) !ResolvedIrDiagnostic {
+    const message = try formatIrDiagnostic(allocator, diagnostic);
+    errdefer allocator.free(message);
+    const location = resolveIrDiagnosticLocation(default_path, default_source, ir, diagnostic);
+    return .{
+        .phase = @tagName(diagnostic.phase),
+        .severity = @tagName(diagnostic.severity),
+        .report_severity = switch (diagnostic.severity) {
+            .warning => .warning,
+            .@"error" => .@"error",
+        },
+        .code = irDiagnosticCode(diagnostic),
+        .message = message,
+        .path = location.path,
+        .source = location.source,
+        .span = location.span,
+    };
+}
+
+fn writeIrDiagnosticJson(
+    diagnostics: *json.Array,
+    resolved: ResolvedIrDiagnostic,
+    diagnostic: anytype,
+) !void {
+    var item = try diagnostics.objectItem();
+    try item.stringField("phase", resolved.phase);
+    try item.stringField("severity", resolved.severity);
+    try item.stringField("code", resolved.code);
+    try item.stringField("message", resolved.message);
+    try item.stringField("path", resolved.path);
+    try item.optionalStringField("origin", diagnostic.origin);
+    try item.optionalIntField("page_id", diagnostic.page_id);
+    try item.optionalIntField("node_id", diagnostic.node_id);
+    if (resolved.span) |span| {
+        var range = try item.objectField("range");
+        try writeJsonLocation(&range, "start", resolved.source, span.start);
+        try writeJsonLocation(&range, "end", resolved.source, @max(span.end, span.start));
+        try range.end();
+    } else {
+        try item.nullField("range");
+    }
+    try item.end();
+}
+
+fn writeJsonLocation(object: *json.Object, key: []const u8, source: []const u8, byte_index: usize) !void {
+    const location = computeLineColumn(source, byte_index);
+    var child = try object.objectField(key);
+    try child.intField("line", if (location.line == 0) 0 else location.line - 1);
+    try child.intField("character", if (location.column == 0) 0 else location.column - 1);
+    try child.end();
+}
+
+fn resolveIrDiagnosticLocation(
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    diagnostic: anytype,
+) struct { path: []const u8, source: []const u8, span: ?ByteSpan } {
+    const located = if (diagnostic.origin) |origin|
+        parseLocatedOrigin(origin)
+    else if (diagnostic.node_id) |node_id| blk: {
+        const node = ir.getNode(node_id) orelse break :blk null;
+        break :blk if (node.origin) |origin| parseLocatedOrigin(origin) else null;
+    } else null;
+    if (located) |origin| {
+        const resolved = sourceForLocatedOrigin(default_path, default_source, ir, origin);
+        return .{ .path = resolved.path, .source = resolved.source, .span = origin.span };
+    }
+    return .{ .path = default_path, .source = default_source, .span = null };
+}
+
+fn irDiagnosticCode(diagnostic: anytype) []const u8 {
+    return switch (diagnostic.data) {
+        .user_report => "UserReport",
+        .asset_not_found => "AssetNotFound",
+        .asset_invalid => "InvalidAsset",
+        .render_failed => "RenderFailed",
+        .type_mismatch => |data| @tagName(data.code),
+        .recursive_function => "RecursiveFunction",
+        .unresolved_frame => "UnresolvedFrame",
+        .page_overflow => "PageOverflow",
+        .content_overflow => "ContentOverflow",
+    };
 }
 
 pub fn hasIrErrors(ir: anytype) bool {

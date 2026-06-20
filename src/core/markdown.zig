@@ -27,6 +27,8 @@ pub const RunKind = enum {
 pub const Run = struct {
     kind: RunKind,
     text: []const u8,
+    source_start: usize = 0,
+    source_end: usize = 0,
     strikethrough: bool = false,
     url: ?[]const u8 = null,
     icon: ?[]const u8 = null,
@@ -138,6 +140,8 @@ const ParserState = struct {
     display_math_depth: usize = 0,
     link_url: ?[]const u8 = null,
     image: ?ImageState = null,
+    source: []const u8 = "",
+    source_offset: usize = 0,
 
     fn arenaAllocator(self: *ParserState) Allocator {
         return self.doc.allocator();
@@ -274,6 +278,7 @@ pub fn parseMarkdownContent(
         .doc = &doc,
         .containers = .empty,
         .lists = .empty,
+        .source = content,
     };
     defer {
         state.containers.deinit(allocator);
@@ -359,10 +364,12 @@ pub fn codeBlockPhysicalLineCount(block: *const Block) usize {
 fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u8) !void {
     var it = std.mem.splitScalar(u8, content, '\n');
     var saw_any = false;
+    var line_offset: usize = 0;
     while (it.next()) |line_text| {
         saw_any = true;
-        const line = try parseInlineLine(allocator, line_text);
+        const line = try parseInlineLineAt(allocator, line_text, line_offset);
         try layout.lines.append(allocator, line);
+        line_offset += line_text.len + 1;
     }
     if (!saw_any) {
         try layout.lines.append(allocator, .{});
@@ -370,6 +377,10 @@ fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u
 }
 
 fn parseInlineLine(allocator: Allocator, line_text: []const u8) !Line {
+    return parseInlineLineAt(allocator, line_text, 0);
+}
+
+fn parseInlineLineAt(allocator: Allocator, line_text: []const u8, source_offset: usize) !Line {
     var line = Line{};
     errdefer line.runs.deinit(allocator);
     if (line_text.len == 0) return line;
@@ -377,6 +388,8 @@ fn parseInlineLine(allocator: Allocator, line_text: []const u8) !Line {
     var state = InlineParserState{
         .allocator = allocator,
         .runs = &line.runs,
+        .source = line_text,
+        .source_offset = source_offset,
     };
 
     var parser = std.mem.zeroes(c.MD_PARSER);
@@ -405,6 +418,8 @@ const InlineParserState = struct {
     display_math_depth: usize = 0,
     link_url: ?[]const u8 = null,
     image: ?ImageState = null,
+    source: []const u8 = "",
+    source_offset: usize = 0,
 };
 
 fn inlineBlockNoop(
@@ -722,15 +737,41 @@ fn appendTextRun(
 
     const alloc = allocatorForState(T, state);
     const text_copy = try alloc.dupe(u8, normalized);
+    const source_span = sourceSpanForText(T, state, text_ptr, size);
     var run = Run{
         .kind = kind,
         .text = text_copy,
+        .source_start = source_span.start,
+        .source_end = source_span.end,
         .strikethrough = state.strikethrough_depth > 0,
     };
     if (run.kind == .link and state.link_url != null) {
         run.url = try alloc.dupe(u8, state.link_url.?);
     }
     try runs.append(alloc, run);
+}
+
+fn sourceSpanForText(
+    comptime T: type,
+    state: *T,
+    text_ptr: [*c]const c.MD_CHAR,
+    size: c.MD_SIZE,
+) struct { start: usize, end: usize } {
+    if (state.source.len == 0 or size == 0) {
+        return .{ .start = state.source_offset, .end = state.source_offset };
+    }
+    const base = @intFromPtr(state.source.ptr);
+    const ptr = @intFromPtr(@as([*]const u8, @ptrCast(text_ptr)));
+    const source_end = base + state.source.len;
+    if (ptr < base or ptr > source_end) {
+        return .{ .start = state.source_offset, .end = state.source_offset };
+    }
+    const relative_start = ptr - base;
+    const relative_end = @min(relative_start + @as(usize, @intCast(size)), state.source.len);
+    return .{
+        .start = state.source_offset + relative_start,
+        .end = state.source_offset + relative_end,
+    };
 }
 
 fn appendIconRun(comptime T: type, state: *T, runs: *std.ArrayList(Run), src: []const u8) !void {
