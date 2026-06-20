@@ -2921,27 +2921,18 @@ fn defaultTreeSitterSymbol(allocator: Allocator, parser_name: []const u8) ![:0]u
 }
 
 fn colorForCapture(code: CodePaint, capture_name: []const u8) ?Color {
-    const base = captureBaseName(capture_name);
-    if (std.mem.eql(u8, base, "comment")) return code.comment;
-    if (std.mem.eql(u8, base, "string")) return code.string;
-    if (std.mem.eql(u8, base, "keyword")) return code.keyword;
-    if (std.mem.eql(u8, base, "function") or std.mem.eql(u8, base, "method")) return code.function;
-    if (std.mem.eql(u8, base, "type")) return code.type;
-    if (std.mem.eql(u8, base, "constant") or std.mem.eql(u8, base, "attribute")) return code.constant;
-    if (std.mem.eql(u8, base, "number")) return code.number;
-    if (std.mem.eql(u8, base, "variable") or
-        std.mem.eql(u8, base, "property") or
-        std.mem.eql(u8, base, "namespace"))
-    {
-        return code.variable;
-    }
-    if (std.mem.eql(u8, base, "operator") or std.mem.eql(u8, base, "punctuation")) return code.operator;
-    return null;
-}
-
-fn captureBaseName(capture_name: []const u8) []const u8 {
-    const dot = std.mem.indexOfScalar(u8, capture_name, '.') orelse return capture_name;
-    return capture_name[0..dot];
+    return switch (utils.highlight.roleForCapture(capture_name) orelse return null) {
+        .plain => code.plain,
+        .keyword => code.keyword,
+        .function => code.function,
+        .type => code.type,
+        .constant => code.constant,
+        .number => code.number,
+        .variable => code.variable,
+        .operator => code.operator,
+        .comment => code.comment,
+        .string => code.string,
+    };
 }
 
 fn highlightSpanLessThan(_: void, lhs: HighlightSpan, rhs: HighlightSpan) bool {

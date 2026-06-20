@@ -111,6 +111,71 @@ test "project spec: highlight languages parse from ss.toml" {
     try testing.expectEqualStrings("tree_sitter_julia", julia.symbol.?);
 }
 
+test "project spec: tree-sitter capture names map to code paint roles" {
+    const cases = [_]struct {
+        capture: []const u8,
+        role: utils.highlight.CaptureRole,
+    }{
+        .{ .capture = "keyword", .role = .keyword },
+        .{ .capture = "keyword.operator", .role = .operator },
+        .{ .capture = "keyword.import", .role = .keyword },
+        .{ .capture = "cImport", .role = .function },
+        .{ .capture = "function.call", .role = .function },
+        .{ .capture = "function.method", .role = .function },
+        .{ .capture = "function.macro", .role = .function },
+        .{ .capture = "constructor", .role = .type },
+        .{ .capture = "type.builtin", .role = .type },
+        .{ .capture = "namespace", .role = .type },
+        .{ .capture = "module", .role = .type },
+        .{ .capture = "tag", .role = .type },
+        .{ .capture = "constant.builtin", .role = .constant },
+        .{ .capture = "boolean", .role = .constant },
+        .{ .capture = "attribute", .role = .constant },
+        .{ .capture = "label", .role = .constant },
+        .{ .capture = "number.float", .role = .number },
+        .{ .capture = "variable.parameter", .role = .variable },
+        .{ .capture = "variable.member", .role = .variable },
+        .{ .capture = "property", .role = .variable },
+        .{ .capture = "punctuation.bracket", .role = .operator },
+        .{ .capture = "punctuation.delimiter", .role = .operator },
+        .{ .capture = "delimiter", .role = .operator },
+        .{ .capture = "_pipe", .role = .operator },
+        .{ .capture = "comment.documentation", .role = .comment },
+        .{ .capture = "string.special", .role = .string },
+        .{ .capture = "string.escape", .role = .string },
+        .{ .capture = "escape", .role = .string },
+        .{ .capture = "character", .role = .string },
+    };
+    for (cases) |case| {
+        try testing.expectEqual(case.role, utils.highlight.roleForCapture(case.capture).?);
+    }
+}
+
+test "project spec: bundled highlight queries use mapped capture names" {
+    const query_paths = [_][]const u8{
+        "editor/tree-sitter-ss/queries/highlights.scm",
+        "third_party/tree-sitter-languages/bash/queries/highlights.scm",
+        "third_party/tree-sitter-languages/c/queries/highlights.scm",
+        "third_party/tree-sitter-languages/cpp/queries/highlights.scm",
+        "third_party/tree-sitter-languages/css/queries/highlights.scm",
+        "third_party/tree-sitter-languages/go/queries/highlights.scm",
+        "third_party/tree-sitter-languages/html/queries/highlights.scm",
+        "third_party/tree-sitter-languages/java/queries/highlights.scm",
+        "third_party/tree-sitter-languages/javascript/queries/highlights.scm",
+        "third_party/tree-sitter-languages/json/queries/highlights.scm",
+        "third_party/tree-sitter-languages/julia/queries/highlights.scm",
+        "third_party/tree-sitter-languages/python/queries/highlights.scm",
+        "third_party/tree-sitter-languages/rust/queries/highlights.scm",
+        "third_party/tree-sitter-languages/toml/queries/highlights.scm",
+        "third_party/tree-sitter-languages/typescript/queries/highlights.scm",
+        "third_party/tree-sitter-languages/yaml/queries/highlights.scm",
+        "third_party/tree-sitter-languages/zig/queries/highlights.scm",
+    };
+    for (query_paths) |path| {
+        try expectMappedHighlightCaptures(path);
+    }
+}
+
 test "project spec: explicit input discovers ss.toml from input directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -181,4 +246,33 @@ fn findHighlightLanguage(languages: []const utils.highlight.Language, name: []co
         if (std.ascii.eqlIgnoreCase(language.name, name)) return language;
     }
     return null;
+}
+
+fn expectMappedHighlightCaptures(path: []const u8) !void {
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .limited(256 * 1024));
+    defer testing.allocator.free(source);
+
+    var index: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, index, '@')) |at| {
+        const start = at + 1;
+        var end = start;
+        while (end < source.len and isCaptureNameByte(source[end])) {
+            end += 1;
+        }
+        index = end;
+        if (start == end) continue;
+        const capture = source[start..end];
+        if (isIgnoredHighlightCapture(capture)) continue;
+        if (utils.highlight.roleForCapture(capture) != null) continue;
+        std.debug.print("unmapped tree-sitter highlight capture '{s}' in {s}\n", .{ capture, path });
+        return error.UnmappedTreeSitterHighlightCapture;
+    }
+}
+
+fn isCaptureNameByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '.';
+}
+
+fn isIgnoredHighlightCapture(capture: []const u8) bool {
+    return std.mem.eql(u8, capture, "embedded") or std.mem.eql(u8, capture, "spell");
 }

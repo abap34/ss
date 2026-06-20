@@ -189,6 +189,17 @@ fn expectBodyTextDefaults(source: []const u8, expected: compiler_semantics.BodyT
     try compiler_semantics.expectBodyTextDefaults(testing.io, allocator, path, source, expected);
 }
 
+fn expectResolvedCodePaintIsColorful(source: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectResolvedCodePaintIsColorful(testing.io, allocator, path, source);
+}
+
 fn expectDumpContains(source: []const u8, expected: []const []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1301,6 +1312,24 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
     try expectObjectProperty(explicit_source, "text_markdown_code_keyword_color", "0.7764706,0.47058824,0.8666667");
     try expectObjectProperty(explicit_source, "text_markdown_code_function_color", "0.38039216,0.6862745,0.9372549");
     try expectObjectProperty(explicit_source, "text_markdown_code_fill", "0.15686275,0.17254902,0.20392157");
+}
+
+test "compiler semantics: default theme applies code theme to code and markdown" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  code!("const value = demo(1)", "javascript")
+        \\  text!("```javascript\nconst value = demo(1)\n```")
+        \\end
+        \\
+    ;
+    try expectResolvedCodePaintIsColorful(source);
+    try expectObjectProperty(source, "code_plain_color", "0.14117648,0.16078432,0.18431373");
+    try expectObjectProperty(source, "code_keyword_color", "0.8117647,0.13333334,0.18039216");
+    try expectObjectProperty(source, "text_markdown_code_plain_color", "0.14117648,0.16078432,0.18431373");
+    try expectObjectProperty(source, "text_markdown_code_keyword_color", "0.8117647,0.13333334,0.18039216");
+    try expectObjectProperty(source, "text_markdown_code_fill", "0.9647059,0.972549,0.98039216");
 }
 
 test "compiler semantics: structured style value members are typed" {
