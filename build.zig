@@ -44,36 +44,38 @@ const bundled_highlight_queries = [_]BundledHighlightQuery{
     .{ .option_name = "zig_highlight_query", .path = "third_party/tree-sitter-languages/zig/queries/highlights.scm" },
 };
 
-const bundled_tree_sitter_sources = [_][]const u8{
-    "third_party/tree-sitter-languages/bash/src/parser.c",
-    "third_party/tree-sitter-languages/bash/src/scanner.c",
-    "third_party/tree-sitter-languages/c/src/parser.c",
-    "third_party/tree-sitter-languages/cpp/src/parser.c",
-    "third_party/tree-sitter-languages/cpp/src/scanner.c",
-    "third_party/tree-sitter-languages/css/src/parser.c",
-    "third_party/tree-sitter-languages/css/src/scanner.c",
-    "third_party/tree-sitter-languages/go/src/parser.c",
-    "third_party/tree-sitter-languages/html/src/parser.c",
-    "third_party/tree-sitter-languages/html/src/scanner.c",
-    "third_party/tree-sitter-languages/java/src/parser.c",
-    "third_party/tree-sitter-languages/javascript/src/parser.c",
-    "third_party/tree-sitter-languages/javascript/src/scanner.c",
-    "third_party/tree-sitter-languages/json/src/parser.c",
-    "third_party/tree-sitter-languages/julia/src/parser.c",
-    "third_party/tree-sitter-languages/julia/src/scanner.c",
-    "third_party/tree-sitter-languages/python/src/parser.c",
-    "third_party/tree-sitter-languages/python/src/scanner.c",
-    "third_party/tree-sitter-languages/rust/src/parser.c",
-    "third_party/tree-sitter-languages/rust/src/scanner.c",
-    "third_party/tree-sitter-languages/toml/src/parser.c",
-    "third_party/tree-sitter-languages/toml/src/scanner.c",
-    "third_party/tree-sitter-languages/typescript/typescript/src/parser.c",
-    "third_party/tree-sitter-languages/typescript/typescript/src/scanner.c",
-    "third_party/tree-sitter-languages/typescript/tsx/src/parser.c",
-    "third_party/tree-sitter-languages/typescript/tsx/src/scanner.c",
-    "third_party/tree-sitter-languages/yaml/src/parser.c",
-    "third_party/tree-sitter-languages/yaml/src/scanner.c",
-    "third_party/tree-sitter-languages/zig/src/parser.c",
+const generated_tree_sitter_root = ".zig-cache/tree-sitter-languages";
+
+const generated_tree_sitter_sources = [_][]const u8{
+    "bash/src/parser.c",
+    "bash/src/scanner.c",
+    "c/src/parser.c",
+    "cpp/src/parser.c",
+    "cpp/src/scanner.c",
+    "css/src/parser.c",
+    "css/src/scanner.c",
+    "go/src/parser.c",
+    "html/src/parser.c",
+    "html/src/scanner.c",
+    "java/src/parser.c",
+    "javascript/src/parser.c",
+    "javascript/src/scanner.c",
+    "json/src/parser.c",
+    "julia/src/parser.c",
+    "julia/src/scanner.c",
+    "python/src/parser.c",
+    "python/src/scanner.c",
+    "rust/src/parser.c",
+    "rust/src/scanner.c",
+    "toml/src/parser.c",
+    "toml/src/scanner.c",
+    "typescript/typescript/src/parser.c",
+    "typescript/typescript/src/scanner.c",
+    "typescript/tsx/src/parser.c",
+    "typescript/tsx/src/scanner.c",
+    "yaml/src/parser.c",
+    "yaml/src/scanner.c",
+    "zig/src/parser.c",
 };
 
 pub fn build(b: *std.Build) void {
@@ -396,6 +398,7 @@ fn addPdfPkgConfigPath(b: *std.Build) void {
 }
 
 fn addNativePdfBackend(b: *std.Build, module: *Module) void {
+    ensureGeneratedTreeSitterSources(b);
     addNativePdfHeadersAndLibraries(b, module);
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
@@ -403,12 +406,47 @@ fn addNativePdfBackend(b: *std.Build, module: *Module) void {
     module.addCSourceFile(.{
         .file = b.path("editor/tree-sitter-ss/src/parser.c"),
     });
-    for (bundled_tree_sitter_sources) |source| {
+    for (generated_tree_sitter_sources) |source| {
         module.addCSourceFile(.{
-            .file = b.path(source),
+            .file = b.path(b.fmt("{s}/{s}", .{ generated_tree_sitter_root, source })),
         });
     }
     module.addIncludePath(b.path("editor/tree-sitter-ss/src"));
+}
+
+fn ensureGeneratedTreeSitterSources(b: *std.Build) void {
+    for (generated_tree_sitter_sources) |source| {
+        b.build_root.handle.access(b.graph.io, b.fmt("{s}/{s}", .{ generated_tree_sitter_root, source }), .{}) catch {
+            runTreeSitterPrepareBuild(b);
+            break;
+        };
+    }
+    for (generated_tree_sitter_sources) |source| {
+        b.build_root.handle.access(b.graph.io, b.fmt("{s}/{s}", .{ generated_tree_sitter_root, source }), .{}) catch
+            std.debug.panic("generated tree-sitter parser source is missing after preparation: {s}/{s}", .{ generated_tree_sitter_root, source });
+    }
+}
+
+fn runTreeSitterPrepareBuild(b: *std.Build) void {
+    std.debug.print("preparing generated tree-sitter parser sources...\n", .{});
+    const argv = [_][]const u8{ "node", "scripts/update-tree-sitter-languages.mjs", "--prepare-build" };
+    const result = std.process.run(b.allocator, b.graph.io, .{
+        .argv = &argv,
+        .cwd = .{ .path = b.pathFromRoot(".") },
+        .stdout_limit = .limited(256 * 1024),
+        .stderr_limit = .limited(256 * 1024),
+    }) catch |err| std.debug.panic("failed to prepare tree-sitter parser sources: {}", .{err});
+    defer b.allocator.free(result.stdout);
+    defer b.allocator.free(result.stderr);
+
+    if (result.stdout.len != 0) std.debug.print("{s}", .{result.stdout});
+    if (result.stderr.len != 0) std.debug.print("{s}", .{result.stderr});
+    switch (result.term) {
+        .exited => |code| {
+            if (code != 0) std.debug.panic("tree-sitter parser preparation failed with exit code {}", .{code});
+        },
+        else => std.debug.panic("tree-sitter parser preparation ended unexpectedly: {}", .{result.term}),
+    }
 }
 
 fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module) void {
