@@ -74,10 +74,7 @@ end
 fn/! image(path_value: String, factor: Number = 1) -> Object
   let obj = img_obj(path_value)
   flow(obj, 102, 102)
-  let chrome = panel()
-  box(chrome, c"1,1,1", c"0.78,0.84,0.92", 0.9, 8)
-  chrome.layout_spacing_after = 30
-  surround(chrome, obj, 12, 10)
+  obj.layout_spacing_after = 30
   scale(obj, factor)
   require_asset_exists(obj)
   return obj
