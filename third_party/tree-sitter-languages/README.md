@@ -1,24 +1,28 @@
 # Bundled tree-sitter languages
 
-These generated parsers and highlight queries are bundled so `ss` can highlight
-common code blocks without per-project parser libraries.
+These pinned tree-sitter languages let `ss` highlight common code blocks
+without per-project parser libraries.
 
-Run this command to reproduce the checked-in bundle from the pinned commits:
+The repository keeps lightweight highlight queries, upstream licenses, and the
+manifest below. Generated parser C sources are materialized under
+`.zig-cache/tree-sitter-languages` during the build so they do not inflate git
+history.
+
+Run this command to refresh tracked queries and materialize generated parser
+sources from the pinned commits:
 
 ```sh
-npm ci --prefix editor/tree-sitter-ss
 node scripts/update-tree-sitter-languages.mjs
 ```
 
 Run this command to advance every bundled parser to the current upstream HEAD:
 
 ```sh
-npm ci --prefix editor/tree-sitter-ss
 node scripts/update-tree-sitter-languages.mjs --latest
 ```
 
 The scheduled GitHub Actions workflow runs the `--latest` form and opens a pull
-request when upstream generated parsers or queries change.
+request when upstream commits change tracked queries or licenses.
 
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 `LICENSE` file.

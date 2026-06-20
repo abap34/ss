@@ -10,18 +10,20 @@ const bundleRoot = path.join(repoRoot, "third_party", "tree-sitter-languages");
 const manifestPath = path.join(bundleRoot, "manifest.json");
 const readmePath = path.join(bundleRoot, "README.md");
 const cacheRoot = path.join(repoRoot, ".ss-cache", "tree-sitter-languages");
+const generatedRoot = path.join(repoRoot, ".zig-cache", "tree-sitter-languages");
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
 const updateLatest = args.has("--latest");
-const allowedArgs = new Set(["--check", "--latest"]);
+const prepareBuild = args.has("--prepare-build");
+const allowedArgs = new Set(["--check", "--latest", "--prepare-build"]);
 for (const arg of args) {
   if (!allowedArgs.has(arg)) {
     throw new Error(`unknown argument: ${arg}`);
   }
 }
-if (checkOnly && updateLatest) {
-  throw new Error("--check and --latest cannot be used together");
+if ([checkOnly, updateLatest, prepareBuild].filter(Boolean).length > 1) {
+  throw new Error("--check, --latest, and --prepare-build cannot be combined");
 }
 
 const manifest = await readManifest();
@@ -33,12 +35,17 @@ if (checkOnly) {
   process.exit(0);
 }
 
+if (prepareBuild) {
+  await syncLanguages(manifest, { copyTracked: false, copyGenerated: true });
+  process.exit(0);
+}
+
 if (updateLatest) {
   await updateManifestToLatest(manifest);
   await writeManifest(manifest);
 }
 
-await syncLanguages(manifest);
+await syncLanguages(manifest, { copyTracked: true, copyGenerated: true });
 await fs.writeFile(readmePath, renderReadme(manifest), "utf8");
 
 async function readManifest() {
@@ -100,6 +107,7 @@ async function checkManifestFiles(manifest) {
   for (const language of manifest.languages) {
     const destRoot = path.join(bundleRoot, language.name);
     for (const file of language.files) {
+      if (isGeneratedFile(file.to)) continue;
       const dest = path.join(destRoot, file.to);
       try {
         await fs.access(dest);
@@ -137,9 +145,12 @@ function latestCommit(repo) {
   return commit;
 }
 
-async function syncLanguages(manifest) {
+async function syncLanguages(manifest, options) {
   await fs.rm(cacheRoot, { recursive: true, force: true });
   await fs.mkdir(cacheRoot, { recursive: true });
+  if (options.copyGenerated) {
+    await fs.mkdir(generatedRoot, { recursive: true });
+  }
   const treeSitter = await resolveTreeSitterCommand(manifest);
   for (const language of manifest.languages) {
     console.log(`sync ${language.name} ${language.commit}`);
@@ -147,21 +158,38 @@ async function syncLanguages(manifest) {
     await checkoutCommit(language.repo, language.commit, checkout);
     await installGrammarDependencies(checkout);
     generateLanguage(treeSitter, checkout, language);
-    const destRoot = path.join(bundleRoot, language.name);
-    await fs.rm(destRoot, { recursive: true, force: true });
+    if (options.copyTracked) {
+      await fs.rm(path.join(bundleRoot, language.name), { recursive: true, force: true });
+    }
+    if (options.copyGenerated) {
+      await fs.rm(path.join(generatedRoot, language.name), { recursive: true, force: true });
+    }
     for (const file of language.files) {
       const source = path.join(checkout, file.from);
-      const dest = path.join(destRoot, file.to);
+      const generated = isGeneratedFile(file.to);
+      if (generated && !options.copyGenerated) continue;
+      if (!generated && !options.copyTracked) continue;
+      const root = generated ? generatedRoot : bundleRoot;
+      const dest = path.join(root, language.name, file.to);
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.copyFile(source, dest);
     }
   }
 }
 
+function isGeneratedFile(relativePath) {
+  return relativePath.startsWith("src/") || relativePath.startsWith("common/") || relativePath.includes("/src/");
+}
+
 async function resolveTreeSitterCommand(manifest) {
+  const localTreeSitter = path.join(repoRoot, "editor", "tree-sitter-ss", "node_modules", ".bin", process.platform === "win32" ? "tree-sitter.cmd" : "tree-sitter");
+  if (!(await fileExists(localTreeSitter))) {
+    run("npm", ["ci", "--prefix", path.join(repoRoot, "editor", "tree-sitter-ss")]);
+  }
+
   const candidates = [];
   if (process.env.TREE_SITTER_CLI) candidates.push(process.env.TREE_SITTER_CLI);
-  candidates.push(path.join(repoRoot, "editor", "tree-sitter-ss", "node_modules", ".bin", process.platform === "win32" ? "tree-sitter.cmd" : "tree-sitter"));
+  candidates.push(localTreeSitter);
   candidates.push("tree-sitter");
 
   for (const command of candidates) {
@@ -180,6 +208,15 @@ async function resolveTreeSitterCommand(manifest) {
   }
 
   throw new Error("tree-sitter CLI is missing; run `npm ci` in editor/tree-sitter-ss or set TREE_SITTER_CLI");
+}
+
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function installGrammarDependencies(checkout) {
@@ -241,25 +278,29 @@ function renderReadme(manifest) {
     .join("\n");
   return `# Bundled tree-sitter languages
 
-These generated parsers and highlight queries are bundled so \`ss\` can highlight
-common code blocks without per-project parser libraries.
+These pinned tree-sitter languages let \`ss\` highlight common code blocks
+without per-project parser libraries.
 
-Run this command to reproduce the checked-in bundle from the pinned commits:
+The repository keeps lightweight highlight queries, upstream licenses, and the
+manifest below. Generated parser C sources are materialized under
+\`.zig-cache/tree-sitter-languages\` during the build so they do not inflate git
+history.
+
+Run this command to refresh tracked queries and materialize generated parser
+sources from the pinned commits:
 
 \`\`\`sh
-npm ci --prefix editor/tree-sitter-ss
 node scripts/update-tree-sitter-languages.mjs
 \`\`\`
 
 Run this command to advance every bundled parser to the current upstream HEAD:
 
 \`\`\`sh
-npm ci --prefix editor/tree-sitter-ss
 node scripts/update-tree-sitter-languages.mjs --latest
 \`\`\`
 
 The scheduled GitHub Actions workflow runs the \`--latest\` form and opens a pull
-request when upstream generated parsers or queries change.
+request when upstream commits change tracked queries or licenses.
 
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 \`LICENSE\` file.

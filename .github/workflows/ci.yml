@@ -104,6 +104,9 @@ jobs:
           qpdf --version
           git -C third_party/md4c rev-parse HEAD
 
+      - name: Install tree-sitter CLI
+        run: npm ci --prefix editor/tree-sitter-ss
+
       - name: Check bundled tree-sitter language metadata
         run: node scripts/update-tree-sitter-languages.mjs --check
 
@@ -123,9 +126,7 @@ jobs:
 
       - name: Test tree-sitter grammar
         working-directory: editor/tree-sitter-ss
-        run: |
-          npm ci
-          npm test
+        run: npm test
 
       - name: Compile VS Code extension
         working-directory: editor/vscode
