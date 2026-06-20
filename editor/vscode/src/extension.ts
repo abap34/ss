@@ -1,23 +1,23 @@
 import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
 import { PageGuideDecorations } from "./pageGuide";
-import { LivePreview } from "./preview";
 import { projectSettings } from "./projectConfig";
+import { RenderController } from "./renderController";
 
 let client: LanguageClient | undefined;
 let pageGuide: PageGuideDecorations | undefined;
-let preview: LivePreview | undefined;
+let renderController: RenderController | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel("ss");
   outputChannel = output;
   pageGuide = new PageGuideDecorations();
-  preview = new LivePreview(context, output, () => client);
+  renderController = new RenderController(context, output, () => client);
 
-  context.subscriptions.push(output, pageGuide, preview);
+  context.subscriptions.push(output, pageGuide, renderController);
   context.subscriptions.push(vscode.commands.registerCommand("ss.preview.live", () => {
-    preview?.open(vscode.window.activeTextEditor?.document);
+    renderController?.openPreview(vscode.window.activeTextEditor?.document);
   }));
   context.subscriptions.push(vscode.commands.registerCommand("ss.checkCurrentFile", async () => {
     const document = vscode.window.activeTextEditor?.document;
@@ -41,8 +41,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export async function deactivate(): Promise<void> {
   pageGuide?.dispose();
   pageGuide = undefined;
-  preview?.dispose();
-  preview = undefined;
+  renderController?.dispose();
+  renderController = undefined;
   await stopLanguageClient();
   outputChannel = undefined;
 }
@@ -56,6 +56,7 @@ async function restartLanguageClient(context: vscode.ExtensionContext): Promise<
   client = active;
   context.subscriptions.push(active);
   await active.start();
+  renderController?.refreshOpenDocuments(0);
 }
 
 async function stopLanguageClient(): Promise<void> {

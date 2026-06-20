@@ -49,6 +49,8 @@ fn usage() void {
         \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
         \\  --cache-id ID
         \\    Stable render cache identity for snapshot-based render inputs
+        \\  --diagnostics-json FILE
+        \\    Write machine-readable diagnostics JSON for render
         \\  --interval-ms N
         \\    Poll interval for watch commands
         \\  --entry FILE
@@ -133,6 +135,7 @@ const CommandOptions = struct {
     project_path: ?[]const u8 = null,
     jobs: ?usize = null,
     cache_id: ?[]const u8 = null,
+    diagnostics_json_path: ?[]const u8 = null,
     interval_ms: u64 = 500,
 };
 
@@ -186,6 +189,12 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         if (std.mem.eql(u8, arg, "--cache-id")) {
             if (i + 1 >= args.len) return failUsage("missing value for --cache-id", .{});
             options.cache_id = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--diagnostics-json")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --diagnostics-json", .{});
+            options.diagnostics_json_path = args[i + 1];
             i += 1;
             continue;
         }
@@ -654,13 +663,17 @@ fn run(init: std.process.Init) !void {
         defer resolved.deinit(allocator);
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         try validateOutputParentOrCliError(io, output_path);
+        if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
         var progress = utils.progress.Progress.init(8);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
             .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
-        try app.writePdfForFileWithAssetBaseAndOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, render_options, &progress);
+        try app.writePdfForFileWithAssetBaseAndWriteOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, .{
+            .render = render_options,
+            .diagnostics_json_path = options.diagnostics_json_path,
+        }, &progress);
         return;
     }
 

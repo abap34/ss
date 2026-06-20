@@ -112,7 +112,7 @@ pub fn formatUserParam(allocator: std.mem.Allocator, param: ast.ParamDecl) ![]co
 fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
     return switch (expr) {
         .ident => |name| allocator.dupe(u8, name),
-        .string => |text| std.fmt.allocPrint(allocator, "\"{s}\"", .{text}),
+        .string => |literal| std.fmt.allocPrint(allocator, "\"{s}\"", .{literal.text}),
         .color => |text| std.fmt.allocPrint(allocator, "c\"{s}\"", .{text}),
         .number => |value| std.fmt.allocPrint(allocator, "{d}", .{value}),
         .boolean => |value| allocator.dupe(u8, if (value) "true" else "false"),

@@ -10,6 +10,32 @@ pub const Property = struct {
     value: []const u8,
 };
 
+pub const ContentProvenance = struct {
+    content_start: usize,
+    content_end: usize,
+    origin: []const u8,
+
+    pub fn deinit(self: *ContentProvenance, allocator: Allocator) void {
+        allocator.free(self.origin);
+    }
+
+    pub fn clone(self: ContentProvenance, allocator: Allocator) !ContentProvenance {
+        return .{
+            .content_start = self.content_start,
+            .content_end = self.content_end,
+            .origin = try allocator.dupe(u8, self.origin),
+        };
+    }
+
+    pub fn cloneWithOffset(self: ContentProvenance, allocator: Allocator, offset: usize) !ContentProvenance {
+        return .{
+            .content_start = self.content_start + offset,
+            .content_end = self.content_end + offset,
+            .origin = try allocator.dupe(u8, self.origin),
+        };
+    }
+};
+
 pub const RenderEnvEntry = struct {
     op: []const u8,
     key: []const u8,
@@ -128,6 +154,7 @@ pub const Node = struct {
     payload_kind: ?PayloadKind = null,
     content: ?[]const u8 = null,
     content_owned: bool = false,
+    content_provenance: std.ArrayList(ContentProvenance) = .empty,
     page_index: ?usize = null,
     origin: ?[]const u8 = null,
     properties: std.ArrayList(Property) = .empty,
@@ -149,6 +176,8 @@ pub const Node = struct {
         if (self.content_owned) {
             if (self.content) |content| allocator.free(content);
         }
+        for (self.content_provenance.items) |*entry| entry.deinit(allocator);
+        self.content_provenance.deinit(allocator);
     }
 };
 

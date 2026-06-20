@@ -88,7 +88,7 @@ fn expectNumber(expr: ast.Expr, expected: f32) !void {
 
 fn expectString(expr: ast.Expr, expected: []const u8) !void {
     switch (expr) {
-        .string => |actual| try testing.expectEqualStrings(expected, actual),
+        .string => |actual| try testing.expectEqualStrings(expected, actual.text),
         else => return error.ExpectedStringExpr,
     }
 }

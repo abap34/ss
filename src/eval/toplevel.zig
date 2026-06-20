@@ -955,7 +955,10 @@ fn evalExpr(
             try reportUnknownIdentifier(ir, name, current_origin);
             break :blk error.UnknownIdentifier;
         },
-        .string => |text| .{ .string = text },
+        .string => |literal| blk: {
+            try registerStringLiteralProvenance(ir, literal);
+            break :blk .{ .string = literal.text };
+        },
         .color => |text| .{ .string = text },
         .number => |value| .{ .number = value },
         .boolean => |value| .{ .boolean = value },
@@ -981,6 +984,18 @@ fn evalExpr(
             break :blk try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, coalesce.fallback.*);
         },
     };
+}
+
+fn registerStringLiteralProvenance(ir: *core.Ir, literal: ast.StringLiteral) !void {
+    const source_span = literal.source_span orelse return;
+    const origin = try originForActiveModuleSpan(ir, source_span);
+    defer ir.allocator.free(origin);
+    const provenance = [_]core.ContentProvenance{.{
+        .content_start = 0,
+        .content_end = literal.text.len,
+        .origin = origin,
+    }};
+    try ir.setStringProvenance(literal.text, &provenance);
 }
 
 fn evalConstValue(
@@ -1348,6 +1363,10 @@ const BuiltinContext = struct {
 
     pub fn ownString(self: *BuiltinContext, text: []u8) ![]const u8 {
         return try self.ir.ownString(text);
+    }
+
+    pub fn ownStringWithProvenance(self: *BuiltinContext, text: []u8, entries: []const core.ContentProvenance) ![]const u8 {
+        return try self.ir.ownStringWithProvenance(text, entries);
     }
 
     pub fn readlines(self: *BuiltinContext, requested: []const u8) ![]const u8 {
@@ -2310,6 +2329,13 @@ fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
         return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_path, span.start, span.end });
     }
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
+}
+
+fn originForActiveModuleSpan(ir: *core.Ir, span: ast.Span) ![]const u8 {
+    if (ir.modulePath(active_module_id)) |path| {
+        return std.fmt.allocPrint(ir.allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
+    }
+    return statementOrigin(ir.allocator, span);
 }
 
 fn resolveAnchorRef(

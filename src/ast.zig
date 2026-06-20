@@ -486,9 +486,25 @@ pub const Span = struct {
     end: usize,
 };
 
+pub const StringLiteral = struct {
+    text: []const u8,
+    source_span: ?Span = null,
+
+    pub fn deinit(self: *StringLiteral, allocator: Allocator) void {
+        allocator.free(self.text);
+    }
+
+    pub fn clone(self: StringLiteral, allocator: Allocator) !StringLiteral {
+        return .{
+            .text = try allocator.dupe(u8, self.text),
+            .source_span = self.source_span,
+        };
+    }
+};
+
 pub const Expr = union(enum) {
     ident: []const u8,
-    string: []const u8,
+    string: StringLiteral,
     color: []const u8,
     number: f32,
     boolean: bool,
@@ -504,7 +520,8 @@ pub const Expr = union(enum) {
 
     pub fn deinit(self: *Expr, allocator: Allocator) void {
         switch (self.*) {
-            .ident, .string, .color => |text| allocator.free(text),
+            .ident, .color => |text| allocator.free(text),
+            .string => |*literal| literal.deinit(allocator),
             .call => |*call| call.deinit(allocator),
             .apply => |*apply| apply.deinit(allocator),
             .lambda => |*lambda| lambda.deinit(allocator),
@@ -520,7 +537,7 @@ pub const Expr = union(enum) {
     pub fn clone(self: Expr, allocator: Allocator) anyerror!Expr {
         return switch (self) {
             .ident => |text| .{ .ident = try allocator.dupe(u8, text) },
-            .string => |text| .{ .string = try allocator.dupe(u8, text) },
+            .string => |literal| .{ .string = try literal.clone(allocator) },
             .color => |text| .{ .color = try allocator.dupe(u8, text) },
             .number => |value| .{ .number = value },
             .boolean => |value| .{ .boolean = value },

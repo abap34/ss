@@ -248,9 +248,9 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "ident");
             try object.stringField("value", name);
         },
-        .string => |text| {
+        .string => |literal| {
             try object.stringField("exprKind", "string");
-            try object.stringField("value", text);
+            try object.stringField("value", literal.text);
         },
         .color => |text| {
             try object.stringField("exprKind", "color");
@@ -388,9 +388,9 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             try item.stringField("kind", "ident");
             try item.stringField("name", name);
         },
-        .string => |text| {
+        .string => |literal| {
             try item.stringField("kind", "string");
-            try item.stringField("value", text);
+            try item.stringField("value", literal.text);
         },
         .color => |text| {
             try item.stringField("kind", "color");

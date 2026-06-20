@@ -77,7 +77,7 @@ pub fn mergeStringLiteral(a: ?[]const u8, b: ?[]const u8) ?[]const u8 {
 
 pub fn resolveStringLiteral(env: *const TypeEnv, expr: ast.Expr) ?[]const u8 {
     return switch (expr) {
-        .string => |text| text,
+        .string => |literal| literal.text,
         .ident => |name| if (env.get(name)) |info| info.string_literal else null,
         else => null,
     };

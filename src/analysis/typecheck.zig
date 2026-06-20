@@ -592,7 +592,7 @@ fn setDefaultPropertyValue(
 
 fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]const u8 {
     return switch (expr) {
-        .string => |text| try allocator.dupe(u8, text),
+        .string => |literal| try allocator.dupe(u8, literal.text),
         .color => |text| try allocator.dupe(u8, text),
         .number => |value| try std.fmt.allocPrint(allocator, "{d}", .{value}),
         .boolean => |value| try allocator.dupe(u8, if (value) "true" else "false"),
@@ -614,7 +614,12 @@ fn staticRecordDefaultPropertyValue(allocator: std.mem.Allocator, record: ast.Re
 fn appendStaticTaggedExprJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr) !bool {
     switch (expr) {
         .none => try out.appendSlice(allocator, "{\"kind\":\"none\"}"),
-        .string, .color => |text| {
+        .string => |literal| {
+            try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
+            try appendJsonString(allocator, out, literal.text);
+            try out.append(allocator, '}');
+        },
+        .color => |text| {
             try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
             try appendJsonString(allocator, out, text);
             try out.append(allocator, '}');
