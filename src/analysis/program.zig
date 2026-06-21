@@ -12,6 +12,7 @@ const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
 const registry = @import("../language/registry.zig");
+const schedule = @import("schedule.zig");
 const analysis_scope = @import("scope.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
@@ -132,7 +133,23 @@ fn checkFunctionDefinitionsWithEnv(
     }
 }
 
-pub fn typecheckProgram(
+pub fn analyzeProgram(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+) !void {
+    try analyzeProgramWithoutSchedule(allocator, ir);
+    try schedule.analyzeDependencies(allocator, ir);
+}
+
+pub fn analyzeProgramForEvaluation(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+) !schedule.ScheduleGraph {
+    try analyzeProgramWithoutSchedule(allocator, ir);
+    return schedule.ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .create });
+}
+
+fn analyzeProgramWithoutSchedule(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
 ) !void {

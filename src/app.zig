@@ -5,7 +5,7 @@ const parser = @import("syntax.zig");
 const lowering = @import("lowering.zig");
 const pdf = @import("render/pdf.zig");
 const dump = @import("dump.zig");
-const typecheck = @import("analysis/typecheck.zig");
+const analysis = @import("analysis.zig");
 const module_loader = @import("modules/loader.zig");
 const utils = @import("utils");
 const error_report = utils.err;
@@ -16,6 +16,32 @@ const Progress = utils.progress.Progress;
 pub const PdfWriteOptions = struct {
     render: RenderOptions = .{},
     diagnostics_json_path: ?[]const u8 = null,
+};
+
+const AnalysisMode = enum {
+    diagnostics_only,
+    evaluation_schedule,
+};
+
+const AnalyzedFile = struct {
+    ir: core.Ir,
+    schedule_graph: ?analysis.schedule.ScheduleGraph = null,
+
+    fn deinit(self: *AnalyzedFile) void {
+        if (self.schedule_graph) |*graph| graph.deinit();
+        self.ir.deinit();
+    }
+
+    fn takeIr(self: *AnalyzedFile) core.Ir {
+        if (self.schedule_graph) |*graph| graph.deinit();
+        const ir = self.ir;
+        self.* = undefined;
+        return ir;
+    }
+
+    fn scheduleGraph(self: *const AnalyzedFile) *const analysis.schedule.ScheduleGraph {
+        return &self.schedule_graph.?;
+    }
 };
 
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
@@ -41,11 +67,11 @@ pub fn buildFileWithAssetBaseAndOverlay(
     progress: ?*Progress,
     overlay: ?*const module_loader.SourceOverlay,
 ) !core.Ir {
-    var ir = try buildTypedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay);
-    errdefer ir.deinit();
-    try evaluateDocumentOrReport(&ir, progress);
-    try solveLayoutOrReport(&ir, progress);
-    return ir;
+    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay, .evaluation_schedule);
+    errdefer analyzed.deinit();
+    try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
+    try solveLayoutOrReport(&analyzed.ir, progress);
+    return analyzed.takeIr();
 }
 
 pub fn buildTypedFileWithAssetBaseAndOverlay(
@@ -56,6 +82,20 @@ pub fn buildTypedFileWithAssetBaseAndOverlay(
     progress: ?*Progress,
     overlay: ?*const module_loader.SourceOverlay,
 ) !core.Ir {
+    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay, .diagnostics_only);
+    errdefer analyzed.deinit();
+    return analyzed.takeIr();
+}
+
+fn buildAnalyzedFileWithAssetBaseAndOverlay(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    asset_base_dir: []const u8,
+    progress: ?*Progress,
+    overlay: ?*const module_loader.SourceOverlay,
+    mode: AnalysisMode,
+) !AnalyzedFile {
     var source = if (overlay) |source_overlay|
         if (source_overlay.get(path)) |text|
             try allocator.dupe(u8, text)
@@ -70,7 +110,7 @@ pub fn buildTypedFileWithAssetBaseAndOverlay(
     errdefer program.deinit(allocator);
     if (progress) |p| p.step("Parse source");
 
-    var index = typecheck.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
+    var index = analysis.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
         if (err == error.UnknownImport) {
             var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
             defer report.deinit(allocator);
@@ -102,7 +142,7 @@ pub fn buildTypedFileWithAssetBaseAndOverlay(
     };
     if (progress) |p| p.step("Load modules");
 
-    var ir = typecheck.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
+    var ir = analysis.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
         if (err == error.UnknownImport) {
             var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
             defer report.deinit(allocator);
@@ -124,21 +164,40 @@ pub fn buildTypedFileWithAssetBaseAndOverlay(
     defer index.deinit();
     errdefer ir.deinit();
 
-    typecheck.typecheckProgram(allocator, &ir) catch |err| {
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
-        return err;
-    };
-    if (progress) |p| p.step("Typecheck");
+    var schedule_graph: ?analysis.schedule.ScheduleGraph = null;
+    errdefer if (schedule_graph) |*graph| graph.deinit();
+
+    switch (mode) {
+        .diagnostics_only => analysis.analyzeProgram(allocator, &ir) catch |err| {
+            error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+            return err;
+        },
+        .evaluation_schedule => {
+            schedule_graph = analysis.analyzeProgramForEvaluation(allocator, &ir) catch |err| {
+                error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+                return err;
+            };
+        },
+    }
+    if (progress) |p| p.step("Analyze");
 
     if (error_report.hasIrErrors(&ir)) {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
         return error.DiagnosticsFailed;
     }
-    return ir;
+    return .{ .ir = ir, .schedule_graph = schedule_graph };
 }
 
 fn evaluateDocumentOrReport(ir: *core.Ir, progress: ?*Progress) !void {
     lowering.evaluateDocument(ir) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        return err;
+    };
+    if (progress) |p| p.step("Evaluate document");
+}
+
+fn evaluateDocumentOrReportWithSchedule(ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph, progress: ?*Progress) !void {
+    lowering.evaluateDocumentWithSchedule(ir, graph) catch |err| {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         return err;
     };
@@ -224,10 +283,10 @@ pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
 }
 
 pub fn writeScheduleTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var ir = try buildTypedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null);
-    defer ir.deinit();
-    const json = lowering.scheduleTraceJson(allocator, &ir) catch |err| {
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
+    defer analyzed.deinit();
+    const json = lowering.scheduleTraceJsonFromGraph(allocator, &analyzed.ir, analyzed.scheduleGraph()) catch |err| {
+        error_report.printIrDiagnostics(analyzed.ir.projectPath(), analyzed.ir.projectSource(), &analyzed.ir);
         return err;
     };
     defer allocator.free(json);
@@ -237,10 +296,10 @@ pub fn writeScheduleTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Al
 }
 
 pub fn writeLayoutTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var ir = try buildTypedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null);
-    defer ir.deinit();
-    try evaluateDocumentOrReport(&ir, progress);
-    try solveLayoutWithTracePathOrReport(&ir, output_path, progress);
+    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
+    defer analyzed.deinit();
+    try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
+    try solveLayoutWithTracePathOrReport(&analyzed.ir, output_path, progress);
 }
 
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {

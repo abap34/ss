@@ -11,9 +11,101 @@ const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyCon
 
 pub const ResourceKind = enum {
     variable,
+    pages,
     objects,
     property,
-    page_index,
+};
+
+pub const PropertyOwner = union(enum) {
+    any,
+    document,
+    page,
+    object: ?[]const u8,
+
+    pub fn intersects(self: PropertyOwner, other: PropertyOwner) bool {
+        return switch (self) {
+            .any => true,
+            .document => switch (other) {
+                .any, .document => true,
+                .page, .object => false,
+            },
+            .page => switch (other) {
+                .any, .page => true,
+                .document, .object => false,
+            },
+            .object => |left| switch (other) {
+                .any => true,
+                .object => |right| optionalNameIntersects(left, right),
+                .document, .page => false,
+            },
+        };
+    }
+
+    pub fn merge(self: PropertyOwner, other: PropertyOwner) PropertyOwner {
+        return switch (self) {
+            .any => .any,
+            .document => switch (other) {
+                .any => .any,
+                .document => .document,
+                .page, .object => .any,
+            },
+            .page => switch (other) {
+                .any => .any,
+                .page => .page,
+                .document, .object => .any,
+            },
+            .object => |left| switch (other) {
+                .any => .any,
+                .object => |right| .{ .object = mergeOptionalNames(left, right) },
+                .document, .page => .any,
+            },
+        };
+    }
+
+    pub fn isUnknown(self: PropertyOwner) bool {
+        return switch (self) {
+            .any => true,
+            .object => |class_name| class_name == null,
+            .document, .page => false,
+        };
+    }
+};
+
+pub const PropertyKey = union(enum) {
+    any,
+    content,
+    named: []const u8,
+
+    const content_name = "content";
+
+    pub fn fromName(maybe_name: ?[]const u8) PropertyKey {
+        const value = maybe_name orelse return .any;
+        if (std.mem.eql(u8, value, content_name)) return .content;
+        return .{ .named = value };
+    }
+
+    pub fn intersects(self: PropertyKey, other: PropertyKey) bool {
+        return switch (self) {
+            .any => true,
+            .content => switch (other) {
+                .any, .content => true,
+                .named => |named_value| std.mem.eql(u8, named_value, content_name),
+            },
+            .named => |left| switch (other) {
+                .any => true,
+                .content => std.mem.eql(u8, left, content_name),
+                .named => |right| std.mem.eql(u8, left, right),
+            },
+        };
+    }
+
+    pub fn displayName(self: PropertyKey) ?[]const u8 {
+        return switch (self) {
+            .any => null,
+            .content => content_name,
+            .named => |value| value,
+        };
+    }
 };
 
 pub const ResourceScope = union(enum) {
@@ -38,37 +130,57 @@ pub const ResourceScope = union(enum) {
     }
 };
 
-pub const Resource = struct {
-    kind: ResourceKind,
-    scope: ResourceScope = .any,
-    owner: ?[]const u8 = null,
-    key: ?[]const u8 = null,
+pub const Resource = union(ResourceKind) {
+    variable: struct {
+        scope: ResourceScope,
+        name: []const u8,
+    },
+    pages: ResourceScope,
+    objects: ?[]const u8,
+    property: struct {
+        owner: PropertyOwner,
+        key: PropertyKey,
+    },
 
     pub fn intersects(self: Resource, other: Resource) bool {
-        if (self.kind != other.kind) return false;
-        if (!self.scope.intersects(other.scope)) return false;
-        if (self.owner != null and other.owner != null and !std.mem.eql(u8, self.owner.?, other.owner.?)) return false;
-        if (self.key != null and other.key != null and !std.mem.eql(u8, self.key.?, other.key.?)) return false;
-        return true;
-    }
-
-    pub fn variable(scope: ResourceScope, name: []const u8) Resource {
-        return .{ .kind = .variable, .scope = scope, .key = name };
-    }
-
-    pub fn objects(role_name: ?[]const u8) Resource {
-        return .{ .kind = .objects, .key = role_name };
-    }
-
-    pub fn property(owner: ?[]const u8, key: ?[]const u8) Resource {
-        return .{ .kind = .property, .owner = owner, .key = key };
-    }
-
-    pub fn pageIndex(page_id: ?core.NodeId) Resource {
-        return .{
-            .kind = .page_index,
-            .scope = if (page_id) |id| .{ .page = id } else .any,
+        return switch (self) {
+            .variable => |left| switch (other) {
+                .variable => |right| left.scope.intersects(right.scope) and std.mem.eql(u8, left.name, right.name),
+                else => false,
+            },
+            .pages => |left| switch (other) {
+                .pages => |right| left.intersects(right),
+                else => false,
+            },
+            .objects => |left| switch (other) {
+                .objects => |right| optionalNameIntersects(left, right),
+                else => false,
+            },
+            .property => |left| switch (other) {
+                .property => |right| left.owner.intersects(right.owner) and left.key.intersects(right.key),
+                else => false,
+            },
         };
+    }
+
+    pub fn makeVariable(scope: ResourceScope, name: []const u8) Resource {
+        return .{ .variable = .{ .scope = scope, .name = name } };
+    }
+
+    pub fn makeObjects(role_name: ?[]const u8) Resource {
+        return .{ .objects = role_name };
+    }
+
+    pub fn makeProperty(owner: PropertyOwner, key: ?[]const u8) Resource {
+        return .{ .property = .{ .owner = owner, .key = PropertyKey.fromName(key) } };
+    }
+
+    pub fn makeContentProperty(owner: PropertyOwner) Resource {
+        return .{ .property = .{ .owner = owner, .key = .content } };
+    }
+
+    pub fn makePages(page_id: ?core.NodeId) Resource {
+        return .{ .pages = if (page_id) |id| .{ .page = id } else .any };
     }
 };
 
@@ -172,29 +284,29 @@ fn appendFlagLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), flag: [
 }
 
 fn appendResource(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resource: Resource) !void {
-    switch (resource.kind) {
-        .variable => {
+    switch (resource) {
+        .variable => |variable| {
             try out.appendSlice(allocator, "Variable(");
-            try appendScope(allocator, out, resource.scope);
+            try appendScope(allocator, out, variable.scope);
             try out.appendSlice(allocator, ", ");
-            try appendOptionalName(allocator, out, resource.key);
+            try appendOptionalName(allocator, out, variable.name);
             try out.append(allocator, ')');
         },
-        .objects => {
+        .pages => |scope| {
+            try out.appendSlice(allocator, "Pages(");
+            try appendScope(allocator, out, scope);
+            try out.append(allocator, ')');
+        },
+        .objects => |role_name| {
             try out.appendSlice(allocator, "Objects(");
-            try appendOptionalName(allocator, out, resource.key);
+            try appendOptionalName(allocator, out, role_name);
             try out.append(allocator, ')');
         },
-        .property => {
+        .property => |property| {
             try out.appendSlice(allocator, "Property(");
-            try appendOptionalName(allocator, out, resource.owner);
+            try appendPropertyOwner(allocator, out, property.owner);
             try out.appendSlice(allocator, ", ");
-            try appendOptionalName(allocator, out, resource.key);
-            try out.append(allocator, ')');
-        },
-        .page_index => {
-            try out.appendSlice(allocator, "PageIndex(");
-            try appendScope(allocator, out, resource.scope);
+            try appendOptionalName(allocator, out, property.key.displayName());
             try out.append(allocator, ')');
         },
     }
@@ -220,6 +332,26 @@ fn appendOptionalName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), val
     try out.appendSlice(allocator, value orelse "*");
 }
 
+fn appendPropertyOwner(allocator: std.mem.Allocator, out: *std.ArrayList(u8), owner: PropertyOwner) !void {
+    switch (owner) {
+        .any => try out.appendSlice(allocator, "*"),
+        .document => try out.appendSlice(allocator, "Doc"),
+        .page => try out.appendSlice(allocator, "PageContext"),
+        .object => |class_name| try appendOptionalName(allocator, out, class_name),
+    }
+}
+
+fn optionalNameIntersects(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left == null or right == null) return true;
+    return std.mem.eql(u8, left.?, right.?);
+}
+
+fn mergeOptionalNames(left: ?[]const u8, right: ?[]const u8) ?[]const u8 {
+    if (left == null or right == null) return null;
+    if (std.mem.eql(u8, left.?, right.?)) return left;
+    return null;
+}
+
 fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), resource: Resource) !void {
     for (list.items) |existing| {
         if (existing.intersects(resource) and resource.intersects(existing)) return;
@@ -232,6 +364,32 @@ const LetPolicy = enum {
     local,
 };
 
+const PropertyTarget = struct {
+    owner: PropertyOwner,
+
+    fn any() PropertyTarget {
+        return .{ .owner = .any };
+    }
+
+    fn document() PropertyTarget {
+        return .{ .owner = .document };
+    }
+
+    fn page() PropertyTarget {
+        return .{ .owner = .page };
+    }
+
+    fn object(class_name: ?[]const u8) PropertyTarget {
+        return .{ .owner = .{ .object = class_name } };
+    }
+};
+
+const CallbackArgBinding = struct {
+    string_literal: ?[]const u8 = null,
+    object_role: ?[]const u8 = null,
+    property_target: ?PropertyTarget = null,
+};
+
 pub const Analyzer = struct {
     allocator: std.mem.Allocator,
     sema: SemanticEnv,
@@ -239,6 +397,8 @@ pub const Analyzer = struct {
     visiting: FunctionVisitSet,
     string_bindings: std.StringHashMap([]const u8),
     object_role_bindings: std.StringHashMap([]const u8),
+    property_target_bindings: std.StringHashMap(PropertyTarget),
+    selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
     owned_strings: std.ArrayList([]const u8),
     local_variables: std.StringHashMap(void),
 
@@ -254,6 +414,8 @@ pub const Analyzer = struct {
             .visiting = FunctionVisitSet.init(allocator),
             .string_bindings = std.StringHashMap([]const u8).init(allocator),
             .object_role_bindings = std.StringHashMap([]const u8).init(allocator),
+            .property_target_bindings = std.StringHashMap(PropertyTarget).init(allocator),
+            .selection_read_bindings = std.StringHashMap(std.ArrayList(Resource)).init(allocator),
             .owned_strings = .empty,
             .local_variables = std.StringHashMap(void).init(allocator),
         };
@@ -263,6 +425,8 @@ pub const Analyzer = struct {
         self.local_variables.deinit();
         for (self.owned_strings.items) |value| self.allocator.free(value);
         self.owned_strings.deinit(self.allocator);
+        self.deinitSelectionReadBindings(&self.selection_read_bindings);
+        self.property_target_bindings.deinit();
         self.object_role_bindings.deinit();
         self.string_bindings.deinit();
         self.visiting.deinit();
@@ -305,13 +469,35 @@ pub const Analyzer = struct {
                 try summary.merge(expr);
                 if (!names.isDiscardBindingName(binding.name)) {
                     switch (let_policy) {
-                        .scheduled => try summary.addWrite(Resource.variable(self.variable_scope, binding.name)),
+                        .scheduled => try summary.addWrite(Resource.makeVariable(self.variable_scope, binding.name)),
                         .local => try self.local_variables.put(binding.name, {}),
                     }
-                    if (try self.objectRoleExpr(binding.expr)) |role_name| {
-                        try self.object_role_bindings.put(binding.name, role_name);
+                    if (try literalStringExpr(self, binding.expr)) |value| {
+                        try self.string_bindings.put(binding.name, value);
+                    } else {
+                        _ = self.string_bindings.remove(binding.name);
+                    }
+                    try self.bindSelectionReads(binding.name, expr.selection_reads.items);
+                    const role_name = try self.objectRoleExpr(binding.expr);
+                    if (role_name) |name| {
+                        try self.object_role_bindings.put(binding.name, name);
                     } else {
                         _ = self.object_role_bindings.remove(binding.name);
+                    }
+                    const target: ?PropertyTarget = blk: {
+                        const expr_target = try self.propertyTargetExpr(binding.expr);
+                        if (role_name) |name| {
+                            if (expr_target == null or expr_target.?.owner.isUnknown()) {
+                                break :blk PropertyTarget.object(self.objectClassForRole(name));
+                            }
+                        }
+                        if (expr_target) |value| break :blk value;
+                        break :blk null;
+                    };
+                    if (target) |value| {
+                        try self.property_target_bindings.put(binding.name, value);
+                    } else {
+                        _ = self.property_target_bindings.remove(binding.name);
                     }
                 }
             },
@@ -326,7 +512,8 @@ pub const Analyzer = struct {
                 var expr = try self.analyzeExpr(property_set.value);
                 defer expr.deinit();
                 try summary.merge(expr);
-                try summary.addWrite(Resource.property(null, property_set.property_name));
+                const target = self.property_target_bindings.get(property_set.object_name) orelse PropertyTarget.any();
+                try summary.addWrite(Resource.makeProperty(target.owner, property_set.property_name));
                 summary.writes_layout_input = true;
             },
             .if_stmt => |if_stmt| {
@@ -358,20 +545,8 @@ pub const Analyzer = struct {
     }
 
     fn withLocalSnapshot(self: *Analyzer, statements: []const ast.Statement) !AccessSummary {
-        var snapshot = try self.cloneLocalVariables();
-        const current = self.local_variables;
-        self.local_variables = snapshot;
-        var role_snapshot = try self.cloneObjectRoles();
-        const current_roles = self.object_role_bindings;
-        self.object_role_bindings = role_snapshot;
-        defer {
-            snapshot = self.local_variables;
-            self.local_variables = current;
-            snapshot.deinit();
-            role_snapshot = self.object_role_bindings;
-            self.object_role_bindings = current_roles;
-            role_snapshot.deinit();
-        }
+        var state = try self.pushLocalFacts();
+        defer state.restore();
         return try self.analyzeStatements(statements, .local);
     }
 
@@ -408,7 +583,9 @@ pub const Analyzer = struct {
             .member => |member| blk: {
                 var summary = try self.analyzeExpr(member.target.*);
                 errdefer summary.deinit();
-                try summary.addRead(Resource.property(null, member.name));
+                if (try self.propertyTargetExpr(member.target.*)) |target| {
+                    try summary.addRead(Resource.makeProperty(target.owner, member.name));
+                }
                 break :blk summary;
             },
             .optional_check => |check| try self.analyzeExpr(check.target.*),
@@ -425,7 +602,10 @@ pub const Analyzer = struct {
     }
 
     fn addVariableRead(self: *Analyzer, summary: *AccessSummary, name: []const u8) !void {
-        if (self.local_variables.contains(name)) return;
+        if (self.local_variables.contains(name)) {
+            try self.addBoundSelectionReads(summary, name);
+            return;
+        }
         if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
             var nested = try self.constValue(resolved);
             defer nested.deinit();
@@ -433,7 +613,8 @@ pub const Analyzer = struct {
             return;
         }
         if (self.sema.resolvedFunction(ast.CallableName.bare(name)) != null) return;
-        try summary.addRead(Resource.variable(self.variable_scope, name));
+        try summary.addRead(Resource.makeVariable(self.variable_scope, name));
+        try self.addBoundSelectionReads(summary, name);
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
@@ -484,33 +665,28 @@ pub const Analyzer = struct {
 
         var string_bindings = std.ArrayList(StringBindingRestore).empty;
         var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
+        var property_target_snapshot = try self.clonePropertyTargets();
+        const current_property_targets = self.property_target_bindings;
+        self.property_target_bindings = property_target_snapshot;
+        var selection_snapshot = try self.cloneSelectionReadBindings();
+        const current_selection_reads = self.selection_read_bindings;
+        self.selection_read_bindings = selection_snapshot;
         defer {
-            var index = object_role_bindings.items.len;
-            while (index > 0) {
-                index -= 1;
-                const binding = object_role_bindings.items[index];
-                if (binding.had_old) {
-                    self.object_role_bindings.put(binding.name, binding.old.?) catch {};
-                } else {
-                    _ = self.object_role_bindings.remove(binding.name);
-                }
-            }
-            object_role_bindings.deinit(self.allocator);
+            selection_snapshot = self.selection_read_bindings;
+            self.selection_read_bindings = current_selection_reads;
+            self.deinitSelectionReadBindings(&selection_snapshot);
 
-            index = string_bindings.items.len;
-            while (index > 0) {
-                index -= 1;
-                const binding = string_bindings.items[index];
-                if (binding.had_old) {
-                    self.string_bindings.put(binding.name, binding.old.?) catch {};
-                } else {
-                    _ = self.string_bindings.remove(binding.name);
-                }
-            }
-            string_bindings.deinit(self.allocator);
+            property_target_snapshot = self.property_target_bindings;
+            self.property_target_bindings = current_property_targets;
+            property_target_snapshot.deinit();
+
+            self.restoreStringBindings(&self.object_role_bindings, &object_role_bindings);
+            self.restoreStringBindings(&self.string_bindings, &string_bindings);
         }
         try self.bindLiteralStringArgs(func, call, &string_bindings);
         try self.bindObjectRoleArgs(func, call, &object_role_bindings);
+        try self.bindPropertyTargetArgs(func, call);
+        try self.bindSelectionReadArgs(func, call);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(module_id);
@@ -541,21 +717,9 @@ pub const Analyzer = struct {
     fn withFunctionLocals(self: *Analyzer, func: ast.FunctionDecl, initial_summary: AccessSummary) !AccessSummary {
         var summary = initial_summary;
         errdefer summary.deinit();
-        var snapshot = try self.cloneLocalVariables();
-        const current = self.local_variables;
-        self.local_variables = snapshot;
-        var role_snapshot = try self.cloneObjectRoles();
-        const current_roles = self.object_role_bindings;
-        self.object_role_bindings = role_snapshot;
-        defer {
-            snapshot = self.local_variables;
-            self.local_variables = current;
-            snapshot.deinit();
-            role_snapshot = self.object_role_bindings;
-            self.object_role_bindings = current_roles;
-            role_snapshot.deinit();
-        }
-        for (func.params.items) |param| try self.local_variables.put(param.name, {});
+        var state = try self.pushLocalFacts();
+        defer state.restore();
+        try self.bindLocalParams(func.params.items);
         var body = try self.analyzeStatements(func.statements.items, .local);
         defer body.deinit();
         try summary.merge(body);
@@ -563,22 +727,71 @@ pub const Analyzer = struct {
     }
 
     fn withLambdaLocals(self: *Analyzer, lambda: ast.LambdaExpr) !AccessSummary {
-        var snapshot = try self.cloneLocalVariables();
-        const current = self.local_variables;
-        self.local_variables = snapshot;
-        var role_snapshot = try self.cloneObjectRoles();
-        const current_roles = self.object_role_bindings;
-        self.object_role_bindings = role_snapshot;
-        defer {
-            snapshot = self.local_variables;
-            self.local_variables = current;
-            snapshot.deinit();
-            role_snapshot = self.object_role_bindings;
-            self.object_role_bindings = current_roles;
-            role_snapshot.deinit();
-        }
-        for (lambda.params.items) |param| try self.local_variables.put(param.name, {});
+        var state = try self.pushLocalFacts();
+        defer state.restore();
+        try self.bindLocalParams(lambda.params.items);
         return try self.analyzeExpr(lambda.body.*);
+    }
+
+    fn bindLocalParams(self: *Analyzer, params: []const ast.ParamDecl) !void {
+        for (params) |param| {
+            try self.local_variables.put(param.name, {});
+            if (!self.property_target_bindings.contains(param.name)) {
+                if (self.propertyTargetForType(param.ty)) |target| {
+                    try self.property_target_bindings.put(param.name, target);
+                }
+            }
+        }
+    }
+
+    const LocalFactsSnapshot = struct {
+        analyzer: *Analyzer,
+        local_variables: std.StringHashMap(void),
+        object_role_bindings: std.StringHashMap([]const u8),
+        property_target_bindings: std.StringHashMap(PropertyTarget),
+        selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
+
+        fn restore(self: *LocalFactsSnapshot) void {
+            var local_snapshot = self.analyzer.local_variables;
+            self.analyzer.local_variables = self.local_variables;
+            local_snapshot.deinit();
+
+            var role_snapshot = self.analyzer.object_role_bindings;
+            self.analyzer.object_role_bindings = self.object_role_bindings;
+            role_snapshot.deinit();
+
+            var property_target_snapshot = self.analyzer.property_target_bindings;
+            self.analyzer.property_target_bindings = self.property_target_bindings;
+            property_target_snapshot.deinit();
+
+            var selection_snapshot = self.analyzer.selection_read_bindings;
+            self.analyzer.selection_read_bindings = self.selection_read_bindings;
+            self.analyzer.deinitSelectionReadBindings(&selection_snapshot);
+        }
+    };
+
+    fn pushLocalFacts(self: *Analyzer) !LocalFactsSnapshot {
+        var local_clone = try self.cloneLocalVariables();
+        errdefer local_clone.deinit();
+        var role_clone = try self.cloneObjectRoles();
+        errdefer role_clone.deinit();
+        var property_target_clone = try self.clonePropertyTargets();
+        errdefer property_target_clone.deinit();
+        var selection_clone = try self.cloneSelectionReadBindings();
+        errdefer self.deinitSelectionReadBindings(&selection_clone);
+
+        const snapshot = LocalFactsSnapshot{
+            .analyzer = self,
+            .local_variables = self.local_variables,
+            .object_role_bindings = self.object_role_bindings,
+            .property_target_bindings = self.property_target_bindings,
+            .selection_read_bindings = self.selection_read_bindings,
+        };
+        self.local_variables = local_clone;
+        self.object_role_bindings = role_clone;
+        self.property_target_bindings = property_target_clone;
+        self.selection_read_bindings = selection_clone;
+        return snapshot;
     }
 
     fn cloneLocalVariables(self: *Analyzer) !std.StringHashMap(void) {
@@ -586,6 +799,14 @@ pub const Analyzer = struct {
         errdefer clone.deinit();
         var iter = self.local_variables.iterator();
         while (iter.next()) |entry| try clone.put(entry.key_ptr.*, {});
+        return clone;
+    }
+
+    fn cloneStringBindings(self: *Analyzer) !std.StringHashMap([]const u8) {
+        var clone = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer clone.deinit();
+        var iter = self.string_bindings.iterator();
+        while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         return clone;
     }
 
@@ -597,11 +818,82 @@ pub const Analyzer = struct {
         return clone;
     }
 
+    fn clonePropertyTargets(self: *Analyzer) !std.StringHashMap(PropertyTarget) {
+        var clone = std.StringHashMap(PropertyTarget).init(self.allocator);
+        errdefer clone.deinit();
+        var iter = self.property_target_bindings.iterator();
+        while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
+        return clone;
+    }
+
+    fn cloneSelectionReadBindings(self: *Analyzer) !std.StringHashMap(std.ArrayList(Resource)) {
+        var clone = std.StringHashMap(std.ArrayList(Resource)).init(self.allocator);
+        errdefer self.deinitSelectionReadBindings(&clone);
+        var iter = self.selection_read_bindings.iterator();
+        while (iter.next()) |entry| {
+            var resources = std.ArrayList(Resource).empty;
+            errdefer resources.deinit(self.allocator);
+            for (entry.value_ptr.items) |resource| try appendUnique(self.allocator, &resources, resource);
+            try clone.put(entry.key_ptr.*, resources);
+        }
+        return clone;
+    }
+
+    fn deinitSelectionReadBindings(self: *Analyzer, bindings: *std.StringHashMap(std.ArrayList(Resource))) void {
+        var iter = bindings.valueIterator();
+        while (iter.next()) |resources| resources.deinit(self.allocator);
+        bindings.deinit();
+    }
+
+    fn bindSelectionReads(self: *Analyzer, name: []const u8, resources: []const Resource) !void {
+        if (resources.len == 0) {
+            self.removeSelectionReads(name);
+            return;
+        }
+        var copy = std.ArrayList(Resource).empty;
+        errdefer copy.deinit(self.allocator);
+        for (resources) |resource| try appendUnique(self.allocator, &copy, resource);
+
+        const gop = try self.selection_read_bindings.getOrPut(name);
+        if (gop.found_existing) gop.value_ptr.deinit(self.allocator);
+        gop.value_ptr.* = copy;
+    }
+
+    fn removeSelectionReads(self: *Analyzer, name: []const u8) void {
+        if (self.selection_read_bindings.fetchRemove(name)) |entry| {
+            var resources = entry.value;
+            resources.deinit(self.allocator);
+        }
+    }
+
+    fn addBoundSelectionReads(self: *Analyzer, summary: *AccessSummary, name: []const u8) !void {
+        const resources = self.selection_read_bindings.get(name) orelse return;
+        for (resources.items) |resource| try summary.addSelectionRead(resource);
+    }
+
     const StringBindingRestore = struct {
         name: []const u8,
         had_old: bool,
         old: ?[]const u8,
     };
+
+    fn restoreStringBindings(
+        self: *Analyzer,
+        bindings: *std.StringHashMap([]const u8),
+        restores: *std.ArrayList(StringBindingRestore),
+    ) void {
+        var index = restores.items.len;
+        while (index > 0) {
+            index -= 1;
+            const binding = restores.items[index];
+            if (binding.had_old) {
+                bindings.put(binding.name, binding.old.?) catch {};
+            } else {
+                _ = bindings.remove(binding.name);
+            }
+        }
+        restores.deinit(self.allocator);
+    }
 
     fn bindLiteralStringArgs(
         self: *Analyzer,
@@ -653,6 +945,164 @@ pub const Analyzer = struct {
         }
     }
 
+    fn bindSelectionReadArgs(self: *Analyzer, func: ast.FunctionDecl, call: ast.CallExpr) !void {
+        for (func.params.items, 0..) |param, index| {
+            if (index >= call.args.items.len) {
+                self.removeSelectionReads(param.name);
+                continue;
+            }
+            var arg_summary = try self.analyzeExpr(call.args.items[index]);
+            defer arg_summary.deinit();
+            try self.bindSelectionReads(param.name, arg_summary.selection_reads.items);
+        }
+    }
+
+    fn bindPropertyTargetArgs(self: *Analyzer, func: ast.FunctionDecl, call: ast.CallExpr) !void {
+        for (func.params.items, 0..) |param, index| {
+            const target: ?PropertyTarget = blk: {
+                if (index >= call.args.items.len) break :blk self.propertyTargetForType(param.ty);
+                const arg_target = try self.propertyTargetExpr(call.args.items[index]);
+                if (try self.objectRoleExpr(call.args.items[index])) |role_name| {
+                    if (arg_target == null or arg_target.?.owner.isUnknown()) {
+                        break :blk PropertyTarget.object(self.objectClassForRole(role_name));
+                    }
+                }
+                break :blk arg_target;
+            };
+            if (target) |value| {
+                try self.property_target_bindings.put(param.name, value);
+            } else {
+                _ = self.property_target_bindings.remove(param.name);
+            }
+        }
+    }
+
+    const CallbackFactsSnapshot = struct {
+        analyzer: *Analyzer,
+        string_bindings: std.StringHashMap([]const u8),
+        object_role_bindings: std.StringHashMap([]const u8),
+        property_target_bindings: std.StringHashMap(PropertyTarget),
+
+        fn restore(self: *CallbackFactsSnapshot) void {
+            var string_snapshot = self.analyzer.string_bindings;
+            self.analyzer.string_bindings = self.string_bindings;
+            string_snapshot.deinit();
+
+            var role_snapshot = self.analyzer.object_role_bindings;
+            self.analyzer.object_role_bindings = self.object_role_bindings;
+            role_snapshot.deinit();
+
+            var property_target_snapshot = self.analyzer.property_target_bindings;
+            self.analyzer.property_target_bindings = self.property_target_bindings;
+            property_target_snapshot.deinit();
+        }
+    };
+
+    fn pushCallbackFacts(self: *Analyzer) !CallbackFactsSnapshot {
+        var string_clone = try self.cloneStringBindings();
+        errdefer string_clone.deinit();
+        var role_clone = try self.cloneObjectRoles();
+        errdefer role_clone.deinit();
+        var property_target_clone = try self.clonePropertyTargets();
+        errdefer property_target_clone.deinit();
+
+        const snapshot = CallbackFactsSnapshot{
+            .analyzer = self,
+            .string_bindings = self.string_bindings,
+            .object_role_bindings = self.object_role_bindings,
+            .property_target_bindings = self.property_target_bindings,
+        };
+        self.string_bindings = string_clone;
+        self.object_role_bindings = role_clone;
+        self.property_target_bindings = property_target_clone;
+        return snapshot;
+    }
+
+    fn callbackArgBindings(
+        self: *Analyzer,
+        call: ast.CallExpr,
+        descriptor: registry.PrimitiveDescriptor,
+        callback_spec: registry.PrimitiveCallbackSpec,
+    ) !std.ArrayList(CallbackArgBinding) {
+        var bindings = std.ArrayList(CallbackArgBinding).empty;
+        errdefer bindings.deinit(self.allocator);
+
+        const item_target = try self.callbackSelectionElementTarget(call);
+        const item_index = callbackSelectionArgIndex(descriptor.op);
+        for (0..callback_spec.supplied_arg_count) |index| {
+            var binding = CallbackArgBinding{};
+            if (item_index != null and index == item_index.?) {
+                binding.property_target = item_target orelse PropertyTarget.any();
+            }
+            try bindings.append(self.allocator, binding);
+        }
+
+        const extra_start = callback_spec.function_arg_index + 1;
+        if (extra_start < call.args.items.len) {
+            for (call.args.items[extra_start..]) |arg| {
+                try bindings.append(self.allocator, try self.callbackBindingForExpr(arg));
+            }
+        }
+        return bindings;
+    }
+
+    fn callbackBindingForExpr(self: *Analyzer, expr: ast.Expr) !CallbackArgBinding {
+        var binding = CallbackArgBinding{};
+        if (try literalStringExpr(self, expr)) |value| {
+            binding.string_literal = value;
+        }
+        if (try self.objectRoleExpr(expr)) |role_name| {
+            binding.object_role = role_name;
+        }
+        if (try self.propertyTargetExpr(expr)) |target| {
+            binding.property_target = target;
+        } else if (binding.object_role) |role_name| {
+            binding.property_target = PropertyTarget.object(self.objectClassForRole(role_name));
+        }
+        return binding;
+    }
+
+    fn callbackSelectionElementTarget(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
+        if (call.args.items.len == 0) return null;
+        return (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any();
+    }
+
+    fn callbackSelectionArgIndex(op: registry.PrimitiveCall) ?usize {
+        return switch (op) {
+            .foreach,
+            .foreach_enumerate,
+            .join,
+            => 0,
+            .fold => 1,
+            else => null,
+        };
+    }
+
+    fn applyCallbackArgBindings(
+        self: *Analyzer,
+        params: []const ast.ParamDecl,
+        bindings: []const CallbackArgBinding,
+    ) !void {
+        for (params, 0..) |param, index| {
+            const binding = if (index < bindings.len) bindings[index] else CallbackArgBinding{};
+            if (binding.string_literal) |value| {
+                try self.string_bindings.put(param.name, value);
+            } else {
+                _ = self.string_bindings.remove(param.name);
+            }
+            if (binding.object_role) |role_name| {
+                try self.object_role_bindings.put(param.name, role_name);
+            } else {
+                _ = self.object_role_bindings.remove(param.name);
+            }
+            if (binding.property_target) |target| {
+                try self.property_target_bindings.put(param.name, target);
+            } else {
+                _ = self.property_target_bindings.remove(param.name);
+            }
+        }
+    }
+
     fn primitiveCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
         if (descriptor.callback != null) return try self.primitiveCallbackCall(call, descriptor);
 
@@ -661,34 +1111,40 @@ pub const Analyzer = struct {
         if (descriptor.places_objects) summary.places_objects = true;
         switch (descriptor.op) {
             .select => try self.applySelectSummary(&summary, call),
-            .page_index, .page_count => try summary.addRead(Resource.pageIndex(null)),
+            .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
             .frame_x, .frame_y, .frame_width, .frame_height => {
                 summary.reads_layout = true;
             },
-            .content => try summary.addRead(Resource.property(null, "content")),
-            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.property(null, try literalStringArg(self, call, 1))),
+            .content => try summary.addRead(Resource.makeContentProperty(try self.propertyOwnerArg(call, 0))),
+            .prop, .has_prop, .prop_eq => try summary.addRead(Resource.makeProperty(
+                try self.propertyOwnerArg(call, 0),
+                try literalStringArg(self, call, 1),
+            )),
             .set_content => {
-                try summary.addWrite(Resource.property(null, "content"));
+                try summary.addWrite(Resource.makeContentProperty(try self.propertyOwnerArg(call, 0)));
                 summary.writes_layout_input = true;
             },
             .group => {
-                try summary.addWrite(Resource.objects("group"));
+                try summary.addWrite(Resource.makeObjects(core.GroupRole));
                 summary.writes_layout_input = true;
             },
             .new_page => {
-                try summary.addWrite(Resource.pageIndex(null));
+                try summary.addWrite(Resource.makePages(null));
                 summary.writes_layout_input = true;
             },
             .new => {
-                try summary.addWrite(Resource.objects(try literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.makeObjects(try literalStringArg(self, call, 1)));
                 summary.writes_layout_input = true;
             },
             .place_on => {
-                try summary.addWrite(Resource.objects(try self.objectRoleArg(call, 1)));
+                try summary.addWrite(Resource.makeObjects(try self.objectRoleArg(call, 1)));
                 summary.writes_layout_input = true;
             },
             .set_prop => {
-                try summary.addWrite(Resource.property(null, try literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.makeProperty(
+                    try self.propertyOwnerArg(call, 0),
+                    try literalStringArg(self, call, 1),
+                ));
                 summary.writes_layout_input = true;
             },
             .equal, .constraints => {
@@ -705,10 +1161,46 @@ pub const Analyzer = struct {
         return summary;
     }
 
+    fn functionCallbackCall(
+        self: *Analyzer,
+        key: core.FunctionKey,
+        module_id: core.SourceModuleId,
+        func: ast.FunctionDecl,
+        bindings: []const CallbackArgBinding,
+        initial_summary: AccessSummary,
+    ) anyerror!AccessSummary {
+        var summary = initial_summary;
+        errdefer summary.deinit();
+        if (self.visiting.contains(key)) return summary;
+        try self.visiting.put(key, {});
+        defer _ = self.visiting.remove(key);
+
+        var facts = try self.pushCallbackFacts();
+        defer facts.restore();
+        try self.applyCallbackArgBindings(func.params.items, bindings);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(module_id);
+        defer self.sema = previous;
+
+        const body = try self.withFunctionLocals(func, summary);
+        summary = AccessSummary.init(self.allocator);
+        return body;
+    }
+
+    fn lambdaCallbackCall(self: *Analyzer, lambda: ast.LambdaExpr, bindings: []const CallbackArgBinding) !AccessSummary {
+        var facts = try self.pushCallbackFacts();
+        defer facts.restore();
+        try self.applyCallbackArgBindings(lambda.params.items, bindings);
+        return try self.withLambdaLocals(lambda);
+    }
+
     fn primitiveCallbackCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
         const callback_spec = descriptor.callback orelse unreachable;
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
+        var callback_arg_bindings = try self.callbackArgBindings(call, descriptor, callback_spec);
+        defer callback_arg_bindings.deinit(self.allocator);
 
         for (call.args.items, 0..) |arg, index| {
             if (index == callback_spec.function_arg_index) continue;
@@ -727,14 +1219,17 @@ pub const Analyzer = struct {
                     } else if (self.sema.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
                         var initial_summary = AccessSummary.init(self.allocator);
                         errdefer initial_summary.deinit();
-                        callback_summary = try self.functionCall(callback.key, callback.module_id, callback.decl, .{
-                            .callee = ast.CallableName.bare(callback_name),
-                            .args = .empty,
-                        }, initial_summary);
+                        callback_summary = try self.functionCallbackCall(
+                            callback.key,
+                            callback.module_id,
+                            callback.decl,
+                            callback_arg_bindings.items,
+                            initial_summary,
+                        );
                     }
                 },
                 .lambda => |lambda| {
-                    callback_summary = try self.withLambdaLocals(lambda);
+                    callback_summary = try self.lambdaCallbackCall(lambda, callback_arg_bindings.items);
                 },
                 else => {
                     var callback_expr = try self.analyzeExpr(call.args.items[callback_spec.function_arg_index]);
@@ -762,27 +1257,187 @@ pub const Analyzer = struct {
 
     fn applySelectSummary(self: *Analyzer, summary: *AccessSummary, call: ast.CallExpr) !void {
         const query_name = (try literalStringArg(self, call, 1)) orelse {
-            try summary.addRead(Resource.objects(null));
-            try summary.addSelectionRead(Resource.objects(null));
+            try summary.addRead(Resource.makeObjects(null));
+            try summary.addSelectionRead(Resource.makeObjects(null));
             return;
         };
         const query = registry.lookupQueryOp(query_name) orelse {
-            try summary.addRead(Resource.objects(null));
+            try summary.addRead(Resource.makeObjects(null));
             return;
         };
         switch (query.op) {
-            .document_pages => try summary.addSelectionRead(Resource.pageIndex(null)),
+            .document_pages => try summary.addSelectionRead(Resource.makePages(null)),
             .page_objects_by_role,
             .document_objects_by_role,
-            => try summary.addSelectionRead(Resource.objects(try literalStringArg(self, call, 2))),
+            => try summary.addSelectionRead(Resource.makeObjects(try literalStringArg(self, call, 2))),
             .children,
             .descendants,
             .self_object,
-            => try summary.addSelectionRead(Resource.objects(null)),
+            => try summary.addSelectionRead(Resource.makeObjects(null)),
             .previous_page,
             .parent_page,
-            => try summary.addRead(Resource.pageIndex(null)),
+            => try summary.addRead(Resource.makePages(null)),
         }
+    }
+
+    fn propertyOwnerArg(self: *Analyzer, call: ast.CallExpr, index: usize) !PropertyOwner {
+        if (index >= call.args.items.len) return .any;
+        const target = (try self.propertyTargetExpr(call.args.items[index])) orelse return .any;
+        return target.owner;
+    }
+
+    fn propertyTargetExpr(self: *Analyzer, expr: ast.Expr) anyerror!?PropertyTarget {
+        return switch (expr) {
+            .ident => |name| blk: {
+                if (self.property_target_bindings.get(name)) |target| break :blk target;
+                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                    break :blk try self.propertyTargetConst(resolved);
+                }
+                break :blk null;
+            },
+            .call => |call| try self.propertyTargetCall(call),
+            .optional_check => |check| try self.propertyTargetExpr(check.target.*),
+            .coalesce => |coalesce| blk: {
+                const target = try self.propertyTargetExpr(coalesce.target.*);
+                const fallback = try self.propertyTargetExpr(coalesce.fallback.*);
+                break :blk mergePropertyTargets(target, fallback);
+            },
+            else => null,
+        };
+    }
+
+    fn propertyTargetCall(self: *Analyzer, call: ast.CallExpr) anyerror!?PropertyTarget {
+        const descriptor = self.sema.callCallee(call.callee) orelse return null;
+        return switch (descriptor) {
+            .primitive => |primitive| switch (primitive.op) {
+                .docctx => PropertyTarget.document(),
+                .pagectx, .new_page => PropertyTarget.page(),
+                .new => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 1))),
+                .group => PropertyTarget.object(self.objectClassForRole(core.GroupRole)),
+                .place_on => if (call.args.items.len > 1)
+                    try self.propertyTargetExpr(call.args.items[1])
+                else
+                    PropertyTarget.any(),
+                .set_content, .require_asset_exists => if (call.args.items.len > 0)
+                    try self.propertyTargetExpr(call.args.items[0])
+                else
+                    PropertyTarget.any(),
+                .set_prop, .extend_render_env, .foreach, .foreach_enumerate => if (call.args.items.len > 0)
+                    try self.propertyTargetExpr(call.args.items[0])
+                else
+                    PropertyTarget.any(),
+                .first => if (call.args.items.len > 0)
+                    (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
+                else
+                    PropertyTarget.any(),
+                .selection_union, .selection_intersection, .selection_difference => try self.propertyTargetSelectionAlgebra(call),
+                .select => try self.propertyTargetSelect(call),
+                else => if (primitive.result_type) |ty| self.propertyTargetForType(ty) else null,
+            },
+            .function => |resolved| try self.propertyTargetFunctionCall(resolved, call),
+        };
+    }
+
+    fn propertyTargetSelectionAlgebra(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
+        if (call.args.items.len == 0) return PropertyTarget.any();
+        var target = try self.propertyTargetExpr(call.args.items[0]);
+        for (call.args.items[1..]) |arg| {
+            target = mergePropertyTargets(target, try self.propertyTargetExpr(arg));
+        }
+        return target orelse PropertyTarget.any();
+    }
+
+    fn propertyTargetSelect(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
+        const query_name = (try literalStringArg(self, call, 1)) orelse return PropertyTarget.any();
+        const query = registry.lookupQueryOp(query_name) orelse return PropertyTarget.any();
+        return switch (query.op) {
+            .document_pages, .previous_page, .parent_page => PropertyTarget.page(),
+            .page_objects_by_role,
+            .document_objects_by_role,
+            => PropertyTarget.object(self.objectClassForRole(try literalStringArg(self, call, 2))),
+            .children, .descendants, .self_object => if (call.args.items.len > 0)
+                (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any()
+            else
+                PropertyTarget.any(),
+        };
+    }
+
+    fn propertyTargetConst(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!?PropertyTarget {
+        if (self.visiting.contains(resolved.key)) return null;
+        try self.visiting.put(resolved.key, {});
+        defer _ = self.visiting.remove(resolved.key);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+
+        return try self.propertyTargetExpr(resolved.decl.value);
+    }
+
+    fn propertyTargetFunctionCall(
+        self: *Analyzer,
+        resolved: semantic_env.ResolvedFunction,
+        call: ast.CallExpr,
+    ) anyerror!?PropertyTarget {
+        const fallback = self.propertyTargetForType(resolved.decl.result_type);
+        if (self.visiting.contains(resolved.key)) return fallback;
+        try self.visiting.put(resolved.key, {});
+        defer _ = self.visiting.remove(resolved.key);
+
+        var facts = try self.pushCallbackFacts();
+        defer facts.restore();
+        var local_snapshot = try self.cloneLocalVariables();
+        const current_locals = self.local_variables;
+        self.local_variables = local_snapshot;
+        defer {
+            local_snapshot = self.local_variables;
+            self.local_variables = current_locals;
+            local_snapshot.deinit();
+        }
+        var string_arg_restores = std.ArrayList(StringBindingRestore).empty;
+        defer string_arg_restores.deinit(self.allocator);
+        var object_role_arg_restores = std.ArrayList(StringBindingRestore).empty;
+        defer object_role_arg_restores.deinit(self.allocator);
+        try self.bindLiteralStringArgs(resolved.decl, call, &string_arg_restores);
+        try self.bindObjectRoleArgs(resolved.decl, call, &object_role_arg_restores);
+        try self.bindPropertyTargetArgs(resolved.decl, call);
+        try self.bindLocalParams(resolved.decl.params.items);
+
+        const previous = self.sema;
+        self.sema = self.sema.forModule(resolved.module_id);
+        defer self.sema = previous;
+
+        for (resolved.decl.statements.items) |stmt| {
+            switch (stmt.kind) {
+                .return_expr => |expr| return (try self.propertyTargetExpr(expr)) orelse fallback,
+                .return_void => return null,
+                else => {
+                    var nested = try self.analyzeStatement(stmt, .local);
+                    nested.deinit();
+                },
+            }
+        }
+        return fallback;
+    }
+
+    fn propertyTargetForType(self: *Analyzer, ty: ast.Type) ?PropertyTarget {
+        return switch (ty.kind) {
+            .document => PropertyTarget.document(),
+            .page => PropertyTarget.page(),
+            .object => PropertyTarget.object(ty.class_name),
+            .selection => switch (ty.param) {
+                .page => PropertyTarget.page(),
+                .object, .any => PropertyTarget.object(ty.param_class_name),
+                else => null,
+            },
+            .optional => if (ty.optional_child) |child| self.propertyTargetForType(child.*) else null,
+            else => null,
+        };
+    }
+
+    fn objectClassForRole(self: *Analyzer, role_name: ?[]const u8) ?[]const u8 {
+        const name = role_name orelse return null;
+        return self.sema.roleClass(name) orelse name;
     }
 
     fn objectRoleArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const u8 {
@@ -809,7 +1464,7 @@ pub const Analyzer = struct {
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
                 .new => try literalStringArg(self, call, 1),
-                .group => "group",
+                .group => core.GroupRole,
                 .place_on => try self.objectRoleArg(call, 1),
                 else => null,
             },
@@ -841,29 +1496,8 @@ pub const Analyzer = struct {
         var string_bindings = std.ArrayList(StringBindingRestore).empty;
         var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
         defer {
-            var index = object_role_bindings.items.len;
-            while (index > 0) {
-                index -= 1;
-                const binding = object_role_bindings.items[index];
-                if (binding.had_old) {
-                    self.object_role_bindings.put(binding.name, binding.old.?) catch {};
-                } else {
-                    _ = self.object_role_bindings.remove(binding.name);
-                }
-            }
-            object_role_bindings.deinit(self.allocator);
-
-            index = string_bindings.items.len;
-            while (index > 0) {
-                index -= 1;
-                const binding = string_bindings.items[index];
-                if (binding.had_old) {
-                    self.string_bindings.put(binding.name, binding.old.?) catch {};
-                } else {
-                    _ = self.string_bindings.remove(binding.name);
-                }
-            }
-            string_bindings.deinit(self.allocator);
+            self.restoreStringBindings(&self.object_role_bindings, &object_role_bindings);
+            self.restoreStringBindings(&self.string_bindings, &string_bindings);
         }
         try self.bindLiteralStringArgs(resolved.decl, call, &string_bindings);
         try self.bindObjectRoleArgs(resolved.decl, call, &object_role_bindings);
@@ -882,6 +1516,12 @@ pub const Analyzer = struct {
         return null;
     }
 };
+
+fn mergePropertyTargets(left: ?PropertyTarget, right: ?PropertyTarget) ?PropertyTarget {
+    if (left == null) return right;
+    if (right == null) return left;
+    return .{ .owner = left.?.owner.merge(right.?.owner) };
+}
 
 fn literalStringArg(self: *Analyzer, call: ast.CallExpr, index: usize) !?[]const u8 {
     if (index >= call.args.items.len) return null;
@@ -926,19 +1566,7 @@ fn literalStringFunctionCall(
     defer _ = self.visiting.remove(resolved.key);
 
     var bindings = std.ArrayList(Analyzer.StringBindingRestore).empty;
-    defer {
-        var index = bindings.items.len;
-        while (index > 0) {
-            index -= 1;
-            const binding = bindings.items[index];
-            if (binding.had_old) {
-                self.string_bindings.put(binding.name, binding.old.?) catch {};
-            } else {
-                _ = self.string_bindings.remove(binding.name);
-            }
-        }
-        bindings.deinit(self.allocator);
-    }
+    defer self.restoreStringBindings(&self.string_bindings, &bindings);
     try self.bindLiteralStringArgs(resolved.decl, call, &bindings);
 
     const previous = self.sema;

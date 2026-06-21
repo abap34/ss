@@ -345,15 +345,15 @@ fn buildIndex(allocator: std.mem.Allocator, path: []const u8, source: []const u8
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try compiler.syntax.parseWithSourceName(allocator, source_buf, path);
-    var program_index = try compiler.typecheck.loadProgramIndex(allocator, testing.io, asset_base_dir, program);
+    var program_index = try compiler.analysis.loadProgramIndex(allocator, testing.io, asset_base_dir, program);
     defer program_index.deinit();
 
-    var ir = try compiler.typecheck.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &program_index, .{
+    var ir = try compiler.analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &program_index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    compiler.typecheck.typecheckProgram(allocator, &ir) catch {};
+    compiler.analysis.analyzeProgram(allocator, &ir) catch {};
     return completion.Index.fromIr(allocator, &ir);
 }
 

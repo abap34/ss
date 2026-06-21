@@ -4,7 +4,7 @@ const build_options = @import("build_options");
 const core = @import("core");
 const syntax = @import("syntax.zig");
 const lowering = @import("lowering.zig");
-const typecheck = @import("analysis/typecheck.zig");
+const analysis = @import("analysis.zig");
 const module_loader = @import("modules/loader.zig");
 const project = @import("project.zig");
 const dump = @import("dump.zig");
@@ -299,7 +299,7 @@ const Server = struct {
 
         var load_diagnostics = module_loader.LoadDiagnostics.init(self.allocator);
         defer load_diagnostics.deinit();
-        var index = typecheck.loadProgramIndexWithOptions(self.allocator, self.io, asset_base_dir, program, .{
+        var index = analysis.loadProgramIndexWithOptions(self.allocator, self.io, asset_base_dir, program, .{
             .overlay = &overlay,
             .diagnostics = &load_diagnostics,
             .print_diagnostics = false,
@@ -319,7 +319,7 @@ const Server = struct {
         };
         defer index.deinit();
 
-        var ir = typecheck.buildIrWithOptions(self.allocator, entry_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch |err| {
+        var ir = analysis.buildIrWithOptions(self.allocator, entry_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch |err| {
             const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
             defer self.allocator.free(message);
             try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, null);
@@ -329,7 +329,7 @@ const Server = struct {
         };
         defer ir.deinit();
 
-        typecheck.typecheckProgram(self.allocator, &ir) catch {};
+        analysis.analyzeProgram(self.allocator, &ir) catch {};
         try diagnostics.addIr(&ir);
         if (!diagnostics.hasErrors()) {
             if (lowering.lowerToIr(&ir)) {
@@ -1072,7 +1072,7 @@ fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_sourc
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(server.allocator);
     defer load_diagnostics.deinit();
-    var index = typecheck.loadProgramIndexWithOptions(server.allocator, server.io, asset_base_dir, program, .{
+    var index = analysis.loadProgramIndexWithOptions(server.allocator, server.io, asset_base_dir, program, .{
         .overlay = &overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -1083,14 +1083,14 @@ fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_sourc
     };
     defer index.deinit();
 
-    var ir = typecheck.buildIrWithOptions(server.allocator, doc_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch {
+    var ir = analysis.buildIrWithOptions(server.allocator, doc_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch {
         program.deinit(server.allocator);
         if (source.len != 0) server.allocator.free(source);
         return null;
     };
     defer ir.deinit();
 
-    typecheck.typecheckProgram(server.allocator, &ir) catch {};
+    analysis.analyzeProgram(server.allocator, &ir) catch {};
     return analysis_completion.Index.fromIr(server.allocator, &ir) catch null;
 }
 
