@@ -468,7 +468,7 @@ test "compiler semantics: stdlib theme toc works through default aliases" {
 }
 
 test "compiler semantics: dependency query comments report statement summaries" {
-    const source =
+    const page_source =
         \\import std:themes/default as *
         \\
         \\page sample
@@ -477,8 +477,32 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\end
         \\
     ;
-    try expectDiagnostic(source, "bytes:", "DependencyQuery:");
-    try expectDiagnostic(source, "bytes:", "write Variable(*, t)");
+    try expectDiagnostic(page_source, "bytes:", "DependencyQuery:");
+    try expectDiagnostic(page_source, "bytes:", "write Variable(page:sample, t)");
+
+    const document_source =
+        \\document
+        \\  let t = "A"
+        \\  ;; ^dep?
+        \\end
+        \\
+    ;
+    try expectDiagnostic(document_source, "bytes:", "write Variable(document:case.ss, t)");
+
+    const function_call_source =
+        \\fn echo(value: String) -> String
+        \\  return value
+        \\end
+        \\
+        \\page sample
+        \\  let t = "A"
+        \\  let out = echo(t)
+        \\  ;; ^dep?
+        \\end
+        \\
+    ;
+    try expectDiagnostic(function_call_source, "bytes:", "read Variable(page:sample, t)");
+    try expectDiagnostic(function_call_source, "bytes:", "write Variable(page:sample, out)");
 }
 
 test "compiler semantics: stdlib core components build when called directly" {
