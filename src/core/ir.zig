@@ -1135,10 +1135,14 @@ pub const Ir = struct {
     }
 
     pub fn finalize(self: *Ir) !void {
+        try self.finalizeWithLayoutTracePath(null);
+    }
+
+    pub fn finalizeWithLayoutTracePath(self: *Ir, trace_path: ?[]const u8) !void {
         self.clearDiagnosticsForPhase(.layout);
         self.last_constraint_failure = null;
         self.constraint_failures.clearRetainingCapacity();
-        try layout.solveLayout(self);
+        try layout.solveLayoutWithTracePath(self, trace_path);
         if (self.constraint_failures.items.len > 0) {
             switch (self.constraint_failures.items[0].kind) {
                 .conflict => return error.ConstraintConflict,

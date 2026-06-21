@@ -41,6 +41,21 @@ pub fn buildFileWithAssetBaseAndOverlay(
     progress: ?*Progress,
     overlay: ?*const module_loader.SourceOverlay,
 ) !core.Ir {
+    var ir = try buildTypedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay);
+    errdefer ir.deinit();
+    try evaluateDocumentOrReport(&ir, progress);
+    try solveLayoutOrReport(&ir, progress);
+    return ir;
+}
+
+pub fn buildTypedFileWithAssetBaseAndOverlay(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    asset_base_dir: []const u8,
+    progress: ?*Progress,
+    overlay: ?*const module_loader.SourceOverlay,
+) !core.Ir {
     var source = if (overlay) |source_overlay|
         if (source_overlay.get(path)) |text|
             try allocator.dupe(u8, text)
@@ -119,24 +134,41 @@ pub fn buildFileWithAssetBaseAndOverlay(
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
         return error.DiagnosticsFailed;
     }
+    return ir;
+}
 
-    lowering.evaluateDocument(&ir) catch |err| {
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+fn evaluateDocumentOrReport(ir: *core.Ir, progress: ?*Progress) !void {
+    lowering.evaluateDocument(ir) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         return err;
     };
     if (progress) |p| p.step("Evaluate document");
+}
 
-    lowering.solveLayout(&ir) catch |err| {
+fn solveLayoutOrReport(ir: *core.Ir, progress: ?*Progress) !void {
+    lowering.solveLayout(ir) catch |err| {
         switch (err) {
-            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), &ir, err, core.formatConstraint),
-            else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir),
+            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err, core.formatConstraint),
+            else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir),
         }
         return err;
     };
     if (progress) |p| p.step("Solve layout");
-    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
-    if (error_report.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    return ir;
+    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+}
+
+fn solveLayoutWithTracePathOrReport(ir: *core.Ir, trace_path: []const u8, progress: ?*Progress) !void {
+    lowering.solveLayoutWithTracePath(ir, trace_path) catch |err| {
+        switch (err) {
+            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err, core.formatConstraint),
+            else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir),
+        }
+        return err;
+    };
+    if (progress) |p| p.step("Solve layout");
+    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
 }
 
 pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
@@ -189,6 +221,26 @@ pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, in
     progress.step("Serialize JSON");
     try utils.fs.writeFile(io, output_path, json);
     progress.step("Write JSON");
+}
+
+pub fn writeScheduleTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildTypedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null);
+    defer ir.deinit();
+    const json = lowering.scheduleTraceJson(allocator, &ir) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        return err;
+    };
+    defer allocator.free(json);
+    progress.step("Serialize JSON");
+    try utils.fs.writeFile(io, output_path, json);
+    progress.step("Write JSON");
+}
+
+pub fn writeLayoutTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildTypedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null);
+    defer ir.deinit();
+    try evaluateDocumentOrReport(&ir, progress);
+    try solveLayoutWithTracePathOrReport(&ir, output_path, progress);
 }
 
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {

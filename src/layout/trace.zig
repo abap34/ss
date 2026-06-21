@@ -17,9 +17,9 @@ const TraceState = struct {
 
 var trace_state = TraceState{};
 
-pub fn beginSolve(allocator: std.mem.Allocator) void {
+pub fn beginSolve(allocator: std.mem.Allocator, json_path: ?[]const u8) void {
     trace_state = .{
-        .json_path = envPath("SS_LAYOUT_TRACE_JSON"),
+        .json_path = json_path,
     };
 
     if (trace_state.json_path) |path| {
@@ -473,13 +473,6 @@ fn messageKindName(kind: MessageKind) []const u8 {
         .propagation => "propagation",
         .default_constraint => "default_constraint",
     };
-}
-
-fn envPath(name: [:0]const u8) ?[]const u8 {
-    const raw = std.c.getenv(name) orelse return null;
-    const value = std.mem.span(raw);
-    if (value.len == 0) return null;
-    return value;
 }
 
 const WriteMode = enum {

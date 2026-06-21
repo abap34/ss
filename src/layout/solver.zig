@@ -16,7 +16,11 @@ const ConstraintTolerance = graph.ConstraintTolerance;
 pub const SolveOptions = graph.SolveOptions;
 
 pub fn solveLayout(ir: anytype) !void {
-    layout_trace.beginSolve(ir.allocator);
+    try solveLayoutWithTracePath(ir, null);
+}
+
+pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
+    layout_trace.beginSolve(ir.allocator, trace_path);
     defer layout_trace.endSolve(ir.allocator);
 
     for (ir.nodes.items) |*node| {

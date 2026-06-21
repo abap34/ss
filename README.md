@@ -289,6 +289,8 @@ to PDFs with the same Docker image:
 | `ss render [input.ss] [output.pdf]`       | Render a PDF.                                                    |
 | `ss init [dir]`                           | Create an `ss.toml` and starter slide deck.                      |
 | `ss doctor`                               | Check project discovery and render tool availability.            |
+| `ss debug schedule [input.ss]`            | Write the inferred dependency graph and execution order as JSON. |
+| `ss debug layout-trace [input.ss]`        | Write the layout solver trace as JSON.                           |
 | `ss lsp`                                  | Run the stdio language server.                                   |
 | `ss watch check [input.ss]`               | Re-run checks as project files change.                           |
 | `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change.                         |
@@ -303,6 +305,8 @@ ss init slides
 ss doctor --project slides
 ss dump --project . --output .ss-cache/deck.json
 ss render --project . --output .ss-cache/deck.pdf
+ss debug schedule --project . --output .ss-cache/schedule.json
+ss debug layout-trace --project . --output .ss-cache/layout-trace.json
 ss watch render slide.ss .ss-cache/deck.pdf
 ss cache stats
 ```

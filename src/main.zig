@@ -25,6 +25,10 @@ fn usage() void {
         \\    Create a new ss.toml and starter slide deck
         \\  doctor
         \\    Check project discovery and render tool availability
+        \\  debug schedule [input.ss]
+        \\    Write the inferred dependency graph and execution order as JSON
+        \\  debug layout-trace [input.ss]
+        \\    Write the layout solver trace as JSON
         \\  lsp
         \\    Run the ss language server over stdio
         \\  watch check [input.ss]
@@ -68,6 +72,8 @@ fn usage() void {
         \\  ss dump --project . --output .ss-cache/dump.json
         \\  ss render slide.ss out.pdf
         \\  ss render --project . --output .ss-cache/render.pdf
+        \\  ss debug schedule --project . --output .ss-cache/schedule.json
+        \\  ss debug layout-trace --project . --output .ss-cache/layout-trace.json
         \\  ss init slides
         \\  ss doctor --project slides
         \\  ss watch check slide.ss
@@ -599,6 +605,35 @@ fn runResolvedWatch(
     });
 }
 
+fn runDebugCommand(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+) !void {
+    if (args.len == 0) return failUsage("missing debug topic", .{});
+    const topic = args[0];
+    const options = try parseCommandOptions(args[1..]);
+    const output_path = options.output_path orelse return failUsage("missing --output for ss debug {s}", .{topic});
+    try validateOutputParentOrCliError(io, output_path);
+
+    var resolved = try resolveProjectOrUsage(allocator, io, options);
+    defer resolved.deinit(allocator);
+
+    if (std.mem.eql(u8, topic, "schedule")) {
+        var progress = utils.progress.Progress.init(6);
+        try app.writeScheduleTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+        return;
+    }
+
+    if (std.mem.eql(u8, topic, "layout-trace")) {
+        var progress = utils.progress.Progress.init(6);
+        try app.writeLayoutTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+        return;
+    }
+
+    return failUsage("unknown debug topic: {s}", .{topic});
+}
+
 fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
     utils.fs.validateOutputParent(io, output_path) catch |err| switch (err) {
         error.OutputParentNotFound => {
@@ -686,6 +721,11 @@ fn run(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "doctor")) {
         const options = try parseDoctorOptions(args[2..]);
         try runDoctor(io, allocator, environ, options);
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "debug")) {
+        try runDebugCommand(io, allocator, args[2..]);
         return;
     }
 

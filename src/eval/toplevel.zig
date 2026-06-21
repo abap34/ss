@@ -159,6 +159,12 @@ const ScheduledUnit = struct {
 const ScheduleEdge = struct {
     from: usize,
     to: usize,
+    kind: Kind,
+
+    const Kind = enum {
+        dependency,
+        source_order_fallback,
+    };
 };
 
 const ScheduleGraph = struct {
@@ -334,6 +340,77 @@ pub fn evalIr(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (graph.order) |unit_index| try executeScheduledUnit(ir, &ir.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
 }
 
+pub fn scheduleTraceJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
+    var graph = try ScheduleGraph.build(allocator, ir, ir);
+    defer graph.deinit();
+    return scheduleGraphJson(allocator, ir, &graph);
+}
+
+fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph: *const ScheduleGraph) ![]u8 {
+    var buffer = std.ArrayList(u8).empty;
+    errdefer buffer.deinit(allocator);
+
+    var root = try utils.json.Object.beginBuffer(allocator, &buffer);
+    try root.intField("schema", 1);
+    try root.stringField("kind", "ss-schedule-trace");
+    try root.stringField("entry_path", ir.projectPath());
+
+    var units = try root.arrayField("units");
+    for (graph.units.items, 0..) |unit, index| {
+        var item = try units.objectItem();
+        try item.intField("id", index);
+        try item.intField("source_order", unit.source_order);
+        try item.intField("module_id", unit.module_id);
+        try item.stringField("path", unit.path);
+        try writeScheduleSpan(&item, unit.span);
+        switch (unit.kind) {
+            .document_statement => |data| {
+                try item.stringField("kind", "document_statement");
+                try item.nullField("page_id");
+                try item.intField("statement_index", data.index);
+            },
+            .page_statement => |data| {
+                try item.stringField("kind", "page_statement");
+                try item.intField("page_id", data.page_id);
+                try item.intField("statement_index", data.index);
+            },
+        }
+        try item.stringField("source", scheduledUnitSource(unit));
+        try item.end();
+    }
+    try units.end();
+
+    var edges = try root.arrayField("edges");
+    for (graph.edges.items) |edge| {
+        var item = try edges.objectItem();
+        try item.intField("from", edge.from);
+        try item.intField("to", edge.to);
+        try item.enumTagField("kind", edge.kind);
+        try item.end();
+    }
+    try edges.end();
+
+    var execution_order = try root.arrayField("execution_order");
+    for (graph.order) |unit_index| try execution_order.intItem(unit_index);
+    try execution_order.end();
+
+    try root.end();
+    try utils.json.appendNewline(&buffer, allocator);
+    return buffer.toOwnedSlice(allocator);
+}
+
+fn writeScheduleSpan(object: *utils.json.Object, span: ast.Span) !void {
+    var span_object = try object.objectField("span");
+    try span_object.intField("start", span.start);
+    try span_object.intField("end", span.end);
+    try span_object.end();
+}
+
+fn scheduledUnitSource(unit: ScheduledUnit) []const u8 {
+    if (unit.span.start > unit.span.end or unit.span.end > unit.source.len) return "";
+    return std.mem.trim(u8, unit.source[unit.span.start..unit.span.end], " \t\r\n");
+}
+
 fn collectScheduledUnits(
     core_ir: *const core.Ir,
     module: *const core.SourceModule,
@@ -476,9 +553,9 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
             if (left_needs_right_structure and right_needs_left_structure) {
                 try addSourceOrderEdge(allocator, units, edges, left_index, right_index);
             } else if (left_needs_right_structure) {
-                try addScheduleEdge(allocator, edges, right_index, left_index);
+                try addScheduleEdge(allocator, edges, right_index, left_index, .dependency);
             } else if (right_needs_left_structure) {
-                try addScheduleEdge(allocator, edges, left_index, right_index);
+                try addScheduleEdge(allocator, edges, left_index, right_index, .dependency);
             } else if (summariesConflict(left.summary, right.summary)) {
                 try addSourceOrderEdge(allocator, units, edges, left_index, right_index);
             }
@@ -575,9 +652,9 @@ fn addSourceOrderEdge(
     right_index: usize,
 ) !void {
     if (units[left_index].source_order <= units[right_index].source_order) {
-        try addScheduleEdge(allocator, edges, left_index, right_index);
+        try addScheduleEdge(allocator, edges, left_index, right_index, .source_order_fallback);
     } else {
-        try addScheduleEdge(allocator, edges, right_index, left_index);
+        try addScheduleEdge(allocator, edges, right_index, left_index, .source_order_fallback);
     }
 }
 
@@ -586,13 +663,18 @@ fn addScheduleEdge(
     edges: *std.ArrayList(ScheduleEdge),
     from: usize,
     to: usize,
+    kind: ScheduleEdge.Kind,
 ) !void {
-    for (edges.items) |edge| {
-        if (edge.from == from and edge.to == to) return;
+    for (edges.items) |*edge| {
+        if (edge.from == from and edge.to == to) {
+            if (kind == .dependency) edge.kind = .dependency;
+            return;
+        }
     }
     try edges.append(allocator, .{
         .from = from,
         .to = to,
+        .kind = kind,
     });
 }
 
