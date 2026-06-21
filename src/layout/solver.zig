@@ -23,6 +23,9 @@ pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
     layout_trace.beginSolve(ir.allocator, trace_path);
     defer layout_trace.endSolve(ir.allocator);
 
+    var measurement_cache = metrics.MeasurementCache.init(ir.allocator);
+    defer measurement_cache.deinit();
+
     for (ir.nodes.items) |*node| {
         switch (node.kind) {
             .document => {},
@@ -41,18 +44,18 @@ pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
                 node.frame.y = 0;
                 node.frame.x_set = false;
                 node.frame.y_set = false;
-                node.frame.width = metrics.intrinsicWidth(ir, node);
-                node.frame.height = metrics.intrinsicHeight(ir, node);
+                node.frame.width = metrics.intrinsicWidthCached(ir, node, &measurement_cache);
+                node.frame.height = metrics.intrinsicHeightCached(ir, node, &measurement_cache);
             },
         }
     }
 
     for (ir.page_order.items) |page_id| {
-        try solvePageLayout(ir, page_id);
+        try solvePageLayout(ir, page_id, &measurement_cache);
     }
 }
 
-fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
+fn solvePageLayout(ir: anytype, page_id: NodeId, measurement_cache: *metrics.MeasurementCache) !void {
     var page_graph = try graph.PageLayoutGraph.init(ir.allocator, ir, page_id);
     defer page_graph.deinit();
     if (page_graph.len() == 0) return;
@@ -68,8 +71,8 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
     horizontal.soft_constraints = horizontal_fallback.items;
     try solvePageAxis(ir, &horizontal);
     try settleHorizontalAxis(ir, &horizontal);
-    applySolvedHorizontalFrames(ir, &horizontal) catch return error.UnknownNode;
-    try groups.propagateTargetedWidths(ir, &horizontal);
+    applySolvedHorizontalFrames(ir, &horizontal, measurement_cache) catch return error.UnknownNode;
+    try groups.propagateTargetedWidthsCached(ir, &horizontal, measurement_cache);
 
     var vertical = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .vertical);
     defer vertical.deinit();
@@ -92,17 +95,17 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
     }
 
     try validatePageConstraints(ir, page_id, &page_graph);
-    try diagnostics.collectPageDiagnostics(ir, page_id, page_graph.child_ids);
+    try diagnostics.collectPageDiagnosticsCached(ir, page_id, page_graph.child_ids, measurement_cache);
 }
 
-fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspace) !void {
+fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
     for (workspace.graph.child_ids, workspace.states) |child_id, h_state| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         const old_width = node.frame.width;
         const solved_width = h_state.size orelse old_width;
         node.frame.width = solved_width;
         if (metrics.shouldWrapNode(ir, node) and @abs(solved_width - old_width) > ConstraintTolerance) {
-            node.frame.height = metrics.intrinsicHeight(ir, node);
+            node.frame.height = metrics.intrinsicHeightCached(ir, node, measurement_cache);
         }
         node.frame.x_set = false;
         if (h_state.start) |x| {
