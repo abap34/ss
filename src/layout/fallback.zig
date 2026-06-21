@@ -63,7 +63,7 @@ fn computeHorizontalComponentUnit(
     _ = graph.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
 
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, &.{});
-    try solver.runPageAxisPassWithOptions(ir, &temp_workspace, .{ .record_diagnostics = false });
+    _ = try solver.runPageAxisPassWithOptions(ir, &temp_workspace, .{ .record_diagnostics = false });
 
     var leftmost_index: ?usize = null;
     var leftmost_start: f32 = 0;
@@ -93,7 +93,7 @@ fn leftPredecessorGroupIndex(
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
         var changed = false;
-        for (ir.constraints.items) |constraint| {
+        for (workspace.hard_constraints) |constraint| {
             if (graph.anchorAxis(constraint.target_anchor) != .horizontal) continue;
             if (constraint.target_anchor != .left) continue;
             const target_index = workspace.indexOf(constraint.target_node) orelse continue;
@@ -406,7 +406,7 @@ fn computeVerticalComponentUnit(
     var local_fallback = try buildComponentLocalTopFlowConstraints(ir, workspace, components, component_root, root_index);
     defer local_fallback.deinit(ir.allocator);
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, local_fallback.items);
-    try solver.runPageAxisPass(ir, &temp_workspace);
+    _ = try solver.runPageAxisPass(ir, &temp_workspace);
     if (policy == .center_stack) {
         try centerDirectChildGroupsInComponent(ir, &temp_workspace, components, component_root);
     }

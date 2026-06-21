@@ -44,9 +44,14 @@ pub const PageLayoutGraph = struct {
     allocator: std.mem.Allocator,
     page_id: NodeId,
     child_ids: []NodeId,
+    constraints: []Constraint,
+    horizontal_constraints: []Constraint,
+    vertical_constraints: []Constraint,
     index_by_node: std.AutoHashMap(NodeId, usize),
     has_horizontal_target_constraint: []bool,
     has_vertical_target_constraint: []bool,
+    horizontal_target_anchor_mask: []u8,
+    vertical_target_anchor_mask: []u8,
 
     pub fn init(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId) !PageLayoutGraph {
         var child_ids_list = std.ArrayList(NodeId).empty;
@@ -68,11 +73,34 @@ pub const PageLayoutGraph = struct {
         errdefer allocator.free(has_horizontal_target_constraint);
         const has_vertical_target_constraint = try allocator.alloc(bool, child_ids.len);
         errdefer allocator.free(has_vertical_target_constraint);
+        const horizontal_target_anchor_mask = try allocator.alloc(u8, child_ids.len);
+        errdefer allocator.free(horizontal_target_anchor_mask);
+        const vertical_target_anchor_mask = try allocator.alloc(u8, child_ids.len);
+        errdefer allocator.free(vertical_target_anchor_mask);
         @memset(has_horizontal_target_constraint, false);
         @memset(has_vertical_target_constraint, false);
+        @memset(horizontal_target_anchor_mask, 0);
+        @memset(vertical_target_anchor_mask, 0);
+        var constraint_list = std.ArrayList(Constraint).empty;
+        errdefer constraint_list.deinit(allocator);
+        var horizontal_constraint_list = std.ArrayList(Constraint).empty;
+        errdefer horizontal_constraint_list.deinit(allocator);
+        var vertical_constraint_list = std.ArrayList(Constraint).empty;
+        errdefer vertical_constraint_list.deinit(allocator);
         for (ir.constraints.items) |constraint| {
             const target_index = index_by_node.get(constraint.target_node) orelse continue;
+            try constraint_list.append(allocator, constraint);
             const axis = anchorAxis(constraint.target_anchor);
+            switch (axis) {
+                .horizontal => {
+                    horizontal_target_anchor_mask[target_index] |= anchorMaskBit(constraint.target_anchor);
+                    try horizontal_constraint_list.append(allocator, constraint);
+                },
+                .vertical => {
+                    vertical_target_anchor_mask[target_index] |= anchorMaskBit(constraint.target_anchor);
+                    try vertical_constraint_list.append(allocator, constraint);
+                },
+            }
             switch (classifySelfConstraint(constraint, axis)) {
                 .none, .size => {},
                 .tautology, .conflict => continue,
@@ -82,22 +110,38 @@ pub const PageLayoutGraph = struct {
                 .vertical => has_vertical_target_constraint[target_index] = true,
             }
         }
+        const constraints = try constraint_list.toOwnedSlice(allocator);
+        errdefer allocator.free(constraints);
+        const horizontal_constraints = try horizontal_constraint_list.toOwnedSlice(allocator);
+        errdefer allocator.free(horizontal_constraints);
+        const vertical_constraints = try vertical_constraint_list.toOwnedSlice(allocator);
+        errdefer allocator.free(vertical_constraints);
 
         return .{
             .allocator = allocator,
             .page_id = page_id,
             .child_ids = child_ids,
+            .constraints = constraints,
+            .horizontal_constraints = horizontal_constraints,
+            .vertical_constraints = vertical_constraints,
             .index_by_node = index_by_node,
             .has_horizontal_target_constraint = has_horizontal_target_constraint,
             .has_vertical_target_constraint = has_vertical_target_constraint,
+            .horizontal_target_anchor_mask = horizontal_target_anchor_mask,
+            .vertical_target_anchor_mask = vertical_target_anchor_mask,
         };
     }
 
     pub fn deinit(self: *PageLayoutGraph) void {
         self.index_by_node.deinit();
         self.allocator.free(self.child_ids);
+        self.allocator.free(self.constraints);
+        self.allocator.free(self.horizontal_constraints);
+        self.allocator.free(self.vertical_constraints);
         self.allocator.free(self.has_horizontal_target_constraint);
         self.allocator.free(self.has_vertical_target_constraint);
+        self.allocator.free(self.horizontal_target_anchor_mask);
+        self.allocator.free(self.vertical_target_anchor_mask);
     }
 
     pub fn len(self: *const PageLayoutGraph) usize {
@@ -144,23 +188,41 @@ pub const PageLayoutGraph = struct {
         return false;
     }
 
+    pub fn hardTargetAnchorCount(self: *const PageLayoutGraph, node_id: NodeId, axis: Axis) usize {
+        const index = self.indexOf(node_id) orelse return 0;
+        return switch (axis) {
+            .horizontal => anchorMaskCount(self.horizontal_target_anchor_mask[index]),
+            .vertical => anchorMaskCount(self.vertical_target_anchor_mask[index]),
+        };
+    }
+
+    pub fn constraintsOnAxis(self: *const PageLayoutGraph, axis: Axis) []const Constraint {
+        return switch (axis) {
+            .horizontal => self.horizontal_constraints,
+            .vertical => self.vertical_constraints,
+        };
+    }
+
     pub fn constraintsForAxis(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
         var result = std.ArrayList(Constraint).empty;
-        try self.appendConstraintsForAxis(allocator, ir.constraints.items, axis, &result);
+        _ = ir;
+        try result.appendSlice(allocator, self.constraintsOnAxis(axis));
         try self.appendConstraintsForAxis(allocator, extra_constraints, axis, &result);
         return result;
     }
 
     pub fn targetConstraints(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
         var result = std.ArrayList(Constraint).empty;
-        try self.appendTargetConstraints(allocator, ir.constraints.items, node_id, axis, &result);
+        _ = ir;
+        try self.appendTargetConstraints(allocator, self.constraints, node_id, axis, &result);
         try self.appendTargetConstraints(allocator, extra_constraints, node_id, axis, &result);
         return result;
     }
 
     pub fn sourceConstraints(self: *const PageLayoutGraph, allocator: std.mem.Allocator, ir: anytype, node_id: NodeId, axis: Axis, extra_constraints: []const Constraint) !std.ArrayList(Constraint) {
         var result = std.ArrayList(Constraint).empty;
-        try self.appendSourceConstraints(allocator, ir.constraints.items, node_id, axis, &result);
+        _ = ir;
+        try self.appendSourceConstraints(allocator, self.constraints, node_id, axis, &result);
         try self.appendSourceConstraints(allocator, extra_constraints, node_id, axis, &result);
         return result;
     }
@@ -265,6 +327,23 @@ fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, ir: anytype, pag
     }
 }
 
+fn anchorMaskBit(anchor: Anchor) u8 {
+    return switch (anchor) {
+        .left, .bottom => 1 << 0,
+        .right, .top => 1 << 1,
+        .center_x, .center_y => 1 << 2,
+    };
+}
+
+fn anchorMaskCount(mask: u8) usize {
+    var value = mask;
+    var count: usize = 0;
+    while (value != 0) : (value >>= 1) {
+        if ((value & 1) != 0) count += 1;
+    }
+    return count;
+}
+
 fn groupIsReferencedByConstraint(ir: anytype, group_id: NodeId) bool {
     for (ir.constraints.items) |constraint| {
         if (constraint.target_node == group_id) return true;
@@ -291,6 +370,7 @@ pub const AxisWorkspace = struct {
     graph: *const PageLayoutGraph,
     axis: Axis,
     states: []AxisState,
+    hard_constraints: []const Constraint,
     soft_constraints: []const Constraint = &.{},
     owns_states: bool = true,
 
@@ -324,6 +404,7 @@ pub const AxisWorkspace = struct {
             .graph = page_graph,
             .axis = axis,
             .states = states,
+            .hard_constraints = page_graph.constraintsOnAxis(axis),
         };
     }
 
@@ -333,6 +414,7 @@ pub const AxisWorkspace = struct {
             .graph = parent.graph,
             .axis = parent.axis,
             .states = states,
+            .hard_constraints = parent.hard_constraints,
             .soft_constraints = soft_constraints,
             .owns_states = false,
         };
@@ -391,7 +473,7 @@ pub const ComponentSet = struct {
 
         if (policy.include_containment) try set.unionContainment(ir);
         try set.markKnownAnchors(ir);
-        try set.unionConstraintSlice(ir, ir.constraints.items, policy);
+        try set.unionConstraintSlice(ir, workspace.hard_constraints, policy);
         try set.unionConstraintSlice(ir, workspace.soft_constraints, policy);
         return set;
     }

@@ -199,7 +199,7 @@ pub fn applyTargetConstraintsWithOptions(
         var temp = AxisState{};
         var used = false;
         var last_constraint: ?Constraint = null;
-        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, ir.constraints.items, options);
+        try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, workspace.hard_constraints, options);
         try applyGroupTargetConstraintSlice(ir, workspace, group_id, base, &temp, &used, &last_constraint, workspace.soft_constraints, options);
         if (!used) continue;
 
