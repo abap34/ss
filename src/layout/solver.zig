@@ -98,8 +98,10 @@ fn solvePageLayout(ir: anytype, page_id: NodeId) !void {
 fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspace) !void {
     for (workspace.graph.child_ids, workspace.states) |child_id, h_state| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
-        node.frame.width = h_state.size orelse node.frame.width;
-        if (metrics.shouldWrapNode(ir, node)) {
+        const old_width = node.frame.width;
+        const solved_width = h_state.size orelse old_width;
+        node.frame.width = solved_width;
+        if (metrics.shouldWrapNode(ir, node) and @abs(solved_width - old_width) > ConstraintTolerance) {
             node.frame.height = metrics.intrinsicHeight(ir, node);
         }
         node.frame.x_set = false;
@@ -113,20 +115,24 @@ fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspac
 fn settleHorizontalAxis(ir: anytype, workspace: *graph.AxisWorkspace) !void {
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
-        try finalizeHorizontalGroupStates(ir, workspace);
-        try runPageAxisPass(ir, workspace);
+        var changed = try finalizeHorizontalGroupStates(ir, workspace);
+        changed = (try runPageAxisPass(ir, workspace)) or changed;
+        if (!changed) break;
     }
 }
 
-fn finalizeHorizontalGroupStates(ir: anytype, workspace: *graph.AxisWorkspace) !void {
+fn finalizeHorizontalGroupStates(ir: anytype, workspace: *graph.AxisWorkspace) !bool {
+    var any_changed = false;
     var pass: usize = 0;
     while (pass < 8) : (pass += 1) {
         var changed = false;
         changed = (try capDefaultWrappedHorizontalWidths(ir, workspace)) or changed;
         changed = (try groups.applyTargetConstraints(ir, workspace)) or changed;
         changed = (try groups.updateAxisStates(ir, workspace)) or changed;
+        any_changed = changed or any_changed;
         if (!changed) break;
     }
+    return any_changed;
 }
 
 fn capDefaultWrappedHorizontalWidths(ir: anytype, workspace: *graph.AxisWorkspace) !bool {
@@ -156,7 +162,7 @@ fn capDefaultWrappedHorizontalWidths(ir: anytype, workspace: *graph.AxisWorkspac
 }
 
 fn solvePageAxis(ir: anytype, workspace: *graph.AxisWorkspace) !void {
-    try runPageAxisPass(ir, workspace);
+    _ = try runPageAxisPass(ir, workspace);
 
     for (workspace.graph.child_ids, workspace.states) |child_id, *state| {
         if (state.size == null) {
@@ -169,14 +175,14 @@ fn solvePageAxis(ir: anytype, workspace: *graph.AxisWorkspace) !void {
         }
     }
 
-    try runPageAxisPass(ir, workspace);
+    _ = try runPageAxisPass(ir, workspace);
 }
 
-pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !void {
+pub fn runPageAxisPass(ir: anytype, workspace: *graph.AxisWorkspace) !bool {
     return runPageAxisPassWithOptions(ir, workspace, .{});
 }
 
-pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !void {
+pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, options: SolveOptions) !bool {
     const trace_enabled = layout_trace.shouldTraceAxisPass(workspace);
     const run_id = if (trace_enabled) layout_trace.nextRunId() else 0;
     if (trace_enabled) layout_trace.axisPassBegin(ir.allocator, ir, workspace, run_id);
@@ -184,6 +190,7 @@ pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, 
     var pass: usize = 0;
     var iteration_count: usize = 0;
     var converged = false;
+    var any_changed = false;
     while (pass < 32) : (pass += 1) {
         iteration_count = pass + 1;
         var changed = false;
@@ -197,7 +204,7 @@ pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, 
                 local_changed = (try reconcileAxisStateLocalized(ir, workspace.graph.page_id, state, options)) or local_changed;
             }
 
-            for (ir.constraints.items) |constraint| {
+            for (workspace.hard_constraints) |constraint| {
                 if (groups.constraintTargetsGroup(ir, constraint)) continue;
                 if (groups.constraintUsesGroupSource(ir, constraint)) continue;
                 local_changed = (try applyAxisConstraint(ir, workspace, constraint, false, options)) or local_changed;
@@ -219,7 +226,7 @@ pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, 
         changed = group_targets_changed or changed;
 
         var group_sources_changed = false;
-        for (ir.constraints.items) |constraint| {
+        for (workspace.hard_constraints) |constraint| {
             if (!groups.constraintUsesGroupSource(ir, constraint)) continue;
             const applied = try applyAxisConstraint(ir, workspace, constraint, false, options);
             group_sources_changed = applied or group_sources_changed;
@@ -250,6 +257,7 @@ pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, 
             );
         }
 
+        any_changed = changed or any_changed;
         if (!changed) {
             converged = true;
             break;
@@ -257,6 +265,7 @@ pub fn runPageAxisPassWithOptions(ir: anytype, workspace: *graph.AxisWorkspace, 
     }
 
     if (trace_enabled) layout_trace.axisPassEnd(ir.allocator, ir, run_id, workspace, iteration_count, converged);
+    return any_changed;
 }
 
 fn reconcileAxisStateLocalized(ir: anytype, page_id: NodeId, state: *AxisState, options: SolveOptions) !bool {
@@ -406,7 +415,8 @@ fn applyAxisConstraint(ir: anytype, workspace: *graph.AxisWorkspace, constraint:
 fn canMoveDefaultSizedAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize) bool {
     const state = workspace.states[target_index];
     if (!state.size_is_default or state.size == null) return false;
-    if (hardTargetAnchorCountOnAxis(ir, workspace.nodeAt(target_index), workspace.axis) > 1) return false;
+    _ = ir;
+    if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) > 1) return false;
     const sources = [_]?Constraint{ state.size_source, state.start_source, state.end_source, state.center_source };
     for (sources) |source| {
         const constraint = source orelse continue;
@@ -418,7 +428,8 @@ fn canMoveDefaultSizedAnchor(ir: anytype, workspace: *const graph.AxisWorkspace,
 fn canReplaceDuplicateDefaultAnchor(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
     const state = workspace.states[target_index];
     if (!state.size_is_default or state.size == null) return false;
-    if (hardTargetAnchorCountOnAxis(ir, workspace.nodeAt(target_index), workspace.axis) != 1) return false;
+    _ = ir;
+    if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) != 1) return false;
     const existing = graph.axisAnchorSource(state, target_anchor) orelse return false;
     return !constraintInSlice(workspace.soft_constraints, existing);
 }
@@ -426,7 +437,8 @@ fn canReplaceDuplicateDefaultAnchor(ir: anytype, workspace: *const graph.AxisWor
 fn shouldReplaceDefaultGeometry(ir: anytype, workspace: *const graph.AxisWorkspace, target_index: usize, target_anchor: model.Anchor) bool {
     const state = workspace.states[target_index];
     if (!state.size_is_default) return false;
-    if (hardTargetAnchorCountOnAxis(ir, workspace.nodeAt(target_index), workspace.axis) <= 1) return false;
+    _ = ir;
+    if (workspace.graph.hardTargetAnchorCount(workspace.nodeAt(target_index), workspace.axis) <= 1) return false;
 
     const existing_source = graph.axisAnchorSource(state, target_anchor);
     if (existing_source) |source| return constraintInSlice(workspace.soft_constraints, source);
@@ -438,32 +450,6 @@ fn constraintInSlice(constraints: []const Constraint, needle: Constraint) bool {
         if (constraintsSame(constraint, needle)) return true;
     }
     return false;
-}
-
-fn hasHardTargetConstraintOnAxis(ir: anytype, node_id: NodeId, axis: model.Axis) bool {
-    return hardTargetAnchorCountOnAxis(ir, node_id, axis) > 0;
-}
-
-fn hardTargetAnchorCountOnAxis(ir: anytype, node_id: NodeId, axis: model.Axis) usize {
-    var seen = [_]bool{ false, false, false };
-    for (ir.constraints.items) |constraint| {
-        if (constraint.target_node != node_id) continue;
-        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
-        seen[anchorSlot(constraint.target_anchor)] = true;
-    }
-    var count: usize = 0;
-    for (seen) |item| {
-        if (item) count += 1;
-    }
-    return count;
-}
-
-fn anchorSlot(anchor: model.Anchor) usize {
-    return switch (anchor) {
-        .left, .bottom => 0,
-        .right, .top => 1,
-        .center_x, .center_y => 2,
-    };
 }
 
 fn applyReverseAxisConstraint(
@@ -491,7 +477,7 @@ fn applyReverseAxisConstraint(
     const target_state = workspace.states[target_index];
     const target_anchor_source = graph.axisAnchorSource(target_state, constraint.target_anchor);
     if (target_anchor_source) |source| {
-        if (constraintInSlice(workspace.soft_constraints, source) and hasHardTargetConstraintOnAxis(ir, node_source.node_id, workspace.axis)) return false;
+        if (constraintInSlice(workspace.soft_constraints, source) and workspace.graph.hardTargetAnchorCount(node_source.node_id, workspace.axis) > 0) return false;
     } else if (target_state.size_is_default) {
         return false;
     }
@@ -510,7 +496,7 @@ fn applyReverseAxisConstraint(
 }
 
 fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const graph.PageLayoutGraph) !void {
-    for (ir.constraints.items) |constraint| {
+    for (page_graph.constraints) |constraint| {
         if (page_graph.indexOf(constraint.target_node) == null) continue;
 
         const target_value = switch (try finalNodeAnchorValue(ir, constraint.target_node, constraint.target_anchor)) {
