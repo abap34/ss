@@ -629,10 +629,12 @@ pub const Analyzer = struct {
         const descriptor = self.sema.callCallee(call.callee) orelse return try self.callArgs(call);
         return switch (descriptor) {
             .function => |resolved| blk: {
-                var summary = try self.callArgs(call);
+                var arg_facts = try self.collectCallArgFacts(call);
+                defer self.deinitCallArgFacts(&arg_facts);
+                var summary = try self.callArgFactsSummary(arg_facts.items);
                 errdefer summary.deinit();
                 if (callableNamePlacesObjects(call.callee.name)) summary.places_objects = true;
-                break :blk try self.functionCall(resolved.key, resolved.module_id, resolved.decl, call, summary);
+                break :blk try self.functionCall(resolved.key, resolved.module_id, resolved.decl, arg_facts.items, summary);
             },
             .primitive => |primitive| try self.primitiveCall(call, primitive),
         };
@@ -649,12 +651,94 @@ pub const Analyzer = struct {
         return summary;
     }
 
+    const CallArgFacts = struct {
+        summary: AccessSummary,
+        string_literal: ?[]const u8 = null,
+        object_role: ?[]const u8 = null,
+        property_target: ?PropertyTarget = null,
+
+        fn deinit(self: *CallArgFacts) void {
+            self.summary.deinit();
+        }
+    };
+
+    const IndexedCallArgFacts = struct {
+        index: usize,
+        facts: CallArgFacts,
+
+        fn deinit(self: *IndexedCallArgFacts) void {
+            self.facts.deinit();
+        }
+    };
+
+    fn analyzeCallArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!CallArgFacts {
+        var facts = CallArgFacts{ .summary = try self.analyzeExpr(arg) };
+        errdefer facts.deinit();
+        facts.string_literal = try literalStringExpr(self, arg);
+        facts.object_role = try self.objectRoleExpr(arg);
+        facts.property_target = try self.propertyTargetExpr(arg);
+        return facts;
+    }
+
+    fn collectCallArgFacts(self: *Analyzer, call: ast.CallExpr) anyerror!std.ArrayList(CallArgFacts) {
+        var facts = std.ArrayList(CallArgFacts).empty;
+        errdefer self.deinitCallArgFacts(&facts);
+        for (call.args.items) |arg| {
+            try facts.append(self.allocator, try self.analyzeCallArgFacts(arg));
+        }
+        return facts;
+    }
+
+    fn collectCallArgFactsSkipping(self: *Analyzer, call: ast.CallExpr, skip_index: usize) anyerror!std.ArrayList(IndexedCallArgFacts) {
+        var facts = std.ArrayList(IndexedCallArgFacts).empty;
+        errdefer self.deinitIndexedCallArgFacts(&facts);
+        for (call.args.items, 0..) |arg, index| {
+            if (index == skip_index) continue;
+            try facts.append(self.allocator, .{
+                .index = index,
+                .facts = try self.analyzeCallArgFacts(arg),
+            });
+        }
+        return facts;
+    }
+
+    fn deinitCallArgFacts(self: *Analyzer, facts: *std.ArrayList(CallArgFacts)) void {
+        for (facts.items) |*fact| fact.deinit();
+        facts.deinit(self.allocator);
+    }
+
+    fn deinitIndexedCallArgFacts(self: *Analyzer, facts: *std.ArrayList(IndexedCallArgFacts)) void {
+        for (facts.items) |*fact| fact.deinit();
+        facts.deinit(self.allocator);
+    }
+
+    fn callArgFactsSummary(self: *Analyzer, facts: []const CallArgFacts) !AccessSummary {
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        for (facts) |fact| try summary.merge(fact.summary);
+        return summary;
+    }
+
+    fn indexedCallArgFactsSummary(self: *Analyzer, facts: []const IndexedCallArgFacts) !AccessSummary {
+        var summary = AccessSummary.init(self.allocator);
+        errdefer summary.deinit();
+        for (facts) |fact| try summary.merge(fact.facts.summary);
+        return summary;
+    }
+
+    fn findIndexedCallArgFacts(facts: []const IndexedCallArgFacts, index: usize) ?*const CallArgFacts {
+        for (facts) |*item| {
+            if (item.index == index) return &item.facts;
+        }
+        return null;
+    }
+
     fn functionCall(
         self: *Analyzer,
         key: core.FunctionKey,
         module_id: core.SourceModuleId,
         func: ast.FunctionDecl,
-        call: ast.CallExpr,
+        arg_facts: []const CallArgFacts,
         initial_summary: AccessSummary,
     ) anyerror!AccessSummary {
         var summary = initial_summary;
@@ -663,38 +747,28 @@ pub const Analyzer = struct {
         try self.visiting.put(key, {});
         defer _ = self.visiting.remove(key);
 
+        var state = try self.pushLocalFacts();
+        defer state.restore();
         var string_bindings = std.ArrayList(StringBindingRestore).empty;
         var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
-        var property_target_snapshot = try self.clonePropertyTargets();
-        const current_property_targets = self.property_target_bindings;
-        self.property_target_bindings = property_target_snapshot;
-        var selection_snapshot = try self.cloneSelectionReadBindings();
-        const current_selection_reads = self.selection_read_bindings;
-        self.selection_read_bindings = selection_snapshot;
         defer {
-            selection_snapshot = self.selection_read_bindings;
-            self.selection_read_bindings = current_selection_reads;
-            self.deinitSelectionReadBindings(&selection_snapshot);
-
-            property_target_snapshot = self.property_target_bindings;
-            self.property_target_bindings = current_property_targets;
-            property_target_snapshot.deinit();
-
             self.restoreStringBindings(&self.object_role_bindings, &object_role_bindings);
             self.restoreStringBindings(&self.string_bindings, &string_bindings);
         }
-        try self.bindLiteralStringArgs(func, call, &string_bindings);
-        try self.bindObjectRoleArgs(func, call, &object_role_bindings);
-        try self.bindPropertyTargetArgs(func, call);
-        try self.bindSelectionReadArgs(func, call);
+        try self.bindLiteralStringArgsFromFacts(func, arg_facts, &string_bindings);
+        try self.bindObjectRoleArgsFromFacts(func, arg_facts, &object_role_bindings);
+        try self.bindPropertyTargetArgsFromFacts(func, arg_facts);
+        try self.bindSelectionReadArgsFromFacts(func, arg_facts);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(module_id);
         defer self.sema = previous;
 
-        const body = try self.withFunctionLocals(func, summary);
-        summary = AccessSummary.init(self.allocator);
-        return body;
+        try self.bindLocalParams(func.params.items);
+        var body = try self.analyzeStatements(func.statements.items, .local);
+        defer body.deinit();
+        try summary.merge(body);
+        return summary;
     }
 
     fn constValue(self: *Analyzer, resolved: semantic_env.ResolvedConst) anyerror!AccessSummary {
@@ -742,6 +816,88 @@ pub const Analyzer = struct {
                 }
             }
         }
+    }
+
+    fn bindLiteralStringArgsFromFacts(
+        self: *Analyzer,
+        func: ast.FunctionDecl,
+        arg_facts: []const CallArgFacts,
+        restores: *std.ArrayList(StringBindingRestore),
+    ) !void {
+        for (func.params.items, 0..) |param, index| {
+            const previous = self.string_bindings.get(param.name);
+            try restores.append(self.allocator, .{
+                .name = param.name,
+                .had_old = previous != null,
+                .old = previous,
+            });
+            if (index < arg_facts.len) {
+                if (arg_facts[index].string_literal) |value| {
+                    try self.string_bindings.put(param.name, value);
+                } else {
+                    _ = self.string_bindings.remove(param.name);
+                }
+            } else {
+                _ = self.string_bindings.remove(param.name);
+            }
+        }
+    }
+
+    fn bindObjectRoleArgsFromFacts(
+        self: *Analyzer,
+        func: ast.FunctionDecl,
+        arg_facts: []const CallArgFacts,
+        restores: *std.ArrayList(StringBindingRestore),
+    ) !void {
+        for (func.params.items, 0..) |param, index| {
+            const previous = self.object_role_bindings.get(param.name);
+            try restores.append(self.allocator, .{
+                .name = param.name,
+                .had_old = previous != null,
+                .old = previous,
+            });
+            if (index < arg_facts.len) {
+                if (arg_facts[index].object_role) |role_name| {
+                    try self.object_role_bindings.put(param.name, role_name);
+                } else {
+                    _ = self.object_role_bindings.remove(param.name);
+                }
+            } else {
+                _ = self.object_role_bindings.remove(param.name);
+            }
+        }
+    }
+
+    fn bindSelectionReadArgsFromFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const CallArgFacts) !void {
+        for (func.params.items, 0..) |param, index| {
+            if (index >= arg_facts.len) {
+                self.removeSelectionReads(param.name);
+                continue;
+            }
+            try self.bindSelectionReads(param.name, arg_facts[index].summary.selection_reads.items);
+        }
+    }
+
+    fn bindPropertyTargetArgsFromFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const CallArgFacts) !void {
+        for (func.params.items, 0..) |param, index| {
+            const target = self.propertyTargetForArgFacts(arg_facts, index, param.ty);
+            if (target) |value| {
+                try self.property_target_bindings.put(param.name, value);
+            } else {
+                _ = self.property_target_bindings.remove(param.name);
+            }
+        }
+    }
+
+    fn propertyTargetForArgFacts(self: *Analyzer, arg_facts: []const CallArgFacts, index: usize, param_type: ast.Type) ?PropertyTarget {
+        if (index >= arg_facts.len) return self.propertyTargetForType(param_type);
+        const fact = arg_facts[index];
+        if (fact.object_role) |role_name| {
+            if (fact.property_target == null or fact.property_target.?.owner.isUnknown()) {
+                return PropertyTarget.object(self.objectClassForRole(role_name));
+            }
+        }
+        return fact.property_target;
     }
 
     const LocalFactsSnapshot = struct {
@@ -1018,16 +1174,17 @@ pub const Analyzer = struct {
         return snapshot;
     }
 
-    fn callbackArgBindings(
+    fn callbackArgBindingsFromFacts(
         self: *Analyzer,
-        call: ast.CallExpr,
         descriptor: registry.PrimitiveDescriptor,
         callback_spec: registry.PrimitiveCallbackSpec,
+        call_arg_count: usize,
+        arg_facts: []const IndexedCallArgFacts,
     ) !std.ArrayList(CallbackArgBinding) {
         var bindings = std.ArrayList(CallbackArgBinding).empty;
         errdefer bindings.deinit(self.allocator);
 
-        const item_target = try self.callbackSelectionElementTarget(call);
+        const item_target = callbackSelectionElementTargetFromFacts(arg_facts);
         const item_index = callbackSelectionArgIndex(descriptor.op);
         for (0..callback_spec.supplied_arg_count) |index| {
             var binding = CallbackArgBinding{};
@@ -1038,33 +1195,29 @@ pub const Analyzer = struct {
         }
 
         const extra_start = callback_spec.function_arg_index + 1;
-        if (extra_start < call.args.items.len) {
-            for (call.args.items[extra_start..]) |arg| {
-                try bindings.append(self.allocator, try self.callbackBindingForExpr(arg));
-            }
+        var index = extra_start;
+        while (index < call_arg_count) : (index += 1) {
+            const facts = findIndexedCallArgFacts(arg_facts, index) orelse continue;
+            try bindings.append(self.allocator, callbackBindingForFacts(self, facts.*));
         }
         return bindings;
     }
 
-    fn callbackBindingForExpr(self: *Analyzer, expr: ast.Expr) !CallbackArgBinding {
+    fn callbackBindingForFacts(self: *Analyzer, facts: CallArgFacts) CallbackArgBinding {
         var binding = CallbackArgBinding{};
-        if (try literalStringExpr(self, expr)) |value| {
-            binding.string_literal = value;
-        }
-        if (try self.objectRoleExpr(expr)) |role_name| {
-            binding.object_role = role_name;
-        }
-        if (try self.propertyTargetExpr(expr)) |target| {
+        binding.string_literal = facts.string_literal;
+        binding.object_role = facts.object_role;
+        if (facts.property_target) |target| {
             binding.property_target = target;
-        } else if (binding.object_role) |role_name| {
+        } else if (facts.object_role) |role_name| {
             binding.property_target = PropertyTarget.object(self.objectClassForRole(role_name));
         }
         return binding;
     }
 
-    fn callbackSelectionElementTarget(self: *Analyzer, call: ast.CallExpr) !?PropertyTarget {
-        if (call.args.items.len == 0) return null;
-        return (try self.propertyTargetExpr(call.args.items[0])) orelse PropertyTarget.any();
+    fn callbackSelectionElementTargetFromFacts(arg_facts: []const IndexedCallArgFacts) ?PropertyTarget {
+        const facts = findIndexedCallArgFacts(arg_facts, 0) orelse return null;
+        return facts.property_target orelse PropertyTarget.any();
     }
 
     fn callbackSelectionArgIndex(op: registry.PrimitiveCall) ?usize {
@@ -1103,25 +1256,63 @@ pub const Analyzer = struct {
         }
     }
 
-    fn primitiveCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
+    fn primitiveCall(
+        self: *Analyzer,
+        call: ast.CallExpr,
+        descriptor: registry.PrimitiveDescriptor,
+    ) anyerror!AccessSummary {
         if (descriptor.callback != null) return try self.primitiveCallbackCall(call, descriptor);
+        if (primitiveNeedsArgFacts(descriptor.op)) {
+            var arg_facts = try self.collectCallArgFacts(call);
+            defer self.deinitCallArgFacts(&arg_facts);
+            return try self.primitiveCallWithFacts(descriptor, arg_facts.items);
+        }
 
         var summary = try self.callArgs(call);
         errdefer summary.deinit();
         if (descriptor.places_objects) summary.places_objects = true;
         switch (descriptor.op) {
-            .select => try self.applySelectSummary(&summary, call),
             .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
             .frame_x, .frame_y, .frame_width, .frame_height => {
                 summary.reads_layout = true;
             },
-            .content => try summary.addRead(Resource.makeContentProperty(try self.propertyOwnerArg(call, 0))),
+            .group => {
+                try summary.addWrite(Resource.makeObjects(core.GroupRole));
+                summary.writes_layout_input = true;
+            },
+            .new_page => {
+                try summary.addWrite(Resource.makePages(null));
+                summary.writes_layout_input = true;
+            },
+            .equal, .constraints => {
+                summary.writes_layout_input = true;
+            },
+            else => {},
+        }
+        return summary;
+    }
+
+    fn primitiveCallWithFacts(
+        self: *Analyzer,
+        descriptor: registry.PrimitiveDescriptor,
+        arg_facts: []const CallArgFacts,
+    ) anyerror!AccessSummary {
+        var summary = try self.callArgFactsSummary(arg_facts);
+        errdefer summary.deinit();
+        if (descriptor.places_objects) summary.places_objects = true;
+        switch (descriptor.op) {
+            .select => try self.applySelectSummaryFromFacts(&summary, arg_facts),
+            .page_index, .page_count => try summary.addRead(Resource.makePages(null)),
+            .frame_x, .frame_y, .frame_width, .frame_height => {
+                summary.reads_layout = true;
+            },
+            .content => try summary.addRead(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0))),
             .prop, .has_prop, .prop_eq => try summary.addRead(Resource.makeProperty(
-                try self.propertyOwnerArg(call, 0),
-                try literalStringArg(self, call, 1),
+                propertyOwnerFromArgFacts(arg_facts, 0),
+                literalStringFromArgFacts(arg_facts, 1),
             )),
             .set_content => {
-                try summary.addWrite(Resource.makeContentProperty(try self.propertyOwnerArg(call, 0)));
+                try summary.addWrite(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0)));
                 summary.writes_layout_input = true;
             },
             .group => {
@@ -1133,17 +1324,17 @@ pub const Analyzer = struct {
                 summary.writes_layout_input = true;
             },
             .new => {
-                try summary.addWrite(Resource.makeObjects(try literalStringArg(self, call, 1)));
+                try summary.addWrite(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 1)));
                 summary.writes_layout_input = true;
             },
             .place_on => {
-                try summary.addWrite(Resource.makeObjects(try self.objectRoleArg(call, 1)));
+                try summary.addWrite(Resource.makeObjects(objectRoleFromArgFacts(arg_facts, 1)));
                 summary.writes_layout_input = true;
             },
             .set_prop => {
                 try summary.addWrite(Resource.makeProperty(
-                    try self.propertyOwnerArg(call, 0),
-                    try literalStringArg(self, call, 1),
+                    propertyOwnerFromArgFacts(arg_facts, 0),
+                    literalStringFromArgFacts(arg_facts, 1),
                 ));
                 summary.writes_layout_input = true;
             },
@@ -1159,6 +1350,22 @@ pub const Analyzer = struct {
             else => {},
         }
         return summary;
+    }
+
+    fn primitiveNeedsArgFacts(op: registry.PrimitiveCall) bool {
+        return switch (op) {
+            .select,
+            .content,
+            .prop,
+            .has_prop,
+            .prop_eq,
+            .set_content,
+            .new,
+            .place_on,
+            .set_prop,
+            => true,
+            else => false,
+        };
     }
 
     fn functionCallbackCall(
@@ -1197,17 +1404,13 @@ pub const Analyzer = struct {
 
     fn primitiveCallbackCall(self: *Analyzer, call: ast.CallExpr, descriptor: registry.PrimitiveDescriptor) anyerror!AccessSummary {
         const callback_spec = descriptor.callback orelse unreachable;
-        var summary = AccessSummary.init(self.allocator);
-        errdefer summary.deinit();
-        var callback_arg_bindings = try self.callbackArgBindings(call, descriptor, callback_spec);
-        defer callback_arg_bindings.deinit(self.allocator);
+        var arg_facts = try self.collectCallArgFactsSkipping(call, callback_spec.function_arg_index);
+        defer self.deinitIndexedCallArgFacts(&arg_facts);
 
-        for (call.args.items, 0..) |arg, index| {
-            if (index == callback_spec.function_arg_index) continue;
-            var arg_summary = try self.analyzeExpr(arg);
-            defer arg_summary.deinit();
-            try summary.merge(arg_summary);
-        }
+        var summary = try self.indexedCallArgFactsSummary(arg_facts.items);
+        errdefer summary.deinit();
+        var callback_arg_bindings = try self.callbackArgBindingsFromFacts(descriptor, callback_spec, call.args.items.len, arg_facts.items);
+        defer callback_arg_bindings.deinit(self.allocator);
 
         var callback_summary = AccessSummary.init(self.allocator);
         defer callback_summary.deinit();
@@ -1255,8 +1458,9 @@ pub const Analyzer = struct {
         return summary;
     }
 
-    fn applySelectSummary(self: *Analyzer, summary: *AccessSummary, call: ast.CallExpr) !void {
-        const query_name = (try literalStringArg(self, call, 1)) orelse {
+    fn applySelectSummaryFromFacts(self: *Analyzer, summary: *AccessSummary, arg_facts: []const CallArgFacts) !void {
+        _ = self;
+        const query_name = literalStringFromArgFacts(arg_facts, 1) orelse {
             try summary.addRead(Resource.makeObjects(null));
             try summary.addSelectionRead(Resource.makeObjects(null));
             return;
@@ -1269,7 +1473,7 @@ pub const Analyzer = struct {
             .document_pages => try summary.addSelectionRead(Resource.makePages(null)),
             .page_objects_by_role,
             .document_objects_by_role,
-            => try summary.addSelectionRead(Resource.makeObjects(try literalStringArg(self, call, 2))),
+            => try summary.addSelectionRead(Resource.makeObjects(literalStringFromArgFacts(arg_facts, 2))),
             .children,
             .descendants,
             .self_object,
@@ -1278,6 +1482,22 @@ pub const Analyzer = struct {
             .parent_page,
             => try summary.addRead(Resource.makePages(null)),
         }
+    }
+
+    fn literalStringFromArgFacts(arg_facts: []const CallArgFacts, index: usize) ?[]const u8 {
+        if (index >= arg_facts.len) return null;
+        return arg_facts[index].string_literal;
+    }
+
+    fn objectRoleFromArgFacts(arg_facts: []const CallArgFacts, index: usize) ?[]const u8 {
+        if (index >= arg_facts.len) return null;
+        return arg_facts[index].object_role;
+    }
+
+    fn propertyOwnerFromArgFacts(arg_facts: []const CallArgFacts, index: usize) PropertyOwner {
+        if (index >= arg_facts.len) return .any;
+        const target = arg_facts[index].property_target orelse return .any;
+        return target.owner;
     }
 
     fn propertyOwnerArg(self: *Analyzer, call: ast.CallExpr, index: usize) !PropertyOwner {

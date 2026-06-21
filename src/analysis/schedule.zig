@@ -273,15 +273,7 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
             }
         }
     }
-    for (units, 0..) |left, left_index| {
-        if (left.summary.writes.items.len == 0) continue;
-        for (units[left_index + 1 ..], left_index + 1..) |right, right_index| {
-            if (right.summary.writes.items.len == 0) continue;
-            if (summariesWriteSameResource(left.summary, right.summary)) {
-                try addWriteOrderEdge(allocator, units, edges, &edge_index, left_index, right_index);
-            }
-        }
-    }
+    try addWriteOrderFrontierEdges(allocator, units, edges, &edge_index);
 }
 
 const EdgeKey = struct {
@@ -404,30 +396,6 @@ fn summaryWritesResource(summary: dependencies.AccessSummary, resource: dependen
     return false;
 }
 
-fn summariesWriteSameResource(left: dependencies.AccessSummary, right: dependencies.AccessSummary) bool {
-    for (left.writes.items) |write| {
-        for (right.writes.items) |right_write| {
-            if (write.intersects(right_write)) return true;
-        }
-    }
-    return false;
-}
-
-fn addWriteOrderEdge(
-    allocator: std.mem.Allocator,
-    units: []const ScheduledUnit,
-    edges: *std.ArrayList(ScheduleEdge),
-    edge_index: *EdgeIndex,
-    left_index: usize,
-    right_index: usize,
-) !void {
-    if (units[left_index].source_order <= units[right_index].source_order) {
-        try addScheduleEdge(allocator, edges, edge_index, left_index, right_index, .write_order);
-    } else {
-        try addScheduleEdge(allocator, edges, edge_index, right_index, left_index, .write_order);
-    }
-}
-
 fn addScheduleEdge(
     allocator: std.mem.Allocator,
     edges: *std.ArrayList(ScheduleEdge),
@@ -449,6 +417,109 @@ fn addScheduleEdge(
     });
     errdefer edges.items.len -= 1;
     try edge_index.putNoClobber(key, edge_pos);
+}
+
+const WriteFrontierEntry = struct {
+    resource: dependencies.Resource,
+    unit_index: usize,
+};
+
+fn addWriteOrderFrontierEdges(
+    allocator: std.mem.Allocator,
+    units: []const ScheduledUnit,
+    edges: *std.ArrayList(ScheduleEdge),
+    edge_index: *EdgeIndex,
+) !void {
+    var frontier = std.ArrayList(WriteFrontierEntry).empty;
+    defer frontier.deinit(allocator);
+
+    for (units, 0..) |unit, unit_index| {
+        for (unit.summary.writes.items) |write| {
+            for (frontier.items) |entry| {
+                if (!entry.resource.intersects(write)) continue;
+                if (entry.unit_index == unit_index) continue;
+                try addScheduleEdge(allocator, edges, edge_index, entry.unit_index, unit_index, .write_order);
+            }
+        }
+        for (unit.summary.writes.items) |write| {
+            var updated = false;
+            for (frontier.items) |*entry| {
+                if (!resourceEql(entry.resource, write)) continue;
+                entry.unit_index = unit_index;
+                updated = true;
+                break;
+            }
+            if (!updated) {
+                try frontier.append(allocator, .{
+                    .resource = write,
+                    .unit_index = unit_index,
+                });
+            }
+        }
+    }
+}
+
+fn resourceEql(left: dependencies.Resource, right: dependencies.Resource) bool {
+    return switch (left) {
+        .variable => |left_variable| switch (right) {
+            .variable => |right_variable| resourceScopeEql(left_variable.scope, right_variable.scope) and std.mem.eql(u8, left_variable.name, right_variable.name),
+            else => false,
+        },
+        .pages => |left_scope| switch (right) {
+            .pages => |right_scope| resourceScopeEql(left_scope, right_scope),
+            else => false,
+        },
+        .objects => |left_name| switch (right) {
+            .objects => |right_name| optionalNameEql(left_name, right_name),
+            else => false,
+        },
+        .property => |left_property| switch (right) {
+            .property => |right_property| propertyOwnerEql(left_property.owner, right_property.owner) and propertyKeyEql(left_property.key, right_property.key),
+            else => false,
+        },
+    };
+}
+
+fn resourceScopeEql(left: dependencies.ResourceScope, right: dependencies.ResourceScope) bool {
+    return switch (left) {
+        .any => right == .any,
+        .document => |left_id| switch (right) {
+            .document => |right_id| left_id == right_id,
+            else => false,
+        },
+        .page => |left_id| switch (right) {
+            .page => |right_id| left_id == right_id,
+            else => false,
+        },
+    };
+}
+
+fn propertyOwnerEql(left: dependencies.PropertyOwner, right: dependencies.PropertyOwner) bool {
+    return switch (left) {
+        .any => right == .any,
+        .document => right == .document,
+        .page => right == .page,
+        .object => |left_name| switch (right) {
+            .object => |right_name| optionalNameEql(left_name, right_name),
+            else => false,
+        },
+    };
+}
+
+fn propertyKeyEql(left: dependencies.PropertyKey, right: dependencies.PropertyKey) bool {
+    return switch (left) {
+        .any => right == .any,
+        .content => right == .content,
+        .named => |left_name| switch (right) {
+            .named => |right_name| std.mem.eql(u8, left_name, right_name),
+            else => false,
+        },
+    };
+}
+
+fn optionalNameEql(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left == null or right == null) return left == null and right == null;
+    return std.mem.eql(u8, left.?, right.?);
 }
 
 pub fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph: *const ScheduleGraph) ![]u8 {
