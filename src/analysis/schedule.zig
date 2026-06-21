@@ -263,13 +263,28 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
     var edge_index = EdgeIndex.init(allocator);
     defer edge_index.deinit();
 
-    for (units, 0..) |writer, writer_index| {
-        if (writer.summary.writes.items.len == 0) continue;
-        for (units, 0..) |reader, reader_index| {
-            if (writer_index == reader_index) continue;
-            if (reader.summary.reads.items.len == 0) continue;
-            if (summaryWritesRead(writer.summary, reader.summary)) {
-                try addScheduleEdge(allocator, edges, &edge_index, writer_index, reader_index, .dependency);
+    var writer_index = ResourceWriterIndex.init(allocator);
+    defer writer_index.deinit();
+    for (units, 0..) |writer, unit_index| {
+        try writer_index.addSummary(unit_index, writer.summary);
+    }
+
+    const seen_candidates = try allocator.alloc(bool, units.len);
+    defer allocator.free(seen_candidates);
+    var candidates = std.ArrayList(usize).empty;
+    defer candidates.deinit(allocator);
+
+    for (units, 0..) |reader, reader_index| {
+        if (reader.summary.reads.items.len == 0) continue;
+        @memset(seen_candidates, false);
+        candidates.clearRetainingCapacity();
+        for (reader.summary.reads.items) |read| {
+            try writer_index.appendCandidates(read, seen_candidates, &candidates);
+        }
+        for (candidates.items) |candidate_index| {
+            if (candidate_index == reader_index) continue;
+            if (summaryWritesRead(units[candidate_index].summary, reader.summary)) {
+                try addScheduleEdge(allocator, edges, &edge_index, candidate_index, reader_index, .dependency);
             }
         }
     }
@@ -296,6 +311,155 @@ const EdgeKeyContext = struct {
 
 const EdgeIndex = std.HashMap(EdgeKey, usize, EdgeKeyContext, std.hash_map.default_max_load_percentage);
 
+const UnitIndexList = std.ArrayList(usize);
+const UnitIndexStringMap = std.StringHashMap(UnitIndexList);
+
+const ResourceWriterIndex = struct {
+    allocator: std.mem.Allocator,
+    variables_by_name: UnitIndexStringMap,
+    pages: UnitIndexList,
+    object_any: UnitIndexList,
+    objects_by_role: UnitIndexStringMap,
+    property_any_key: UnitIndexList,
+    property_content_key: UnitIndexList,
+    properties_by_key: UnitIndexStringMap,
+
+    fn init(allocator: std.mem.Allocator) ResourceWriterIndex {
+        return .{
+            .allocator = allocator,
+            .variables_by_name = UnitIndexStringMap.init(allocator),
+            .pages = .empty,
+            .object_any = .empty,
+            .objects_by_role = UnitIndexStringMap.init(allocator),
+            .property_any_key = .empty,
+            .property_content_key = .empty,
+            .properties_by_key = UnitIndexStringMap.init(allocator),
+        };
+    }
+
+    fn deinit(self: *ResourceWriterIndex) void {
+        deinitStringMapLists(self.allocator, &self.variables_by_name);
+        self.pages.deinit(self.allocator);
+        self.object_any.deinit(self.allocator);
+        deinitStringMapLists(self.allocator, &self.objects_by_role);
+        self.property_any_key.deinit(self.allocator);
+        self.property_content_key.deinit(self.allocator);
+        deinitStringMapLists(self.allocator, &self.properties_by_key);
+    }
+
+    fn addSummary(self: *ResourceWriterIndex, unit_index: usize, summary: dependencies.AccessSummary) !void {
+        for (summary.writes.items) |write| {
+            try self.addWrite(unit_index, write);
+        }
+    }
+
+    fn addWrite(self: *ResourceWriterIndex, unit_index: usize, write: dependencies.Resource) !void {
+        switch (write) {
+            .variable => |variable| try self.appendStringBucket(&self.variables_by_name, variable.name, unit_index),
+            .pages => try self.pages.append(self.allocator, unit_index),
+            .objects => |role_name| {
+                if (role_name) |name| {
+                    try self.appendStringBucket(&self.objects_by_role, name, unit_index);
+                } else {
+                    try self.object_any.append(self.allocator, unit_index);
+                }
+            },
+            .property => |property| switch (property.key) {
+                .any => try self.property_any_key.append(self.allocator, unit_index),
+                .content => try self.property_content_key.append(self.allocator, unit_index),
+                .named => |name| {
+                    try self.appendStringBucket(&self.properties_by_key, name, unit_index);
+                    if (propertyNameIsContent(name)) try self.property_content_key.append(self.allocator, unit_index);
+                },
+            },
+        }
+    }
+
+    fn appendCandidates(
+        self: *const ResourceWriterIndex,
+        read: dependencies.Resource,
+        seen: []bool,
+        out: *UnitIndexList,
+    ) !void {
+        switch (read) {
+            .variable => |variable| {
+                if (self.variables_by_name.get(variable.name)) |entries| {
+                    try appendCandidateList(self.allocator, entries.items, seen, out);
+                }
+            },
+            .pages => try appendCandidateList(self.allocator, self.pages.items, seen, out),
+            .objects => |role_name| {
+                try appendCandidateList(self.allocator, self.object_any.items, seen, out);
+                if (role_name) |name| {
+                    if (self.objects_by_role.get(name)) |entries| {
+                        try appendCandidateList(self.allocator, entries.items, seen, out);
+                    }
+                } else {
+                    var roles = self.objects_by_role.valueIterator();
+                    while (roles.next()) |entries| {
+                        try appendCandidateList(self.allocator, entries.items, seen, out);
+                    }
+                }
+            },
+            .property => |property| {
+                try appendCandidateList(self.allocator, self.property_any_key.items, seen, out);
+                switch (property.key) {
+                    .any => {
+                        try appendCandidateList(self.allocator, self.property_content_key.items, seen, out);
+                        var keys = self.properties_by_key.valueIterator();
+                        while (keys.next()) |entries| {
+                            try appendCandidateList(self.allocator, entries.items, seen, out);
+                        }
+                    },
+                    .content => try appendCandidateList(self.allocator, self.property_content_key.items, seen, out),
+                    .named => |name| {
+                        if (propertyNameIsContent(name)) {
+                            try appendCandidateList(self.allocator, self.property_content_key.items, seen, out);
+                        }
+                        if (self.properties_by_key.get(name)) |entries| {
+                            try appendCandidateList(self.allocator, entries.items, seen, out);
+                        }
+                    },
+                }
+            },
+        }
+    }
+
+    fn appendStringBucket(self: *ResourceWriterIndex, map: *UnitIndexStringMap, key: []const u8, unit_index: usize) !void {
+        const gop = try map.getOrPut(key);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(self.allocator, unit_index);
+    }
+};
+
+fn appendCandidateList(
+    allocator: std.mem.Allocator,
+    entries: []const usize,
+    seen: []bool,
+    out: *UnitIndexList,
+) !void {
+    for (entries) |unit_index| {
+        if (seen[unit_index]) continue;
+        seen[unit_index] = true;
+        try out.append(allocator, unit_index);
+    }
+}
+
+fn deinitStringMapLists(allocator: std.mem.Allocator, map: *UnitIndexStringMap) void {
+    var values = map.valueIterator();
+    while (values.next()) |list| {
+        list.deinit(allocator);
+    }
+    map.deinit();
+}
+
+fn propertyNameIsContent(name: []const u8) bool {
+    return switch (dependencies.PropertyKey.fromName(name)) {
+        .content => true,
+        .any, .named => false,
+    };
+}
+
 fn scheduleFromEdges(
     allocator: std.mem.Allocator,
     units: []const ScheduledUnit,
@@ -315,31 +479,33 @@ fn scheduleFromEdges(
     defer allocator.free(done);
     @memset(done, false);
 
+    var ready = ReadyQueue.init(allocator, units);
+    defer ready.deinit();
+    for (indegree, 0..) |degree, index| {
+        if (degree == 0) try ready.push(index);
+    }
+
     var out = try allocator.alloc(usize, count);
     errdefer allocator.free(out);
     var produced: usize = 0;
-    while (produced < count) {
-        var best: ?usize = null;
-        for (units, 0..) |unit, index| {
-            if (done[index] or indegree[index] != 0) continue;
-            if (best == null or unit.source_order < units[best.?].source_order) best = index;
-        }
-        const next = best orelse {
-            var candidate: ?usize = null;
-            for (units, 0..) |unit, index| {
-                if (done[index] or indegree[index] == 0) continue;
-                if (candidate == null or unit.source_order < units[candidate.?].source_order) candidate = index;
-            }
-            cycle_hint.* = candidate;
-            return error.ScheduledDependencyCycle;
-        };
+    while (ready.pop()) |next| {
         done[next] = true;
         out[produced] = next;
         produced += 1;
         for (adjacency.neighbors(next)) |to| {
             std.debug.assert(indegree[to] > 0);
             indegree[to] -= 1;
+            if (indegree[to] == 0) try ready.push(to);
         }
+    }
+    if (produced != count) {
+        var candidate: ?usize = null;
+        for (units, 0..) |unit, index| {
+            if (done[index] or indegree[index] == 0) continue;
+            if (candidate == null or unit.source_order < units[candidate.?].source_order) candidate = index;
+        }
+        cycle_hint.* = candidate;
+        return error.ScheduledDependencyCycle;
     }
     return out;
 }
@@ -355,6 +521,73 @@ const Adjacency = struct {
 
     fn neighbors(self: Adjacency, unit_index: usize) []const usize {
         return self.targets[self.offsets[unit_index]..self.offsets[unit_index + 1]];
+    }
+};
+
+const ReadyQueue = struct {
+    allocator: std.mem.Allocator,
+    units: []const ScheduledUnit,
+    heap: std.ArrayList(usize),
+
+    fn init(allocator: std.mem.Allocator, units: []const ScheduledUnit) ReadyQueue {
+        return .{
+            .allocator = allocator,
+            .units = units,
+            .heap = .empty,
+        };
+    }
+
+    fn deinit(self: *ReadyQueue) void {
+        self.heap.deinit(self.allocator);
+    }
+
+    fn push(self: *ReadyQueue, unit_index: usize) !void {
+        try self.heap.append(self.allocator, unit_index);
+        self.siftUp(self.heap.items.len - 1);
+    }
+
+    fn pop(self: *ReadyQueue) ?usize {
+        if (self.heap.items.len == 0) return null;
+        const result = self.heap.items[0];
+        const last = self.heap.pop().?;
+        if (self.heap.items.len != 0) {
+            self.heap.items[0] = last;
+            self.siftDown(0);
+        }
+        return result;
+    }
+
+    fn siftUp(self: *ReadyQueue, start: usize) void {
+        var index = start;
+        while (index > 0) {
+            const parent = (index - 1) / 2;
+            if (!self.before(self.heap.items[index], self.heap.items[parent])) break;
+            std.mem.swap(usize, &self.heap.items[index], &self.heap.items[parent]);
+            index = parent;
+        }
+    }
+
+    fn siftDown(self: *ReadyQueue, start: usize) void {
+        var index = start;
+        while (true) {
+            const left = index * 2 + 1;
+            if (left >= self.heap.items.len) break;
+            const right = left + 1;
+            var child = left;
+            if (right < self.heap.items.len and self.before(self.heap.items[right], self.heap.items[left])) {
+                child = right;
+            }
+            if (!self.before(self.heap.items[child], self.heap.items[index])) break;
+            std.mem.swap(usize, &self.heap.items[index], &self.heap.items[child]);
+            index = child;
+        }
+    }
+
+    fn before(self: *const ReadyQueue, left: usize, right: usize) bool {
+        const left_order = self.units[left].source_order;
+        const right_order = self.units[right].source_order;
+        if (left_order != right_order) return left_order < right_order;
+        return left < right;
     }
 };
 

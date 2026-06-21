@@ -15,24 +15,35 @@ pub fn constraintTargetsGroup(ir: anytype, constraint: Constraint) bool {
     return isGroupNode(target_node);
 }
 
-fn propagateWidthCapToSubtree(ir: anytype, node_id: NodeId, max_right: f32) !void {
+fn propagateWidthCapToSubtree(ir: anytype, node_id: NodeId, max_right: f32, measurement_cache: ?*metrics.MeasurementCache) !void {
     const node = ir.getNode(node_id) orelse return error.UnknownNode;
     if (node.frame.x_set and metrics.shouldWrapNode(ir, node)) {
         const available = @max(@as(f32, 1.0), max_right - node.frame.x);
         if (available < node.frame.width - graph.ConstraintTolerance) {
             node.frame.width = available;
-            node.frame.height = metrics.intrinsicHeight(ir, node);
+            node.frame.height = if (measurement_cache) |cache|
+                metrics.intrinsicHeightCached(ir, node, cache)
+            else
+                metrics.intrinsicHeight(ir, node);
         }
     }
     if (isGroupNode(node)) {
         const children = ir.childrenOf(node_id) orelse return;
         for (children) |child_id| {
-            try propagateWidthCapToSubtree(ir, child_id, max_right);
+            try propagateWidthCapToSubtree(ir, child_id, max_right, measurement_cache);
         }
     }
 }
 
 pub fn propagateTargetedWidths(ir: anytype, workspace: *const graph.AxisWorkspace) !void {
+    try propagateTargetedWidthsWithCache(ir, workspace, null);
+}
+
+pub fn propagateTargetedWidthsCached(ir: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {
+    try propagateTargetedWidthsWithCache(ir, workspace, measurement_cache);
+}
+
+fn propagateTargetedWidthsWithCache(ir: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: ?*metrics.MeasurementCache) !void {
     for (workspace.graph.child_ids, workspace.states) |group_id, h_state| {
         const node = ir.getNode(group_id) orelse return error.UnknownNode;
         if (!isGroupNode(node)) continue;
@@ -42,7 +53,7 @@ pub fn propagateTargetedWidths(ir: anytype, workspace: *const graph.AxisWorkspac
         const group_right = group_left + group_width - metrics.chromePadX(ir, node);
         const children = ir.childrenOf(group_id) orelse continue;
         for (children) |child_id| {
-            try propagateWidthCapToSubtree(ir, child_id, group_right);
+            try propagateWidthCapToSubtree(ir, child_id, group_right, measurement_cache);
         }
     }
 }

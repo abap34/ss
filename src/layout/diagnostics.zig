@@ -18,6 +18,14 @@ const OverflowDiagnostic = struct {
 };
 
 pub fn collectPageDiagnostics(ir: anytype, page_id: NodeId, child_ids: []const NodeId) !void {
+    try collectPageDiagnosticsWithCache(ir, page_id, child_ids, null);
+}
+
+pub fn collectPageDiagnosticsCached(ir: anytype, page_id: NodeId, child_ids: []const NodeId, measurement_cache: *metrics.MeasurementCache) !void {
+    try collectPageDiagnosticsWithCache(ir, page_id, child_ids, measurement_cache);
+}
+
+fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []const NodeId, measurement_cache: ?*metrics.MeasurementCache) !void {
     var overflows = std.ArrayList(OverflowDiagnostic).empty;
     defer overflows.deinit(ir.allocator);
 
@@ -56,7 +64,10 @@ pub fn collectPageDiagnostics(ir: anytype, page_id: NodeId, child_ids: []const N
         }
 
         if (shouldCheckContentOverflow(ir, node)) {
-            const required_height = metrics.intrinsicHeight(ir, node);
+            const required_height = if (measurement_cache) |cache|
+                metrics.intrinsicHeightCached(ir, node, cache)
+            else
+                metrics.intrinsicHeight(ir, node);
             const overflow_height = @max(@as(f32, 0.0), required_height - node.frame.height);
             if (overflow_height > graph.ConstraintTolerance) {
                 switch (overflowPolicy(node)) {
