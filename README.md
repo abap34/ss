@@ -89,6 +89,25 @@ ss-compiler analyzes dependencies across the whole program.
 This enables ss to infer that `pagenos!()` depends on the page list,
 so the function is evaluated only after the pages become available.
 
+You can check it via `;; ^dep?`:
+
+```
+24 | let content = "hello!"
+25 | let t = text!(content)
+26 | ;; ^dep?
+   |    ▔▔▔▔▔ DependencyQuery:
+                read Variable(page:sample, content)
+                read Property(Doc, code_theme_fill)
+                read Property(Doc, code_theme_stroke)
+                write Objects(body)
+                write Property(Body, text)
+                write Property(Body, layout)
+                write Property(Body, code)
+                write Variable(page:sample, t)
+                flag writes_layout_input
+                flag places_objects
+```
+
 That means document-wide behavior such as adding a table of contents or page numbers can be defined in ss itself, not
 bolted on from outside the language. Yes, this is directed at you (and me), the
 person who hand-wrote a ToC and forgot to update it.
