@@ -8,6 +8,7 @@ pub const groups = root.groups;
 pub const graph = root.graph;
 pub const diagnostics = root.diagnostics;
 pub const solveLayout = root.solveLayout;
+pub const solveLayoutWithTracePath = root.solveLayoutWithTracePath;
 pub const styleForNode = root.styleForNode;
 pub const intrinsicWidth = root.intrinsicWidth;
 pub const intrinsicHeight = root.intrinsicHeight;
