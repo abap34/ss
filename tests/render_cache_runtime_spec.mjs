@@ -12,7 +12,8 @@ async function testRenderCacheGenerations() {
   const project = await mkdtempProject("ss-render-cache-");
   try {
     const slide = path.join(project, "slide.ss");
-    const firstSource = deckSource("First page", "Second page");
+    const firstPagesSource = Array.from({ length: 18 }, (_, index) => `Page ${index + 1}`);
+    const firstSource = deckSource(firstPagesSource);
     await writeFile(slide, firstSource, "utf8");
 
     await runSs(["render", "slide.ss", "out-1.pdf", "--cache-id", "stable-deck"], project);
@@ -23,16 +24,24 @@ async function testRenderCacheGenerations() {
 
     const firstGeneration = await singleGeneration(cacheRoot);
     const firstPages = await pdfFiles(path.join(firstGeneration.path, "pages"));
-    assert(firstPages.length === 2, `expected two cached page PDFs, got ${firstPages.length}`);
+    assert(firstPages.length === firstPagesSource.length, `expected ${firstPagesSource.length} cached page PDFs, got ${firstPages.length}`);
+    await assertPdfFile(path.join(firstGeneration.path, "document.pdf"), "generation should cache assembled PDF");
+    const firstChunks = await pdfFiles(path.join(firstGeneration.path, "chunks"));
+    assert(firstChunks.length >= 2, `expected chunk PDFs for incremental assembly, got ${firstChunks.length}`);
 
-    const secondSource = deckSource("First page", "Changed second page");
+    const secondPagesSource = [...firstPagesSource];
+    secondPagesSource[7] = "Changed page 8";
+    const secondSource = deckSource(secondPagesSource);
     await writeFile(slide, secondSource, "utf8");
     await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "stable-deck"], project);
 
     const secondGeneration = await singleGeneration(cacheRoot);
     assert(secondGeneration.name !== firstGeneration.name, "second render should publish a fresh generation");
     const secondPages = await pdfFiles(path.join(secondGeneration.path, "pages"));
-    assert(secondPages.length === 2, `expected two cached page PDFs after rerender, got ${secondPages.length}`);
+    assert(secondPages.length === secondPagesSource.length, `expected ${secondPagesSource.length} cached page PDFs after rerender, got ${secondPages.length}`);
+    await assertPdfFile(path.join(secondGeneration.path, "document.pdf"), "rerender should cache assembled PDF");
+    const secondChunks = await pdfFiles(path.join(secondGeneration.path, "chunks"));
+    assert(secondChunks.length >= 2, `expected chunk PDFs after rerender, got ${secondChunks.length}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -56,16 +65,16 @@ async function testCacheClearRejectsActiveRender() {
   }
 }
 
-function deckSource(first, second) {
+function deckSource(pages) {
   return `import std:themes/default as *
 
-page one
-text!("${first}")
-end
-
-page two
-text!("${second}")
-end
+${pages
+  .map(
+    (text, index) => `page p${index + 1}
+text!("${text}")
+end`,
+  )
+  .join("\n\n")}
 `;
 }
 
@@ -117,6 +126,11 @@ async function singleGeneration(cacheRoot) {
 async function pdfFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".pdf"));
+}
+
+async function assertPdfFile(target, message) {
+  const info = await stat(target);
+  assert(info.isFile() && info.size > 8, `${message}; invalid PDF file at ${target}`);
 }
 
 async function assertPathMissing(target, message) {

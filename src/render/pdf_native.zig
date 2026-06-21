@@ -318,7 +318,10 @@ const RenderPlan = struct {
     trash_dir: []const u8,
     leases_dir: []const u8,
     pages_dir: []const u8,
+    chunks_dir: []const u8,
     final_pdf_path: []const u8,
+    previous_chunks_dir: ?[]const u8,
+    previous_document_path: ?[]const u8,
     current_path: []const u8,
     lease_path: []const u8,
     generation_published: bool = false,
@@ -336,7 +339,10 @@ const RenderPlan = struct {
         self.allocator.free(self.trash_dir);
         self.allocator.free(self.leases_dir);
         self.allocator.free(self.pages_dir);
+        self.allocator.free(self.chunks_dir);
         self.allocator.free(self.final_pdf_path);
+        if (self.previous_chunks_dir) |path| self.allocator.free(path);
+        if (self.previous_document_path) |path| self.allocator.free(path);
         self.allocator.free(self.current_path);
         self.allocator.free(self.lease_path);
     }
@@ -459,7 +465,14 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
     defer assembly_failure.deinit();
     var assembly_ctx = ctx;
     assembly_ctx.command_failure = &assembly_failure;
-    assembleRenderPlan(&assembly_ctx, &plan, options, progress) catch |err| {
+    const reused_document = try reusePreviousDocumentPdf(&assembly_ctx, &plan, progress);
+    if (!reused_document) {
+        assembleRenderPlan(&assembly_ctx, &plan, options, progress) catch |err| {
+            try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
+            return error.DiagnosticsFailed;
+        };
+    }
+    storeRenderPlanDocumentPdf(&assembly_ctx, &plan) catch |err| {
         try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
         return error.DiagnosticsFailed;
     };
@@ -494,6 +507,8 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     errdefer ctx.allocator.free(generation_dir);
     const pages_dir = try std.fs.path.join(ctx.allocator, &.{ building_dir, "pages" });
     errdefer ctx.allocator.free(pages_dir);
+    const chunks_dir = try std.fs.path.join(ctx.allocator, &.{ building_dir, "chunks" });
+    errdefer ctx.allocator.free(chunks_dir);
     const final_pdf_path = try std.fs.path.join(ctx.allocator, &.{ run_dir, "document.pdf" });
     errdefer ctx.allocator.free(final_pdf_path);
     const trash_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "trash" });
@@ -623,6 +638,10 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     const page_cache_hit_count = countPageCacheHits(page_slice);
     const artifact_cache = try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
     errdefer ctx.allocator.free(artifact_cache.cached);
+    const previous_chunks_dir = try previousGenerationSubdir(ctx, if (previous_generation) |*previous| previous else null, "chunks");
+    errdefer if (previous_chunks_dir) |path| ctx.allocator.free(path);
+    const previous_document_path = try reusablePreviousDocumentPdf(ctx, if (previous_generation) |*previous| previous else null, page_slice);
+    errdefer if (previous_document_path) |path| ctx.allocator.free(path);
 
     return .{
         .allocator = ctx.allocator,
@@ -638,7 +657,10 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         .trash_dir = trash_dir,
         .leases_dir = leases_dir,
         .pages_dir = pages_dir,
+        .chunks_dir = chunks_dir,
         .final_pdf_path = final_pdf_path,
+        .previous_chunks_dir = previous_chunks_dir,
+        .previous_document_path = previous_document_path,
         .current_path = current_path,
         .lease_path = lease_path,
     };
@@ -666,6 +688,10 @@ fn renderDeckId(allocator: Allocator, ir: *const core.Ir, options: RenderOptions
 
 fn pagePath(allocator: Allocator, pages_dir: []const u8, page_index: usize) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}/page-{d:0>4}.pdf", .{ pages_dir, page_index + 1 });
+}
+
+fn documentPdfPath(allocator: Allocator, generation_dir: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ generation_dir, "document.pdf" });
 }
 
 fn readPreviousGeneration(ctx: *DrawContext, generations_dir: []const u8, current_path: []const u8) !?PreviousGeneration {
@@ -743,6 +769,27 @@ fn reusePreviousPage(ctx: *DrawContext, previous: ?*const PreviousGeneration, pa
     if (!(try cachedPdfAvailable(ctx, previous_path))) return false;
     copyOrLinkCacheFile(ctx, previous_path, dest_path) catch return false;
     return cachedPdfAvailable(ctx, dest_path) catch false;
+}
+
+fn previousGenerationSubdir(ctx: *DrawContext, previous: ?*const PreviousGeneration, name: []const u8) !?[]u8 {
+    const generation = previous orelse return null;
+    return try std.fs.path.join(ctx.allocator, &.{ generation.dir, name });
+}
+
+fn reusablePreviousDocumentPdf(ctx: *DrawContext, previous: ?*const PreviousGeneration, pages: []const RenderPage) !?[]u8 {
+    const generation = previous orelse return null;
+    if (generation.manifest.hashes.len != pages.len) return null;
+    for (pages, 0..) |page, index| {
+        if (generation.manifest.hashes[index] != page.page_hash) return null;
+    }
+
+    const path = try documentPdfPath(ctx.allocator, generation.dir);
+    errdefer ctx.allocator.free(path);
+    if (!(try cachedPdfAvailable(ctx, path))) {
+        ctx.allocator.free(path);
+        return null;
+    }
+    return path;
 }
 
 fn copyOrLinkCacheFile(ctx: *DrawContext, source_path: []const u8, dest_path: []const u8) !void {
@@ -930,13 +977,13 @@ fn renameReplacing(ctx: *DrawContext, tmp_path: []const u8, final_path: []const 
     };
 }
 
-fn qpdfInputCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, inputs: []const []const u8, single_page_inputs: bool) ![]u8 {
+fn qpdfPageHashCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, pages: []const RenderPage) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, qpdf_cache_version);
     hashString(&hasher, prefix);
-    hashBool(&hasher, single_page_inputs);
-    hashUsize(&hasher, inputs.len);
-    for (inputs) |input| hashString(&hasher, input);
+    hashBool(&hasher, true);
+    hashUsize(&hasher, pages.len);
+    for (pages) |page| hashU64(&hasher, page.page_hash);
     return qpdfCachePath(allocator, cache_dir, prefix, hasher.final());
 }
 
@@ -3125,8 +3172,24 @@ fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
     try drawPngFit(ctx, frame, png_path);
 }
 
-const direct_merge_page_limit: usize = 96;
+const direct_merge_page_limit: usize = 16;
 const merge_chunk_size: usize = 16;
+
+fn reusePreviousDocumentPdf(ctx: *DrawContext, plan: *const RenderPlan, progress: ?RenderProgress) !bool {
+    const source = plan.previous_document_path orelse return false;
+    if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
+    copyOrLinkCacheFile(ctx, source, plan.final_pdf_path) catch return false;
+    if (!(try cachedPdfAvailable(ctx, plan.final_pdf_path))) return false;
+    if (progress) |p| p.assemblyCompleted(p.context, 1, 1);
+    return true;
+}
+
+fn storeRenderPlanDocumentPdf(ctx: *DrawContext, plan: *const RenderPlan) !void {
+    const destination = try documentPdfPath(ctx.allocator, plan.building_dir);
+    defer ctx.allocator.free(destination);
+    try copyOrLinkCacheFile(ctx, plan.final_pdf_path, destination);
+    if (!(try cachedPdfAvailable(ctx, destination))) return NativePdfError.InvalidPdfCache;
+}
 
 fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
     const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
@@ -3147,9 +3210,7 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
         return;
     }
 
-    const chunk_cache_dir = try std.fs.path.join(ctx.allocator, &.{ plan.run_dir, "chunks" });
-    defer ctx.allocator.free(chunk_cache_dir);
-    try std.Io.Dir.cwd().createDirPath(ctx.io, chunk_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(ctx.io, plan.chunks_dir);
 
     const chunk_count = std.math.divCeil(usize, page_paths.len, merge_chunk_size) catch unreachable;
 
@@ -3165,9 +3226,9 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
     for (chunks, 0..) |*chunk, chunk_index| {
         const start = chunk_index * merge_chunk_size;
         const end = @min(page_paths.len, start + merge_chunk_size);
-        const output = try qpdfInputCachePath(ctx.allocator, chunk_cache_dir, "chunk", page_paths[start..end], true);
+        const output = try qpdfPageHashCachePath(ctx.allocator, plan.chunks_dir, "chunk", plan.pages[start..end]);
         errdefer ctx.allocator.free(output);
-        const cache_hit = try cachedPdfAvailable(ctx, output);
+        const cache_hit = (try cachedPdfAvailable(ctx, output)) or (try reusePreviousMergeChunk(ctx, plan, output));
         chunk.* = .{
             .inputs = page_paths[start..end],
             .output = output,
@@ -3185,6 +3246,15 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
     for (chunks, 0..) |chunk, index| chunk_paths[index] = chunk.output;
     try mergePdfInputs(ctx, chunk_paths, false, plan.final_pdf_path);
     if (progress) |p| p.assemblyCompleted(p.context, total_steps, total_steps);
+}
+
+fn reusePreviousMergeChunk(ctx: *DrawContext, plan: *const RenderPlan, destination: []const u8) !bool {
+    const previous_chunks_dir = plan.previous_chunks_dir orelse return false;
+    const source = try std.fs.path.join(ctx.allocator, &.{ previous_chunks_dir, std.fs.path.basename(destination) });
+    defer ctx.allocator.free(source);
+    if (!(try cachedPdfAvailable(ctx, source))) return false;
+    copyOrLinkCacheFile(ctx, source, destination) catch return false;
+    return cachedPdfAvailable(ctx, destination) catch false;
 }
 
 fn runMergeChunks(
