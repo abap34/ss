@@ -238,17 +238,41 @@ pub const AccessSummary = struct {
     }
 };
 
+pub const ScopeDisplayName = union(enum) {
+    document: []const u8,
+    page: []const u8,
+    caller,
+};
+
+pub const ScopeDisplay = struct {
+    scope: ResourceScope,
+    name: ScopeDisplayName,
+};
+
+pub const AccessSummaryFormatOptions = struct {
+    variable_scope_displays: []const ScopeDisplay = &.{},
+    pages_scope_displays: []const ScopeDisplay = &.{},
+};
+
 pub fn formatAccessSummary(allocator: std.mem.Allocator, summary: AccessSummary) ![]u8 {
+    return formatAccessSummaryWithOptions(allocator, summary, .{});
+}
+
+pub fn formatAccessSummaryWithOptions(
+    allocator: std.mem.Allocator,
+    summary: AccessSummary,
+    options: AccessSummaryFormatOptions,
+) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "DependencyQuery:");
     var wrote_item = false;
     for (summary.reads.items) |resource| {
-        try appendAccessLine(allocator, &out, "read", resource);
+        try appendAccessLine(allocator, &out, "read", resource, options);
         wrote_item = true;
     }
     for (summary.writes.items) |resource| {
-        try appendAccessLine(allocator, &out, "write", resource);
+        try appendAccessLine(allocator, &out, "write", resource, options);
         wrote_item = true;
     }
     if (summary.reads_layout) {
@@ -271,11 +295,17 @@ pub fn formatAccessSummary(allocator: std.mem.Allocator, summary: AccessSummary)
     return try out.toOwnedSlice(allocator);
 }
 
-fn appendAccessLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), access: []const u8, resource: Resource) !void {
+fn appendAccessLine(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    access: []const u8,
+    resource: Resource,
+    options: AccessSummaryFormatOptions,
+) !void {
     try out.appendSlice(allocator, "\n  ");
     try out.appendSlice(allocator, access);
     try out.appendSlice(allocator, " ");
-    try appendResource(allocator, out, resource);
+    try appendResource(allocator, out, resource, options);
 }
 
 fn appendFlagLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), flag: []const u8) !void {
@@ -283,18 +313,23 @@ fn appendFlagLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), flag: [
     try out.appendSlice(allocator, flag);
 }
 
-fn appendResource(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resource: Resource) !void {
+fn appendResource(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    resource: Resource,
+    options: AccessSummaryFormatOptions,
+) !void {
     switch (resource) {
         .variable => |variable| {
             try out.appendSlice(allocator, "Variable(");
-            try appendScope(allocator, out, variable.scope);
+            try appendScope(allocator, out, variable.scope, options.variable_scope_displays);
             try out.appendSlice(allocator, ", ");
             try appendOptionalName(allocator, out, variable.name);
             try out.append(allocator, ')');
         },
         .pages => |scope| {
             try out.appendSlice(allocator, "Pages(");
-            try appendScope(allocator, out, scope);
+            try appendScope(allocator, out, scope, options.pages_scope_displays);
             try out.append(allocator, ')');
         },
         .objects => |role_name| {
@@ -312,7 +347,18 @@ fn appendResource(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resourc
     }
 }
 
-fn appendScope(allocator: std.mem.Allocator, out: *std.ArrayList(u8), scope: ResourceScope) !void {
+fn appendScope(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    scope: ResourceScope,
+    displays: []const ScopeDisplay,
+) !void {
+    for (displays) |display| {
+        if (resourceScopeEql(scope, display.scope)) {
+            try appendScopeDisplayName(allocator, out, display.name);
+            return;
+        }
+    }
     switch (scope) {
         .any => try out.appendSlice(allocator, "*"),
         .document => |id| {
@@ -326,6 +372,34 @@ fn appendScope(allocator: std.mem.Allocator, out: *std.ArrayList(u8), scope: Res
             try out.appendSlice(allocator, text);
         },
     }
+}
+
+fn appendScopeDisplayName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: ScopeDisplayName) !void {
+    switch (name) {
+        .document => |value| {
+            try out.appendSlice(allocator, "document:");
+            try out.appendSlice(allocator, value);
+        },
+        .page => |value| {
+            try out.appendSlice(allocator, "page:");
+            try out.appendSlice(allocator, value);
+        },
+        .caller => try out.appendSlice(allocator, "caller"),
+    }
+}
+
+fn resourceScopeEql(left: ResourceScope, right: ResourceScope) bool {
+    return switch (left) {
+        .any => right == .any,
+        .document => |left_id| switch (right) {
+            .document => |right_id| left_id == right_id,
+            else => false,
+        },
+        .page => |left_id| switch (right) {
+            .page => |right_id| left_id == right_id,
+            else => false,
+        },
+    };
 }
 
 fn appendOptionalName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ?[]const u8) !void {
