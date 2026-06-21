@@ -6,7 +6,7 @@ const declarations = @import("../language/declarations.zig");
 const editor = @import("editor.zig");
 const language_names = @import("../language/names.zig");
 const registry = @import("../language/registry.zig");
-const typecheck = @import("typecheck.zig");
+const program_analysis = @import("program.zig");
 
 const JsonObject = std.json.ObjectMap;
 
@@ -461,7 +461,7 @@ fn buildVariables(allocator: std.mem.Allocator, ir: *core.Ir) ![]VariableInfo {
     }
     for (ir.modules.items) |module| {
         if (module.path == null) continue;
-        var infos = try typecheck.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
+        var infos = try program_analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
             const type_label: []u8 = @constCast(try entry.info.ty.formatAlloc(allocator));

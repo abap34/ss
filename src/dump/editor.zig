@@ -1,14 +1,14 @@
 const std = @import("std");
 const core = @import("core");
 
-const typecheck = @import("../analysis/typecheck.zig");
+const analysis = @import("../analysis.zig");
 const json = @import("utils").json;
 
 pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
     var variables = try root.arrayField("variables");
     for (ir.modules.items) |module| {
         if (module.path == null) continue;
-        var variable_infos = try typecheck.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
+        var variable_infos = try analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
         defer variable_infos.deinit(allocator);
         for (variable_infos.items) |entry| {
             var item = try variables.objectItem();

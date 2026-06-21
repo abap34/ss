@@ -256,6 +256,17 @@ fn expectLoweredDiagnostic(source: []const u8, expected_message: []const u8) !vo
     try compiler_semantics.expectLoweredDiagnostic(testing.io, allocator, path, source, expected_message);
 }
 
+fn expectLoweringErrorDiagnostic(source: []const u8, expected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectLoweringErrorDiagnostic(testing.io, allocator, path, source, expected_message);
+}
+
 fn expectNoLoweredDiagnostic(source: []const u8, unexpected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -989,7 +1000,6 @@ test "compiler semantics: enum names can be shadowed by values" {
         \\  let card = obj("card", "card", "text")
         \\  let Mode = card
         \\  let current = Mode.custom_mode ?? fallback
-        \\  Mode.custom_mode = current
         \\end
         \\
     );
@@ -2641,7 +2651,19 @@ test "compiler semantics: scheduled page statements share page scope" {
     , "from page scope");
 }
 
-test "compiler semantics: document blocks preserve top-level order" {
+test "compiler semantics: variable resources keep let bindings before references" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  let label_text = "from variable"
+        \\  text(label_text)
+        \\end
+        \\
+    , "from variable");
+}
+
+test "compiler semantics: document property writes schedule before reads" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
@@ -2666,7 +2688,47 @@ test "compiler semantics: document blocks preserve top-level order" {
         \\  docctx().footer_text = "after"
         \\end
         \\
-    , "unset");
+    , "after");
+}
+
+test "compiler semantics: later content writes schedule before pure content reads" {
+    try expectObjectState(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  let item = new("old", "body", "text")
+        \\  let observed = new(content(item), "note", "text")
+        \\  set_content(item, "new")
+        \\end
+        \\
+    , .{ .role = "note", .content = "new" });
+}
+
+test "compiler semantics: same-property updates keep source order" {
+    try expectObjectState(
+        \\import std:themes/default as *
+        \\
+        \\page one
+        \\  let item = new("old", "body", "text")
+        \\  set_content(item, "one")
+        \\  set_content(item, "two")
+        \\  let observed = new(content(item), "note", "text")
+        \\end
+        \\
+    , .{ .role = "note", .content = "two" });
+}
+
+test "compiler semantics: variable and property dependencies reject inverse cycles" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let item = text("old")
+        \\  let current = content(item)
+        \\  set_content(item, current)
+        \\end
+        \\
+    , "ScheduledDependencyCycle: document evaluation dependencies contain a cycle");
 }
 
 test "compiler semantics: void functions may finish without explicit return" {
@@ -3283,6 +3345,28 @@ test "compiler semantics: foreach cannot mutate the iterated object selection" {
         \\end
         \\
     );
+}
+
+test "compiler semantics: foreach selection mutation follows variables and function arguments" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn duplicate_title(title_obj: Object) -> Object
+        \\  let copy = new("copy", "title", "text")
+        \\  return title_obj
+        \\end
+        \\
+        \\fn mutate(selection: Selection<Object>) -> Selection<Object>
+        \\  return foreach(selection, duplicate_title)
+        \\end
+        \\
+        \\page bad
+        \\  title("A")
+        \\  let titles = objs(pagectx(), "title")
+        \\  mutate(titles)
+        \\end
+        \\
+    , "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated");
 }
 
 test "compiler semantics: foreach cannot create pages while iterating pages" {

@@ -45,14 +45,13 @@ fn numbered_item_role(counter_name: String) -> String
 end
 
 fn/! numbered_item(counter_name: String, text_value: String) -> Object
-  return new(text_value, numbered_item_role(counter_name), "text")
+  let item = new(text_value, numbered_item_role(counter_name), "text")
+  item.numbered_item_source = text_value
+  return item
 end
 
 fn set_numbered_item(item: Object, index: Number, format: String) -> Object
-  if !item.numbered_item_source?
-    item.numbered_item_source = content(item)
-  end
-  let source_text = item.numbered_item_source ?? content(item)
+  let source_text = item.numbered_item_source ?? ""
   let numbered_text = replace(format, "{number}", str(index))
   return set_content(item, replace(numbered_text, "{text}", source_text))
 end
