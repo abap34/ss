@@ -571,12 +571,16 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                 if (node.kind != .object or !node.attached) continue;
                 var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
                 defer env.deinit(ctx.allocator);
+                const uses_asset_content = switch (node.payload_kind orelse .text) {
+                    .image_ref, .pdf_ref => true,
+                    else => false,
+                };
                 var op = RenderOp{
                     .page_id = page.id,
                     .node_id = node.id,
                     .frame = node.frame,
-                    .content = node.content orelse "",
-                    .content_provenance = node.content_provenance.items,
+                    .content = if (uses_asset_content) node.content orelse "" else core.nodeDisplayContent(node),
+                    .content_provenance = if (uses_asset_content) node.content_provenance.items else core.nodeDisplayContentProvenance(node),
                     .link_id = core.nodeProperty(node, "link_id"),
                     .render = core.render_policy.resolveWithEnv(ir, node, sema),
                     .parse_mode = core.markdown.parseModeForNode(ir, node),

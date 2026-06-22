@@ -171,7 +171,7 @@ fn appendChrome(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const mode
 fn appendText(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, text: render_policy.TextPaint) !void {
     var op = Op.init(node, "draw_text");
     errdefer op.deinit(allocator);
-    try op.put(allocator, "content", node.content orelse "");
+    try op.put(allocator, "content", model.nodeDisplayContent(node));
     try putFontFace(allocator, &op, "font", text.font);
     try putFontFace(allocator, &op, "bold_font", text.bold_font);
     try putFontFace(allocator, &op, "italic_font", text.italic_font);
@@ -225,7 +225,7 @@ fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, ir: anytype, node: 
     const preamble = try @import("render_env.zig").joinTexPreambleEntries(allocator, env);
     defer allocator.free(preamble);
     try op.put(allocator, "capability", "compile_math");
-    try op.put(allocator, "source", node.content orelse "");
+    try op.put(allocator, "source", model.nodeDisplayContent(node));
     try op.put(allocator, "tex_mode", texModeForNode(node));
     try op.put(allocator, "math_tex_preamble", preamble);
     try op.putFloat(allocator, "scale", math.scale);

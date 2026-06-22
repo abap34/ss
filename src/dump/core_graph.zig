@@ -22,8 +22,10 @@ pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
 
 fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sema: anytype, node: core.Node) !void {
     const render = core.render_policy.resolveWithEnv(ir, &node, sema);
-    const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and node.content != null;
-    const should_parse_inline = core.markdown.shouldParseInlineNode(ir, &node) and node.content != null and !should_parse_blocks;
+    const display_content = core.nodeDisplayContent(&node);
+    const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;
+    const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and has_display_content;
+    const should_parse_inline = core.markdown.shouldParseInlineNode(ir, &node) and has_display_content and !should_parse_blocks;
 
     var markdown_doc_storage = core.markdown.MarkdownDocument.init(allocator);
     defer markdown_doc_storage.deinit();
@@ -34,7 +36,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sem
             allocator,
             ir,
             &node,
-            node.content.?,
+            display_content,
         );
     }
     if (should_parse_inline) {
@@ -42,7 +44,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sem
             allocator,
             ir,
             &node,
-            node.content.?,
+            display_content,
         );
     }
 
@@ -54,6 +56,9 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sem
     try item.optionalEnumTagField("object_kind", node.object_kind);
     try item.optionalEnumTagField("payload_kind", node.payload_kind);
     try item.optionalStringField("content", node.content);
+    if (node.display_content != null) {
+        try item.stringField("display_content", display_content);
+    }
     if (should_parse_blocks) {
         try writeMarkdownBlocks(&item, "blocks", markdown_doc_storage.blocks.items);
     } else {

@@ -19,6 +19,7 @@ const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
 const ValueTag = model.ValueTag;
 const Value = model.Value;
+const FunctionRef = model.FunctionRef;
 const Query = model.Query;
 const PageLayout = model.PageLayout;
 const Diagnostic = model.Diagnostic;
@@ -633,10 +634,7 @@ pub const Ir = struct {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.properties.items) |*property| {
             if (std.mem.eql(u8, property.key, key)) {
-                const owned_value = try self.allocator.dupe(u8, value);
-                self.allocator.free(property.value);
-                property.value = owned_value;
-                return;
+                return error.DuplicatePropertyDefinition;
             }
         }
         try node.properties.append(self.allocator, .{
@@ -684,14 +682,9 @@ pub const Ir = struct {
         node.content_provenance.clearRetainingCapacity();
     }
 
-    fn appendNodeContentProvenance(self: *Ir, out: *std.ArrayList(ContentProvenance), entries: []const ContentProvenance, offset: usize) !void {
-        for (entries) |entry| {
-            try out.append(self.allocator, try entry.cloneWithOffset(self.allocator, offset));
-        }
-    }
-
     pub fn setNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
+        if (node.content != null) return error.DuplicateContentDefinition;
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
         const provenance = self.stringProvenance(value);
@@ -707,21 +700,28 @@ pub const Ir = struct {
         node.content_provenance = owned_provenance;
     }
 
-    pub fn appendNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+    pub fn setNodeDisplayContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
-        const current = node.content orelse "";
-        var next_provenance = std.ArrayList(ContentProvenance).empty;
-        errdefer self.deinitProvenanceList(&next_provenance);
-        try self.appendNodeContentProvenance(&next_provenance, node.content_provenance.items, 0);
-        try self.appendNodeContentProvenance(&next_provenance, self.stringProvenance(value), current.len);
-        const next_content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current, value });
-        errdefer self.allocator.free(next_content);
-        try self.setStringProvenance(next_content, next_provenance.items);
-        if (node.content_owned) self.allocator.free(current);
-        self.clearNodeContentProvenance(node);
-        node.content = next_content;
-        node.content_owned = true;
-        node.content_provenance = next_provenance;
+        const owned_value = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned_value);
+        const provenance = self.stringProvenance(value);
+        var owned_provenance = try self.cloneProvenanceList(provenance);
+        errdefer self.deinitProvenanceList(&owned_provenance);
+        try self.setStringProvenance(owned_value, owned_provenance.items);
+        if (node.display_content_owned) {
+            if (node.display_content) |content| self.allocator.free(content);
+        }
+        for (node.display_content_provenance.items) |*entry| entry.deinit(self.allocator);
+        node.display_content_provenance.clearRetainingCapacity();
+        node.display_content = owned_value;
+        node.display_content_owned = true;
+        node.display_content_provenance = owned_provenance;
+    }
+
+    pub fn setNodeReprFunction(self: *Ir, node_id: NodeId, function: FunctionRef) !void {
+        const node = self.getNode(node_id) orelse return error.UnknownNode;
+        if (node.repr_function != null) return error.DuplicateReprDefinition;
+        node.repr_function = try function.clone(self.allocator);
     }
 
     fn makeNodeWithOrigin(

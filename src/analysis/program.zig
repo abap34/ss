@@ -186,6 +186,7 @@ const DependencyQuery = struct {
 
 const DependencyQueryTarget = struct {
     stmt: ast.Statement,
+    context: []const ast.Statement,
     scope: dependencies.ResourceScope,
     scope_display: dependencies.ScopeDisplayName,
 };
@@ -200,6 +201,10 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, ir: *core.Ir, sem
             const target = dependencyQueryTarget(module, query.span.start) orelse continue;
             var analyzer = dependencies.Analyzer.initWithScope(allocator, &module_sema, target.scope);
             defer analyzer.deinit();
+            for (target.context) |stmt| {
+                var context_summary = try analyzer.statement(stmt);
+                context_summary.deinit();
+            }
             var summary = try analyzer.statement(target.stmt);
             defer summary.deinit();
             const scope_displays = [_]dependencies.ScopeDisplay{.{
@@ -250,20 +255,20 @@ fn dependencyQueryTarget(module: *const core.SourceModule, query_start: usize) ?
     var best: ?DependencyQueryTarget = null;
     var best_end: usize = 0;
     const document_display = dependencies.ScopeDisplayName{ .document = dependencyQueryDocumentName(module) };
-    for (module.program.document_statements.items) |stmt| {
-        updateDependencyQueryTarget(&best, &best_end, stmt, .{ .document = module.id }, document_display, query_start);
+    for (module.program.document_statements.items, 0..) |stmt, index| {
+        updateDependencyQueryTarget(&best, &best_end, stmt, module.program.document_statements.items[0..index], .{ .document = module.id }, document_display, query_start);
     }
     for (module.program.pages.items, 0..) |page, page_index| {
         const page_scope = dependencies.ResourceScope{ .page = dependencyQuerySyntheticPageId(page_index) };
         const page_display = dependencies.ScopeDisplayName{ .page = page.name };
-        for (page.statements.items) |stmt| {
-            updateDependencyQueryTarget(&best, &best_end, stmt, page_scope, page_display, query_start);
+        for (page.statements.items, 0..) |stmt, index| {
+            updateDependencyQueryTarget(&best, &best_end, stmt, page.statements.items[0..index], page_scope, page_display, query_start);
         }
     }
     const caller_display: dependencies.ScopeDisplayName = .caller;
     for (module.program.functions.items) |func| {
-        for (func.statements.items) |stmt| {
-            updateDependencyQueryTarget(&best, &best_end, stmt, .any, caller_display, query_start);
+        for (func.statements.items, 0..) |stmt, index| {
+            updateDependencyQueryTarget(&best, &best_end, stmt, func.statements.items[0..index], .any, caller_display, query_start);
         }
     }
     return best;
@@ -283,18 +288,19 @@ fn updateDependencyQueryTarget(
     best: *?DependencyQueryTarget,
     best_end: *usize,
     stmt: ast.Statement,
+    context: []const ast.Statement,
     scope: dependencies.ResourceScope,
     scope_display: dependencies.ScopeDisplayName,
     query_start: usize,
 ) void {
     if (stmt.span.end <= query_start and stmt.span.end >= best_end.*) {
-        best.* = .{ .stmt = stmt, .scope = scope, .scope_display = scope_display };
+        best.* = .{ .stmt = stmt, .context = context, .scope = scope, .scope_display = scope_display };
         best_end.* = stmt.span.end;
     }
     switch (stmt.kind) {
         .if_stmt => |if_stmt| {
-            for (if_stmt.then_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, scope, scope_display, query_start);
-            for (if_stmt.else_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, scope, scope_display, query_start);
+            for (if_stmt.then_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, context, scope, scope_display, query_start);
+            for (if_stmt.else_statements.items) |nested| updateDependencyQueryTarget(best, best_end, nested, context, scope, scope_display, query_start);
         },
         else => {},
     }
