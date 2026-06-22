@@ -167,6 +167,8 @@ type Flow = object {
   fit: FitPolicy = FitPolicy.warn
   link_id: String = ""
   numbered_item_source: String? = none
+  numbered_item_number: String? = none
+  numbered_item_format: String? = none
 }
 
 type Text = object {
@@ -455,6 +457,7 @@ type Pageno = object {
   base = Text
   roles = ["pageno"]
 
+  pageno_format: String? = none
   text_size: Number = 11
   text_line_height: Number? = none
   layout_font_size: Number? = none

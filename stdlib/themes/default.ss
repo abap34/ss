@@ -4,33 +4,42 @@ fn default_code_theme() -> CodeHighlightTheme
   return code_theme_github_light()
 end
 
-fn body_style(body: Object) -> Object
+fn body_style(
+  body: Object,
+  font_size_name: Number = 24,
+  line_height_name: Number = 31,
+  color_name: Color = c"0.07,0.08,0.10",
+  markdown_bold_color_name: Color = c"0.05,0.30,0.58",
+  table_pad_x_name: Number = 12,
+  table_pad_y_name: Number = 9,
+  table_line_width_name: Number = 0.8
+) -> Object
   let theme = default_code_theme()
   let fill = theme.fill ?? c"#f6f8fa"
   let stroke = theme.stroke ?? c"#d0d7de"
-  txt(body, "Helvetica", 24, 31, c"0.07,0.08,0.10", 28, 96, 96)
-  md_bold(body, c"0.05,0.30,0.58")
+  txt(body, "Helvetica", font_size_name, line_height_name, color_name, 28, 96, 96)
+  md_bold(body, markdown_bold_color_name)
   md_code(body, 19, 25, 12, 9, docctx().code_theme_fill ?? fill, docctx().code_theme_stroke ?? stroke, 0.9, 6)
   code_theme(body, theme)
-  md_table(body, 12, 9, c"0.76,0.82,0.90", 0.8, c"0.90,0.94,0.98", c"0.985,0.990,0.996")
+  md_table(body, table_pad_x_name, table_pad_y_name, c"0.76,0.82,0.90", table_line_width_name, c"0.90,0.94,0.98", c"0.985,0.990,0.996")
   return body
 end
 
-fn/! h1(title_text: String) -> Object
+fn/! h1(title_text: String, font_size_name: Number = 40, color_name: Color = c"0.04,0.06,0.09") -> Object
   let title = title_obj(title_text)
-  txt(title, "Helvetica", 40, 47, c"0.04,0.06,0.09", 42, 72, 72, 700)
+  txt(title, "Helvetica", font_size_name, add(font_size_name, 7), color_name, 42, 72, 72, 700)
   return title
 end
 
-fn/! h2(subtitle_text: String) -> Object
+fn/! h2(subtitle_text: String, font_size_name: Number = 30, color_name: Color = c"0.07,0.09,0.13") -> Object
   let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica", 30, 37, c"0.07,0.09,0.13", 34, 88, 88, 700)
+  txt(subtitle, "Helvetica", font_size_name, add(font_size_name, 7), color_name, 34, 88, 88, 700)
   return subtitle
 end
 
-fn/! h3(subtitle_text: String) -> Object
+fn/! h3(subtitle_text: String, font_size_name: Number = 24, color_name: Color = c"0.10,0.12,0.16") -> Object
   let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica", 24, 31, c"0.10,0.12,0.16", 28, 96, 96, 700)
+  txt(subtitle, "Helvetica", font_size_name, add(font_size_name, 7), color_name, 28, 96, 96, 700)
   return subtitle
 end
 
@@ -54,9 +63,9 @@ fn/! subhead(subtitle_text: String) -> Object
   return subtitle
 end
 
-fn/! text(text_value: String) -> Object
+fn/! text(text_value: String, font_size_name: Number = 24, color_name: Color = c"0.07,0.08,0.10", markdown_bold_color_name: Color = c"0.05,0.30,0.58") -> Object
   let body = body_obj(text_value)
-  body_style(body)
+  body_style(body, font_size_name, add(font_size_name, 7), color_name, markdown_bold_color_name)
   return body
 end
 
@@ -69,7 +78,6 @@ end
 fn/! tex(text_value: String, scale: Number = 1) -> Object
   let obj = flow(tex_obj(text_value), 96, 96)
   obj.math_scale = scale
-  obj.math_align = Align.center
   return obj
 end
 
@@ -100,14 +108,14 @@ fn/! pdf(path_value: String, factor: Number = 1) -> Object
   return obj
 end
 
-fn/! code(text_value: String, language_name: String = "python") -> Object
+fn/! code(text_value: String, language_name: String = "python", font_size_name: Number = 16, code_font_family_name: String = "Menlo") -> Object
   let theme = default_code_theme()
   let fill = theme.fill ?? c"#f6f8fa"
   let stroke = theme.stroke ?? c"#d0d7de"
   let code = code_box(text_value, language_name, 96, 96, 16, 12, docctx().code_theme_fill ?? fill, docctx().code_theme_stroke ?? stroke, 0.9, 8)
   code_theme(code, theme)
-  code.text_size = 16
-  code.text_code_font_family = "Menlo"
+  code.text_size = font_size_name
+  code.text_code_font_family = code_font_family_name
   code.layout_spacing_after = 30
   return code
 end
@@ -117,13 +125,13 @@ fn/! code_file(path_value: String, language_name: String = "plain") -> Object
 end
 
 fn toc(title_text: String) -> Object
-  let title = head(title_text)
+  let title = lab_obj(title_text)
+  txt(title, "Helvetica", 36, 44, c"0.04,0.06,0.09", 34, 72, 72, 700)
   let list = toc_obj()
-  body_style(list)
-  list.text_size = 18
+  body_style(list, 18, 25, c"0.07,0.08,0.10")
   let chrome = panel()
   box(chrome, c"1,1,1", c"0.78,0.84,0.92", 0.9, 8)
-  below(list, title, title.layout_spacing_after ?? 36)
+  below(list, title, 34)
   surround(chrome, list, 14, 12)
   return group(title, chrome, list)
 end

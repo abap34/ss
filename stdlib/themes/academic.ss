@@ -18,9 +18,9 @@ fn/! h3(text_value: String) -> Object
   return content
 end
 
-fn/! head(title_text: String) -> Object
+fn/! head(title_text: String, font_size_name: Number = 34) -> Object
   let title = tl(title_obj(title_text), 30, 30)
-  txt(title, "Helvetica", 34, 50, c"0,0,0.0353", 35, 72, 72, 700)
+  txt(title, "Helvetica", font_size_name, mul(font_size_name, 1.45), c"0,0,0.0353", 35, 72, 72, 700)
   return title
 end
 
@@ -45,9 +45,10 @@ fn/! code_file(path_value: String, language_name: String = "plain") -> Object
 end
 
 fn toc(title_text: String) -> Object
-  let title = head(title_text)
+  let title = tl(lab_obj(title_text), 30, 30)
+  txt(title, "Helvetica", 34, 49.3, c"0,0,0.0353", 35, 72, 72, 700)
   let list = toc_obj()
-  below(list, title, title.layout_spacing_after ?? 32)
+  below(list, title, 35)
   return group(title, list)
 end
 
