@@ -381,13 +381,13 @@ test "compiler semantics: stdlib editor variable info keeps theme object classes
         \\
         \\fn/! h2(content: String) -> Object
         \\  let t = default::h2(content)
-        \\  t.text_size = 32
+        \\  t.link_id = "heading"
         \\  return t
         \\end
         \\
         \\page ok
         \\  let t = text! "body"
-        \\  t.text_size = 20
+        \\  t.link_id = "body"
         \\end
         \\
     , &.{
@@ -411,7 +411,7 @@ test "compiler semantics: default alias supports theme override with prelude pla
         \\
         \\fn/! h2(content: String) -> Object
         \\  let t = default::h2(content)
-        \\  t.text_size = 32
+        \\  t.link_id = "heading"
         \\  return t
         \\end
         \\
@@ -427,11 +427,8 @@ test "compiler semantics: theme text size override keeps automatic line height" 
         \\import std:themes/academic as *
         \\
         \\page ok
-        \\  let title = head! <<
-        \\large text
-        \\next line
-        \\>>
-        \\  title.text_size = 64
+        \\  let title = head!("large text
+        \\next line", 64)
         \\end
         \\
     , &.{
@@ -478,7 +475,7 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\
     ;
     try expectDiagnostic(page_source, "bytes:", "DependencyQuery:");
-    try expectDiagnostic(page_source, "bytes:", "write Variable(page:sample, t)");
+    try expectDiagnostic(page_source, "bytes:", "write Variable(scope=page:sample, name=t)");
 
     const document_source =
         \\document
@@ -487,7 +484,7 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\end
         \\
     ;
-    try expectDiagnostic(document_source, "bytes:", "write Variable(document:case.ss, t)");
+    try expectDiagnostic(document_source, "bytes:", "write Variable(scope=document:case.ss, name=t)");
 
     const function_call_source =
         \\fn echo(value: String) -> String
@@ -501,8 +498,35 @@ test "compiler semantics: dependency query comments report statement summaries" 
         \\end
         \\
     ;
-    try expectDiagnostic(function_call_source, "bytes:", "read Variable(page:sample, t)");
-    try expectDiagnostic(function_call_source, "bytes:", "write Variable(page:sample, out)");
+    try expectDiagnostic(function_call_source, "bytes:", "read Variable(scope=page:sample, name=t)");
+    try expectDiagnostic(function_call_source, "bytes:", "write Variable(scope=page:sample, name=out)");
+
+    const property_source =
+        \\import std:themes/default as *
+        \\
+        \\type Claim = object {
+        \\  roles = ["claim"]
+        \\  suffix: String? = none
+        \\}
+        \\
+        \\fn/! claim(text: String) -> Object = txt_obj(text, "claim")
+        \\
+        \\fn claim_suffix(item: Object) -> String
+        \\  return item.suffix ?? ""
+        \\end
+        \\
+        \\page sample
+        \\  let a = claim!("A")
+        \\  a.suffix = "!"
+        \\  ;; ^dep?
+        \\  text!(join(doc_objs(docctx(), "claim"), "", claim_suffix))
+        \\  ;; ^dep?
+        \\end
+        \\
+    ;
+    try expectDiagnostic(property_source, "bytes:", "write Property(owner=object:Claim#page:sample.a, key=suffix)");
+    try expectDiagnostic(property_source, "bytes:", "read Objects(role=claim)");
+    try expectDiagnostic(property_source, "bytes:", "read Property(owner=object:Claim.*, key=suffix)");
 }
 
 test "compiler semantics: stdlib core components build when called directly" {
@@ -901,19 +925,6 @@ test "compiler semantics: dynamically built residual text survives lowering" {
     , "hello world");
 }
 
-test "compiler semantics: content mutation helpers are stdlib functions" {
-    try expectObjectContent(
-        \\import std:themes/default as *
-        \\
-        \\page ok
-        \\  let target = text("hello [1]")
-        \\  rewrite(target, "[1]", "world")
-        \\  append(target, "!")
-        \\end
-        \\
-    , "hello world!");
-}
-
 test "compiler semantics: math alignment helpers are stdlib functions" {
     try buildSource(
         \\import std:themes/default as *
@@ -1234,7 +1245,7 @@ test "compiler semantics: Color is a static type" {
         \\end
         \\
         \\page ok
-        \\  let body = text("ok")
+        \\  let body = body_obj("ok")
         \\  body.text_color = keep_color(c"0.1,0.2,0.3")
         \\end
         \\
@@ -1258,7 +1269,7 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = text("color")
+        \\  let body = body_obj("color")
         \\  body.text_color = c"#334455"
         \\end
         \\
@@ -1268,7 +1279,7 @@ test "compiler semantics: Color is a static type" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = text("**bold**")
+        \\  let body = body_obj("**bold**")
         \\  body.text_markdown_bold_color = c"#884422"
         \\end
         \\
@@ -1300,7 +1311,7 @@ test "compiler semantics: structured style values expand to render properties" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = text("style")
+        \\  let body = body_obj("style")
         \\  body.text = TextStyle {
         \\    size = 33
         \\    color = c"#123456"
@@ -1334,9 +1345,10 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let snippet = code("fn demo() -> Void\nend", "ss")
+        \\  let snippet = code_in("fn demo() -> Void\nend", "ss", 96, 96)
         \\  code_theme(snippet, code_theme_one_dark())
-        \\  let body = text("```ss\nfn demo() -> Void\nend\n```")
+        \\  let body = body_obj("```ss\nfn demo() -> Void\nend\n```")
+        \\  md_code(body, 19, 25, 12, 9, c"#282c34", c"#3e4451", 0.9, 6)
         \\  code_theme(body, code_theme_one_dark())
         \\end
         \\
@@ -1345,7 +1357,6 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
     try expectObjectProperty(explicit_source, "code_function_color", "0.38039216,0.6862745,0.9372549");
     try expectObjectProperty(explicit_source, "text_markdown_code_keyword_color", "0.7764706,0.47058824,0.8666667");
     try expectObjectProperty(explicit_source, "text_markdown_code_function_color", "0.38039216,0.6862745,0.9372549");
-    try expectObjectProperty(explicit_source, "text_markdown_code_fill", "0.15686275,0.17254902,0.20392157");
 }
 
 test "compiler semantics: default theme applies code theme to code and markdown" {
@@ -1371,7 +1382,7 @@ test "compiler semantics: structured style value members are typed" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = text("style")
+        \\  let body = body_obj("style")
         \\  let style = TextStyle { size = 31 }
         \\  body.text_size = style.size
         \\end
@@ -1406,7 +1417,7 @@ test "compiler semantics: user record declarations define typed record values" {
         \\end
         \\
         \\page ok
-        \\  let body = text("caption")
+        \\  let body = body_obj("caption")
         \\  let style = large(CaptionStyle { size = 20 })
         \\  body.text = TextStyle {
         \\    size = style.size
@@ -1426,7 +1437,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\end
         \\
         \\page ok
-        \\  let body = text("ok")
+        \\  let body = body_obj("ok")
         \\  body.text_markdown_code_fill = none
         \\  body.text_color = fallback(body.text_markdown_code_fill)
         \\end
@@ -1473,13 +1484,11 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\import std:themes/default as *
         \\
         \\page ok
-        \\  let body = text("body")
-        \\  body.text_markdown_code_fill = c"1,0,0"
-        \\  body.text_markdown_code_fill = none
+        \\  let body = body_obj("body")
         \\  if body.text_markdown_code_fill?
-        \\    text("still-set")
+        \\    body_obj("still-set")
         \\  else
-        \\    text("unset")
+        \\    body_obj("unset")
         \\  end
         \\end
         \\
@@ -2388,15 +2397,15 @@ test "compiler semantics: math alignment rejects unknown literals" {
 }
 
 test "compiler semantics: member sugar reads and writes properties and content" {
-    try expectObjectContent(
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
-        \\page ok
+        \\page bad
         \\  let target = text("hello")
         \\  target.content = target.content ++ "!"
         \\end
         \\
-    , "hello!");
+    , "ScheduledDependencyCycle: document evaluation dependencies contain a cycle");
 
     try expectObjectContent(
         \\import std:themes/default as *
@@ -2435,7 +2444,7 @@ test "compiler semantics: chained member assignment writes through record fields
         \\}
         \\
         \\fn make_parts() -> Parts
-        \\  let middle = text("middle")
+        \\  let middle = body_obj("middle")
         \\  return Parts {
         \\    root = group(middle)
         \\    middle = middle
@@ -2445,13 +2454,14 @@ test "compiler semantics: chained member assignment writes through record fields
         \\page ok
         \\  let parts = make_parts()
         \\  place!(parts.root)
-        \\  parts.middle.content = "changed"
+        \\  parts.middle.link_id = "changed"
         \\  parts.middle.text_color = c"#ff0000"
         \\end
         \\
     ;
 
-    try expectObjectContent(source, "changed");
+    try expectObjectContent(source, "middle");
+    try expectObjectProperty(source, "link_id", "changed");
     try expectObjectProperty(source, "text_color", "1,0,0");
 }
 
@@ -2472,16 +2482,16 @@ test "compiler semantics: member reads materialize typed property values" {
         \\end
         \\
         \\page ok
-        \\  let target = text("typed")
+        \\  let target = body_obj("typed")
         \\  target.wrap = WrapMode.off
         \\  target.text_size = 24
         \\  target.link_id = "custom"
         \\  target.text_markdown_code_fill = c"0.1,0.2,0.3"
         \\  let panel_obj = panel()
-        \\  let other = text("color")
+        \\  let other = body_obj("color")
         \\  other.text_color = target.text_markdown_code_fill ?? c"0,0,0"
-        \\  text(wrap_label(target.wrap ?? WrapMode.on) ++ ":" ++ str(target.text_size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
-        \\  text(render_label(panel_obj.render_kind ?? RenderKind.text))
+        \\  body_obj(wrap_label(target.wrap ?? WrapMode.on) ++ ":" ++ str(target.text_size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
+        \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
         \\end
         \\
     , "wrap:24:custom");
@@ -2495,7 +2505,7 @@ test "compiler semantics: member reads materialize typed property values" {
         \\
         \\page ok
         \\  let panel_obj = panel()
-        \\  text(render_label(panel_obj.render_kind ?? RenderKind.text))
+        \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
         \\end
         \\
     , "render");
@@ -2517,7 +2527,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\  let unset = body_obj("unset")
         \\  let set = body_obj("set")
         \\  set.text_markdown_code_fill = c"0.1,0.2,0.3"
-        \\  text(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
+        \\  body_obj(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
         \\end
         \\
     , "none:some");
@@ -2715,8 +2725,8 @@ test "compiler semantics: document property writes schedule before reads" {
     , "after");
 }
 
-test "compiler semantics: later content writes schedule before pure content reads" {
-    try expectObjectState(
+test "compiler semantics: content definitions cannot replace constructor content" {
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\page one
@@ -2725,11 +2735,11 @@ test "compiler semantics: later content writes schedule before pure content read
         \\  set_content(item, "new")
         \\end
         \\
-    , .{ .role = "note", .content = "new" });
+    , "DuplicateContentDefinition: object content is already defined");
 }
 
-test "compiler semantics: same-property updates keep source order" {
-    try expectObjectState(
+test "compiler semantics: repeated content definitions are rejected" {
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\page one
@@ -2739,7 +2749,134 @@ test "compiler semantics: same-property updates keep source order" {
         \\  let observed = new(content(item), "note", "text")
         \\end
         \\
-    , .{ .role = "note", .content = "two" });
+    , "DuplicateContentDefinition: object content is already defined");
+}
+
+test "compiler semantics: independent claim properties join before summary reads" {
+    try expectObjectState(
+        \\import std:themes/default as *
+        \\
+        \\type Claim = object {
+        \\  base = Text
+        \\  roles = ["claim"]
+        \\  suffix: String? = none
+        \\  number_prefix: String? = none
+        \\}
+        \\
+        \\fn/! claim(text_value: String) -> Object
+        \\  return txt_obj(text_value, "claim")
+        \\end
+        \\
+        \\fn number_claim(item: Object, index: Number) -> Object
+        \\  item.number_prefix = str(index) ++ ":"
+        \\  return item
+        \\end
+        \\
+        \\fn claim_text(item: Object) -> String
+        \\  let prefix = item.number_prefix ?? ""
+        \\  let suffix = item.suffix ?? ""
+        \\  return prefix ++ item.content ++ suffix
+        \\end
+        \\
+        \\document
+        \\  foreach_enumerate(doc_objs(docctx(), "claim"), number_claim)
+        \\end
+        \\
+        \\page summary
+        \\  note!(join(doc_objs(docctx(), "claim"), ",", claim_text))
+        \\end
+        \\
+        \\page one
+        \\  let a = claim!("A")
+        \\  a.suffix = "!"
+        \\end
+        \\
+        \\page two
+        \\  claim!("B")
+        \\end
+        \\
+    , .{ .role = "note", .content = "1:A!,2:B" });
+}
+
+test "compiler semantics: repr functions materialize display content" {
+    try expectObjectContent(
+        \\import std:themes/default as *
+        \\
+        \\type Claim = object {
+        \\  base = Text
+        \\  roles = ["claim"]
+        \\  claim_suffix: String? = none
+        \\}
+        \\
+        \\fn claim_repr(item: Object) -> String
+        \\  return content(item) ++ (item.claim_suffix ?? "")
+        \\end
+        \\
+        \\page one
+        \\  let item = txt_obj("A", "claim")
+        \\  item.claim_suffix = "!"
+        \\  set_repr(item, claim_repr)
+        \\  place!(item)
+        \\end
+        \\
+    , "A!");
+}
+
+test "compiler semantics: repr reads wait for later property definitions" {
+    try expectObjectState(
+        \\import std:themes/default as *
+        \\
+        \\type Claim = object {
+        \\  base = Text
+        \\  roles = ["claim"]
+        \\  claim_suffix: String? = none
+        \\}
+        \\
+        \\fn/! claim(text_value: String) -> Object
+        \\  let item = txt_obj(text_value, "claim")
+        \\  return set_repr(item, claim_repr)
+        \\end
+        \\
+        \\fn claim_repr(item: Object) -> String
+        \\  return content(item) ++ (item.claim_suffix ?? "")
+        \\end
+        \\
+        \\fn claim_text(item: Object) -> String
+        \\  return repr(item)
+        \\end
+        \\
+        \\page summary
+        \\  note!(join(doc_objs(docctx(), "claim"), ",", claim_text))
+        \\end
+        \\
+        \\page one
+        \\  let item = claim!("A")
+        \\  item.claim_suffix = "!"
+        \\end
+        \\
+        \\page two
+        \\  claim!("B")
+        \\end
+        \\
+    , .{ .role = "note", .content = "A!,B" });
+}
+
+test "compiler semantics: repr functions are single definitions" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\fn label(item: Object) -> String
+        \\  return content(item)
+        \\end
+        \\
+        \\page one
+        \\  let item = txt_obj("A", "claim")
+        \\  set_repr(item, label)
+        \\  set_repr(item, label)
+        \\  place!(item)
+        \\end
+        \\
+    , "DuplicateReprDefinition: object repr is already defined");
 }
 
 test "compiler semantics: variable and property dependencies reject inverse cycles" {
@@ -2962,7 +3099,7 @@ test "compiler semantics: constants are evaluated once as value bindings" {
         \\}
         \\
         \\fn make_parts() -> Parts
-        \\  let middle = text("middle")
+        \\  let middle = body_obj("middle")
         \\  return Parts {
         \\    root = group(middle)
         \\    middle = middle
@@ -2972,14 +3109,14 @@ test "compiler semantics: constants are evaluated once as value bindings" {
         \\const parts: Parts = make_parts()
         \\
         \\page ok
-        \\  parts.middle.content = "changed"
+        \\  parts.middle.link_id = "changed"
         \\  parts.middle.text_color = c"#ff0000"
         \\  place!(parts.root)
         \\end
         \\
     ;
 
-    try expectObjectContent(source, "changed");
+    try expectObjectProperty(source, "link_id", "changed");
     try expectObjectProperty(source, "text_color", "1,0,0");
 }
 
@@ -3068,7 +3205,12 @@ test "compiler semantics: foreach_enumerate passes one-based indices" {
         \\import std:themes/default as *
         \\
         \\fn number_body(item: Object, index: Number) -> Object
-        \\  return set_content(item, str(index) ++ ":" ++ content(item))
+        \\  item.link_id = str(index)
+        \\  return item
+        \\end
+        \\
+        \\fn link_text(item: Object) -> String
+        \\  return item.link_id ?? "missing"
         \\end
         \\
         \\page one
@@ -3083,7 +3225,11 @@ test "compiler semantics: foreach_enumerate passes one-based indices" {
         \\  foreach_enumerate(doc_objs(docctx(), "body"), number_body)
         \\end
         \\
-    , "2:B");
+        \\page summary
+        \\  note(join(doc_objs(docctx(), "body"), ",", link_text))
+        \\end
+        \\
+    , "1,2");
 }
 
 test "compiler semantics: foreach_enumerate checks callback argument order" {
@@ -3180,8 +3326,8 @@ test "compiler semantics: document object counts wait for titles on any page" {
     , "102");
 }
 
-test "compiler semantics: stdlib numbering keeps source text across repeated formatting" {
-    try expectObjectContent(
+test "compiler semantics: stdlib numbering rejects repeated formatting" {
+    try expectLoweringErrorDiagnostic(
         \\import std:themes/default as *
         \\
         \\page one
@@ -3193,7 +3339,7 @@ test "compiler semantics: stdlib numbering keeps source text across repeated for
         \\  numbering!("claim", "Second {number}: {text}")
         \\end
         \\
-    , "Second 1: A");
+    , "DuplicatePropertyDefinition: property 'numbered_item_number' is already defined on this target");
 }
 
 test "compiler semantics: stdlib numbering keeps counters separate" {

@@ -271,7 +271,7 @@ end
       const query = diagnostics.find((diagnostic) => diagnostic.code === "DependencyQuery");
       assert(query, `dependency query diagnostic missing: ${JSON.stringify(diagnostics)}`);
       assert(query.message.includes("DependencyQuery:"), `dependency query message missing header: ${JSON.stringify(query)}`);
-      assert(query.message.includes("write Variable(page:sample, t)"), `dependency query message missing variable write: ${JSON.stringify(query)}`);
+      assert(query.message.includes("write Variable(scope=page:sample, name=t)"), `dependency query message missing variable write: ${JSON.stringify(query)}`);
       assert(query.range.start.line === 4, `dependency query diagnostic pointed at wrong line: ${JSON.stringify(query)}`);
     });
   } finally {

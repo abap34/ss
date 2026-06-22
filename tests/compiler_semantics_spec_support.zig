@@ -105,9 +105,7 @@ pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []con
 
     for (ir.nodes.items) |node| {
         if (node.kind == .object) {
-            if (node.content) |content| {
-                if (std.mem.eql(u8, content, expected)) return;
-            }
+            if (std.mem.eql(u8, core.nodeDisplayContent(&node), expected)) return;
         }
     }
     return error.ExpectedObjectContentMissing;
@@ -126,9 +124,7 @@ pub fn expectObjectContentWithOverlays(
 
     for (ir.nodes.items) |node| {
         if (node.kind == .object) {
-            if (node.content) |content| {
-                if (std.mem.eql(u8, content, expected)) return;
-            }
+            if (std.mem.eql(u8, core.nodeDisplayContent(&node), expected)) return;
         }
     }
     return error.ExpectedObjectContentMissing;

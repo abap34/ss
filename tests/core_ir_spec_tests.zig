@@ -48,7 +48,7 @@ test "core IR spec: containment is idempotent for the same parent-child pair" {
     try testing.expectEqual(object, children[0]);
 }
 
-test "core IR spec: node properties are last-write-wins by key" {
+test "core IR spec: node properties reject duplicate keys" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 
@@ -57,11 +57,11 @@ test "core IR spec: node properties are last-write-wins by key" {
 
     try ir.setNodeProperty(object, "fill", "red");
     try ir.setNodeProperty(object, "stroke", "black");
-    try ir.setNodeProperty(object, "fill", "blue");
+    try testing.expectError(error.DuplicatePropertyDefinition, ir.setNodeProperty(object, "fill", "blue"));
 
     const node = ir.getNode(object).?;
     try testing.expectEqual(@as(usize, 2), node.properties.items.len);
-    try testing.expectEqualStrings("blue", ir.getNodeProperty(object, "fill").?);
+    try testing.expectEqualStrings("red", ir.getNodeProperty(object, "fill").?);
     try testing.expectEqualStrings("black", ir.getNodeProperty(object, "stroke").?);
 }
 
