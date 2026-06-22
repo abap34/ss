@@ -15,25 +15,19 @@ fn/! pageno_obj() -> Object
 end
 
 fn pagenos!(format: String? = none) -> Void
-  docctx().pageno_fmt = format
-  mk_pagenos!(docctx())
-  set_pagenos(docctx())
+  mk_pagenos!(docctx(), format)
 end
 
 fn footers!(text_value: String) -> Void
-  docctx().footer_text = text_value
-  mk_footers!(docctx())
+  mk_footers!(docctx(), text_value)
 end
 
 fn logos!(path_value: String, scale: Number = 1) -> Void
-  docctx().logo_path = path_value
-  docctx().logo_scale = scale
-  mk_logos!(docctx())
+  mk_logos!(docctx(), path_value, scale)
 end
 
 fn watermark!(text_value: String) -> Void
-  docctx().watermark = text_value
-  mk_marks!(docctx())
+  mk_marks!(docctx(), text_value)
 end
 
 fn need_titles() -> Void
@@ -47,13 +41,19 @@ end
 fn/! numbered_item(counter_name: String, text_value: String) -> Object
   let item = new(text_value, numbered_item_role(counter_name), "text")
   item.numbered_item_source = text_value
-  return item
+  return set_repr(item, numbered_item_repr)
+end
+
+fn numbered_item_repr(item: Object) -> String
+  let source_text = item.numbered_item_source ?? content(item)
+  let numbered_text = replace(item.numbered_item_format ?? "{text}", "{number}", item.numbered_item_number ?? "0")
+  return replace(numbered_text, "{text}", source_text)
 end
 
 fn set_numbered_item(item: Object, index: Number, format: String) -> Object
-  let source_text = item.numbered_item_source ?? ""
-  let numbered_text = replace(format, "{number}", str(index))
-  return set_content(item, replace(numbered_text, "{text}", source_text))
+  item.numbered_item_number = str(index)
+  item.numbered_item_format = format
+  return item
 end
 
 fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
@@ -64,108 +64,95 @@ fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
   )
 end
 
-fn mk_pagenos!(doc: Document) -> Void
-  foreach(pages(doc), (page_value: Page) |-> mk_pageno!(page_value))
+fn mk_pagenos!(doc: Document, format: String?) -> Void
+  foreach(pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format))
 end
 
-fn mk_pageno!(page_value: Page) -> Page
-  if selection_empty(objs(page_value, "pageno"))
-    let page_no = place_on!(page_value, new("", "pageno", "text"))
-    pageno_s(page_no)
-  end
+fn mk_pageno!(page_value: Page, doc: Document, format: String?) -> Page
+  let page_no = place_on!(page_value, new("", "pageno", "text"))
+  pageno_s(page_no)
+  set_pageno(page_no, doc, format)
   return page_value
 end
 
 fn set_pagenos(doc: Document) -> Void
   foreach(
     doc_objs(doc, "pageno"),
-    (page_no: Object) |-> set_pageno(page_no, doc)
+    (page_no: Object) |-> set_pageno(page_no, doc, none)
   )
 end
 
-fn set_pageno(page_no: Object, doc: Document) -> Object
+fn set_pageno(page_no: Object, doc: Document, format: String?) -> Object
+  set_prop(page_no, "pageno_format", format)
+  return set_repr(page_no, pageno_repr)
+end
+
+fn pageno_repr(page_no: Object) -> String
   let page_value = page_of(page_no)
-  if doc.pageno_fmt?
-    let format = doc.pageno_fmt ?? ""
-    let page_text = replace(format, "{page}", str(page_index(page_value)))
-    let text = replace(page_text, "{total}", str(page_count(doc)))
-    page_no.content = text
-  else
-    page_no.content = str(page_index(page_value)) ++ "/" ++ str(page_count(doc))
+  if page_no.pageno_format?
+    let format_text = page_no.pageno_format ?? ""
+    let page_text = replace(format_text, "{page}", str(page_index(page_value)))
+    return replace(page_text, "{total}", str(page_count(docctx())))
   end
-  return page_no
+  return str(page_index(page_value)) ++ "/" ++ str(page_count(docctx()))
 end
 
-fn mk_footers!(doc: Document) -> Void
-  if doc.footer_text?
-    foreach(
-      pages(doc),
-      (page_value: Page) |-> mk_footer!(page_value, doc)
-    )
-  end
+fn mk_footers!(doc: Document, text_value: String) -> Void
+  foreach(
+    pages(doc),
+    (page_value: Page) |-> mk_footer!(page_value, text_value)
+  )
 end
 
-fn mk_footer!(page_value: Page, doc: Document) -> Page
-  if selection_empty(objs(page_value, "footer"))
-    let footer = place_on!(page_value, new(doc.footer_text ?? "", "footer", "text"))
-    txt(footer, "Helvetica", 12, 15, c"0.42,0.42,0.42", 0, 72, 160)
-    footer.wrap = WrapMode.off
-    pin_l(footer, 72)
-    pin_b(footer, 20)
-  end
+fn mk_footer!(page_value: Page, text_value: String) -> Page
+  let footer = place_on!(page_value, new(text_value, "footer", "text"))
+  txt(footer, "Helvetica", 12, 15, c"0.42,0.42,0.42", 0, 72, 160)
+  footer.wrap = WrapMode.off
+  pin_l(footer, 72)
+  pin_b(footer, 20)
   return page_value
 end
 
-fn mk_logos!(doc: Document) -> Void
-  if doc.logo_path?
-    foreach(
-      pages(doc),
-      (page_value: Page) |-> mk_logo!(page_value, doc)
-    )
-  end
+fn mk_logos!(doc: Document, path_value: String, scale: Number) -> Void
+  foreach(
+    pages(doc),
+    (page_value: Page) |-> mk_logo!(page_value, path_value, scale)
+  )
 end
 
-fn mk_logo!(page_value: Page, doc: Document) -> Page
-  if selection_empty(objs(page_value, "logo"))
-    let logo = place_on!(page_value, new(doc.logo_path ?? "", "logo", "image_ref"))
-    logo.render_kind = RenderKind.raster_asset
-    logo.asset_scale = doc.logo_scale ?? 1
-    logo.wrap = WrapMode.off
-    fix_w(logo, 96)
-    fix_h(logo, 40)
-    pin_r(logo, 72)
-    pin_t(logo, 36)
-  end
+fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
+  let logo = place_on!(page_value, new(path_value, "logo", "image_ref"))
+  logo.render_kind = RenderKind.raster_asset
+  logo.asset_scale = scale
+  logo.wrap = WrapMode.off
+  fix_w(logo, 96)
+  fix_h(logo, 40)
+  pin_r(logo, 72)
+  pin_t(logo, 36)
   return page_value
 end
 
-fn mk_marks!(doc: Document) -> Void
-  if doc.watermark?
-    foreach(
-      pages(doc),
-      (page_value: Page) |-> mk_mark!(page_value, doc)
-    )
-  end
+fn mk_marks!(doc: Document, text_value: String) -> Void
+  foreach(
+    pages(doc),
+    (page_value: Page) |-> mk_mark!(page_value, text_value)
+  )
 end
 
-fn mk_mark!(page_value: Page, doc: Document) -> Page
-  if selection_empty(objs(page_value, "watermark"))
-    let mark = place_on!(page_value, new(doc.watermark ?? "", "watermark", "text"))
-    txt(mark, "Helvetica", 72, 80, c"0.85,0.85,0.85", 0, 0, 0)
-    mark.wrap = WrapMode.off
-    fix_w(mark, 800)
-    fix_h(mark, 90)
-    equal(anchor(mark, "center_x"), page_anchor("center_x"), 0)
-    equal(anchor(mark, "center_y"), page_anchor("center_y"), 0)
-  end
+fn mk_mark!(page_value: Page, text_value: String) -> Page
+  let mark = place_on!(page_value, new(text_value, "watermark", "text"))
+  txt(mark, "Helvetica", 72, 80, c"0.85,0.85,0.85", 0, 0, 0)
+  mark.wrap = WrapMode.off
+  fix_w(mark, 800)
+  fix_h(mark, 90)
+  equal(anchor(mark, "center_x"), page_anchor("center_x"), 0)
+  equal(anchor(mark, "center_y"), page_anchor("center_y"), 0)
   return page_value
 end
 
 fn toc_obj() -> Object
   let toc = obj("", "toc", "text")
-  txt(toc, "Helvetica", 18, 24, c"0,0,0.0353", 24, 96, 96)
-  set_toc(toc, docctx())
-  return toc
+  return set_repr(toc, toc_repr)
 end
 
 fn set_tocs(doc: Document) -> Void
@@ -195,8 +182,11 @@ fn toc_text(doc: Document) -> String
 end
 
 fn set_toc(toc: Object, doc: Document) -> Object
-  toc.content = toc_text(doc)
-  return toc
+  return set_repr(toc, toc_repr)
+end
+
+fn toc_repr(toc: Object) -> String
+  return toc_text(docctx())
 end
 
 fn chk_titles(doc: Document) -> Void

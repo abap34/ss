@@ -81,11 +81,12 @@ fn/! note(text_value: String) -> Object
 end
 
 fn toc(title_text: String) -> Object
-  let title = head(title_text)
+  let title = tl(txt_obj(title_text, "label"), 72, 98)
+  txt(title, "Helvetica", 36, 42, c"1,0.3765,0.5098", 46, 72, 72, 700)
   let list = toc_obj()
   let chrome = panel()
   box(chrome, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
-  below(list, title, title.layout_spacing_after ?? 32)
+  below(list, title, 46)
   surround(chrome, list, 14, 12)
   return group(title, chrome, list)
 end

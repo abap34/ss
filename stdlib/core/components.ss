@@ -144,9 +144,7 @@ end
 fn/! citation(target: Object, number: Number, reference_text: String) -> Object
   let number_text = str(number)
   let marker = "[" ++ number_text ++ "]"
-  let escaped_marker = "\[" ++ number_text ++ "\]"
   let id = "citation:" ++ str(page_index(pagectx())) ++ ":" ++ number_text
-  rewrite(target, marker, md_link(escaped_marker, "#" ++ id))
 
   let ref = link(cite_obj(marker ++ " " ++ reference_text), id)
   inset_x(ref, 120, 90)
