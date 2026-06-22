@@ -155,6 +155,10 @@ pub const Node = struct {
     content: ?[]const u8 = null,
     content_owned: bool = false,
     content_provenance: std.ArrayList(ContentProvenance) = .empty,
+    display_content: ?[]const u8 = null,
+    display_content_owned: bool = false,
+    display_content_provenance: std.ArrayList(ContentProvenance) = .empty,
+    repr_function: ?FunctionRef = null,
     page_index: ?usize = null,
     origin: ?[]const u8 = null,
     properties: std.ArrayList(Property) = .empty,
@@ -178,6 +182,12 @@ pub const Node = struct {
         }
         for (self.content_provenance.items) |*entry| entry.deinit(allocator);
         self.content_provenance.deinit(allocator);
+        if (self.display_content_owned) {
+            if (self.display_content) |content| allocator.free(content);
+        }
+        for (self.display_content_provenance.items) |*entry| entry.deinit(allocator);
+        self.display_content_provenance.deinit(allocator);
+        if (self.repr_function) |*function| function.deinit(allocator);
     }
 };
 
@@ -511,6 +521,16 @@ pub fn nodeProperty(node: *const Node, key: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, property.key, key)) return property.value;
     }
     return null;
+}
+
+pub fn nodeDisplayContent(node: *const Node) []const u8 {
+    if (node.display_content) |content| return content;
+    return node.content orelse "";
+}
+
+pub fn nodeDisplayContentProvenance(node: *const Node) []const ContentProvenance {
+    if (node.display_content != null) return node.display_content_provenance.items;
+    return node.content_provenance.items;
 }
 
 pub fn nodePropertyEq(node: *const Node, key: []const u8, expected: []const u8) bool {

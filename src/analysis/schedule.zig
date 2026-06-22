@@ -282,7 +282,6 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
             try writer_index.appendCandidates(read, seen_candidates, &candidates);
         }
         for (candidates.items) |candidate_index| {
-            if (candidate_index == reader_index) continue;
             if (summaryWritesRead(units[candidate_index].summary, reader.summary)) {
                 try addScheduleEdge(allocator, edges, &edge_index, candidate_index, reader_index, .dependency);
             }
@@ -615,16 +614,8 @@ fn buildAdjacency(allocator: std.mem.Allocator, unit_count: usize, edges: []cons
 fn summaryWritesRead(writer: dependencies.AccessSummary, reader: dependencies.AccessSummary) bool {
     for (writer.writes.items) |write| {
         for (reader.reads.items) |read| {
-            if (summaryWritesResource(reader, write)) continue;
             if (write.intersects(read)) return true;
         }
-    }
-    return false;
-}
-
-fn summaryWritesResource(summary: dependencies.AccessSummary, resource: dependencies.Resource) bool {
-    for (summary.writes.items) |write| {
-        if (write.intersects(resource)) return true;
     }
     return false;
 }
@@ -732,11 +723,20 @@ fn propertyOwnerEql(left: dependencies.PropertyOwner, right: dependencies.Proper
         .any => right == .any,
         .document => right == .document,
         .page => right == .page,
-        .object => |left_name| switch (right) {
-            .object => |right_name| optionalNameEql(left_name, right_name),
+        .object => |left_owner| switch (right) {
+            .object => |right_owner| objectOwnerEql(left_owner, right_owner),
             else => false,
         },
     };
+}
+
+fn objectOwnerEql(left: dependencies.ObjectOwner, right: dependencies.ObjectOwner) bool {
+    return optionalNameEql(left.class_name, right.class_name) and objectIdentityEql(left.identity, right.identity);
+}
+
+fn objectIdentityEql(left: ?dependencies.ObjectIdentity, right: ?dependencies.ObjectIdentity) bool {
+    if (left == null or right == null) return left == null and right == null;
+    return left.?.eql(right.?);
 }
 
 fn propertyKeyEql(left: dependencies.PropertyKey, right: dependencies.PropertyKey) bool {

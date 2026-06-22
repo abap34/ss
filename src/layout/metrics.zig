@@ -172,7 +172,7 @@ pub fn intrinsicWidthCached(ir: anytype, node: *const Node, cache: *MeasurementC
 
 fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) f32 {
     const style = styleForNode(ir, node);
-    const content = node.content orelse "";
+    const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(ir, node);
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
@@ -222,13 +222,13 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
         },
         .figure_text => PageLayout.max_figure_height + chrome_height,
         .math_text, .math_tex => blk: {
-            const content = node.content orelse "";
+            const content = model.nodeDisplayContent(node);
             const lines = @max(lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
             break :blk @min(PageLayout.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node)) + chrome_height;
         },
         else => blk: {
-            const content = node.content orelse "";
+            const content = model.nodeDisplayContent(node);
             const width = if (node.frame.width > 0)
                 @max(@as(f32, 1.0), node.frame.width - 2.0 * chromePadX(ir, node))
             else

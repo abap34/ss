@@ -282,6 +282,10 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const object_id = try ctx.evalObjectArg(call, 0);
             break :blk .{ .string = ctx.nodeContent(object_id) orelse "" };
         },
+        .repr => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            break :blk .{ .string = try ctx.reprNode(object_id) };
+        },
         .prop => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             defer target.deinit(ctx.ir.allocator);
@@ -320,6 +324,13 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const object_id = try ctx.evalObjectArg(call, 0);
             const text = try ctx.evalStringArg(call, 1);
             try ctx.setNodeContent(object_id, text);
+            break :blk .{ .object = object_id };
+        },
+        .set_repr => blk: {
+            const object_id = try ctx.evalObjectArg(call, 0);
+            var function = try evalFunctionArg(ctx, call, 1);
+            defer function.deinit(ctx.ir.allocator);
+            try ctx.setNodeReprFunction(object_id, function);
             break :blk .{ .object = object_id };
         },
         .group => blk: {

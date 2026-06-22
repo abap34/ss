@@ -16,11 +16,46 @@ pub const ResourceKind = enum {
     property,
 };
 
+pub const ObjectIdentity = struct {
+    scope: ResourceScope,
+    name: []const u8,
+
+    pub fn eql(self: ObjectIdentity, other: ObjectIdentity) bool {
+        return resourceScopeEql(self.scope, other.scope) and std.mem.eql(u8, self.name, other.name);
+    }
+};
+
+pub const ObjectOwner = struct {
+    class_name: ?[]const u8 = null,
+    identity: ?ObjectIdentity = null,
+
+    pub fn intersects(self: ObjectOwner, other: ObjectOwner) bool {
+        if (self.identity != null and other.identity != null) {
+            return self.identity.?.eql(other.identity.?);
+        }
+        return optionalNameIntersects(self.class_name, other.class_name);
+    }
+
+    pub fn merge(self: ObjectOwner, other: ObjectOwner) ObjectOwner {
+        return .{
+            .class_name = mergeOptionalNames(self.class_name, other.class_name),
+            .identity = if (self.identity != null and other.identity != null and self.identity.?.eql(other.identity.?))
+                self.identity
+            else
+                null,
+        };
+    }
+
+    pub fn isUnknown(self: ObjectOwner) bool {
+        return self.class_name == null and self.identity == null;
+    }
+};
+
 pub const PropertyOwner = union(enum) {
     any,
     document,
     page,
-    object: ?[]const u8,
+    object: ObjectOwner,
 
     pub fn intersects(self: PropertyOwner, other: PropertyOwner) bool {
         return switch (self) {
@@ -35,7 +70,7 @@ pub const PropertyOwner = union(enum) {
             },
             .object => |left| switch (other) {
                 .any => true,
-                .object => |right| optionalNameIntersects(left, right),
+                .object => |right| left.intersects(right),
                 .document, .page => false,
             },
         };
@@ -56,7 +91,7 @@ pub const PropertyOwner = union(enum) {
             },
             .object => |left| switch (other) {
                 .any => .any,
-                .object => |right| .{ .object = mergeOptionalNames(left, right) },
+                .object => |right| .{ .object = left.merge(right) },
                 .document, .page => .any,
             },
         };
@@ -65,7 +100,7 @@ pub const PropertyOwner = union(enum) {
     pub fn isUnknown(self: PropertyOwner) bool {
         return switch (self) {
             .any => true,
-            .object => |class_name| class_name == null,
+            .object => |owner| owner.isUnknown(),
             .document, .page => false,
         };
     }
@@ -322,26 +357,30 @@ fn appendResource(
     switch (resource) {
         .variable => |variable| {
             try out.appendSlice(allocator, "Variable(");
+            try out.appendSlice(allocator, "scope=");
             try appendScope(allocator, out, variable.scope, options.variable_scope_displays);
-            try out.appendSlice(allocator, ", ");
-            try appendOptionalName(allocator, out, variable.name);
+            try out.appendSlice(allocator, ", name=");
+            try out.appendSlice(allocator, variable.name);
             try out.append(allocator, ')');
         },
         .pages => |scope| {
             try out.appendSlice(allocator, "Pages(");
+            try out.appendSlice(allocator, "scope=");
             try appendScope(allocator, out, scope, options.pages_scope_displays);
             try out.append(allocator, ')');
         },
         .objects => |role_name| {
             try out.appendSlice(allocator, "Objects(");
-            try appendOptionalName(allocator, out, role_name);
+            try out.appendSlice(allocator, "role=");
+            try appendOptionalNameOrAny(allocator, out, role_name);
             try out.append(allocator, ')');
         },
         .property => |property| {
             try out.appendSlice(allocator, "Property(");
-            try appendPropertyOwner(allocator, out, property.owner);
-            try out.appendSlice(allocator, ", ");
-            try appendOptionalName(allocator, out, property.key.displayName());
+            try out.appendSlice(allocator, "owner=");
+            try appendPropertyOwner(allocator, out, property.owner, options);
+            try out.appendSlice(allocator, ", key=");
+            try appendOptionalNameOrAny(allocator, out, property.key.displayName());
             try out.append(allocator, ')');
         },
     }
@@ -402,17 +441,42 @@ fn resourceScopeEql(left: ResourceScope, right: ResourceScope) bool {
     };
 }
 
-fn appendOptionalName(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ?[]const u8) !void {
+fn appendOptionalNameOrAny(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ?[]const u8) !void {
     try out.appendSlice(allocator, value orelse "*");
 }
 
-fn appendPropertyOwner(allocator: std.mem.Allocator, out: *std.ArrayList(u8), owner: PropertyOwner) !void {
+fn appendPropertyOwner(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    owner: PropertyOwner,
+    options: AccessSummaryFormatOptions,
+) !void {
     switch (owner) {
         .any => try out.appendSlice(allocator, "*"),
-        .document => try out.appendSlice(allocator, "Doc"),
-        .page => try out.appendSlice(allocator, "PageContext"),
-        .object => |class_name| try appendOptionalName(allocator, out, class_name),
+        .document => try out.appendSlice(allocator, "document"),
+        .page => try out.appendSlice(allocator, "page"),
+        .object => |object_owner| {
+            try out.appendSlice(allocator, "object:");
+            try appendOptionalNameOrAny(allocator, out, object_owner.class_name);
+            if (object_owner.identity) |identity| {
+                try out.append(allocator, '#');
+                try appendObjectIdentity(allocator, out, identity, options);
+            } else {
+                try out.appendSlice(allocator, ".*");
+            }
+        },
     }
+}
+
+fn appendObjectIdentity(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    identity: ObjectIdentity,
+    options: AccessSummaryFormatOptions,
+) !void {
+    try appendScope(allocator, out, identity.scope, options.variable_scope_displays);
+    try out.append(allocator, '.');
+    try out.appendSlice(allocator, identity.name);
 }
 
 fn optionalNameIntersects(left: ?[]const u8, right: ?[]const u8) bool {
@@ -431,6 +495,24 @@ fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), re
         if (existing.intersects(resource) and resource.intersects(existing)) return;
     }
     try list.append(allocator, resource);
+}
+
+fn singleObjectWriteRole(summary: AccessSummary) ?[]const u8 {
+    var role_name: ?[]const u8 = null;
+    for (summary.writes.items) |resource| {
+        switch (resource) {
+            .objects => |name| {
+                const concrete = name orelse return null;
+                if (role_name) |existing| {
+                    if (!std.mem.eql(u8, existing, concrete)) return null;
+                } else {
+                    role_name = concrete;
+                }
+            },
+            else => {},
+        }
+    }
+    return role_name;
 }
 
 const LetPolicy = enum {
@@ -454,7 +536,14 @@ const PropertyTarget = struct {
     }
 
     fn object(class_name: ?[]const u8) PropertyTarget {
-        return .{ .owner = .{ .object = class_name } };
+        return .{ .owner = .{ .object = .{ .class_name = class_name } } };
+    }
+
+    fn objectWithIdentity(class_name: ?[]const u8, scope: ResourceScope, name: []const u8) PropertyTarget {
+        return .{ .owner = .{ .object = .{
+            .class_name = class_name,
+            .identity = .{ .scope = scope, .name = name },
+        } } };
     }
 };
 
@@ -552,7 +641,7 @@ pub const Analyzer = struct {
                         _ = self.string_bindings.remove(binding.name);
                     }
                     try self.bindSelectionReads(binding.name, expr.selection_reads.items);
-                    const role_name = try self.objectRoleExpr(binding.expr);
+                    const role_name = (try self.objectRoleExpr(binding.expr)) orelse singleObjectWriteRole(expr);
                     if (role_name) |name| {
                         try self.object_role_bindings.put(binding.name, name);
                     } else {
@@ -568,7 +657,7 @@ pub const Analyzer = struct {
                         if (expr_target) |value| break :blk value;
                         break :blk null;
                     };
-                    if (target) |value| {
+                    if (self.bindingPropertyTarget(binding.name, target, let_policy)) |value| {
                         try self.property_target_bindings.put(binding.name, value);
                     } else {
                         _ = self.property_target_bindings.remove(binding.name);
@@ -622,6 +711,17 @@ pub const Analyzer = struct {
         var state = try self.pushLocalFacts();
         defer state.restore();
         return try self.analyzeStatements(statements, .local);
+    }
+
+    fn bindingPropertyTarget(self: *Analyzer, name: []const u8, target: ?PropertyTarget, let_policy: LetPolicy) ?PropertyTarget {
+        const value = target orelse return null;
+        return switch (value.owner) {
+            .object => |owner| blk: {
+                if (owner.identity != null or let_policy == .local) break :blk value;
+                break :blk PropertyTarget.objectWithIdentity(owner.class_name, self.variable_scope, name);
+            },
+            .any, .document, .page => value,
+        };
     }
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
@@ -1381,12 +1481,21 @@ pub const Analyzer = struct {
                 summary.reads_layout = true;
             },
             .content => try summary.addRead(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0))),
+            .repr => {
+                const owner = propertyOwnerFromArgFacts(arg_facts, 0);
+                try summary.addRead(Resource.makeContentProperty(owner));
+                try summary.addRead(Resource.makeProperty(owner, null));
+            },
             .prop, .has_prop, .prop_eq => try summary.addRead(Resource.makeProperty(
                 propertyOwnerFromArgFacts(arg_facts, 0),
                 literalStringFromArgFacts(arg_facts, 1),
             )),
             .set_content => {
                 try summary.addWrite(Resource.makeContentProperty(propertyOwnerFromArgFacts(arg_facts, 0)));
+                summary.writes_layout_input = true;
+            },
+            .set_repr => {
+                try summary.addWrite(Resource.makeProperty(propertyOwnerFromArgFacts(arg_facts, 0), "repr"));
                 summary.writes_layout_input = true;
             },
             .group => {
@@ -1430,10 +1539,12 @@ pub const Analyzer = struct {
         return switch (op) {
             .select,
             .content,
+            .repr,
             .prop,
             .has_prop,
             .prop_eq,
             .set_content,
+            .set_repr,
             .new,
             .place_on,
             .set_prop,
@@ -1612,7 +1723,7 @@ pub const Analyzer = struct {
                     try self.propertyTargetExpr(call.args.items[1])
                 else
                     PropertyTarget.any(),
-                .set_content, .require_asset_exists => if (call.args.items.len > 0)
+                .set_content, .set_repr, .require_asset_exists => if (call.args.items.len > 0)
                     try self.propertyTargetExpr(call.args.items[0])
                 else
                     PropertyTarget.any(),
@@ -1787,14 +1898,23 @@ pub const Analyzer = struct {
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
-        var string_bindings = std.ArrayList(StringBindingRestore).empty;
-        var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
+        var facts = try self.pushCallbackFacts();
+        defer facts.restore();
+        var local_snapshot = try self.cloneLocalVariables();
+        const current_locals = self.local_variables;
+        self.local_variables = local_snapshot;
         defer {
-            self.restoreStringBindings(&self.object_role_bindings, &object_role_bindings);
-            self.restoreStringBindings(&self.string_bindings, &string_bindings);
+            local_snapshot = self.local_variables;
+            self.local_variables = current_locals;
+            local_snapshot.deinit();
         }
+        var string_bindings = std.ArrayList(StringBindingRestore).empty;
+        defer string_bindings.deinit(self.allocator);
+        var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
+        defer object_role_bindings.deinit(self.allocator);
         try self.bindLiteralStringArgs(resolved.decl, call, &string_bindings);
         try self.bindObjectRoleArgs(resolved.decl, call, &object_role_bindings);
+        try self.bindLocalParams(resolved.decl.params.items);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
@@ -1804,7 +1924,10 @@ pub const Analyzer = struct {
             switch (stmt.kind) {
                 .return_expr => |expr| return try self.objectRoleExpr(expr),
                 .return_void => return null,
-                else => {},
+                else => {
+                    var nested = try self.analyzeStatement(stmt, .local);
+                    nested.deinit();
+                },
             }
         }
         return null;

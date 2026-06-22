@@ -169,6 +169,26 @@ fn reportLowerError(ir: *core.Ir, err: anyerror, origin: []const u8) !void {
     });
 }
 
+fn reportDuplicatePropertyDefinition(ir: *core.Ir, origin: []const u8, key: []const u8) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{
+            .message = try std.fmt.allocPrint(ir.allocator, "DuplicatePropertyDefinition: property '{s}' is already defined on this target", .{key}),
+        },
+    });
+}
+
+fn reportDuplicateContentDefinition(ir: *core.Ir, origin: []const u8) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try ir.allocator.dupe(u8, "DuplicateContentDefinition: object content is already defined") },
+    });
+}
+
+fn reportDuplicateReprDefinition(ir: *core.Ir, origin: []const u8) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try ir.allocator.dupe(u8, "DuplicateReprDefinition: object repr is already defined") },
+    });
+}
+
 fn reportLowerDiagnostic(ir: *core.Ir, diagnostic: LowerDiagnostic) !void {
     var message_buf: [256]u8 = undefined;
     const message = formatLowerDiagnostic(&message_buf, diagnostic);
@@ -215,6 +235,9 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
         error.ScheduledDependencyCycle => "ScheduledDependencyCycle: document evaluation dependencies contain a cycle",
+        error.DuplicateContentDefinition => "DuplicateContentDefinition: object content is already defined",
+        error.DuplicatePropertyDefinition => "DuplicatePropertyDefinition: property is already defined on this target",
+        error.DuplicateReprDefinition => "DuplicateReprDefinition: object repr is already defined",
         error.ExpectedSelection => "ExpectedSelection: expected a selection value",
         error.ExpectedConstraintSet => "ExpectedConstraintSet: expected a constraint set",
         error.ExpectedStringArgument => "ExpectedStringArgument: expected a string argument",
@@ -254,6 +277,34 @@ pub fn evalIrWithSchedule(allocator: std.mem.Allocator, ir: *core.Ir, graph: *co
         page_states.deinit();
     }
     for (graph.order) |unit_index| try executeScheduledUnit(ir, &ir.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
+    try materializeDisplayContent(ir, &ir.functions, &closures);
+}
+
+fn materializeDisplayContent(ir: *core.Ir, functions: *const core.FunctionMap, closures: *ClosureStore) !void {
+    var env = std.StringHashMap(core.Value).init(ir.allocator);
+    defer env.deinit();
+
+    var index: usize = 0;
+    while (index < ir.nodes.items.len) : (index += 1) {
+        const node_id = ir.nodes.items[index].id;
+        const node = ir.getNode(node_id) orelse continue;
+        if (node.kind != .object) continue;
+        const function = if (node.repr_function) |repr_function|
+            try repr_function.clone(ir.allocator)
+        else
+            continue;
+        var owned_function = function;
+        defer owned_function.deinit(ir.allocator);
+
+        const page_id = ir.parentPageOf(node_id) orelse ir.document_id;
+        const context: EvalContext = if (page_id == ir.document_id) .document else .page;
+        const origin = node.origin orelse "";
+        const text = evalNodeReprWithFunction(ir, page_id, context, .attached, &env, functions, closures, origin, node_id, function) catch |err| {
+            try reportLowerError(ir, err, origin);
+            return err;
+        };
+        try ir.setNodeDisplayContent(node_id, text);
+    }
 }
 
 const DocumentExecutionState = struct {
@@ -955,6 +1006,43 @@ fn evalCallArgs(
     return values;
 }
 
+fn evalNodeRepr(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    current_origin: []const u8,
+    object_id: core.NodeId,
+) ![]const u8 {
+    const node = ir.getNode(object_id) orelse return error.UnknownNode;
+    const function = node.repr_function orelse return node.content orelse "";
+    return evalNodeReprWithFunction(ir, page_id, context, mode, env, functions, closures, current_origin, object_id, function);
+}
+
+fn evalNodeReprWithFunction(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    current_origin: []const u8,
+    object_id: core.NodeId,
+    function: core.FunctionRef,
+) ![]const u8 {
+    const args = [_]core.Value{.{ .object = object_id }};
+    var result = try invokeFunctionRef(ir, page_id, context, mode, env, functions, closures, function, current_origin, &args);
+    defer result.deinit(ir.allocator);
+    return switch (result) {
+        .string => |text| text,
+        else => error.ExpectedStringArgument,
+    };
+}
+
 const BuiltinContext = struct {
     ir: *core.Ir,
     page_id: core.NodeId,
@@ -1083,7 +1171,23 @@ const BuiltinContext = struct {
     }
 
     pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
-        try self.ir.setNodeProperty(object_id, key, value);
+        self.ir.setNodeProperty(object_id, key, value) catch |err| switch (err) {
+            error.DuplicatePropertyDefinition => {
+                try reportDuplicatePropertyDefinition(self.ir, self.current_origin, key);
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    pub fn setNodeReprFunction(self: *BuiltinContext, object_id: core.NodeId, function: core.FunctionRef) !void {
+        self.ir.setNodeReprFunction(object_id, function) catch |err| switch (err) {
+            error.DuplicateReprDefinition => {
+                try reportDuplicateReprDefinition(self.ir, self.current_origin);
+                return err;
+            },
+            else => return err,
+        };
     }
 
     pub fn unsetNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8) !void {
@@ -1135,6 +1239,10 @@ const BuiltinContext = struct {
         return node.content;
     }
 
+    pub fn reprNode(self: *BuiltinContext, object_id: core.NodeId) ![]const u8 {
+        return try evalNodeRepr(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.closures, self.current_origin, object_id);
+    }
+
     pub fn nodeProperty(self: *BuiltinContext, target: core.Value, key: []const u8) ?[]const u8 {
         const node_id = switch (target) {
             .document => |id| id,
@@ -1147,11 +1255,13 @@ const BuiltinContext = struct {
     }
 
     pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
-        try self.ir.setNodeContent(object_id, text);
-    }
-
-    pub fn appendNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
-        try self.ir.appendNodeContent(object_id, text);
+        self.ir.setNodeContent(object_id, text) catch |err| switch (err) {
+            error.DuplicateContentDefinition => {
+                try reportDuplicateContentDefinition(self.ir, self.current_origin);
+                return err;
+            },
+            else => return err,
+        };
     }
 
     pub fn equalAnchorConstraintSet(
@@ -1689,7 +1799,13 @@ fn executeStatement(
             }
             const text = try resolveValuePropertyString(ir.allocator, value);
             defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
-            try ir.setNodeProperty(object_id, property_set.property_name, text);
+            ir.setNodeProperty(object_id, property_set.property_name, text) catch |err| switch (err) {
+                error.DuplicatePropertyDefinition => {
+                    try reportDuplicatePropertyDefinition(ir, origin, property_set.property_name);
+                    return err;
+                },
+                else => return err,
+            };
         },
         .if_stmt => |if_stmt| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, if_stmt.condition);

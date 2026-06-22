@@ -190,7 +190,8 @@ pub const Type = struct {
         }
         if (expected.kind != actual.kind) return false;
         if (expected.kind == .function) {
-            if (expected.fn_result == null or actual.fn_result == null) return false;
+            if (expected.fn_result == null) return true;
+            if (actual.fn_result == null) return false;
             if (expected.fn_params.len != actual.fn_params.len) return false;
             for (expected.fn_params, 0..) |expected_param, index| {
                 if (!accepts(expected_param, actual.fn_params[index])) return false;
