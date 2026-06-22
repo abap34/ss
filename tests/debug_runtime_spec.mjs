@@ -26,9 +26,8 @@ async function testDebugScheduleJson() {
     assert(payload.units.some((unit) => unit.source.includes("text!")), "schedule trace should include source text");
     const edgeKinds = new Set(payload.edges.map((edge) => edge.kind));
     assert(edgeKinds.has("dependency"), `schedule trace should include dependency edges: ${JSON.stringify(payload.edges)}`);
-    assert(edgeKinds.has("write_order"), `schedule trace should include write_order edges: ${JSON.stringify(payload.edges)}`);
     for (const kind of edgeKinds) {
-      assert(kind === "dependency" || kind === "write_order", `unexpected schedule edge kind: ${kind}`);
+      assert(kind === "dependency", `unexpected schedule edge kind: ${kind}`);
     }
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -59,9 +58,9 @@ async function writeDeck(project) {
 
 page one
 text!("hello")
+text!("world")
 let item = new("old", "note", "text")
-set_content(item, "one")
-set_content(item, "two")
+item.link_id = "one"
 let observed = new(content(item), "label", "text")
 end
 `,

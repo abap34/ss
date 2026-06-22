@@ -973,12 +973,13 @@ test "render policy: math alignment applies to markdown and vector math" {
     const text_object = try ir.makeObject(page, "body", null, .text, .text, "$$x^2$$");
     try ir.setNodeProperty(text_object, "math_align", "left");
 
-    var resolved_text = core.render_policy.resolve(&ir, ir.getNode(text_object).?);
+    const resolved_text = core.render_policy.resolve(&ir, ir.getNode(text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_text.text.?.math_align);
 
-    try ir.setNodeProperty(text_object, "math_align", "sideways");
-    resolved_text = core.render_policy.resolve(&ir, ir.getNode(text_object).?);
-    try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_text.text.?.math_align);
+    const invalid_text_object = try ir.makeObject(page, "body", null, .text, .text, "$$z^2$$");
+    try ir.setNodeProperty(invalid_text_object, "math_align", "sideways");
+    const resolved_invalid_text = core.render_policy.resolve(&ir, ir.getNode(invalid_text_object).?);
+    try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid_text.text.?.math_align);
 
     try ir.setNodeProperty(ir.document_id, "math_align", "right");
     const document_text_object = try ir.makeObject(page, "body", null, .text, .text, "$$a^2$$");

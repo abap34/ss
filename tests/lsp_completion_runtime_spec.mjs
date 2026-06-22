@@ -55,13 +55,13 @@ async function testProjectCompletionLifecycle() {
     const libraryValidSource = `import std:themes/default
 import std:themes/default as *
 
-fn module_label!(text_value: String) -> Object
-  return text!(text_value)
+fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Object
+  return text!(text_value, 24, color_name)
 end
 
 fn/! ultra_big(content: String) -> Object
   let t = default::h1(content)
-  t.text_size = 40
+  t.link_id = "ultra-big"
   return t
 end
 `;
@@ -70,7 +70,7 @@ end
     const libraryDiagnostics = await libraryDiagnosticsPromise;
     assert(libraryDiagnostics.params.diagnostics.length === 0, `library valid diagnostics: ${JSON.stringify(libraryDiagnostics.params.diagnostics)}`);
 
-    const libraryBrokenSource = libraryValidSource.replace("t.text_size = 40", "t.");
+    const libraryBrokenSource = libraryValidSource.replace('t.link_id = "ultra-big"', "t.");
     client.changeDocument({ uri: partsUri, version: 2, text: libraryBrokenSource });
     const libraryMemberCompletion = await client.request("textDocument/completion", {
       textDocument: { uri: partsUri },
@@ -94,7 +94,7 @@ end
 
 fn/! ultra_big(content: String) -> Object
   let t = default::h1(content)
-  t.text_size = 40
+  t.link_id = "ultra-big"
   return t
 end
 `;
@@ -103,7 +103,7 @@ end
     const unimportedDiagnostics = await unimportedDiagnosticsPromise;
     assert(unimportedDiagnostics.params.diagnostics.length === 0, `unimported library valid diagnostics: ${JSON.stringify(unimportedDiagnostics.params.diagnostics)}`);
 
-    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace("t.text_size = 40", "t.");
+    const unimportedLibraryBrokenSource = unimportedLibraryValidSource.replace('t.link_id = "ultra-big"', "t.");
     client.changeDocument({ uri: themeTempUri, version: 2, text: unimportedLibraryBrokenSource });
     const unimportedBrokenCompletion = await client.request("textDocument/completion", {
       textDocument: { uri: themeTempUri },
@@ -270,7 +270,7 @@ import std:themes/default as *
 
 fn/! ultra_big(content: String) -> Object
   let t = default::h1(content)
-  t.text_size = 40
+  t.link_id = "ultra-big"
   return t
 end
 

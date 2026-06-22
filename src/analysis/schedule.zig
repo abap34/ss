@@ -46,12 +46,6 @@ pub const ScheduledUnit = struct {
 pub const ScheduleEdge = struct {
     from: usize,
     to: usize,
-    kind: Kind,
-
-    pub const Kind = enum {
-        dependency,
-        write_order,
-    };
 };
 
 pub const ScheduleGraph = struct {
@@ -283,11 +277,10 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
         }
         for (candidates.items) |candidate_index| {
             if (summaryWritesRead(units[candidate_index].summary, reader.summary)) {
-                try addScheduleEdge(allocator, edges, &edge_index, candidate_index, reader_index, .dependency);
+                try addScheduleEdge(allocator, edges, &edge_index, candidate_index, reader_index);
             }
         }
     }
-    try addWriteOrderFrontierEdges(allocator, units, edges, &edge_index);
 }
 
 const EdgeKey = struct {
@@ -626,133 +619,16 @@ fn addScheduleEdge(
     edge_index: *EdgeIndex,
     from: usize,
     to: usize,
-    kind: ScheduleEdge.Kind,
 ) !void {
     const key = EdgeKey{ .from = from, .to = to };
-    if (edge_index.get(key)) |edge_pos| {
-        if (kind == .dependency) edges.items[edge_pos].kind = .dependency;
-        return;
-    }
+    if (edge_index.contains(key)) return;
     const edge_pos = edges.items.len;
     try edges.append(allocator, .{
         .from = from,
         .to = to,
-        .kind = kind,
     });
     errdefer edges.items.len -= 1;
     try edge_index.putNoClobber(key, edge_pos);
-}
-
-const WriteFrontierEntry = struct {
-    resource: dependencies.Resource,
-    unit_index: usize,
-};
-
-fn addWriteOrderFrontierEdges(
-    allocator: std.mem.Allocator,
-    units: []const ScheduledUnit,
-    edges: *std.ArrayList(ScheduleEdge),
-    edge_index: *EdgeIndex,
-) !void {
-    var frontier = std.ArrayList(WriteFrontierEntry).empty;
-    defer frontier.deinit(allocator);
-
-    for (units, 0..) |unit, unit_index| {
-        for (unit.summary.writes.items) |write| {
-            for (frontier.items) |entry| {
-                if (!entry.resource.intersects(write)) continue;
-                if (entry.unit_index == unit_index) continue;
-                try addScheduleEdge(allocator, edges, edge_index, entry.unit_index, unit_index, .write_order);
-            }
-        }
-        for (unit.summary.writes.items) |write| {
-            var updated = false;
-            for (frontier.items) |*entry| {
-                if (!resourceEql(entry.resource, write)) continue;
-                entry.unit_index = unit_index;
-                updated = true;
-                break;
-            }
-            if (!updated) {
-                try frontier.append(allocator, .{
-                    .resource = write,
-                    .unit_index = unit_index,
-                });
-            }
-        }
-    }
-}
-
-fn resourceEql(left: dependencies.Resource, right: dependencies.Resource) bool {
-    return switch (left) {
-        .variable => |left_variable| switch (right) {
-            .variable => |right_variable| resourceScopeEql(left_variable.scope, right_variable.scope) and std.mem.eql(u8, left_variable.name, right_variable.name),
-            else => false,
-        },
-        .pages => |left_scope| switch (right) {
-            .pages => |right_scope| resourceScopeEql(left_scope, right_scope),
-            else => false,
-        },
-        .objects => |left_name| switch (right) {
-            .objects => |right_name| optionalNameEql(left_name, right_name),
-            else => false,
-        },
-        .property => |left_property| switch (right) {
-            .property => |right_property| propertyOwnerEql(left_property.owner, right_property.owner) and propertyKeyEql(left_property.key, right_property.key),
-            else => false,
-        },
-    };
-}
-
-fn resourceScopeEql(left: dependencies.ResourceScope, right: dependencies.ResourceScope) bool {
-    return switch (left) {
-        .any => right == .any,
-        .document => |left_id| switch (right) {
-            .document => |right_id| left_id == right_id,
-            else => false,
-        },
-        .page => |left_id| switch (right) {
-            .page => |right_id| left_id == right_id,
-            else => false,
-        },
-    };
-}
-
-fn propertyOwnerEql(left: dependencies.PropertyOwner, right: dependencies.PropertyOwner) bool {
-    return switch (left) {
-        .any => right == .any,
-        .document => right == .document,
-        .page => right == .page,
-        .object => |left_owner| switch (right) {
-            .object => |right_owner| objectOwnerEql(left_owner, right_owner),
-            else => false,
-        },
-    };
-}
-
-fn objectOwnerEql(left: dependencies.ObjectOwner, right: dependencies.ObjectOwner) bool {
-    return optionalNameEql(left.class_name, right.class_name) and objectIdentityEql(left.identity, right.identity);
-}
-
-fn objectIdentityEql(left: ?dependencies.ObjectIdentity, right: ?dependencies.ObjectIdentity) bool {
-    if (left == null or right == null) return left == null and right == null;
-    return left.?.eql(right.?);
-}
-
-fn propertyKeyEql(left: dependencies.PropertyKey, right: dependencies.PropertyKey) bool {
-    return switch (left) {
-        .any => right == .any,
-        .content => right == .content,
-        .named => |left_name| switch (right) {
-            .named => |right_name| std.mem.eql(u8, left_name, right_name),
-            else => false,
-        },
-    };
-}
-
-fn optionalNameEql(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left == null or right == null) return left == null and right == null;
-    return std.mem.eql(u8, left.?, right.?);
 }
 
 pub fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph: *const ScheduleGraph) ![]u8 {
@@ -794,7 +670,7 @@ pub fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph
         var item = try edges.objectItem();
         try item.intField("from", edge.from);
         try item.intField("to", edge.to);
-        try item.enumTagField("kind", edge.kind);
+        try item.stringField("kind", "dependency");
         try item.end();
     }
     try edges.end();
