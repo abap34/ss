@@ -70,6 +70,9 @@ pub const ScheduleGraph = struct {
 
         var collected_modules = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
         defer collected_modules.deinit();
+        var run_cache = dependencies.RunCache.init(allocator);
+        defer run_cache.deinit();
+        try run_cache.reserve(ir);
         var context = BuildContext{
             .allocator = allocator,
             .core_ir = ir,
@@ -77,6 +80,7 @@ pub const ScheduleGraph = struct {
             .functions = &ir.functions,
             .units = &graph.units,
             .collected_modules = &collected_modules,
+            .run_cache = &run_cache,
             .source_order = 0,
             .page_id_mode = options.page_id_mode,
         };
@@ -119,6 +123,7 @@ const BuildContext = struct {
     functions: *const core.FunctionMap,
     units: *std.ArrayList(ScheduledUnit),
     collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
+    run_cache: *dependencies.RunCache,
     source_order: usize,
     synthetic_page_count: core.NodeId = 0,
     page_id_mode: PageIdMode,
@@ -163,7 +168,7 @@ const BuildContext = struct {
         statement_count: usize,
     ) !void {
         const sema = SemanticEnv.init(self.core_ir, null, self.functions).forModule(module.id);
-        var analyzer = dependencies.Analyzer.init(self.allocator, &sema);
+        var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
         defer analyzer.deinit();
         const statement_end = @min(statement_start + statement_count, module.program.document_statements.items.len);
         for (module.program.document_statements.items[statement_start..statement_end], statement_start..) |stmt, stmt_index| {
@@ -195,7 +200,7 @@ const BuildContext = struct {
     ) !void {
         const page_id = try self.nextPageId(page.name);
         const sema = SemanticEnv.init(self.document, null, self.functions).forModule(module.id);
-        var analyzer = dependencies.Analyzer.initWithScope(self.allocator, &sema, .{ .page = page_id });
+        var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
         for (page.statements.items, 0..) |stmt, stmt_index| {
             const summary = try analyzer.statement(stmt);
@@ -263,22 +268,10 @@ fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit
         try writer_index.addSummary(unit_index, writer.summary);
     }
 
-    const seen_candidates = try allocator.alloc(bool, units.len);
-    defer allocator.free(seen_candidates);
-    var candidates = std.ArrayList(usize).empty;
-    defer candidates.deinit(allocator);
-
     for (units, 0..) |reader, reader_index| {
         if (reader.summary.reads.items.len == 0) continue;
-        @memset(seen_candidates, false);
-        candidates.clearRetainingCapacity();
         for (reader.summary.reads.items) |read| {
-            try writer_index.appendCandidates(read, seen_candidates, &candidates);
-        }
-        for (candidates.items) |candidate_index| {
-            if (summaryWritesRead(units[candidate_index].summary, reader.summary)) {
-                try addScheduleEdge(allocator, edges, &edge_index, candidate_index, reader_index);
-            }
+            try writer_index.addEdgesForRead(read, reader_index, edges, &edge_index);
         }
     }
 }
@@ -303,29 +296,34 @@ const EdgeKeyContext = struct {
 
 const EdgeIndex = std.HashMap(EdgeKey, usize, EdgeKeyContext, std.hash_map.default_max_load_percentage);
 
-const UnitIndexList = std.ArrayList(usize);
-const UnitIndexStringMap = std.StringHashMap(UnitIndexList);
+const WriteEntry = struct {
+    unit_index: usize,
+    resource: dependencies.Resource,
+};
+
+const WriteEntryList = std.ArrayList(WriteEntry);
+const WriteEntryStringMap = std.StringHashMap(WriteEntryList);
 
 const ResourceWriterIndex = struct {
     allocator: std.mem.Allocator,
-    variables_by_name: UnitIndexStringMap,
-    pages: UnitIndexList,
-    object_any: UnitIndexList,
-    objects_by_role: UnitIndexStringMap,
-    property_any_key: UnitIndexList,
-    property_content_key: UnitIndexList,
-    properties_by_key: UnitIndexStringMap,
+    variables_by_name: WriteEntryStringMap,
+    pages: WriteEntryList,
+    object_any: WriteEntryList,
+    objects_by_role: WriteEntryStringMap,
+    property_any_key: WriteEntryList,
+    property_content_key: WriteEntryList,
+    properties_by_key: WriteEntryStringMap,
 
     fn init(allocator: std.mem.Allocator) ResourceWriterIndex {
         return .{
             .allocator = allocator,
-            .variables_by_name = UnitIndexStringMap.init(allocator),
+            .variables_by_name = WriteEntryStringMap.init(allocator),
             .pages = .empty,
             .object_any = .empty,
-            .objects_by_role = UnitIndexStringMap.init(allocator),
+            .objects_by_role = WriteEntryStringMap.init(allocator),
             .property_any_key = .empty,
             .property_content_key = .empty,
-            .properties_by_key = UnitIndexStringMap.init(allocator),
+            .properties_by_key = WriteEntryStringMap.init(allocator),
         };
     }
 
@@ -346,70 +344,72 @@ const ResourceWriterIndex = struct {
     }
 
     fn addWrite(self: *ResourceWriterIndex, unit_index: usize, write: dependencies.Resource) !void {
+        const entry = WriteEntry{ .unit_index = unit_index, .resource = write };
         switch (write) {
-            .variable => |variable| try self.appendStringBucket(&self.variables_by_name, variable.name, unit_index),
-            .pages => try self.pages.append(self.allocator, unit_index),
+            .variable => |variable| try self.appendStringBucket(&self.variables_by_name, variable.name, entry),
+            .pages => try self.pages.append(self.allocator, entry),
             .objects => |role_name| {
                 if (role_name) |name| {
-                    try self.appendStringBucket(&self.objects_by_role, name, unit_index);
+                    try self.appendStringBucket(&self.objects_by_role, name, entry);
                 } else {
-                    try self.object_any.append(self.allocator, unit_index);
+                    try self.object_any.append(self.allocator, entry);
                 }
             },
             .property => |property| switch (property.key) {
-                .any => try self.property_any_key.append(self.allocator, unit_index),
-                .content => try self.property_content_key.append(self.allocator, unit_index),
+                .any => try self.property_any_key.append(self.allocator, entry),
+                .content => try self.property_content_key.append(self.allocator, entry),
                 .named => |name| {
-                    try self.appendStringBucket(&self.properties_by_key, name, unit_index);
-                    if (propertyNameIsContent(name)) try self.property_content_key.append(self.allocator, unit_index);
+                    try self.appendStringBucket(&self.properties_by_key, name, entry);
+                    if (propertyNameIsContent(name)) try self.property_content_key.append(self.allocator, entry);
                 },
             },
         }
     }
 
-    fn appendCandidates(
+    fn addEdgesForRead(
         self: *const ResourceWriterIndex,
         read: dependencies.Resource,
-        seen: []bool,
-        out: *UnitIndexList,
+        reader_index: usize,
+        edges: *std.ArrayList(ScheduleEdge),
+        edge_index: *EdgeIndex,
     ) !void {
         switch (read) {
             .variable => |variable| {
                 if (self.variables_by_name.get(variable.name)) |entries| {
-                    try appendCandidateList(self.allocator, entries.items, seen, out);
+                    try self.addEdgesFromEntries(entries.items, read, reader_index, edges, edge_index);
                 }
             },
-            .pages => try appendCandidateList(self.allocator, self.pages.items, seen, out),
+            .pages => try self.addEdgesFromEntries(self.pages.items, read, reader_index, edges, edge_index),
             .objects => |role_name| {
-                try appendCandidateList(self.allocator, self.object_any.items, seen, out);
+                try self.addEdgesFromEntries(self.object_any.items, read, reader_index, edges, edge_index);
                 if (role_name) |name| {
                     if (self.objects_by_role.get(name)) |entries| {
-                        try appendCandidateList(self.allocator, entries.items, seen, out);
+                        try self.addEdgesFromEntries(entries.items, read, reader_index, edges, edge_index);
                     }
                 } else {
                     var roles = self.objects_by_role.valueIterator();
                     while (roles.next()) |entries| {
-                        try appendCandidateList(self.allocator, entries.items, seen, out);
+                        try self.addEdgesFromEntries(entries.items, read, reader_index, edges, edge_index);
                     }
                 }
             },
             .property => |property| {
-                try appendCandidateList(self.allocator, self.property_any_key.items, seen, out);
+                try self.addEdgesFromEntries(self.property_any_key.items, read, reader_index, edges, edge_index);
                 switch (property.key) {
                     .any => {
-                        try appendCandidateList(self.allocator, self.property_content_key.items, seen, out);
+                        try self.addEdgesFromEntries(self.property_content_key.items, read, reader_index, edges, edge_index);
                         var keys = self.properties_by_key.valueIterator();
                         while (keys.next()) |entries| {
-                            try appendCandidateList(self.allocator, entries.items, seen, out);
+                            try self.addEdgesFromEntries(entries.items, read, reader_index, edges, edge_index);
                         }
                     },
-                    .content => try appendCandidateList(self.allocator, self.property_content_key.items, seen, out),
+                    .content => try self.addEdgesFromEntries(self.property_content_key.items, read, reader_index, edges, edge_index),
                     .named => |name| {
                         if (propertyNameIsContent(name)) {
-                            try appendCandidateList(self.allocator, self.property_content_key.items, seen, out);
+                            try self.addEdgesFromEntries(self.property_content_key.items, read, reader_index, edges, edge_index);
                         }
                         if (self.properties_by_key.get(name)) |entries| {
-                            try appendCandidateList(self.allocator, entries.items, seen, out);
+                            try self.addEdgesFromEntries(entries.items, read, reader_index, edges, edge_index);
                         }
                     },
                 }
@@ -417,27 +417,29 @@ const ResourceWriterIndex = struct {
         }
     }
 
-    fn appendStringBucket(self: *ResourceWriterIndex, map: *UnitIndexStringMap, key: []const u8, unit_index: usize) !void {
+    fn addEdgesFromEntries(
+        self: *const ResourceWriterIndex,
+        entries: []const WriteEntry,
+        read: dependencies.Resource,
+        reader_index: usize,
+        edges: *std.ArrayList(ScheduleEdge),
+        edge_index: *EdgeIndex,
+    ) !void {
+        for (entries) |entry| {
+            if (entry.resource.intersects(read)) {
+                try addScheduleEdge(self.allocator, edges, edge_index, entry.unit_index, reader_index);
+            }
+        }
+    }
+
+    fn appendStringBucket(self: *ResourceWriterIndex, map: *WriteEntryStringMap, key: []const u8, entry: WriteEntry) !void {
         const gop = try map.getOrPut(key);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(self.allocator, unit_index);
+        try gop.value_ptr.append(self.allocator, entry);
     }
 };
 
-fn appendCandidateList(
-    allocator: std.mem.Allocator,
-    entries: []const usize,
-    seen: []bool,
-    out: *UnitIndexList,
-) !void {
-    for (entries) |unit_index| {
-        if (seen[unit_index]) continue;
-        seen[unit_index] = true;
-        try out.append(allocator, unit_index);
-    }
-}
-
-fn deinitStringMapLists(allocator: std.mem.Allocator, map: *UnitIndexStringMap) void {
+fn deinitStringMapLists(allocator: std.mem.Allocator, map: *WriteEntryStringMap) void {
     var values = map.valueIterator();
     while (values.next()) |list| {
         list.deinit(allocator);
@@ -604,15 +606,6 @@ fn buildAdjacency(allocator: std.mem.Allocator, unit_count: usize, edges: []cons
     return .{ .offsets = offsets, .targets = targets };
 }
 
-fn summaryWritesRead(writer: dependencies.AccessSummary, reader: dependencies.AccessSummary) bool {
-    for (writer.writes.items) |write| {
-        for (reader.reads.items) |read| {
-            if (write.intersects(read)) return true;
-        }
-    }
-    return false;
-}
-
 fn addScheduleEdge(
     allocator: std.mem.Allocator,
     edges: *std.ArrayList(ScheduleEdge),
@@ -621,14 +614,16 @@ fn addScheduleEdge(
     to: usize,
 ) !void {
     const key = EdgeKey{ .from = from, .to = to };
-    if (edge_index.contains(key)) return;
+    const gop = try edge_index.getOrPut(key);
+    if (gop.found_existing) return;
+    errdefer _ = edge_index.remove(key);
     const edge_pos = edges.items.len;
     try edges.append(allocator, .{
         .from = from,
         .to = to,
     });
     errdefer edges.items.len -= 1;
-    try edge_index.putNoClobber(key, edge_pos);
+    gop.value_ptr.* = edge_pos;
 }
 
 pub fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph: *const ScheduleGraph) ![]u8 {

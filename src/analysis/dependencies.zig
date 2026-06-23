@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
+const analysis_cache = @import("cache.zig");
 const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
 const names = @import("../language/names.zig");
@@ -263,6 +264,9 @@ pub const AccessSummary = struct {
     }
 
     pub fn merge(self: *AccessSummary, other: AccessSummary) !void {
+        try self.reads.ensureUnusedCapacity(self.allocator, other.reads.items.len);
+        try self.writes.ensureUnusedCapacity(self.allocator, other.writes.items.len);
+        try self.selection_reads.ensureUnusedCapacity(self.allocator, other.selection_reads.items.len);
         for (other.reads.items) |resource| try self.addRead(resource);
         for (other.writes.items) |resource| try self.addWrite(resource);
         for (other.selection_reads.items) |resource| try self.addSelectionRead(resource);
@@ -270,6 +274,22 @@ pub const AccessSummary = struct {
         self.writes_layout_input = self.writes_layout_input or other.writes_layout_input;
         self.places_objects = self.places_objects or other.places_objects;
         if (self.invalid_selection_mutation == null) self.invalid_selection_mutation = other.invalid_selection_mutation;
+    }
+
+    pub fn clone(self: AccessSummary, allocator: std.mem.Allocator) !AccessSummary {
+        var copied = AccessSummary.init(allocator);
+        errdefer copied.deinit();
+        try copied.reads.ensureTotalCapacity(allocator, @intCast(self.reads.items.len));
+        try copied.writes.ensureTotalCapacity(allocator, @intCast(self.writes.items.len));
+        try copied.selection_reads.ensureTotalCapacity(allocator, @intCast(self.selection_reads.items.len));
+        copied.reads.appendSliceAssumeCapacity(self.reads.items);
+        copied.writes.appendSliceAssumeCapacity(self.writes.items);
+        copied.selection_reads.appendSliceAssumeCapacity(self.selection_reads.items);
+        copied.reads_layout = self.reads_layout;
+        copied.writes_layout_input = self.writes_layout_input;
+        copied.places_objects = self.places_objects;
+        copied.invalid_selection_mutation = self.invalid_selection_mutation;
+        return copied;
     }
 };
 
@@ -492,10 +512,66 @@ fn mergeOptionalNames(left: ?[]const u8, right: ?[]const u8) ?[]const u8 {
 
 fn appendUnique(allocator: std.mem.Allocator, list: *std.ArrayList(Resource), resource: Resource) !void {
     for (list.items) |existing| {
-        if (existing.intersects(resource) and resource.intersects(existing)) return;
+        if (existing.intersects(resource)) return;
     }
     try list.append(allocator, resource);
 }
+
+const SummaryCache = std.StringHashMap(AccessSummary);
+
+pub const RunCache = struct {
+    allocator: std.mem.Allocator,
+    name_resolution: analysis_cache.NameResolutionCache,
+    summaries: SummaryCache,
+
+    pub fn init(allocator: std.mem.Allocator) RunCache {
+        return .{
+            .allocator = allocator,
+            .name_resolution = analysis_cache.NameResolutionCache.init(allocator),
+            .summaries = SummaryCache.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *RunCache) void {
+        var iter = self.summaries.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        self.summaries.deinit();
+        self.name_resolution.deinit();
+    }
+
+    pub fn reserve(self: *RunCache, ir: *const core.Ir) !void {
+        try self.name_resolution.reserve(ir);
+        try self.summaries.ensureTotalCapacity(@intCast((ir.functions.count() * 8) + (ir.constants.count() * 2)));
+    }
+
+    pub fn resolvedFunction(self: *RunCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
+        return try self.name_resolution.resolvedFunction(sema, callee);
+    }
+
+    pub fn resolvedConst(self: *RunCache, sema: *const SemanticEnv, callee: ast.CallableName) !?semantic_env.ResolvedConst {
+        return try self.name_resolution.resolvedConst(sema, callee);
+    }
+
+    pub fn cachedSummary(self: *RunCache, key: []const u8, allocator: std.mem.Allocator) !?AccessSummary {
+        const summary = self.summaries.get(key) orelse return null;
+        return try summary.clone(allocator);
+    }
+
+    pub fn putSummary(self: *RunCache, key: []const u8, summary: AccessSummary) !void {
+        if (self.summaries.contains(key)) return;
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        const owned_summary = try summary.clone(self.allocator);
+        errdefer {
+            var copy = owned_summary;
+            copy.deinit();
+        }
+        try self.summaries.putNoClobber(owned_key, owned_summary);
+    }
+};
 
 fn singleObjectWriteRole(summary: AccessSummary) ?[]const u8 {
     var role_name: ?[]const u8 = null;
@@ -564,12 +640,22 @@ pub const Analyzer = struct {
     selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
     owned_strings: std.ArrayList([]const u8),
     local_variables: std.StringHashMap(void),
+    run_cache: ?*RunCache,
 
     pub fn init(allocator: std.mem.Allocator, sema: *const SemanticEnv) Analyzer {
         return initWithScope(allocator, sema, .{ .document = sema.module_id });
     }
 
     pub fn initWithScope(allocator: std.mem.Allocator, sema: *const SemanticEnv, variable_scope: ResourceScope) Analyzer {
+        return initWithScopeAndCache(allocator, sema, variable_scope, null);
+    }
+
+    pub fn initWithScopeAndCache(
+        allocator: std.mem.Allocator,
+        sema: *const SemanticEnv,
+        variable_scope: ResourceScope,
+        run_cache: ?*RunCache,
+    ) Analyzer {
         return .{
             .allocator = allocator,
             .sema = sema.*,
@@ -581,6 +667,7 @@ pub const Analyzer = struct {
             .selection_read_bindings = std.StringHashMap(std.ArrayList(Resource)).init(allocator),
             .owned_strings = .empty,
             .local_variables = std.StringHashMap(void).init(allocator),
+            .run_cache = run_cache,
         };
     }
 
@@ -609,6 +696,24 @@ pub const Analyzer = struct {
 
     pub fn statement(self: *Analyzer, stmt: ast.Statement) anyerror!AccessSummary {
         return try self.analyzeStatement(stmt, .scheduled);
+    }
+
+    fn resolvedFunction(self: *Analyzer, callee: ast.CallableName) !?semantic_env.ResolvedFunction {
+        if (self.run_cache) |cache| return try cache.resolvedFunction(&self.sema, callee);
+        return self.sema.resolvedFunction(callee);
+    }
+
+    fn resolvedConst(self: *Analyzer, callee: ast.CallableName) !?semantic_env.ResolvedConst {
+        if (self.run_cache) |cache| return try cache.resolvedConst(&self.sema, callee);
+        return self.sema.resolvedConst(callee);
+    }
+
+    fn callCallee(self: *Analyzer, callee: ast.CallableName) !?semantic_env.CallDescriptor {
+        if (try self.resolvedFunction(callee)) |func| return .{ .function = func };
+        if (!callee.isQualified()) {
+            if (self.sema.primitive(callee.name)) |descriptor| return .{ .primitive = descriptor };
+        }
+        return null;
     }
 
     fn analyzeStatements(self: *Analyzer, items: []const ast.Statement, let_policy: LetPolicy) anyerror!AccessSummary {
@@ -780,19 +885,19 @@ pub const Analyzer = struct {
             try self.addBoundSelectionReads(summary, name);
             return;
         }
-        if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+        if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
             var nested = try self.constValue(resolved);
             defer nested.deinit();
             try summary.merge(nested);
             return;
         }
-        if (self.sema.resolvedFunction(ast.CallableName.bare(name)) != null) return;
+        if ((try self.resolvedFunction(ast.CallableName.bare(name))) != null) return;
         try summary.addRead(Resource.makeVariable(self.variable_scope, name));
         try self.addBoundSelectionReads(summary, name);
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
-        if (self.sema.resolvedConst(call.callee)) |resolved| {
+        if (try self.resolvedConst(call.callee)) |resolved| {
             var summary = try self.callArgs(call);
             errdefer summary.deinit();
             var const_summary = try self.constValue(resolved);
@@ -800,7 +905,7 @@ pub const Analyzer = struct {
             try summary.merge(const_summary);
             return summary;
         }
-        const descriptor = self.sema.callCallee(call.callee) orelse return try self.callArgs(call);
+        const descriptor = (try self.callCallee(call.callee)) orelse return try self.callArgs(call);
         return switch (descriptor) {
             .function => |resolved| blk: {
                 var arg_facts = try self.collectCallArgFacts(call);
@@ -836,6 +941,21 @@ pub const Analyzer = struct {
         }
     };
 
+    const StringArgFacts = struct {
+        string_literal: ?[]const u8 = null,
+    };
+
+    const StringRoleArgFacts = struct {
+        string_literal: ?[]const u8 = null,
+        object_role: ?[]const u8 = null,
+    };
+
+    const StaticCallArgFacts = struct {
+        string_literal: ?[]const u8 = null,
+        object_role: ?[]const u8 = null,
+        property_target: ?PropertyTarget = null,
+    };
+
     const IndexedCallArgFacts = struct {
         index: usize,
         facts: CallArgFacts,
@@ -852,6 +972,25 @@ pub const Analyzer = struct {
         facts.object_role = try self.objectRoleExpr(arg);
         facts.property_target = try self.propertyTargetExpr(arg);
         return facts;
+    }
+
+    fn analyzeStringArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!StringArgFacts {
+        return .{ .string_literal = try literalStringExpr(self, arg) };
+    }
+
+    fn analyzeStringRoleArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!StringRoleArgFacts {
+        return .{
+            .string_literal = try literalStringExpr(self, arg),
+            .object_role = try self.objectRoleExpr(arg),
+        };
+    }
+
+    fn analyzeStaticCallArgFacts(self: *Analyzer, arg: ast.Expr) anyerror!StaticCallArgFacts {
+        return .{
+            .string_literal = try literalStringExpr(self, arg),
+            .object_role = try self.objectRoleExpr(arg),
+            .property_target = try self.propertyTargetExpr(arg),
+        };
     }
 
     fn collectCallArgFacts(self: *Analyzer, call: ast.CallExpr) anyerror!std.ArrayList(CallArgFacts) {
@@ -873,6 +1012,27 @@ pub const Analyzer = struct {
                 .facts = try self.analyzeCallArgFacts(arg),
             });
         }
+        return facts;
+    }
+
+    fn collectStringArgFacts(self: *Analyzer, call: ast.CallExpr) anyerror!std.ArrayList(StringArgFacts) {
+        var facts = std.ArrayList(StringArgFacts).empty;
+        errdefer facts.deinit(self.allocator);
+        for (call.args.items) |arg| try facts.append(self.allocator, try self.analyzeStringArgFacts(arg));
+        return facts;
+    }
+
+    fn collectStringRoleArgFacts(self: *Analyzer, call: ast.CallExpr) anyerror!std.ArrayList(StringRoleArgFacts) {
+        var facts = std.ArrayList(StringRoleArgFacts).empty;
+        errdefer facts.deinit(self.allocator);
+        for (call.args.items) |arg| try facts.append(self.allocator, try self.analyzeStringRoleArgFacts(arg));
+        return facts;
+    }
+
+    fn collectStaticCallArgFacts(self: *Analyzer, call: ast.CallExpr) anyerror!std.ArrayList(StaticCallArgFacts) {
+        var facts = std.ArrayList(StaticCallArgFacts).empty;
+        errdefer facts.deinit(self.allocator);
+        for (call.args.items) |arg| try facts.append(self.allocator, try self.analyzeStaticCallArgFacts(arg));
         return facts;
     }
 
@@ -918,21 +1078,27 @@ pub const Analyzer = struct {
         var summary = initial_summary;
         errdefer summary.deinit();
         if (self.visiting.contains(key)) return summary;
+
+        const cache_key = if (self.run_cache != null)
+            try buildFunctionCallSummaryKey(self.allocator, key, self.variable_scope, arg_facts)
+        else
+            null;
+        defer if (cache_key) |owned| self.allocator.free(owned);
+        if (cache_key) |owned| {
+            if (try self.run_cache.?.cachedSummary(owned, self.allocator)) |cached_body| {
+                var body = cached_body;
+                defer body.deinit();
+                try summary.merge(body);
+                return summary;
+            }
+        }
+
         try self.visiting.put(key, {});
         defer _ = self.visiting.remove(key);
 
-        var state = try self.pushLocalFacts();
+        var state = self.pushFreshFunctionFacts();
         defer state.restore();
-        var string_bindings = std.ArrayList(StringBindingRestore).empty;
-        var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
-        defer {
-            self.restoreStringBindings(&self.object_role_bindings, &object_role_bindings);
-            self.restoreStringBindings(&self.string_bindings, &string_bindings);
-        }
-        try self.bindLiteralStringArgsFromFacts(func, arg_facts, &string_bindings);
-        try self.bindObjectRoleArgsFromFacts(func, arg_facts, &object_role_bindings);
-        try self.bindPropertyTargetArgsFromFacts(func, arg_facts);
-        try self.bindSelectionReadArgsFromFacts(func, arg_facts);
+        try self.bindFunctionParamsFromFacts(func, arg_facts);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(module_id);
@@ -941,6 +1107,7 @@ pub const Analyzer = struct {
         try self.bindLocalParams(func.params.items);
         var body = try self.analyzeStatements(func.statements.items, .local);
         defer body.deinit();
+        if (cache_key) |owned| try self.run_cache.?.putSummary(owned, body);
         try summary.merge(body);
         return summary;
     }
@@ -949,8 +1116,21 @@ pub const Analyzer = struct {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
         if (self.visiting.contains(resolved.key)) return summary;
+
+        const cache_key = if (self.run_cache != null)
+            try buildConstSummaryKey(self.allocator, resolved.key, self.variable_scope)
+        else
+            null;
+        defer if (cache_key) |owned| self.allocator.free(owned);
+        if (cache_key) |owned| {
+            if (try self.run_cache.?.cachedSummary(owned, self.allocator)) |cached| return cached;
+        }
+
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
+
+        var state = self.pushFreshFunctionFacts();
+        defer state.restore();
 
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
@@ -959,6 +1139,7 @@ pub const Analyzer = struct {
         var nested = try self.analyzeExpr(resolved.decl.value);
         defer nested.deinit();
         try summary.merge(nested);
+        if (cache_key) |owned| try self.run_cache.?.putSummary(owned, summary);
         return summary;
     }
 
@@ -982,83 +1163,13 @@ pub const Analyzer = struct {
     }
 
     fn bindLocalParams(self: *Analyzer, params: []const ast.ParamDecl) !void {
+        try self.local_variables.ensureUnusedCapacity(@intCast(params.len));
         for (params) |param| {
             try self.local_variables.put(param.name, {});
             if (!self.property_target_bindings.contains(param.name)) {
                 if (self.propertyTargetForType(param.ty)) |target| {
                     try self.property_target_bindings.put(param.name, target);
                 }
-            }
-        }
-    }
-
-    fn bindLiteralStringArgsFromFacts(
-        self: *Analyzer,
-        func: ast.FunctionDecl,
-        arg_facts: []const CallArgFacts,
-        restores: *std.ArrayList(StringBindingRestore),
-    ) !void {
-        for (func.params.items, 0..) |param, index| {
-            const previous = self.string_bindings.get(param.name);
-            try restores.append(self.allocator, .{
-                .name = param.name,
-                .had_old = previous != null,
-                .old = previous,
-            });
-            if (index < arg_facts.len) {
-                if (arg_facts[index].string_literal) |value| {
-                    try self.string_bindings.put(param.name, value);
-                } else {
-                    _ = self.string_bindings.remove(param.name);
-                }
-            } else {
-                _ = self.string_bindings.remove(param.name);
-            }
-        }
-    }
-
-    fn bindObjectRoleArgsFromFacts(
-        self: *Analyzer,
-        func: ast.FunctionDecl,
-        arg_facts: []const CallArgFacts,
-        restores: *std.ArrayList(StringBindingRestore),
-    ) !void {
-        for (func.params.items, 0..) |param, index| {
-            const previous = self.object_role_bindings.get(param.name);
-            try restores.append(self.allocator, .{
-                .name = param.name,
-                .had_old = previous != null,
-                .old = previous,
-            });
-            if (index < arg_facts.len) {
-                if (arg_facts[index].object_role) |role_name| {
-                    try self.object_role_bindings.put(param.name, role_name);
-                } else {
-                    _ = self.object_role_bindings.remove(param.name);
-                }
-            } else {
-                _ = self.object_role_bindings.remove(param.name);
-            }
-        }
-    }
-
-    fn bindSelectionReadArgsFromFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const CallArgFacts) !void {
-        for (func.params.items, 0..) |param, index| {
-            if (index >= arg_facts.len) {
-                self.removeSelectionReads(param.name);
-                continue;
-            }
-            try self.bindSelectionReads(param.name, arg_facts[index].summary.selection_reads.items);
-        }
-    }
-
-    fn bindPropertyTargetArgsFromFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const CallArgFacts) !void {
-        for (func.params.items, 0..) |param, index| {
-            const target = self.propertyTargetForArgFacts(arg_facts, index, param.ty);
-            if (target) |value| {
-                try self.property_target_bindings.put(param.name, value);
-            } else {
-                _ = self.property_target_bindings.remove(param.name);
             }
         }
     }
@@ -1072,6 +1183,120 @@ pub const Analyzer = struct {
             }
         }
         return fact.property_target;
+    }
+
+    fn bindFunctionParamsFromFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const CallArgFacts) !void {
+        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        try self.object_role_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        try self.property_target_bindings.ensureUnusedCapacity(@intCast(func.params.items.len));
+        for (func.params.items, 0..) |param, index| {
+            if (index < arg_facts.len) {
+                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
+                if (arg_facts[index].object_role) |role_name| try self.object_role_bindings.put(param.name, role_name);
+                if (self.propertyTargetForArgFacts(arg_facts, index, param.ty)) |target| {
+                    try self.property_target_bindings.put(param.name, target);
+                }
+                try self.bindSelectionReads(param.name, arg_facts[index].summary.selection_reads.items);
+            }
+        }
+        try self.bindLocalParams(func.params.items);
+    }
+
+    fn bindFunctionParamsFromStaticFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const StaticCallArgFacts) !void {
+        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        try self.object_role_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        try self.property_target_bindings.ensureUnusedCapacity(@intCast(func.params.items.len));
+        for (func.params.items, 0..) |param, index| {
+            if (index < arg_facts.len) {
+                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
+                if (arg_facts[index].object_role) |role_name| try self.object_role_bindings.put(param.name, role_name);
+                if (self.propertyTargetForStaticFacts(arg_facts, index, param.ty)) |target| {
+                    try self.property_target_bindings.put(param.name, target);
+                }
+            }
+        }
+        try self.bindLocalParams(func.params.items);
+    }
+
+    fn propertyTargetForStaticFacts(self: *Analyzer, arg_facts: []const StaticCallArgFacts, index: usize, param_type: ast.Type) ?PropertyTarget {
+        if (index >= arg_facts.len) return self.propertyTargetForType(param_type);
+        const fact = arg_facts[index];
+        if (fact.object_role) |role_name| {
+            if (fact.property_target == null or fact.property_target.?.owner.isUnknown()) {
+                return PropertyTarget.object(self.objectClassForRole(role_name));
+            }
+        }
+        return fact.property_target orelse self.propertyTargetForType(param_type);
+    }
+
+    fn bindFunctionParamsFromStringRoleFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const StringRoleArgFacts) !void {
+        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        try self.object_role_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        for (func.params.items, 0..) |param, index| {
+            if (index < arg_facts.len) {
+                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
+                if (arg_facts[index].object_role) |role_name| try self.object_role_bindings.put(param.name, role_name);
+            }
+        }
+        try self.bindLocalParams(func.params.items);
+    }
+
+    fn bindFunctionParamsFromStringFacts(self: *Analyzer, func: ast.FunctionDecl, arg_facts: []const StringArgFacts) !void {
+        try self.string_bindings.ensureUnusedCapacity(@intCast(@min(func.params.items.len, arg_facts.len)));
+        for (func.params.items, 0..) |param, index| {
+            if (index < arg_facts.len) {
+                if (arg_facts[index].string_literal) |value| try self.string_bindings.put(param.name, value);
+            }
+        }
+        try self.bindLocalParams(func.params.items);
+    }
+
+    const FunctionFactsSnapshot = struct {
+        analyzer: *Analyzer,
+        string_bindings: std.StringHashMap([]const u8),
+        local_variables: std.StringHashMap(void),
+        object_role_bindings: std.StringHashMap([]const u8),
+        property_target_bindings: std.StringHashMap(PropertyTarget),
+        selection_read_bindings: std.StringHashMap(std.ArrayList(Resource)),
+
+        fn restore(self: *FunctionFactsSnapshot) void {
+            var string_snapshot = self.analyzer.string_bindings;
+            self.analyzer.string_bindings = self.string_bindings;
+            string_snapshot.deinit();
+
+            var local_snapshot = self.analyzer.local_variables;
+            self.analyzer.local_variables = self.local_variables;
+            local_snapshot.deinit();
+
+            var role_snapshot = self.analyzer.object_role_bindings;
+            self.analyzer.object_role_bindings = self.object_role_bindings;
+            role_snapshot.deinit();
+
+            var property_target_snapshot = self.analyzer.property_target_bindings;
+            self.analyzer.property_target_bindings = self.property_target_bindings;
+            property_target_snapshot.deinit();
+
+            var selection_snapshot = self.analyzer.selection_read_bindings;
+            self.analyzer.selection_read_bindings = self.selection_read_bindings;
+            self.analyzer.deinitSelectionReadBindings(&selection_snapshot);
+        }
+    };
+
+    fn pushFreshFunctionFacts(self: *Analyzer) FunctionFactsSnapshot {
+        const snapshot = FunctionFactsSnapshot{
+            .analyzer = self,
+            .string_bindings = self.string_bindings,
+            .local_variables = self.local_variables,
+            .object_role_bindings = self.object_role_bindings,
+            .property_target_bindings = self.property_target_bindings,
+            .selection_read_bindings = self.selection_read_bindings,
+        };
+        self.string_bindings = std.StringHashMap([]const u8).init(self.allocator);
+        self.local_variables = std.StringHashMap(void).init(self.allocator);
+        self.object_role_bindings = std.StringHashMap([]const u8).init(self.allocator);
+        self.property_target_bindings = std.StringHashMap(PropertyTarget).init(self.allocator);
+        self.selection_read_bindings = std.StringHashMap(std.ArrayList(Resource)).init(self.allocator);
+        return snapshot;
     }
 
     const LocalFactsSnapshot = struct {
@@ -1127,6 +1352,7 @@ pub const Analyzer = struct {
     fn cloneLocalVariables(self: *Analyzer) !std.StringHashMap(void) {
         var clone = std.StringHashMap(void).init(self.allocator);
         errdefer clone.deinit();
+        try clone.ensureTotalCapacity(@intCast(self.local_variables.count()));
         var iter = self.local_variables.iterator();
         while (iter.next()) |entry| try clone.put(entry.key_ptr.*, {});
         return clone;
@@ -1135,6 +1361,7 @@ pub const Analyzer = struct {
     fn cloneStringBindings(self: *Analyzer) !std.StringHashMap([]const u8) {
         var clone = std.StringHashMap([]const u8).init(self.allocator);
         errdefer clone.deinit();
+        try clone.ensureTotalCapacity(@intCast(self.string_bindings.count()));
         var iter = self.string_bindings.iterator();
         while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         return clone;
@@ -1143,6 +1370,7 @@ pub const Analyzer = struct {
     fn cloneObjectRoles(self: *Analyzer) !std.StringHashMap([]const u8) {
         var clone = std.StringHashMap([]const u8).init(self.allocator);
         errdefer clone.deinit();
+        try clone.ensureTotalCapacity(@intCast(self.object_role_bindings.count()));
         var iter = self.object_role_bindings.iterator();
         while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         return clone;
@@ -1151,6 +1379,7 @@ pub const Analyzer = struct {
     fn clonePropertyTargets(self: *Analyzer) !std.StringHashMap(PropertyTarget) {
         var clone = std.StringHashMap(PropertyTarget).init(self.allocator);
         errdefer clone.deinit();
+        try clone.ensureTotalCapacity(@intCast(self.property_target_bindings.count()));
         var iter = self.property_target_bindings.iterator();
         while (iter.next()) |entry| try clone.put(entry.key_ptr.*, entry.value_ptr.*);
         return clone;
@@ -1159,6 +1388,7 @@ pub const Analyzer = struct {
     fn cloneSelectionReadBindings(self: *Analyzer) !std.StringHashMap(std.ArrayList(Resource)) {
         var clone = std.StringHashMap(std.ArrayList(Resource)).init(self.allocator);
         errdefer self.deinitSelectionReadBindings(&clone);
+        try clone.ensureTotalCapacity(@intCast(self.selection_read_bindings.count()));
         var iter = self.selection_read_bindings.iterator();
         while (iter.next()) |entry| {
             var resources = std.ArrayList(Resource).empty;
@@ -1199,112 +1429,6 @@ pub const Analyzer = struct {
     fn addBoundSelectionReads(self: *Analyzer, summary: *AccessSummary, name: []const u8) !void {
         const resources = self.selection_read_bindings.get(name) orelse return;
         for (resources.items) |resource| try summary.addSelectionRead(resource);
-    }
-
-    const StringBindingRestore = struct {
-        name: []const u8,
-        had_old: bool,
-        old: ?[]const u8,
-    };
-
-    fn restoreStringBindings(
-        self: *Analyzer,
-        bindings: *std.StringHashMap([]const u8),
-        restores: *std.ArrayList(StringBindingRestore),
-    ) void {
-        var index = restores.items.len;
-        while (index > 0) {
-            index -= 1;
-            const binding = restores.items[index];
-            if (binding.had_old) {
-                bindings.put(binding.name, binding.old.?) catch {};
-            } else {
-                _ = bindings.remove(binding.name);
-            }
-        }
-        restores.deinit(self.allocator);
-    }
-
-    fn bindLiteralStringArgs(
-        self: *Analyzer,
-        func: ast.FunctionDecl,
-        call: ast.CallExpr,
-        restores: *std.ArrayList(StringBindingRestore),
-    ) !void {
-        for (func.params.items, 0..) |param, index| {
-            const previous = self.string_bindings.get(param.name);
-            try restores.append(self.allocator, .{
-                .name = param.name,
-                .had_old = previous != null,
-                .old = previous,
-            });
-            if (index < call.args.items.len) {
-                if (try literalStringExpr(self, call.args.items[index])) |value| {
-                    try self.string_bindings.put(param.name, value);
-                } else {
-                    _ = self.string_bindings.remove(param.name);
-                }
-            } else {
-                _ = self.string_bindings.remove(param.name);
-            }
-        }
-    }
-
-    fn bindObjectRoleArgs(
-        self: *Analyzer,
-        func: ast.FunctionDecl,
-        call: ast.CallExpr,
-        restores: *std.ArrayList(StringBindingRestore),
-    ) !void {
-        for (func.params.items, 0..) |param, index| {
-            const previous = self.object_role_bindings.get(param.name);
-            try restores.append(self.allocator, .{
-                .name = param.name,
-                .had_old = previous != null,
-                .old = previous,
-            });
-            if (index < call.args.items.len) {
-                if (try self.objectRoleExpr(call.args.items[index])) |role_name| {
-                    try self.object_role_bindings.put(param.name, role_name);
-                } else {
-                    _ = self.object_role_bindings.remove(param.name);
-                }
-            } else {
-                _ = self.object_role_bindings.remove(param.name);
-            }
-        }
-    }
-
-    fn bindSelectionReadArgs(self: *Analyzer, func: ast.FunctionDecl, call: ast.CallExpr) !void {
-        for (func.params.items, 0..) |param, index| {
-            if (index >= call.args.items.len) {
-                self.removeSelectionReads(param.name);
-                continue;
-            }
-            var arg_summary = try self.analyzeExpr(call.args.items[index]);
-            defer arg_summary.deinit();
-            try self.bindSelectionReads(param.name, arg_summary.selection_reads.items);
-        }
-    }
-
-    fn bindPropertyTargetArgs(self: *Analyzer, func: ast.FunctionDecl, call: ast.CallExpr) !void {
-        for (func.params.items, 0..) |param, index| {
-            const target: ?PropertyTarget = blk: {
-                if (index >= call.args.items.len) break :blk self.propertyTargetForType(param.ty);
-                const arg_target = try self.propertyTargetExpr(call.args.items[index]);
-                if (try self.objectRoleExpr(call.args.items[index])) |role_name| {
-                    if (arg_target == null or arg_target.?.owner.isUnknown()) {
-                        break :blk PropertyTarget.object(self.objectClassForRole(role_name));
-                    }
-                }
-                break :blk arg_target;
-            };
-            if (target) |value| {
-                try self.property_target_bindings.put(param.name, value);
-            } else {
-                _ = self.property_target_bindings.remove(param.name);
-            }
-        }
     }
 
     const CallbackFactsSnapshot = struct {
@@ -1564,20 +1688,38 @@ pub const Analyzer = struct {
         var summary = initial_summary;
         errdefer summary.deinit();
         if (self.visiting.contains(key)) return summary;
+
+        const cache_key = if (self.run_cache != null)
+            try buildFunctionCallbackSummaryKey(self.allocator, key, self.variable_scope, bindings)
+        else
+            null;
+        defer if (cache_key) |owned| self.allocator.free(owned);
+        if (cache_key) |owned| {
+            if (try self.run_cache.?.cachedSummary(owned, self.allocator)) |cached_body| {
+                var body = cached_body;
+                defer body.deinit();
+                try summary.merge(body);
+                return summary;
+            }
+        }
+
         try self.visiting.put(key, {});
         defer _ = self.visiting.remove(key);
 
-        var facts = try self.pushCallbackFacts();
+        var facts = self.pushFreshFunctionFacts();
         defer facts.restore();
         try self.applyCallbackArgBindings(func.params.items, bindings);
+        try self.bindLocalParams(func.params.items);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(module_id);
         defer self.sema = previous;
 
-        const body = try self.withFunctionLocals(func, summary);
-        summary = AccessSummary.init(self.allocator);
-        return body;
+        var body = try self.analyzeStatements(func.statements.items, .local);
+        defer body.deinit();
+        if (cache_key) |owned| try self.run_cache.?.putSummary(owned, body);
+        try summary.merge(body);
+        return summary;
     }
 
     fn lambdaCallbackCall(self: *Analyzer, lambda: ast.LambdaExpr, bindings: []const CallbackArgBinding) !AccessSummary {
@@ -1602,9 +1744,9 @@ pub const Analyzer = struct {
         if (call.args.items.len > callback_spec.function_arg_index) {
             switch (call.args.items[callback_spec.function_arg_index]) {
                 .ident => |callback_name| {
-                    if (self.sema.resolvedConst(ast.CallableName.bare(callback_name))) |callback| {
+                    if (try self.resolvedConst(ast.CallableName.bare(callback_name))) |callback| {
                         callback_summary = try self.constValue(callback);
-                    } else if (self.sema.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
+                    } else if (try self.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
                         var initial_summary = AccessSummary.init(self.allocator);
                         errdefer initial_summary.deinit();
                         callback_summary = try self.functionCallbackCall(
@@ -1695,7 +1837,7 @@ pub const Analyzer = struct {
         return switch (expr) {
             .ident => |name| blk: {
                 if (self.property_target_bindings.get(name)) |target| break :blk target;
-                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                     break :blk try self.propertyTargetConst(resolved);
                 }
                 break :blk null;
@@ -1712,7 +1854,7 @@ pub const Analyzer = struct {
     }
 
     fn propertyTargetCall(self: *Analyzer, call: ast.CallExpr) anyerror!?PropertyTarget {
-        const descriptor = self.sema.callCallee(call.callee) orelse return null;
+        const descriptor = (try self.callCallee(call.callee)) orelse return null;
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
                 .docctx => PropertyTarget.document(),
@@ -1772,6 +1914,9 @@ pub const Analyzer = struct {
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
+        var state = self.pushFreshFunctionFacts();
+        defer state.restore();
+
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
         defer self.sema = previous;
@@ -1789,24 +1934,11 @@ pub const Analyzer = struct {
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
-        var facts = try self.pushCallbackFacts();
+        var arg_facts = try self.collectStaticCallArgFacts(call);
+        defer arg_facts.deinit(self.allocator);
+        var facts = self.pushFreshFunctionFacts();
         defer facts.restore();
-        var local_snapshot = try self.cloneLocalVariables();
-        const current_locals = self.local_variables;
-        self.local_variables = local_snapshot;
-        defer {
-            local_snapshot = self.local_variables;
-            self.local_variables = current_locals;
-            local_snapshot.deinit();
-        }
-        var string_arg_restores = std.ArrayList(StringBindingRestore).empty;
-        defer string_arg_restores.deinit(self.allocator);
-        var object_role_arg_restores = std.ArrayList(StringBindingRestore).empty;
-        defer object_role_arg_restores.deinit(self.allocator);
-        try self.bindLiteralStringArgs(resolved.decl, call, &string_arg_restores);
-        try self.bindObjectRoleArgs(resolved.decl, call, &object_role_arg_restores);
-        try self.bindPropertyTargetArgs(resolved.decl, call);
-        try self.bindLocalParams(resolved.decl.params.items);
+        try self.bindFunctionParamsFromStaticFacts(resolved.decl, arg_facts.items);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
@@ -1854,7 +1986,7 @@ pub const Analyzer = struct {
         return switch (expr) {
             .ident => |name| blk: {
                 if (self.object_role_bindings.get(name)) |role_name| break :blk role_name;
-                if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
+                if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                     break :blk try self.objectRoleConst(resolved);
                 }
                 break :blk null;
@@ -1865,7 +1997,7 @@ pub const Analyzer = struct {
     }
 
     fn objectRoleCall(self: *Analyzer, call: ast.CallExpr) anyerror!?[]const u8 {
-        const descriptor = self.sema.callCallee(call.callee) orelse return null;
+        const descriptor = (try self.callCallee(call.callee)) orelse return null;
         return switch (descriptor) {
             .primitive => |primitive| switch (primitive.op) {
                 .new => try literalStringArg(self, call, 1),
@@ -1898,23 +2030,11 @@ pub const Analyzer = struct {
         try self.visiting.put(resolved.key, {});
         defer _ = self.visiting.remove(resolved.key);
 
-        var facts = try self.pushCallbackFacts();
+        var arg_facts = try self.collectStringRoleArgFacts(call);
+        defer arg_facts.deinit(self.allocator);
+        var facts = self.pushFreshFunctionFacts();
         defer facts.restore();
-        var local_snapshot = try self.cloneLocalVariables();
-        const current_locals = self.local_variables;
-        self.local_variables = local_snapshot;
-        defer {
-            local_snapshot = self.local_variables;
-            self.local_variables = current_locals;
-            local_snapshot.deinit();
-        }
-        var string_bindings = std.ArrayList(StringBindingRestore).empty;
-        defer string_bindings.deinit(self.allocator);
-        var object_role_bindings = std.ArrayList(StringBindingRestore).empty;
-        defer object_role_bindings.deinit(self.allocator);
-        try self.bindLiteralStringArgs(resolved.decl, call, &string_bindings);
-        try self.bindObjectRoleArgs(resolved.decl, call, &object_role_bindings);
-        try self.bindLocalParams(resolved.decl.params.items);
+        try self.bindFunctionParamsFromStringRoleFacts(resolved.decl, arg_facts.items);
 
         const previous = self.sema;
         self.sema = self.sema.forModule(resolved.module_id);
@@ -1933,6 +2053,173 @@ pub const Analyzer = struct {
         return null;
     }
 };
+
+fn buildConstSummaryKey(
+    allocator: std.mem.Allocator,
+    key: core.FunctionKey,
+    variable_scope: ResourceScope,
+) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendKeyBytes(allocator, &out, "const");
+    try appendFunctionKey(allocator, &out, key);
+    try appendResourceScopeKey(allocator, &out, variable_scope);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn buildFunctionCallSummaryKey(
+    allocator: std.mem.Allocator,
+    key: core.FunctionKey,
+    variable_scope: ResourceScope,
+    facts: []const Analyzer.CallArgFacts,
+) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendKeyBytes(allocator, &out, "call");
+    try appendFunctionKey(allocator, &out, key);
+    try appendResourceScopeKey(allocator, &out, variable_scope);
+    try appendKeyInt(allocator, &out, facts.len);
+    for (facts) |fact| {
+        try appendOptionalBytesKey(allocator, &out, fact.string_literal);
+        try appendOptionalBytesKey(allocator, &out, fact.object_role);
+        try appendOptionalPropertyTargetKey(allocator, &out, fact.property_target);
+        try appendResourceListKey(allocator, &out, fact.summary.selection_reads.items);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn buildFunctionCallbackSummaryKey(
+    allocator: std.mem.Allocator,
+    key: core.FunctionKey,
+    variable_scope: ResourceScope,
+    bindings: []const CallbackArgBinding,
+) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendKeyBytes(allocator, &out, "callback");
+    try appendFunctionKey(allocator, &out, key);
+    try appendResourceScopeKey(allocator, &out, variable_scope);
+    try appendKeyInt(allocator, &out, bindings.len);
+    for (bindings) |binding| {
+        try appendOptionalBytesKey(allocator, &out, binding.string_literal);
+        try appendOptionalBytesKey(allocator, &out, binding.object_role);
+        try appendOptionalPropertyTargetKey(allocator, &out, binding.property_target);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendFunctionKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), key: core.FunctionKey) !void {
+    try appendKeyInt(allocator, out, key.module_id);
+    try appendKeyBytes(allocator, out, key.name);
+}
+
+fn appendResourceListKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resources: []const Resource) !void {
+    try appendKeyInt(allocator, out, resources.len);
+    for (resources) |resource| try appendResourceKey(allocator, out, resource);
+}
+
+fn appendResourceKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), resource: Resource) !void {
+    switch (resource) {
+        .variable => |variable| {
+            try out.append(allocator, 'v');
+            try appendResourceScopeKey(allocator, out, variable.scope);
+            try appendKeyBytes(allocator, out, variable.name);
+        },
+        .pages => |scope| {
+            try out.append(allocator, 'g');
+            try appendResourceScopeKey(allocator, out, scope);
+        },
+        .objects => |role_name| {
+            try out.append(allocator, 'o');
+            try appendOptionalBytesKey(allocator, out, role_name);
+        },
+        .property => |property| {
+            try out.append(allocator, 'p');
+            try appendPropertyOwnerKey(allocator, out, property.owner);
+            try appendPropertyKeyKey(allocator, out, property.key);
+        },
+    }
+}
+
+fn appendResourceScopeKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), scope: ResourceScope) !void {
+    switch (scope) {
+        .any => try out.append(allocator, '*'),
+        .document => |module_id| {
+            try out.append(allocator, 'd');
+            try appendKeyInt(allocator, out, module_id);
+        },
+        .page => |page_id| {
+            try out.append(allocator, 'p');
+            try appendKeyInt(allocator, out, page_id);
+        },
+    }
+}
+
+fn appendOptionalPropertyTargetKey(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    target: ?PropertyTarget,
+) !void {
+    if (target) |value| {
+        try out.append(allocator, 's');
+        try appendPropertyOwnerKey(allocator, out, value.owner);
+    } else {
+        try out.append(allocator, 'n');
+    }
+}
+
+fn appendPropertyOwnerKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), owner: PropertyOwner) !void {
+    switch (owner) {
+        .any => try out.append(allocator, '*'),
+        .document => try out.append(allocator, 'd'),
+        .page => try out.append(allocator, 'p'),
+        .object => |object_owner| {
+            try out.append(allocator, 'o');
+            try appendOptionalBytesKey(allocator, out, object_owner.class_name);
+            if (object_owner.identity) |identity| {
+                try out.append(allocator, 'i');
+                try appendResourceScopeKey(allocator, out, identity.scope);
+                try appendKeyBytes(allocator, out, identity.name);
+            } else {
+                try out.append(allocator, 'n');
+            }
+        },
+    }
+}
+
+fn appendPropertyKeyKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), key: PropertyKey) !void {
+    switch (key) {
+        .any => try out.append(allocator, '*'),
+        .content => try out.append(allocator, 'c'),
+        .named => |name| {
+            try out.append(allocator, 'n');
+            try appendKeyBytes(allocator, out, name);
+        },
+    }
+}
+
+fn appendOptionalBytesKey(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: ?[]const u8) !void {
+    if (value) |bytes| {
+        try out.append(allocator, 's');
+        try appendKeyBytes(allocator, out, bytes);
+    } else {
+        try out.append(allocator, 'n');
+    }
+}
+
+fn appendKeyBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
+    try appendKeyInt(allocator, out, bytes.len);
+    try out.append(allocator, ':');
+    try out.appendSlice(allocator, bytes);
+    try out.append(allocator, ';');
+}
+
+fn appendKeyInt(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: anytype) !void {
+    var buf: [32]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buf, "{d}", .{value});
+    try out.appendSlice(allocator, text);
+    try out.append(allocator, ';');
+}
 
 fn mergePropertyTargets(left: ?PropertyTarget, right: ?PropertyTarget) ?PropertyTarget {
     if (left == null) return right;
@@ -1956,7 +2243,7 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
 }
 
 fn literalStringCall(self: *Analyzer, call: ast.CallExpr) anyerror!?[]const u8 {
-    const descriptor = self.sema.callCallee(call.callee) orelse return null;
+    const descriptor = (try self.callCallee(call.callee)) orelse return null;
     return switch (descriptor) {
         .primitive => |primitive| switch (primitive.op) {
             .concat => try literalConcat(self, call),
@@ -1982,9 +2269,11 @@ fn literalStringFunctionCall(
     try self.visiting.put(resolved.key, {});
     defer _ = self.visiting.remove(resolved.key);
 
-    var bindings = std.ArrayList(Analyzer.StringBindingRestore).empty;
-    defer self.restoreStringBindings(&self.string_bindings, &bindings);
-    try self.bindLiteralStringArgs(resolved.decl, call, &bindings);
+    var arg_facts = try self.collectStringArgFacts(call);
+    defer arg_facts.deinit(self.allocator);
+    var facts = self.pushFreshFunctionFacts();
+    defer facts.restore();
+    try self.bindFunctionParamsFromStringFacts(resolved.decl, arg_facts.items);
 
     const previous = self.sema;
     self.sema = self.sema.forModule(resolved.module_id);
