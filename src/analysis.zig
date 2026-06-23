@@ -1,4 +1,5 @@
 pub const check = @import("analysis/check.zig");
+pub const cache = @import("analysis/cache.zig");
 pub const contracts = @import("analysis/contracts.zig");
 pub const dependencies = @import("analysis/dependencies.zig");
 pub const infer = @import("analysis/infer.zig");
