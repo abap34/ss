@@ -9,6 +9,7 @@ await testRenderFailureProducesDiagnostic();
 await testRenderFailureWritesStructuredDiagnostic();
 await testInlineMathRenderFailureLocatesFormula();
 await testConcatenatedMathRenderFailureLocatesSourceLiteral();
+await testSvgAssetRenderFailureLocatesAssetReference();
 
 async function testRenderFailureProducesDiagnostic() {
   const project = await mkdtempProject("ss-render-diagnostics-");
@@ -135,6 +136,50 @@ end
     assert(output.includes("Undefined control sequence"), `concatenated math diagnostic omitted command output summary:\n${output}`);
     assert(output.includes("slide.ss:5:19"), `concatenated math diagnostic did not point at the source literal:\n${output}`);
     assert(output.includes('| text!(prefix ++ "$\\notacommand$ third")'), `concatenated math diagnostic omitted source excerpt:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testSvgAssetRenderFailureLocatesAssetReference() {
+  const project = await mkdtempProject("ss-svg-asset-diagnostics-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const diagnosticsPath = path.join(project, "diagnostics.json");
+    await writeFile(path.join(project, "bad.svg"), "<svg><notclosed>\n", "utf8");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page bad
+image!("bad.svg")
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs([
+      "render",
+      "slide.ss",
+      "out.pdf",
+      "--cache-id",
+      "svg-asset-diagnostics",
+      "--diagnostics-json",
+      diagnosticsPath,
+    ], project);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "render should fail for an invalid SVG asset");
+    assert(output.includes("RenderFailed:"), `SVG asset failure did not produce a render diagnostic:\n${output}`);
+    assert(output.includes("ImageDecodeFailed"), `SVG asset diagnostic omitted decode failure:\n${output}`);
+    assert(output.includes("slide.ss:4:9"), `SVG asset diagnostic did not point at the asset reference:\n${output}`);
+    assert(output.includes('| image!("bad.svg")'), `SVG asset diagnostic omitted source excerpt:\n${output}`);
+
+    const payload = JSON.parse(await readFile(diagnosticsPath, "utf8"));
+    assert(payload.diagnostics.length === 1, `unexpected SVG diagnostics count: ${JSON.stringify(payload)}`);
+    const diagnostic = payload.diagnostics[0];
+    assert(diagnostic.code === "RenderFailed", `unexpected SVG diagnostic code: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.range.start.line === 3, `unexpected SVG diagnostic start line: ${JSON.stringify(diagnostic)}`);
+    assert(diagnostic.range.start.character === 8, `unexpected SVG diagnostic start character: ${JSON.stringify(diagnostic)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

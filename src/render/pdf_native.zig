@@ -1511,15 +1511,29 @@ fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const Re
         };
     }
 
+    if (!added) {
+        added = try collectPageRenderDiagnostics(ctx, ir, plan);
+    }
+
     if (!added) try addGenericRenderDiagnostic(ir, original_err, null);
 }
 
 fn addPreloadRenderDiagnostic(ir: *core.Ir, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
     const target = preloadTaskTarget(task);
+    try addTargetedRenderDiagnostic(ir, target, preloadTaskLabel(task), err, maybe_message);
+}
+
+fn addTargetedRenderDiagnostic(
+    ir: *core.Ir,
+    target: RenderDiagnosticTarget,
+    label: []const u8,
+    err: anyerror,
+    maybe_message: ?[]const u8,
+) !void {
     var origin = try preloadTaskDiagnosticOrigin(ir, target);
     defer origin.deinit(ir.allocator);
     const detail = maybe_message orelse @errorName(err);
-    const reason = try std.fmt.allocPrint(ir.allocator, "{s}: {s}", .{ preloadTaskLabel(task), detail });
+    const reason = try std.fmt.allocPrint(ir.allocator, "{s}: {s}", .{ label, detail });
     try ir.addRenderDiagnostic(.@"error", target.page_id, target.node_id, origin.text, .{
         .render_failed = .{
             .reason = reason,
@@ -1578,6 +1592,88 @@ fn addGenericRenderDiagnostic(ir: *core.Ir, err: anyerror, maybe_message: ?[]con
             .reason = reason,
         },
     });
+}
+
+fn collectPageRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const RenderPlan) !bool {
+    var added = false;
+    for (plan.pages) |*page| {
+        if (page.cache_hit) continue;
+        if (try collectPageRenderDiagnostic(ctx, ir, page)) added = true;
+    }
+    return added;
+}
+
+fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, page: *const RenderPage) !bool {
+    const path = try tempCachePath(ctx, page.render_path, "pdf");
+    defer ctx.allocator.free(path);
+    defer deleteFileIfExists(ctx, path);
+
+    const path_z = try ctx.allocator.dupeZ(u8, path);
+    defer ctx.allocator.free(path_z);
+
+    const pdf = c.ss_pdf_create(path_z.ptr, PageLayout.width, PageLayout.height) orelse return false;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_set_creator(pdf, "ss native Cairo/Pango backend");
+
+    var diagnostic_ctx = ctx.*;
+    diagnostic_ctx.pdf = pdf;
+
+    c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
+    const added = try drawRenderPageDiagnostics(&diagnostic_ctx, ir, page);
+    c.ss_pdf_end_page(pdf);
+    return added;
+}
+
+fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Ir, page: *const RenderPage) !bool {
+    if (page.background) |fill| {
+        c.ss_pdf_fill_rect(ctx.pdf, 0, 0, PageLayout.width, PageLayout.height, fill.r, fill.g, fill.b);
+    }
+    for (page.ops) |*op| {
+        if (op.render.kind == .chrome_only) {
+            if (try drawRenderOpDiagnostic(ctx, ir, op)) return true;
+        }
+    }
+    for (page.ops) |*op| {
+        if (op.render.kind != .chrome_only) {
+            if (try drawRenderOpDiagnostic(ctx, ir, op)) return true;
+        }
+    }
+    return false;
+}
+
+fn drawRenderOpDiagnostic(ctx: *DrawContext, ir: *core.Ir, op: *const RenderOp) !bool {
+    var sink = CommandFailureSink{ .allocator = ir.allocator };
+    defer sink.deinit();
+    var diagnostic_ctx = ctx.*;
+    diagnostic_ctx.command_failure = &sink;
+    drawRenderOp(&diagnostic_ctx, op) catch |err| {
+        try addRenderOpDiagnostic(ir, op, err, sink.message);
+        return true;
+    };
+    return false;
+}
+
+fn addRenderOpDiagnostic(ir: *core.Ir, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
+    try addTargetedRenderDiagnostic(ir, renderOpDiagnosticTarget(op), renderOpLabel(op), err, maybe_message);
+}
+
+fn renderOpDiagnosticTarget(op: *const RenderOp) RenderDiagnosticTarget {
+    const target = opDiagnosticTarget(op);
+    return switch (op.render.kind) {
+        .vector_math, .vector_asset, .raster_asset => targetWithContentSpan(target, 0, op.content.len),
+        else => target,
+    };
+}
+
+fn renderOpLabel(op: *const RenderOp) []const u8 {
+    return switch (op.render.kind) {
+        .text => "text object",
+        .code => "code block",
+        .chrome_only => "object chrome",
+        .vector_math => "math expression",
+        .vector_asset => "vector asset",
+        .raster_asset => "raster asset",
+    };
 }
 
 fn preloadTaskTarget(task: PreloadTask) RenderDiagnosticTarget {
