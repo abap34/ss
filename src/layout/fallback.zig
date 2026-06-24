@@ -63,7 +63,7 @@ fn computeHorizontalComponentUnit(
     _ = graph.setAxisAnchor(&temp[seed_index], .left, 0, null) catch return null;
 
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, &.{});
-    _ = try solver.runPageAxisPassWithOptions(ir, &temp_workspace, .{ .record_diagnostics = false });
+    _ = try solver.runPageAxisPass(ir, &temp_workspace, .{ .record_diagnostics = false });
 
     var leftmost_index: ?usize = null;
     var leftmost_start: f32 = 0;
@@ -398,6 +398,35 @@ fn computeVerticalComponentUnit(
 ) !?VerticalComponentUnit {
     const root_index = components.fallbackRootIndex(ir, component_root) orelse return null;
 
+    if (try computeVerticalComponentUnitFromRoot(ir, workspace, components, component_root, local_tops, policy, root_index)) |unit| {
+        return unit;
+    }
+
+    for (workspace.graph.child_ids, 0..) |child_id, candidate_index| {
+        if (candidate_index == root_index) continue;
+        if (!components.contains(component_root, candidate_index)) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (groups.isGroupNode(node)) continue;
+
+        if (try computeVerticalComponentUnitFromRoot(ir, workspace, components, component_root, local_tops, policy, candidate_index)) |unit| {
+            return unit;
+        }
+    }
+
+    return null;
+}
+
+fn computeVerticalComponentUnitFromRoot(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    local_tops: []?f32,
+    policy: VerticalFallbackPolicy,
+    root_index: usize,
+) !?VerticalComponentUnit {
+    clearComponentLocalTops(components, component_root, local_tops);
+
     const temp = try ir.allocator.alloc(AxisState, workspace.states.len);
     defer ir.allocator.free(temp);
     @memcpy(temp, workspace.states);
@@ -406,7 +435,7 @@ fn computeVerticalComponentUnit(
     var local_fallback = try buildComponentLocalTopFlowConstraints(ir, workspace, components, component_root, root_index);
     defer local_fallback.deinit(ir.allocator);
     var temp_workspace = graph.AxisWorkspace.borrow(workspace, temp, local_fallback.items);
-    _ = try solver.runPageAxisPass(ir, &temp_workspace);
+    _ = try solver.runPageAxisPass(ir, &temp_workspace, .{ .record_diagnostics = false });
     if (policy == .center_stack) {
         try centerDirectChildGroupsInComponent(ir, &temp_workspace, components, component_root);
     }
@@ -441,6 +470,12 @@ fn computeVerticalComponentUnit(
         .height = local_top.? - local_bottom.?,
         .spacing_after = style_defaults.styleForNode(ir, spacing_source).spacing_after,
     };
+}
+
+fn clearComponentLocalTops(components: *const graph.ComponentSet, component_root: usize, local_tops: []?f32) void {
+    for (local_tops, 0..) |*local_top, index| {
+        if (components.contains(component_root, index)) local_top.* = null;
+    }
 }
 
 fn centerDirectChildGroupsInComponent(

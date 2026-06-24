@@ -28,7 +28,9 @@ fn usage() void {
         \\    Check project discovery, render tools, and tree-sitter health
         \\  debug schedule [input.ss]
         \\    Write the inferred dependency graph and execution order as JSON
-        \\  debug layout-trace [input.ss]
+        \\  debug layout conflicts [input.ss]
+        \\    Write the layout conflict report as JSON
+        \\  debug layout trace [input.ss]
         \\    Write the layout solver trace as JSON
         \\  lsp
         \\    Run the ss language server over stdio
@@ -62,6 +64,8 @@ fn usage() void {
         \\    Stable render cache identity for snapshot-based render inputs
         \\  --diagnostics-json FILE
         \\    Write machine-readable diagnostics JSON for render
+        \\  --color auto|always|never
+        \\    Control color in human-readable diagnostics
         \\  --interval-ms N
         \\    Poll interval for watch commands
         \\  --entry FILE
@@ -80,7 +84,8 @@ fn usage() void {
         \\  ss render slide.ss out.pdf
         \\  ss render --project . --output .ss-cache/render.pdf
         \\  ss debug schedule --project . --output .ss-cache/schedule.json
-        \\  ss debug layout-trace --project . --output .ss-cache/layout-trace.json
+        \\  ss debug layout conflicts --project . --output .ss-cache/layout-conflicts.json
+        \\  ss debug layout trace --project . --output .ss-cache/layout-trace.json
         \\  ss init slides
         \\  ss doctor --project slides
         \\  ss watch check slide.ss
@@ -217,6 +222,16 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--color")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --color", .{});
+            const value = args[i + 1];
+            if (!std.mem.eql(u8, value, "auto") and !std.mem.eql(u8, value, "always") and !std.mem.eql(u8, value, "never")) {
+                return failUsage("invalid --color value: {s}", .{value});
+            }
+            error_report.setColorMode(parseColorMode(value));
+            i += 1;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--interval-ms")) {
             if (i + 1 >= args.len) return failUsage("missing value for --interval-ms", .{});
             options.interval_ms = std.fmt.parseUnsigned(u64, args[i + 1], 10) catch {
@@ -238,6 +253,13 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
         positional_index += 1;
     }
     return options;
+}
+
+fn parseColorMode(value: []const u8) error_report.ColorMode {
+    if (std.mem.eql(u8, value, "auto")) return .auto;
+    if (std.mem.eql(u8, value, "always")) return .always;
+    if (std.mem.eql(u8, value, "never")) return .never;
+    unreachable;
 }
 
 fn parseInitOptions(args: []const []const u8) !InitOptions {
@@ -693,23 +715,38 @@ fn runDebugCommand(
 ) !void {
     if (args.len == 0) return failUsage("missing debug topic", .{});
     const topic = args[0];
-    const options = try parseCommandOptions(args[1..]);
-    const output_path = options.output_path orelse return failUsage("missing --output for ss debug {s}", .{topic});
-    try validateOutputParentOrCliError(io, output_path);
-
-    var resolved = try resolveProjectOrUsage(allocator, io, options);
-    defer resolved.deinit(allocator);
 
     if (std.mem.eql(u8, topic, "schedule")) {
+        const options = try parseCommandOptions(args[1..]);
+        const output_path = options.output_path orelse return failUsage("missing --output for ss debug schedule", .{});
+        try validateOutputParentOrCliError(io, output_path);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
+        defer resolved.deinit(allocator);
         var progress = utils.progress.Progress.init(6);
         try app.writeScheduleTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
         return;
     }
 
-    if (std.mem.eql(u8, topic, "layout-trace")) {
-        var progress = utils.progress.Progress.init(6);
-        try app.writeLayoutTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
-        return;
+    if (std.mem.eql(u8, topic, "layout")) {
+        if (args.len < 2) return failUsage("missing debug layout topic", .{});
+        const layout_topic = args[1];
+        const options = try parseCommandOptions(args[2..]);
+        const output_path = options.output_path orelse return failUsage("missing --output for ss debug layout {s}", .{layout_topic});
+        try validateOutputParentOrCliError(io, output_path);
+        var resolved = try resolveProjectOrUsage(allocator, io, options);
+        defer resolved.deinit(allocator);
+
+        if (std.mem.eql(u8, layout_topic, "trace")) {
+            var progress = utils.progress.Progress.init(6);
+            try app.writeLayoutTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+            return;
+        }
+        if (std.mem.eql(u8, layout_topic, "conflicts")) {
+            var progress = utils.progress.Progress.init(8);
+            try app.writeLayoutConflictReportFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+            return;
+        }
+        return failUsage("unknown debug layout topic: {s}", .{layout_topic});
     }
 
     return failUsage("unknown debug topic: {s}", .{topic});
