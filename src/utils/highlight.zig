@@ -4,15 +4,11 @@ pub const Language = struct {
     name: []u8,
     parser: []u8,
     query: []u8,
-    library: ?[]u8 = null,
-    symbol: ?[]u8 = null,
 
     pub fn deinit(self: *Language, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.parser);
         allocator.free(self.query);
-        if (self.library) |value| allocator.free(value);
-        if (self.symbol) |value| allocator.free(value);
     }
 
     pub fn clone(self: Language, allocator: std.mem.Allocator) !Language {
@@ -20,8 +16,6 @@ pub const Language = struct {
             .name = try allocator.dupe(u8, self.name),
             .parser = try allocator.dupe(u8, self.parser),
             .query = try allocator.dupe(u8, self.query),
-            .library = if (self.library) |value| try allocator.dupe(u8, value) else null,
-            .symbol = if (self.symbol) |value| try allocator.dupe(u8, value) else null,
         };
     }
 };
@@ -102,7 +96,7 @@ pub fn defaultConfig(allocator: std.mem.Allocator) !Config {
     return configWithDefaults(allocator, &.{});
 }
 
-pub fn configWithDefaults(allocator: std.mem.Allocator, overrides: []const Language) !Config {
+pub fn configWithDefaults(allocator: std.mem.Allocator, additions: []const Language) !Config {
     var languages = std.ArrayList(Language).empty;
     errdefer {
         for (languages.items) |*language| language.deinit(allocator);
@@ -112,14 +106,11 @@ pub fn configWithDefaults(allocator: std.mem.Allocator, overrides: []const Langu
     for (builtin_languages) |language| {
         try languages.append(allocator, try cloneBuiltinLanguage(allocator, language));
     }
-    for (overrides) |language| {
-        if (languageIndex(languages.items, language.name)) |index| {
-            const replacement = try language.clone(allocator);
-            languages.items[index].deinit(allocator);
-            languages.items[index] = replacement;
-        } else {
-            try languages.append(allocator, try language.clone(allocator));
-        }
+    for (additions) |language| {
+        if (isBuiltinLanguageName(language.name)) return error.BuiltinHighlightLanguageReserved;
+        if (languageIndex(languages.items, language.name) != null) return error.DuplicateHighlightLanguage;
+        if (!isBuiltinParserName(language.parser)) return error.UnknownHighlightParser;
+        try languages.append(allocator, try language.clone(allocator));
     }
 
     return .{ .languages = try languages.toOwnedSlice(allocator) };
@@ -143,6 +134,21 @@ fn languageIndex(languages: []const Language, name: []const u8) ?usize {
         if (std.ascii.eqlIgnoreCase(language.name, name)) return index;
     }
     return null;
+}
+
+pub fn isBuiltinLanguageName(name: []const u8) bool {
+    for (builtin_languages) |language| {
+        if (std.ascii.eqlIgnoreCase(language.name, name)) return true;
+    }
+    return false;
+}
+
+pub fn isBuiltinParserName(name: []const u8) bool {
+    for (builtin_languages) |language| {
+        if (std.ascii.eqlIgnoreCase(language.name, name)) return true;
+        if (std.ascii.eqlIgnoreCase(language.parser, name)) return true;
+    }
+    return false;
 }
 
 pub fn roleForCapture(capture_name: []const u8) ?CaptureRole {

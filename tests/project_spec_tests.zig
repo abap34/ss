@@ -87,15 +87,9 @@ test "project spec: highlight languages parse from ss.toml" {
         \\[project]
         \\entry = "slides/main.ss"
         \\
-        \\[highlight.languages.ss]
-        \\parser = "ss"
-        \\query = "builtin:ss"
-        \\
-        \\[highlight.languages.julia]
-        \\parser = "julia"
-        \\query = "queries/julia/highlights.scm"
-        \\library = "parsers/libtree-sitter-julia.dylib"
-        \\symbol = "tree_sitter_julia"
+        \\[highlight.languages.python-snippet]
+        \\parser = "python"
+        \\query = "queries/python/highlights.scm"
         \\
     );
     defer cfg.deinit(testing.allocator);
@@ -104,11 +98,34 @@ test "project spec: highlight languages parse from ss.toml" {
     const ss = findHighlightLanguage(cfg.highlight.languages, "ss").?;
     try testing.expectEqualStrings("ss", ss.parser);
     try testing.expectEqualStrings("builtin:ss", ss.query);
-    try testing.expect(ss.library == null);
-    const julia = findHighlightLanguage(cfg.highlight.languages, "julia").?;
-    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/queries/julia/highlights.scm", julia.query);
-    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/parsers/libtree-sitter-julia.dylib", julia.library.?);
-    try testing.expectEqualStrings("tree_sitter_julia", julia.symbol.?);
+    const python_snippet = findHighlightLanguage(cfg.highlight.languages, "python-snippet").?;
+    try testing.expectEqualStrings("python", python_snippet.parser);
+    try testing.expectEqualStrings("/tmp/ss-project-spec/deck/queries/python/highlights.scm", python_snippet.query);
+}
+
+test "project spec: highlight config rejects bundled language redefinition" {
+    try testing.expectError(error.BuiltinHighlightLanguageReserved, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[highlight.languages.python]
+        \\parser = "python"
+        \\query = "builtin:python"
+        \\
+    ));
+}
+
+test "project spec: highlight config rejects unknown language fields" {
+    try testing.expectError(error.UnknownHighlightLanguageField, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[highlight.languages.python-snippet]
+        \\parser = "python"
+        \\query = "builtin:python"
+        \\library = "parsers/libtree-sitter-python.dylib"
+        \\
+    ));
 }
 
 test "project spec: tree-sitter capture names map to code paint roles" {
@@ -197,10 +214,6 @@ test "project spec: explicit input discovers ss.toml from input directory" {
         \\[project]
         \\entry = "ignored.ss"
         \\asset_base_dir = "assets"
-        \\
-        \\[highlight.languages.ss]
-        \\parser = "ss"
-        \\query = "builtin:ss"
         \\
         ,
         .flags = .{ .truncate = true },

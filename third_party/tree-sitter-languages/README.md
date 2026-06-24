@@ -4,12 +4,12 @@ These pinned tree-sitter languages let `ss` highlight common code blocks
 without per-project parser libraries.
 
 The repository keeps lightweight highlight queries, upstream licenses, and the
-manifest below. Generated parser C sources are materialized under
-`.zig-cache/tree-sitter-languages` during the build so they do not inflate git
-history.
+manifest below. Parser C sources committed by the upstream grammar repositories
+are materialized under the shared `~/.ss/cache/tree-sitter` build cache so they
+do not inflate git history or repeat across project checkouts.
 
-Run this command to refresh tracked queries and materialize generated parser
-sources from the pinned commits:
+Run this command to refresh tracked queries and licenses from the pinned
+commits:
 
 ```sh
 node scripts/update-tree-sitter-languages.mjs
@@ -27,8 +27,9 @@ request when upstream commits change tracked queries or licenses.
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 `LICENSE` file.
 
-Parsers are generated from the listed upstream commits with tree-sitter CLI
-0.25.10 and kept compatible with tree-sitter language ABI 15.
+The tree-sitter runtime is built from https://github.com/tree-sitter/tree-sitter at commit
+da6fe9beb4f7f67beb75914ca8e0d48ae48d6406. Parser source ABI compatibility is checked against
+that runtime during `zig build`.
 
 Default highlighting is enabled for these code block language names:
 `ss`, `bash`, `sh`, `shell`, `c`, `cpp`, `c++`, `cc`, `css`, `go`, `golang`, `html`, `java`, `javascript`, `js`, `json`, `julia`, `jl`, `python`, `py`, `rust`, `rs`, `toml`, `typescript`, `ts`, `tsx`, `yaml`, `yml`, `zig`.

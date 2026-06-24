@@ -293,10 +293,8 @@ fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, s
                 builder.parser = value;
             } else if (std.mem.eql(u8, key, "query")) {
                 builder.query = value;
-            } else if (std.mem.eql(u8, key, "library")) {
-                builder.library = value;
-            } else if (std.mem.eql(u8, key, "symbol")) {
-                builder.symbol = value;
+            } else {
+                return error.UnknownHighlightLanguageField;
             }
         }
     }
@@ -309,8 +307,6 @@ const HighlightLanguageBuilder = struct {
     name: []const u8,
     parser: ?[]const u8 = null,
     query: ?[]const u8 = null,
-    library: ?[]const u8 = null,
-    symbol: ?[]const u8 = null,
 };
 
 fn finishHighlightLanguage(
@@ -321,15 +317,18 @@ fn finishHighlightLanguage(
 ) !void {
     const builder = current.* orelse return;
     current.* = null;
-    const parser = builder.parser orelse return;
-    const query = builder.query orelse return;
+    if (highlight.isBuiltinLanguageName(builder.name)) return error.BuiltinHighlightLanguageReserved;
+    const parser = builder.parser orelse return error.MissingHighlightParser;
+    if (!highlight.isBuiltinParserName(parser)) return error.UnknownHighlightParser;
+    const query = builder.query orelse return error.MissingHighlightQuery;
+    for (languages.items) |language| {
+        if (std.ascii.eqlIgnoreCase(language.name, builder.name)) return error.DuplicateHighlightLanguage;
+    }
 
     var language = highlight.Language{
         .name = try allocator.dupe(u8, builder.name),
         .parser = try allocator.dupe(u8, parser),
         .query = try resolveHighlightValue(allocator, project_dir, query),
-        .library = if (builder.library) |value| try resolveAgainst(allocator, project_dir, value) else null,
-        .symbol = if (builder.symbol) |value| try allocator.dupe(u8, value) else null,
     };
     errdefer language.deinit(allocator);
     try languages.append(allocator, language);

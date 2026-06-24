@@ -5,6 +5,7 @@ const utils = @import("utils");
 const watcher = @import("watch.zig");
 const project = @import("project.zig");
 const lsp = @import("lsp.zig");
+const pdf = @import("render/pdf.zig");
 const error_report = utils.err;
 
 fn usage() void {
@@ -24,7 +25,7 @@ fn usage() void {
         \\  init [dir]
         \\    Create a new ss.toml and starter slide deck
         \\  doctor
-        \\    Check project discovery and render tool availability
+        \\    Check project discovery, render tools, and tree-sitter health
         \\  debug schedule [input.ss]
         \\    Write the inferred dependency graph and execution order as JSON
         \\  debug layout-trace [input.ss]
@@ -35,10 +36,16 @@ fn usage() void {
         \\    Re-run check when the project changes
         \\  watch render [input.ss] [output.pdf]
         \\    Re-render PDF when the project changes
-        \\  cache clear
-        \\    Clear the managed render cache under .ss-cache/render
-        \\  cache stats
-        \\    Print managed render cache file, directory, and size totals
+        \\  cache project clear
+        \\    Clear the managed project render cache under .ss-cache/render
+        \\  cache project stats
+        \\    Print project render cache file, directory, and size totals
+        \\  cache tree-sitter clear
+        \\    Clear the shared tree-sitter build cache
+        \\  cache tree-sitter prune
+        \\    Remove stale tree-sitter bundles and unfinished build dirs
+        \\  cache tree-sitter stats
+        \\    Print shared tree-sitter cache file, directory, and size totals
         \\
         \\Flags:
         \\  --version, -V
@@ -78,8 +85,10 @@ fn usage() void {
         \\  ss doctor --project slides
         \\  ss watch check slide.ss
         \\  ss watch render slide.ss out.pdf
-        \\  ss cache clear
-        \\  ss cache stats
+        \\  ss cache project clear
+        \\  ss cache project stats
+        \\  ss cache tree-sitter stats
+        \\  ss cache tree-sitter prune
         \\  zig build run -- check slide.ss
         \\  zig build run -- render slide.ss out.pdf
         \\
@@ -105,10 +114,14 @@ fn version() void {
 
 fn printCacheStats(stats: utils.render_cache.Stats) void {
     std.debug.print("render cache: {s}\n", .{utils.render_cache.path});
-    std.debug.print("files: {d}\n", .{stats.files});
-    std.debug.print("directories: {d}\n", .{stats.directories});
+    printCacheTotals(stats.files, stats.directories, stats.bytes);
+}
+
+fn printCacheTotals(files: usize, directories: usize, bytes: u64) void {
+    std.debug.print("files: {d}\n", .{files});
+    std.debug.print("directories: {d}\n", .{directories});
     std.debug.print("size: ", .{});
-    printByteSize(stats.bytes);
+    printByteSize(bytes);
     std.debug.print("\n", .{});
 }
 
@@ -396,9 +409,13 @@ fn runDoctor(
     std.debug.print("ss doctor\n", .{});
     std.debug.print("version: {s} ({s})\n\n", .{ build_options.version, build_options.commit });
 
+    var highlight_config: ?utils.highlight.Config = null;
+    defer if (highlight_config) |*cfg| cfg.deinit(allocator);
+
     var issues: usize = 0;
-    issues += try doctorProject(io, allocator, options);
+    issues += try doctorProject(io, allocator, options, &highlight_config);
     issues += try doctorTools(allocator, environ);
+    issues += try doctorTreeSitter(io, allocator, if (highlight_config) |*cfg| cfg.languages else null);
 
     if (issues == 0) {
         std.debug.print("\ndoctor: ok\n", .{});
@@ -411,7 +428,12 @@ fn runDoctor(
     if (options.strict) return error.DoctorIssues;
 }
 
-fn doctorProject(io: std.Io, allocator: std.mem.Allocator, options: DoctorOptions) !usize {
+fn doctorProject(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    options: DoctorOptions,
+    highlight_config: *?utils.highlight.Config,
+) !usize {
     std.debug.print("project:\n", .{});
     if (options.input_path == null and options.project_path == null and options.asset_base_dir == null) {
         var discovered = project.discover(allocator, io, ".") catch |err| {
@@ -420,6 +442,7 @@ fn doctorProject(io: std.Io, allocator: std.mem.Allocator, options: DoctorOption
         };
         if (discovered) |*cfg| {
             defer cfg.deinit(allocator);
+            highlight_config.* = try cfg.highlight.clone(allocator);
             return doctorResolvedProject(allocator, cfg.path, cfg.entry, cfg.asset_base_dir);
         }
         std.debug.print("  warn ss.toml: not found from current directory\n", .{});
@@ -431,6 +454,7 @@ fn doctorProject(io: std.Io, allocator: std.mem.Allocator, options: DoctorOption
         return 1;
     };
     defer resolved.deinit(allocator);
+    highlight_config.* = try resolved.highlight.clone(allocator);
     return doctorResolvedProject(
         allocator,
         resolved.project_file orelse "(explicit input)",
@@ -483,6 +507,63 @@ fn doctorTools(allocator: std.mem.Allocator, environ: std.process.Environ) !usiz
         }
     }
     return issues;
+}
+
+fn doctorTreeSitter(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    configured_languages: ?[]const utils.highlight.Language,
+) !usize {
+    std.debug.print("\ntree-sitter:\n", .{});
+    if (utils.tree_sitter_cache.pathExists(allocator, build_options.tree_sitter_cache_root)) {
+        std.debug.print("  ok cache: {s}\n", .{build_options.tree_sitter_cache_root});
+    } else {
+        std.debug.print("  info cache: {s} not found\n", .{build_options.tree_sitter_cache_root});
+    }
+    if (utils.tree_sitter_cache.pathExists(allocator, build_options.tree_sitter_bundle_root)) {
+        std.debug.print("  ok bundle: {s}\n", .{build_options.tree_sitter_bundle_root});
+    } else {
+        std.debug.print("  info bundle: {s} not found\n", .{build_options.tree_sitter_bundle_root});
+    }
+    std.debug.print("  ok manifest hash: {s}\n", .{build_options.tree_sitter_manifest_hash});
+    std.debug.print("  ok runtime ABI range: {d}..{d}\n", .{
+        pdf.tree_sitter_min_compatible_language_version,
+        pdf.tree_sitter_language_version,
+    });
+
+    var default_config: ?utils.highlight.Config = null;
+    defer if (default_config) |*cfg| cfg.deinit(allocator);
+    const languages = configured_languages orelse blk: {
+        default_config = try utils.highlight.defaultConfig(allocator);
+        break :blk default_config.?.languages;
+    };
+
+    var report = try pdf.treeSitterHealthReport(allocator, io, languages);
+    defer report.deinit(allocator);
+
+    if (report.items.len == 0) {
+        std.debug.print("  fail languages: no configured highlight languages\n", .{});
+        return 1;
+    }
+
+    std.debug.print("  ok configured names: {d}\n", .{report.configured_languages});
+    for (report.items) |item| {
+        switch (item.status) {
+            .ok => std.debug.print(
+                "  ok {s}: parser={s}, query={s}, captures={d}, mapped={d}\n",
+                .{ item.name, item.parser, item.query, item.capture_count, item.mapped_capture_count },
+            ),
+            .warning => std.debug.print(
+                "  warn {s}: parser={s}, query={s}: {s}\n",
+                .{ item.name, item.parser, item.query, item.detail },
+            ),
+            .fail => std.debug.print(
+                "  fail {s}: parser={s}, query={s}: {s}\n",
+                .{ item.name, item.parser, item.query, item.detail },
+            ),
+        }
+    }
+    return report.failures + report.warnings;
 }
 
 fn findOnPath(allocator: std.mem.Allocator, environ: std.process.Environ, name: []const u8) !?[]u8 {
@@ -648,6 +729,81 @@ fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
     };
 }
 
+fn runCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (args.len < 1) return failUsage("missing cache target", .{});
+    if (std.mem.eql(u8, args[0], "project")) return runProjectCacheCommand(io, allocator, args[1..]);
+    if (std.mem.eql(u8, args[0], "tree-sitter")) return runTreeSitterCacheCommand(io, allocator, args[1..]);
+    return failUsage("unknown cache target: {s}", .{args[0]});
+}
+
+fn runProjectCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (args.len < 1) return failUsage("missing project cache command", .{});
+    if (args.len == 1 and std.mem.eql(u8, args[0], "clear")) {
+        utils.render_cache.clear(io, allocator) catch |err| switch (err) {
+            error.ActiveRenderCacheLease => return failCli("project render cache is currently in use", .{}),
+            else => return err,
+        };
+        std.debug.print("cleared project render cache: {s}\n", .{utils.render_cache.path});
+        return;
+    }
+    if (args.len == 1 and std.mem.eql(u8, args[0], "stats")) {
+        const stats = try utils.render_cache.stats(io, allocator);
+        printCacheStats(stats);
+        return;
+    }
+    return failUsage("unknown project cache command: {s}", .{args[0]});
+}
+
+fn runTreeSitterCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (args.len < 1) return failUsage("missing tree-sitter cache command", .{});
+    if (args.len == 1 and std.mem.eql(u8, args[0], "stats")) {
+        try printTreeSitterCacheStats(io, allocator);
+        return;
+    }
+    if (args.len == 1 and std.mem.eql(u8, args[0], "clear")) {
+        const before = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
+        try utils.tree_sitter_cache.clear(io, build_options.tree_sitter_cache_root);
+        std.debug.print("cleared tree-sitter cache: {s}\n", .{build_options.tree_sitter_cache_root});
+        std.debug.print("removed: ", .{});
+        printByteSize(before.bytes);
+        std.debug.print("\n", .{});
+        return;
+    }
+    if (args.len == 1 and std.mem.eql(u8, args[0], "prune")) {
+        const before = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
+        const result = try utils.tree_sitter_cache.prune(
+            io,
+            allocator,
+            build_options.tree_sitter_cache_root,
+            build_options.tree_sitter_manifest_hash,
+        );
+        const after = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
+        std.debug.print("pruned tree-sitter cache: {s}\n", .{build_options.tree_sitter_cache_root});
+        std.debug.print("removed bundles: {d}\n", .{result.removed_bundles});
+        std.debug.print("removed build dirs: {d}\n", .{result.removed_build_dirs});
+        std.debug.print("removed source dirs: {d}\n", .{result.removed_source_dirs});
+        std.debug.print("freed: ", .{});
+        printByteSize(before.bytes -| after.bytes);
+        std.debug.print("\n", .{});
+        return;
+    }
+    return failUsage("unknown tree-sitter cache command: {s}", .{args[0]});
+}
+
+fn printTreeSitterCacheStats(io: std.Io, allocator: std.mem.Allocator) !void {
+    const total = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_cache_root);
+    const current = try utils.tree_sitter_cache.stats(io, allocator, build_options.tree_sitter_bundle_root);
+    const bundles = try utils.tree_sitter_cache.bundleCount(io, allocator, build_options.tree_sitter_cache_root);
+    std.debug.print("tree-sitter cache: {s}\n", .{build_options.tree_sitter_cache_root});
+    std.debug.print("current manifest hash: {s}\n", .{build_options.tree_sitter_manifest_hash});
+    std.debug.print("current bundle: {s}\n", .{build_options.tree_sitter_bundle_root});
+    std.debug.print("bundles: {d}\n", .{bundles});
+    std.debug.print("total:\n", .{});
+    printCacheTotals(total.files, total.directories, total.bytes);
+    std.debug.print("current bundle:\n", .{});
+    printCacheTotals(current.files, current.directories, current.bytes);
+}
+
 fn run(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const io = init.io;
@@ -751,21 +907,8 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "cache")) {
-        if (args.len == 3 and std.mem.eql(u8, args[2], "clear")) {
-            utils.render_cache.clear(io, allocator) catch |err| switch (err) {
-                error.ActiveRenderCacheLease => return failCli("render cache is currently in use", .{}),
-                else => return err,
-            };
-            std.debug.print("cleared render cache: {s}\n", .{utils.render_cache.path});
-            return;
-        }
-        if (args.len == 3 and std.mem.eql(u8, args[2], "stats")) {
-            const stats = try utils.render_cache.stats(io, allocator);
-            printCacheStats(stats);
-            return;
-        }
-        if (args.len < 3) return failUsage("missing cache command", .{});
-        return failUsage("unknown cache command: {s}", .{args[2]});
+        try runCacheCommand(io, allocator, args[2..]);
+        return;
     }
 
     return failUsage("unknown command: {s}", .{cmd});

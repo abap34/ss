@@ -6,6 +6,7 @@ import path from "node:path";
 import { assert, ssBin } from "./lsp_harness.mjs";
 
 await testRenderCacheGenerations();
+await testCacheStatsCommands();
 await testCacheClearRejectsActiveRender();
 
 async function testRenderCacheGenerations() {
@@ -47,6 +48,20 @@ async function testRenderCacheGenerations() {
   }
 }
 
+async function testCacheStatsCommands() {
+  const project = await mkdtempProject("ss-cache-stats-");
+  try {
+    const projectStats = await runSs(["cache", "project", "stats"], project);
+    assert(projectStats.stderr.includes("render cache:"), `project cache stats omitted render cache path: ${projectStats.stderr}`);
+
+    const treeSitterStats = await runSs(["cache", "tree-sitter", "stats"], project);
+    assert(treeSitterStats.stderr.includes("tree-sitter cache:"), `tree-sitter cache stats omitted cache path: ${treeSitterStats.stderr}`);
+    assert(treeSitterStats.stderr.includes("current manifest hash:"), `tree-sitter cache stats omitted manifest hash: ${treeSitterStats.stderr}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testCacheClearRejectsActiveRender() {
   const project = await mkdtempProject("ss-render-cache-clear-");
   try {
@@ -54,11 +69,11 @@ async function testCacheClearRejectsActiveRender() {
     await mkdir(leases, { recursive: true });
     await writeFile(path.join(leases, "active.json"), JSON.stringify({ schema: 1, pid: process.pid }), "utf8");
 
-    const result = await runSs(["cache", "clear"], project, { allowFailure: true });
-    assert(result.code !== 0, "cache clear should fail while an active lease exists");
+    const result = await runSs(["cache", "project", "clear"], project, { allowFailure: true });
+    assert(result.code !== 0, "cache project clear should fail while an active lease exists");
     assert(
-      result.stderr.includes("render cache is currently in use"),
-      `cache clear did not report active lease: ${result.stderr}`,
+      result.stderr.includes("project render cache is currently in use"),
+      `cache project clear did not report active lease: ${result.stderr}`,
     );
   } finally {
     await rm(project, { recursive: true, force: true });

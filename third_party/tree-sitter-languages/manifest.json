@@ -1,7 +1,9 @@
 {
   "schema": 1,
-  "language_abi": 15,
-  "tree_sitter_cli": "0.25.10",
+  "runtime": {
+    "repo": "https://github.com/tree-sitter/tree-sitter",
+    "commit": "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406"
+  },
   "languages": [
     {
       "name": "bash",
@@ -175,7 +177,6 @@
       "repo": "https://github.com/tree-sitter/tree-sitter-typescript",
       "commit": "75b3874edb2dc714fb1fd77a32013d0f8699989f",
       "aliases": ["typescript", "ts", "tsx"],
-      "generate": ["typescript", "tsx"],
       "files": [
         { "from": "LICENSE", "to": "LICENSE" },
         { "from": "queries/highlights.scm", "to": "queries/highlights.scm" },

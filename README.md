@@ -195,7 +195,8 @@ directory when omitted.
 The JSON Schema for `ss.toml` lives at `schemas/ss-toml.schema.json`. TOML
 language servers such as Taplo can use it for completion and validation.
 Code blocks in common languages use bundled tree-sitter parsers by default.
-Use `[highlight.languages.<name>]` only when adding or overriding a language.
+Use `[highlight.languages.<name>]` only when adding another code block name that
+reuses a bundled parser and query. Bundled language names are reserved.
 The exact bundled language names are listed in
 `third_party/tree-sitter-languages/README.md`.
 
@@ -222,17 +223,19 @@ ss has the following dependencies:
 | Cairo headers and library | Native PDF drawing. |
 | Pango headers and library | Text shaping and layout. |
 | librsvg headers and library | SVG rendering. |
-| tree-sitter headers and library | Built-in syntax highlighting for code blocks. |
+| `git` | Fetch pinned tree-sitter runtime and parser sources during the first build. |
 | `qpdf` | PDF assembly and normalization. |
 | `magick` | Raster image conversion, when raster assets need conversion or resizing. |
 | `pdftocairo` | PDF/vector asset conversion, including rendered LaTeX math conversion. |
 | `pdflatex` | LaTeX math rendering, when math objects are used. |
 
-Run `ss doctor` to check the tools available in the current environment.
-
+Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
+highlighting health in the current environment.
 
 Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
-set up MD4C, and build:
+set up MD4C, and build. The build prepares the pinned tree-sitter runtime and
+standard parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
+The first build may use network access for that cache.
 
 ```sh
 scripts/setup-md4c.sh
@@ -243,14 +246,14 @@ zig build -Doptimize=ReleaseSafe install --prefix ~/.local
 Example Homebrew command for the non-TeX dependencies:
 
 ```sh
-brew install pkgconf cairo pango librsvg tree-sitter qpdf poppler imagemagick
+brew install pkgconf cairo pango librsvg qpdf poppler imagemagick
 ```
 
 Example apt command for the non-TeX dependencies on Ubuntu/Debian:
 
 ```sh
 sudo apt-get install -y \
-  pkg-config libcairo2-dev libpango1.0-dev librsvg2-dev libtree-sitter-dev \
+  pkg-config libcairo2-dev libpango1.0-dev librsvg2-dev \
   qpdf poppler-utils imagemagick
 ```
 
@@ -307,14 +310,17 @@ to PDFs with the same Docker image:
 | `ss dump [input.ss] [output.json]`        | Write compiler/IR metadata for tooling and debugging.            |
 | `ss render [input.ss] [output.pdf]`       | Render a PDF.                                                    |
 | `ss init [dir]`                           | Create an `ss.toml` and starter slide deck.                      |
-| `ss doctor`                               | Check project discovery and render tool availability.            |
+| `ss doctor`                               | Check project discovery, render tools, and tree-sitter health.   |
 | `ss debug schedule [input.ss]`            | Write the inferred dependency graph and execution order as JSON. |
 | `ss debug layout-trace [input.ss]`        | Write the layout solver trace as JSON.                           |
 | `ss lsp`                                  | Run the stdio language server.                                   |
 | `ss watch check [input.ss]`               | Re-run checks as project files change.                           |
 | `ss watch render [input.ss] [output.pdf]` | Re-render a PDF as project files change.                         |
-| `ss cache stats`                          | Show managed render cache file count, directory count, and size. |
-| `ss cache clear`                          | Clear the managed render cache under `.ss-cache/render`.         |
+| `ss cache project stats`                  | Show project render cache file count, directory count, and size. |
+| `ss cache project clear`                  | Clear the project render cache under `.ss-cache/render`.         |
+| `ss cache tree-sitter stats`              | Show shared tree-sitter cache bundle count and size.             |
+| `ss cache tree-sitter prune`              | Remove stale tree-sitter bundles and unfinished build dirs.      |
+| `ss cache tree-sitter clear`              | Clear the shared tree-sitter cache.                              |
 
 Examples:
 
@@ -327,7 +333,8 @@ ss render --project . --output .ss-cache/deck.pdf
 ss debug schedule --project . --output .ss-cache/schedule.json
 ss debug layout-trace --project . --output .ss-cache/layout-trace.json
 ss watch render slide.ss .ss-cache/deck.pdf
-ss cache stats
+ss cache project stats
+ss cache tree-sitter stats
 ```
 
 ### Project Discovery

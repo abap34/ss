@@ -6,24 +6,22 @@ import path from "node:path";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
-const bundleRoot = path.join(repoRoot, "third_party", "tree-sitter-languages");
-const manifestPath = path.join(bundleRoot, "manifest.json");
-const readmePath = path.join(bundleRoot, "README.md");
-const cacheRoot = path.join(repoRoot, ".ss-cache", "tree-sitter-languages");
-const generatedRoot = path.join(repoRoot, ".zig-cache", "tree-sitter-languages");
+const trackedRoot = path.join(repoRoot, "third_party", "tree-sitter-languages");
+const manifestPath = path.join(trackedRoot, "manifest.json");
+const readmePath = path.join(trackedRoot, "README.md");
+const workRoot = path.join(repoRoot, ".ss-cache", "tree-sitter-languages");
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
 const updateLatest = args.has("--latest");
-const prepareBuild = args.has("--prepare-build");
-const allowedArgs = new Set(["--check", "--latest", "--prepare-build"]);
+const allowedArgs = new Set(["--check", "--latest"]);
 for (const arg of args) {
   if (!allowedArgs.has(arg)) {
     throw new Error(`unknown argument: ${arg}`);
   }
 }
-if ([checkOnly, updateLatest, prepareBuild].filter(Boolean).length > 1) {
-  throw new Error("--check, --latest, and --prepare-build cannot be combined");
+if ([checkOnly, updateLatest].filter(Boolean).length > 1) {
+  throw new Error("--check and --latest cannot be combined");
 }
 
 const manifest = await readManifest();
@@ -35,17 +33,12 @@ if (checkOnly) {
   process.exit(0);
 }
 
-if (prepareBuild) {
-  await syncLanguages(manifest, { copyTracked: false, copyGenerated: true });
-  process.exit(0);
-}
-
 if (updateLatest) {
   await updateManifestToLatest(manifest);
   await writeManifest(manifest);
 }
 
-await syncLanguages(manifest, { copyTracked: true, copyGenerated: true });
+await syncLanguages(manifest, { workRoot });
 await fs.writeFile(readmePath, renderReadme(manifest), "utf8");
 
 async function readManifest() {
@@ -59,7 +52,13 @@ async function writeManifest(manifest) {
 
 function validateManifest(manifest) {
   if (manifest.schema !== 1) throw new Error("unsupported tree-sitter language manifest schema");
-  if (!Number.isInteger(manifest.language_abi)) throw new Error("manifest language_abi must be an integer");
+  if (!manifest.runtime || typeof manifest.runtime !== "object") throw new Error("manifest runtime must be an object");
+  if (typeof manifest.runtime.repo !== "string" || manifest.runtime.repo.length === 0) {
+    throw new Error("manifest runtime.repo must be a non-empty string");
+  }
+  if (!/^[0-9a-f]{40}$/.test(manifest.runtime.commit)) {
+    throw new Error("manifest runtime.commit must be a 40-character commit");
+  }
   if (!Array.isArray(manifest.languages) || manifest.languages.length === 0) {
     throw new Error("manifest languages must be a non-empty array");
   }
@@ -80,13 +79,6 @@ function validateManifest(manifest) {
     if (!Array.isArray(language.files) || language.files.length === 0) {
       throw new Error(`language ${language.name} must declare files`);
     }
-    if (language.generate !== undefined && !Array.isArray(language.generate)) {
-      throw new Error(`language ${language.name} generate must be an array`);
-    }
-    for (const dir of language.generate ?? ["."]) {
-      if (typeof dir !== "string") throw new Error(`language ${language.name} has an invalid generate entry`);
-      rejectUnsafePath(dir, `${language.name} generate path`);
-    }
     for (const file of language.files) {
       if (typeof file.from !== "string" || typeof file.to !== "string") {
         throw new Error(`language ${language.name} has an invalid file entry`);
@@ -105,7 +97,7 @@ function rejectUnsafePath(value, label) {
 
 async function checkManifestFiles(manifest) {
   for (const language of manifest.languages) {
-    const destRoot = path.join(bundleRoot, language.name);
+    const destRoot = path.join(trackedRoot, language.name);
     for (const file of language.files) {
       if (isGeneratedFile(file.to)) continue;
       const dest = path.join(destRoot, file.to);
@@ -130,10 +122,10 @@ async function updateManifestToLatest(manifest) {
   for (const language of manifest.languages) {
     const latest = latestCommit(language.repo);
     if (latest !== language.commit) {
-      console.log(`${language.name}: ${language.commit} -> ${latest}`);
+      log(`${language.name}: ${language.commit} -> ${latest}`);
       language.commit = latest;
     } else {
-      console.log(`${language.name}: already at ${latest}`);
+      log(`${language.name}: already at ${latest}`);
     }
   }
 }
@@ -146,31 +138,18 @@ function latestCommit(repo) {
 }
 
 async function syncLanguages(manifest, options) {
-  await fs.rm(cacheRoot, { recursive: true, force: true });
-  await fs.mkdir(cacheRoot, { recursive: true });
-  if (options.copyGenerated) {
-    await fs.mkdir(generatedRoot, { recursive: true });
-  }
-  const treeSitter = await resolveTreeSitterCommand(manifest);
+  const syncWorkRoot = options.workRoot;
+  await fs.rm(syncWorkRoot, { recursive: true, force: true });
+  await fs.mkdir(syncWorkRoot, { recursive: true });
   for (const language of manifest.languages) {
-    console.log(`sync ${language.name} ${language.commit}`);
-    const checkout = path.join(cacheRoot, language.name);
+    log(`sync ${language.name} ${language.commit}`);
+    const checkout = path.join(syncWorkRoot, language.name);
     await checkoutCommit(language.repo, language.commit, checkout);
-    await installGrammarDependencies(checkout);
-    generateLanguage(treeSitter, checkout, language);
-    if (options.copyTracked) {
-      await fs.rm(path.join(bundleRoot, language.name), { recursive: true, force: true });
-    }
-    if (options.copyGenerated) {
-      await fs.rm(path.join(generatedRoot, language.name), { recursive: true, force: true });
-    }
+    await fs.rm(path.join(trackedRoot, language.name), { recursive: true, force: true });
     for (const file of language.files) {
+      if (isGeneratedFile(file.to)) continue;
       const source = path.join(checkout, file.from);
-      const generated = isGeneratedFile(file.to);
-      if (generated && !options.copyGenerated) continue;
-      if (!generated && !options.copyTracked) continue;
-      const root = generated ? generatedRoot : bundleRoot;
-      const dest = path.join(root, language.name, file.to);
+      const dest = path.join(trackedRoot, language.name, file.to);
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.copyFile(source, dest);
     }
@@ -179,66 +158,6 @@ async function syncLanguages(manifest, options) {
 
 function isGeneratedFile(relativePath) {
   return relativePath.startsWith("src/") || relativePath.startsWith("common/") || relativePath.includes("/src/");
-}
-
-async function resolveTreeSitterCommand(manifest) {
-  const localTreeSitter = path.join(repoRoot, "editor", "tree-sitter-ss", "node_modules", ".bin", process.platform === "win32" ? "tree-sitter.cmd" : "tree-sitter");
-  if (!(await fileExists(localTreeSitter))) {
-    run("npm", ["ci", "--prefix", path.join(repoRoot, "editor", "tree-sitter-ss")]);
-  }
-
-  const candidates = [];
-  if (process.env.TREE_SITTER_CLI) candidates.push(process.env.TREE_SITTER_CLI);
-  candidates.push(localTreeSitter);
-  candidates.push("tree-sitter");
-
-  for (const command of candidates) {
-    if (command !== "tree-sitter") {
-      try {
-        await fs.access(command);
-      } catch {
-        continue;
-      }
-    }
-    const version = commandOutput(command, ["--version"]).trim();
-    if (!version.includes(manifest.tree_sitter_cli)) {
-      throw new Error(`tree-sitter CLI version ${manifest.tree_sitter_cli} is required, got: ${version}`);
-    }
-    return command;
-  }
-
-  throw new Error("tree-sitter CLI is missing; run `npm ci` in editor/tree-sitter-ss or set TREE_SITTER_CLI");
-}
-
-async function fileExists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function installGrammarDependencies(checkout) {
-  try {
-    await fs.access(path.join(checkout, "package.json"));
-  } catch {
-    return;
-  }
-  run("npm", [
-    "install",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    "--cache",
-    path.join(cacheRoot, "npm-cache"),
-  ], { cwd: checkout });
-}
-
-function generateLanguage(treeSitter, checkout, language) {
-  for (const dir of language.generate ?? ["."]) {
-    run(treeSitter, ["generate"], { cwd: path.join(checkout, dir) });
-  }
 }
 
 async function checkoutCommit(repo, commit, dest) {
@@ -260,15 +179,8 @@ function run(command, args, options = {}) {
   }
 }
 
-function commandOutput(command, args) {
-  const result = spawnSync(command, args, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
-  });
-  if (result.status !== 0) return "";
-  return `${result.stdout}${result.stderr}`;
+function log(message) {
+  console.log(message);
 }
 
 function renderReadme(manifest) {
@@ -282,12 +194,12 @@ These pinned tree-sitter languages let \`ss\` highlight common code blocks
 without per-project parser libraries.
 
 The repository keeps lightweight highlight queries, upstream licenses, and the
-manifest below. Generated parser C sources are materialized under
-\`.zig-cache/tree-sitter-languages\` during the build so they do not inflate git
-history.
+manifest below. Parser C sources committed by the upstream grammar repositories
+are materialized under the shared \`~/.ss/cache/tree-sitter\` build cache so they
+do not inflate git history or repeat across project checkouts.
 
-Run this command to refresh tracked queries and materialize generated parser
-sources from the pinned commits:
+Run this command to refresh tracked queries and licenses from the pinned
+commits:
 
 \`\`\`sh
 node scripts/update-tree-sitter-languages.mjs
@@ -305,8 +217,9 @@ request when upstream commits change tracked queries or licenses.
 All listed parsers are MIT licensed. Each language directory keeps the upstream
 \`LICENSE\` file.
 
-Parsers are generated from the listed upstream commits with tree-sitter CLI
-${manifest.tree_sitter_cli} and kept compatible with tree-sitter language ABI ${manifest.language_abi}.
+The tree-sitter runtime is built from ${manifest.runtime.repo} at commit
+${manifest.runtime.commit}. Parser source ABI compatibility is checked against
+that runtime during \`zig build\`.
 
 Default highlighting is enabled for these code block language names:
 \`${aliases.join("`, `")}\`.

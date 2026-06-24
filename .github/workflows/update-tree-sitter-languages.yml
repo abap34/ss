@@ -24,11 +24,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: editor/tree-sitter-ss/package-lock.json
-
-      - name: Install tree-sitter CLI
-        run: npm ci --prefix editor/tree-sitter-ss
 
       - name: Sync bundled grammars
         run: node scripts/update-tree-sitter-languages.mjs --latest
