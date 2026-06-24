@@ -16,7 +16,6 @@ RUN apt-get update \
         libcairo2-dev \
         librsvg2-dev \
         libpango1.0-dev \
-        libtree-sitter-dev \
         pkg-config \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -69,7 +68,6 @@ RUN set -eu; \
         libpango-1.0-0 \
         libpangocairo-1.0-0 \
         librsvg2-2 \
-        libtree-sitter0 \
         poppler-utils \
         qpdf \
         texlive-full; \

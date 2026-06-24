@@ -128,13 +128,8 @@ fn mixHighlightLanguageStats(io: std.Io, hash: *u64, languages: []const utils.hi
         mixBytes(hash, language.name);
         mixBytes(hash, language.parser);
         mixBytes(hash, language.query);
-        mixOptionalBytes(hash, language.library);
-        mixOptionalBytes(hash, language.symbol);
         if (!std.mem.startsWith(u8, language.query, "builtin:")) {
             try mixStatFile(io, hash, language.query);
-        }
-        if (language.library) |library| {
-            try mixStatFile(io, hash, library);
         }
     }
 }
@@ -248,9 +243,4 @@ fn mixBytes(hash: *u64, bytes: []const u8) void {
         hash.* ^= byte;
         hash.* *%= 1099511628211;
     }
-}
-
-fn mixOptionalBytes(hash: *u64, value: ?[]const u8) void {
-    mixValue(bool, hash, value != null);
-    if (value) |bytes| mixBytes(hash, bytes);
 }
