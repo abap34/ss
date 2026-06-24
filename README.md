@@ -192,13 +192,8 @@ ss render --project . --output deck.pdf
 `entry` is required. `asset_base_dir` defaults to the entry file's parent
 directory when omitted.
 
-The JSON Schema for `ss.toml` lives at `schemas/ss-toml.schema.json`. TOML
+The JSON Schema for `ss.toml` lives at [schemas/ss-toml.schema.json](schemas/ss-toml.schema.json). TOML
 language servers such as Taplo can use it for completion and validation.
-Code blocks in common languages use bundled tree-sitter parsers by default.
-Use `[highlight.languages.<name>]` only when adding another code block name that
-reuses a bundled parser and query. Bundled language names are reserved.
-The exact bundled language names are listed in
-`third_party/tree-sitter-languages/README.md`.
 
 ## Installation
 
@@ -223,6 +218,7 @@ ss has the following dependencies:
 | Cairo headers and library | Native PDF drawing. |
 | Pango headers and library | Text shaping and layout. |
 | librsvg headers and library | SVG rendering. |
+| tree-sitter | Syntax Highlight. |
 | `git` | Fetch pinned tree-sitter runtime and parser sources during the first build. |
 | `qpdf` | PDF assembly and normalization. |
 | `magick` | Raster image conversion, when raster assets need conversion or resizing. |
@@ -233,8 +229,10 @@ Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
 highlighting health in the current environment.
 
 Install Zig 0.16 and the Cairo/Pango/librsvg development files listed above,
-set up MD4C, and build. The build prepares the pinned tree-sitter runtime and
+set up MD4C, and build. 
+The build prepares the pinned tree-sitter runtime and
 standard parsers under `~/.ss/cache/tree-sitter` when that cache is missing.
+(Full list of builtin languages is avaliable at: [third_party/tree-sitter-languages/README.md](third_party/tree-sitter-languages/README.md))
 The first build may use network access for that cache.
 
 ```sh
@@ -243,13 +241,13 @@ zig build -Doptimize=ReleaseSafe
 zig build -Doptimize=ReleaseSafe install --prefix ~/.local
 ```
 
-Example Homebrew command for the non-TeX dependencies:
+Example Homebrew command for the **non**-TeX dependencies:
 
 ```sh
 brew install pkgconf cairo pango librsvg qpdf poppler imagemagick
 ```
 
-Example apt command for the non-TeX dependencies on Ubuntu/Debian:
+Example apt command on Ubuntu/Debian:
 
 ```sh
 sudo apt-get install -y \
@@ -409,7 +407,7 @@ Install it from Zed with `zed: install dev extension`, then select
 
 ### Tree-sitter
 
-The standalone grammar package lives under `editor/tree-sitter-ss/`.
+The standalone ss grammar package lives under `editor/tree-sitter-ss/`.
 
 ## Contributing
 
