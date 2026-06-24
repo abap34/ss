@@ -237,11 +237,34 @@ end
         conflict.message.includes("ConstraintConflict: constraint conflict"),
         `constraint conflict message did not match CLI classification: ${JSON.stringify(conflict)}`,
       );
-      assert(conflict.message.includes("constraint:"), `constraint text missing from LSP diagnostic: ${JSON.stringify(conflict)}`);
-      assert(conflict.range.start.line === 4, `constraint diagnostic pointed at the wrong line: ${JSON.stringify(conflict)}`);
+      assert(
+        conflict.message.includes("reason: anchor_value_conflict"),
+        `constraint conflict reason missing from LSP diagnostic: ${JSON.stringify(conflict)}`,
+      );
+      assert(conflict.message.includes("incoming value:"), `incoming propagation missing from LSP diagnostic: ${JSON.stringify(conflict)}`);
+      assert(conflict.message.includes("→"), `propagation arrow missing from LSP diagnostic: ${JSON.stringify(conflict)}`);
+      assert(
+        conflict.relatedInformation?.some((item) => item.message === "current value source"),
+        `current value related information missing from LSP diagnostic: ${JSON.stringify(conflict)}`,
+      );
+      assert(conflict.range.start.line === 5, `constraint diagnostic pointed at the wrong line: ${JSON.stringify(conflict)}`);
       assert(
         !diagnostics.some((diagnostic) => diagnostic.code === "unresolved_frame"),
         `secondary unresolved frame diagnostics leaked through: ${JSON.stringify(diagnostics)}`,
+      );
+
+      const unsaved = source.replace("page.left + 20", "page.left + 30");
+      client.changeDocument({ uri, version: 2, text: unsaved });
+      const report = await client.request("ss/layoutConflicts", { textDocument: { uri } });
+      assert(report.kind === "ss-layout-conflicts", `unexpected conflict report kind: ${JSON.stringify(report)}`);
+      assert(report.failures?.length > 0, `conflict report missing failures: ${JSON.stringify(report)}`);
+      assert(
+        report.failures.some((failure) => failure.reason === "anchor_value_conflict" && Math.abs((failure.expected ?? 0) - 30) < 0.1),
+        `conflict report did not reflect unsaved source: ${JSON.stringify(report.failures)}`,
+      );
+      assert(
+        report.failures.every((failure) => !("difference" in failure)),
+        `conflict report should not expose difference: ${JSON.stringify(report.failures)}`,
       );
     });
   } finally {

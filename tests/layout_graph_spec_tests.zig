@@ -72,7 +72,7 @@ test "layout graph spec: reconciliation reports conflicts and negative sizes" {
     try testing.expectError(error.ConstraintConflict, graph.reconcileAxisState(&conflict));
 
     var negative = model.AxisState{ .start = 20, .end = 10 };
-    try testing.expectError(error.NegativeConstraintSize, graph.reconcileAxisState(&negative));
+    try testing.expectError(error.NegativeFrameSize, graph.reconcileAxisState(&negative));
 }
 
 test "layout graph spec: self-referential anchor pairs define sizes when roles differ" {
@@ -253,6 +253,30 @@ test "layout graph spec: page graph indexes direct page children and filters axi
     try testing.expectEqual(b, sourced_by_a.items[0].target_node);
 }
 
+test "layout graph spec: implicit constraint objects stay page local" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const first_page = try ir.addPage("First");
+    const second_page = try ir.addPage("Second");
+    const placed = try ir.makeObject(first_page, "placed", null, .text, .text, "placed");
+    const helper = try ir.createObjectWithOrigin("helper", null, .text, .text, "helper", null);
+    const foreign = try ir.makeObject(second_page, "foreign", null, .text, .text, "foreign");
+    try ir.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 10, "helper-top");
+    try ir.addAnchorConstraint(placed, .left, .{ .node = .{ .node_id = foreign, .anchor = .left } }, 20, "foreign-left");
+
+    var first_graph = try graph.PageLayoutGraph.init(testing.allocator, &ir, first_page);
+    defer first_graph.deinit();
+    try testing.expect(first_graph.indexOf(placed) != null);
+    try testing.expect(first_graph.indexOf(helper) != null);
+    try testing.expect(first_graph.indexOf(foreign) == null);
+
+    var second_graph = try graph.PageLayoutGraph.init(testing.allocator, &ir, second_page);
+    defer second_graph.deinit();
+    try testing.expect(second_graph.indexOf(foreign) != null);
+    try testing.expect(second_graph.indexOf(placed) == null);
+}
+
 test "layout graph spec: constraint classification names layout dependency roles" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -372,6 +396,26 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     try testing.expectError(error.ConstraintConflict, cycle.finalize());
 }
 
+test "layout solver: consistent constraint cycles are fixed by fallback placement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const a = try ir.makeObject(page, "a", null, .text, .text, "A");
+    const b = try ir.makeObject(page, "b", null, .text, .text, "B");
+    try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-top");
+    try ir.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, "b-top");
+
+    try ir.finalize();
+
+    const a_node = ir.getNode(a).?;
+    const b_node = ir.getNode(b).?;
+    try testing.expect(a_node.frame.y_set);
+    try testing.expect(b_node.frame.y_set);
+    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(b_node.frame, .top));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
 test "layout solver: tautological self-anchor constraints do not block fallback placement" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -385,6 +429,50 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
     const node = ir.getNode(object).?;
     try testing.expect(node.frame.x_set);
     try testing.expect(node.frame.y_set);
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: vertical fallback tries alternate roots in unresolved components" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const panel = try ir.makeObject(page, "panel", null, .text, .text, "");
+    const body = try ir.makeObject(page, "body", null, .text, .text, "content");
+    try ir.addAnchorConstraint(panel, .left, .{ .page = .left }, 52, "panel-left");
+    try ir.addAnchorConstraint(panel, .right, .{ .page = .right }, -52, "panel-right");
+    try ir.addAnchorConstraint(body, .left, .{ .page = .left }, 72, "body-left");
+    try ir.addAnchorConstraint(body, .right, .{ .page = .right }, -72, "body-right");
+    try ir.addAnchorConstraint(panel, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 16, "panel-top");
+    try ir.addAnchorConstraint(panel, .bottom, .{ .node = .{ .node_id = body, .anchor = .bottom } }, -16, "panel-bottom");
+
+    try ir.finalize();
+
+    const panel_node = ir.getNode(panel).?;
+    const body_node = ir.getNode(body).?;
+    try testing.expect(panel_node.frame.y_set);
+    try testing.expect(body_node.frame.y_set);
+    try expectFloat(graph.anchorValue(body_node.frame, .top) + 16, graph.anchorValue(panel_node.frame, .top));
+    try expectFloat(graph.anchorValue(body_node.frame, .bottom) - 16, graph.anchorValue(panel_node.frame, .bottom));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: constraint-referenced objects participate in fallback placement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const placed = try ir.makeObject(page, "placed", null, .text, .text, "placed");
+    const referenced = try ir.createObjectWithOrigin("referenced", null, .text, .text, "referenced", null);
+    try ir.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, "placed-top");
+
+    try ir.finalize();
+
+    const placed_node = ir.getNode(placed).?;
+    const referenced_node = ir.getNode(referenced).?;
+    try testing.expect(placed_node.frame.y_set);
+    try testing.expect(referenced_node.frame.y_set);
+    try expectFloat(graph.anchorValue(referenced_node.frame, .top) + 10, graph.anchorValue(placed_node.frame, .top));
     try testing.expect(!ir.hasConstraintFailures());
 }
 
@@ -563,7 +651,7 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     try expectFloat(model.PageLayout.height / 2, body_center);
 }
 
-test "layout solver: explicit anchor conflicts and negative sizes are rejected" {
+test "layout solver: explicit anchor conflicts and negative frame sizes are rejected" {
     var conflict = try initEmptyIr();
     defer conflict.deinit();
 
@@ -579,7 +667,7 @@ test "layout solver: explicit anchor conflicts and negative sizes are rejected" 
     const negative_page = try negative.addPage("Page");
     const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
     try negative.addAnchorConstraint(negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, "negative-width");
-    try testing.expectError(error.NegativeConstraintSize, negative.finalize());
+    try testing.expectError(error.NegativeFrameSize, negative.finalize());
 }
 
 test "layout solver: group width propagation must preserve child hard widths" {
