@@ -207,7 +207,7 @@ fn evaluateDocumentOrReportWithSchedule(ir: *core.Ir, graph: *const analysis.sch
 fn solveLayoutOrReport(ir: *core.Ir, progress: ?*Progress) !void {
     lowering.solveLayout(ir) catch |err| {
         switch (err) {
-            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err, core.formatConstraint),
+            error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
             else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir),
         }
         return err;
@@ -220,7 +220,7 @@ fn solveLayoutOrReport(ir: *core.Ir, progress: ?*Progress) !void {
 fn solveLayoutWithTracePathOrReport(ir: *core.Ir, trace_path: []const u8, progress: ?*Progress) !void {
     lowering.solveLayoutWithTracePath(ir, trace_path) catch |err| {
         switch (err) {
-            error.ConstraintConflict, error.NegativeConstraintSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err, core.formatConstraint),
+            error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
             else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir),
         }
         return err;
@@ -300,6 +300,46 @@ pub fn writeLayoutTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allo
     defer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
     try solveLayoutWithTracePathOrReport(&analyzed.ir, output_path, progress);
+}
+
+pub fn layoutConflictReportJsonWithAssetBaseAndOverlay(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    asset_base_dir: []const u8,
+    overlay: ?*const module_loader.SourceOverlay,
+    progress: ?*Progress,
+) ![]u8 {
+    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, overlay, .evaluation_schedule);
+    defer analyzed.deinit();
+    try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
+    lowering.solveLayout(&analyzed.ir) catch |err| switch (err) {
+        error.ConstraintConflict,
+        error.NegativeFrameSize,
+        => {},
+        else => {
+            error_report.printIrDiagnostics(analyzed.ir.projectPath(), analyzed.ir.projectSource(), &analyzed.ir);
+            return err;
+        },
+    };
+    if (progress) |p| p.step("Solve layout");
+    const data = try core.layout.conflicts.toJson(allocator, &analyzed.ir);
+    if (progress) |p| p.step("Serialize report");
+    return data;
+}
+
+pub fn writeLayoutConflictReportFileWithAssetBase(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    asset_base_dir: []const u8,
+    output_path: []const u8,
+    progress: *Progress,
+) !void {
+    const data = try layoutConflictReportJsonWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, null, progress);
+    defer allocator.free(data);
+    try utils.fs.writeFile(io, output_path, data);
+    progress.step("Write report");
 }
 
 pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {

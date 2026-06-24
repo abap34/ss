@@ -38,6 +38,137 @@ pub const GroupTargetPolicy = enum {
 
 pub const SolveOptions = struct {
     record_diagnostics: bool = true,
+    record_propagation: bool = false,
+};
+
+pub const PropagationSlot = enum {
+    start,
+    end,
+    center,
+    size,
+};
+
+pub const PropagationTrace = struct {
+    lines: std.ArrayList([]const u8) = .empty,
+    line_sources: std.ArrayList(?[]const u8) = .empty,
+
+    pub fn deinit(self: *PropagationTrace, allocator: std.mem.Allocator) void {
+        for (self.lines.items) |line| allocator.free(line);
+        self.lines.deinit(allocator);
+        for (self.line_sources.items) |source| {
+            if (source) |text| allocator.free(text);
+        }
+        self.line_sources.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn clone(self: *const PropagationTrace, allocator: std.mem.Allocator) !PropagationTrace {
+        var copied = PropagationTrace{};
+        errdefer copied.deinit(allocator);
+        for (self.lines.items, 0..) |line, index| {
+            const source = if (index < self.line_sources.items.len) self.line_sources.items[index] else null;
+            const copied_line = try allocator.dupe(u8, line);
+            const copied_source = if (source) |text| allocator.dupe(u8, text) catch |err| {
+                allocator.free(copied_line);
+                return err;
+            } else null;
+            try copied.appendOwnedLineWithSource(allocator, copied_line, copied_source);
+        }
+        return copied;
+    }
+
+    pub fn appendLine(self: *PropagationTrace, allocator: std.mem.Allocator, line: []const u8) !void {
+        const copied = try allocator.dupe(u8, line);
+        errdefer allocator.free(copied);
+        try self.lines.append(allocator, copied);
+        errdefer _ = self.lines.pop();
+        try self.line_sources.append(allocator, null);
+    }
+
+    pub fn appendOwnedLine(self: *PropagationTrace, allocator: std.mem.Allocator, line: []const u8) !void {
+        errdefer allocator.free(line);
+        try self.lines.append(allocator, line);
+        errdefer _ = self.lines.pop();
+        try self.line_sources.append(allocator, null);
+    }
+
+    pub fn appendOwnedLineWithSource(self: *PropagationTrace, allocator: std.mem.Allocator, line: []const u8, source: ?[]const u8) !void {
+        errdefer allocator.free(line);
+        errdefer if (source) |text| allocator.free(text);
+        try self.lines.append(allocator, line);
+        errdefer _ = self.lines.pop();
+        try self.line_sources.append(allocator, source);
+    }
+
+    pub fn appendTrace(self: *PropagationTrace, allocator: std.mem.Allocator, other: *const PropagationTrace) !void {
+        for (other.lines.items, 0..) |line, index| {
+            const source = if (index < other.line_sources.items.len) other.line_sources.items[index] else null;
+            const copied_line = try allocator.dupe(u8, line);
+            const copied_source = if (source) |text| allocator.dupe(u8, text) catch |err| {
+                allocator.free(copied_line);
+                return err;
+            } else null;
+            try self.appendOwnedLineWithSource(allocator, copied_line, copied_source);
+        }
+    }
+};
+
+const NodePropagationTraces = struct {
+    start: ?PropagationTrace = null,
+    end: ?PropagationTrace = null,
+    center: ?PropagationTrace = null,
+    size: ?PropagationTrace = null,
+
+    fn deinit(self: *NodePropagationTraces, allocator: std.mem.Allocator) void {
+        if (self.start) |*trace| trace.deinit(allocator);
+        if (self.end) |*trace| trace.deinit(allocator);
+        if (self.center) |*trace| trace.deinit(allocator);
+        if (self.size) |*trace| trace.deinit(allocator);
+        self.* = .{};
+    }
+};
+
+pub const PropagationTracker = struct {
+    allocator: std.mem.Allocator,
+    nodes: []NodePropagationTraces,
+
+    pub fn init(allocator: std.mem.Allocator, len: usize) !PropagationTracker {
+        const nodes = try allocator.alloc(NodePropagationTraces, len);
+        @memset(nodes, .{});
+        return .{ .allocator = allocator, .nodes = nodes };
+    }
+
+    pub fn deinit(self: *PropagationTracker) void {
+        for (self.nodes) |*node| node.deinit(self.allocator);
+        self.allocator.free(self.nodes);
+        self.* = .{ .allocator = self.allocator, .nodes = &.{} };
+    }
+
+    pub fn trace(self: *const PropagationTracker, index: usize, slot: PropagationSlot) ?*const PropagationTrace {
+        const node = &self.nodes[index];
+        return switch (slot) {
+            .start => if (node.start) |*trace_value| trace_value else null,
+            .end => if (node.end) |*trace_value| trace_value else null,
+            .center => if (node.center) |*trace_value| trace_value else null,
+            .size => if (node.size) |*trace_value| trace_value else null,
+        };
+    }
+
+    pub fn setTrace(self: *PropagationTracker, index: usize, slot: PropagationSlot, trace_value: PropagationTrace) void {
+        const slot_ptr = self.slotPtr(index, slot);
+        if (slot_ptr.*) |*old| old.deinit(self.allocator);
+        slot_ptr.* = trace_value;
+    }
+
+    fn slotPtr(self: *PropagationTracker, index: usize, slot: PropagationSlot) *?PropagationTrace {
+        const node = &self.nodes[index];
+        return switch (slot) {
+            .start => &node.start,
+            .end => &node.end,
+            .center => &node.center,
+            .size => &node.size,
+        };
+    }
 };
 
 pub const PageLayoutGraph = struct {
@@ -59,7 +190,7 @@ pub const PageLayoutGraph = struct {
         if (ir.contains.get(page_id)) |children| {
             try child_ids_list.appendSlice(allocator, children.items);
         }
-        try appendImplicitConstraintGroups(allocator, ir, page_id, &child_ids_list);
+        try appendImplicitLayoutNodes(allocator, ir, page_id, &child_ids_list);
         const child_ids = try child_ids_list.toOwnedSlice(allocator);
         errdefer allocator.free(child_ids);
 
@@ -312,14 +443,61 @@ pub const PageLayoutGraph = struct {
     }
 };
 
-fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
+fn appendImplicitLayoutNodes(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
+    var changed = true;
+    while (changed) {
+        const before = child_ids.items.len;
+        try appendConstraintConnectedObjects(allocator, ir, page_id, child_ids);
+        try appendImplicitConstraintGroups(allocator, ir, child_ids);
+        changed = child_ids.items.len != before;
+    }
+}
+
+fn appendConstraintConnectedObjects(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId)) !void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (ir.constraints.items) |constraint| {
+            if (containsNodeId(child_ids.items, constraint.target_node)) {
+                switch (constraint.source) {
+                    .page => {},
+                    .node => |source| changed = (try appendLayoutObjectCandidate(allocator, ir, page_id, child_ids, source.node_id)) or changed,
+                }
+            }
+            switch (constraint.source) {
+                .page => {},
+                .node => |source| {
+                    if (containsNodeId(child_ids.items, source.node_id)) {
+                        changed = (try appendLayoutObjectCandidate(allocator, ir, page_id, child_ids, constraint.target_node)) or changed;
+                    }
+                },
+            }
+        }
+    }
+}
+
+fn appendLayoutObjectCandidate(allocator: std.mem.Allocator, ir: anytype, page_id: NodeId, child_ids: *std.ArrayList(NodeId), node_id: NodeId) !bool {
+    if (containsNodeId(child_ids.items, node_id)) return false;
+    const node = ir.getNode(node_id) orelse return false;
+    if (node.kind != .object) return false;
+    if (!layoutObjectCanJoinPage(ir, page_id, node_id, node)) return false;
+    try child_ids.append(allocator, node_id);
+    return true;
+}
+
+fn layoutObjectCanJoinPage(ir: anytype, page_id: NodeId, node_id: NodeId, node: *const Node) bool {
+    if (!node.attached) return true;
+    return (ir.parentPageOf(node_id) orelse return false) == page_id;
+}
+
+fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, ir: anytype, child_ids: *std.ArrayList(NodeId)) !void {
     var changed = true;
     while (changed) {
         changed = false;
         for (ir.nodes.items) |node| {
             if (!isGroupNode(&node)) continue;
             if (containsNodeId(child_ids.items, node.id)) continue;
-            if (!groupHasPageDescendant(ir, page_id, node.id)) continue;
+            if (!groupHasLayoutDescendant(ir, child_ids.items, node.id)) continue;
             if (!groupIsReferencedByConstraint(ir, node.id)) continue;
             try child_ids.append(allocator, node.id);
             changed = true;
@@ -355,12 +533,12 @@ fn groupIsReferencedByConstraint(ir: anytype, group_id: NodeId) bool {
     return false;
 }
 
-fn groupHasPageDescendant(ir: anytype, page_id: NodeId, group_id: NodeId) bool {
+fn groupHasLayoutDescendant(ir: anytype, layout_nodes: []const NodeId, group_id: NodeId) bool {
     const children = ir.childrenOf(group_id) orelse return false;
     for (children) |child_id| {
-        if (ir.parentPageOf(child_id) == page_id) return true;
+        if (containsNodeId(layout_nodes, child_id)) return true;
         const child = ir.getNode(child_id) orelse continue;
-        if (isGroupNode(child) and groupHasPageDescendant(ir, page_id, child_id)) return true;
+        if (isGroupNode(child) and groupHasLayoutDescendant(ir, layout_nodes, child_id)) return true;
     }
     return false;
 }
@@ -372,6 +550,7 @@ pub const AxisWorkspace = struct {
     states: []AxisState,
     hard_constraints: []const Constraint,
     soft_constraints: []const Constraint = &.{},
+    propagation: ?*PropagationTracker = null,
     owns_states: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, ir: anytype, page_graph: *const PageLayoutGraph, axis: Axis) !AxisWorkspace {
@@ -416,6 +595,7 @@ pub const AxisWorkspace = struct {
             .states = states,
             .hard_constraints = parent.hard_constraints,
             .soft_constraints = soft_constraints,
+            .propagation = null,
             .owns_states = false,
         };
     }
@@ -964,7 +1144,7 @@ pub fn reconcileAxisState(state: *AxisState) !bool {
 }
 
 fn ensureNonNegativeSize(size: f32) !void {
-    if (size < -ConstraintTolerance) return error.NegativeConstraintSize;
+    if (size < -ConstraintTolerance) return error.NegativeFrameSize;
 }
 
 fn setOptionalFloat(slot: *?f32, source_slot: *?Constraint, value: f32, source: ?Constraint) !bool {

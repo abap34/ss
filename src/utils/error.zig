@@ -7,6 +7,18 @@ pub const Severity = enum {
     @"error",
 };
 
+pub const ColorMode = enum {
+    auto,
+    always,
+    never,
+};
+
+var color_mode: ColorMode = .auto;
+
+pub fn setColorMode(mode: ColorMode) void {
+    color_mode = mode;
+}
+
 pub const ByteSpan = struct {
     start: usize,
     end: usize,
@@ -378,49 +390,205 @@ pub fn printConstraintFailure(
     source: []const u8,
     ir: anytype,
     err: anyerror,
-    formatConstraint: anytype,
 ) void {
-    const failure = ir.last_constraint_failure orelse {
+    if (ir.constraint_failures.items.len == 0 and ir.last_constraint_failure == null) {
         std.debug.print("constraint error: {s}\n", .{@errorName(err)});
         return;
-    };
-    const kind_text = switch (failure.kind) {
-        .conflict => "ConstraintConflict: constraint conflict",
-        .negative_size => "NegativeConstraintSize: negative size from constraints",
-    };
-    const constraint_text = formatConstraint(ir.allocator, failure.constraint) catch "";
-    defer if (constraint_text.len > 0) ir.allocator.free(constraint_text);
-    const existing_text = if (failure.existing_constraint) |constraint|
-        formatConstraint(ir.allocator, constraint) catch ""
-    else
-        "";
-    defer if (existing_text.len > 0) ir.allocator.free(existing_text);
+    }
 
-    if (failure.constraint.origin) |origin| {
-        if (parseLocatedOrigin(origin) != null) {
-            printLocatedOrigin(path, source, ir, .@"error", kind_text, origin);
-            if (failure.existing_constraint != null) {
-                printLabeledLocatedOrigin(path, source, ir, "other constraint", failure.existing_constraint.?.origin);
-            }
-            if (constraint_text.len > 0 and existing_text.len == 0) {
-                std.debug.print("  constraint: {s}\n", .{constraint_text});
-            }
-            return;
+    const failures = ir.constraint_failures.items;
+    const count = if (failures.len > 0) failures.len else 1;
+    if (count > 1) {
+        printColor(.@"error");
+        std.debug.print("error: {d} layout constraint failures\n", .{count});
+        printReset();
+        printDim();
+        std.debug.print("  = showing first {d}; use `ss debug layout conflicts` for the full report\n", .{@min(count, 3)});
+        printReset();
+    }
+
+    if (failures.len > 0) {
+        const limit = @min(failures.len, 3);
+        for (failures[0..limit], 0..) |failure, index| {
+            if (index != 0 or count > 1) std.debug.print("\n", .{});
+            printConstraintFailureItem(path, source, ir, failure);
+        }
+        return;
+    }
+
+    printConstraintFailureItem(path, source, ir, ir.last_constraint_failure.?);
+}
+
+fn printConstraintFailureItem(path: []const u8, source: []const u8, ir: anytype, failure: anytype) void {
+    const code = constraintFailureCode(failure);
+    printColor(.@"error");
+    std.debug.print("error: {s}: {s}\n", .{ code, constraintFailureReasonLabel(failure) });
+    printReset();
+
+    const located = printRustLocatedOrigin(path, source, ir, .@"error", constraintFailurePrimaryLabel(failure), failure.constraint.origin);
+    if (!located and path.len != 0) {
+        printDim();
+        std.debug.print("  --> {s}\n", .{path});
+        printReset();
+    }
+
+    printConstraintFailureBox(ir, failure);
+}
+
+fn printRustLocatedOrigin(
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    severity: Severity,
+    label: []const u8,
+    origin: ?[]const u8,
+) bool {
+    const origin_text = origin orelse return false;
+    const located = parseLocatedOrigin(origin_text) orelse return false;
+    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    const loc = computeLineColumn(resolved.source, located.span.start);
+    printDim();
+    std.debug.print("  --> {s}:{d}:{d}\n", .{ resolved.path, loc.line, loc.column });
+    std.debug.print("   |\n", .{});
+    printReset();
+    printExcerpt(resolved.source, located.span, severity, label, 1);
+    return true;
+}
+
+fn printConstraintFailureBox(ir: anytype, failure: anytype) void {
+    if (failure.propagation) |propagation| {
+        printConstraintPropagationBox(failure, propagation);
+        return;
+    }
+
+    const target_text = constraintTargetLabel(ir.allocator, ir, failure.constraint) catch "";
+    defer if (target_text.len > 0) ir.allocator.free(target_text);
+
+    printDim();
+    std.debug.print("╭─ propagation\n", .{});
+    printReset();
+    printBoxField("target", target_text);
+    printOptionalBoxField("axis", if (failure.axis) |axis| @tagName(axis) else null);
+    printOptionalFloatBoxField("actual", failure.actual);
+    printOptionalFloatBoxField("expected", failure.expected);
+    printBoxField("reason", @tagName(failure.reason));
+    printDim();
+    std.debug.print("╰─\n", .{});
+    printReset();
+}
+
+fn printConstraintPropagationBox(failure: anytype, propagation: anytype) void {
+    printDim();
+    std.debug.print("╭─ propagation\n", .{});
+    printReset();
+    printOptionalBoxField("target", propagation.target);
+    printOptionalBoxField("axis", if (failure.axis) |axis| @tagName(axis) else null);
+    for (propagation.paths) |path| {
+        printBoxBlankLine();
+        printBoxHeading(path.title);
+        for (path.lines, 0..) |line, index| {
+            const source = if (index < path.line_sources.len) path.line_sources[index] else null;
+            printBoxIndentedLineWithSource(line, source);
         }
     }
+    if (propagation.result.len > 0) {
+        printBoxBlankLine();
+        printBoxHeading("result");
+        for (propagation.result) |line| printBoxIndentedLine(line);
+    }
+    printDim();
+    std.debug.print("╰─\n", .{});
+    printReset();
+}
 
-    if (path.len != 0) {
-        std.debug.print("{s}: error: {s}\n", .{ path, kind_text });
+fn printBoxField(name: []const u8, value: []const u8) void {
+    if (value.len == 0) return;
+    printDim();
+    std.debug.print("│ ", .{});
+    printReset();
+    std.debug.print("{s}", .{name});
+    if (name.len < 16) {
+        printSpaces(16 - name.len);
     } else {
-        std.debug.print("{s}\n", .{kind_text});
+        printSpaces(2);
     }
-    if (failure.existing_constraint != null) {
-        printLabeledLocatedOrigin(path, source, ir, "other constraint", failure.existing_constraint.?.origin);
+    std.debug.print("{s}\n", .{value});
+}
+
+fn printOptionalBoxField(name: []const u8, value: ?[]const u8) void {
+    if (value) |text| printBoxField(name, text);
+}
+
+fn printOptionalFloatBoxField(name: []const u8, value: ?f32) void {
+    const number = value orelse return;
+    var buffer: [64]u8 = undefined;
+    const text = std.fmt.bufPrint(&buffer, "{d:.1}", .{number}) catch return;
+    printBoxField(name, text);
+}
+
+fn printBoxBlankLine() void {
+    printDim();
+    std.debug.print("│\n", .{});
+    printReset();
+}
+
+fn printBoxHeading(text: []const u8) void {
+    printDim();
+    std.debug.print("│ ", .{});
+    printReset();
+    std.debug.print("{s}\n", .{text});
+}
+
+fn printBoxIndentedLine(text: []const u8) void {
+    printBoxIndentedLineWithSource(text, null);
+}
+
+fn printBoxIndentedLineWithSource(text: []const u8, source: ?[]const u8) void {
+    printDim();
+    std.debug.print("│   ", .{});
+    printReset();
+    std.debug.print("{s}", .{text});
+    if (source) |origin| {
+        if (origin.len > 0) {
+            printDim();
+            std.debug.print("  {s}", .{origin});
+            printReset();
+        }
     }
-    if (constraint_text.len > 0 and existing_text.len == 0) {
-        std.debug.print("  constraint: {s}\n", .{constraint_text});
-        printLabeledLocatedOrigin(path, source, ir, "constraint", failure.constraint.origin);
-    }
+    std.debug.print("\n", .{});
+}
+
+fn constraintFailureCode(failure: anytype) []const u8 {
+    return switch (failure.kind) {
+        .conflict => "ConstraintConflict",
+        .negative_frame_size => "NegativeFrameSize",
+    };
+}
+
+fn constraintFailurePrimaryLabel(failure: anytype) []const u8 {
+    return switch (failure.kind) {
+        .conflict => "propagates a conflicting value",
+        .negative_frame_size => "propagates a negative frame size",
+    };
+}
+
+fn constraintFailureReasonLabel(failure: anytype) []const u8 {
+    return switch (failure.reason) {
+        .anchor_value_conflict => "constraint conflict",
+        .overconstrained_frame => "overconstrained frame",
+        .negative_frame_size => "negative frame size",
+        .constraint_cycle => "constraint cycle has no solution",
+        .group_size_conflict => "group size conflict",
+    };
+}
+
+fn constraintTargetLabel(allocator: std.mem.Allocator, ir: anytype, constraint: anytype) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(ir, constraint.target_node), @tagName(constraint.target_anchor) });
+}
+
+fn nodeLabel(ir: anytype, node_id: anytype) []const u8 {
+    const node = ir.getNode(node_id) orelse return "unknown";
+    return node.role orelse node.name;
 }
 
 pub fn isExpectedCliError(err: anyerror) bool {
@@ -475,7 +643,7 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.DuplicatePropertyDefinition,
         error.DuplicateReprDefinition,
         error.ConstraintConflict,
-        error.NegativeConstraintSize,
+        error.NegativeFrameSize,
         error.DiagnosticsFailed,
         error.DoctorIssues,
         error.InitEntryMustBeRelative,
@@ -898,7 +1066,11 @@ fn printReset() void {
 }
 
 fn useColor() bool {
-    return std.c.getenv("NO_COLOR") == null and !envEquals("CLICOLOR", "0");
+    return switch (color_mode) {
+        .auto => std.c.getenv("NO_COLOR") == null and !envEquals("CLICOLOR", "0"),
+        .always => true,
+        .never => false,
+    };
 }
 
 fn envEquals(name: [:0]const u8, expected: []const u8) bool {

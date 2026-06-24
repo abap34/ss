@@ -130,21 +130,48 @@ fn applyGroupTargetConstraintSlice(
             .tautology => continue,
             .conflict => {
                 if (options.record_diagnostics) {
-                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(temp.*, constraint.target_anchor), .conflict);
+                    ir.noteConstraintFailureDetailed(
+                        workspace.graph.page_id,
+                        constraint,
+                        graph.axisAnchorSource(temp.*, constraint.target_anchor),
+                        .conflict,
+                        .group_size_conflict,
+                        workspace.axis,
+                        graph.axisAnchorValue(temp.*, constraint.target_anchor),
+                        null,
+                    );
                 }
                 continue;
             },
             .size => |size| {
                 if (size < -graph.ConstraintTolerance) {
                     if (options.record_diagnostics) {
-                        ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, .negative_size);
+                        ir.noteConstraintFailureDetailed(
+                            workspace.graph.page_id,
+                            constraint,
+                            temp.size_source,
+                            .negative_frame_size,
+                            .group_size_conflict,
+                            workspace.axis,
+                            size,
+                            0,
+                        );
                     }
                     continue;
                 }
                 _ = graph.setAxisSize(temp, size, constraint) catch |err| {
                     if (options.record_diagnostics) {
-                        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                        ir.noteConstraintFailure(workspace.graph.page_id, constraint, temp.size_source, kind);
+                        const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
+                        ir.noteConstraintFailureDetailed(
+                            workspace.graph.page_id,
+                            constraint,
+                            temp.size_source,
+                            kind,
+                            .group_size_conflict,
+                            workspace.axis,
+                            temp.size,
+                            size,
+                        );
                     }
                     continue;
                 };
@@ -166,8 +193,17 @@ fn applyGroupTargetConstraintSlice(
 
         _ = graph.setAxisAnchor(temp, constraint.target_anchor, source_value.? + constraint.offset, constraint) catch |err| {
             if (options.record_diagnostics) {
-                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                ir.noteConstraintFailure(workspace.graph.page_id, constraint, graph.axisAnchorSource(temp.*, constraint.target_anchor), kind);
+                const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
+                ir.noteConstraintFailureDetailed(
+                    workspace.graph.page_id,
+                    constraint,
+                    graph.axisAnchorSource(temp.*, constraint.target_anchor),
+                    kind,
+                    .group_size_conflict,
+                    workspace.axis,
+                    graph.axisAnchorValue(temp.*, constraint.target_anchor),
+                    source_value.? + constraint.offset,
+                );
             }
         };
     }
@@ -187,13 +223,6 @@ pub fn translateSubtree(
 }
 
 pub fn applyTargetConstraints(
-    ir: anytype,
-    workspace: *graph.AxisWorkspace,
-) !bool {
-    return applyTargetConstraintsWithOptions(ir, workspace, .{});
-}
-
-pub fn applyTargetConstraintsWithOptions(
     ir: anytype,
     workspace: *graph.AxisWorkspace,
     options: graph.SolveOptions,
@@ -228,8 +257,17 @@ pub fn applyTargetConstraintsWithOptions(
         _ = graph.reconcileAxisState(&temp) catch |err| {
             if (options.record_diagnostics) {
                 if (last_constraint) |constraint| {
-                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_size;
-                    ir.noteConstraintFailure(workspace.graph.page_id, constraint, null, kind);
+                    const kind: model.ConstraintFailureKind = if (err == error.ConstraintConflict) .conflict else .negative_frame_size;
+                    ir.noteConstraintFailureDetailed(
+                        workspace.graph.page_id,
+                        constraint,
+                        null,
+                        kind,
+                        .group_size_conflict,
+                        workspace.axis,
+                        temp.size,
+                        base.size,
+                    );
                 }
             }
             continue;

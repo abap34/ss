@@ -19,6 +19,7 @@ const Selection = model.Selection;
 const SelectionItemTag = model.SelectionItemTag;
 const ValueTag = model.ValueTag;
 const Value = model.Value;
+const Axis = model.Axis;
 const FunctionRef = model.FunctionRef;
 const Query = model.Query;
 const PageLayout = model.PageLayout;
@@ -27,6 +28,7 @@ const DiagnosticPhase = model.DiagnosticPhase;
 const DiagnosticSeverity = model.DiagnosticSeverity;
 const ConstraintFailure = model.ConstraintFailure;
 const ConstraintFailureKind = model.ConstraintFailureKind;
+const ConstraintFailureReason = model.ConstraintFailureReason;
 const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
 const nodeProperty = model.nodeProperty;
@@ -238,6 +240,7 @@ pub const Ir = struct {
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
+        self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
         self.deinitStringProvenance();
         self.runtime_strings.deinit(self.allocator);
@@ -277,6 +280,7 @@ pub const Ir = struct {
         self.constraints.deinit(self.allocator);
         self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
+        self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
         self.deinitStringProvenance();
         for (self.runtime_strings.items) |text| self.allocator.free(text);
@@ -795,21 +799,93 @@ pub const Ir = struct {
     }
 
     pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
-        const failure: ConstraintFailure = .{
+        self.noteConstraintFailureDetailed(
+            page_id,
+            constraint,
+            existing_constraint,
+            kind,
+            defaultConstraintFailureReason(kind),
+            null,
+            null,
+            null,
+        );
+    }
+
+    pub fn noteConstraintFailureDetailed(
+        self: *Ir,
+        page_id: NodeId,
+        constraint: Constraint,
+        existing_constraint: ?Constraint,
+        kind: ConstraintFailureKind,
+        reason: ConstraintFailureReason,
+        axis: ?Axis,
+        actual: ?f32,
+        expected: ?f32,
+    ) void {
+        self.noteConstraintFailureDetailedWithPropagation(
+            page_id,
+            constraint,
+            existing_constraint,
+            kind,
+            reason,
+            axis,
+            actual,
+            expected,
+            null,
+        );
+    }
+
+    pub fn noteConstraintFailureDetailedWithPropagation(
+        self: *Ir,
+        page_id: NodeId,
+        constraint: Constraint,
+        existing_constraint: ?Constraint,
+        kind: ConstraintFailureKind,
+        reason: ConstraintFailureReason,
+        axis: ?Axis,
+        actual: ?f32,
+        expected: ?f32,
+        propagation: ?model.ConstraintPropagation,
+    ) void {
+        var failure: ConstraintFailure = .{
             .kind = kind,
+            .reason = reason,
             .page_id = page_id,
+            .axis = axis orelse layout.anchorAxis(constraint.target_anchor),
             .constraint = constraint,
             .existing_constraint = existing_constraint,
+            .actual = actual,
+            .expected = expected,
+            .propagation = propagation,
         };
-        self.last_constraint_failure = failure;
-        for (self.constraint_failures.items) |existing| {
-            if (constraintFailureSame(existing, failure)) return;
+        for (self.constraint_failures.items) |*existing| {
+            if (constraintFailureSame(existing.*, failure) or constraintFailureSameTarget(existing.*, failure)) {
+                if (constraintFailureDetailScore(failure) > constraintFailureDetailScore(existing.*)) {
+                    existing.deinit(self.allocator);
+                    existing.* = failure;
+                    self.last_constraint_failure = existing.*;
+                } else {
+                    self.last_constraint_failure = existing.*;
+                    failure.deinit(self.allocator);
+                }
+                return;
+            }
         }
-        self.constraint_failures.append(self.allocator, failure) catch {};
+        self.constraint_failures.append(self.allocator, failure) catch {
+            failure.deinit(self.allocator);
+            return;
+        };
+        self.last_constraint_failure = self.constraint_failures.items[self.constraint_failures.items.len - 1];
     }
 
     pub fn hasConstraintFailures(self: *const Ir) bool {
         return self.constraint_failures.items.len > 0;
+    }
+
+    pub fn clearConstraintFailures(self: *Ir) void {
+        for (self.constraint_failures.items) |*failure| failure.deinit(self.allocator);
+        self.constraint_failures.clearRetainingCapacity();
+        self.last_constraint_failure = null;
     }
 
     pub fn clearDiagnostics(self: *Ir) void {
@@ -1140,13 +1216,22 @@ pub const Ir = struct {
 
     pub fn finalizeWithLayoutTracePath(self: *Ir, trace_path: ?[]const u8) !void {
         self.clearDiagnosticsForPhase(.layout);
-        self.last_constraint_failure = null;
-        self.constraint_failures.clearRetainingCapacity();
+        self.clearConstraintFailures();
         try layout.solveLayoutWithTracePath(self, trace_path);
         if (self.constraint_failures.items.len > 0) {
+            const first_kind = self.constraint_failures.items[0].kind;
+            self.clearDiagnosticsForPhase(.layout);
+            self.clearConstraintFailures();
+            try layout.solveLayoutWithTracePathAndOptions(self, trace_path, .{ .record_propagation = true });
+            if (self.constraint_failures.items.len == 0) {
+                switch (first_kind) {
+                    .conflict => return error.ConstraintConflict,
+                    .negative_frame_size => return error.NegativeFrameSize,
+                }
+            }
             switch (self.constraint_failures.items[0].kind) {
                 .conflict => return error.ConstraintConflict,
-                .negative_size => return error.NegativeConstraintSize,
+                .negative_frame_size => return error.NegativeFrameSize,
             }
         }
     }
@@ -1168,29 +1253,46 @@ pub const Ir = struct {
     }
 };
 
-pub fn formatConstraint(allocator: Allocator, constraint: Constraint) ![]const u8 {
-    const source_text = switch (constraint.source) {
-        .page => |anchor| try std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
-        .node => |source| try std.fmt.allocPrint(allocator, "#{d}.{s}", .{ source.node_id, @tagName(source.anchor) }),
+fn defaultConstraintFailureReason(kind: ConstraintFailureKind) ConstraintFailureReason {
+    return switch (kind) {
+        .conflict => .anchor_value_conflict,
+        .negative_frame_size => .negative_frame_size,
     };
-    defer allocator.free(source_text);
-    return std.fmt.allocPrint(
-        allocator,
-        "  - #{d}.{s} = {s} {s} {d:.1}",
-        .{
-            constraint.target_node,
-            @tagName(constraint.target_anchor),
-            source_text,
-            if (constraint.offset < 0) "-" else "+",
-            @abs(constraint.offset),
-        },
-    );
 }
 
 fn constraintFailureSame(a: ConstraintFailure, b: ConstraintFailure) bool {
     if (a.kind != b.kind) return false;
     if (a.page_id != b.page_id) return false;
-    if (!constraintEq(a.constraint, b.constraint)) return false;
+    if (constraintFailureConstraintPairSame(a, b)) return true;
+    return false;
+}
+
+fn constraintFailureSameTarget(a: ConstraintFailure, b: ConstraintFailure) bool {
+    if (a.kind != b.kind) return false;
+    if (a.reason != b.reason) return false;
+    if (a.page_id != b.page_id) return false;
+    if (a.axis != b.axis) return false;
+    return a.constraint.target_node == b.constraint.target_node and a.constraint.target_anchor == b.constraint.target_anchor;
+}
+
+fn constraintFailureDetailScore(failure: ConstraintFailure) usize {
+    var score: usize = 0;
+    if (failure.propagation) |propagation| {
+        score += 100;
+        for (propagation.paths) |path| score += path.lines.len;
+        score += propagation.result.len;
+    }
+    if (failure.actual != null) score += 10;
+    if (failure.expected != null) score += 10;
+    if (failure.existing_constraint != null) score += 1;
+    return score;
+}
+
+fn constraintFailureConstraintPairSame(a: ConstraintFailure, b: ConstraintFailure) bool {
+    if (!constraintEq(a.constraint, b.constraint)) {
+        if (a.existing_constraint == null or b.existing_constraint == null) return false;
+        return constraintEq(a.constraint, b.existing_constraint.?) and constraintEq(a.existing_constraint.?, b.constraint);
+    }
     if ((a.existing_constraint == null) != (b.existing_constraint == null)) return false;
     if (a.existing_constraint) |existing_a| {
         if (!constraintEq(existing_a, b.existing_constraint.?)) return false;

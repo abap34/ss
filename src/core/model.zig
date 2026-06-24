@@ -92,14 +92,64 @@ pub const Constraint = struct {
 
 pub const ConstraintFailureKind = enum {
     conflict,
-    negative_size,
+    negative_frame_size,
+};
+
+pub const ConstraintFailureReason = enum {
+    anchor_value_conflict,
+    overconstrained_frame,
+    negative_frame_size,
+    constraint_cycle,
+    group_size_conflict,
 };
 
 pub const ConstraintFailure = struct {
     kind: ConstraintFailureKind,
+    reason: ConstraintFailureReason,
     page_id: NodeId,
+    axis: ?Axis = null,
     constraint: Constraint,
     existing_constraint: ?Constraint = null,
+    actual: ?f32 = null,
+    expected: ?f32 = null,
+    propagation: ?ConstraintPropagation = null,
+
+    pub fn deinit(self: *ConstraintFailure, allocator: Allocator) void {
+        if (self.propagation) |*propagation| propagation.deinit(allocator);
+        self.propagation = null;
+    }
+};
+
+pub const ConstraintPropagation = struct {
+    target: ?[]const u8 = null,
+    paths: []PropagationPath = &.{},
+    result: []const []const u8 = &.{},
+
+    pub fn deinit(self: *ConstraintPropagation, allocator: Allocator) void {
+        if (self.target) |target| allocator.free(target);
+        for (self.paths) |*path| path.deinit(allocator);
+        allocator.free(self.paths);
+        for (self.result) |line| allocator.free(line);
+        allocator.free(self.result);
+        self.* = .{};
+    }
+};
+
+pub const PropagationPath = struct {
+    title: []const u8,
+    lines: []const []const u8,
+    line_sources: []const ?[]const u8 = &.{},
+
+    pub fn deinit(self: *PropagationPath, allocator: Allocator) void {
+        allocator.free(self.title);
+        for (self.lines) |line| allocator.free(line);
+        allocator.free(self.lines);
+        for (self.line_sources) |source| {
+            if (source) |text| allocator.free(text);
+        }
+        allocator.free(self.line_sources);
+        self.* = .{ .title = "", .lines = &.{}, .line_sources = &.{} };
+    }
 };
 
 pub const AnchorValue = union(enum) {
