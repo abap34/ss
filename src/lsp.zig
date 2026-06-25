@@ -1179,14 +1179,18 @@ fn completionIndexForRequest(server: *Server, position: *const RequestPosition) 
         try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
         return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
     }
-    const access_completion = analysis_completion.accessBeforeOffset(position.source, position.offset) != null;
-    if (access_completion) {
+    const access_context = analysis_completion.accessBeforeOffset(position.source, position.offset);
+    if (access_context) |access| {
+        if (try buildAccessRecoveryCompletionIndex(server, position.doc_path, position.source, access)) |index| {
+            try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
+            return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
+        }
         if (try buildImportEnvironmentCompletionIndex(server, position.doc_path, position.source)) |index| {
             try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
             return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
         }
     }
-    if (!access_completion) {
+    if (access_context == null) {
         if (try buildImportEnvironmentCompletionIndex(server, position.doc_path, position.source)) |index| {
             try server.rememberDocumentCompletion(position.doc_path, source_hash, index);
             return server.documentCompletionCache(position.doc_path, source_hash) orelse primary;
@@ -1196,6 +1200,29 @@ fn completionIndexForRequest(server: *Server, position: *const RequestPosition) 
         if (index.containsDocument(server.allocator, position.doc_path)) return index;
     }
     return primary;
+}
+
+fn buildAccessRecoveryCompletionIndex(
+    server: *Server,
+    doc_path: []const u8,
+    doc_source: []const u8,
+    access: analysis_completion.AccessContext,
+) !?analysis_completion.Index {
+    if (access.separator != .dot) return null;
+    if (access.separator_offset >= doc_source.len) return null;
+
+    var source = try server.allocator.dupe(u8, doc_source);
+    defer server.allocator.free(source);
+
+    var start = access.separator_offset;
+    while (start > 0 and source[start - 1] != '\n') start -= 1;
+
+    var cursor = start;
+    while (cursor < source.len and source[cursor] != '\n') : (cursor += 1) {
+        source[cursor] = ' ';
+    }
+
+    return buildDocumentCompletionIndex(server, doc_path, source);
 }
 
 fn completionSourceHash(source: []const u8) u64 {
@@ -1221,6 +1248,7 @@ fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_sourc
     while (doc_iterator.next()) |entry| {
         try overlay.put(entry.key_ptr.*, entry.value_ptr.*);
     }
+    try overlay.put(doc_path, doc_source);
 
     var source = try server.allocator.dupe(u8, doc_source);
     var program = syntax.parseWithSourceName(server.allocator, source, doc_path) catch {
