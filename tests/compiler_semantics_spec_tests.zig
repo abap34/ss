@@ -167,6 +167,21 @@ fn expectObjectProperty(source: []const u8, key: []const u8, expected: []const u
     try compiler_semantics.expectObjectProperty(testing.io, allocator, path, source, key, expected);
 }
 
+fn expectObjectPropertyWithThemeOverlay(source: []const u8, theme_source: []const u8, key: []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const theme_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/theme.ss", .{tmp.sub_path[0..]});
+    const overlays = [_]compiler_semantics.OverlaySource{
+        .{ .path = theme_path, .source = theme_source },
+    };
+    try compiler_semantics.expectObjectPropertyWithOverlays(testing.io, allocator, path, source, &overlays, key, expected);
+}
+
 fn expectClassDefaultProperty(source: []const u8, role: []const u8, key: []const u8, expected: ?[]const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -428,7 +443,10 @@ test "compiler semantics: theme text size override keeps automatic line height" 
         \\
         \\page ok
         \\  let title = head!("large text
-        \\next line", 64)
+        \\next line", current_theme() with {
+        \\    head.text.size = 64
+        \\    head.text.line_height = none
+        \\  })
         \\end
         \\
     , &.{
@@ -1398,6 +1416,171 @@ test "compiler semantics: structured style value members are typed" {
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'text' expects TextStyle, got FontFace");
+}
+
+test "compiler semantics: record update copies nested fields" {
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\
+        \\record Inner {
+        \\  size: Number = 20
+        \\  color: Color = c"#111111"
+        \\}
+        \\
+        \\record LocalTheme {
+        \\  body: Inner = Inner {}
+        \\}
+        \\
+        \\page ok
+        \\  let base = LocalTheme {}
+        \\  let changed = base with {
+        \\    body.size = 33
+        \\  }
+        \\  let body = body_obj("changed")
+        \\  body.text = TextStyle {
+        \\    size = changed.body.size
+        \\    color = changed.body.color
+        \\  }
+        \\end
+        \\
+    , "text_size", "33");
+
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\
+        \\record Inner {
+        \\  size: Number = 20
+        \\}
+        \\
+        \\record LocalTheme {
+        \\  body: Inner = Inner {}
+        \\}
+        \\
+        \\page ok
+        \\  let base = LocalTheme {}
+        \\  let changed = base with {
+        \\    body.size = 33
+        \\  }
+        \\  let body = body_obj("base")
+        \\  body.text = TextStyle {
+        \\    size = base.body.size
+        \\  }
+        \\end
+        \\
+    , "text_size", "20");
+}
+
+test "compiler semantics: record update makes updated style leaves explicit" {
+    try expectObjectProperty(
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = body_obj("style")
+        \\  let style = TextStyle {} with {
+        \\    size = 31
+        \\  }
+        \\  body.text = style
+        \\end
+        \\
+    , "text_size", "31");
+}
+
+test "compiler semantics: record update rejects invalid paths and values" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let style = TextStyle {} with {
+        \\    missing = 1
+        \\  }
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownRecordField: record type 'TextStyle' has no field 'missing'");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let style = TextStyle {} with {
+        \\    font.family.name = "bad"
+        \\  }
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidRecordUpdatePath: field 'font.family' is String, not a record");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let style = TextStyle {} with {
+        \\    size = "large"
+        \\  }
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let style = TextStyle {} with {
+        \\    font = FontFace {}
+        \\    font.family = "Menlo"
+        \\  }
+        \\end
+        \\
+    , "case.ss:bytes:", "OverlappingRecordUpdate: update path 'font' overlaps 'font.family'");
+}
+
+test "compiler semantics: theme overlay customizes current and local themes" {
+    const theme_source =
+        \\import std:themes/default as *
+        \\import std:themes/default as base
+        \\
+        \\document
+        \\  theme!(default_theme() with {
+        \\    body.text.size = 22
+        \\    h1.text.color = c"#123456"
+        \\  })
+        \\end
+        \\
+        \\fn/! h1(text_value: String, theme: Theme = current_theme()) -> Object
+        \\  return base::h1(text_value, theme with {
+        \\    h1.text.size = 44
+        \\  })
+        \\end
+        \\
+    ;
+
+    try expectObjectPropertyWithThemeOverlay(
+        \\import "./theme" as *
+        \\
+        \\page ok
+        \\  text!("body")
+        \\end
+        \\
+    , theme_source, "text_size", "22");
+
+    try expectObjectPropertyWithThemeOverlay(
+        \\import "./theme" as *
+        \\
+        \\page ok
+        \\  h1!("title")
+        \\end
+        \\
+    , theme_source, "text_size", "44");
+
+    try expectObjectPropertyWithThemeOverlay(
+        \\import "./theme" as *
+        \\
+        \\page ok
+        \\  let local = current_theme() with {
+        \\    body.text.size = 18
+        \\  }
+        \\  text!("small", local)
+        \\end
+        \\
+    , theme_source, "text_size", "18");
 }
 
 test "compiler semantics: user record declarations define typed record values" {
