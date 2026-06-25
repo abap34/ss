@@ -2,9 +2,19 @@ import std:core/render as *
 import std:core/selectors as *
 
 fn pageno_s(page_no: Object) -> Object
-  txt(page_no, "Helvetica", 13, 16, c"0.5,0.5,0.5", 0, 60, 24)
-  page_no.wrap = WrapMode.off
-  fit_error(page_no)
+  apply_text(page_no, TextStyle {
+    font = FontFace { family = "Helvetica" }
+    size = 13
+    line_height = 16
+    color = c"0.5,0.5,0.5"
+  })
+  apply_layout(page_no, LayoutStyle {
+    spacing_after = 0
+    x = 60
+    right_inset = 24
+    wrap = WrapMode.off
+    fit = FitPolicy.error
+  })
   pin_r(page_no, 24)
   pin_b(page_no, 20)
   return page_no
@@ -106,8 +116,18 @@ end
 
 fn mk_footer!(page_value: Page, text_value: String) -> Page
   let footer = place_on!(page_value, new(text_value, "footer", "text"))
-  txt(footer, "Helvetica", 12, 15, c"0.42,0.42,0.42", 0, 72, 160)
-  footer.wrap = WrapMode.off
+  apply_text(footer, TextStyle {
+    font = FontFace { family = "Helvetica" }
+    size = 12
+    line_height = 15
+    color = c"0.42,0.42,0.42"
+  })
+  apply_layout(footer, LayoutStyle {
+    spacing_after = 0
+    x = 72
+    right_inset = 160
+    wrap = WrapMode.off
+  })
   pin_l(footer, 72)
   pin_b(footer, 20)
   return page_value
@@ -141,8 +161,18 @@ end
 
 fn mk_mark!(page_value: Page, text_value: String) -> Page
   let mark = place_on!(page_value, new(text_value, "watermark", "text"))
-  txt(mark, "Helvetica", 72, 80, c"0.85,0.85,0.85", 0, 0, 0)
-  mark.wrap = WrapMode.off
+  apply_text(mark, TextStyle {
+    font = FontFace { family = "Helvetica" }
+    size = 72
+    line_height = 80
+    color = c"0.85,0.85,0.85"
+  })
+  apply_layout(mark, LayoutStyle {
+    spacing_after = 0
+    x = 0
+    right_inset = 0
+    wrap = WrapMode.off
+  })
   fix_w(mark, 800)
   fix_h(mark, 90)
   equal(anchor(mark, "center_x"), page_anchor("center_x"), 0)

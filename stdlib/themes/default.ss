@@ -1,53 +1,396 @@
 import std:themes/base as *
 
-fn default_code_theme() -> CodeHighlightTheme
-  return code_theme_github_light()
+fn default_theme() -> Theme
+  let highlight = code_theme_github_light()
+  return Theme {
+    body = TextBlockStyle {
+      text = TextStyle {
+        parse = TextParseMode.block
+        font = FontFace { family = "Helvetica" }
+        code_font = FontFace { family = "Courier" }
+        size = 24
+        line_height = 31
+        color = c"0.07,0.08,0.10"
+        markdown_bold_color = c"0.05,0.30,0.58"
+        markdown_code_font_size = 19
+        markdown_code_line_height = 25
+        markdown_code_pad_x = 12
+        markdown_code_pad_y = 9
+        markdown_code_fill = highlight.fill ?? c"#f6f8fa"
+        markdown_code_stroke = highlight.stroke ?? c"#d0d7de"
+        markdown_code_line_width = 0.9
+        markdown_code_radius = 6
+        markdown_table_cell_pad_x = 12
+        markdown_table_cell_pad_y = 9
+        markdown_table_border = c"0.76,0.82,0.90"
+        markdown_table_line_width = 0.8
+        markdown_table_header_fill = c"0.90,0.94,0.98"
+        markdown_table_alt_row_fill = c"0.985,0.990,0.996"
+      }
+      layout = LayoutStyle {
+        spacing_after = 28
+        x = 96
+        right_inset = 96
+      }
+    }
+    h1 = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 40
+        line_height = 47
+        color = c"0.04,0.06,0.09"
+      }
+      layout = LayoutStyle {
+        spacing_after = 42
+        x = 72
+        right_inset = 72
+      }
+    }
+    h2 = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 30
+        line_height = 37
+        color = c"0.07,0.09,0.13"
+      }
+      layout = LayoutStyle {
+        spacing_after = 34
+        x = 88
+        right_inset = 88
+      }
+    }
+    h3 = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 24
+        line_height = 31
+        color = c"0.10,0.12,0.16"
+      }
+      layout = LayoutStyle {
+        spacing_after = 28
+        x = 96
+        right_inset = 96
+      }
+    }
+    head = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 36
+        line_height = 44
+        color = c"0.04,0.06,0.09"
+      }
+      layout = LayoutStyle {
+        spacing_after = 34
+        x = 72
+        right_inset = 72
+      }
+    }
+    subhead = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 26
+        line_height = 33
+        color = c"0.08,0.10,0.14"
+        cjk_bold_passes = 3
+        cjk_bold_dx = 0.04
+      }
+      layout = LayoutStyle {
+        spacing_after = 30
+        x = 96
+        right_inset = 96
+      }
+    }
+    note = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica" }
+        size = 15
+        line_height = 20
+        color = c"0.38,0.42,0.48"
+      }
+      layout = LayoutStyle {
+        spacing_after = 16
+        x = 112
+        right_inset = 112
+      }
+    }
+    byline = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica" }
+        size = 20
+        line_height = 26
+        color = c"0.38,0.42,0.48"
+      }
+      layout = LayoutStyle {
+        spacing_after = 18
+        x = 72
+        right_inset = 72
+      }
+    }
+    label = TextBlockStyle {
+      text = TextStyle {
+        font = FontFace { family = "Helvetica", weight = 700 }
+        size = 14
+        line_height = 18
+        color = c"0.2745,0.5098,0.7059"
+      }
+      layout = LayoutStyle {
+        spacing_after = 0
+        x = 72
+        right_inset = 72
+        wrap = WrapMode.off
+      }
+    }
+    citation = TextBlockStyle {
+      text = TextStyle {
+        parse = TextParseMode.inline
+        font = FontFace { family = "Helvetica" }
+        size = 13
+        line_height = 17
+        color = c"0.58,0.58,0.58"
+        link_color = c"0.58,0.58,0.58"
+      }
+      layout = LayoutStyle {
+        spacing_after = 0
+        x = 120
+        right_inset = 90
+        wrap = WrapMode.off
+      }
+    }
+    code = CodeBlockStyle {
+      text = TextStyle {
+        parse = TextParseMode.none
+        font = FontFace { family = "Menlo" }
+        code_font = FontFace { family = "Menlo" }
+        size = 16
+        line_height = none
+        color = c"0.12,0.12,0.12"
+      }
+      layout = LayoutStyle {
+        spacing_after = 30
+        x = 96
+        right_inset = 96
+        wrap = WrapMode.off
+      }
+      highlight = highlight
+      chrome = ChromeStyle {
+        fill = highlight.fill ?? c"#f6f8fa"
+        stroke = highlight.stroke ?? c"#d0d7de"
+        line_width = 0.9
+        radius = 8
+        pad_x = 16
+        pad_y = 12
+      }
+    }
+    figure = FigureBlockStyle {
+      text = TextStyle {
+        parse = TextParseMode.block
+        font = FontFace { family = "Helvetica" }
+        size = 24
+        line_height = 31
+        color = c"0.07,0.08,0.10"
+        markdown_bold_color = c"0.05,0.30,0.58"
+      }
+      layout = LayoutStyle {
+        spacing_after = 34
+        x = 102
+        right_inset = 102
+      }
+      chrome = ChromeStyle {
+        fill = c"0.997,0.999,1.000"
+        stroke = c"0.78,0.84,0.92"
+        line_width = 0.9
+        radius = 8
+        pad_x = 16
+        pad_y = 12
+      }
+    }
+    image = AssetBlockStyle {
+      layout = LayoutStyle {
+        spacing_after = 30
+        x = 102
+        right_inset = 102
+      }
+      asset = AssetStyle { scale = 1 }
+    }
+    pdf = AssetBlockStyle {
+      layout = LayoutStyle {
+        spacing_after = 30
+        x = 102
+        right_inset = 102
+      }
+      asset = AssetStyle { scale = 1 }
+      chrome = ChromeStyle {
+        fill = c"1,1,1"
+        stroke = c"0.78,0.84,0.92"
+        line_width = 0.9
+        radius = 8
+        pad_x = 12
+        pad_y = 10
+      }
+    }
+    toc = TocStyle {
+      title = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica", weight = 700 }
+          size = 36
+          line_height = 44
+          color = c"0.04,0.06,0.09"
+        }
+        layout = LayoutStyle {
+          spacing_after = 34
+          x = 72
+          right_inset = 72
+        }
+      }
+      body = TextBlockStyle {
+        text = TextStyle {
+          parse = TextParseMode.block
+          font = FontFace { family = "Helvetica" }
+          size = 18
+          line_height = 25
+          color = c"0.07,0.08,0.10"
+        }
+        layout = LayoutStyle {
+          spacing_after = 28
+          x = 96
+          right_inset = 96
+        }
+      }
+      chrome = ChromeStyle {
+        fill = c"1,1,1"
+        stroke = c"0.78,0.84,0.92"
+        line_width = 0.9
+        radius = 8
+        pad_x = 14
+        pad_y = 12
+      }
+    }
+    cover = CoverStyle {
+      title = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica", weight = 700 }
+          size = 56
+          line_height = 64
+          color = c"0.04,0.06,0.09"
+        }
+        layout = LayoutStyle {
+          spacing_after = 26
+          x = 72
+          right_inset = 72
+        }
+      }
+      subtitle = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica" }
+          size = 30
+          line_height = 38
+          color = c"0.20,0.25,0.32"
+        }
+        layout = LayoutStyle {
+          spacing_after = 24
+          x = 72
+          right_inset = 72
+        }
+      }
+      author = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica" }
+          size = 20
+          line_height = 26
+          color = c"0.38,0.42,0.48"
+        }
+        layout = LayoutStyle {
+          spacing_after = 18
+          x = 72
+          right_inset = 72
+        }
+      }
+      accent = RuleBlockStyle {
+        rule = RuleStyle {
+          stroke = c"0.32,0.50,0.72"
+          line_width = 2.0
+        }
+      }
+    }
+    generated = GeneratedStyle {
+      pageno = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica" }
+          size = 13
+          line_height = 16
+          color = c"0.5,0.5,0.5"
+        }
+        layout = LayoutStyle {
+          spacing_after = 0
+          x = 60
+          right_inset = 24
+          wrap = WrapMode.off
+          fit = FitPolicy.error
+        }
+      }
+      footer = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica" }
+          size = 12
+          line_height = 15
+          color = c"0.42,0.42,0.42"
+        }
+        layout = LayoutStyle {
+          spacing_after = 0
+          x = 72
+          right_inset = 160
+          wrap = WrapMode.off
+        }
+      }
+      watermark = TextBlockStyle {
+        text = TextStyle {
+          font = FontFace { family = "Helvetica" }
+          size = 72
+          line_height = 80
+          color = c"0.85,0.85,0.85"
+        }
+        layout = LayoutStyle {
+          spacing_after = 0
+          x = 0
+          right_inset = 0
+          wrap = WrapMode.off
+        }
+      }
+    }
+  }
 end
 
-fn body_style(
-  body: Object,
-  font_size_name: Number = 24,
-  line_height_name: Number = 31,
-  color_name: Color = c"0.07,0.08,0.10",
-  markdown_bold_color_name: Color = c"0.05,0.30,0.58",
-  table_pad_x_name: Number = 12,
-  table_pad_y_name: Number = 9,
-  table_line_width_name: Number = 0.8
-) -> Object
-  let theme = default_code_theme()
-  let fill = theme.fill ?? c"#f6f8fa"
-  let stroke = theme.stroke ?? c"#d0d7de"
-  txt(body, "Helvetica", font_size_name, line_height_name, color_name, 28, 96, 96)
-  md_bold(body, markdown_bold_color_name)
-  md_code(body, 19, 25, 12, 9, docctx().code_theme_fill ?? fill, docctx().code_theme_stroke ?? stroke, 0.9, 6)
-  code_theme(body, theme)
-  md_table(body, table_pad_x_name, table_pad_y_name, c"0.76,0.82,0.90", table_line_width_name, c"0.90,0.94,0.98", c"0.985,0.990,0.996")
-  return body
+fn theme!(theme_value: Theme) -> Void
+  docctx().theme = theme_value
 end
 
-fn/! h1(title_text: String, font_size_name: Number = 40, color_name: Color = c"0.04,0.06,0.09") -> Object
+fn current_theme() -> Theme
+  return docctx().theme ?? default_theme()
+end
+
+fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
   let title = title_obj(title_text)
-  txt(title, "Helvetica", font_size_name, add(font_size_name, 7), color_name, 42, 72, 72, 700)
+  apply_text_block(title, theme.h1)
   return title
 end
 
-fn/! h2(subtitle_text: String, font_size_name: Number = 30, color_name: Color = c"0.07,0.09,0.13") -> Object
+fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica", font_size_name, add(font_size_name, 7), color_name, 34, 88, 88, 700)
+  apply_text_block(subtitle, theme.h2)
   return subtitle
 end
 
-fn/! h3(subtitle_text: String, font_size_name: Number = 24, color_name: Color = c"0.10,0.12,0.16") -> Object
+fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica", font_size_name, add(font_size_name, 7), color_name, 28, 96, 96, 700)
+  apply_text_block(subtitle, theme.h3)
   return subtitle
 end
 
-fn/! head(title_text: String) -> Object
+fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let rule = rule()
   let title = tl(title_obj(title_text), 72, 56)
-  txt(title, "Helvetica", 36, 44, c"0.04,0.06,0.09", 34, 72, 72, 700)
-  rule_l(rule, c"0.78,0.84,0.91", 0.8, "")
+  apply_text_block(title, theme.head)
+  apply_rule(rule, theme.cover.accent.rule)
   rule.layout_spacing_after = 48
   pin_l(rule, 72)
   pin_r(rule, 72)
@@ -55,23 +398,22 @@ fn/! head(title_text: String) -> Object
   return title
 end
 
-fn/! subhead(subtitle_text: String) -> Object
+fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 124)
-  txt(subtitle, "Helvetica", 26, 33, c"0.08,0.10,0.14", 30, 96, 96, 700)
-  subtitle.text_cjk_bold_passes = 3
-  subtitle.text_cjk_bold_dx = 0.04
+  apply_text_block(subtitle, theme.subhead)
   return subtitle
 end
 
-fn/! text(text_value: String, font_size_name: Number = 24, color_name: Color = c"0.07,0.08,0.10", markdown_bold_color_name: Color = c"0.05,0.30,0.58") -> Object
+fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
   let body = body_obj(text_value)
-  body_style(body, font_size_name, add(font_size_name, 7), color_name, markdown_bold_color_name)
+  apply_text_block(body, theme.body)
+  code_theme(body, theme.code.highlight)
   return body
 end
 
-fn/! note(text_value: String) -> Object
+fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
   let note = note_obj(text_value)
-  txt(note, "Helvetica", 15, 20, c"0.38,0.42,0.48", 16, 112, 112)
+  apply_text_block(note, theme.note)
   return note
 end
 
@@ -81,76 +423,81 @@ fn/! tex(text_value: String, scale: Number = 1) -> Object
   return obj
 end
 
-fn/! figure(text_value: String) -> Object
-  let obj = frame(text_value, "figure", "figure_text", 102, 102, 16, 12, c"0.997,0.999,1.000", c"0.78,0.84,0.92", 0.9, 8)
-  body_style(obj)
-  return obj
-end
-
-fn/! image(path_value: String, factor: Number = 1) -> Object
-  let obj = img_obj(path_value)
-  flow(obj, 102, 102)
-  obj.layout_spacing_after = 30
-  scale(obj, factor)
-  require_asset_exists(obj)
-  return obj
-end
-
-fn/! pdf(path_value: String, factor: Number = 1) -> Object
-  let obj = pdf_obj(path_value)
-  flow(obj, 102, 102)
+fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
+  let obj = raw_obj(text_value, "figure", "figure_text")
+  apply_figure_block(obj, theme.figure)
+  code_theme(obj, theme.code.highlight)
   let chrome = panel()
-  box(chrome, c"1,1,1", c"0.78,0.84,0.92", 0.9, 8)
-  chrome.layout_spacing_after = 30
-  surround(chrome, obj, 12, 10)
-  scale(obj, factor)
+  apply_chrome(chrome, theme.figure.chrome)
+  chrome.layout_spacing_after = theme.figure.layout.spacing_after
+  surround(chrome, obj, theme.figure.chrome.pad_x, theme.figure.chrome.pad_y)
+  return obj
+end
+
+fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+  let obj = img_obj(path_value)
+  apply_asset_block(obj, theme.image with {
+    asset.scale = factor
+  })
   require_asset_exists(obj)
   return obj
 end
 
-fn/! code(text_value: String, language_name: String = "python", font_size_name: Number = 16, code_font_family_name: String = "Menlo") -> Object
-  let theme = default_code_theme()
-  let fill = theme.fill ?? c"#f6f8fa"
-  let stroke = theme.stroke ?? c"#d0d7de"
-  let code = code_box(text_value, language_name, 96, 96, 16, 12, docctx().code_theme_fill ?? fill, docctx().code_theme_stroke ?? stroke, 0.9, 8)
-  code_theme(code, theme)
-  code.text_size = font_size_name
-  code.text_code_font_family = code_font_family_name
-  code.layout_spacing_after = 30
+fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+  let obj = pdf_obj(path_value)
+  apply_asset_block(obj, theme.pdf with {
+    asset.scale = factor
+  })
+  let chrome = panel()
+  apply_chrome(chrome, theme.pdf.chrome)
+  chrome.layout_spacing_after = theme.pdf.layout.spacing_after
+  surround(chrome, obj, theme.pdf.chrome.pad_x, theme.pdf.chrome.pad_y)
+  require_asset_exists(obj)
+  return obj
+end
+
+fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
+  let code = code_obj(text_value)
+  code.language = language_name
+  apply_code_block(code, theme.code)
+  let chrome = panel()
+  apply_chrome(chrome, theme.code.chrome)
+  chrome.layout_spacing_after = theme.code.layout.spacing_after
+  surround(chrome, code, theme.code.chrome.pad_x, theme.code.chrome.pad_y)
   return code
 end
 
-fn/! code_file(path_value: String, language_name: String = "plain") -> Object
-  return code(readlines(path_value), language_name)
+fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme = current_theme()) -> Object
+  return code(readlines(path_value), language_name, theme)
 end
 
-fn toc(title_text: String) -> Object
+fn toc(title_text: String, theme: Theme = current_theme()) -> Object
   let title = lab_obj(title_text)
-  txt(title, "Helvetica", 36, 44, c"0.04,0.06,0.09", 34, 72, 72, 700)
+  apply_text_block(title, theme.toc.title)
   let list = toc_obj()
-  body_style(list, 18, 25, c"0.07,0.08,0.10")
+  apply_text_block(list, theme.toc.body)
   let chrome = panel()
-  box(chrome, c"1,1,1", c"0.78,0.84,0.92", 0.9, 8)
+  apply_chrome(chrome, theme.toc.chrome)
   below(list, title, 34)
-  surround(chrome, list, 14, 12)
+  surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
 end
 
-fn toc!(title_text: String) -> Object
-  let contents = place!(toc(title_text))
+fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
+  let contents = place!(toc(title_text, theme))
   pageno!()
   return contents
 end
 
-fn/! cover(title_text: String, subtitle_text: String, author_name: String) -> Object
+fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
   let title = tl(title_obj(title_text), 72, 148)
   let subtitle = sub_obj(subtitle_text)
   let author = by_obj(author_name)
   let accent = rule()
-  txt(title, "Helvetica", 56, 64, c"0.04,0.06,0.09", 26, 72, 72, 700)
-  txt(subtitle, "Helvetica", 30, 38, c"0.20,0.25,0.32", 24, 72, 72)
-  txt(author, "Helvetica", 20, 26, c"0.38,0.42,0.48", 18, 72, 72)
-  rule_l(accent, c"0.32,0.50,0.72", 2.0, "")
+  apply_text_block(title, theme.cover.title)
+  apply_text_block(subtitle, theme.cover.subtitle)
+  apply_text_block(author, theme.cover.author)
+  apply_rule(accent, theme.cover.accent.rule)
 
   below_l(subtitle, title, 0, 28)
   below_l(author, subtitle, 0, 40)

@@ -1,39 +1,141 @@
-import std:themes/base as *
+import std:themes/default as *
+import std:themes/default as base
 
-fn/! h1(title_text: String) -> Object
-  let title = txt_obj(title_text, "title")
-  txt(title, "Helvetica", 36, 42, c"1,0.3765,0.5098", 46, 72, 72, 700)
-  return title
+fn default_theme() -> Theme
+  return base::default_theme() with {
+    body.text.size = 20
+    body.text.line_height = 28
+    body.text.color = c"0.1569,0.1333,0.2196"
+    body.text.markdown_code_font_size = 18
+    body.text.markdown_code_line_height = 24
+    body.text.markdown_code_pad_x = 14
+    body.text.markdown_code_pad_y = 12
+    body.text.markdown_code_fill = c"1,0.9647,0.9294"
+    body.text.markdown_code_stroke = c"1,0.7373,0.3843"
+    body.text.markdown_code_line_width = 1.4
+    body.text.markdown_code_radius = 16
+    h1.text.size = 36
+    h1.text.line_height = 42
+    h1.text.color = c"1,0.3765,0.5098"
+    h1.layout.spacing_after = 46
+    h1.layout.x = 72
+    h1.layout.right_inset = 72
+    h2.text.size = 22
+    h2.text.line_height = 30
+    h2.text.color = c"0.1569,0.1333,0.2196"
+    h2.text.font.weight = 400
+    h2.layout.spacing_after = 22
+    h2.layout.x = 78
+    h2.layout.right_inset = 78
+    head.text.size = 36
+    head.text.line_height = 42
+    head.text.color = c"1,0.3765,0.5098"
+    head.layout.spacing_after = 46
+    subhead.text.size = 22
+    subhead.text.line_height = 30
+    subhead.text.color = c"0.1569,0.1333,0.2196"
+    subhead.text.font.weight = 700
+    subhead.text.cjk_bold_passes = 3
+    subhead.text.cjk_bold_dx = 0.04
+    subhead.layout.spacing_after = 22
+    note.layout.x = 124
+    note.layout.right_inset = 124
+    code.layout.x = 108
+    code.layout.right_inset = 108
+    code.chrome.fill = c"1,0.9647,0.9294"
+    code.chrome.stroke = c"1,0.7373,0.3843"
+    code.chrome.line_width = 1.4
+    code.chrome.radius = 16
+    code.chrome.pad_x = 18
+    code.chrome.pad_y = 14
+    figure.layout.x = 108
+    figure.layout.right_inset = 108
+    figure.chrome.fill = c"1,0.9647,0.9294"
+    figure.chrome.stroke = c"1,0.7373,0.3843"
+    figure.chrome.line_width = 1.4
+    figure.chrome.radius = 16
+    figure.chrome.pad_x = 14
+    figure.chrome.pad_y = 12
+    image.layout.x = 108
+    image.layout.right_inset = 108
+    image.chrome.fill = c"1,0.9647,0.9294"
+    image.chrome.stroke = c"1,0.7373,0.3843"
+    image.chrome.line_width = 1.4
+    image.chrome.radius = 16
+    image.chrome.pad_x = 14
+    image.chrome.pad_y = 12
+    pdf.layout.x = 108
+    pdf.layout.right_inset = 108
+    pdf.chrome.fill = c"1,0.9647,0.9294"
+    pdf.chrome.stroke = c"1,0.7373,0.3843"
+    pdf.chrome.line_width = 1.4
+    pdf.chrome.radius = 16
+    pdf.chrome.pad_x = 14
+    pdf.chrome.pad_y = 12
+    toc.title.text.size = 36
+    toc.title.text.line_height = 42
+    toc.title.text.color = c"1,0.3765,0.5098"
+    toc.title.layout.spacing_after = 46
+    toc.chrome.fill = c"1,0.9647,0.9294"
+    toc.chrome.stroke = c"1,0.7373,0.3843"
+    toc.chrome.line_width = 1.4
+    toc.chrome.radius = 16
+    toc.chrome.pad_x = 14
+    toc.chrome.pad_y = 12
+    cover.title.text.size = 52
+    cover.title.text.line_height = 60
+    cover.title.text.color = c"0.4745,0.3765,1"
+    cover.title.text.font.weight = 700
+    cover.subtitle.text.size = 22
+    cover.subtitle.text.line_height = 30
+    cover.subtitle.text.color = c"0.1569,0.1333,0.2196"
+    cover.subtitle.text.font.weight = 400
+    cover.author.text.size = 18
+    cover.author.text.line_height = 24
+    cover.author.text.color = c"1,0.6706,0.2941"
+    cover.author.text.font.weight = 700
+  }
 end
 
-fn/! h2(subtitle_text: String) -> Object
-  let subtitle = sub_obj(subtitle_text)
-  txt(subtitle, "Helvetica", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78)
-  return subtitle
+fn theme!(theme_value: Theme) -> Void
+  docctx().theme = theme_value
 end
 
-fn/! head(title_text: String) -> Object
+fn current_theme() -> Theme
+  return docctx().theme ?? default_theme()
+end
+
+fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
+  return base::h1(title_text, theme)
+end
+
+fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
+  return base::h2(subtitle_text, theme)
+end
+
+fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let chip = txt_obj(title_text, "label")
   let title = tl(txt_obj(title_text, "title"), 72, 98)
-  txt(chip, "Helvetica", 13, 18, c"1,1,1", 0, 72, 72, 700)
-  box(chip, c"1,0.3765,0.5098", c"1,0.6706,0.2941", 1.0, 10)
-  txt(title, "Helvetica", 36, 42, c"1,0.3765,0.5098", 46, 72, 72, 700)
+  apply_text_block(chip, theme.label)
+  apply_chrome(chip, ChromeStyle {
+    fill = c"1,0.3765,0.5098"
+    stroke = c"1,0.6706,0.2941"
+    line_width = 1
+    radius = 10
+  })
+  apply_text_block(title, theme.head)
   same_tr(chip, title, 72, 8)
   return title
 end
 
-fn/! subhead(subtitle_text: String) -> Object
+fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = tspan(sub_obj(subtitle_text), 110, 110, 150)
-  txt(subtitle, "Helvetica", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78, 700)
-  subtitle.text_cjk_bold_passes = 3
-  subtitle.text_cjk_bold_dx = 0.04
+  apply_text_block(subtitle, theme.subhead)
   return subtitle
 end
 
-fn/! text(text_value: String) -> Object
-  let body = body_obj(text_value)
-  md_code(body, 18, 24, 14, 12, docctx().code_theme_fill ?? c"1,0.9647,0.9294", docctx().code_theme_stroke ?? c"1,0.7373,0.3843", 1.4, 16)
-  return body
+fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::text(text_value, theme)
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
@@ -42,68 +144,57 @@ fn/! tex(text_value: String, scale: Number = 1) -> Object
   return obj
 end
 
-fn/! figure(text_value: String) -> Object
-  return frame(text_value, "figure", "figure_text", 108, 108, 14, 12, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
+fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::figure(text_value, theme)
 end
 
-fn/! image(path_value: String, factor: Number = 1) -> Object
-  let obj = img_obj(path_value)
-  flow(obj, 108, 108)
-  let chrome = panel()
-  box(chrome, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
-  surround(chrome, obj, 14, 12)
-  scale(obj, factor)
-  require_asset_exists(obj)
-  return obj
+fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+  return base::image(path_value, factor, theme)
 end
 
-fn/! pdf(path_value: String, factor: Number = 1) -> Object
-  let obj = pdf_obj(path_value)
-  flow(obj, 108, 108)
-  let chrome = panel()
-  box(chrome, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
-  surround(chrome, obj, 14, 12)
-  scale(obj, factor)
-  require_asset_exists(obj)
-  return obj
+fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+  return base::pdf(path_value, factor, theme)
 end
 
-fn/! code(text_value: String, language_name: String = "python") -> Object
-  return code_box(text_value, language_name, 108, 108, 18, 14, docctx().code_theme_fill ?? c"1,0.9647,0.9294", docctx().code_theme_stroke ?? c"1,0.7373,0.3843", 1.4, 16)
+fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
+  return base::code(text_value, language_name, theme)
 end
 
-fn/! code_file(path_value: String, language_name: String = "plain") -> Object
-  return code(readlines(path_value), language_name)
+fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme = current_theme()) -> Object
+  return code(readlines(path_value), language_name, theme)
 end
 
-fn/! note(text_value: String) -> Object
-  return inset(note_obj(text_value), 124, 124)
+fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
+  let note = note_obj(text_value)
+  apply_text_block(note, theme.note)
+  return note
 end
 
-fn toc(title_text: String) -> Object
+fn toc(title_text: String, theme: Theme = current_theme()) -> Object
   let title = tl(txt_obj(title_text, "label"), 72, 98)
-  txt(title, "Helvetica", 36, 42, c"1,0.3765,0.5098", 46, 72, 72, 700)
+  apply_text_block(title, theme.toc.title)
   let list = toc_obj()
+  apply_text_block(list, theme.toc.body)
   let chrome = panel()
-  box(chrome, c"1,0.9647,0.9294", c"1,0.7373,0.3843", 1.4, 16)
+  apply_chrome(chrome, theme.toc.chrome)
   below(list, title, 46)
-  surround(chrome, list, 14, 12)
+  surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
 end
 
-fn toc!(title_text: String) -> Object
-  let contents = place!(toc(title_text))
+fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
+  let contents = place!(toc(title_text, theme))
   pageno!()
   return contents
 end
 
-fn/! cover(title_text: String, subtitle_text: String, author_name: String) -> Object
+fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
   let title = tl(txt_obj(title_text, "title"), 72, 152)
   let subtitle = txt_obj(subtitle_text, "subtitle")
   let author = txt_obj(author_name, "byline")
-  txt(title, "Helvetica", 52, 60, c"0.4745,0.3765,1", 26, 72, 72, 700)
-  txt(subtitle, "Helvetica", 22, 30, c"0.1569,0.1333,0.2196", 22, 78, 78)
-  txt(author, "Helvetica", 18, 24, c"1,0.6706,0.2941", 18, 72, 72, 700)
+  apply_text_block(title, theme.cover.title)
+  apply_text_block(subtitle, theme.cover.subtitle)
+  apply_text_block(author, theme.cover.author)
 
   below_l(subtitle, title, 6, 28)
   same_tr(author, title, 72, -4)
