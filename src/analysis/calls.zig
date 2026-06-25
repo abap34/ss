@@ -287,6 +287,16 @@ const Analyzer = struct {
                 }
                 return labels;
             },
+            .record_update => |update| {
+                var labels = try self.exprLabels(update.target.*, env, owner);
+                errdefer labels.deinit();
+                for (update.fields.items) |field| {
+                    var nested = try self.exprLabels(field.value, env, owner);
+                    defer nested.deinit();
+                    try labels.unionWith(nested);
+                }
+                return labels;
+            },
             .call => |call| return try self.callLabels(call, env, owner),
             .apply => |apply| {
                 const callee_labels = try self.exprLabels(apply.callee.*, env, owner);

@@ -189,6 +189,14 @@ fn reportDuplicateReprDefinition(ir: *core.Ir, origin: []const u8) !void {
     });
 }
 
+fn reportRecordUpdateError(ir: *core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{
+            .message = try std.fmt.allocPrint(ir.allocator, fmt, args),
+        },
+    });
+}
+
 fn reportLowerDiagnostic(ir: *core.Ir, diagnostic: LowerDiagnostic) !void {
     var message_buf: [256]u8 = undefined;
     const message = formatLowerDiagnostic(&message_buf, diagnostic);
@@ -675,6 +683,7 @@ fn evalExpr(
         .apply => |apply| try evalApply(ir, page_id, context, mode, env, functions, closures, current_origin, apply),
         .lambda => |lambda| try evalLambda(env, closures, lambda),
         .record => |record| try evalRecord(ir, page_id, context, mode, env, functions, closures, current_origin, record),
+        .record_update => |update| try evalRecordUpdate(ir, page_id, context, mode, env, functions, closures, current_origin, update),
         .member => |member| try evalMember(ir, page_id, context, mode, env, functions, closures, current_origin, member),
         .optional_check => |check| blk: {
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, check.target.*);
@@ -815,6 +824,78 @@ fn evalRecord(
         try putRecordFieldValue(ir.allocator, &value, field.name, field_value, true);
     }
     return .{ .record = value };
+}
+
+fn evalRecordUpdate(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    env: *std.StringHashMap(core.Value),
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    current_origin: []const u8,
+    update: ast.RecordUpdateExpr,
+) !core.Value {
+    var target = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, update.target.*);
+    errdefer target.deinit(ir.allocator);
+    if (target != .record) {
+        try reportRecordUpdateError(ir, current_origin, "InvalidRecordUpdate: with expects a record value", .{});
+        return error.InvalidValueTag;
+    }
+
+    for (update.fields.items) |field| {
+        var field_value = try evalExpr(ir, page_id, context, mode, env, functions, closures, current_origin, field.value);
+        var field_value_moved = false;
+        errdefer if (!field_value_moved) field_value.deinit(ir.allocator);
+        updateRecordFieldPath(ir.allocator, &target.record, field.path.items, field_value) catch |err| switch (err) {
+            error.InvalidValueTag => {
+                const path = try formatRecordUpdatePath(ir.allocator, field.path.items);
+                defer ir.allocator.free(path);
+                try reportRecordUpdateError(ir, current_origin, "InvalidRecordUpdatePath: '{s}' does not resolve to a nested record", .{path});
+                return err;
+            },
+            error.UnknownRecordField => {
+                const path = try formatRecordUpdatePath(ir.allocator, field.path.items);
+                defer ir.allocator.free(path);
+                try reportRecordUpdateError(ir, current_origin, "MissingRecordField: record update path '{s}' is not present at runtime", .{path});
+                return err;
+            },
+            else => return err,
+        };
+        field_value_moved = true;
+    }
+    return target;
+}
+
+fn updateRecordFieldPath(
+    allocator: std.mem.Allocator,
+    record: *core.RecordValue,
+    path: []const []const u8,
+    value: core.Value,
+) !void {
+    if (path.len == 0) return error.UnknownRecordField;
+    if (path.len == 1) {
+        try putRecordFieldValue(allocator, record, path[0], value, true);
+        return;
+    }
+    for (record.fields.items) |*field| {
+        if (!std.mem.eql(u8, field.name, path[0])) continue;
+        if (field.value != .record) return error.InvalidValueTag;
+        try updateRecordFieldPath(allocator, &field.value.record, path[1..], value);
+        return;
+    }
+    return error.UnknownRecordField;
+}
+
+fn formatRecordUpdatePath(allocator: std.mem.Allocator, path: []const []const u8) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (path, 0..) |segment, index| {
+        if (index > 0) try out.append(allocator, '.');
+        try out.appendSlice(allocator, segment);
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 const ResolvedRecordDecl = struct {

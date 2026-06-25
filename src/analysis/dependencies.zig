@@ -849,6 +849,16 @@ pub const Analyzer = struct {
                 }
                 break :blk summary;
             },
+            .record_update => |update| blk: {
+                var summary = try self.analyzeExpr(update.target.*);
+                errdefer summary.deinit();
+                for (update.fields.items) |field| {
+                    var nested = try self.analyzeExpr(field.value);
+                    defer nested.deinit();
+                    try summary.merge(nested);
+                }
+                break :blk summary;
+            },
             .apply => |apply| blk: {
                 var summary = try self.analyzeExpr(apply.callee.*);
                 errdefer summary.deinit();

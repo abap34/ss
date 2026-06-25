@@ -421,6 +421,63 @@ pub const RecordExpr = struct {
     }
 };
 
+pub const RecordUpdateFieldExpr = struct {
+    path: std.ArrayList([]const u8),
+    value: Expr,
+
+    pub fn deinit(self: *RecordUpdateFieldExpr, allocator: Allocator) void {
+        for (self.path.items) |segment| allocator.free(segment);
+        self.path.deinit(allocator);
+        self.value.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordUpdateFieldExpr, allocator: Allocator) anyerror!RecordUpdateFieldExpr {
+        var path = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (path.items) |segment| allocator.free(segment);
+            path.deinit(allocator);
+        }
+        for (self.path.items) |segment| {
+            try path.append(allocator, try allocator.dupe(u8, segment));
+        }
+        return .{
+            .path = path,
+            .value = try self.value.clone(allocator),
+        };
+    }
+};
+
+pub const RecordUpdateExpr = struct {
+    target: *Expr,
+    fields: std.ArrayList(RecordUpdateFieldExpr),
+
+    pub fn deinit(self: *RecordUpdateExpr, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        allocator.destroy(self.target);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
+    }
+
+    pub fn clone(self: RecordUpdateExpr, allocator: Allocator) anyerror!RecordUpdateExpr {
+        const target = try allocator.create(Expr);
+        errdefer allocator.destroy(target);
+        target.* = try self.target.clone(allocator);
+
+        var fields = std.ArrayList(RecordUpdateFieldExpr).empty;
+        errdefer {
+            for (fields.items) |*field| field.deinit(allocator);
+            fields.deinit(allocator);
+        }
+        for (self.fields.items) |field| {
+            try fields.append(allocator, try field.clone(allocator));
+        }
+        return .{
+            .target = target,
+            .fields = fields,
+        };
+    }
+};
+
 pub const EnumCaseExpr = struct {
     enum_name: []const u8,
     case_name: []const u8,
@@ -514,6 +571,7 @@ pub const Expr = union(enum) {
     lambda: LambdaExpr,
     member: MemberExpr,
     record: RecordExpr,
+    record_update: RecordUpdateExpr,
     enum_case: EnumCaseExpr,
     optional_check: OptionalCheckExpr,
     coalesce: CoalesceExpr,
@@ -527,6 +585,7 @@ pub const Expr = union(enum) {
             .lambda => |*lambda| lambda.deinit(allocator),
             .member => |*member| member.deinit(allocator),
             .record => |*record| record.deinit(allocator),
+            .record_update => |*update| update.deinit(allocator),
             .enum_case => |*enum_case| enum_case.deinit(allocator),
             .optional_check => |*check| check.deinit(allocator),
             .coalesce => |*coalesce| coalesce.deinit(allocator),
@@ -547,6 +606,7 @@ pub const Expr = union(enum) {
             .lambda => |lambda| .{ .lambda = try lambda.clone(allocator) },
             .member => |member| .{ .member = try member.clone(allocator) },
             .record => |record| .{ .record = try record.clone(allocator) },
+            .record_update => |update| .{ .record_update = try update.clone(allocator) },
             .enum_case => |enum_case| .{ .enum_case = try enum_case.clone(allocator) },
             .optional_check => |check| .{ .optional_check = try check.clone(allocator) },
             .coalesce => |coalesce| .{ .coalesce = try coalesce.clone(allocator) },

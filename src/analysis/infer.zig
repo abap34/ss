@@ -113,6 +113,7 @@ fn exprInfoWithOptions(
         .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin, options),
         .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin, options),
         .record => |record| try inferRecordInfo(allocator, ir, sema, env, record, origin, options),
+        .record_update => |update| try inferRecordUpdateInfo(allocator, ir, sema, env, update, origin, options),
         .member => |member| try inferMemberInfo(allocator, ir, sema, env, member, origin, options),
         .optional_check => |check| try inferOptionalCheckInfo(allocator, ir, sema, env, check.target.*, origin, options),
         .coalesce => |coalesce| try inferCoalesceInfo(allocator, ir, sema, env, coalesce, origin, options),
@@ -153,6 +154,113 @@ fn inferRecordInfo(
         try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
     return infoFromType(Type.recordType(record_decl.name));
+}
+
+fn inferRecordUpdateInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    update: ast.RecordUpdateExpr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !TypeInfo {
+    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, update.target.*, origin, options);
+    if (target_info.ty.kind != .record) {
+        const actual = try typeLabelAlloc(allocator, target_info.ty);
+        defer allocator.free(actual);
+        try addUserReport(ir, origin, "InvalidRecordUpdate: with expects a record value, got {s}", .{actual});
+        return error.InvalidType;
+    }
+    const record_name = target_info.ty.class_name orelse {
+        try addUserReport(ir, origin, "InvalidRecordUpdate: record type has no name", .{});
+        return error.InvalidType;
+    };
+
+    try rejectOverlappingRecordUpdateFields(allocator, ir, update.fields.items, origin);
+    for (update.fields.items) |field| {
+        try inferRecordUpdateField(allocator, ir, sema, env, record_name, field, origin, options);
+    }
+    return infoFromType(target_info.ty);
+}
+
+fn rejectOverlappingRecordUpdateFields(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    fields: []const ast.RecordUpdateFieldExpr,
+    origin: []const u8,
+) !void {
+    for (fields, 0..) |left, left_index| {
+        for (fields[left_index + 1 ..]) |right| {
+            if (!recordUpdatePathsOverlap(left.path.items, right.path.items)) continue;
+            const left_text = try formatRecordUpdatePath(allocator, left.path.items);
+            defer allocator.free(left_text);
+            const right_text = try formatRecordUpdatePath(allocator, right.path.items);
+            defer allocator.free(right_text);
+            try addUserReport(ir, origin, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
+            return error.InvalidType;
+        }
+    }
+}
+
+fn recordUpdatePathsOverlap(left: []const []const u8, right: []const []const u8) bool {
+    const shared = @min(left.len, right.len);
+    for (0..shared) |index| {
+        if (!std.mem.eql(u8, left[index], right[index])) return false;
+    }
+    return true;
+}
+
+fn formatRecordUpdatePath(allocator: std.mem.Allocator, path: []const []const u8) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (path, 0..) |segment, index| {
+        if (index > 0) try out.append(allocator, '.');
+        try out.appendSlice(allocator, segment);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn inferRecordUpdateField(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    env: *const TypeEnv,
+    base_record_name: []const u8,
+    update_field: ast.RecordUpdateFieldExpr,
+    origin: []const u8,
+    options: InferenceOptions,
+) !void {
+    var current_record_name = base_record_name;
+    for (update_field.path.items, 0..) |segment, index| {
+        const field = sema.recordField(current_record_name, segment) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment });
+            return error.InvalidType;
+        };
+        var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
+            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+            return error.InvalidType;
+        };
+        defer field_type.deinit(allocator);
+
+        if (index + 1 == update_field.path.items.len) {
+            const actual = try exprInfoWithOptions(allocator, ir, sema, env, update_field.value, origin, options);
+            try ensureType(ir, allocator, actual, field_type, origin, .UnmatchedArgumentType);
+            return;
+        }
+        if (field_type.kind != .record) {
+            const path = try formatRecordUpdatePath(allocator, update_field.path.items[0 .. index + 1]);
+            defer allocator.free(path);
+            const label = try typeLabelAlloc(allocator, field_type);
+            defer allocator.free(label);
+            try addUserReport(ir, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
+            return error.InvalidType;
+        }
+        current_record_name = field_type.class_name orelse {
+            try addUserReport(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+            return error.InvalidType;
+        };
+    }
 }
 
 fn inferMemberInfo(

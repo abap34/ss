@@ -76,6 +76,13 @@ const PageContextRequirement = struct {
                 }
                 break :blk null;
             },
+            .record_update => |update| blk: {
+                if (try self.exprRequirement(scope, update.target.*)) |requirement| break :blk requirement;
+                for (update.fields.items) |field| {
+                    if (try self.exprRequirement(scope, field.value)) |requirement| break :blk requirement;
+                }
+                break :blk null;
+            },
             .call => |call| blk: {
                 if (!call.callee.isQualified()) {
                     if (registry.lookupPrimitiveCall(call.callee.name)) |descriptor| {
