@@ -552,6 +552,10 @@ fn resolveExprTypeReferences(
         .record => |*record| {
             for (record.fields.items) |*field| try resolveExprTypeReferences(&field.value, module_id, sema);
         },
+        .record_update => |*update| {
+            try resolveExprTypeReferences(update.target, module_id, sema);
+            for (update.fields.items) |*field| try resolveExprTypeReferences(&field.value, module_id, sema);
+        },
         .member => |*member| try resolveExprTypeReferences(member.target, module_id, sema),
         .optional_check => |*check| try resolveExprTypeReferences(check.target, module_id, sema),
         .coalesce => |*coalesce| {
@@ -699,6 +703,7 @@ fn appendStaticTaggedExprJson(allocator: std.mem.Allocator, out: *std.ArrayList(
             }
             try out.appendSlice(allocator, "]}");
         },
+        .record_update => return false,
         .call => |call| {
             if (!std.mem.eql(u8, call.callee.name, "neg") or call.args.items.len != 1) return false;
             if (call.args.items[0] != .number) return false;
@@ -812,6 +817,10 @@ fn resolveExprEnumCases(
         },
         .record => |*record| {
             for (record.fields.items) |*field| try resolveExprEnumCases(allocator, module_id, sema, env, &field.value);
+        },
+        .record_update => |*update| {
+            try resolveExprEnumCases(allocator, module_id, sema, env, update.target);
+            for (update.fields.items) |*field| try resolveExprEnumCases(allocator, module_id, sema, env, &field.value);
         },
         .optional_check => |*check| try resolveExprEnumCases(allocator, module_id, sema, env, check.target),
         .coalesce => |*coalesce| {
@@ -954,6 +963,10 @@ fn checkExprTypeAnnotations(
         },
         .record => |record| {
             for (record.fields.items) |field| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value);
+        },
+        .record_update => |update| {
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, update.target.*);
+            for (update.fields.items) |field| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value);
         },
         .member => |member| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, member.target.*),
         .optional_check => |check| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, check.target.*),

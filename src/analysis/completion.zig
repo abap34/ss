@@ -252,7 +252,7 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
         }
     }
 
-    const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
+    const keywords = [_][]const u8{ "import", "as", "with", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
     for (keywords) |keyword| try builder.add(.{ .label = keyword, .kind = .keyword, .detail = "keyword" });
     try appendImportAsCompletions(&builder, request.source, request.offset);
     try appendVisibleFunctions(&builder, index, allocator, request.doc_path);

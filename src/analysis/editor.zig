@@ -131,6 +131,24 @@ fn formatExpr(allocator: std.mem.Allocator, expr: ast.Expr) ![]const u8 {
             }
             break :blk std.fmt.allocPrint(allocator, "{s} {{ {s} }}", .{ record.type_name, fields.items });
         },
+        .record_update => |update| blk: {
+            const target = try formatExpr(allocator, update.target.*);
+            defer allocator.free(target);
+            var fields = std.ArrayList(u8).empty;
+            defer fields.deinit(allocator);
+            for (update.fields.items, 0..) |field, index| {
+                if (index != 0) try fields.appendSlice(allocator, ", ");
+                for (field.path.items, 0..) |segment, segment_index| {
+                    if (segment_index != 0) try fields.append(allocator, '.');
+                    try fields.appendSlice(allocator, segment);
+                }
+                const text = try formatExpr(allocator, field.value);
+                defer allocator.free(text);
+                try fields.appendSlice(allocator, " = ");
+                try fields.appendSlice(allocator, text);
+            }
+            break :blk std.fmt.allocPrint(allocator, "{s} with {{ {s} }}", .{ target, fields.items });
+        },
         .call => |call| blk: {
             const callee = try call.callee.displayAlloc(allocator);
             defer allocator.free(callee);
@@ -368,6 +386,10 @@ fn collectExprHints(
             for (apply.args.items) |arg| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, arg);
         },
         .lambda => |lambda| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, lambda.body.*),
+        .record_update => |update| {
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, update.target.*);
+            for (update.fields.items) |field| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, field.value);
+        },
         .member => |member| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, member.target.*),
         .optional_check => |check| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, check.target.*),
         .coalesce => |coalesce| {

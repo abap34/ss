@@ -124,6 +124,23 @@ fn expectMember(expr: ast.Expr, name: []const u8) !ast.MemberExpr {
     }
 }
 
+fn expectRecordUpdate(expr: ast.Expr, field_count: usize) !ast.RecordUpdateExpr {
+    switch (expr) {
+        .record_update => |update| {
+            try testing.expectEqual(field_count, update.fields.items.len);
+            return update;
+        },
+        else => return error.ExpectedRecordUpdateExpr,
+    }
+}
+
+fn expectPath(path: []const []const u8, expected: []const []const u8) !void {
+    try testing.expectEqual(expected.len, path.len);
+    for (expected, 0..) |segment, index| {
+        try testing.expectEqualStrings(segment, path[index]);
+    }
+}
+
 fn expectImportMode(import_decl: ast.ImportDecl, expected_alias: ?[]const u8, expected_unqualified: bool) !void {
     if (expected_alias) |alias| {
         try testing.expect(import_decl.mode.alias != null);
@@ -227,7 +244,7 @@ test "syntax spec: import specs omit ss extension" {
     );
 }
 
-test "syntax spec: as is reserved" {
+test "syntax spec: as and with are reserved" {
     try expectParseError(error.ReservedIdentifier,
         \\fn as() -> Void
         \\  return
@@ -238,6 +255,13 @@ test "syntax spec: as is reserved" {
     try expectParseError(error.ReservedIdentifier,
         \\page ok
         \\  let as = 1
+        \\end
+        \\
+    );
+
+    try expectParseError(error.ReservedIdentifier,
+        \\page ok
+        \\  let with = 1
         \\end
         \\
     );
@@ -758,6 +782,27 @@ test "syntax spec: member optional and coalesce keep nested targets" {
         },
         else => return error.ExpectedCoalesceExpr,
     }
+}
+
+test "syntax spec: record update keeps target and nested field paths" {
+    var parsed = try parse(
+        \\page Update
+        \\  let theme = default_theme() with {
+        \\    body.text.size = 22,
+        \\    h1.text.color = c"#123456"
+        \\  }
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const expr = parsed.program.pages.items[0].statements.items[0].kind.let_binding.expr;
+    const update = try expectRecordUpdate(expr, 2);
+    _ = try expectCall(update.target.*, "default_theme", 0);
+    try expectPath(update.fields.items[0].path.items, &.{ "body", "text", "size" });
+    try expectNumber(update.fields.items[0].value, 22);
+    try expectPath(update.fields.items[1].path.items, &.{ "h1", "text", "color" });
+    try expectColor(update.fields.items[1].value, "0.07058824,0.20392157,0.3372549");
 }
 
 test "syntax spec: lambda expressions can be used as callees" {

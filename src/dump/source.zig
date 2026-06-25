@@ -287,6 +287,10 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("type", record.type_name);
             try object.intField("fieldCount", record.fields.items.len);
         },
+        .record_update => |update| {
+            try object.stringField("exprKind", "record_update");
+            try object.intField("fieldCount", update.fields.items.len);
+        },
         .member => |member| {
             try object.stringField("exprKind", "member");
             try object.stringField("name", member.name);
@@ -443,6 +447,20 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             for (record.fields.items) |field| {
                 var field_item = try fields.objectItem();
                 try field_item.stringField("name", field.name);
+                try writeExpr(allocator, &field_item, "value", field.value);
+                try field_item.end();
+            }
+            try fields.end();
+        },
+        .record_update => |update| {
+            try item.stringField("kind", "record_update");
+            try writeExpr(allocator, item, "target", update.target.*);
+            var fields = try item.arrayField("fields");
+            for (update.fields.items) |field| {
+                var field_item = try fields.objectItem();
+                var path = try field_item.arrayField("path");
+                for (field.path.items) |segment| try path.stringItem(segment);
+                try path.end();
                 try writeExpr(allocator, &field_item, "value", field.value);
                 try field_item.end();
             }

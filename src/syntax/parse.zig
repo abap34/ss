@@ -1044,6 +1044,10 @@ const Parser = struct {
         while (true) {
             self.skipInlineSpaces();
             if (self.eof()) return expr;
+            if (self.consumeKeywordNoTrivia("with")) {
+                expr = try self.parseRecordUpdateAfterTarget(expr);
+                continue;
+            }
             if (self.startsWith("??")) {
                 self.pos += 2;
                 const fallback = try self.parseExpr();
@@ -1060,6 +1064,54 @@ const Parser = struct {
                 else => return expr,
             }
         }
+    }
+
+    fn parseRecordUpdateAfterTarget(self: *Parser, target_expr: Expr) !Expr {
+        const target = try self.allocator.create(Expr);
+        errdefer self.allocator.destroy(target);
+        target.* = target_expr;
+
+        try self.expectChar('{');
+        var fields = std.ArrayList(ast.RecordUpdateFieldExpr).empty;
+        errdefer {
+            for (fields.items) |*field| field.deinit(self.allocator);
+            fields.deinit(self.allocator);
+        }
+
+        self.skipTrivia();
+        while (!self.eof() and !self.peekChar('}')) {
+            var path = std.ArrayList([]const u8).empty;
+            errdefer {
+                for (path.items) |segment| self.allocator.free(segment);
+                path.deinit(self.allocator);
+            }
+            try path.append(self.allocator, try self.parseIdentifier());
+            while (true) {
+                self.skipInlineSpaces();
+                if (self.eof() or self.source[self.pos] != '.') break;
+                self.pos += 1;
+                self.skipInlineSpaces();
+                try path.append(self.allocator, try self.parseIdentifier());
+            }
+            self.skipInlineSpaces();
+            try self.expectChar('=');
+            const value = try self.parseExpr();
+            try fields.append(self.allocator, .{
+                .path = path,
+                .value = value,
+            });
+            self.skipTrivia();
+            if (!self.eof() and self.source[self.pos] == ',') {
+                self.pos += 1;
+                self.skipTrivia();
+                continue;
+            }
+        }
+        try self.expectChar('}');
+        return .{ .record_update = .{
+            .target = target,
+            .fields = fields,
+        } };
     }
 
     fn parseApplyAfterCallee(self: *Parser, expr: Expr) !Expr {
@@ -1698,6 +1750,7 @@ const Parser = struct {
             "let",
             "bind",
             "as",
+            "with",
         };
         inline for (reserved) |keyword| {
             if (std.mem.eql(u8, ident, keyword)) return true;
