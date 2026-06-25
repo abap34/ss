@@ -113,6 +113,8 @@ test "core IR spec: render doc marks math and raw TeX vector modes" {
     const tex_object = try ir.makeObject(page, "math_tex", null, .asset, .math_tex, "\\begin{algorithm}[H]\\end{algorithm}");
     try ir.setNodeProperty(math_object, "render_kind", "vector_math");
     try ir.setNodeProperty(tex_object, "render_kind", "vector_math");
+    try ir.setNodeProperty(math_object, "text_color", "1,0,0");
+    try ir.setNodeProperty(tex_object, "text_color", "0,0,1");
 
     var doc = try core.render_doc.build(testing.allocator, &ir);
     defer doc.deinit(testing.allocator);
@@ -121,6 +123,8 @@ test "core IR spec: render doc marks math and raw TeX vector modes" {
     const tex_op = vectorMathOpForNode(doc, tex_object).?;
     try testing.expectEqualStrings("math", argValue(math_op, "tex_mode").?);
     try testing.expectEqualStrings("raw", argValue(tex_op, "tex_mode").?);
+    try testing.expect(argValue(math_op, "color") == null);
+    try testing.expect(argValue(tex_op, "color") == null);
 }
 
 fn argValue(op: core.render_doc.Op, key: []const u8) ?[]const u8 {

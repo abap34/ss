@@ -1205,7 +1205,6 @@ fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
         hashF32(hasher, math.block_vertical_padding);
         hashF32(hasher, math.scale);
         hashHorizontalAlign(hasher, math.horizontal_align);
-        hashColor(hasher, math.color);
     }
 }
 
@@ -2543,7 +2542,7 @@ fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32,
         .width = fitted.width,
         .height = fitted.height,
     };
-    try drawSvgFrameTinted(ctx, draw_frame, svg.path, text.color);
+    try drawSvgFrame(ctx, draw_frame, svg.path);
     return block_bottom - text.font_size;
 }
 
@@ -2716,7 +2715,7 @@ fn drawAtomsWithOptions(
             .math => {
                 const path = atom.svg_path orelse continue;
                 const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
-                try drawSvgFrameTinted(ctx, frame, path, atom.color);
+                try drawSvgFrame(ctx, frame, path);
                 cursor.advance(measured_atom.advance);
             },
             .icon => {
@@ -3446,8 +3445,7 @@ fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: 
         .width = fitted.width,
         .height = fitted.height,
     };
-    const color = if (math) |m| m.color else Color{ .r = 0, .g = 0, .b = 0 };
-    try drawSvgFrameTinted(ctx, draw_frame, svg.path, color);
+    try drawSvgFrame(ctx, draw_frame, svg.path);
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
@@ -3979,7 +3977,6 @@ fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_h
         .block_vertical_padding = 2,
         .scale = 1,
         .horizontal_align = .center,
-        .color = .{ .r = 0, .g = 0, .b = 0 },
     };
     const target_height = @max(
         paint.block_min_height,
