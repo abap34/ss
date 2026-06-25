@@ -56,7 +56,10 @@ async function testProjectCompletionLifecycle() {
 import std:themes/default as *
 
 fn module_label!(text_value: String, color_name: Color = c"0.07,0.08,0.10") -> Object
-  return text!(text_value, 24, color_name)
+  return text!(text_value, current_theme() with {
+    body.text.size = 24
+    body.text.color = color_name
+  })
 end
 
 fn/! ultra_big(content: String) -> Object
@@ -74,14 +77,14 @@ end
     client.changeDocument({ uri: partsUri, version: 2, text: libraryBrokenSource });
     const libraryMemberCompletion = await client.request("textDocument/completion", {
       textDocument: { uri: partsUri },
-      position: positionAfter(libraryBrokenSource, "t."),
+      position: positionAfter(libraryBrokenSource, "  t."),
     });
     assertPropertyCompletion(libraryMemberCompletion, "imported library member completion");
     await client.waitForDiagnostics(partsUri);
 
     const repeatedLibraryCompletion = await client.request("textDocument/completion", {
       textDocument: { uri: partsUri },
-      position: positionAfter(libraryBrokenSource, "t."),
+      position: positionAfter(libraryBrokenSource, "  t."),
     });
     assertSameLabels(libraryMemberCompletion, repeatedLibraryCompletion, "repeated imported library member completion");
 
