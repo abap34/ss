@@ -414,3 +414,5 @@ The standalone ss grammar package lives under `editor/tree-sitter-ss/`.
 Contributions to ss are very welcome!
 
 If you want to contribute, please open an issue or a pull request. For major changes, please open an issue first to discuss what you would like to change.
+
+We especially welcome anyone willing to work on the items listed in the [roadmap](https://gist.github.com/abap34/46167c714522ece12a14fd50ff252f7a)!
