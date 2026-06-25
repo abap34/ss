@@ -90,7 +90,6 @@ pub const MathPaint = struct {
     block_vertical_padding: f32,
     scale: f32,
     horizontal_align: HorizontalAlign,
-    color: Color,
 };
 
 pub const CodePaint = struct {
@@ -256,7 +255,6 @@ fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
         .block_vertical_padding = nonNegativeFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
         .scale = positiveFloatProperty(ir, node, "math_scale") orelse 1,
         .horizontal_align = inheritedHorizontalAlignProperty(ir, node, "math_align") orelse .center,
-        .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
     };
 }
 
@@ -345,7 +343,6 @@ fn resolveMathWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
         .block_vertical_padding = nonNegativeFloatPropertyWithEnv(node, "math_block_vertical_padding", sema) orelse 2,
         .scale = positiveFloatPropertyWithEnv(node, "math_scale", sema) orelse 1,
         .horizontal_align = inheritedHorizontalAlignPropertyWithEnv(ir, node, "math_align", sema) orelse .center,
-        .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
     };
 }
 
