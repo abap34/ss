@@ -4,6 +4,13 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-27
+
+### Fixed
+
+- Improved layout constraint diagnostics without changing slide language syntax,
+  standard library APIs, or default rendering behavior.
+
 ## [0.6.0] - 2026-06-18
 
 ### Added
