@@ -61,6 +61,32 @@ git tag -a vX.Y.Z -m "ss vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+## Releasing From a Non-Tip Commit
+
+When the release should stop at a commit that is not the current branch tip,
+prepare the release metadata from that commit in an isolated worktree:
+
+```sh
+release/tools/prepare-release.py --base <commit> vX.Y.Z
+cd .ss-cache/release-worktrees/vX.Y.Z
+git rev-parse HEAD^
+release/tools/pre-release-check.sh --release-metadata-only vX.Y.Z
+git tag -a vX.Y.Z -m "ss vX.Y.Z"
+```
+
+`prepare-release.py` creates `release/vX.Y.Z` by default, updates the release
+metadata files, drafts the changelog section from commits since the previous
+tag when `Unreleased` is empty, runs metadata checks, and creates the release
+preparation commit. Confirm that `HEAD^` is the intended implementation commit
+before tagging. Pass `--detached` to create a detached worktree instead of a
+branch; keep that worktree until the tag is created. When the release worktree
+contains a `pre-release-check.sh` with `--base` support, include the
+parent-commit check in the guarded release check:
+
+```sh
+release/tools/pre-release-check.sh --release-metadata-only --base <commit> vX.Y.Z
+```
+
 Watch the release workflows:
 
 ```sh
