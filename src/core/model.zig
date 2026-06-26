@@ -72,8 +72,11 @@ pub const ConstraintFailureKind = enum {
 pub const ConstraintFailure = struct {
     kind: ConstraintFailureKind,
     page_id: NodeId,
+    axis: ?Axis = null,
     constraint: Constraint,
     existing_constraint: ?Constraint = null,
+    actual: ?f32 = null,
+    expected: ?f32 = null,
 };
 
 pub const AnchorValue = union(enum) {

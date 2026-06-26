@@ -572,6 +572,8 @@ test "layout solver: explicit anchor conflicts and negative sizes are rejected" 
     try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 100, "left-a");
     try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 120, "left-b");
     try testing.expectError(error.ConstraintConflict, conflict.finalize());
+    try testing.expect(conflict.constraint_failures.items.len > 0);
+    try testing.expectEqual(model.Axis.horizontal, conflict.constraint_failures.items[0].axis.?);
 
     var negative = try initEmptyIr();
     defer negative.deinit();
@@ -580,6 +582,30 @@ test "layout solver: explicit anchor conflicts and negative sizes are rejected" 
     const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
     try negative.addAnchorConstraint(negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, "negative-width");
     try testing.expectError(error.NegativeConstraintSize, negative.finalize());
+}
+
+test "layout solver: repeated constraint failure keeps more detailed values" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "A");
+    const constraint = model.Constraint{
+        .target_node = object,
+        .target_anchor = .left,
+        .source = .{ .page = .left },
+        .offset = 120,
+        .origin = "left",
+    };
+
+    ir.noteConstraintFailure(page, constraint, null, .conflict);
+    ir.noteConstraintFailureDetailed(page, constraint, null, .conflict, .horizontal, 100, 120);
+
+    try testing.expectEqual(@as(usize, 1), ir.constraint_failures.items.len);
+    const failure = ir.constraint_failures.items[0];
+    try testing.expectEqual(model.Axis.horizontal, failure.axis.?);
+    try expectFloat(100, failure.actual.?);
+    try expectFloat(120, failure.expected.?);
 }
 
 test "layout solver: group width propagation must preserve child hard widths" {

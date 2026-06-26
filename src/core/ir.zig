@@ -19,6 +19,7 @@ const SelectionItemTag = model.SelectionItemTag;
 const ValueTag = model.ValueTag;
 const Value = model.Value;
 const Query = model.Query;
+const Axis = model.Axis;
 const PageLayout = model.PageLayout;
 const Diagnostic = model.Diagnostic;
 const DiagnosticPhase = model.DiagnosticPhase;
@@ -701,17 +702,42 @@ pub const Ir = struct {
     }
 
     pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
+        self.noteConstraintFailureDetailed(page_id, constraint, existing_constraint, kind, null, null, null);
+    }
+
+    pub fn noteConstraintFailureDetailed(
+        self: *Ir,
+        page_id: NodeId,
+        constraint: Constraint,
+        existing_constraint: ?Constraint,
+        kind: ConstraintFailureKind,
+        axis: ?Axis,
+        actual: ?f32,
+        expected: ?f32,
+    ) void {
         const failure: ConstraintFailure = .{
             .kind = kind,
             .page_id = page_id,
+            .axis = axis orelse layout.anchorAxis(constraint.target_anchor),
             .constraint = constraint,
             .existing_constraint = existing_constraint,
+            .actual = actual,
+            .expected = expected,
         };
-        self.last_constraint_failure = failure;
-        for (self.constraint_failures.items) |existing| {
-            if (constraintFailureSame(existing, failure)) return;
+        for (self.constraint_failures.items) |*existing| {
+            if (constraintFailureSame(existing.*, failure)) {
+                if (constraintFailureDetailScore(failure) > constraintFailureDetailScore(existing.*)) {
+                    existing.* = failure;
+                }
+                self.last_constraint_failure = existing.*;
+                return;
+            }
         }
         self.constraint_failures.append(self.allocator, failure) catch {};
+        self.last_constraint_failure = if (self.constraint_failures.items.len == 0)
+            failure
+        else
+            self.constraint_failures.items[self.constraint_failures.items.len - 1];
     }
 
     pub fn hasConstraintFailures(self: *const Ir) bool {
@@ -1078,6 +1104,15 @@ fn constraintFailureSame(a: ConstraintFailure, b: ConstraintFailure) bool {
         if (!constraintEq(existing_a, b.existing_constraint.?)) return false;
     }
     return true;
+}
+
+fn constraintFailureDetailScore(failure: ConstraintFailure) usize {
+    var score: usize = 0;
+    if (failure.axis != null) score += 1;
+    if (failure.existing_constraint != null) score += 1;
+    if (failure.actual != null) score += 10;
+    if (failure.expected != null) score += 10;
+    return score;
 }
 
 fn constraintEq(a: Constraint, b: Constraint) bool {
