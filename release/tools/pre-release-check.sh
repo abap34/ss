@@ -9,6 +9,8 @@ Run the local checks that should pass before creating and pushing a release tag.
 
 Options:
   --allow-dirty   Allow tracked working tree changes while debugging this script.
+  --base COMMIT   With --release-metadata-only, require HEAD to be a release
+                  metadata commit directly on COMMIT.
   --release-metadata-only
                   Verify HEAD only changes release metadata, then skip Zig tests and smoke checks.
   --skip-docker   Skip the render Docker image build and container run.
@@ -111,16 +113,44 @@ assert_release_metadata_only_head() {
   fi
 }
 
+assert_release_base() {
+  local expected="$1"
+  local expected_commit
+  local actual_parent
+  local parent_line
+  local -a fields
+
+  expected_commit="$(git rev-parse --verify "${expected}^{commit}")" || fail "release base is not a commit: $expected"
+  parent_line="$(git rev-list --parents -n 1 HEAD)"
+  read -r -a fields <<< "$parent_line"
+  if [[ "${#fields[@]}" -ne 2 ]]; then
+    fail "--base requires HEAD to be a single-parent release metadata commit"
+  fi
+
+  actual_parent="$(git rev-parse HEAD^)"
+  if [[ "$actual_parent" != "$expected_commit" ]]; then
+    fail "--base expected HEAD parent $expected_commit, got $actual_parent"
+  fi
+}
+
 tag=""
 allow_dirty=false
 release_metadata_only=false
 skip_docker=false
+release_base=""
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --allow-dirty)
       allow_dirty=true
       shift
+      ;;
+    --base)
+      if [[ "$#" -lt 2 ]]; then
+        fail "--base requires a commit"
+      fi
+      release_base="$2"
+      shift 2
       ;;
     --release-metadata-only)
       release_metadata_only=true
@@ -154,6 +184,9 @@ if [[ -z "$tag" ]]; then
   tag="v$(tr -d '[:space:]' < release/VERSION)"
 fi
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "release tag must look like v0.1.0, got $tag"
+if [[ -n "$release_base" && "$release_metadata_only" != true ]]; then
+  fail "--base requires --release-metadata-only"
+fi
 
 version="${tag#v}"
 commit="$(git rev-parse HEAD)"
@@ -192,6 +225,9 @@ release_version="$(tr -d '[:space:]' < release/VERSION)"
 
 if [[ "$release_metadata_only" == true ]]; then
   assert_release_metadata_only_head
+  if [[ -n "$release_base" ]]; then
+    assert_release_base "$release_base"
+  fi
 fi
 
 require_command git
