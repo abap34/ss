@@ -595,12 +595,12 @@ const DiagnosticSet = struct {
     }
 
     fn addConstraintFailure(self: *DiagnosticSet, ir: *core.Ir, err: anyerror) !void {
-        if (ir.last_constraint_failure) |failure| {
-            try self.addConstraintFailureItem(ir, failure);
-            return;
-        }
         if (ir.constraint_failures.items.len > 0) {
             try self.addConstraintFailureItem(ir, ir.constraint_failures.items[0]);
+            return;
+        }
+        if (ir.last_constraint_failure) |failure| {
+            try self.addConstraintFailureItem(ir, failure);
             return;
         }
 
@@ -664,6 +664,20 @@ fn formatConstraintFailureMessage(
     var message = std.ArrayList(u8).empty;
     errdefer message.deinit(allocator);
     try message.appendSlice(allocator, kind_text);
+    if (failure.axis) |axis| {
+        try message.appendSlice(allocator, "\naxis: ");
+        try message.appendSlice(allocator, @tagName(axis));
+    }
+    if (failure.actual) |actual| {
+        const value = try std.fmt.allocPrint(allocator, "\nactual: {d:.1}", .{actual});
+        defer allocator.free(value);
+        try message.appendSlice(allocator, value);
+    }
+    if (failure.expected) |expected| {
+        const value = try std.fmt.allocPrint(allocator, "\nexpected: {d:.1}", .{expected});
+        defer allocator.free(value);
+        try message.appendSlice(allocator, value);
+    }
 
     const constraint_text = core.formatConstraint(ir.allocator, failure.constraint) catch "";
     defer if (constraint_text.len > 0) ir.allocator.free(constraint_text);

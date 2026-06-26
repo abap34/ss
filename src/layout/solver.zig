@@ -512,7 +512,7 @@ fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const grap
         const target_value = switch (try finalNodeAnchorValue(ir, constraint.target_node, constraint.target_anchor)) {
             .known => |value| value,
             .unknown => {
-                ir.noteConstraintFailure(page_id, constraint, null, .conflict);
+                ir.noteConstraintFailureDetailed(page_id, constraint, null, .conflict, graph.anchorAxis(constraint.target_anchor), null, null);
                 continue;
             },
         };
@@ -520,14 +520,14 @@ fn validatePageConstraints(ir: anytype, page_id: NodeId, page_graph: *const grap
         const source_value = switch (try finalConstraintSourceValue(ir, page_id, constraint.source)) {
             .known => |value| value,
             .unknown => {
-                ir.noteConstraintFailure(page_id, constraint, null, .conflict);
+                ir.noteConstraintFailureDetailed(page_id, constraint, null, .conflict, graph.anchorAxis(constraint.target_anchor), null, null);
                 continue;
             },
         };
 
         const expected = source_value + constraint.offset;
         if (@abs(target_value - expected) > ConstraintTolerance) {
-            ir.noteConstraintFailure(page_id, constraint, null, .conflict);
+            ir.noteConstraintFailureDetailed(page_id, constraint, null, .conflict, graph.anchorAxis(constraint.target_anchor), target_value, expected);
         }
     }
 }

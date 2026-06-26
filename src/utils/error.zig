@@ -250,10 +250,35 @@ pub fn printConstraintFailure(
     err: anyerror,
     formatConstraint: anytype,
 ) void {
-    const failure = ir.last_constraint_failure orelse {
+    if (ir.constraint_failures.items.len == 0 and ir.last_constraint_failure == null) {
         std.debug.print("constraint error: {s}\n", .{@errorName(err)});
         return;
-    };
+    }
+
+    const failures = ir.constraint_failures.items;
+    if (failures.len > 0) {
+        if (failures.len > 1) {
+            std.debug.print("error: {d} layout constraint failures\n", .{failures.len});
+            std.debug.print("  showing first {d}\n", .{@min(failures.len, 3)});
+        }
+        const limit = @min(failures.len, 3);
+        for (failures[0..limit], 0..) |failure, index| {
+            if (index != 0 or failures.len > 1) std.debug.print("\n", .{});
+            printConstraintFailureItem(path, source, ir, failure, formatConstraint);
+        }
+        return;
+    }
+
+    printConstraintFailureItem(path, source, ir, ir.last_constraint_failure.?, formatConstraint);
+}
+
+fn printConstraintFailureItem(
+    path: []const u8,
+    source: []const u8,
+    ir: anytype,
+    failure: anytype,
+    formatConstraint: anytype,
+) void {
     const kind_text = switch (failure.kind) {
         .conflict => "ConstraintConflict: constraint conflict",
         .negative_size => "NegativeConstraintSize: negative size from constraints",
@@ -266,15 +291,16 @@ pub fn printConstraintFailure(
         "";
     defer if (existing_text.len > 0) ir.allocator.free(existing_text);
 
-    if (failure.constraint.origin) |origin| {
+    const primary_origin = if (failure.constraint.origin) |origin|
+        origin
+    else if (failure.existing_constraint) |constraint|
+        constraint.origin
+    else
+        null;
+    if (primary_origin) |origin| {
         if (parseLocatedOrigin(origin) != null) {
             printLocatedOrigin(path, source, ir, .@"error", kind_text, origin);
-            if (failure.existing_constraint != null) {
-                printLabeledLocatedOrigin(path, source, ir, "other constraint", failure.existing_constraint.?.origin);
-            }
-            if (constraint_text.len > 0 and existing_text.len == 0) {
-                std.debug.print("  constraint: {s}\n", .{constraint_text});
-            }
+            printConstraintFailureDetailLines(path, source, ir, failure, constraint_text, existing_text);
             return;
         }
     }
@@ -284,11 +310,36 @@ pub fn printConstraintFailure(
     } else {
         std.debug.print("{s}\n", .{kind_text});
     }
+    printConstraintFailureDetailLines(path, source, ir, failure, constraint_text, existing_text);
+}
+
+fn printConstraintFailureDetailLines(
+    path: []const u8,
+    source: []const u8,
+    ir: anytype,
+    failure: anytype,
+    constraint_text: []const u8,
+    existing_text: []const u8,
+) void {
+    if (failure.axis) |axis| {
+        std.debug.print("  axis: {s}\n", .{@tagName(axis)});
+    }
+    if (failure.actual) |actual| {
+        std.debug.print("  actual: {d:.1}\n", .{actual});
+    }
+    if (failure.expected) |expected| {
+        std.debug.print("  expected: {d:.1}\n", .{expected});
+    }
+    if (constraint_text.len > 0) {
+        std.debug.print("  constraint: {s}\n", .{constraint_text});
+    }
     if (failure.existing_constraint != null) {
         printLabeledLocatedOrigin(path, source, ir, "other constraint", failure.existing_constraint.?.origin);
     }
-    if (constraint_text.len > 0 and existing_text.len == 0) {
-        std.debug.print("  constraint: {s}\n", .{constraint_text});
+    if (existing_text.len > 0) {
+        std.debug.print("  other constraint: {s}\n", .{existing_text});
+    }
+    if (constraint_text.len > 0) {
         printLabeledLocatedOrigin(path, source, ir, "constraint", failure.constraint.origin);
     }
 }
