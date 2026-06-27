@@ -918,7 +918,9 @@ test "layout metrics use render atom widths for CJK emoji markdown text" {
     try ir.setNodeProperty(object, "text_line_height", "31");
 
     const node = ir.getNode(object).?;
-    node.frame.width = 608;
+    const measured_width = metrics.intrinsicWidth(&ir, node);
+    try testing.expect(measured_width > 1);
+    node.frame.width = measured_width - 1;
 
     try expectFloat(62, metrics.intrinsicHeight(&ir, node));
 }
@@ -936,10 +938,13 @@ test "layout solver keeps CJK emoji markdown text on one line when measured atom
     try ir.setNodeProperty(object, "text_size", "30");
     try ir.setNodeProperty(object, "text_line_height", "31");
 
+    const expected_width = metrics.intrinsicWidth(&ir, ir.getNode(object).?);
+    try testing.expect(expected_width > 1);
+
     try solver.solveLayout(&ir);
 
     const node = ir.getNode(object).?;
-    try testing.expect(node.frame.width > 608);
+    try expectFloat(expected_width, node.frame.width);
     try expectFloat(31, node.frame.height);
 }
 
