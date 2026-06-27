@@ -16,6 +16,8 @@ fn usage() void {
         \\Commands:
         \\  help
         \\    Show this help message
+        \\  version
+        \\    Show build, source, and native render backend versions
         \\  check [input.ss]
         \\    Parse and type-check; print diagnostics when needed
         \\  dump [input.ss] [output.json]
@@ -51,7 +53,7 @@ fn usage() void {
         \\
         \\Flags:
         \\  --version, -V
-        \\    Show the ss version and source commit
+        \\    Show build, source, and native render backend versions
         \\  --asset-base-dir DIR
         \\    Resolve relative assets/themes from DIR instead of the input file directory
         \\  --project FILE_OR_DIR
@@ -112,8 +114,41 @@ fn failCli(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
 }
 
 fn version() void {
-    var buffer: [128]u8 = undefined;
-    const text = std.fmt.bufPrint(&buffer, "ss {s} ({s})\n", .{ build_options.version, build_options.commit }) catch return;
+    const native = pdf.nativeRuntimeVersions();
+    var buffer: [2048]u8 = undefined;
+    const text = std.fmt.bufPrint(&buffer,
+        \\ss {s}
+        \\commit: {s}
+        \\uncommitted changes: {s}
+        \\tree-sitter manifest: {s}
+        \\tree-sitter ABI: {d}..{d}
+        \\native PDF:
+        \\  Cairo: {s}
+        \\  Pango: {s}
+        \\  librsvg: {s}
+        \\  Fontconfig: {d}
+        \\  HarfBuzz: {s}
+        \\render cache schema:
+        \\  Page PDF: {s}
+        \\  qpdf: {s}
+        \\  Native artifacts: {s}
+        \\
+    , .{
+        build_options.version,
+        build_options.commit,
+        build_options.uncommitted_changes,
+        build_options.tree_sitter_manifest_hash,
+        pdf.tree_sitter_min_compatible_language_version,
+        pdf.tree_sitter_language_version,
+        native.cairo,
+        native.pango,
+        native.librsvg,
+        native.fontconfig,
+        native.harfbuzz,
+        pdf.page_pdf_cache_version,
+        pdf.qpdf_cache_version,
+        pdf.native_artifact_cache_version,
+    }) catch return;
     utils.io.writeStdoutAll(text) catch {};
 }
 
