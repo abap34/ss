@@ -110,9 +110,9 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v22";
-const qpdf_cache_version = "ss-native-qpdf-v1";
-const native_artifact_cache_version = "ss-native-artifacts-v2";
+pub const page_pdf_cache_version = "ss-native-page-pdf-v22";
+pub const qpdf_cache_version = "ss-native-qpdf-v1";
+pub const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
     .raw = std.Io.Duration.fromSeconds(120),
     .clock = .awake,
@@ -124,6 +124,24 @@ const artifact_job_slack: usize = 2;
 const highlight_query_read_limit = 1024 * 1024;
 pub const tree_sitter_language_version: u32 = build_options.tree_sitter_language_version;
 pub const tree_sitter_min_compatible_language_version: u32 = build_options.tree_sitter_min_compatible_language_version;
+
+pub const NativeRuntimeVersions = struct {
+    cairo: []const u8,
+    pango: []const u8,
+    librsvg: []const u8,
+    fontconfig: u32,
+    harfbuzz: []const u8,
+};
+
+pub fn nativeRuntimeVersions() NativeRuntimeVersions {
+    return .{
+        .cairo = spanCString(c.ss_pdf_cairo_version_string()),
+        .pango = spanCString(c.ss_pdf_pango_version_string()),
+        .librsvg = spanCString(c.ss_pdf_librsvg_version_string()),
+        .fontconfig = @intCast(c.ss_pdf_fontconfig_version()),
+        .harfbuzz = spanCString(c.ss_pdf_harfbuzz_version_string()),
+    };
+}
 
 const DrawContext = struct {
     allocator: Allocator,
