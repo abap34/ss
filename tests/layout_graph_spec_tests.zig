@@ -476,6 +476,153 @@ test "layout solver: constraint-referenced objects participate in fallback place
     try testing.expect(!ir.hasConstraintFailures());
 }
 
+test "layout solver: size-only constraints still receive fallback placement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "content");
+    try ir.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "object-width");
+    try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 96, "object-height");
+
+    try ir.finalize();
+
+    const node = ir.getNode(object).?;
+    try testing.expect(node.frame.x_set);
+    try testing.expect(node.frame.y_set);
+    try expectFloat(240, node.frame.width);
+    try expectFloat(96, node.frame.height);
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: page-dependent group children receive local vertical fallback" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
+    const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
+    _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, title }, "head");
+    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try ir.setNodeProperty(ruler, "layout_spacing_after", "12");
+    try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+
+    try ir.finalize();
+
+    const ruler_node = ir.getNode(ruler).?;
+    const title_node = ir.getNode(title).?;
+    const body_node = ir.getNode(body).?;
+    try testing.expect(ruler_node.frame.y_set);
+    try testing.expect(title_node.frame.y_set);
+    try testing.expect(body_node.frame.y_set);
+    try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(title_node.frame, .top));
+    try expectFloat(graph.anchorValue(title_node.frame, .bottom) - core.layout.styleForNode(&ir, title_node).spacing_after, graph.anchorValue(body_node.frame, .top));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: page-dependent group children before fixed anchors receive fallback" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
+    _ = try ir.makeGroupWithOrigin(page, true, &.{ title, ruler }, "head");
+    try ir.setNodeProperty(title, "layout_spacing_after", "12");
+    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+
+    try ir.finalize();
+
+    const title_node = ir.getNode(title).?;
+    const ruler_node = ir.getNode(ruler).?;
+    try testing.expect(title_node.frame.y_set);
+    try testing.expect(ruler_node.frame.y_set);
+    try expectFloat(graph.anchorValue(ruler_node.frame, .top) + 12, graph.anchorValue(title_node.frame, .bottom));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: page-dependent vertical cycles receive fallback placement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
+    const first = try ir.makeObject(page, "first", null, .text, .text, "A");
+    const second = try ir.makeObject(page, "second", null, .text, .text, "B");
+    _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, "head");
+    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try ir.setNodeProperty(ruler, "layout_spacing_after", "12");
+    try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+    try ir.addAnchorConstraint(first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, "first-cycle");
+    try ir.addAnchorConstraint(second, .top, .{ .node = .{ .node_id = first, .anchor = .top } }, 0, "second-cycle");
+
+    try ir.finalize();
+
+    const ruler_node = ir.getNode(ruler).?;
+    const first_node = ir.getNode(first).?;
+    const second_node = ir.getNode(second).?;
+    try testing.expect(first_node.frame.y_set);
+    try testing.expect(second_node.frame.y_set);
+    try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(first_node.frame, .top));
+    try expectFloat(graph.anchorValue(first_node.frame, .top), graph.anchorValue(second_node.frame, .top));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: page-dependent horizontal cycles receive fallback placement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
+    const first = try ir.makeObject(page, "first", null, .text, .text, "A");
+    const second = try ir.makeObject(page, "second", null, .text, .text, "B");
+    _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, "head");
+    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try ir.addAnchorConstraint(ruler, .left, .{ .page = .left }, 100, "rule-left");
+    try ir.addAnchorConstraint(first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, "first-cycle");
+    try ir.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "second-cycle");
+
+    try ir.finalize();
+
+    const first_node = ir.getNode(first).?;
+    const second_node = ir.getNode(second).?;
+    try testing.expect(first_node.frame.x_set);
+    try testing.expect(second_node.frame.x_set);
+    try expectFloat(first_node.frame.x, second_node.frame.x);
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: centered page-dependent group children receive local vertical fallback" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+
+    const page = try ir.addPage("Page");
+    const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
+    const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
+    _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, title }, "head");
+    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try ir.setNodeProperty(ruler, "layout_spacing_after", "12");
+    try ir.setNodeProperty(body, "layout_line_height", "500");
+    try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
+
+    try ir.finalize();
+
+    const ruler_node = ir.getNode(ruler).?;
+    const title_node = ir.getNode(title).?;
+    const body_node = ir.getNode(body).?;
+    try testing.expect(ruler_node.frame.y_set);
+    try testing.expect(title_node.frame.y_set);
+    try testing.expect(body_node.frame.y_set);
+    try expectFloat(graph.anchorValue(ruler_node.frame, .bottom) - 12, graph.anchorValue(title_node.frame, .top));
+    try expectFloat(graph.anchorValue(title_node.frame, .bottom) - core.layout.styleForNode(&ir, title_node).spacing_after, graph.anchorValue(body_node.frame, .top));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
 test "layout solver: horizontal alignment alone does not imply vertical row alignment" {
     var stacked = try initEmptyIr();
     defer stacked.deinit();
@@ -615,7 +762,8 @@ test "layout solver: centered vflow clamps below fixed top components only when 
     const body_node = ir.getNode(body).?;
     const header_bottom = header_node.frame.y;
     const body_top = body_node.frame.y + body_node.frame.height;
-    try expectFloat(header_bottom, body_top);
+    const header_spacing = core.layout.styleForNode(&ir, header_node).spacing_after;
+    try expectFloat(header_bottom - header_spacing, body_top);
 }
 
 test "layout solver: centered vflow preserves page center for side-by-side rows" {
