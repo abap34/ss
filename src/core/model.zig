@@ -524,10 +524,6 @@ pub const Diagnostic = struct {
         recursive_function: struct {
             function_name: []const u8,
         },
-        unresolved_frame: struct {
-            missing_horizontal: bool,
-            missing_vertical: bool,
-        },
         page_overflow: struct {
             overflow_left: f32,
             overflow_right: f32,

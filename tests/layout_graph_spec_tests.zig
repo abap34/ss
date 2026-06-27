@@ -432,7 +432,7 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
     try testing.expect(!ir.hasConstraintFailures());
 }
 
-test "layout solver: vertical fallback tries alternate roots in unresolved components" {
+test "layout solver: vertical fallback tries alternate roots in incomplete components" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 

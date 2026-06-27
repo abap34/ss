@@ -85,11 +85,6 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
             try item.stringField("code", "RecursiveFunction");
             try item.stringField("function_name", data.function_name);
         },
-        .unresolved_frame => |data| {
-            try item.stringField("code", "unresolved_frame");
-            try item.boolField("missing_horizontal", data.missing_horizontal);
-            try item.boolField("missing_vertical", data.missing_vertical);
-        },
         .page_overflow => |data| {
             try item.stringField("code", "page_overflow");
             try item.floatField("overflow_left", data.overflow_left, "{d:.1}");

@@ -372,7 +372,6 @@ fn irDiagnosticCode(diagnostic: anytype) []const u8 {
         .render_failed => "RenderFailed",
         .type_mismatch => |data| @tagName(data.code),
         .recursive_function => "RecursiveFunction",
-        .unresolved_frame => "UnresolvedFrame",
         .page_overflow => "PageOverflow",
         .content_overflow => "ContentOverflow",
     };
@@ -709,14 +708,6 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
             allocator,
             "RecursiveFunction: recursive function cycle involving {s}",
             .{data.function_name},
-        ),
-        .unresolved_frame => |data| std.fmt.allocPrint(
-            allocator,
-            "UnresolvedFrame: missing_horizontal={s} missing_vertical={s}",
-            .{
-                if (data.missing_horizontal) "true" else "false",
-                if (data.missing_vertical) "true" else "false",
-            },
         ),
         .page_overflow => |data| std.fmt.allocPrint(
             allocator,
