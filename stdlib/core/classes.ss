@@ -448,7 +448,8 @@ type Rule = object {
   roles = ["rule"]
 
   rule: RuleStyle
-  rule_stroke: Color? = none
+  layout_spacing_after: Number = 24
+  rule_stroke: Color? = c"#d0d7de"
   rule_line_width: Number = 1
   rule_dash: String = ""
 }

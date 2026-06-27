@@ -42,6 +42,7 @@ pub fn buildHorizontalConstraints(ir: anytype, workspace: *const graph.AxisWorks
             .offset = style_defaults.styleForNode(ir, placement_node).default_x,
         });
     }
+    try appendAbsoluteFallbackConstraints(ir, workspace, &constraints);
     return constraints;
 }
 
@@ -142,18 +143,25 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
     if (workspace.graph.len() == 0) return constraints;
 
     const allocator = ir.allocator;
-    var components = try workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
+    var initial_components = try workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
+    defer initial_components.deinit();
+
+    try appendPageDependentLocalVerticalFallbackConstraints(ir, workspace, &initial_components, &constraints);
+    var seeded = try seededWorkspaceWithSoftConstraints(ir, workspace, constraints.items);
+    defer seeded.deinit();
+
+    var components = try seeded.workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
     defer components.deinit();
 
-    const local_tops = try allocator.alloc(?f32, workspace.graph.len());
+    const local_tops = try allocator.alloc(?f32, seeded.workspace.graph.len());
     defer allocator.free(local_tops);
     @memset(local_tops, null);
 
     var units = std.ArrayList(VerticalComponentUnit).empty;
     defer units.deinit(allocator);
-    try collectVerticalComponentUnits(ir, workspace, &components, local_tops, .top_flow, &units);
+    try collectVerticalComponentUnits(ir, &seeded.workspace, &components, local_tops, .top_flow, &units);
 
-    const seen = try allocator.alloc(bool, workspace.graph.len());
+    const seen = try allocator.alloc(bool, seeded.workspace.graph.len());
     defer allocator.free(seen);
     @memset(seen, false);
 
@@ -161,7 +169,7 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
     var current_offset: f32 = PageLayout.flow_top - PageLayout.height;
     var current_top_value: f32 = PageLayout.flow_top;
 
-    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, state, index| {
+    for (seeded.workspace.graph.child_ids, seeded.workspace.states, 0..) |child_id, state, index| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         if (groups.isGroupNode(node)) continue;
 
@@ -183,13 +191,14 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
         seen[root] = true;
 
         const unit = findVerticalComponentUnit(units.items, root) orelse continue;
-        try appendVerticalComponentPlacementConstraints(allocator, &constraints, workspace, &components, local_tops, root, current_source, current_offset, unit.local_top);
+        try appendVerticalComponentPlacementConstraints(allocator, &constraints, &seeded.workspace, &components, local_tops, root, current_source, current_offset, unit.local_top);
 
-        current_source = .{ .node = .{ .node_id = workspace.nodeAt(unit.bottom_index), .anchor = .bottom } };
+        current_source = .{ .node = .{ .node_id = seeded.workspace.nodeAt(unit.bottom_index), .anchor = .bottom } };
         current_offset = -unit.spacing_after;
         current_top_value = current_top_value - unit.height - unit.spacing_after;
     }
 
+    try appendAbsoluteFallbackConstraints(ir, &seeded.workspace, &constraints);
     return constraints;
 }
 
@@ -207,17 +216,23 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
     if (workspace.graph.len() == 0) return constraints;
 
     const allocator = ir.allocator;
-    var components = try workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
+    var initial_components = try workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
+    defer initial_components.deinit();
+
+    try appendPageDependentLocalVerticalFallbackConstraints(ir, workspace, &initial_components, &constraints);
+    var seeded = try seededWorkspaceWithSoftConstraints(ir, workspace, constraints.items);
+    defer seeded.deinit();
+
+    var components = try seeded.workspace.dependencyComponents(allocator, ir, verticalComponentPolicy());
     defer components.deinit();
 
-    const local_tops = try allocator.alloc(?f32, workspace.graph.len());
+    const local_tops = try allocator.alloc(?f32, seeded.workspace.graph.len());
     defer allocator.free(local_tops);
     @memset(local_tops, null);
 
     var units = std.ArrayList(VerticalComponentUnit).empty;
     defer units.deinit(allocator);
-    try collectVerticalComponentUnits(ir, workspace, &components, local_tops, .center_stack, &units);
-    if (units.items.len == 0) return constraints;
+    try collectVerticalComponentUnits(ir, &seeded.workspace, &components, local_tops, .center_stack, &units);
 
     var total_height: f32 = 0;
     for (units.items, 0..) |unit, index| {
@@ -225,13 +240,13 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
         if (index != units.items.len - 1) total_height += unit.spacing_after;
     }
 
-    const band = try centerStackAvailableBand(ir, workspace, &components);
+    const band = try centerStackAvailableBand(ir, &seeded.workspace, &components);
     var current_top = centerStackTopWithinBand(band, total_height, verticalCenterOffset(ir, workspace.graph.page_id));
     for (units.items) |unit| {
         try appendVerticalComponentPlacementConstraints(
             allocator,
             &constraints,
-            workspace,
+            &seeded.workspace,
             &components,
             local_tops,
             unit.component_root,
@@ -241,6 +256,7 @@ fn buildCenterStackVerticalFallbackConstraints(ir: anytype, workspace: *const gr
         );
         current_top -= unit.height + unit.spacing_after;
     }
+    try appendAbsoluteFallbackConstraints(ir, &seeded.workspace, &constraints);
 
     return constraints;
 }
@@ -249,6 +265,34 @@ const VerticalBand = struct {
     bottom: f32,
     top: f32,
 };
+
+const SeededAxisWorkspace = struct {
+    allocator: std.mem.Allocator,
+    states: []AxisState,
+    workspace: graph.AxisWorkspace,
+
+    fn deinit(self: *SeededAxisWorkspace) void {
+        self.allocator.free(self.states);
+    }
+};
+
+fn seededWorkspaceWithSoftConstraints(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    constraints: []const Constraint,
+) !SeededAxisWorkspace {
+    const states = try ir.allocator.alloc(AxisState, workspace.states.len);
+    errdefer ir.allocator.free(states);
+    @memcpy(states, workspace.states);
+
+    var seeded = graph.AxisWorkspace.borrow(workspace, states, constraints);
+    _ = try solver.runPageAxisPass(ir, &seeded, .{ .record_diagnostics = false });
+    return .{
+        .allocator = ir.allocator,
+        .states = states,
+        .workspace = seeded,
+    };
+}
 
 fn centerStackTopWithinBand(band: VerticalBand, total_height: f32, center_offset: f32) f32 {
     var top = PageLayout.height / 2 - center_offset + total_height / 2;
@@ -281,9 +325,9 @@ fn centerStackAvailableBand(
         const bounds = try componentVerticalBounds(ir, workspace, components, root) orelse continue;
         const center = (bounds.bottom + bounds.top) / 2;
         if (center >= PageLayout.height / 2) {
-            band.top = @min(band.top, bounds.bottom);
+            band.top = @min(band.top, bounds.bottom - bounds.spacing_after);
         } else {
-            band.bottom = @max(band.bottom, bounds.top);
+            band.bottom = @max(band.bottom, bounds.top + bounds.spacing_after);
         }
     }
 
@@ -294,6 +338,7 @@ fn centerStackAvailableBand(
 const ComponentVerticalBounds = struct {
     bottom: f32,
     top: f32,
+    spacing_after: f32,
 };
 
 fn componentVerticalBounds(
@@ -304,6 +349,7 @@ fn componentVerticalBounds(
 ) !?ComponentVerticalBounds {
     var bottom: ?f32 = null;
     var top: ?f32 = null;
+    var bottom_index: ?usize = null;
 
     for (workspace.graph.child_ids, workspace.states, 0..) |child_id, state, index| {
         if (!components.contains(component_root, index)) continue;
@@ -311,13 +357,18 @@ fn componentVerticalBounds(
         if (groups.isGroupNode(node)) continue;
         const node_bottom = state.start orelse continue;
         const node_top = state.end orelse continue;
-        if (bottom == null or node_bottom < bottom.?) bottom = node_bottom;
+        if (bottom == null or node_bottom < bottom.?) {
+            bottom = node_bottom;
+            bottom_index = index;
+        }
         if (top == null or node_top > top.?) top = node_top;
     }
 
+    const spacing_node = ir.getNode(workspace.nodeAt(bottom_index orelse return null)) orelse return error.UnknownNode;
     return .{
         .bottom = bottom orelse return null,
         .top = top orelse return null,
+        .spacing_after = style_defaults.styleForNode(ir, spacing_node).spacing_after,
     };
 }
 
@@ -348,6 +399,32 @@ fn collectVerticalComponentUnits(
 
         const unit = try computeVerticalComponentUnit(ir, workspace, components, root, local_tops, policy) orelse continue;
         try units.append(ir.allocator, unit);
+    }
+}
+
+fn appendPageDependentLocalVerticalFallbackConstraints(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    var seen = try ir.allocator.alloc(bool, workspace.graph.len());
+    defer ir.allocator.free(seen);
+    @memset(seen, false);
+
+    for (workspace.graph.child_ids, 0..) |_, index| {
+        const root = components.findConst(index);
+        if (seen[root]) continue;
+        seen[root] = true;
+        if (!components.isPageDependent(root)) continue;
+
+        try appendAnchoredLocalTopFlowForPageChildren(ir, workspace, components, root, constraints);
+        for (workspace.graph.child_ids, 0..) |group_id, group_index| {
+            if (!components.contains(root, group_index)) continue;
+            const group_node = ir.getNode(group_id) orelse return error.UnknownNode;
+            if (!groups.isGroupNode(group_node)) continue;
+            try appendAnchoredLocalTopFlowForGroupChildren(ir, workspace, components, root, group_id, constraints);
+        }
     }
 }
 
@@ -558,6 +635,28 @@ fn appendLocalTopFlowForGroupChildren(
     try appendLocalTopFlowForChildren(ir, workspace, components, component_root, root_index, children, .group, constraints);
 }
 
+fn appendAnchoredLocalTopFlowForPageChildren(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    try appendAnchoredLocalTopFlowForChildren(ir, workspace, components, component_root, workspace.graph.child_ids, .page, constraints);
+}
+
+fn appendAnchoredLocalTopFlowForGroupChildren(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    group_id: NodeId,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    const children = ir.childrenOf(group_id) orelse return;
+    try appendAnchoredLocalTopFlowForChildren(ir, workspace, components, component_root, children, .group, constraints);
+}
+
 const FlowScope = enum { page, group };
 
 fn appendLocalTopFlowForChildren(
@@ -599,6 +698,88 @@ fn appendLocalTopFlowForChildren(
     }
 }
 
+fn appendAnchoredLocalTopFlowForChildren(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    children: []const NodeId,
+    scope: FlowScope,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    var pending_before_anchor = std.ArrayList(usize).empty;
+    defer pending_before_anchor.deinit(ir.allocator);
+
+    var current_source: ?ConstraintSource = null;
+    var current_offset: f32 = 0;
+
+    for (children) |child_id| {
+        const index = localFlowChildIndex(ir, workspace, components, component_root, child_id, scope) orelse continue;
+        const state = workspace.states[index];
+        if (axisPositionKnown(state)) {
+            try appendPendingBeforeKnownVerticalConstraints(ir, workspace, components, component_root, pending_before_anchor.items, index, constraints);
+            pending_before_anchor.clearRetainingCapacity();
+            if (state.start != null) {
+                const spacing_node = ir.getNode(workspace.nodeAt(index)) orelse return error.UnknownNode;
+                current_source = .{ .node = .{ .node_id = workspace.nodeAt(index), .anchor = .bottom } };
+                current_offset = -style_defaults.styleForNode(ir, spacing_node).spacing_after;
+            }
+            continue;
+        }
+
+        if (current_source) |source| {
+            const node_id = workspace.nodeAt(index);
+            const has_fallback = hasFallbackTargetConstraint(constraints.items, node_id, .vertical);
+            const can_seed = hardFallbackSeedAllowed(workspace, components, component_root, node_id, .vertical);
+            if (!has_fallback and can_seed) {
+                try constraints.append(ir.allocator, .{
+                    .target_node = node_id,
+                    .target_anchor = .top,
+                    .source = source,
+                    .offset = current_offset,
+                });
+            }
+            if (!has_fallback and !can_seed) continue;
+            const spacing_node = ir.getNode(node_id) orelse return error.UnknownNode;
+            current_source = .{ .node = .{ .node_id = node_id, .anchor = .bottom } };
+            current_offset = -style_defaults.styleForNode(ir, spacing_node).spacing_after;
+        } else {
+            try pending_before_anchor.append(ir.allocator, index);
+        }
+    }
+}
+
+fn appendPendingBeforeKnownVerticalConstraints(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    pending_indexes: []const usize,
+    known_index: usize,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    var source: ConstraintSource = .{ .node = .{ .node_id = workspace.nodeAt(known_index), .anchor = .top } };
+    var cursor = pending_indexes.len;
+    while (cursor > 0) {
+        cursor -= 1;
+        const index = pending_indexes[cursor];
+        const node_id = workspace.nodeAt(index);
+        const spacing_node = ir.getNode(node_id) orelse return error.UnknownNode;
+        const has_fallback = hasFallbackTargetConstraint(constraints.items, node_id, .vertical);
+        const can_seed = hardFallbackSeedAllowed(workspace, components, component_root, node_id, .vertical);
+        if (!has_fallback and can_seed) {
+            try constraints.append(ir.allocator, .{
+                .target_node = node_id,
+                .target_anchor = .bottom,
+                .source = source,
+                .offset = style_defaults.styleForNode(ir, spacing_node).spacing_after,
+            });
+        }
+        if (!has_fallback and !can_seed) continue;
+        source = .{ .node = .{ .node_id = node_id, .anchor = .top } };
+    }
+}
+
 fn flowChildIndex(
     ir: anytype,
     workspace: *const graph.AxisWorkspace,
@@ -616,6 +797,182 @@ fn flowChildIndex(
     if (state.start != null or state.end != null or state.center != null) return null;
     if (workspace.graph.hasTargetConstraint(ir, child_id, .vertical, &.{})) return null;
     return index;
+}
+
+fn localFlowChildIndex(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    child_id: NodeId,
+    scope: FlowScope,
+) ?usize {
+    const index = workspace.indexOf(child_id) orelse return null;
+    if (!components.contains(component_root, index)) return null;
+    const node = ir.getNode(child_id) orelse return null;
+    if (groups.isGroupNode(node) and scope != .group) return null;
+    if (scope == .page and directParentGroupIndex(ir, workspace, components, component_root, child_id) != null) return null;
+    return index;
+}
+
+fn appendAbsoluteFallbackConstraints(
+    ir: anytype,
+    workspace: *const graph.AxisWorkspace,
+    constraints: *std.ArrayList(Constraint),
+) !void {
+    var seeded_workspace = graph.AxisWorkspace.borrow(workspace, workspace.states, constraints.items);
+    var components = try seeded_workspace.dependencyComponents(ir.allocator, ir, .{});
+    defer components.deinit();
+
+    var seeded_hard_components = try ir.allocator.alloc(bool, workspace.graph.len());
+    defer ir.allocator.free(seeded_hard_components);
+    @memset(seeded_hard_components, false);
+
+    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, state, index| {
+        if (axisPositionKnown(state)) continue;
+        if (hasFallbackTargetConstraint(constraints.items, child_id, workspace.axis)) continue;
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (groups.isGroupNode(node)) continue;
+
+        if (hasHardPositionTargetConstraint(workspace, child_id, workspace.axis)) {
+            const root = components.findConst(index);
+            if (!hardFallbackSeedAllowed(workspace, &components, root, child_id, workspace.axis)) continue;
+            if (components.isPageDependent(root)) continue;
+            if (componentHasAxisPositionSeed(workspace, &components, root, constraints.items)) continue;
+            if (seeded_hard_components[root]) continue;
+            seeded_hard_components[root] = true;
+        }
+
+        try constraints.append(ir.allocator, .{
+            .target_node = child_id,
+            .target_anchor = absoluteFallbackTargetAnchor(workspace.axis),
+            .source = .{ .page = absoluteFallbackTargetAnchor(workspace.axis) },
+            .offset = absoluteFallbackOffset(ir, node, workspace.axis),
+        });
+    }
+}
+
+fn componentHasAxisPositionSeed(
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    constraints: []const Constraint,
+) bool {
+    for (workspace.graph.child_ids, workspace.states, 0..) |child_id, state, index| {
+        if (!components.contains(component_root, index)) continue;
+        if (axisPositionKnown(state)) return true;
+        if (hasFallbackTargetConstraint(constraints, child_id, workspace.axis)) return true;
+    }
+    return false;
+}
+
+fn absoluteFallbackTargetAnchor(axis: Axis) model.Anchor {
+    return switch (axis) {
+        .horizontal => .left,
+        .vertical => .top,
+    };
+}
+
+fn absoluteFallbackOffset(ir: anytype, node: *const model.Node, axis: Axis) f32 {
+    return switch (axis) {
+        .horizontal => style_defaults.styleForNode(ir, node).default_x,
+        .vertical => PageLayout.flow_top - PageLayout.height,
+    };
+}
+
+fn axisPositionKnown(state: AxisState) bool {
+    return state.start != null or state.end != null or state.center != null;
+}
+
+fn hasFallbackTargetConstraint(constraints: []const Constraint, node_id: NodeId, axis: Axis) bool {
+    for (constraints) |constraint| {
+        if (constraint.target_node != node_id) continue;
+        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
+        return true;
+    }
+    return false;
+}
+
+fn hasHardPositionTargetConstraint(workspace: *const graph.AxisWorkspace, node_id: NodeId, axis: Axis) bool {
+    for (workspace.hard_constraints) |constraint| {
+        if (constraint.target_node != node_id) continue;
+        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
+        switch (graph.classifySelfConstraint(constraint, axis)) {
+            .size, .tautology, .conflict => continue,
+            .none => return true,
+        }
+    }
+    return false;
+}
+
+fn hardFallbackSeedAllowed(
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    node_id: NodeId,
+    axis: Axis,
+) bool {
+    if (!hasHardPositionTargetConstraint(workspace, node_id, axis)) return true;
+    return !componentHasInconsistentHardPositionCycle(workspace, components, component_root, axis);
+}
+
+const ConstraintEndpoint = struct {
+    node_id: NodeId,
+    anchor: model.Anchor,
+};
+
+fn componentHasInconsistentHardPositionCycle(
+    workspace: *const graph.AxisWorkspace,
+    components: *const graph.ComponentSet,
+    component_root: usize,
+    axis: Axis,
+) bool {
+    for (workspace.hard_constraints) |constraint| {
+        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
+        const target_index = workspace.indexOf(constraint.target_node) orelse continue;
+        if (!components.contains(component_root, target_index)) continue;
+        const offset = hardConstraintCycleOffset(workspace, constraint, axis) orelse continue;
+        if (@abs(offset) > graph.ConstraintTolerance) return true;
+    }
+    return false;
+}
+
+fn hardConstraintCycleOffset(workspace: *const graph.AxisWorkspace, start_constraint: Constraint, axis: Axis) ?f32 {
+    const start_endpoint = ConstraintEndpoint{ .node_id = start_constraint.target_node, .anchor = start_constraint.target_anchor };
+    var current = start_constraint;
+    var accumulated_offset: f32 = 0;
+
+    var steps: usize = 0;
+    while (steps <= workspace.hard_constraints.len) : (steps += 1) {
+        if (graph.anchorAxis(current.target_anchor) != axis) return null;
+        accumulated_offset += current.offset;
+
+        const source_endpoint = constraintSourceEndpoint(current.source) orelse return null;
+        if (graph.anchorAxis(source_endpoint.anchor) != axis) return null;
+        if (constraintEndpointSame(source_endpoint, start_endpoint)) return accumulated_offset;
+
+        current = findHardConstraintTargetingEndpoint(workspace, source_endpoint, axis) orelse return null;
+    }
+    return null;
+}
+
+fn constraintSourceEndpoint(source: ConstraintSource) ?ConstraintEndpoint {
+    return switch (source) {
+        .page => null,
+        .node => |node_source| .{ .node_id = node_source.node_id, .anchor = node_source.anchor },
+    };
+}
+
+fn findHardConstraintTargetingEndpoint(workspace: *const graph.AxisWorkspace, endpoint: ConstraintEndpoint, axis: Axis) ?Constraint {
+    for (workspace.hard_constraints) |constraint| {
+        if (graph.anchorAxis(constraint.target_anchor) != axis) continue;
+        if (constraint.target_node == endpoint.node_id and constraint.target_anchor == endpoint.anchor) return constraint;
+    }
+    return null;
+}
+
+fn constraintEndpointSame(a: ConstraintEndpoint, b: ConstraintEndpoint) bool {
+    return a.node_id == b.node_id and a.anchor == b.anchor;
 }
 
 fn directParentGroupIndex(ir: anytype, workspace: *const graph.AxisWorkspace, components: *const graph.ComponentSet, component_root: usize, child_id: NodeId) ?usize {
