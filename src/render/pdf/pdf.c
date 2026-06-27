@@ -2,7 +2,9 @@
 
 #include <cairo-pdf.h>
 #include <cairo.h>
+#include <fontconfig/fontconfig.h>
 #include <glib.h>
+#include <hb.h>
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
 #include <stdio.h>
@@ -11,13 +13,83 @@
 
 #define SS_PI 3.14159265358979323846
 
-struct SsPdf {
+typedef struct SsPdfMeasurementFrame {
     cairo_surface_t *surface;
     cairo_t *cr;
+    cairo_t *saved_cr;
+    struct SsPdfMeasurementFrame *previous;
+} SsPdfMeasurementFrame;
+
+struct SsPdf {
+    cairo_surface_t *surface;
+    cairo_t *pdf_cr;
+    cairo_t *cr;
+    cairo_surface_t *recording_surface;
+    cairo_t *recording_cr;
+    SsPdfMeasurementFrame *measurement;
 };
+
+static void ss_pdf_destroy_measurements(SsPdf *pdf) {
+    if (pdf == NULL) return;
+    while (pdf->measurement != NULL) {
+        SsPdfMeasurementFrame *frame = pdf->measurement;
+        pdf->measurement = frame->previous;
+        if (frame->cr != NULL) cairo_destroy(frame->cr);
+        if (frame->surface != NULL) cairo_surface_destroy(frame->surface);
+        pdf->cr = frame->saved_cr;
+        free(frame);
+    }
+}
+
+static void ss_pdf_destroy_recording(SsPdf *pdf) {
+    if (pdf == NULL) return;
+    if (pdf->recording_cr != NULL) {
+        cairo_destroy(pdf->recording_cr);
+        pdf->recording_cr = NULL;
+    }
+    if (pdf->recording_surface != NULL) {
+        cairo_surface_destroy(pdf->recording_surface);
+        pdf->recording_surface = NULL;
+    }
+    pdf->cr = pdf->pdf_cr;
+}
+
+static int ss_pdf_recording_surface_ink_extents(cairo_surface_t *surface, SsPdfRecordingExtents *extents) {
+    if (surface == NULL || extents == NULL) return 1;
+    cairo_recording_surface_ink_extents(
+        surface,
+        &extents->x,
+        &extents->y,
+        &extents->width,
+        &extents->height
+    );
+    return cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS ? 0 : 1;
+}
 
 static void ss_pdf_set_rgb(double r, double g, double b, cairo_t *cr) {
     cairo_set_source_rgb(cr, r, g, b);
+}
+
+const char *ss_pdf_cairo_version_string(void) {
+    return cairo_version_string();
+}
+
+const char *ss_pdf_pango_version_string(void) {
+    return pango_version_string();
+}
+
+const char *ss_pdf_librsvg_version_string(void) {
+    static char version[32];
+    snprintf(version, sizeof(version), "%u.%u.%u", rsvg_major_version, rsvg_minor_version, rsvg_micro_version);
+    return version;
+}
+
+int ss_pdf_fontconfig_version(void) {
+    return FcGetVersion();
+}
+
+const char *ss_pdf_harfbuzz_version_string(void) {
+    return hb_version_string();
 }
 
 static void ss_pdf_rounded_rect_path(cairo_t *cr, double x, double y, double width, double height, double radius) {
@@ -95,7 +167,7 @@ static char *ss_pdf_link_attributes(
     snprintf(
         attributes,
         (size_t)len + 1,
-        "rect=[%.17g %.17g %.17g %.17g] %s='%s'",
+        "rect=[%.17g %.17g %.17g %.17g] %s='%s'%s",
         x,
         y,
         width,
@@ -127,8 +199,9 @@ SsPdf *ss_pdf_create(const char *path, double width, double height) {
         return NULL;
     }
 
-    pdf->cr = cairo_create(pdf->surface);
-    if (pdf->cr == NULL || cairo_status(pdf->cr) != CAIRO_STATUS_SUCCESS) {
+    pdf->pdf_cr = cairo_create(pdf->surface);
+    pdf->cr = pdf->pdf_cr;
+    if (pdf->pdf_cr == NULL || cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) {
         ss_pdf_destroy(pdf);
         return NULL;
     }
@@ -138,7 +211,9 @@ SsPdf *ss_pdf_create(const char *path, double width, double height) {
 
 void ss_pdf_destroy(SsPdf *pdf) {
     if (pdf == NULL) return;
-    if (pdf->cr != NULL) cairo_destroy(pdf->cr);
+    ss_pdf_destroy_measurements(pdf);
+    ss_pdf_destroy_recording(pdf);
+    if (pdf->pdf_cr != NULL) cairo_destroy(pdf->pdf_cr);
     if (pdf->surface != NULL) cairo_surface_destroy(pdf->surface);
     free(pdf);
 }
@@ -159,11 +234,171 @@ void ss_pdf_end_page(SsPdf *pdf) {
 }
 
 int ss_pdf_finish(SsPdf *pdf) {
-    if (pdf == NULL || pdf->surface == NULL || pdf->cr == NULL) return 1;
+    if (pdf == NULL || pdf->surface == NULL || pdf->pdf_cr == NULL || pdf->recording_surface != NULL || pdf->measurement != NULL) return 1;
     cairo_surface_finish(pdf->surface);
-    if (cairo_status(pdf->cr) != CAIRO_STATUS_SUCCESS) return 1;
+    if (cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) return 1;
     if (cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) return 1;
     return 0;
+}
+
+int ss_pdf_begin_recording(SsPdf *pdf) {
+    if (pdf == NULL || pdf->pdf_cr == NULL || pdf->recording_surface != NULL) return 1;
+    pdf->recording_surface = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
+    if (pdf->recording_surface == NULL || cairo_surface_status(pdf->recording_surface) != CAIRO_STATUS_SUCCESS) {
+        ss_pdf_destroy_recording(pdf);
+        return 1;
+    }
+    pdf->recording_cr = cairo_create(pdf->recording_surface);
+    if (pdf->recording_cr == NULL || cairo_status(pdf->recording_cr) != CAIRO_STATUS_SUCCESS) {
+        ss_pdf_destroy_recording(pdf);
+        return 1;
+    }
+    pdf->cr = pdf->recording_cr;
+    return 0;
+}
+
+int ss_pdf_recording_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents) {
+    if (pdf == NULL || pdf->recording_surface == NULL || extents == NULL) return 1;
+    return ss_pdf_recording_surface_ink_extents(pdf->recording_surface, extents);
+}
+
+int ss_pdf_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin, SsPdfRecordingFit *fit) {
+    if (pdf == NULL || pdf->recording_surface == NULL || fit == NULL) return 1;
+    if (margin < 0) margin = 0;
+
+    SsPdfRecordingExtents extents = {0};
+    if (ss_pdf_recording_ink_extents(pdf, &extents) != 0) return 1;
+
+    if (extents.width <= 0 || extents.height <= 0) {
+        fit->bounds = extents;
+        fit->scale = 1.0;
+        fit->tx = 0.0;
+        fit->ty = 0.0;
+        return 0;
+    }
+
+    const double pad = 1.0;
+    double x = extents.x - pad;
+    double y = extents.y - pad;
+    double width = extents.width + pad * 2.0;
+    double height = extents.height + pad * 2.0;
+
+    const double available_width = page_width - margin * 2.0;
+    const double available_height = page_height - margin * 2.0;
+    if (available_width <= 0 || available_height <= 0) return 1;
+
+    double scale = 1.0;
+    if (width > available_width || height > available_height) {
+        const double scale_x = available_width / width;
+        const double scale_y = available_height / height;
+        scale = scale_x < scale_y ? scale_x : scale_y;
+        if (scale <= 0) return 1;
+    }
+
+    double tx = 0.0;
+    double ty = 0.0;
+    if (scale < 1.0) {
+        tx = margin + (available_width - width * scale) / 2.0 - x * scale;
+        ty = margin + (available_height - height * scale) / 2.0 - y * scale;
+    } else {
+        const double min_tx = margin - x;
+        const double max_tx = page_width - margin - (x + width);
+        const double min_ty = margin - y;
+        const double max_ty = page_height - margin - (y + height);
+        if (min_tx > 0.0) tx = min_tx;
+        if (max_tx < 0.0 && (tx == 0.0 || max_tx > tx)) tx = max_tx;
+        if (min_ty > 0.0) ty = min_ty;
+        if (max_ty < 0.0 && (ty == 0.0 || max_ty > ty)) ty = max_ty;
+    }
+
+    fit->bounds.x = x;
+    fit->bounds.y = y;
+    fit->bounds.width = width;
+    fit->bounds.height = height;
+    fit->scale = scale;
+    fit->tx = tx;
+    fit->ty = ty;
+    return 0;
+}
+
+int ss_pdf_paint_recording_with_fit(SsPdf *pdf, const SsPdfRecordingFit *fit) {
+    if (pdf == NULL || pdf->pdf_cr == NULL || pdf->recording_surface == NULL || fit == NULL) return 1;
+
+    cairo_t *recording_cr = pdf->recording_cr;
+    pdf->recording_cr = NULL;
+    if (recording_cr != NULL) cairo_destroy(recording_cr);
+    pdf->cr = pdf->pdf_cr;
+
+    if (fit->bounds.width <= 0 || fit->bounds.height <= 0) {
+        ss_pdf_destroy_recording(pdf);
+        return 0;
+    }
+
+    cairo_save(pdf->pdf_cr);
+    cairo_translate(pdf->pdf_cr, fit->tx, fit->ty);
+    cairo_scale(pdf->pdf_cr, fit->scale, fit->scale);
+    cairo_set_source_surface(pdf->pdf_cr, pdf->recording_surface, 0, 0);
+    cairo_paint(pdf->pdf_cr);
+    cairo_restore(pdf->pdf_cr);
+
+    const int ok = cairo_status(pdf->pdf_cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
+    ss_pdf_destroy_recording(pdf);
+    return ok;
+}
+
+int ss_pdf_paint_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin) {
+    if (pdf == NULL || pdf->pdf_cr == NULL || pdf->recording_surface == NULL) return 1;
+
+    SsPdfRecordingFit fit = {0};
+    if (ss_pdf_recording_fit(pdf, page_width, page_height, margin, &fit) != 0) return 1;
+    return ss_pdf_paint_recording_with_fit(pdf, &fit);
+}
+
+int ss_pdf_begin_measurement(SsPdf *pdf) {
+    if (pdf == NULL || pdf->cr == NULL) return 1;
+
+    SsPdfMeasurementFrame *frame = (SsPdfMeasurementFrame *)calloc(1, sizeof(SsPdfMeasurementFrame));
+    if (frame == NULL) return 1;
+
+    frame->surface = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
+    if (frame->surface == NULL || cairo_surface_status(frame->surface) != CAIRO_STATUS_SUCCESS) {
+        if (frame->surface != NULL) cairo_surface_destroy(frame->surface);
+        free(frame);
+        return 1;
+    }
+
+    frame->cr = cairo_create(frame->surface);
+    if (frame->cr == NULL || cairo_status(frame->cr) != CAIRO_STATUS_SUCCESS) {
+        if (frame->cr != NULL) cairo_destroy(frame->cr);
+        cairo_surface_destroy(frame->surface);
+        free(frame);
+        return 1;
+    }
+
+    frame->saved_cr = pdf->cr;
+    frame->previous = pdf->measurement;
+    pdf->measurement = frame;
+    pdf->cr = frame->cr;
+    return 0;
+}
+
+int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents) {
+    if (pdf == NULL || pdf->measurement == NULL || extents == NULL) return 1;
+    return ss_pdf_recording_surface_ink_extents(pdf->measurement->surface, extents);
+}
+
+int ss_pdf_end_measurement(SsPdf *pdf) {
+    if (pdf == NULL || pdf->measurement == NULL) return 1;
+    SsPdfMeasurementFrame *frame = pdf->measurement;
+    pdf->measurement = frame->previous;
+    pdf->cr = frame->saved_cr;
+    const int ok =
+        cairo_status(frame->cr) == CAIRO_STATUS_SUCCESS &&
+        cairo_surface_status(frame->surface) == CAIRO_STATUS_SUCCESS;
+    cairo_destroy(frame->cr);
+    cairo_surface_destroy(frame->surface);
+    free(frame);
+    return ok ? 0 : 1;
 }
 
 void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double height, double r, double g, double b) {
@@ -233,24 +468,12 @@ void ss_pdf_fill_stroke_rounded_rect(
     }
 }
 
-void ss_pdf_push_clip_rect(SsPdf *pdf, double x, double y, double width, double height) {
-    if (pdf == NULL || pdf->cr == NULL) return;
-    cairo_save(pdf->cr);
-    cairo_rectangle(pdf->cr, x, y, width, height);
-    cairo_clip(pdf->cr);
-}
-
-void ss_pdf_pop_clip(SsPdf *pdf) {
-    if (pdf == NULL || pdf->cr == NULL) return;
-    cairo_restore(pdf->cr);
-}
-
 int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double height, const char *uri) {
     return ss_pdf_begin_link(pdf, x, y, width, height, "uri", uri, "");
 }
 
 int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest) {
-    return ss_pdf_begin_link(pdf, x, y, width, height, "dest", dest, " internal");
+    return ss_pdf_begin_link(pdf, x, y, width, height, "dest", dest, "");
 }
 
 void ss_pdf_end_link(SsPdf *pdf) {
@@ -360,14 +583,13 @@ int ss_pdf_draw_text(
     } else {
         pango_layout_set_width(layout, -1);
     }
-    if (height > 0) pango_layout_set_height(layout, (int)(height * PANGO_SCALE));
+    (void)height;
 
     cairo_save(pdf->cr);
-    cairo_rectangle(pdf->cr, x, y, width, height);
-    cairo_clip(pdf->cr);
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, y);
-    pango_cairo_show_layout(pdf->cr, layout);
+    pango_cairo_layout_path(pdf->cr, layout);
+    cairo_fill(pdf->cr);
     cairo_restore(pdf->cr);
 
     g_object_unref(layout);
@@ -418,13 +640,70 @@ int ss_pdf_draw_text_baseline(
     } else {
         pango_layout_set_width(layout, -1);
     }
-    if (height > 0) pango_layout_set_height(layout, (int)(height * PANGO_SCALE));
+    (void)height;
+    (void)clip_y;
 
     double layout_y = baseline_y - ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
-    double clip_pad = font_size * 0.35;
     cairo_save(pdf->cr);
-    cairo_rectangle(pdf->cr, x, clip_y - clip_pad, width, height + clip_pad * 2.0);
-    cairo_clip(pdf->cr);
+    ss_pdf_set_rgb(r, g, b, pdf->cr);
+    cairo_move_to(pdf->cr, x, layout_y);
+    pango_cairo_layout_path(pdf->cr, layout);
+    cairo_fill(pdf->cr);
+    cairo_restore(pdf->cr);
+
+    g_object_unref(layout);
+    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
+}
+
+int ss_pdf_draw_color_text_baseline(
+    SsPdf *pdf,
+    double x,
+    double baseline_y,
+    double clip_y,
+    double width,
+    double height,
+    const char *text,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
+    double font_size,
+    double r,
+    double g,
+    double b,
+    int wrap
+) {
+    if (pdf == NULL || pdf->cr == NULL) return 1;
+
+    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
+    if (layout == NULL) return 1;
+
+    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
+    if (desc == NULL) {
+        g_object_unref(layout);
+        return 1;
+    }
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+
+    char *valid_text = g_utf8_make_valid(text, -1);
+    if (valid_text == NULL) {
+        g_object_unref(layout);
+        return 1;
+    }
+    pango_layout_set_text(layout, valid_text, -1);
+    g_free(valid_text);
+    if (wrap && width > 0) {
+        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
+        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    } else {
+        pango_layout_set_width(layout, -1);
+    }
+    (void)height;
+    (void)clip_y;
+
+    double layout_y = baseline_y - ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
+    cairo_save(pdf->cr);
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, layout_y);
     pango_cairo_show_layout(pdf->cr, layout);
@@ -563,8 +842,6 @@ int ss_pdf_draw_png(SsPdf *pdf, const char *path, double x, double y, double wid
     }
 
     cairo_save(pdf->cr);
-    cairo_rectangle(pdf->cr, x, y, width, height);
-    cairo_clip(pdf->cr);
     cairo_translate(pdf->cr, x, y);
     cairo_scale(pdf->cr, width / source_width, height / source_height);
     cairo_set_source_surface(pdf->cr, image, 0, 0);
@@ -608,8 +885,6 @@ int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double wid
     }
 
     cairo_save(pdf->cr);
-    cairo_rectangle(pdf->cr, x, y, width, height);
-    cairo_clip(pdf->cr);
     cairo_translate(pdf->cr, x, y);
     cairo_scale(pdf->cr, width / dimensions.width, height / dimensions.height);
     gboolean ok = rsvg_handle_render_cairo(handle, pdf->cr);
@@ -637,8 +912,6 @@ int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, dou
     }
 
     cairo_save(pdf->cr);
-    cairo_rectangle(pdf->cr, x, y, width, height);
-    cairo_clip(pdf->cr);
     cairo_translate(pdf->cr, x, y);
     cairo_scale(pdf->cr, width / dimensions.width, height / dimensions.height);
     cairo_push_group(pdf->cr);

@@ -756,6 +756,45 @@ test "layout metrics use measured font width for wrapped text height" {
     try expectFloat(43.5, metrics.intrinsicHeight(&ir, node));
 }
 
+test "layout metrics use render atom widths for CJK emoji markdown text" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
+    try ir.setNodeProperty(object, "wrap", "on");
+    try ir.setNodeProperty(object, "text_parse", "block");
+    try ir.setNodeProperty(object, "text_font_family", "Helvetica");
+    try ir.setNodeProperty(object, "text_font_weight", "700");
+    try ir.setNodeProperty(object, "text_size", "30");
+    try ir.setNodeProperty(object, "text_line_height", "31");
+
+    const node = ir.getNode(object).?;
+    node.frame.width = 608;
+
+    try expectFloat(62, metrics.intrinsicHeight(&ir, node));
+}
+
+test "layout solver keeps CJK emoji markdown text on one line when measured atom width fits" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
+    try ir.setNodeProperty(object, "wrap", "on");
+    try ir.setNodeProperty(object, "text_parse", "block");
+    try ir.setNodeProperty(object, "text_font_family", "Helvetica");
+    try ir.setNodeProperty(object, "text_font_weight", "700");
+    try ir.setNodeProperty(object, "text_size", "30");
+    try ir.setNodeProperty(object, "text_line_height", "31");
+
+    try solver.solveLayout(&ir);
+
+    const node = ir.getNode(object).?;
+    try testing.expect(node.frame.width > 608);
+    try expectFloat(31, node.frame.height);
+}
+
 test "layout metrics: chrome padding is part of visual bounds and yields a content frame" {
     var ir = try initEmptyIr();
     defer ir.deinit();
