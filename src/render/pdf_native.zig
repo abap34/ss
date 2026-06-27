@@ -5,6 +5,7 @@ const build_options = @import("build_options");
 
 const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
+const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
 
 const c = @cImport({
@@ -109,7 +110,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-const page_pdf_cache_version = "ss-native-page-pdf-v12";
+const page_pdf_cache_version = "ss-native-page-pdf-v22";
 const qpdf_cache_version = "ss-native-qpdf-v1";
 const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -132,6 +133,33 @@ const DrawContext = struct {
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
     command_failure: ?*CommandFailureSink = null,
+    link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
+    destinations: ?*std.ArrayList(DestinationAnnotation) = null,
+};
+
+const LinkAnnotation = struct {
+    kind: Kind,
+    target: []const u8,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+
+    const Kind = enum { uri, dest };
+
+    fn deinit(self: LinkAnnotation, allocator: Allocator) void {
+        allocator.free(self.target);
+    }
+};
+
+const DestinationAnnotation = struct {
+    name: []const u8,
+    x: f32,
+    y: f32,
+
+    fn deinit(self: DestinationAnnotation, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
 };
 
 const Atom = struct {
@@ -1033,6 +1061,7 @@ fn qpdfCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8
 fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), background: ?Color, ops: []const RenderOp) !u64 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, page_pdf_cache_version);
+    hashNativePdfRuntime(&hasher);
     hashF32(&hasher, PageLayout.width);
     hashF32(&hasher, PageLayout.height);
     hashF32(&hasher, raster_cache_scale);
@@ -1277,6 +1306,26 @@ fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
 fn hashString(hasher: *std.hash.Wyhash, value: []const u8) void {
     hashUsize(hasher, value.len);
     hasher.update(value);
+}
+
+fn hashCString(hasher: *std.hash.Wyhash, ptr: [*c]const u8) void {
+    hashBool(hasher, ptr != null);
+    if (ptr == null) return;
+    hashString(hasher, spanCString(ptr));
+}
+
+fn hashNativePdfRuntime(hasher: *std.hash.Wyhash) void {
+    hashCString(hasher, c.ss_pdf_cairo_version_string());
+    hashCString(hasher, c.ss_pdf_pango_version_string());
+    hashCString(hasher, c.ss_pdf_librsvg_version_string());
+    hashU32(hasher, @intCast(c.ss_pdf_fontconfig_version()));
+    hashCString(hasher, c.ss_pdf_harfbuzz_version_string());
+}
+
+fn spanCString(ptr: [*c]const u8) []const u8 {
+    if (ptr == null) return "unknown";
+    const sentinel: [*:0]const u8 = @ptrCast(ptr);
+    return std.mem.span(sentinel);
 }
 
 fn hashFontFace(hasher: *std.hash.Wyhash, face: FontFace) void {
@@ -1920,20 +1969,84 @@ fn drawRenderPage(ctx: *DrawContext, page: *const RenderPage) !void {
     if (page.background) |fill| {
         c.ss_pdf_fill_rect(ctx.pdf, 0, 0, PageLayout.width, PageLayout.height, fill.r, fill.g, fill.b);
     }
+    var links = std.ArrayList(LinkAnnotation).empty;
+    defer links.deinit(ctx.allocator);
+    defer deinitLinkAnnotations(ctx.allocator, links.items);
+    var destinations = std.ArrayList(DestinationAnnotation).empty;
+    defer destinations.deinit(ctx.allocator);
+    defer deinitDestinationAnnotations(ctx.allocator, destinations.items);
+    ctx.link_annotations = &links;
+    ctx.destinations = &destinations;
+    defer {
+        ctx.link_annotations = null;
+        ctx.destinations = null;
+    }
+
+    if (c.ss_pdf_begin_recording(ctx.pdf) != 0) return NativePdfError.CairoCreateFailed;
     for (page.ops) |*op| {
         if (op.render.kind == .chrome_only) try drawRenderOp(ctx, op);
     }
     for (page.ops) |*op| {
         if (op.render.kind != .chrome_only) try drawRenderOp(ctx, op);
     }
+    var fit: c.SsPdfRecordingFit = undefined;
+    if (c.ss_pdf_recording_fit(ctx.pdf, PageLayout.width, PageLayout.height, 1.0, &fit) != 0) return NativePdfError.CairoFailed;
+    if (c.ss_pdf_paint_recording_with_fit(ctx.pdf, &fit) != 0) return NativePdfError.CairoFailed;
+    try emitPageAnnotations(ctx, fit, destinations.items, links.items);
+}
+
+fn deinitLinkAnnotations(allocator: Allocator, links: []const LinkAnnotation) void {
+    for (links) |link| link.deinit(allocator);
+}
+
+fn deinitDestinationAnnotations(allocator: Allocator, destinations: []const DestinationAnnotation) void {
+    for (destinations) |destination| destination.deinit(allocator);
+}
+
+fn emitPageAnnotations(ctx: *DrawContext, fit: c.SsPdfRecordingFit, destinations: []const DestinationAnnotation, links: []const LinkAnnotation) !void {
+    for (destinations) |destination| {
+        const transformed = transformPoint(fit, destination.x, destination.y);
+        try emitDestination(ctx, destination.name, transformed.x, transformed.y);
+    }
+    for (links) |link| {
+        const rect = transformRect(fit, link.x, link.y, link.width, link.height);
+        try emitLinkAnnotation(ctx, link.kind, link.target, rect.x, rect.y, rect.width, rect.height);
+    }
+}
+
+const TransformedPoint = struct {
+    x: f64,
+    y: f64,
+};
+
+const TransformedRect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+fn transformPoint(fit: c.SsPdfRecordingFit, x: f32, y: f32) TransformedPoint {
+    return .{
+        .x = fit.tx + @as(f64, @floatCast(x)) * fit.scale,
+        .y = fit.ty + @as(f64, @floatCast(y)) * fit.scale,
+    };
+}
+
+fn transformRect(fit: c.SsPdfRecordingFit, x: f32, y: f32, width: f32, height: f32) TransformedRect {
+    return .{
+        .x = fit.tx + @as(f64, @floatCast(x)) * fit.scale,
+        .y = fit.ty + @as(f64, @floatCast(y)) * fit.scale,
+        .width = @as(f64, @floatCast(width)) * fit.scale,
+        .height = @as(f64, @floatCast(height)) * fit.scale,
+    };
 }
 
 fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
-    try addDestination(ctx, op.link_id, op.frame);
-    drawObjectChrome(ctx.pdf, op.frame, op.render);
+    const visual_frame = try measuredRenderOpVisualFrame(ctx, op);
+    try addDestination(ctx, op.link_id, visual_frame);
+    drawObjectChrome(ctx.pdf, visual_frame, op.render);
     const content_frame = contentFrameForRender(op.frame, op.render);
-    pushClipRect(ctx.pdf, content_frame);
-    defer popClip(ctx.pdf);
     switch (op.render.kind) {
         .text => if (op.render.text) |text| try drawTextOp(ctx, op, content_frame, text),
         .code => if (op.render.text) |text| {
@@ -1946,6 +2059,123 @@ fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
         .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
         .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
     }
+}
+
+fn measuredRenderOpVisualFrame(ctx: *DrawContext, op: *const RenderOp) !Frame {
+    switch (op.render.kind) {
+        .text => if (op.render.text) |text| {
+            const measured = try measureRenderedOpContent(ctx, op, text);
+            return expandFrameToMeasuredInk(op.frame, op.render, measured);
+        },
+        .code => if (op.render.text) |text| {
+            var code_text = text;
+            code_text.font = text.code_font;
+            const measured = try measureRenderedOpContent(ctx, op, code_text);
+            return expandFrameToMeasuredInk(op.frame, op.render, measured);
+        },
+        .vector_math, .vector_asset, .raster_asset => {
+            const measured = try measureRenderedOpContent(ctx, op, null);
+            return expandFrameToMeasuredInk(op.frame, op.render, measured);
+        },
+        else => {},
+    }
+    return op.frame;
+}
+
+fn expandFrameToMeasuredInk(frame: Frame, render: ResolvedRender, maybe_ink: ?Frame) Frame {
+    const current_content = contentFrameForRender(frame, render);
+    var content_left = current_content.x;
+    var content_right = current_content.x + current_content.width;
+    var content_bottom = current_content.y;
+    var content_top = current_content.y + current_content.height;
+    if (maybe_ink) |ink| {
+        content_left = @min(content_left, ink.x);
+        content_right = @max(content_right, ink.x + ink.width);
+        content_bottom = @min(content_bottom, ink.y);
+        content_top = @max(content_top, ink.y + ink.height);
+    }
+    return .{
+        .x = content_left - render.chrome.pad_x,
+        .y = content_bottom - render.chrome.pad_y,
+        .width = @max(content_right - content_left, 1) + render.chrome.pad_x * 2,
+        .height = @max(content_top - content_bottom, 1) + render.chrome.pad_y * 2,
+        .x_set = frame.x_set,
+        .y_set = frame.y_set,
+    };
+}
+
+const MeasurementScope = struct {
+    ctx: *DrawContext,
+    previous_links: ?*std.ArrayList(LinkAnnotation),
+    previous_destinations: ?*std.ArrayList(DestinationAnnotation),
+    links: std.ArrayList(LinkAnnotation) = .empty,
+    destinations: std.ArrayList(DestinationAnnotation) = .empty,
+    active: bool = false,
+
+    fn init(ctx: *DrawContext) MeasurementScope {
+        return .{
+            .ctx = ctx,
+            .previous_links = ctx.link_annotations,
+            .previous_destinations = ctx.destinations,
+        };
+    }
+
+    fn begin(self: *MeasurementScope) !void {
+        if (c.ss_pdf_begin_measurement(self.ctx.pdf) != 0) return NativePdfError.CairoCreateFailed;
+        self.active = true;
+        self.ctx.link_annotations = &self.links;
+        self.ctx.destinations = &self.destinations;
+    }
+
+    fn inkFrame(self: *MeasurementScope) !?Frame {
+        var extents: c.SsPdfRecordingExtents = undefined;
+        if (c.ss_pdf_measurement_ink_extents(self.ctx.pdf, &extents) != 0) return NativePdfError.CairoFailed;
+        return recordingExtentsToFrame(extents);
+    }
+
+    fn deinit(self: *MeasurementScope) void {
+        self.ctx.link_annotations = self.previous_links;
+        self.ctx.destinations = self.previous_destinations;
+        deinitLinkAnnotations(self.ctx.allocator, self.links.items);
+        self.links.deinit(self.ctx.allocator);
+        deinitDestinationAnnotations(self.ctx.allocator, self.destinations.items);
+        self.destinations.deinit(self.ctx.allocator);
+        if (self.active) {
+            _ = c.ss_pdf_end_measurement(self.ctx.pdf);
+            self.active = false;
+        }
+    }
+};
+
+fn recordingExtentsToFrame(extents: c.SsPdfRecordingExtents) ?Frame {
+    if (extents.width <= 0 or extents.height <= 0) return null;
+    const x: f32 = @floatCast(extents.x);
+    const y_top: f32 = @floatCast(extents.y);
+    const width: f32 = @floatCast(extents.width);
+    const height: f32 = @floatCast(extents.height);
+    return .{
+        .x = x,
+        .y = PageLayout.height - y_top - height,
+        .width = width,
+        .height = height,
+    };
+}
+
+fn measureRenderedOpContent(ctx: *DrawContext, op: *const RenderOp, maybe_text: ?TextPaint) !?Frame {
+    var measurement = MeasurementScope.init(ctx);
+    try measurement.begin();
+    defer measurement.deinit();
+
+    const content_frame = contentFrameForRender(op.frame, op.render);
+    switch (op.render.kind) {
+        .text => if (maybe_text) |text| try drawTextOp(ctx, op, content_frame, text),
+        .code => if (maybe_text) |text| try drawCodeBlock(ctx, content_frame, op.content, text, op.render.code),
+        .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
+        else => return null,
+    }
+    return try measurement.inkFrame();
 }
 
 fn cloneTexPreambleEntries(allocator: Allocator, preamble: []const TexPreambleEntry) ![]const TexPreambleEntry {
@@ -2136,17 +2366,25 @@ fn clampWorkerCount(value: usize, task_count: usize) usize {
 fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !void {
     const link_id = maybe_link_id orelse return;
     if (link_id.len == 0) return;
-    const name_z = try ctx.allocator.dupeZ(u8, link_id);
+    const x = frame.x;
+    const y = topOf(frame);
+    if (ctx.destinations) |destinations| {
+        const owned_name = try ctx.allocator.dupe(u8, link_id);
+        errdefer ctx.allocator.free(owned_name);
+        try destinations.append(ctx.allocator, .{
+            .name = owned_name,
+            .x = x,
+            .y = y,
+        });
+        return;
+    }
+    try emitDestination(ctx, link_id, @floatCast(x), @floatCast(y));
+}
+
+fn emitDestination(ctx: *DrawContext, name: []const u8, x: f64, y: f64) !void {
+    const name_z = try ctx.allocator.dupeZ(u8, name);
     defer ctx.allocator.free(name_z);
-    if (c.ss_pdf_add_destination(ctx.pdf, name_z.ptr, frame.x, topOf(frame)) != 0) return NativePdfError.CairoFailed;
-}
-
-fn pushClipRect(pdf: *c.SsPdf, frame: Frame) void {
-    c.ss_pdf_push_clip_rect(pdf, frame.x, topOf(frame), frame.width, frame.height);
-}
-
-fn popClip(pdf: *c.SsPdf) void {
-    c.ss_pdf_pop_clip(pdf);
+    if (c.ss_pdf_add_destination(ctx.pdf, name_z.ptr, x, y) != 0) return NativePdfError.CairoFailed;
 }
 
 fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
@@ -2272,7 +2510,12 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
 }
 
 fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint) !f32 {
-    const placement = markdownCodeBlockPlacement(x, baseline_bl, width, core.markdown.codeBlockPhysicalLineCount(block), text);
+    const source = try markdownCodeBlockContent(ctx.allocator, block);
+    defer ctx.allocator.free(source);
+    const code_paint = markdownCodeBlockPaint(block, text);
+    const initial_content_width = @max(width - text.markdown_code_pad_x * 2, 1);
+    const measured = try measureMarkdownCodeBlockContent(ctx, source, initial_content_width, text, code_paint);
+    const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text);
     const frame = placement.frame;
 
     c.ss_pdf_fill_stroke_rounded_rect(
@@ -2293,9 +2536,12 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         text.markdown_code_line_width,
     );
 
-    const source = try markdownCodeBlockContent(ctx.allocator, block);
-    defer ctx.allocator.free(source);
-    const code_paint = CodePaint{
+    try drawMarkdownCodeBlockContent(ctx, placement.content_x, placement.first_baseline_bl, placement.content_width, source, text, code_paint);
+    return placement.next_baseline_bl;
+}
+
+fn markdownCodeBlockPaint(block: *const Block, text: TextPaint) CodePaint {
+    return .{
         .language = block.language,
         .plain = text.markdown_code_plain_color orelse text.color,
         .keyword = text.markdown_code_keyword_color orelse text.link_color,
@@ -2308,37 +2554,90 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
         .comment = text.markdown_code_comment_color orelse Color{ .r = 0.38, .g = 0.42, .b = 0.48 },
         .string = text.markdown_code_string_color orelse text.markdown_bold_color orelse text.link_color,
     };
-    if (block.language) |language| {
+}
+
+fn drawMarkdownCodeBlockContent(ctx: *DrawContext, x: f32, first_baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, code_paint: CodePaint) !void {
+    if (code_paint.language) |language| {
         if (highlightLanguageFor(ctx, language) != null) {
-            try drawHighlightedCodeLines(ctx, x + text.markdown_code_pad_x, placement.first_baseline_bl, @max(width - text.markdown_code_pad_x * 2, 1), source, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height, code_paint, text.emoji_spacing, true);
-            return placement.next_baseline_bl;
+            try drawHighlightedCodeLines(ctx, x, first_baseline_bl, width, source, text.code_font, text.markdown_code_font_size, text.markdown_code_line_height, code_paint, text.emoji_spacing, true);
+            return;
         }
     }
 
-    var cursor_bl = placement.first_baseline_bl;
+    var cursor_bl = first_baseline_bl;
     var physical = std.mem.splitScalar(u8, source, '\n');
     while (physical.next()) |segment| {
         if (segment.len == 0 and physical.index == null and source.len > 0 and source[source.len - 1] == '\n') break;
-        _ = try drawCodeTextAtTop(ctx, x + text.markdown_code_pad_x, baselineTop(cursor_bl, text.markdown_code_font_size), @max(width - text.markdown_code_pad_x * 2, 1), text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, code_paint.plain, text.emoji_spacing);
+        _ = try drawCodeTextAtTop(ctx, x, baselineTop(cursor_bl, text.markdown_code_font_size), width, text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, code_paint.plain, text.emoji_spacing);
         cursor_bl -= text.markdown_code_line_height;
     }
-    return placement.next_baseline_bl;
 }
 
 const MarkdownCodeBlockPlacement = struct {
     frame: Frame,
+    content_x: f32,
+    content_width: f32,
     first_baseline_bl: f32,
     next_baseline_bl: f32,
 };
 
-fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, physical_line_count: usize, text: TextPaint) MarkdownCodeBlockPlacement {
-    const line_count: f32 = @floatFromInt(physical_line_count);
-    const box_height = line_count * text.markdown_code_line_height + text.markdown_code_pad_y * 2;
+const MarkdownCodeBlockMeasure = struct {
+    left: f32,
+    right: f32,
+    top_over_baseline: f32,
+    bottom_under_baseline: f32,
+};
+
+fn measureMarkdownCodeBlockContent(ctx: *DrawContext, source: []const u8, width: f32, text: TextPaint, code_paint: CodePaint) !MarkdownCodeBlockMeasure {
+    const baseline_bl = PageLayout.height * 0.5;
+    var measurement = MeasurementScope.init(ctx);
+    try measurement.begin();
+    defer measurement.deinit();
+
+    try drawMarkdownCodeBlockContent(ctx, 0, baseline_bl, width, source, text, code_paint);
+    if (try measurement.inkFrame()) |ink| {
+        return .{
+            .left = ink.x,
+            .right = ink.x + ink.width,
+            .top_over_baseline = @max(@as(f32, 0), ink.y + ink.height - baseline_bl),
+            .bottom_under_baseline = @max(@as(f32, 0), baseline_bl - ink.y),
+        };
+    }
+
+    const line_count: f32 = @floatFromInt(@max(physicalCodeLineCount(source), 1));
+    const default_height = @max(line_count * text.markdown_code_line_height, text.markdown_code_font_size);
+    return .{
+        .left = 0,
+        .right = 1,
+        .top_over_baseline = text.markdown_code_font_size,
+        .bottom_under_baseline = @max(default_height - text.markdown_code_font_size, 0),
+    };
+}
+
+fn physicalCodeLineCount(source: []const u8) usize {
+    if (source.len == 0) return 1;
+    var count: usize = 1;
+    for (source) |ch| {
+        if (ch == '\n') count += 1;
+    }
+    if (source[source.len - 1] == '\n' and count > 1) count -= 1;
+    return count;
+}
+
+fn markdownCodeBlockPlacement(x: f32, baseline_bl: f32, width: f32, measured: MarkdownCodeBlockMeasure, text: TextPaint) MarkdownCodeBlockPlacement {
     const box_top = baseline_bl + text.font_size;
+    const first_baseline_bl = box_top - text.markdown_code_pad_y - measured.top_over_baseline;
+    const content_left = x + text.markdown_code_pad_x + measured.left;
+    const content_right = x + text.markdown_code_pad_x + measured.right;
+    const frame_x = @min(x, content_left - text.markdown_code_pad_x);
+    const frame_right = @max(x + width, content_right + text.markdown_code_pad_x);
+    const box_height = text.markdown_code_pad_y * 2 + measured.top_over_baseline + measured.bottom_under_baseline;
     const box_bottom = box_top - box_height;
     return .{
-        .frame = .{ .x = x, .y = box_bottom, .width = width, .height = box_height },
-        .first_baseline_bl = box_top - text.markdown_code_pad_y - text.markdown_code_font_size,
+        .frame = .{ .x = frame_x, .y = box_bottom, .width = @max(frame_right - frame_x, 1), .height = @max(box_height, 1) },
+        .content_x = x + text.markdown_code_pad_x,
+        .content_width = @max(width - text.markdown_code_pad_x * 2, 1),
+        .first_baseline_bl = first_baseline_bl,
         .next_baseline_bl = box_bottom - text.font_size,
     };
 }
@@ -2362,14 +2661,17 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
     var body_row_index: usize = 0;
 
     for (table.rows.items) |row| {
-        var row_lines: usize = 1;
         const content_width = @max(column_width - text.markdown_table_cell_pad_x * 2, 1);
+        var row_top_overhang: f32 = 0;
+        var row_bottom_depth: f32 = text.line_height;
         for (row.cells.items) |cell| {
             var cell_text = text;
             cell_text.font = if (row.header) text.bold_font else text.font;
-            row_lines = @max(row_lines, try markdownTableCellVisualLineCount(ctx, cell.lines.items, cell_text, content_width, preamble));
+            const measured = try measureInlineLinesInkBlock(ctx, cell.lines.items, cell_text, content_width, preamble);
+            row_top_overhang = @max(row_top_overhang, measured.top_overhang);
+            row_bottom_depth = @max(row_bottom_depth, measured.bottom_depth);
         }
-        const row_height = @as(f32, @floatFromInt(row_lines)) * text.line_height + text.markdown_table_cell_pad_y * 2;
+        const row_height = row_top_overhang + row_bottom_depth + text.markdown_table_cell_pad_y * 2;
         const row_bottom = cursor_top_bl - row_height;
         const fill = if (row.header)
             text.markdown_table_header_fill
@@ -2404,7 +2706,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
                 const cell = row.cells.items[column_index];
                 var cell_text = text;
                 cell_text.font = if (row.header) text.bold_font else text.font;
-                var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - text.font_size;
+                var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - row_top_overhang - text.font_size;
                 for (cell.lines.items) |line| {
                     const one_line = [_]Line{line};
                     line_bl = try drawInlineLines(ctx, cell_x + text.markdown_table_cell_pad_x, line_bl, content_width, one_line[0..], cell_text, true, preamble);
@@ -2414,26 +2716,6 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         cursor_top_bl = row_bottom;
     }
     return cursor_top_bl - text.font_size;
-}
-
-fn markdownTableCellVisualLineCount(ctx: *DrawContext, lines: []const Line, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
-    if (lines.len == 0) return 1;
-    var total: usize = 0;
-    for (lines) |line| {
-        total += try markdownTableLineVisualLineCount(ctx, line, text, max_width, preamble);
-    }
-    return @max(total, 1);
-}
-
-fn markdownTableLineVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
-    if (lineContainsDisplayMath(line)) {
-        return try lineWithDisplayMathVisualLineCount(ctx, line, text, max_width, preamble);
-    }
-    var atoms = std.ArrayList(Atom).empty;
-    defer atoms.deinit(ctx.allocator);
-    defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutAtoms(ctx, line, text, preamble, &atoms);
-    return atomVisualLineCount(atoms.items, atomPaint(text), max_width);
 }
 
 fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
@@ -2451,6 +2733,31 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
+}
+
+const InlineInkBlock = struct {
+    top_overhang: f32,
+    bottom_depth: f32,
+};
+
+fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, preamble: []const TexPreambleEntry) !InlineInkBlock {
+    const baseline_bl = PageLayout.height * 0.5;
+    const content_top_bl = baseline_bl + text.font_size;
+    var measurement = MeasurementScope.init(ctx);
+    try measurement.begin();
+    defer measurement.deinit();
+
+    const next_bl = try drawInlineLines(ctx, 0, baseline_bl, width, lines, text, true, preamble);
+    var top_overhang: f32 = 0;
+    var bottom_depth = @max(baseline_bl - next_bl, text.line_height);
+    if (try measurement.inkFrame()) |ink| {
+        top_overhang = @max(@as(f32, 0), ink.y + ink.height - content_top_bl);
+        bottom_depth = @max(bottom_depth, content_top_bl - ink.y);
+    }
+    return .{
+        .top_overhang = top_overhang,
+        .bottom_depth = @max(bottom_depth, text.line_height),
+    };
 }
 
 fn layoutAtoms(ctx: *DrawContext, line: Line, text: TextPaint, preamble: []const TexPreambleEntry, atoms: *std.ArrayList(Atom)) !void {
@@ -2546,43 +2853,6 @@ fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32,
     return block_bottom - text.font_size;
 }
 
-fn lineWithDisplayMathVisualLineCount(ctx: *DrawContext, line: Line, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
-    const runs = line.runs.items;
-    var total: usize = 0;
-    var segment_start: usize = 0;
-    var index: usize = 0;
-    while (index < runs.len) {
-        if (runs[index].kind != .display_math) {
-            index += 1;
-            continue;
-        }
-        if (segment_start < index) {
-            total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..index], text, max_width, preamble);
-        }
-        const display_start = index;
-        while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
-        const source = try displayMathSource(ctx.allocator, runs[display_start..index]);
-        defer ctx.allocator.free(source);
-        if (source.len > 0) {
-            total += @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(displayMathBlockHeight(source, text) / @max(text.line_height, 1)))));
-        }
-        segment_start = index;
-    }
-    if (segment_start < runs.len) {
-        total += try inlineRunSliceVisualLineCount(ctx, runs[segment_start..], text, max_width, preamble);
-    }
-    return @max(total, 1);
-}
-
-fn inlineRunSliceVisualLineCount(ctx: *DrawContext, runs: []const Run, text: TextPaint, max_width: f32, preamble: []const TexPreambleEntry) !usize {
-    var atoms = std.ArrayList(Atom).empty;
-    defer atoms.deinit(ctx.allocator);
-    defer freeAtoms(ctx.allocator, atoms.items);
-    try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
-    if (atoms.items.len == 0) return 0;
-    return atomVisualLineCount(atoms.items, atomPaint(text), max_width);
-}
-
 fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
     var joined = std.ArrayList(u8).empty;
     defer joined.deinit(allocator);
@@ -2610,21 +2880,21 @@ fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
 }
 
 fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool) !void {
-    var tokenizer = Tokenizer.init(value);
+    var tokenizer = text_tokenize.Tokenizer.init(value);
     while (tokenizer.next()) |token| {
-        const is_emoji = isEmojiToken(token);
+        const is_emoji = text_tokenize.isEmojiToken(token);
         const measured_width = if (is_emoji)
             try measureTextVisualWidth(ctx, token, font, font_size)
         else
             try measureText(ctx, token, font, font_size);
-        const width = if (is_emoji) @max(measured_width, font_size * 1.05) else measured_width;
+        const width = measured_width;
         try atoms.append(ctx.allocator, .{
             .kind = .text,
             .text = token,
             .font = font,
             .color = color,
             .width = width,
-            .is_space = isWhitespace(token),
+            .is_space = text_tokenize.isWhitespace(token),
             .is_emoji = is_emoji,
             .strikethrough = strikethrough,
             .link_url = link_url,
@@ -2705,7 +2975,7 @@ fn drawAtomsWithOptions(
                 if (atom.link_url) |url| {
                     try drawLinkedRawText(ctx, cursor_x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
                 } else {
-                    try drawRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), paint.line_height, atom.text, atom.font, paint.font_size, atom.color, false);
+                    try drawAtomRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), paint.line_height, atom, paint, false);
                 }
                 if (atom.strikethrough) {
                     drawStrikethrough(ctx, cursor_x, y_top, atom, paint);
@@ -2727,22 +2997,6 @@ fn drawAtomsWithOptions(
         }
     }
     return cursor_bl - paint.line_height;
-}
-
-fn atomVisualLineCount(atoms: []const Atom, paint: AtomPaint, max_width: f32) usize {
-    if (atoms.len == 0) return 1;
-    var lines: usize = 1;
-    var cursor = wrap_layout.Cursor{};
-    for (atoms, 0..) |_, index| {
-        const measured_atom = measuredWrapAtom(atoms, index, paint);
-        switch (cursor.next(measured_atom, max_width, true)) {
-            .skip => continue,
-            .break_then_draw => lines += 1,
-            .draw => {},
-        }
-        cursor.advance(measured_atom.advance);
-    }
-    return lines;
 }
 
 fn measuredWrapAtom(atoms: []const Atom, index: usize, paint: AtomPaint) wrap_layout.Atom {
@@ -2910,7 +3164,8 @@ fn drawHighlightedCodeLine(
 ) !void {
     var cursor_x = x;
     var pos = line_start;
-    while (pos < line_end and cursor_x < x + width) {
+    _ = width;
+    while (pos < line_end) {
         var next = nextHighlightBoundary(spans, pos, line_end);
         if (next <= pos) next = @min(pos + 1, line_end);
         const color = highlightColorAt(spans, pos, next) orelse plain_color;
@@ -3369,7 +3624,7 @@ fn drawCodeLine(
 
     var cursor_x = x;
     var index: usize = 0;
-    while (index < line.len and cursor_x < x + width) {
+    while (index < line.len) {
         const start = index;
         const byte = line[index];
         if (byte == '#') {
@@ -3388,7 +3643,7 @@ fn drawCodeLine(
             try drawCodeSegment(ctx, &cursor_x, y_top, segment, font, font_size, line_height, if (isPythonKeyword(segment)) code.keyword else code.plain, emoji_spacing);
             continue;
         }
-        index += utf8ByteSequenceLength(byte);
+        index += text_tokenize.utf8ByteSequenceLength(byte);
         try drawCodeSegment(ctx, &cursor_x, y_top, line[start..@min(index, line.len)], font, font_size, line_height, code.plain, emoji_spacing);
     }
 }
@@ -3693,29 +3948,89 @@ fn drawRawText(
     color: Color,
     wrap: bool,
 ) !void {
+    return drawRawTextWithMode(ctx, x, y_top, width, height, content, font, font_size, color, wrap, false);
+}
+
+fn drawColorRawText(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    width: f32,
+    height: f32,
+    content: []const u8,
+    font: FontFace,
+    font_size: f32,
+    color: Color,
+    wrap: bool,
+) !void {
+    return drawRawTextWithMode(ctx, x, y_top, width, height, content, font, font_size, color, wrap, true);
+}
+
+fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, height: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
+    if (atom.is_emoji) {
+        try drawColorRawText(ctx, x, y_top, width, height, atom.text, atom.font, paint.font_size, atom.color, wrap);
+    } else {
+        try drawRawText(ctx, x, y_top, width, height, atom.text, atom.font, paint.font_size, atom.color, wrap);
+    }
+}
+
+fn drawRawTextWithMode(
+    ctx: *DrawContext,
+    x: f32,
+    y_top: f32,
+    width: f32,
+    height: f32,
+    content: []const u8,
+    font: FontFace,
+    font_size: f32,
+    color: Color,
+    wrap: bool,
+    preserve_color_glyphs: bool,
+) !void {
     const family_z = try ctx.allocator.dupeZ(u8, font.family);
     defer ctx.allocator.free(family_z);
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
     const baseline_y = y_top + font_size;
-    if (c.ss_pdf_draw_text_baseline(
-        ctx.pdf,
-        x,
-        baseline_y,
-        y_top,
-        width,
-        height,
-        content_z.ptr,
-        family_z.ptr,
-        @intCast(font.weight),
-        core.font.styleCode(font.style),
-        core.font.stretchCode(font.stretch),
-        font_size,
-        color.r,
-        color.g,
-        color.b,
-        if (wrap) 1 else 0,
-    ) != 0) return NativePdfError.PangoCreateFailed;
+    const result = if (preserve_color_glyphs)
+        c.ss_pdf_draw_color_text_baseline(
+            ctx.pdf,
+            x,
+            baseline_y,
+            y_top,
+            width,
+            height,
+            content_z.ptr,
+            family_z.ptr,
+            @intCast(font.weight),
+            core.font.styleCode(font.style),
+            core.font.stretchCode(font.stretch),
+            font_size,
+            color.r,
+            color.g,
+            color.b,
+            if (wrap) 1 else 0,
+        )
+    else
+        c.ss_pdf_draw_text_baseline(
+            ctx.pdf,
+            x,
+            baseline_y,
+            y_top,
+            width,
+            height,
+            content_z.ptr,
+            family_z.ptr,
+            @intCast(font.weight),
+            core.font.styleCode(font.style),
+            core.font.stretchCode(font.stretch),
+            font_size,
+            color.r,
+            color.g,
+            color.b,
+            if (wrap) 1 else 0,
+        );
+    if (result != 0) return NativePdfError.PangoCreateFailed;
 }
 
 fn drawLinkedRawText(
@@ -3730,22 +4045,49 @@ fn drawLinkedRawText(
 ) !void {
     const target = if (isInternalLink(url)) url[1..] else url;
     if (target.len == 0) {
-        try drawRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom.text, atom.font, paint.font_size, atom.color, false);
+        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom, paint, false);
         return;
     }
-    const target_z = try ctx.allocator.dupeZ(u8, target);
-    defer ctx.allocator.free(target_z);
-    const begin_result = if (isInternalLink(url))
-        c.ss_pdf_begin_dest_link(ctx.pdf, x, y_top, @max(link_width, 1), height, target_z.ptr)
-    else
-        c.ss_pdf_begin_uri_link(ctx.pdf, x, y_top, @max(link_width, 1), height, target_z.ptr);
-    if (begin_result != 0) return NativePdfError.CairoFailed;
+
+    const kind: LinkAnnotation.Kind = if (isInternalLink(url)) .dest else .uri;
+    const resolved_width = @max(link_width, 1);
+    if (ctx.link_annotations) |links| {
+        const owned_target = try ctx.allocator.dupe(u8, target);
+        errdefer ctx.allocator.free(owned_target);
+        try links.append(ctx.allocator, .{
+            .kind = kind,
+            .target = owned_target,
+            .x = x,
+            .y = y_top,
+            .width = resolved_width,
+            .height = height,
+        });
+        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom, paint, false);
+        return;
+    }
+
+    try beginLinkAnnotation(ctx, kind, target, @floatCast(x), @floatCast(y_top), @floatCast(resolved_width), @floatCast(height));
     defer c.ss_pdf_end_link(ctx.pdf);
-    try drawRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom.text, atom.font, paint.font_size, atom.color, false);
+    try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom, paint, false);
 }
 
 fn isInternalLink(url: []const u8) bool {
     return url.len > 1 and url[0] == '#';
+}
+
+fn emitLinkAnnotation(ctx: *DrawContext, kind: LinkAnnotation.Kind, target: []const u8, x: f64, y: f64, width: f64, height: f64) !void {
+    try beginLinkAnnotation(ctx, kind, target, x, y, width, height);
+    c.ss_pdf_end_link(ctx.pdf);
+}
+
+fn beginLinkAnnotation(ctx: *DrawContext, kind: LinkAnnotation.Kind, target: []const u8, x: f64, y: f64, width: f64, height: f64) !void {
+    const target_z = try ctx.allocator.dupeZ(u8, target);
+    defer ctx.allocator.free(target_z);
+    const result = switch (kind) {
+        .dest => c.ss_pdf_begin_dest_link(ctx.pdf, x, y, width, height, target_z.ptr),
+        .uri => c.ss_pdf_begin_uri_link(ctx.pdf, x, y, width, height, target_z.ptr),
+    };
+    if (result != 0) return NativePdfError.CairoFailed;
 }
 
 fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size: f32) !f32 {
@@ -3793,126 +4135,6 @@ fn baselineTop(baseline_bl: f32, font_size: f32) f32 {
 fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize, ordinal: usize) ![]const u8 {
     if (kind == .ordered_list) return std.fmt.allocPrint(allocator, "{d}.", .{ordinal});
     return allocator.dupe(u8, if (depth == 0) "•" else "◦");
-}
-
-const Tokenizer = struct {
-    text: []const u8,
-    index: usize = 0,
-
-    fn init(text: []const u8) Tokenizer {
-        return .{ .text = text };
-    }
-
-    fn next(self: *Tokenizer) ?[]const u8 {
-        if (self.index >= self.text.len) return null;
-        const start = self.index;
-        const first_codepoint = utf8CodepointAt(self.text, self.index);
-        const first_len = first_codepoint.len;
-        const first_end = @min(self.text.len, self.index + first_len);
-        const first = self.text[start..first_end];
-        self.index = first_end;
-
-        if (isWhitespace(first)) {
-            while (self.index < self.text.len) {
-                const len = utf8ByteSequenceLength(self.text[self.index]);
-                const end = @min(self.text.len, self.index + len);
-                if (!isWhitespace(self.text[self.index..end])) break;
-                self.index = end;
-            }
-            return self.text[start..self.index];
-        }
-
-        if (isEmojiStart(first_codepoint.value)) {
-            self.index = consumeEmojiSequence(self.text, self.index, first_codepoint.value);
-            return self.text[start..self.index];
-        }
-
-        if (isAsciiWordByte(first[0])) {
-            while (self.index < self.text.len and isAsciiWordByte(self.text[self.index])) self.index += 1;
-            return self.text[start..self.index];
-        }
-
-        return first;
-    }
-};
-
-const Utf8Codepoint = struct {
-    value: u21,
-    len: usize,
-};
-
-fn utf8CodepointAt(text: []const u8, index: usize) Utf8Codepoint {
-    if (index >= text.len) return .{ .value = 0, .len = 0 };
-    const len = @min(utf8ByteSequenceLength(text[index]), text.len - index);
-    const value = std.unicode.utf8Decode(text[index .. index + len]) catch text[index];
-    return .{ .value = value, .len = len };
-}
-
-fn utf8ByteSequenceLength(first: u8) usize {
-    if (first < 0x80) return 1;
-    if ((first & 0xe0) == 0xc0) return 2;
-    if ((first & 0xf0) == 0xe0) return 3;
-    if ((first & 0xf8) == 0xf0) return 4;
-    return 1;
-}
-
-fn consumeEmojiSequence(text: []const u8, index: usize, first: u21) usize {
-    var cursor = index;
-    if (isRegionalIndicator(first)) {
-        const next = utf8CodepointAt(text, cursor);
-        if (isRegionalIndicator(next.value)) cursor += next.len;
-        return cursor;
-    }
-
-    while (cursor < text.len) {
-        const next = utf8CodepointAt(text, cursor);
-        if (next.len == 0) break;
-        if (isEmojiModifier(next.value) or next.value == 0xfe0f) {
-            cursor += next.len;
-            continue;
-        }
-        if (next.value == 0x200d) {
-            const joiner_start = cursor;
-            cursor += next.len;
-            const joined = utf8CodepointAt(text, cursor);
-            if (joined.len == 0 or !isEmojiStart(joined.value)) return joiner_start;
-            cursor += joined.len;
-            continue;
-        }
-        break;
-    }
-    return cursor;
-}
-
-fn isEmojiStart(value: u21) bool {
-    return (value >= 0x1f000 and value <= 0x1faff) or
-        (value >= 0x2600 and value <= 0x27bf) or
-        isRegionalIndicator(value);
-}
-
-fn isEmojiModifier(value: u21) bool {
-    return (value >= 0x1f3fb and value <= 0x1f3ff) or value == 0xfe0e or value == 0xfe0f;
-}
-
-fn isRegionalIndicator(value: u21) bool {
-    return value >= 0x1f1e6 and value <= 0x1f1ff;
-}
-
-fn isAsciiWordByte(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '.' or byte == '/' or byte == ':' or byte == '+' or byte == '-';
-}
-
-fn isWhitespace(text: []const u8) bool {
-    for (text) |byte| {
-        if (byte != ' ' and byte != '\t' and byte != '\r' and byte != '\n') return false;
-    }
-    return text.len > 0;
-}
-
-fn isEmojiToken(text: []const u8) bool {
-    if (text.len == 0) return false;
-    const first = utf8CodepointAt(text, 0);
-    return first.len > 0 and isEmojiStart(first.value);
 }
 
 fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8) !void {

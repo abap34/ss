@@ -4,6 +4,7 @@ const class_fields = @import("../core/class_fields.zig");
 const font_model = @import("../core/font.zig");
 const markdown = @import("../core/markdown.zig");
 const text_measure = @import("../render/text_measure.zig");
+const text_tokenize = @import("../core/text_tokenize.zig");
 const wrap_layout = @import("../render/wrap.zig");
 const style_defaults = @import("style.zig");
 
@@ -189,18 +190,30 @@ fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementC
     }
 
     var max_width: f32 = 0;
-    const fonts = font_model.textFacesForNode(ir, node);
-    const plain_font = plainTextFaceForNode(ir, node, fonts);
-    const wrap = shouldWrapNode(ir, node);
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        const line_width = if (wrap)
-            measuredTextAdvance(cache, ir.allocator, line, plain_font, style)
-        else
-            measuredTextDrawExtent(cache, ir.allocator, line, plain_font, style);
-        max_width = @max(max_width, line_width);
+    if (markdown.shouldParseBlocksNode(ir, node)) {
+        var doc = markdown.parseMarkdownDocumentForNode(
+            ir.allocator,
+            ir,
+            node,
+            content,
+        ) catch null;
+        if (doc) |*parsed| {
+            defer parsed.deinit();
+            if (markdownBlocksNaturalWidth(ir, node, cache, style, parsed.blocks.items)) |width| {
+                max_width = @max(max_width, width);
+            }
+        }
     }
-    if (max_width <= 0) max_width = fallbackGlyphAdvance(style);
+
+    if (max_width <= 0) {
+        const fonts = font_model.textFacesForNode(ir, node);
+        const plain_font = plainTextFaceForNode(ir, node, fonts);
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            max_width = @max(max_width, measuredTextDrawExtent(cache, ir.allocator, line, plain_font, style, textEmojiSpacing(ir, node)));
+        }
+    }
+    if (max_width <= 0) max_width = 1;
     return @min(maxWidthForStyle(style), max_width) + chrome_width;
 }
 
@@ -239,7 +252,7 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
                     ir,
                     node,
                     content,
-                ) catch break :blk fallbackTextHeight(ir, node, cache, style, content, width);
+                ) catch break :blk measuredPlainTextHeight(ir, node, cache, style, content, width);
                 defer doc.deinit();
                 break :blk markdownBlocksHeight(ir, node, cache, style, doc.blocks.items, width, 0) + chrome_height;
             }
@@ -252,7 +265,7 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
     };
 }
 
-fn fallbackTextHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, content: []const u8, width: f32) f32 {
+fn measuredPlainTextHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, content: []const u8, width: f32) f32 {
     const lines = if (shouldWrapNode(ir, node))
         wrappedLineCount(ir, node, cache, style, content, width)
     else
@@ -324,16 +337,15 @@ fn markdownListHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache,
 
     var total: f32 = 0;
     for (list.items.items, 0..) |item, item_index| {
-        total += markdownListItemHeight(ir, node, cache, style, block.kind, item, max_width, list_depth);
+        total += markdownListItemHeight(ir, node, cache, style, block.kind, item, max_width, list_depth, list.start + item_index);
         if (item_index != list.items.items.len - 1) total += markdownBlockGap(ir, node, style);
     }
     return total;
 }
 
-fn markdownListItemHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize) f32 {
-    _ = kind;
+fn markdownListItemHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, kind: markdown.BlockKind, item: *const markdown.ListItem, max_width: f32, list_depth: usize, ordinal: usize) f32 {
     const marker_gap = @max(@as(f32, 8.0), style.font_size * 0.35);
-    const marker_width = style.font_size * 0.58;
+    const marker_width = markdownListMarkerWidth(ir, node, cache, style, kind, list_depth, ordinal);
     const content_width = @max(@as(f32, 1.0), max_width - marker_width - marker_gap);
     if (item.blocks.items.len == 0) return style.line_height;
 
@@ -347,6 +359,20 @@ fn markdownListItemHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCa
         if (block_index != item.blocks.items.len - 1) total += markdownGapBetweenBlocks(ir, node, style, block, item.blocks.items[block_index + 1]);
     }
     return total;
+}
+
+fn markdownListMarkerWidth(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, kind: markdown.BlockKind, depth: usize, ordinal: usize) f32 {
+    const fonts = font_model.textFacesForNode(ir, node);
+    const font = plainTextFaceForNode(ir, node, fonts);
+    return switch (kind) {
+        .ordered_list => blk: {
+            var buffer: [32]u8 = undefined;
+            const marker = std.fmt.bufPrint(&buffer, "{d}.", .{ordinal}) catch return 0;
+            break :blk measuredTextDrawExtent(cache, ir.allocator, marker, font, style, textEmojiSpacing(ir, node));
+        },
+        .bullet_list => measuredTextDrawExtent(cache, ir.allocator, if (depth == 0) "•" else "◦", font, style, textEmojiSpacing(ir, node)),
+        else => 0,
+    };
 }
 
 fn markdownTableCellPadX(ir: anytype, node: *const Node, style: TextStyle) f32 {
@@ -436,24 +462,65 @@ fn markdownLineVisualLineCount(ir: anytype, node: *const Node, cache: ?*Measurem
     return @max(total, 1);
 }
 
-fn wrappedAdvanceLineCount(width: f32, max_width: f32) usize {
-    if (width <= 0) return 0;
-    const available = @max(@as(f32, 1.0), max_width);
-    return @max(@as(usize, 1), @as(usize, @intFromFloat(@ceil(width / available))));
+fn markdownBlocksNaturalWidth(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, blocks: []const *markdown.Block) ?f32 {
+    if (blocks.len != 1) return null;
+    const block = blocks[0];
+    return switch (block.kind) {
+        .paragraph => markdownParagraphNaturalWidth(ir, node, cache, style, block.paragraph.?.lines.items),
+        else => null,
+    };
 }
 
-fn markdownRunAdvance(style: TextStyle, run: markdown.Run) f32 {
-    return switch (run.kind) {
-        .icon, .math, .display_math => style.font_size * 1.05,
-        else => blk: {
-            break :blk fallbackTextAdvance(style, run.text);
-        },
-    };
+fn markdownParagraphNaturalWidth(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, lines: []const markdown.Line) ?f32 {
+    if (lines.len == 0) return 0;
+    var max_width: f32 = 0;
+    for (lines) |line| {
+        if (markdownLineContainsMeasuredRenderArtifact(line)) return null;
+        max_width = @max(max_width, markdownRunSliceDrawExtent(ir, node, cache, style, line.runs.items) orelse return null);
+    }
+    return max_width;
 }
 
 fn markdownLineContainsDisplayMath(line: markdown.Line) bool {
     for (line.runs.items) |run| {
         if (run.kind == .display_math) return true;
+    }
+    return false;
+}
+
+fn markdownBlocksContainMeasuredRenderArtifact(blocks: []const *markdown.Block) bool {
+    for (blocks) |block| {
+        switch (block.kind) {
+            .paragraph, .code_block => if (block.paragraph) |paragraph| {
+                for (paragraph.lines.items) |line| {
+                    if (markdownLineContainsMeasuredRenderArtifact(line)) return true;
+                }
+            },
+            .bullet_list, .ordered_list => if (block.list) |list| {
+                for (list.items.items) |item| {
+                    if (markdownBlocksContainMeasuredRenderArtifact(item.blocks.items)) return true;
+                }
+            },
+            .table => if (block.table) |table| {
+                for (table.rows.items) |row| {
+                    for (row.cells.items) |cell| {
+                        for (cell.lines.items) |line| {
+                            if (markdownLineContainsMeasuredRenderArtifact(line)) return true;
+                        }
+                    }
+                }
+            },
+        }
+    }
+    return false;
+}
+
+fn markdownLineContainsMeasuredRenderArtifact(line: markdown.Line) bool {
+    for (line.runs.items) |run| {
+        switch (run.kind) {
+            .icon, .math, .display_math => return true,
+            else => {},
+        }
     }
     return false;
 }
@@ -509,6 +576,7 @@ fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) b
     defer doc.deinit();
 
     if (doc.blocks.items.len > 1) return true;
+    if (markdownBlocksContainMeasuredRenderArtifact(doc.blocks.items)) return true;
     for (doc.blocks.items) |block| {
         switch (block.kind) {
             .bullet_list, .ordered_list, .code_block, .table => return true,
@@ -557,7 +625,7 @@ fn wrappedLineCount(ir: anytype, node: *const Node, cache: ?*MeasurementCache, s
             continue;
         }
 
-        total += measuredWrappedTextLineCount(cache, ir.allocator, trimmed, plain_font, style, max_width);
+        total += measuredWrappedTextLineCount(cache, ir.allocator, trimmed, plain_font, style, max_width, textEmojiSpacing(ir, node));
     }
     return total;
 }
@@ -572,55 +640,77 @@ fn plainTextFaceForNode(ir: anytype, node: *const Node, faces: font_model.TextFa
 
 fn markdownRunSliceVisualLineCount(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, runs: []const markdown.Run, max_width: f32) usize {
     if (runs.len == 0) return 0;
-    const fonts = font_model.textFacesForNode(ir, node);
-    var lines: usize = 1;
-    var cursor = wrap_layout.Cursor{};
-    var saw_atom = false;
+    var atoms = std.ArrayList(MeasuredAtom).empty;
+    defer atoms.deinit(ir.allocator);
+    appendMarkdownRunSliceMeasuredAtoms(ir, node, cache, style, runs, &atoms) catch return 1;
+    return measuredAtomVisualLineCount(atoms.items, max_width, textEmojiSpacing(ir, node));
+}
 
+fn markdownRunSliceDrawExtent(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, runs: []const markdown.Run) ?f32 {
+    var atoms = std.ArrayList(MeasuredAtom).empty;
+    defer atoms.deinit(ir.allocator);
+    appendMarkdownRunSliceMeasuredAtoms(ir, node, cache, style, runs, &atoms) catch return null;
+    return measuredAtomLineExtent(atoms.items, textEmojiSpacing(ir, node));
+}
+
+fn appendMarkdownRunSliceMeasuredAtoms(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, runs: []const markdown.Run, atoms: *std.ArrayList(MeasuredAtom)) !void {
+    const fonts = font_model.textFacesForNode(ir, node);
     for (runs) |run| {
         switch (run.kind) {
-            .icon, .math, .display_math => {
-                const atom = wrap_layout.Atom{
-                    .width = markdownRunAdvance(style, run),
-                    .advance = markdownRunAdvance(style, run),
-                    .is_space = false,
-                };
-                applyMeasuredAtom(&cursor, atom, max_width, &lines, &saw_atom);
-            },
+            .icon, .math, .display_math => return error.RenderArtifactMeasuredAtDraw,
             else => {
                 const font = fontForRun(fonts, run.kind);
-                var tokenizer = MeasureTokenizer.init(run.text);
-                while (tokenizer.next()) |token| {
-                    const width = measuredTextWidth(cache, ir.allocator, token, font, style);
-                    const atom = wrap_layout.Atom{
-                        .width = width,
-                        .advance = width,
-                        .is_space = isWhitespace(token),
-                    };
-                    applyMeasuredAtom(&cursor, atom, max_width, &lines, &saw_atom);
-                }
+                try appendMeasuredTextAtoms(cache, ir.allocator, atoms, run.text, font, style);
             },
         }
     }
-
-    return if (saw_atom) lines else 0;
 }
 
-fn measuredWrappedTextLineCount(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle, max_width: f32) usize {
+fn measuredWrappedTextLineCount(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle, max_width: f32, emoji_spacing: f32) usize {
+    var atoms = std.ArrayList(MeasuredAtom).empty;
+    defer atoms.deinit(allocator);
+    appendMeasuredTextAtoms(cache, allocator, &atoms, text, font, style) catch return 1;
+    return measuredAtomVisualLineCount(atoms.items, max_width, emoji_spacing);
+}
+
+fn measuredAtomVisualLineCount(atoms: []const MeasuredAtom, max_width: f32, emoji_spacing: f32) usize {
+    if (atoms.len == 0) return 1;
     var lines: usize = 1;
     var cursor = wrap_layout.Cursor{};
     var saw_atom = false;
-    var tokenizer = MeasureTokenizer.init(text);
-    while (tokenizer.next()) |token| {
-        const width = measuredTextWidth(cache, allocator, token, font, style);
-        const atom = wrap_layout.Atom{
+    for (atoms, 0..) |measured_atom, index| {
+        const width = measured_atom.width;
+        const wrap_atom = wrap_layout.Atom{
             .width = width,
-            .advance = width,
-            .is_space = isWhitespace(token),
+            .advance = width + measuredAtomSpacingAfter(atoms, index, emoji_spacing),
+            .is_space = measured_atom.is_space,
         };
-        applyMeasuredAtom(&cursor, atom, max_width, &lines, &saw_atom);
+        applyMeasuredAtom(&cursor, wrap_atom, max_width, &lines, &saw_atom);
     }
     return if (saw_atom) lines else 1;
+}
+
+const MeasuredAtom = struct {
+    width: f32,
+    is_space: bool,
+    is_emoji: bool,
+};
+
+fn appendMeasuredTextAtoms(cache: ?*MeasurementCache, allocator: std.mem.Allocator, atoms: *std.ArrayList(MeasuredAtom), text: []const u8, font: font_model.Face, style: TextStyle) !void {
+    var tokenizer = text_tokenize.Tokenizer.init(text);
+    while (tokenizer.next()) |token| {
+        const is_emoji = text_tokenize.isEmojiToken(token);
+        const measured_width = if (is_emoji)
+            measuredTextVisualWidth(cache, allocator, token, font, style)
+        else
+            measuredTextWidth(cache, allocator, token, font, style);
+        const width = measured_width;
+        try atoms.append(allocator, .{
+            .width = width,
+            .is_space = text_tokenize.isWhitespace(token),
+            .is_emoji = is_emoji,
+        });
+    }
 }
 
 fn applyMeasuredAtom(cursor: *wrap_layout.Cursor, atom: wrap_layout.Atom, max_width: f32, lines: *usize, saw_atom: *bool) void {
@@ -647,7 +737,7 @@ fn measuredTextWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, te
         measurements.advanceWidth(text, font, style.font_size) catch 0
     else
         text_measure.advanceWidth(allocator, text, font, style.font_size) catch 0;
-    return if (measured > 0) measured else fallbackTextAdvance(style, text);
+    return if (measured > 0) measured else 0;
 }
 
 fn measuredTextVisualWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
@@ -655,105 +745,32 @@ fn measuredTextVisualWidth(cache: ?*MeasurementCache, allocator: std.mem.Allocat
         measurements.visualWidth(text, font, style.font_size) catch 0
     else
         text_measure.visualWidth(allocator, text, font, style.font_size) catch 0;
-    return if (measured > 0) measured else fallbackTextAdvance(style, text);
+    return if (measured > 0) measured else 0;
 }
 
-fn measuredTextDrawExtent(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
+fn measuredTextDrawExtent(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle, emoji_spacing: f32) f32 {
+    var atoms = std.ArrayList(MeasuredAtom).empty;
+    defer atoms.deinit(allocator);
+    appendMeasuredTextAtoms(cache, allocator, &atoms, text, font, style) catch return 0;
+    return measuredAtomLineExtent(atoms.items, emoji_spacing);
+}
+
+fn measuredAtomLineExtent(atoms: []const MeasuredAtom, emoji_spacing: f32) f32 {
     var advance: f32 = 0;
     var extent: f32 = 0;
-    var saw_token = false;
-    var tokenizer = MeasureTokenizer.init(text);
-    while (tokenizer.next()) |token| {
-        const token_advance = measuredTextWidth(cache, allocator, token, font, style);
-        const token_visual_width = measuredTextVisualWidth(cache, allocator, token, font, style);
-        extent = @max(extent, advance + @max(token_advance, token_visual_width));
-        advance += token_advance;
-        saw_token = true;
+    for (atoms, 0..) |atom, index| {
+        extent = @max(extent, advance + atom.width);
+        advance += atom.width + measuredAtomSpacingAfter(atoms, index, emoji_spacing);
     }
-    return if (saw_token) extent else 0;
+    return extent;
 }
 
-fn measuredTextAdvance(cache: ?*MeasurementCache, allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, style: TextStyle) f32 {
-    var total: f32 = 0;
-    var saw_token = false;
-    var tokenizer = MeasureTokenizer.init(text);
-    while (tokenizer.next()) |token| {
-        total += measuredTextWidth(cache, allocator, token, font, style);
-        saw_token = true;
-    }
-    return if (saw_token) total else 0;
+fn measuredAtomSpacingAfter(atoms: []const MeasuredAtom, index: usize, emoji_spacing: f32) f32 {
+    if (index + 1 >= atoms.len) return 0;
+    if (!atoms[index].is_emoji or atoms[index + 1].is_space) return 0;
+    return emoji_spacing;
 }
 
-fn fallbackTextAdvance(style: TextStyle, text: []const u8) f32 {
-    const advance = if (containsNonAscii(text)) style.font_size * 1.02 else fallbackGlyphAdvance(style);
-    return @as(f32, @floatFromInt(codepointCount(text))) * advance;
-}
-
-fn fallbackGlyphAdvance(style: TextStyle) f32 {
-    return style.font_size * 0.58;
-}
-
-const MeasureTokenizer = struct {
-    text: []const u8,
-    index: usize = 0,
-
-    fn init(text: []const u8) MeasureTokenizer {
-        return .{ .text = text };
-    }
-
-    fn next(self: *MeasureTokenizer) ?[]const u8 {
-        if (self.index >= self.text.len) return null;
-        const start = self.index;
-        const first_len = utf8ByteSequenceLength(self.text[self.index]);
-        const first_end = @min(self.text.len, self.index + first_len);
-        const first = self.text[start..first_end];
-        self.index = first_end;
-
-        if (isWhitespace(first)) {
-            while (self.index < self.text.len) {
-                const len = utf8ByteSequenceLength(self.text[self.index]);
-                const end = @min(self.text.len, self.index + len);
-                if (!isWhitespace(self.text[self.index..end])) break;
-                self.index = end;
-            }
-            return self.text[start..self.index];
-        }
-
-        if (isAsciiWordByte(first[0])) {
-            while (self.index < self.text.len and isAsciiWordByte(self.text[self.index])) self.index += 1;
-            return self.text[start..self.index];
-        }
-
-        return first;
-    }
-};
-
-fn utf8ByteSequenceLength(first: u8) usize {
-    if (first < 0x80) return 1;
-    if ((first & 0xe0) == 0xc0) return 2;
-    if ((first & 0xf0) == 0xe0) return 3;
-    if ((first & 0xf8) == 0xf0) return 4;
-    return 1;
-}
-
-fn isAsciiWordByte(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '.' or byte == '/' or byte == ':' or byte == '+' or byte == '-';
-}
-
-fn isWhitespace(text: []const u8) bool {
-    for (text) |byte| {
-        if (byte != ' ' and byte != '\t' and byte != '\r' and byte != '\n') return false;
-    }
-    return text.len > 0;
-}
-
-fn codepointCount(text: []const u8) usize {
-    return std.unicode.utf8CountCodepoints(text) catch text.len;
-}
-
-fn containsNonAscii(text: []const u8) bool {
-    for (text) |ch| {
-        if (ch >= 0x80) return true;
-    }
-    return false;
+fn textEmojiSpacing(ir: anytype, node: *const Node) f32 {
+    return styleForNode(ir, node).font_size * (nonNegativeNodeFloatProperty(ir, node, "text_emoji_spacing") orelse 0);
 }
