@@ -248,10 +248,6 @@ end
         `current value related information missing from LSP diagnostic: ${JSON.stringify(conflict)}`,
       );
       assert(conflict.range.start.line === 5, `constraint diagnostic pointed at the wrong line: ${JSON.stringify(conflict)}`);
-      assert(
-        !diagnostics.some((diagnostic) => diagnostic.code === "unresolved_frame"),
-        `secondary unresolved frame diagnostics leaked through: ${JSON.stringify(diagnostics)}`,
-      );
 
       const unsaved = source.replace("page.left + 20", "page.left + 30");
       client.changeDocument({ uri, version: 2, text: unsaved });

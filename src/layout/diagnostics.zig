@@ -33,12 +33,6 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
 
         if (!node.frame.x_set or !node.frame.y_set) {
-            try ir.addLayoutError(page_id, child_id, .{
-                .unresolved_frame = .{
-                    .missing_horizontal = !node.frame.x_set,
-                    .missing_vertical = !node.frame.y_set,
-                },
-            });
             continue;
         }
 

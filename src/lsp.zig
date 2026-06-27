@@ -2431,7 +2431,6 @@ fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
         .render_failed => "render_failed",
         .type_mismatch => |data| @tagName(data.code),
         .recursive_function => "RecursiveFunction",
-        .unresolved_frame => "unresolved_frame",
         .page_overflow => "page_overflow",
         .content_overflow => "content_overflow",
     };
