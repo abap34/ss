@@ -7,7 +7,8 @@ const dump_editor = @import("dump/editor.zig");
 const dump_layout = @import("dump/layout.zig");
 const dump_render_doc = @import("dump/render_doc.zig");
 const dump_source = @import("dump/source.zig");
-const json = @import("utils").json;
+const utils = @import("utils");
+const json = utils.json;
 
 pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
@@ -57,22 +58,22 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
     try item.optionalStringField("origin", diagnostic.origin);
     switch (diagnostic.data) {
         .user_report => |data| {
-            try item.stringField("code", "user_report");
+            try item.stringField("code", utils.err.userReportDiagnosticCode(data.message));
             try item.stringField("message", data.message);
         },
         .asset_not_found => |data| {
-            try item.stringField("code", "asset_not_found");
+            try item.stringField("code", "AssetNotFound");
             try item.stringField("requested_path", data.requested_path);
             try item.stringField("resolved_path", data.resolved_path);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
         .asset_invalid => |data| {
-            try item.stringField("code", "asset_invalid");
+            try item.stringField("code", "InvalidAsset");
             try item.stringField("reason", data.reason);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
         .render_failed => |data| {
-            try item.stringField("code", "render_failed");
+            try item.stringField("code", "RenderFailed");
             try item.stringField("reason", data.reason);
             try item.optionalEnumTagField("payload_kind", data.payload_kind);
         },
@@ -86,14 +87,14 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
             try item.stringField("function_name", data.function_name);
         },
         .page_overflow => |data| {
-            try item.stringField("code", "page_overflow");
+            try item.stringField("code", "PageOverflow");
             try item.floatField("overflow_left", data.overflow_left, "{d:.1}");
             try item.floatField("overflow_right", data.overflow_right, "{d:.1}");
             try item.floatField("overflow_top", data.overflow_top, "{d:.1}");
             try item.floatField("overflow_bottom", data.overflow_bottom, "{d:.1}");
         },
         .content_overflow => |data| {
-            try item.stringField("code", "content_overflow");
+            try item.stringField("code", "ContentOverflow");
             try item.floatField("required_height", data.required_height, "{d:.1}");
             try item.floatField("frame_height", data.frame_height, "{d:.1}");
             try item.floatField("overflow_height", data.overflow_height, "{d:.1}");

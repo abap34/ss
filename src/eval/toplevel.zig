@@ -161,7 +161,7 @@ fn reportNamedResolutionError(ir: *core.Ir, err: anyerror, kind: []const u8, nam
     });
 }
 
-fn reportLowerError(ir: *core.Ir, err: anyerror, origin: []const u8) !void {
+fn reportLowerError(ir: *core.Ir, err: anyerror, origin: ?[]const u8) !void {
     try reportLowerDiagnostic(ir, .{
         .err = err,
         .origin = origin,
@@ -210,25 +210,33 @@ fn formatLowerDiagnostic(buf: []u8, diagnostic: LowerDiagnostic) []const u8 {
         .unknown_name => |data| std.fmt.bufPrint(buf, "{s}: unknown {s}: {s}", .{ unknownNameCode(data.kind), data.kind, data.name }) catch "UnknownName: unknown name",
         .invalid_arity => |data| blk: {
             if (data.min == data.max) {
-                break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}, got {d}", .{ data.min, data.actual }) catch lowerErrorMessage(diagnostic.err);
+                break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}, got {d}", .{ data.min, data.actual }) catch formatGenericLowerDiagnostic(buf, diagnostic.err);
             }
-            break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch lowerErrorMessage(diagnostic.err);
+            break :blk std.fmt.bufPrint(buf, "InvalidArity: expected {d}..{d}, got {d}", .{ data.min, data.max, data.actual }) catch formatGenericLowerDiagnostic(buf, diagnostic.err);
         },
-        .invalid_value_tag => |data| std.fmt.bufPrint(buf, "InvalidValueTag: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch lowerErrorMessage(diagnostic.err),
-        .generic => lowerErrorMessage(diagnostic.err),
+        .invalid_value_tag => |data| std.fmt.bufPrint(buf, "InvalidValueTag: expected {s}, got {s}", .{ @tagName(data.expected), @tagName(data.actual) }) catch formatGenericLowerDiagnostic(buf, diagnostic.err),
+        .generic => formatGenericLowerDiagnostic(buf, diagnostic.err),
     };
 }
 
 fn unknownNameCode(kind: []const u8) []const u8 {
     if (std.mem.eql(u8, kind, "function")) return "UnknownFunction";
+    if (std.mem.eql(u8, kind, "import alias")) return "UnknownModuleAlias";
     if (std.mem.eql(u8, kind, "query")) return "UnknownQuery";
     if (std.mem.eql(u8, kind, "identifier")) return "UnknownIdentifier";
+    if (std.mem.eql(u8, kind, "record type")) return "UnknownRecordType";
     if (std.mem.eql(u8, kind, "anchor")) return "UnknownAnchor";
     if (std.mem.eql(u8, kind, "role")) return "UnknownRole";
+    if (std.mem.eql(u8, kind, "payload kind")) return "UnknownPayloadKind";
     return "UnknownName";
 }
 
-fn lowerErrorMessage(err: anyerror) []const u8 {
+fn formatGenericLowerDiagnostic(buf: []u8, err: anyerror) []const u8 {
+    return lowerErrorMessage(err) orelse
+        std.fmt.bufPrint(buf, "LoweringFailed: {s}", .{@errorName(err)}) catch "LoweringFailed: internal lowering error";
+}
+
+fn lowerErrorMessage(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.ReturnOutsideFunction => "ReturnOutsideFunction: return is only valid inside a function",
         error.InvalidLibraryModule => "InvalidLibraryModule: imported modules must contain functions, constants, and imports only",
@@ -259,7 +267,7 @@ fn lowerErrorMessage(err: anyerror) []const u8 {
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
         error.UnsupportedScheduledPrimitive => "UnsupportedScheduledPrimitive: this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
-        else => @errorName(err),
+        else => null,
     };
 }
 
@@ -365,12 +373,8 @@ fn executeScheduledDocumentStatement(
 ) !void {
     const error_count = diagnosticErrorCount(ir);
     const flow = executeStatement(ir, ir.document_id, .document, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
-        var owns_origin = true;
-        const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
-            owns_origin = false;
-            break :blk "bytes:0-1";
-        };
-        defer if (owns_origin) ir.allocator.free(origin);
+        const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+        defer if (origin) |text| ir.allocator.free(text);
         if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
         return err;
     };
@@ -394,12 +398,8 @@ fn executeScheduledPageStatement(
 ) !void {
     const error_count = diagnosticErrorCount(ir);
     const flow = executeStatement(ir, page_id, .page, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
-        var owns_origin = true;
-        const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
-            owns_origin = false;
-            break :blk "bytes:0-1";
-        };
-        defer if (owns_origin) ir.allocator.free(origin);
+        const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+        defer if (origin) |text| ir.allocator.free(text);
         if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
         return err;
     };
@@ -578,12 +578,8 @@ fn executeDocumentStatementSlice(
     for (statements) |stmt| {
         const error_count = diagnosticErrorCount(ir);
         const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, closures, &document_last_code_like, stmt, null) catch |err| {
-            var owns_origin = true;
-            const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
-                owns_origin = false;
-                break :blk "bytes:0-1";
-            };
-            defer if (owns_origin) ir.allocator.free(origin);
+            const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+            defer if (origin) |text| ir.allocator.free(text);
             if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
             return err;
         };
@@ -622,12 +618,8 @@ fn executePageBody(
     for (page.statements.items) |stmt| {
         const error_count = diagnosticErrorCount(ir);
         const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, closures, &last_code_like, stmt, null) catch |err| {
-            var owns_origin = true;
-            const origin = statementOrigin(ir.allocator, stmt.span) catch blk: {
-                owns_origin = false;
-                break :blk "bytes:0-1";
-            };
-            defer if (owns_origin) ir.allocator.free(origin);
+            const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+            defer if (origin) |text| ir.allocator.free(text);
             if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
             return err;
         };
@@ -1406,8 +1398,10 @@ fn emitUserReport(
 
 fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
     const node = ir.getNode(object_id) orelse return error.UnknownNode;
+    var diagnostic_origin = try assetContentDiagnosticOrigin(ir, node, origin);
+    defer diagnostic_origin.deinit(ir.allocator);
     if (node.object_kind == null or node.object_kind.? != .asset or node.content == null) {
-        try ir.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
+        try ir.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin.text, .{
             .asset_invalid = .{
                 .reason = try ir.allocator.dupe(u8, "expected an asset object with a path"),
                 .payload_kind = node.payload_kind,
@@ -1419,7 +1413,7 @@ fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeI
     const requested = node.content.?;
     const resolved = try resolveAssetPath(ir.allocator, ir.asset_base_dir, requested);
     if (!fs_utils.fileExists(ir.allocator, resolved)) {
-        try ir.addValidationDiagnostic(.@"error", page_id, object_id, origin, .{
+        try ir.addValidationDiagnostic(.@"error", page_id, object_id, diagnostic_origin.text, .{
             .asset_not_found = .{
                 .requested_path = try ir.allocator.dupe(u8, requested),
                 .resolved_path = resolved,
@@ -1434,6 +1428,45 @@ fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeI
     } else if (node.payload_kind == .pdf_ref) {
         try attachIntrinsicPdfSize(ir, object_id, resolved);
     }
+}
+
+const DiagnosticOrigin = struct {
+    text: ?[]const u8,
+    owned: bool = false,
+
+    fn deinit(self: *DiagnosticOrigin, allocator: std.mem.Allocator) void {
+        if (self.owned) {
+            if (self.text) |text| allocator.free(text);
+        }
+    }
+};
+
+fn assetContentDiagnosticOrigin(ir: *core.Ir, node: *const core.Node, fallback: []const u8) !DiagnosticOrigin {
+    const content = node.content orelse return .{ .text = fallback };
+    if (try originForContentSpan(ir.allocator, node.content_provenance.items, 0, content.len)) |origin| {
+        return .{ .text = origin, .owned = true };
+    }
+    return .{ .text = fallback };
+}
+
+fn originForContentSpan(
+    allocator: std.mem.Allocator,
+    entries: []const core.ContentProvenance,
+    content_start: usize,
+    content_end: usize,
+) !?[]const u8 {
+    const normalized_end = @max(content_end, content_start);
+    for (entries) |entry| {
+        if (content_start < entry.content_start or normalized_end > entry.content_end) continue;
+        const located = utils.err.parseLocatedOrigin(entry.origin) orelse continue;
+        const start = located.span.start + (content_start - entry.content_start);
+        const end = located.span.start + (normalized_end - entry.content_start);
+        if (located.path) |path| {
+            return try std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, start, end });
+        }
+        return try std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ start, end });
+    }
+    return null;
 }
 
 fn attachIntrinsicImageSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
@@ -1997,7 +2030,7 @@ fn executeCallStatement(
     active_module_id = resolved.module_id;
     defer active_module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, last_code_like, inner, null);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -2121,7 +2154,7 @@ fn invokeUserFunctionValueInModule(
     active_module_id = module_id;
     defer active_module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, &last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, &last_code_like, inner, null);
         switch (flow) {
             .none => {},
             .returned => |value| {
@@ -2158,7 +2191,7 @@ fn invokeUserFunctionValues(
     active_module_id = module_id;
     defer active_module_id = previous_module_id;
     for (func.statements.items) |inner| {
-        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, &last_code_like, inner, current_origin);
+        const flow = try executeStatement(ir, page_id, context, mode, &local_env, functions, closures, &last_code_like, inner, null);
         switch (flow) {
             .none => {},
             .returned => |value| {

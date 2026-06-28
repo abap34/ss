@@ -116,7 +116,7 @@ test "project spec: highlight config rejects bundled language redefinition" {
 }
 
 test "project spec: highlight config rejects unknown language fields" {
-    try testing.expectError(error.UnknownHighlightLanguageField, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
+    const source =
         \\[project]
         \\entry = "slides/main.ss"
         \\
@@ -125,7 +125,50 @@ test "project spec: highlight config rejects unknown language fields" {
         \\query = "builtin:python"
         \\library = "parsers/libtree-sitter-python.dylib"
         \\
-    ));
+    ;
+    try testing.expectError(error.UnknownHighlightLanguageField, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", source));
+    try expectConfigSpanText(source, error.UnknownHighlightLanguageField, "library = \"parsers/libtree-sitter-python.dylib\"");
+}
+
+test "project spec: config error spans locate highlight section failures" {
+    const unknown_parser =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[highlight.languages.python-snippet]
+        \\parser = "python3"
+        \\query = "builtin:python"
+        \\
+    ;
+    try testing.expectError(error.UnknownHighlightParser, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", unknown_parser));
+    try expectConfigSpanText(unknown_parser, error.UnknownHighlightParser, "parser = \"python3\"");
+
+    const missing_query =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[highlight.languages.python-snippet]
+        \\parser = "python"
+        \\
+    ;
+    try testing.expectError(error.MissingHighlightQuery, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", missing_query));
+    try expectConfigSpanText(missing_query, error.MissingHighlightQuery, "[highlight.languages.python-snippet]");
+
+    const duplicate =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[highlight.languages.python-snippet]
+        \\parser = "python"
+        \\query = "builtin:python"
+        \\
+        \\[highlight.languages.PYTHON-SNIPPET]
+        \\parser = "python"
+        \\query = "builtin:python"
+        \\
+    ;
+    try testing.expectError(error.DuplicateHighlightLanguage, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", duplicate));
+    try expectConfigSpanText(duplicate, error.DuplicateHighlightLanguage, "[highlight.languages.PYTHON-SNIPPET]");
 }
 
 test "project spec: tree-sitter capture names map to code paint roles" {
@@ -259,6 +302,11 @@ fn findHighlightLanguage(languages: []const utils.highlight.Language, name: []co
         if (std.ascii.eqlIgnoreCase(language.name, name)) return language;
     }
     return null;
+}
+
+fn expectConfigSpanText(source: []const u8, err: anyerror, expected: []const u8) !void {
+    const span = project.configErrorSpan(source, err) orelse return error.MissingConfigErrorSpan;
+    try testing.expectEqualStrings(expected, source[span.start..span.end]);
 }
 
 fn expectMappedHighlightCaptures(path: []const u8) !void {

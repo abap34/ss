@@ -18,11 +18,11 @@ esbuild.buildSync({
   target: "node18",
 });
 
-const { fallbackSsDiagnosticMessage, parseSsDiagnosticsJson } = require(bundled);
+const { parseSsDiagnosticsJson } = require(bundled);
 
 testStructuredRenderDiagnostic();
 testStructuredWarningDiagnostic();
-testFallbackMessage();
+testUnlocatedDiagnosticIsSkipped();
 
 function testStructuredRenderDiagnostic() {
   const snapshotPath = path.join(repoRoot, ".ss-cache", "preview", "snapshot", "slide.ss");
@@ -84,7 +84,18 @@ function testStructuredWarningDiagnostic() {
   assert.strictEqual(diagnostics[0].severity, "warning");
 }
 
-function testFallbackMessage() {
-  assert.strictEqual(fallbackSsDiagnosticMessage("", 7), "render failed with exit code 7");
-  assert.strictEqual(fallbackSsDiagnosticMessage("\x1b[31mfailed\x1b[0m", null), "failed");
+function testUnlocatedDiagnosticIsSkipped() {
+  const payload = JSON.stringify({
+    schema: 1,
+    kind: "ss-diagnostics",
+    diagnostics: [{
+      phase: "render",
+      severity: "error",
+      code: "RenderFailed",
+      message: "render backend failed",
+      path: path.join(repoRoot, "slide.ss"),
+      range: null,
+    }],
+  });
+  assert.strictEqual(parseSsDiagnosticsJson(payload, {}).length, 0);
 }

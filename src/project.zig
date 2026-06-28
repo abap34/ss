@@ -156,7 +156,14 @@ pub fn discoverPath(allocator: std.mem.Allocator, start_dir: []const u8) !?[]u8 
 
 pub fn isConfigError(err: anyerror) bool {
     return switch (err) {
-        error.MissingProjectEntry => true,
+        error.MissingProjectEntry,
+        error.UnknownHighlightLanguageField,
+        error.BuiltinHighlightLanguageReserved,
+        error.MissingHighlightParser,
+        error.MissingHighlightQuery,
+        error.UnknownHighlightParser,
+        error.DuplicateHighlightLanguage,
+        => true,
         else => false,
     };
 }
@@ -207,6 +214,28 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, source: []con
         .page_guide = parsePageGuideConfig(source),
         .highlight = highlight_config,
     };
+}
+
+pub fn configErrorSpan(source: []const u8, err: anyerror) ?utils.err.ByteSpan {
+    return switch (err) {
+        error.MissingProjectEntry => tomlKeySpan(source, "project", "entry") orelse tomlSectionSpan(source, "project"),
+        error.UnknownHighlightLanguageField,
+        error.BuiltinHighlightLanguageReserved,
+        error.MissingHighlightParser,
+        error.MissingHighlightQuery,
+        error.UnknownHighlightParser,
+        error.DuplicateHighlightLanguage,
+        => highlightConfigErrorSpan(source, err),
+        else => null,
+    };
+}
+
+pub fn tomlSectionSpan(source: []const u8, section_name: []const u8) ?utils.err.ByteSpan {
+    return tomlSpan(source, .{ .section = section_name });
+}
+
+pub fn tomlKeySpan(source: []const u8, section_name: []const u8, key: []const u8) ?utils.err.ByteSpan {
+    return tomlSpan(source, .{ .section = section_name, .key = key });
 }
 
 fn parseLspConfig(source: []const u8) LspConfig {
@@ -305,6 +334,105 @@ const HighlightLanguageBuilder = struct {
     query: ?[]const u8 = null,
 };
 
+const HighlightSpanBuilder = struct {
+    name: []const u8,
+    section_span: utils.err.ByteSpan,
+    parser: ?[]const u8 = null,
+    parser_span: ?utils.err.ByteSpan = null,
+    query: ?[]const u8 = null,
+};
+
+fn highlightConfigErrorSpan(source: []const u8, err: anyerror) ?utils.err.ByteSpan {
+    var current: ?HighlightSpanBuilder = null;
+    var line_start: usize = 0;
+    while (line_start <= source.len) {
+        const raw_line_end = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+        const line_end = if (raw_line_end > line_start and source[raw_line_end - 1] == '\r') raw_line_end - 1 else raw_line_end;
+        const comment_start = line_start + tomlCommentStart(source[line_start..line_end]);
+        const bounds = trimmedBounds(source, line_start, comment_start);
+        const line = source[bounds.start..bounds.end];
+
+        if (line.len != 0 and line[0] == '[') {
+            if (finishHighlightSpan(source, current, err)) |span| return span;
+            current = null;
+            if (highlightLanguageSectionName(line)) |name| {
+                current = .{
+                    .name = name,
+                    .section_span = .{ .start = bounds.start, .end = bounds.end },
+                };
+            }
+        } else if (current) |*builder| {
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse {
+                if (raw_line_end == source.len) break;
+                line_start = raw_line_end + 1;
+                continue;
+            };
+            const key_bounds = trimmedBounds(source, bounds.start, bounds.start + eq);
+            const key = source[key_bounds.start..key_bounds.end];
+            const value = parseTomlStringValue(std.mem.trim(u8, line[eq + 1 ..], " \t")) orelse {
+                if (raw_line_end == source.len) break;
+                line_start = raw_line_end + 1;
+                continue;
+            };
+            if (std.mem.eql(u8, key, "parser")) {
+                builder.parser = value;
+                builder.parser_span = .{ .start = bounds.start, .end = bounds.end };
+            } else if (std.mem.eql(u8, key, "query")) {
+                builder.query = value;
+            } else if (err == error.UnknownHighlightLanguageField) {
+                return .{ .start = bounds.start, .end = bounds.end };
+            }
+        }
+
+        if (raw_line_end == source.len) break;
+        line_start = raw_line_end + 1;
+    }
+    return finishHighlightSpan(source, current, err);
+}
+
+fn finishHighlightSpan(
+    source: []const u8,
+    current: ?HighlightSpanBuilder,
+    err: anyerror,
+) ?utils.err.ByteSpan {
+    const builder = current orelse return null;
+    if (highlight.isBuiltinLanguageName(builder.name)) {
+        return if (err == error.BuiltinHighlightLanguageReserved) builder.section_span else null;
+    }
+    if (builder.parser == null) {
+        return if (err == error.MissingHighlightParser) builder.section_span else null;
+    }
+    if (!highlight.isBuiltinParserName(builder.parser.?)) {
+        return if (err == error.UnknownHighlightParser) builder.parser_span orelse builder.section_span else null;
+    }
+    if (builder.query == null) {
+        return if (err == error.MissingHighlightQuery) builder.section_span else null;
+    }
+    if (hasPreviousHighlightLanguage(source, builder.name, builder.section_span.start)) {
+        return if (err == error.DuplicateHighlightLanguage) builder.section_span else null;
+    }
+    return null;
+}
+
+fn hasPreviousHighlightLanguage(source: []const u8, name: []const u8, before: usize) bool {
+    var line_start: usize = 0;
+    while (line_start < before and line_start < source.len) {
+        const raw_line_end = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+        const line_end = if (raw_line_end > line_start and source[raw_line_end - 1] == '\r') raw_line_end - 1 else raw_line_end;
+        const comment_start = line_start + tomlCommentStart(source[line_start..line_end]);
+        const bounds = trimmedBounds(source, line_start, comment_start);
+        const line = source[bounds.start..bounds.end];
+        if (line.len != 0 and line[0] == '[') {
+            if (highlightLanguageSectionName(line)) |found| {
+                if (std.ascii.eqlIgnoreCase(found, name)) return true;
+            }
+        }
+        if (raw_line_end == source.len) break;
+        line_start = raw_line_end + 1;
+    }
+    return false;
+}
+
 fn finishHighlightLanguage(
     allocator: std.mem.Allocator,
     project_dir: []const u8,
@@ -386,6 +514,51 @@ fn parseValue(source: []const u8, section: []const u8, key: []const u8) ?[]const
         return std.mem.trim(u8, line[eq + 1 ..], " \t");
     }
     return null;
+}
+
+const TomlSpanQuery = struct {
+    section: ?[]const u8 = null,
+    key: ?[]const u8 = null,
+};
+
+fn tomlSpan(source: []const u8, query: TomlSpanQuery) ?utils.err.ByteSpan {
+    var in_target_section = false;
+    var line_start: usize = 0;
+    while (line_start <= source.len) {
+        const raw_line_end = std.mem.indexOfScalarPos(u8, source, line_start, '\n') orelse source.len;
+        const line_end = if (raw_line_end > line_start and source[raw_line_end - 1] == '\r') raw_line_end - 1 else raw_line_end;
+        const comment_start = line_start + tomlCommentStart(source[line_start..line_end]);
+        const bounds = trimmedBounds(source, line_start, comment_start);
+        const line = source[bounds.start..bounds.end];
+
+        if (line.len != 0 and line[0] == '[') {
+            in_target_section = if (query.section) |section| sectionHeaderMatches(line, section) else false;
+            if (in_target_section and query.key == null) return .{ .start = bounds.start, .end = bounds.end };
+        } else if (in_target_section) {
+            if (query.key) |wanted_key| {
+                const eq = std.mem.indexOfScalar(u8, line, '=') orelse {
+                    if (raw_line_end == source.len) break;
+                    line_start = raw_line_end + 1;
+                    continue;
+                };
+                const key_bounds = trimmedBounds(source, bounds.start, bounds.start + eq);
+                const key_text = source[key_bounds.start..key_bounds.end];
+                if (std.mem.eql(u8, key_text, wanted_key)) return .{ .start = bounds.start, .end = bounds.end };
+            }
+        }
+
+        if (raw_line_end == source.len) break;
+        line_start = raw_line_end + 1;
+    }
+    return null;
+}
+
+fn trimmedBounds(source: []const u8, start: usize, end: usize) utils.err.ByteSpan {
+    var first = start;
+    while (first < end and (source[first] == ' ' or source[first] == '\t' or source[first] == '\r')) first += 1;
+    var last = end;
+    while (last > first and (source[last - 1] == ' ' or source[last - 1] == '\t' or source[last - 1] == '\r')) last -= 1;
+    return .{ .start = first, .end = last };
 }
 
 fn sectionHeaderMatches(line: []const u8, section: []const u8) bool {

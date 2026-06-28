@@ -110,8 +110,18 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
     errdefer program.deinit(allocator);
     if (progress) |p| p.step("Parse source");
 
-    var index = analysis.loadProgramIndexWithOverlay(allocator, io, asset_base_dir, program, overlay) catch |err| {
-        if (err == error.UnknownImport) {
+    var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
+    defer load_diagnostics.deinit();
+    var index = analysis.loadProgramIndexWithOptions(allocator, io, asset_base_dir, program, .{
+        .overlay = overlay,
+        .diagnostics = &load_diagnostics,
+        .print_diagnostics = false,
+    }) catch |err| {
+        if (load_diagnostics.items.items.len != 0) {
+            printLoadDiagnostics(&load_diagnostics);
+            printImportFailureDiagnostic(allocator, io, path, source, asset_base_dir, &program, overlay, &load_diagnostics);
+            return error.DiagnosticsFailed;
+        } else if (err == error.UnknownImport) {
             var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
             defer report.deinit(allocator);
             error_report.print(.{
@@ -123,18 +133,6 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
                     .start = report.span.start,
                     .end = report.span.end,
                 },
-            });
-        } else if (err == error.ImportCycle) {
-            const span = if (program.imports.items.len != 0) blk: {
-                const import_span = program.imports.items[0].span;
-                break :blk error_report.ByteSpan{ .start = import_span.start, .end = import_span.end };
-            } else null;
-            error_report.print(.{
-                .path = path,
-                .source = source,
-                .severity = .@"error",
-                .message = "ImportCycle: import graph contains a cycle",
-                .span = span,
             });
             return error.DiagnosticsFailed;
         }
@@ -157,7 +155,15 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
                 },
             });
         } else if (err != error.DiagnosticsFailed) {
-            std.debug.print("error: {s}\n", .{@errorName(err)});
+            const message = try std.fmt.allocPrint(allocator, "BuildFailed: {s}", .{@errorName(err)});
+            defer allocator.free(message);
+            error_report.print(.{
+                .path = path,
+                .source = source,
+                .severity = .@"error",
+                .message = message,
+                .span = null,
+            });
         }
         return err;
     };
@@ -409,6 +415,45 @@ fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u
     return parser.parseWithSourceName(allocator, source, path) catch |err| {
         error_report.printParseError(path, source, err, parser.lastParseDiagnostic());
         return err;
+    };
+}
+
+fn printLoadDiagnostics(diagnostics: *const module_loader.LoadDiagnostics) void {
+    for (diagnostics.items.items) |item| {
+        error_report.print(.{
+            .path = item.path,
+            .source = item.source,
+            .severity = loadDiagnosticSeverity(item.severity),
+            .message = item.message,
+            .span = item.span,
+        });
+    }
+}
+
+fn printImportFailureDiagnostic(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    path: []const u8,
+    source: []const u8,
+    asset_base_dir: []const u8,
+    program: *const ast.Program,
+    overlay: ?*const module_loader.SourceOverlay,
+    diagnostics: *const module_loader.LoadDiagnostics,
+) void {
+    const span = module_loader.importFailureSpan(allocator, io, asset_base_dir, program, overlay, diagnostics) orelse return;
+    error_report.print(.{
+        .path = path,
+        .source = source,
+        .severity = .@"error",
+        .message = "ImportFailed: imported module failed to load",
+        .span = span,
+    });
+}
+
+fn loadDiagnosticSeverity(severity: core.DiagnosticSeverity) error_report.Severity {
+    return switch (severity) {
+        .warning => .warning,
+        .@"error" => .@"error",
     };
 }
 

@@ -11,7 +11,7 @@ import {
   positionAt,
   root,
   withLspClient,
-} from "./lsp_harness.mjs";
+} from "./harness.mjs";
 
 const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
 const defaultThemeUri = pathToFileURL(defaultTheme).toString();
@@ -23,6 +23,10 @@ await testLspConfiguration();
 await testLspDebouncesDocumentChanges();
 await testConstraintConflictDiagnosticMatchesCli();
 await testDependencyQueryDiagnostic();
+await testUserReportDiagnosticCode();
+await testDirectUnknownImportDiagnosticLocation();
+await testImportedUnknownImportReportsBothFiles();
+await testImportCycleDiagnosticLocation();
 await testBrokenProjectConfigKeepsCompletionAlive();
 
 async function testStdlibDefinitionOutsideWorkspace() {
@@ -292,6 +296,141 @@ end
       assert(query.message.includes("DependencyQuery:"), `dependency query message missing header: ${JSON.stringify(query)}`);
       assert(query.message.includes("write Variable(scope=page:sample, name=t)"), `dependency query message missing variable write: ${JSON.stringify(query)}`);
       assert(query.range.start.line === 4, `dependency query diagnostic pointed at wrong line: ${JSON.stringify(query)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testUserReportDiagnosticCode() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-user-report-code-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `page bad
+let x = "a"
+let x = "b"
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      const duplicate = diagnostics.find((diagnostic) => diagnostic.code === "DuplicateBinding");
+      assert(duplicate, `DuplicateBinding diagnostic code missing: ${JSON.stringify(diagnostics)}`);
+      assert(duplicate.range.start.line === 2, `DuplicateBinding diagnostic pointed at wrong line: ${JSON.stringify(duplicate)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDirectUnknownImportDiagnosticLocation() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-unknown-import-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import "./missing" as *
+
+page main
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      const missing = diagnostics.find((diagnostic) => diagnostic.code === "UnknownImport");
+      assert(missing, `UnknownImport diagnostic missing: ${JSON.stringify(diagnostics)}`);
+      assert(missing.message.startsWith("UnknownImport:"), `UnknownImport message missing code prefix: ${JSON.stringify(missing)}`);
+      assert(missing.range.start.line === 0, `UnknownImport diagnostic pointed at wrong line: ${JSON.stringify(missing)}`);
+      assert(missing.range.start.character === 0, `UnknownImport diagnostic pointed at wrong character: ${JSON.stringify(missing)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testImportedUnknownImportReportsBothFiles() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-imported-unknown-import-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const imported = path.join(project, "a.ss");
+    const slideUri = pathToFileURL(slide).toString();
+    const importedUri = pathToFileURL(imported).toString();
+    const slideSource = `import "./a" as *
+
+page main
+end
+`;
+    await writeFile(slide, slideSource, "utf8");
+    await writeFile(imported, `import "./missing" as *\n`, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const importedDiagnosticsPromise = client.waitForDiagnostics(
+        importedUri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "UnknownImport"),
+        "UnknownImport diagnostic for imported module",
+      );
+      const sourceDiagnosticsPromise = client.waitForDiagnostics(
+        slideUri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "ImportFailed"),
+        "ImportFailed diagnostic for importing module",
+      );
+      client.openDocument({ uri: slideUri, text: slideSource });
+      const importedDiagnostics = (await importedDiagnosticsPromise).params.diagnostics;
+      const unknown = importedDiagnostics.find((diagnostic) => diagnostic.code === "UnknownImport");
+      assert(unknown, `UnknownImport diagnostic missing: ${JSON.stringify(importedDiagnostics)}`);
+      assert(unknown.range.start.line === 0, `UnknownImport diagnostic pointed at wrong line: ${JSON.stringify(unknown)}`);
+      assert(unknown.range.start.character === 0, `UnknownImport diagnostic pointed at wrong character: ${JSON.stringify(unknown)}`);
+
+      const sourceDiagnostics = (await sourceDiagnosticsPromise).params.diagnostics;
+      const failed = sourceDiagnostics.find((diagnostic) => diagnostic.code === "ImportFailed");
+      assert(failed, `ImportFailed diagnostic missing: ${JSON.stringify(sourceDiagnostics)}`);
+      assert(failed.range.start.line === 0, `ImportFailed diagnostic pointed at wrong line: ${JSON.stringify(failed)}`);
+      assert(failed.range.start.character === 0, `ImportFailed diagnostic pointed at wrong character: ${JSON.stringify(failed)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testImportCycleDiagnosticLocation() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-import-cycle-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const a = path.join(project, "a.ss");
+    const b = path.join(project, "b.ss");
+    const slideUri = pathToFileURL(slide).toString();
+    const bUri = pathToFileURL(b).toString();
+    const slideSource = `import "./a" as *
+
+page main
+end
+`;
+    await writeFile(slide, slideSource, "utf8");
+    await writeFile(a, `import "./b" as *\n`, "utf8");
+    await writeFile(b, `import "./a" as *\n`, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const cycleDiagnosticsPromise = client.waitForDiagnostics(
+        bUri,
+        (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "ImportCycle"),
+        "ImportCycle diagnostic for imported module",
+      );
+      client.openDocument({ uri: slideUri, text: slideSource });
+      const diagnostics = (await cycleDiagnosticsPromise).params.diagnostics;
+      const cycle = diagnostics.find((diagnostic) => diagnostic.code === "ImportCycle");
+      assert(cycle, `ImportCycle diagnostic missing: ${JSON.stringify(diagnostics)}`);
+      assert(cycle.range.start.line === 0, `ImportCycle diagnostic pointed at wrong line: ${JSON.stringify(cycle)}`);
+      assert(cycle.range.start.character === 0, `ImportCycle diagnostic pointed at wrong character: ${JSON.stringify(cycle)}`);
     });
   } finally {
     await rm(project, { recursive: true, force: true });

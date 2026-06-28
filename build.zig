@@ -422,12 +422,13 @@ fn addTestModule(b: *std.Build, test_step: *Step, module: *Module) void {
 
 fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const node_spec_files = [_][]const u8{
-        "tests/debug_runtime_spec.mjs",
-        "tests/doctor_runtime_spec.mjs",
-        "tests/lsp_completion_runtime_spec.mjs",
-        "tests/lsp_editor_runtime_spec.mjs",
-        "tests/render_cache_runtime_spec.mjs",
-        "tests/render_diagnostics_runtime_spec.mjs",
+        "tests/runtime/cli_diagnostics_runtime_spec.mjs",
+        "tests/runtime/debug_runtime_spec.mjs",
+        "tests/runtime/doctor_runtime_spec.mjs",
+        "tests/runtime/lsp_completion_runtime_spec.mjs",
+        "tests/runtime/lsp_editor_runtime_spec.mjs",
+        "tests/runtime/render_cache_runtime_spec.mjs",
+        "tests/runtime/render_diagnostics_runtime_spec.mjs",
     };
 
     for (node_spec_files) |path| {

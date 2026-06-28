@@ -264,6 +264,43 @@ pub fn findUnknownImportReport(
     return null;
 }
 
+pub fn importFailureSpan(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    program: *const ast.Program,
+    overlay: ?*const SourceOverlay,
+    diagnostics: *const LoadDiagnostics,
+) ?error_report.ByteSpan {
+    for (diagnostics.items.items) |diagnostic| {
+        for (program.imports.items) |import_decl| {
+            if (importMatchesDiagnosticPath(allocator, io, base_dir, import_decl.spec, diagnostic.path, overlay) catch false) {
+                return .{ .start = import_decl.span.start, .end = import_decl.span.end };
+            }
+        }
+    }
+    return null;
+}
+
+fn importMatchesDiagnosticPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    base_dir: []const u8,
+    import_spec: []const u8,
+    diagnostic_path: []const u8,
+    overlay: ?*const SourceOverlay,
+) !bool {
+    const resolved = resolveImport(allocator, io, base_dir, import_spec, overlay) catch |err| switch (err) {
+        error.UnknownImport => return false,
+        else => return err,
+    };
+    defer freeResolvedModule(allocator, resolved);
+    if (resolved.path) |path| {
+        return std.mem.eql(u8, path, diagnostic_path);
+    }
+    return std.mem.eql(u8, resolved.spec, diagnostic_path);
+}
+
 const VisitState = enum {
     visiting,
     done,
@@ -337,7 +374,10 @@ const Builder = struct {
         const program = syntax.parseWithSourceName(self.allocator, source, parse_path) catch |err| {
             const diagnostic = syntax.lastDiagnostic();
             var message_buf: [256]u8 = undefined;
-            const message = if (diagnostic) |diag| error_report.formatParseDiagnostic(&message_buf, diag) else @errorName(err);
+            const message = if (diagnostic) |diag|
+                error_report.formatParseDiagnostic(&message_buf, diag)
+            else
+                error_report.formatParseFailureWithoutDiagnostic(&message_buf, err);
             try self.addDiagnostic(parse_path, source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
             if (self.print_diagnostics) {
                 error_report.printParseError(parse_path, source, err, diagnostic);
@@ -441,7 +481,7 @@ const Builder = struct {
         for (module.implicit_import_ids.items) |import_id| {
             if (self.state_by_id.get(import_id)) |state| {
                 if (state == .visiting) {
-                    reportImportCycle(module, null);
+                    try self.reportImportCycle(module, null);
                     return error.DiagnosticsFailed;
                 }
             }
@@ -450,7 +490,7 @@ const Builder = struct {
         for (module.resolved_import_ids.items, 0..) |import_id, import_index| {
             if (self.state_by_id.get(import_id)) |state| {
                 if (state == .visiting) {
-                    reportImportCycle(module, import_index);
+                    try self.reportImportCycle(module, import_index);
                     return error.DiagnosticsFailed;
                 }
             }
@@ -461,20 +501,22 @@ const Builder = struct {
         try order.append(self.allocator, module_id);
     }
 
-    fn reportImportCycle(module: *const core.SourceModule, import_index: ?usize) void {
-        const span = if (import_index) |index|
-            if (index < module.program.imports.items.len)
-                module.program.imports.items[index].span
-            else
-                ast.Span{ .start = 0, .end = 1 }
-        else
-            ast.Span{ .start = 0, .end = 1 };
+    fn reportImportCycle(self: *Builder, module: *const core.SourceModule, import_index: ?usize) !void {
+        const path = module.path orelse module.spec;
+        const span: ?error_report.ByteSpan = if (import_index) |index| blk: {
+            if (index >= module.program.imports.items.len) break :blk null;
+            const import_span = module.program.imports.items[index].span;
+            break :blk .{ .start = import_span.start, .end = import_span.end };
+        } else null;
+        const message = "ImportCycle: import graph contains a cycle";
+        try self.addDiagnostic(path, module.source, .@"error", "ImportCycle", message, span);
+        if (!self.print_diagnostics) return;
         error_report.print(.{
-            .path = module.path orelse module.spec,
+            .path = path,
             .source = module.source,
             .severity = .@"error",
-            .message = "ImportCycle: import graph contains a cycle",
-            .span = .{ .start = span.start, .end = span.end },
+            .message = message,
+            .span = span,
         });
     }
 };

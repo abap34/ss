@@ -197,7 +197,7 @@ pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diag
             .path = path,
             .source = source,
             .severity = .@"error",
-            .message = std.fmt.bufPrint(&message_buf, "{s}: {s}", .{ @errorName(err), @errorName(err) }) catch @errorName(err),
+            .message = formatParseFailureWithoutDiagnostic(&message_buf, err),
             .span = null,
         });
         return;
@@ -216,11 +216,12 @@ pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diag
 pub fn printIrDiagnostics(path: []const u8, source: []const u8, ir: anytype) void {
     for (ir.diagnostics.items) |diagnostic| {
         var resolved = resolveIrDiagnostic(ir.allocator, path, source, ir, diagnostic) catch {
+            var message_buf: [128]u8 = undefined;
             print(.{
                 .path = path,
                 .source = source,
                 .severity = .@"error",
-                .message = @tagName(diagnostic.phase),
+                .message = fallbackIrDiagnosticMessage(&message_buf, diagnostic),
                 .span = null,
             });
             continue;
@@ -366,7 +367,7 @@ fn resolveIrDiagnosticLocation(
 
 fn irDiagnosticCode(diagnostic: anytype) []const u8 {
     return switch (diagnostic.data) {
-        .user_report => "UserReport",
+        .user_report => |data| userReportDiagnosticCode(data.message),
         .asset_not_found => "AssetNotFound",
         .asset_invalid => "InvalidAsset",
         .render_failed => "RenderFailed",
@@ -375,6 +376,24 @@ fn irDiagnosticCode(diagnostic: anytype) []const u8 {
         .page_overflow => "PageOverflow",
         .content_overflow => "ContentOverflow",
     };
+}
+
+fn fallbackIrDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "DiagnosticResolutionFailed: could not resolve {s} diagnostic",
+        .{@tagName(diagnostic.phase)},
+    ) catch "DiagnosticResolutionFailed: could not resolve diagnostic";
+}
+
+pub fn userReportDiagnosticCode(message: []const u8) []const u8 {
+    const colon = std.mem.indexOfScalar(u8, message, ':') orelse return "UserReport";
+    const code = message[0..colon];
+    if (code.len == 0) return "UserReport";
+    for (code) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and byte != '_') return "UserReport";
+    }
+    return code;
 }
 
 pub fn hasIrErrors(ir: anytype) bool {
@@ -391,7 +410,18 @@ pub fn printConstraintFailure(
     err: anyerror,
 ) void {
     if (ir.constraint_failures.items.len == 0 and ir.last_constraint_failure == null) {
-        std.debug.print("constraint error: {s}\n", .{@errorName(err)});
+        var message_buf: [128]u8 = undefined;
+        print(.{
+            .path = path,
+            .source = source,
+            .severity = .@"error",
+            .message = std.fmt.bufPrint(
+                &message_buf,
+                "LayoutFailed: {s}; no source constraint failure was recorded",
+                .{@errorName(err)},
+            ) catch "LayoutFailed: no source constraint failure was recorded",
+            .span = null,
+        });
         return;
     }
 
@@ -666,6 +696,14 @@ pub fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
             break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ parseDiagnosticCode(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
         },
     };
+}
+
+pub fn formatParseFailureWithoutDiagnostic(buf: []u8, err: anyerror) []const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "ParseFailed: parser returned {s} without a source diagnostic",
+        .{@errorName(err)},
+    ) catch "ParseFailed: parser failed without a source diagnostic";
 }
 
 fn parseDiagnosticCode(err: anyerror) []const u8 {

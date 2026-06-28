@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+export const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const requestedSsBin = process.argv[2] ?? process.env.SS_BIN ?? path.join(root, "zig-out", "bin", "ss");
 export const ssBin = resolveCommandPath(requestedSsBin);
 

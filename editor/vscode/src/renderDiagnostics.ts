@@ -31,8 +31,11 @@ export function parseSsDiagnosticsJson(source: string, pathMap: Record<string, s
     if (!filePath || !message) {
       continue;
     }
-    const start = positionField(item, "range", "start") ?? { line: 0, character: 0 };
-    const end = positionField(item, "range", "end") ?? { line: start.line, character: start.character + 1 };
+    const start = positionField(item, "range", "start");
+    const end = positionField(item, "range", "end");
+    if (!start || !end) {
+      continue;
+    }
     diagnostics.push({
       filePath: resolveDiagnosticPath(filePath, pathMap),
       line: Math.max(start.line, 0),
@@ -45,14 +48,6 @@ export function parseSsDiagnosticsJson(source: string, pathMap: Record<string, s
     });
   }
   return diagnostics;
-}
-
-export function fallbackSsDiagnosticMessage(output: string, exitCode: number | null): string {
-  const trimmed = stripAnsi(output).trim();
-  if (trimmed.length > 0) {
-    return truncateDiagnosticMessage(trimmed);
-  }
-  return `render failed with exit code ${exitCode ?? "unknown"}`;
 }
 
 function positionField(
@@ -104,8 +99,4 @@ function truncateDiagnosticMessage(message: string): string {
     return message;
   }
   return `${message.slice(0, maxDiagnosticMessageLength - 3)}...`;
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }

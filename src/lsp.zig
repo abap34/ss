@@ -283,16 +283,17 @@ const Server = struct {
             try self.allocator.dupe(u8, text)
         else
             utils.fs.readFileAlloc(self.io, self.allocator, entry_path) catch |err| {
-                const message = try std.fmt.allocPrint(self.allocator, "ProjectReadFailed: {s}", .{@errorName(err)});
-                defer self.allocator.free(message);
-                try diagnostics.add(entry_path, "", .@"error", "ProjectReadFailed", message, null);
+                try self.addProjectEntryReadDiagnostic(diagnostics, project_path, entry_path, err);
                 return snapshot;
             };
 
         var program = syntax.parseWithSourceName(self.allocator, source, entry_path) catch |err| {
             const diagnostic = syntax.lastParseDiagnostic();
             var message_buf: [256]u8 = undefined;
-            const message = if (diagnostic) |diag| formatParseDiagnostic(&message_buf, diag) else @errorName(err);
+            const message = if (diagnostic) |diag|
+                utils.err.formatParseDiagnostic(&message_buf, diag)
+            else
+                utils.err.formatParseFailureWithoutDiagnostic(&message_buf, err);
             try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
             self.allocator.free(source);
             return snapshot;
@@ -306,13 +307,19 @@ const Server = struct {
             .print_diagnostics = false,
         }) catch |err| {
             try diagnostics.addLoadDiagnostics(&load_diagnostics);
-            const span = importFailureSpan(self.allocator, asset_base_dir, &program, &load_diagnostics);
             if (load_diagnostics.items.items.len != 0) {
+                const span = module_loader.importFailureSpan(self.allocator, self.io, asset_base_dir, &program, &overlay, &load_diagnostics);
                 try diagnostics.add(entry_path, source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span);
+            } else if (err == error.UnknownImport) {
+                if (try module_loader.findUnknownImportReport(self.allocator, self.io, asset_base_dir, program, &overlay)) |found| {
+                    var report = found;
+                    defer report.deinit(self.allocator);
+                    try diagnostics.add(entry_path, source, .@"error", "UnknownImport", report.message, .{ .start = report.span.start, .end = report.span.end });
+                }
             } else {
                 const message = try std.fmt.allocPrint(self.allocator, "ProjectLoadFailed: {s}", .{@errorName(err)});
                 defer self.allocator.free(message);
-                try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, span);
+                try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, null);
             }
             program.deinit(self.allocator);
             self.allocator.free(source);
@@ -374,7 +381,29 @@ const Server = struct {
         };
         const message = try std.fmt.allocPrint(self.allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
         defer self.allocator.free(message);
-        try diagnostics.add(path, source, .@"error", @errorName(err), message, null);
+        try diagnostics.add(path, source, .@"error", @errorName(err), message, project.configErrorSpan(source, err));
+    }
+
+    fn addProjectEntryReadDiagnostic(
+        self: *Server,
+        diagnostics: *DiagnosticSet,
+        project_path: ?[]const u8,
+        entry_path: []const u8,
+        err: anyerror,
+    ) !void {
+        const message = try std.fmt.allocPrint(self.allocator, "ProjectReadFailed: could not read {s}: {s}", .{ entry_path, @errorName(err) });
+        defer self.allocator.free(message);
+        if (project_path) |path| {
+            var owned_source: ?[]u8 = null;
+            defer if (owned_source) |source| self.allocator.free(source);
+            const source = self.sourceForPath(path) orelse blk: {
+                owned_source = utils.fs.readFileAlloc(self.io, self.allocator, path) catch null;
+                break :blk owned_source orelse "";
+            };
+            try diagnostics.add(path, source, .@"error", "ProjectReadFailed", message, project.tomlKeySpan(source, "project", "entry") orelse project.tomlSectionSpan(source, "project"));
+            return;
+        }
+        try diagnostics.add(entry_path, "", .@"error", "ProjectReadFailed", message, null);
     }
 
     fn rememberCompletionSnapshot(self: *Server, snapshot: *const Snapshot) !void {
@@ -563,8 +592,9 @@ const DiagnosticSet = struct {
         span: ?utils.err.ByteSpan,
         related: []const LspRelatedInput,
     ) !void {
+        const primary_span = span orelse return;
         const uri = try uriFromPath(self.allocator, path);
-        const range = rangeFromSpan(source, span);
+        const range = rangeFromSpan(source, primary_span);
         const code_copy = self.allocator.dupe(u8, code) catch |err| {
             self.allocator.free(uri);
             return err;
@@ -583,6 +613,7 @@ const DiagnosticSet = struct {
         };
         errdefer diagnostic.deinit(self.allocator);
         for (related) |item| {
+            const related_span = item.span orelse continue;
             const related_uri = try uriFromPath(self.allocator, item.path);
             const related_message = self.allocator.dupe(u8, item.message) catch |err| {
                 self.allocator.free(related_uri);
@@ -590,7 +621,7 @@ const DiagnosticSet = struct {
             };
             diagnostic.related_information.append(self.allocator, .{
                 .uri = related_uri,
-                .range = rangeFromSpan(item.source, item.span),
+                .range = rangeFromSpan(item.source, related_span),
                 .message = related_message,
             }) catch |err| {
                 self.allocator.free(related_uri);
@@ -2360,8 +2391,7 @@ fn percentDecode(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn rangeFromSpan(source: []const u8, span: ?utils.err.ByteSpan) LspRange {
-    const s = span orelse return .{};
+fn rangeFromSpan(source: []const u8, s: utils.err.ByteSpan) LspRange {
     const start = lspPositionFromOffset(source, @min(s.start, source.len));
     const end = lspPositionFromOffset(source, @min(@max(s.end, s.start + 1), source.len));
     return .{
@@ -2423,64 +2453,15 @@ fn appendLocationObject(allocator: std.mem.Allocator, out: *std.ArrayList(u8), u
 
 fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
     return switch (diagnostic.data) {
-        .user_report => |data| if (std.mem.startsWith(u8, data.message, "DependencyQuery:")) "DependencyQuery" else "user_report",
-        .asset_not_found => "asset_not_found",
-        .asset_invalid => "asset_invalid",
-        .render_failed => "render_failed",
+        .user_report => |data| utils.err.userReportDiagnosticCode(data.message),
+        .asset_not_found => "AssetNotFound",
+        .asset_invalid => "InvalidAsset",
+        .render_failed => "RenderFailed",
         .type_mismatch => |data| @tagName(data.code),
         .recursive_function => "RecursiveFunction",
-        .page_overflow => "page_overflow",
-        .content_overflow => "content_overflow",
+        .page_overflow => "PageOverflow",
+        .content_overflow => "ContentOverflow",
     };
-}
-
-fn formatParseDiagnostic(buf: []u8, diagnostic: anytype) []const u8 {
-    return switch (diagnostic.err) {
-        error.UnterminatedString => "UnterminatedString: unterminated string",
-        error.UnknownAnchor => "UnknownAnchor: unknown anchor name",
-        error.AssignmentRequiresLet => "AssignmentRequiresLet: plain assignment statements are not supported; use 'let name = expr'",
-        error.ZeroArgCallRequiresParens => "ZeroArgCallRequiresParens: a bare name is not a statement; use parentheses for a zero-argument call, or pass the value to a placing function such as 'text!(name)'",
-        else => blk: {
-            const expected = diagnostic.expected orelse @errorName(diagnostic.err);
-            const found = diagnostic.found orelse "unknown token";
-            break :blk std.fmt.bufPrint(buf, "{s}: expected {s}, found {s}", .{ @errorName(diagnostic.err), expected, found }) catch @errorName(diagnostic.err);
-        },
-    };
-}
-
-fn importFailureSpan(
-    allocator: std.mem.Allocator,
-    asset_base_dir: []const u8,
-    program: *const ast.Program,
-    load_diagnostics: *const module_loader.LoadDiagnostics,
-) ?utils.err.ByteSpan {
-    for (load_diagnostics.items.items) |diagnostic| {
-        for (program.imports.items) |import_decl| {
-            if (importMatchesDiagnosticPath(allocator, asset_base_dir, import_decl.spec, diagnostic.path) catch false) {
-                return .{ .start = import_decl.span.start, .end = import_decl.span.end };
-            }
-        }
-    }
-    if (program.imports.items.len == 0) return null;
-    const span = program.imports.items[0].span;
-    return .{ .start = span.start, .end = span.end };
-}
-
-fn importMatchesDiagnosticPath(
-    allocator: std.mem.Allocator,
-    asset_base_dir: []const u8,
-    import_spec: []const u8,
-    diagnostic_path: []const u8,
-) !bool {
-    if (std.mem.startsWith(u8, import_spec, "std:")) {
-        return std.mem.eql(u8, import_spec, diagnostic_path);
-    }
-    const resolved = if (std.fs.path.isAbsolute(import_spec))
-        try allocator.dupe(u8, import_spec)
-    else
-        try std.fs.path.resolve(allocator, &.{ asset_base_dir, import_spec });
-    defer allocator.free(resolved);
-    return std.mem.eql(u8, resolved, diagnostic_path);
 }
 
 fn dirnameAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

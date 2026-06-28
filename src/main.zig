@@ -659,8 +659,52 @@ fn resolveProjectOrUsage(
         if (err == error.MissingInputPath) {
             return failUsage("missing input path or --project", .{});
         }
+        if (project.isConfigError(err)) {
+            if (try printProjectConfigErrorForOptions(allocator, io, options, err)) {
+                return error.DiagnosticsFailed;
+            }
+        }
         return err;
     };
+}
+
+fn printProjectConfigErrorForOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    options: CommandOptions,
+    err: anyerror,
+) !bool {
+    const maybe_config_path = try projectConfigPathForOptions(allocator, options);
+    const config_path = maybe_config_path orelse return false;
+    defer allocator.free(config_path);
+    const source = utils.fs.readFileAlloc(io, allocator, config_path) catch return false;
+    defer allocator.free(source);
+    const message = try std.fmt.allocPrint(allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
+    defer allocator.free(message);
+    error_report.print(.{
+        .path = config_path,
+        .source = source,
+        .severity = .@"error",
+        .message = message,
+        .span = project.configErrorSpan(source, err),
+    });
+    return true;
+}
+
+fn projectConfigPathForOptions(allocator: std.mem.Allocator, options: CommandOptions) !?[]u8 {
+    if (options.project_path) |arg| {
+        const absolute = try project.absolutePath(allocator, arg);
+        defer allocator.free(absolute);
+        if (std.mem.endsWith(u8, absolute, ".toml")) return try allocator.dupe(u8, absolute);
+        return try std.fs.path.join(allocator, &.{ absolute, "ss.toml" });
+    }
+    if (options.input_path) |input| {
+        const absolute = try project.absolutePath(allocator, input);
+        defer allocator.free(absolute);
+        const dir = std.fs.path.dirname(absolute) orelse ".";
+        return try project.discoverPath(allocator, dir);
+    }
+    return try project.discoverPath(allocator, ".");
 }
 
 fn runWatchCommand(

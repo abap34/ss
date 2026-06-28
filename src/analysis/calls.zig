@@ -523,7 +523,9 @@ const Analyzer = struct {
             try reportRecursiveFunction(self.allocator, self.ir, activation.module_id, func);
             return;
         }
-        try self.ir.addValidationDiagnostic(.@"error", null, null, "bytes:0-0", .{
+        const origin = try activationOrigin(self.allocator, self.ir, activation);
+        defer if (origin) |text| self.allocator.free(text);
+        try self.ir.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .message = try self.allocator.dupe(u8, "RecursiveFunction: recursive function value application") },
         });
     }
@@ -548,12 +550,26 @@ fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Ir, module_id
     });
 }
 
+fn activationOrigin(allocator: std.mem.Allocator, ir: *const core.Ir, activation: Activation) !?[]const u8 {
+    return switch (activation.label) {
+        .function => |key| if (ir.functions.get(key)) |func|
+            try originForModuleSpan(allocator, ir, key.module_id, func.span)
+        else
+            null,
+        .lambda => |span| try originForModuleSpan(allocator, ir, activation.module_id, span),
+    };
+}
+
 fn functionOrigin(allocator: std.mem.Allocator, ir: *const core.Ir, module_id: core.SourceModuleId, func: ast.FunctionDecl) ![]const u8 {
+    return originForModuleSpan(allocator, ir, module_id, func.span);
+}
+
+fn originForModuleSpan(allocator: std.mem.Allocator, ir: *const core.Ir, module_id: core.SourceModuleId, span: ast.Span) ![]const u8 {
     if (ir.moduleById(module_id)) |module| {
         const path = module.path orelse module.spec;
-        if (path.len != 0) return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, func.span.start, func.span.end });
+        if (path.len != 0) return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
     }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ func.span.start, func.span.end });
+    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
 fn functionKeyLessThan(left: core.FunctionKey, right: core.FunctionKey) bool {
