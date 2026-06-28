@@ -140,11 +140,6 @@
               "description": "Live preview refresh triggers.",
               "additionalProperties": false,
               "properties": {
-                "edit": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Refresh after edits."
-                },
                 "save": {
                   "type": "boolean",
                   "default": true,
@@ -168,11 +163,6 @@
                   "default": 30000,
                   "description": "Render timeout in milliseconds."
                 },
-                "delete_snapshots": {
-                  "type": "boolean",
-                  "default": true,
-                  "description": "Delete temporary project snapshots after rendering."
-                },
                 "extra_args": {
                   "type": "array",
                   "items": {
@@ -192,11 +182,6 @@
                   "type": "string",
                   "default": ".ss-cache/vscode-preview",
                   "description": "Generated PDF directory, relative to the workspace root unless absolute."
-                },
-                "snapshot": {
-                  "type": "string",
-                  "default": ".ss-cache/vscode-projects",
-                  "description": "Temporary snapshot directory, relative to the workspace root unless absolute."
                 }
               }
             }

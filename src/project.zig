@@ -45,13 +45,11 @@ pub const PreviewOpenMode = enum {
 pub const PreviewConfig = struct {
     enabled: bool = true,
     debounce_ms: u64 = 350,
-    refresh_on_edit: bool = true,
     refresh_on_save: bool = true,
     refresh_on_dependency_change: bool = true,
     open_mode: PreviewOpenMode = .vscode,
     reveal_after_render: bool = true,
     render_timeout_ms: u64 = 30000,
-    delete_snapshots_after_render: bool = true,
 };
 
 pub const PageGuideConfig = struct {
@@ -234,13 +232,11 @@ fn parsePreviewConfig(source: []const u8) PreviewConfig {
     return .{
         .enabled = parseBool(source, "editor.preview", "enabled", true),
         .debounce_ms = parseU64(source, "editor.preview", "debounce", 350),
-        .refresh_on_edit = parseBool(source, "editor.preview.refresh", "edit", true),
         .refresh_on_save = parseBool(source, "editor.preview.refresh", "save", true),
         .refresh_on_dependency_change = parseBool(source, "editor.preview.refresh", "dependency", true),
         .open_mode = parsePreviewOpenMode(source, "editor.preview", "open", .vscode),
         .reveal_after_render = parseBool(source, "editor.preview", "reveal", true),
         .render_timeout_ms = parseU64(source, "editor.preview.render", "timeout", 30000),
-        .delete_snapshots_after_render = parseBool(source, "editor.preview.render", "delete_snapshots", true),
     };
 }
 

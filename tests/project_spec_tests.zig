@@ -61,7 +61,7 @@ test "project spec: editor settings parse from ss.toml" {
         \\open = "external"
         \\
         \\[editor.preview.refresh]
-        \\edit = false
+        \\save = false
         \\
         \\[editor.page_guide]
         \\enabled = false
@@ -77,7 +77,7 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expect(!cfg.lsp.inlay_hint_positions);
     try testing.expectEqual(@as(u64, 50), cfg.preview.debounce_ms);
     try testing.expectEqual(project.PreviewOpenMode.external, cfg.preview.open_mode);
-    try testing.expect(!cfg.preview.refresh_on_edit);
+    try testing.expect(!cfg.preview.refresh_on_save);
     try testing.expect(!cfg.page_guide.enabled);
     try testing.expect(!cfg.page_guide.gutter_icon);
 }

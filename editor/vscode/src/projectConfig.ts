@@ -27,15 +27,12 @@ export interface LspSettings {
 export interface PreviewSettings {
   enabled: boolean;
   debounceMs: number;
-  refreshOnEdit: boolean;
   refreshOnSave: boolean;
   refreshOnDependencyChange: boolean;
   openMode: "vscode" | "external";
   revealAfterRender: boolean;
   renderTimeoutMs: number;
   outputDirectory: string;
-  snapshotDirectory: string;
-  deleteSnapshotsAfterRender: boolean;
   extraRenderArgs: string[];
 }
 
@@ -67,15 +64,12 @@ const defaultSettings: ProjectSettings = {
   preview: {
     enabled: true,
     debounceMs: 350,
-    refreshOnEdit: true,
     refreshOnSave: true,
     refreshOnDependencyChange: true,
     openMode: "vscode",
     revealAfterRender: true,
     renderTimeoutMs: 30000,
     outputDirectory: ".ss-cache/vscode-preview",
-    snapshotDirectory: ".ss-cache/vscode-projects",
-    deleteSnapshotsAfterRender: true,
     extraRenderArgs: [],
   },
   pageGuide: {
@@ -118,15 +112,12 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
     preview: {
       enabled: boolValue(table, "editor.preview", "enabled", defaultSettings.preview.enabled),
       debounceMs: numberValue(table, "editor.preview", "debounce", defaultSettings.preview.debounceMs, 0),
-      refreshOnEdit: boolValue(table, "editor.preview.refresh", "edit", defaultSettings.preview.refreshOnEdit),
       refreshOnSave: boolValue(table, "editor.preview.refresh", "save", defaultSettings.preview.refreshOnSave),
       refreshOnDependencyChange: boolValue(table, "editor.preview.refresh", "dependency", defaultSettings.preview.refreshOnDependencyChange),
       openMode: stringValue(table, "editor.preview", "open", defaultSettings.preview.openMode) === "external" ? "external" : "vscode",
       revealAfterRender: boolValue(table, "editor.preview", "reveal", defaultSettings.preview.revealAfterRender),
       renderTimeoutMs: numberValue(table, "editor.preview.render", "timeout", defaultSettings.preview.renderTimeoutMs, 0),
       outputDirectory: stringValue(table, "editor.preview.path", "output", defaultSettings.preview.outputDirectory),
-      snapshotDirectory: stringValue(table, "editor.preview.path", "snapshot", defaultSettings.preview.snapshotDirectory),
-      deleteSnapshotsAfterRender: boolValue(table, "editor.preview.render", "delete_snapshots", defaultSettings.preview.deleteSnapshotsAfterRender),
       extraRenderArgs: stringArrayValue(table, "editor.preview.render", "extra_args"),
     },
     pageGuide: {

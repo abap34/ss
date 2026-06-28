@@ -1,6 +1,5 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
@@ -31,14 +30,6 @@ interface RenderSession {
   panel?: PdfPreviewPanel;
 }
 
-interface Snapshot {
-  entryPath: string;
-  assetBaseDir: string;
-  cwd: string;
-  snapshotDir: string;
-  pathMap: Record<string, string>;
-}
-
 export class RenderController implements vscode.Disposable {
   private readonly sessions = new Map<string, RenderSession>();
   private readonly disposables: vscode.Disposable[] = [];
@@ -55,11 +46,6 @@ export class RenderController implements vscode.Disposable {
     this.disposables.push(this.renderDiagnostics);
     this.disposables.push(vscode.workspace.onDidOpenTextDocument((document) => {
       this.scheduleDocumentRender(document, 0);
-    }));
-    this.disposables.push(vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.languageId === "ss-slide" && projectSettings(event.document.uri).preview.refreshOnEdit) {
-        this.scheduleAffectedDocument(event.document);
-      }
     }));
     this.disposables.push(vscode.workspace.onDidSaveTextDocument((document) => {
       if (document.languageId === "ss-slide" && projectSettings(document.uri).preview.refreshOnSave) {
@@ -258,25 +244,19 @@ export class RenderController implements vscode.Disposable {
     if (!this.renderIsCurrent(key, renderId)) {
       return;
     }
-    const snapshot = await this.writeSnapshot(entryPath, assetBaseDir, localModules, renderId);
-    if (!this.renderIsCurrent(key, renderId)) {
-      const settings = projectSettings(document.uri).preview;
-      if (settings.deleteSnapshotsAfterRender) {
-        await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
-      }
-      return;
-    }
     const paths = this.previewPaths(document, renderId);
     await fs.promises.mkdir(paths.dir, { recursive: true });
 
     const settings = projectSettings(document.uri).preview;
     const command = vscode.workspace.getConfiguration("ss").get<string>("cli.path", "ss");
+    const entryUri = vscode.Uri.file(entryPath);
+    const workspaceRoot = vscode.workspace.getWorkspaceFolder(entryUri)?.uri.fsPath ?? path.dirname(entryPath);
     const args = [
       "render",
-      snapshot.entryPath,
+      entryPath,
       paths.tempPdf,
       "--asset-base-dir",
-      snapshot.assetBaseDir,
+      assetBaseDir,
       "--cache-id",
       entryPath,
       "--diagnostics-json",
@@ -284,17 +264,14 @@ export class RenderController implements vscode.Disposable {
       ...settings.extraRenderArgs,
     ];
     this.output.appendLine(`[render] ${command} ${args.join(" ")}`);
-    const result = await run(command, args, snapshot.cwd, settings.renderTimeoutMs);
-    if (settings.deleteSnapshotsAfterRender) {
-      await fs.promises.rm(snapshot.snapshotDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    const result = await run(command, args, workspaceRoot, settings.renderTimeoutMs);
     const current = this.sessions.get(key);
     if (!current || current.renderId !== renderId) {
       await removeIfExists(paths.tempPdf);
       await removeIfExists(paths.diagnosticsJson);
       return;
     }
-    const diagnostics = await this.readRenderDiagnostics(paths.diagnosticsJson, snapshot.pathMap);
+    const diagnostics = await this.readRenderDiagnostics(paths.diagnosticsJson);
     if (result.code !== 0) {
       const output = renderOutput(result);
       this.output.appendLine(output || `[render] failed with exit code ${result.code}`);
@@ -346,52 +323,13 @@ export class RenderController implements vscode.Disposable {
     }
   }
 
-  private async writeSnapshot(entryPath: string, assetBaseDir: string, modules: string[], renderId: number): Promise<Snapshot> {
-    const entryUri = vscode.Uri.file(entryPath);
-    const workspaceRoot = vscode.workspace.getWorkspaceFolder(entryUri)?.uri.fsPath ?? path.dirname(entryPath);
-    const settings = projectSettings(vscode.Uri.file(entryPath)).preview;
-    const snapshotRoot = path.join(resolveWorkspacePath(workspaceRoot, settings.snapshotDirectory), stableHash(entryPath));
-    const snapshotDir = path.join(snapshotRoot, `${process.pid}-${renderId}`);
-    await fs.promises.rm(snapshotDir, { recursive: true, force: true });
-    await copyDirectory(assetBaseDir, snapshotDir);
-    const pathMap: Record<string, string> = {};
-    const paths = unique([
-      entryPath,
-      ...modules,
-      ...vscode.workspace.textDocuments
-        .filter((doc) => doc.languageId === "ss-slide" && doc.uri.scheme === "file" && !ignoreGeneratedPath(doc.uri.fsPath))
-        .map((doc) => doc.uri.fsPath),
-    ]);
-    for (const sourcePath of paths) {
-      const text = openDocumentText(sourcePath) ?? await fs.promises.readFile(sourcePath, "utf8").catch(() => undefined);
-      if (text === undefined) {
-        continue;
-      }
-      const relative = safeRelative(assetBaseDir, sourcePath);
-      const target = path.join(snapshotDir, relative);
-      pathMap[normalizePath(target)] = normalizePath(sourcePath);
-      await fs.promises.mkdir(path.dirname(target), { recursive: true });
-      await fs.promises.writeFile(target, text, "utf8");
-    }
-    return {
-      entryPath: path.join(snapshotDir, safeRelative(assetBaseDir, entryPath)),
-      assetBaseDir: snapshotDir,
-      cwd: workspaceRoot,
-      snapshotDir,
-      pathMap,
-    };
-  }
-
-  private async readRenderDiagnostics(
-    diagnosticsJsonPath: string,
-    pathMap: Record<string, string>,
-  ): Promise<Map<string, vscode.Diagnostic[]>> {
+  private async readRenderDiagnostics(diagnosticsJsonPath: string): Promise<Map<string, vscode.Diagnostic[]>> {
     const source = await fs.promises.readFile(diagnosticsJsonPath, "utf8").catch(() => undefined);
     if (source === undefined) {
       return new Map();
     }
     try {
-      return structuredRenderDiagnostics(source, pathMap);
+      return structuredRenderDiagnostics(source, {});
     } catch (error) {
       this.output.appendLine(`[render] failed to read diagnostics JSON: ${String(error)}`);
       return new Map();
@@ -598,51 +536,8 @@ function unique(paths: string[]): string[] {
   return [...new Set(paths.map((item) => path.resolve(item)))];
 }
 
-function safeRelative(root: string, filePath: string): string {
-  const relative = path.relative(root, filePath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return path.join("__external", stableHash(filePath), path.basename(filePath));
-  }
-  return relative;
-}
-
 function resolveWorkspacePath(workspaceRoot: string, configuredPath: string): string {
   return path.isAbsolute(configuredPath) ? configuredPath : path.join(workspaceRoot, configuredPath);
-}
-
-function openDocumentText(filePath: string): string | undefined {
-  const resolved = path.resolve(filePath);
-  return vscode.workspace.textDocuments.find((doc) => doc.uri.scheme === "file" && path.resolve(doc.uri.fsPath) === resolved)?.getText();
-}
-
-async function copyDirectory(source: string, target: string): Promise<void> {
-  const entries = await fs.promises.readdir(source, { withFileTypes: true }).catch(() => []);
-  await fs.promises.mkdir(target, { recursive: true });
-  for (const entry of entries) {
-    if (skipSnapshotEntry(entry.name)) {
-      continue;
-    }
-    const sourcePath = path.join(source, entry.name);
-    const targetPath = path.join(target, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirectory(sourcePath, targetPath);
-    } else if (entry.isFile()) {
-      await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.promises.copyFile(sourcePath, targetPath);
-    }
-  }
-}
-
-function skipSnapshotEntry(name: string): boolean {
-  return name === "ss.toml" ||
-    name === ".ss-cache" ||
-    name === ".git" ||
-    name === ".zig-cache" ||
-    name === "zig-out" ||
-    name === "node_modules" ||
-    name === "dist" ||
-    name === "build" ||
-    name === "coverage";
 }
 
 function run(command: string, args: string[], cwd: string, timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
