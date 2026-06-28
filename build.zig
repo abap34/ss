@@ -265,7 +265,7 @@ fn addTestStep(
     const syntax_mod = createCommonTestModule(ctx, test_step, "src/syntax.zig", modules, true);
     const main_tests_mod = createCliModule(ctx, modules, build_options, tree_sitter);
     addTestModule(b, test_step, main_tests_mod);
-    addModuleTest(ctx, test_step, "tests/syntax_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/syntax/parser/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
@@ -273,12 +273,12 @@ fn addTestStep(
         import("language_type", modules.language_type),
         import("syntax", syntax_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/language_type_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/language/type/spec_tests.zig", &.{
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, null);
     const type_defs_mod = createModule(ctx, "src/language/type_defs.zig", &.{}, null);
-    addModuleTest(ctx, test_step, "tests/language_type_defs_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/language/type/defs_spec_tests.zig", &.{
         import("type_defs", type_defs_mod),
     }, null);
 
@@ -286,33 +286,33 @@ fn addTestStep(
         import("core", modules.core),
         import("language_type", modules.language_type),
     }, null);
-    addModuleTest(ctx, test_step, "tests/language_registry_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/language/registry/spec_tests.zig", &.{
         import("core", modules.core),
         import("model", modules.model),
         import("language_type", modules.language_type),
         import("registry", registry_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/core_ir_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/core/ir/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, true);
-    addModuleTest(ctx, test_step, "tests/core_markdown_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/core/markdown/spec_tests.zig", &.{
         import("core", modules.core),
     }, true);
-    addModuleTest(ctx, test_step, "tests/layout_graph_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, true);
-    addModuleTest(ctx, test_step, "tests/utils_fs_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
-    addModuleTest(ctx, test_step, "tests/project_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/project/config/spec_tests.zig", &.{
         import("project", modules.project),
         import("utils", modules.utils),
     }, null);
@@ -320,30 +320,30 @@ fn addTestStep(
     const lsp_scope_mod = createModule(ctx, "src/lsp/scope.zig", &.{
         import("utils", modules.utils),
     }, true);
-    addModuleTest(ctx, test_step, "tests/lsp_scope_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/lsp/scope/spec_tests.zig", &.{
         import("lsp_scope", lsp_scope_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/lsp_completion_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfHeadersAndLibraries(b, watch_mod, tree_sitter);
-    addModuleTest(ctx, test_step, "tests/watch_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
-    const render_pdf_spec_mod = createModule(ctx, "tests/render_pdf_spec_tests.zig", &.{}, true);
+    const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{}, true);
     addNativePdfBackend(ctx, render_pdf_spec_mod, tree_sitter);
     addTestModule(b, test_step, render_pdf_spec_mod);
     const render_wrap_mod = createModule(ctx, "src/render/wrap.zig", &.{}, null);
-    addModuleTest(ctx, test_step, "tests/render_pdf_native_wrap_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/render/pdf/native_wrap_spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
     }, null);
 
-    const compiler_semantics_support_mod = createModule(ctx, "tests/compiler_semantics_spec_support.zig", &.{
+    const compiler_semantics_support_mod = createModule(ctx, "tests/compiler/semantics/support.zig", &.{
         import("utils", modules.utils),
         import("compiler", compiler_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/compiler_semantics_spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/compiler/semantics/spec_tests.zig", &.{
         import("compiler_semantics", compiler_semantics_support_mod),
     }, true);
 

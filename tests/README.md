@@ -1,15 +1,19 @@
 # Test Boundary
 
-The tests in this directory are named `*_spec_tests.zig` because they assert
-behavior that should be treated as part of the language or compiler contract.
+The Zig tests in this directory live under subsystem and topic directories.
+Leaf test files use `spec_tests.zig` names because they assert behavior that
+should be treated as part of the language or compiler contract.
 
 They intentionally assert:
 
-- surface syntax and parse diagnostics that users can rely on;
-- static type acceptance rules exposed by `language/type.zig`;
-- IR ownership and graph operations used across compiler stages;
+- surface syntax and parse diagnostics under `tests/syntax/parser/`;
+- language-level type and registry rules under `tests/language/type/` and
+  `tests/language/registry/`;
+- IR ownership and graph operations under `tests/core/ir/`;
 - page-local layout graph semantics, constraint classification, and axis state
-  reconciliation;
+  reconciliation under `tests/layout/graph/`;
+- compiler, project, render, LSP, watch, and utility contracts under their
+  matching subsystem and topic directories;
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
 - focused CLI，render，and LSP regressions through `tests/runtime/*_spec.mjs`, also
@@ -24,9 +28,9 @@ has ever touched that subsystem.
   `tests/fixtures/project-basic`.
 - `tests/smoke/lsp.mjs` spawns `ss lsp` and checks initialize, diagnostics,
   one global completion, hover, definition, and one ranged edit cycle.
-- Language semantics, static semantics, and detailed runtime/editor regressions belong
-  in `*_spec_tests.zig`, `tests/runtime/*_spec.mjs`, or a focused
-  regression fixture before being considered for smoke coverage.
+- Language semantics, static semantics, and detailed runtime/editor regressions
+  belong in the matching subsystem/topic directory, `tests/runtime/*_spec.mjs`,
+  or a focused regression fixture before being considered for smoke coverage.
 
 They intentionally avoid asserting behavior that is still an implementation
 detail or underspecified:
