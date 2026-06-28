@@ -389,8 +389,8 @@ fn checkTopLevelStatement(
                 try addUserReport(ir, origin, "NoCurrentPage: constraints are only valid inside a page block", .{});
                 return error.NoCurrentPage;
             }
-            try validateAnchorRef(allocator, ir, env, origin, decl.target, true);
-            try validateAnchorRef(allocator, ir, env, origin, decl.source, false);
+            try validateAnchorRef(allocator, ir, sema, env, origin, decl.target, true);
+            try validateAnchorRef(allocator, ir, sema, env, origin, decl.source, false);
             if (decl.offset) |expr| {
                 try rejectPageOnlyExpr(ir, context, origin, page_context, scope, expr);
                 const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);
@@ -424,6 +424,7 @@ fn rejectPageOnlyExpr(
 fn validateAnchorRef(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
+    sema: *const SemanticEnv,
     env: *TypeEnv,
     origin: []const u8,
     anchor_ref: ast.AnchorRef,
@@ -435,16 +436,53 @@ fn validateAnchorRef(
             return error.PageCannotBeConstraintTarget;
         },
         .node => {
-            const name = anchor_ref.node_name orelse return;
-            const info = env.get(name) orelse {
-                try addUserReport(ir, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{name});
-                return error.UnknownIdentifier;
-            };
+            const path = anchorObjectPath(anchor_ref) orelse return;
+            const info = try resolveAnchorPathInfo(allocator, ir, sema, env, origin, path);
             if (!isObjectLike(info)) {
                 try ensureType(ir, allocator, info, Type.object, origin, .UnmatchedArgumentType);
             }
         },
     }
+}
+
+fn anchorObjectPath(anchor_ref: ast.AnchorRef) ?[]const u8 {
+    return anchor_ref.node_path orelse anchor_ref.node_name;
+}
+
+fn resolveAnchorPathInfo(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    env: *TypeEnv,
+    origin: []const u8,
+    path: []const u8,
+) !semantic_types.TypeInfo {
+    var iter = std.mem.splitScalar(u8, path, '.');
+    const first = iter.next() orelse return error.UnknownIdentifier;
+    var info = env.get(first) orelse {
+        try addUserReport(ir, origin, "UnknownIdentifier: unknown constraint object '{s}'", .{first});
+        return error.UnknownIdentifier;
+    };
+    while (iter.next()) |field_name| {
+        if (info.ty.kind != .record) {
+            try addUserReport(ir, origin, "InvalidConstraintObject: anchor path '{s}' does not resolve through a record", .{path});
+            return error.InvalidType;
+        }
+        const record_name = info.ty.class_name orelse {
+            try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
+            return error.InvalidType;
+        };
+        const field = sema.recordField(record_name, field_name) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, field_name });
+            return error.InvalidType;
+        };
+        const field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
+            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
+            return error.InvalidType;
+        };
+        info = infoFromType(field_type);
+    }
+    return info;
 }
 
 fn isObjectLike(info: semantic_types.TypeInfo) bool {

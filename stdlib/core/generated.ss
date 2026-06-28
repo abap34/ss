@@ -1,22 +1,23 @@
-import std:core/render as *
+import std:core/classes as *
+import std:core/objects as *
 import std:core/selectors as *
 
 fn pageno_s(page_no: Object) -> Object
-  apply_text(page_no, TextStyle {
+  page_no.text = TextStyle {
     font = FontFace { family = "Helvetica" }
     size = 13
     line_height = 16
     color = c"0.5,0.5,0.5"
-  })
-  apply_layout(page_no, LayoutStyle {
+  }
+  page_no.layout = LayoutStyle {
     spacing_after = 0
     x = 60
     right_inset = 24
     wrap = WrapMode.off
     fit = FitPolicy.error
-  })
-  pin_r(page_no, 24)
-  pin_b(page_no, 20)
+  }
+  ~ page_no.right == page.right - 24
+  ~ page_no.bottom == page.bottom + 20
   return page_no
 end
 
@@ -116,20 +117,20 @@ end
 
 fn mk_footer!(page_value: Page, text_value: String) -> Page
   let footer = place_on!(page_value, new(text_value, "footer", "text"))
-  apply_text(footer, TextStyle {
+  footer.text = TextStyle {
     font = FontFace { family = "Helvetica" }
     size = 12
     line_height = 15
     color = c"0.42,0.42,0.42"
-  })
-  apply_layout(footer, LayoutStyle {
+  }
+  footer.layout = LayoutStyle {
     spacing_after = 0
     x = 72
     right_inset = 160
     wrap = WrapMode.off
-  })
-  pin_l(footer, 72)
-  pin_b(footer, 20)
+  }
+  ~ footer.left == page.left + 72
+  ~ footer.bottom == page.bottom + 20
   return page_value
 end
 
@@ -145,10 +146,10 @@ fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
   logo.render_kind = RenderKind.raster_asset
   logo.asset_scale = scale
   logo.wrap = WrapMode.off
-  fix_w(logo, 96)
-  fix_h(logo, 40)
-  pin_r(logo, 72)
-  pin_t(logo, 36)
+  ~ logo.width == 96
+  ~ logo.height == 40
+  ~ logo.right == page.right - 72
+  ~ logo.top == page.top - 36
   return page_value
 end
 
@@ -161,22 +162,22 @@ end
 
 fn mk_mark!(page_value: Page, text_value: String) -> Page
   let mark = place_on!(page_value, new(text_value, "watermark", "text"))
-  apply_text(mark, TextStyle {
+  mark.text = TextStyle {
     font = FontFace { family = "Helvetica" }
     size = 72
     line_height = 80
     color = c"0.85,0.85,0.85"
-  })
-  apply_layout(mark, LayoutStyle {
+  }
+  mark.layout = LayoutStyle {
     spacing_after = 0
     x = 0
     right_inset = 0
     wrap = WrapMode.off
-  })
-  fix_w(mark, 800)
-  fix_h(mark, 90)
-  equal(anchor(mark, "center_x"), page_anchor("center_x"), 0)
-  equal(anchor(mark, "center_y"), page_anchor("center_y"), 0)
+  }
+  ~ mark.width == 800
+  ~ mark.height == 90
+  ~ mark.center_x == page.center_x
+  ~ mark.center_y == page.center_y
   return page_value
 end
 

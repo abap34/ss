@@ -371,6 +371,7 @@ fn writeAnchorRef(object: *json.Object, key: []const u8, anchor_ref: ast.AnchorR
     try item.stringField("kind", @tagName(anchor_ref.kind));
     try item.enumTagField("anchor", anchor_ref.anchor);
     try item.optionalStringField("node_name", anchor_ref.node_name);
+    try item.optionalStringField("node_path", anchor_ref.node_path);
     try item.end();
 }
 

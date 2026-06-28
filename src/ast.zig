@@ -621,6 +621,16 @@ pub const AnchorRef = struct {
     },
     anchor: core.Anchor,
     node_name: ?[]const u8 = null,
+    node_path: ?[]const u8 = null,
+
+    pub fn withAnchor(self: AnchorRef, anchor: core.Anchor) AnchorRef {
+        return .{
+            .kind = self.kind,
+            .anchor = anchor,
+            .node_name = self.node_name,
+            .node_path = self.node_path,
+        };
+    }
 };
 
 pub const ConstraintDecl = struct {

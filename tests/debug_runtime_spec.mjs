@@ -136,8 +136,8 @@ async function writeConflictDeck(project) {
 
 page one
 let item = text!("conflict")
-equal(anchor(item, "left"), page_anchor("left"), 80)
-equal(anchor(item, "left"), page_anchor("left"), 120)
+~ item.left == page.left + 80
+~ item.left == page.left + 120
 end
 `,
     "utf8",

@@ -1,4 +1,9 @@
 import std:themes/base as *
+import std:core/classes as *
+import std:core/components as *
+import std:core/layout as *
+import std:core/objects as *
+import std:core/render as *
 
 fn default_theme() -> Theme
   let highlight = code_theme_github_light()
@@ -370,65 +375,88 @@ end
 
 fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
   let title = title_obj(title_text)
-  apply_text_block(title, theme.h1)
+  title.text = theme.h1.text
+  title.layout = theme.h1.layout
+  title.underline = theme.h1.underline
   return title
 end
 
 fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = sub_obj(subtitle_text)
-  apply_text_block(subtitle, theme.h2)
+  subtitle.text = theme.h2.text
+  subtitle.layout = theme.h2.layout
+  subtitle.underline = theme.h2.underline
   return subtitle
 end
 
 fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
   let subtitle = sub_obj(subtitle_text)
-  apply_text_block(subtitle, theme.h3)
+  subtitle.text = theme.h3.text
+  subtitle.layout = theme.h3.layout
+  subtitle.underline = theme.h3.underline
   return subtitle
 end
 
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let rule = rule()
-  let title = tl(title_obj(title_text), 72, 56)
-  apply_text_block(title, theme.head)
-  apply_rule(rule, theme.cover.accent.rule)
+  let title = title_obj(title_text)
+  title.text = theme.head.text
+  title.layout = theme.head.layout
+  title.underline = theme.head.underline
+  rule.rule = theme.cover.accent.rule
   rule.layout_spacing_after = 48
-  pin_l(rule, 72)
-  pin_r(rule, 72)
-  below(rule, title, -4)
-  return title
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 56
+  ~ rule.left == page.left + 72
+  ~ rule.right == page.right - 72
+  ~ rule.top == title.bottom + 4
+  return group(title, rule)
 end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 124)
-  apply_text_block(subtitle, theme.subhead)
+  let subtitle = sub_obj(subtitle_text)
+  subtitle.text = theme.subhead.text
+  subtitle.layout = theme.subhead.layout
+  subtitle.underline = theme.subhead.underline
+  ~ subtitle.left == page.left + 96
+  ~ subtitle.right == page.right - 96
+  ~ subtitle.top == page.top - 124
   return subtitle
 end
 
 fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
   let body = body_obj(text_value)
-  apply_text_block(body, theme.body)
+  body.text = theme.body.text
+  body.layout = theme.body.layout
+  body.underline = theme.body.underline
   code_theme(body, theme.code.highlight)
   return body
 end
 
 fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
   let note = note_obj(text_value)
-  apply_text_block(note, theme.note)
+  note.text = theme.note.text
+  note.layout = theme.note.layout
+  note.underline = theme.note.underline
   return note
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = flow(tex_obj(text_value), 96, 96)
+  let obj = tex_obj(text_value)
+  obj.layout_x = 96
+  obj.layout_right_inset = 96
+  obj.wrap = WrapMode.on
   obj.math_scale = scale
   return obj
 end
 
 fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
   let obj = raw_obj(text_value, "figure", "figure_text")
-  apply_figure_block(obj, theme.figure)
+  obj.text = theme.figure.text
+  obj.layout = theme.figure.layout
   code_theme(obj, theme.code.highlight)
   let chrome = panel()
-  apply_chrome(chrome, theme.figure.chrome)
+  chrome.chrome = theme.figure.chrome
   chrome.layout_spacing_after = theme.figure.layout.spacing_after
   surround(chrome, obj, theme.figure.chrome.pad_x, theme.figure.chrome.pad_y)
   return obj
@@ -436,20 +464,24 @@ end
 
 fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
   let obj = img_obj(path_value)
-  apply_asset_block(obj, theme.image with {
+  let image_style = theme.image with {
     asset.scale = factor
-  })
+  }
+  obj.layout = image_style.layout
+  obj.asset = image_style.asset
   require_asset_exists(obj)
   return obj
 end
 
 fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
   let obj = pdf_obj(path_value)
-  apply_asset_block(obj, theme.pdf with {
+  let pdf_style = theme.pdf with {
     asset.scale = factor
-  })
+  }
+  obj.layout = pdf_style.layout
+  obj.asset = pdf_style.asset
   let chrome = panel()
-  apply_chrome(chrome, theme.pdf.chrome)
+  chrome.chrome = theme.pdf.chrome
   chrome.layout_spacing_after = theme.pdf.layout.spacing_after
   surround(chrome, obj, theme.pdf.chrome.pad_x, theme.pdf.chrome.pad_y)
   require_asset_exists(obj)
@@ -459,9 +491,11 @@ end
 fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
   let code = code_obj(text_value)
   code.language = language_name
-  apply_code_block(code, theme.code)
+  code.text = theme.code.text
+  code.layout = theme.code.layout
+  code_theme(code, theme.code.highlight)
   let chrome = panel()
-  apply_chrome(chrome, theme.code.chrome)
+  chrome.chrome = theme.code.chrome
   chrome.layout_spacing_after = theme.code.layout.spacing_after
   surround(chrome, code, theme.code.chrome.pad_x, theme.code.chrome.pad_y)
   return code
@@ -473,12 +507,16 @@ end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
   let title = lab_obj(title_text)
-  apply_text_block(title, theme.toc.title)
+  title.text = theme.toc.title.text
+  title.layout = theme.toc.title.layout
+  title.underline = theme.toc.title.underline
   let list = toc_obj()
-  apply_text_block(list, theme.toc.body)
+  list.text = theme.toc.body.text
+  list.layout = theme.toc.body.layout
+  list.underline = theme.toc.body.underline
   let chrome = panel()
-  apply_chrome(chrome, theme.toc.chrome)
-  below(list, title, 34)
+  chrome.chrome = theme.toc.chrome
+  ~ list.top == title.bottom - 34
   surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
 end
@@ -490,19 +528,29 @@ fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
-  let title = tl(title_obj(title_text), 72, 148)
+  let title = title_obj(title_text)
   let subtitle = sub_obj(subtitle_text)
   let author = by_obj(author_name)
   let accent = rule()
-  apply_text_block(title, theme.cover.title)
-  apply_text_block(subtitle, theme.cover.subtitle)
-  apply_text_block(author, theme.cover.author)
-  apply_rule(accent, theme.cover.accent.rule)
+  title.text = theme.cover.title.text
+  title.layout = theme.cover.title.layout
+  title.underline = theme.cover.title.underline
+  subtitle.text = theme.cover.subtitle.text
+  subtitle.layout = theme.cover.subtitle.layout
+  subtitle.underline = theme.cover.subtitle.underline
+  author.text = theme.cover.author.text
+  author.layout = theme.cover.author.layout
+  author.underline = theme.cover.author.underline
+  accent.rule = theme.cover.accent.rule
 
-  below_l(subtitle, title, 0, 28)
-  below_l(author, subtitle, 0, 40)
-  pin_l(accent, 72)
-  fix_w(accent, 160)
-  below(accent, author, 32)
-  return title
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 148
+  ~ subtitle.left == title.left
+  ~ subtitle.top == title.bottom - 28
+  ~ author.left == subtitle.left
+  ~ author.top == subtitle.bottom - 40
+  ~ accent.left == page.left + 72
+  ~ accent.right == accent.left + 160
+  ~ accent.top == author.bottom - 32
+  return group(title, subtitle, author, accent)
 end

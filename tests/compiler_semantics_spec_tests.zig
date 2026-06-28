@@ -3861,7 +3861,7 @@ test "compiler semantics: document callbacks may use explicit pages without curr
         \\
         \\fn decorate!(page_value: Page) -> Object
         \\  let item = place_on!(page_value, new("explicit", "body", "text"))
-        \\  pin_l(item, 72)
+        \\  ~ item.left == page.left + 72
         \\  return item
         \\end
         \\
@@ -3977,6 +3977,36 @@ test "compiler semantics: constraint-referenced groups are layout values" {
         \\  let detail = text! "detail"
         \\  let right = text! "right"
         \\  cols2(group(left, detail), right)
+        \\end
+        \\
+    , "UnplacedObject");
+}
+
+test "compiler semantics: constraints resolve record member object anchors" {
+    try expectNoLoweredDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\record Parts {
+        \\  root: Object
+        \\  left: Object
+        \\  right: Object
+        \\}
+        \\
+        \\fn make_parts(left: Object, right: Object) -> Parts
+        \\  return Parts {
+        \\    root = group(left, right)
+        \\    left = left
+        \\    right = right
+        \\  }
+        \\end
+        \\
+        \\page ok
+        \\  let left = text! "left"
+        \\  let right = text! "right"
+        \\  let parts = make_parts(left, right)
+        \\  let caption = note! "caption"
+        \\  ~ caption.top == parts.root.bottom - 16
+        \\  ~ caption.left == parts.right.left
         \\end
         \\
     , "UnplacedObject");

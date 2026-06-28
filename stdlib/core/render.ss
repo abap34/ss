@@ -1,3 +1,4 @@
+import std:core/classes as *
 import std:core/objects as *
 
 fn tex_preamble(src: String) -> Void
@@ -27,62 +28,6 @@ end
 
 fn scale(obj: Object, factor: Number) -> Object
   obj.asset_scale = factor
-  return obj
-end
-
-fn apply_text(obj: Object, style: TextStyle) -> Object
-  obj.text = style
-  return obj
-end
-
-fn apply_layout(obj: Object, style: LayoutStyle) -> Object
-  obj.layout = style
-  return obj
-end
-
-fn apply_font(obj: Object, face: FontFace) -> Object
-  obj.text_font_family = face.family
-  obj.text_font_weight = face.weight
-  obj.text_font_style = face.style
-  obj.text_font_stretch = face.stretch
-  return obj
-end
-
-fn apply_code_font(obj: Object, face: FontFace) -> Object
-  obj.text_code_font_family = face.family
-  obj.text_code_font_weight = face.weight
-  obj.text_code_font_style = face.style
-  obj.text_code_font_stretch = face.stretch
-  return obj
-end
-
-fn apply_code_style(obj: Object, style: CodeStyle) -> Object
-  obj.code = style
-  return obj
-end
-
-fn apply_chrome(obj: Object, style: ChromeStyle) -> Object
-  obj.chrome = style
-  return obj
-end
-
-fn apply_underline(obj: Object, style: UnderlineStyle) -> Object
-  obj.underline = style
-  return obj
-end
-
-fn apply_rule(obj: Object, style: RuleStyle) -> Object
-  obj.rule = style
-  return obj
-end
-
-fn apply_asset(obj: Object, style: AssetStyle) -> Object
-  obj.asset = style
-  return obj
-end
-
-fn apply_math(obj: Object, style: MathStyle) -> Object
-  obj.math = style
   return obj
 end
 
@@ -323,16 +268,4 @@ end
 
 fn fit_ignore(obj: Object) -> Object
   return fit(obj, FitPolicy.ignore)
-end
-
-fn/! byline(text_value: String) -> Object
-  return by_obj(text_value)
-end
-
-fn/! label(text_value: String) -> Object
-  return lab_obj(text_value)
-end
-
-fn/! rule() -> Object
-  return rule_obj()
 end
