@@ -353,8 +353,8 @@ ss stores generated render artifacts under `.ss-cache/render`. Converted assets
 and math images live under `artifacts/`; the renderer keeps only the latest page
 generation for each deck under `decks/`.
 
-Preview tools that render temporary snapshots can pass `--cache-id ID` to reuse
-the same deck generation across changing snapshot paths.
+Preview tools that render through temporary paths can pass `--cache-id ID` to
+reuse the same deck generation across changing input paths.
 
 Environment knobs:
 

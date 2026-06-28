@@ -1984,14 +1984,12 @@ fn appendProjectInfoSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u
     try out.appendSlice(allocator, ",\"preview\":{");
     try appendBoolField(allocator, out, "enabled", snapshot.preview.enabled, true);
     try appendIntField(allocator, out, "debounce", snapshot.preview.debounce_ms, false);
-    try appendBoolField(allocator, out, "refreshOnEdit", snapshot.preview.refresh_on_edit, false);
     try appendBoolField(allocator, out, "refreshOnSave", snapshot.preview.refresh_on_save, false);
     try appendBoolField(allocator, out, "refreshOnDependencyChange", snapshot.preview.refresh_on_dependency_change, false);
     try out.appendSlice(allocator, ",\"open\":");
     try appendJsonString(allocator, out, if (snapshot.preview.open_mode == .external) "external" else "vscode");
     try appendBoolField(allocator, out, "reveal", snapshot.preview.reveal_after_render, false);
     try appendIntField(allocator, out, "timeout", snapshot.preview.render_timeout_ms, false);
-    try appendBoolField(allocator, out, "deleteSnapshots", snapshot.preview.delete_snapshots_after_render, false);
     try out.append(allocator, '}');
 
     try out.appendSlice(allocator, ",\"pageGuide\":{");

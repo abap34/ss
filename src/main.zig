@@ -63,7 +63,7 @@ fn usage() void {
         \\  --jobs N
         \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
         \\  --cache-id ID
-        \\    Stable render cache identity for snapshot-based render inputs
+        \\    Stable render cache identity for temporary render input paths
         \\  --diagnostics-json FILE
         \\    Write machine-readable diagnostics JSON for render
         \\  --color auto|always|never

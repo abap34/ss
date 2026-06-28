@@ -52,18 +52,15 @@ open = "vscode"
 reveal = true
 
 [editor.preview.refresh]
-edit = true
 save = true
 dependency = true
 
 [editor.preview.render]
 timeout = 30000
-delete_snapshots = true
 extra_args = []
 
 [editor.preview.path]
 output = ".ss-cache/vscode-preview"
-snapshot = ".ss-cache/vscode-projects"
 
 [editor.page_guide]
 enabled = true
@@ -100,18 +97,19 @@ Add this to your workspace settings:
 
 ## Live Preview
 
-Open `.ss` documents are rendered through the same snapshot path used by live
-preview so render-phase failures appear in VS Code Diagnostics. This covers
+Live preview renders saved project files. Normal LSP diagnostics continue to use
+open editor buffers, but PDF output and render-phase diagnostics update from the
+files on disk when the deck or a dependency is saved or changed. This covers
 backend errors such as TeX math rendering failures. Opening or closing the PDF
 preview only controls the viewer; render diagnostics continue to use the normal
 editor refresh settings.
 
 Run `ss: Open Live Preview` from the command palette or the editor title button.
-The preview asks the language server for `ss/projectInfo`, writes a snapshot of
-open `.ss` buffers under `.ss-cache/vscode-projects/`, and refreshes a PDF with:
+The preview asks the language server for `ss/projectInfo` and refreshes a PDF
+with:
 
 ```sh
-ss render <snapshot-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base> --cache-id <project-entry>
+ss render <project-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base> --cache-id <project-entry>
 ```
 
 With the default `[editor.preview].open = "vscode"`, the extension opens its own
