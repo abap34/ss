@@ -13,7 +13,7 @@ import {
   positionAt,
   root,
   withLspClient,
-} from "../lsp_harness.mjs";
+} from "../runtime/harness.mjs";
 
 const fixture = path.join(root, "tests", "fixtures", "project-basic", "slide.ss");
 const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "parts.ss");

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assert, ssBin } from "./lsp_harness.mjs";
+import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
 await testCacheStatsCommands();

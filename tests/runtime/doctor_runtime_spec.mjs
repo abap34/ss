@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { assert, root, ssBin } from "./lsp_harness.mjs";
+import { assert, root, ssBin } from "./harness.mjs";
 
 await testDoctorReportsTreeSitterHealth();
 

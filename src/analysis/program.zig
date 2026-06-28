@@ -1274,7 +1274,14 @@ fn printIrDiagnosticsOrFallback(ir: *core.Ir, err: anyerror) void {
     if (utils.err.hasIrErrors(ir)) {
         utils.err.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
     } else {
-        std.debug.print("error: {s}\n", .{@errorName(err)});
+        var message_buf: [128]u8 = undefined;
+        utils.err.print(.{
+            .path = ir.projectPath(),
+            .source = ir.projectSource(),
+            .severity = .@"error",
+            .message = std.fmt.bufPrint(&message_buf, "BuildFailed: {s}", .{@errorName(err)}) catch "BuildFailed: internal analysis failure",
+            .span = null,
+        });
     }
 }
 

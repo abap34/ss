@@ -7,7 +7,7 @@ import { PdfPreviewPanel } from "./pdfPreviewPanel";
 import { PdfPreviewServer } from "./pdfPreviewServer";
 import { projectSettings } from "./projectConfig";
 import { RenderDiagnosticStore } from "./renderDiagnosticStore";
-import { fallbackSsDiagnosticMessage, parseSsDiagnosticsJson } from "./renderDiagnostics";
+import { parseSsDiagnosticsJson } from "./renderDiagnostics";
 
 type ClientProvider = () => LanguageClient | undefined;
 
@@ -276,7 +276,7 @@ export class RenderController implements vscode.Disposable {
       const output = renderOutput(result);
       this.output.appendLine(output || `[render] failed with exit code ${result.code}`);
       if (diagnostics.size === 0) {
-        this.publishFallbackRenderDiagnostic(document, key, output, result.code);
+        this.clearRenderDiagnostics(key);
       } else {
         this.renderDiagnostics.replace(key, diagnostics);
       }
@@ -334,24 +334,6 @@ export class RenderController implements vscode.Disposable {
       this.output.appendLine(`[render] failed to read diagnostics JSON: ${String(error)}`);
       return new Map();
     }
-  }
-
-  private publishFallbackRenderDiagnostic(
-    document: vscode.TextDocument,
-    owner: string,
-    output: string,
-    exitCode: number | null,
-  ): void {
-    const fallback = new vscode.Diagnostic(
-      new vscode.Range(0, 0, 0, 1),
-      fallbackSsDiagnosticMessage(output, exitCode),
-      vscode.DiagnosticSeverity.Error,
-    );
-    fallback.source = "ss render";
-    fallback.code = "RenderFailed";
-    const grouped = new Map<string, vscode.Diagnostic[]>();
-    grouped.set(document.uri.fsPath, [fallback]);
-    this.renderDiagnostics.replace(owner, grouped);
   }
 
   private clearRenderDiagnostics(owner: string): void {

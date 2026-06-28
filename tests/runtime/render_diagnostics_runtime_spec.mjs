@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assert, ssBin } from "./lsp_harness.mjs";
+import { assert, ssBin } from "./harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
 
@@ -12,6 +12,7 @@ await testRenderFailureWritesStructuredDiagnostic();
 await testInlineMathRenderFailureLocatesFormula();
 await testConcatenatedMathRenderFailureLocatesSourceLiteral();
 await testSvgAssetRenderFailureLocatesAssetReference();
+await testMissingAssetCheckLocatesPathLiteral();
 
 async function testRenderFailureProducesDiagnostic() {
   const project = await mkdtempProject("ss-render-diagnostics-");
@@ -202,6 +203,32 @@ end
     assert(diagnostic.code === "RenderFailed", `unexpected SVG diagnostic code: ${JSON.stringify(diagnostic)}`);
     assert(diagnostic.range.start.line === 3, `unexpected SVG diagnostic start line: ${JSON.stringify(diagnostic)}`);
     assert(diagnostic.range.start.character === 8, `unexpected SVG diagnostic start character: ${JSON.stringify(diagnostic)}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testMissingAssetCheckLocatesPathLiteral() {
+  const project = await mkdtempProject("ss-missing-asset-diagnostics-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page bad
+image!("missing.svg")
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs(["check", "slide.ss"], project);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code !== 0, "check should fail for a missing asset");
+    assert(output.includes("AssetNotFound:"), `missing asset did not produce a diagnostic:\n${output}`);
+    assert(output.includes("slide.ss:4:9"), `missing asset diagnostic did not point at the path literal:\n${output}`);
+    assert(output.includes('| image!("missing.svg")'), `missing asset diagnostic omitted source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

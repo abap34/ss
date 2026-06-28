@@ -712,6 +712,6 @@ fn analysisErrorMessage(err: anyerror) []const u8 {
         error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
         error.ScheduledDependencyCycle => "ScheduledDependencyCycle: document evaluation dependencies contain a cycle",
-        else => @errorName(err),
+        else => "ScheduleAnalysisFailed: scheduled unit analysis failed",
     };
 }
