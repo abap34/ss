@@ -1,5 +1,9 @@
 import std:themes/default as *
 import std:themes/default as base
+import std:core/classes as *
+import std:core/components as *
+import std:core/layout as *
+import std:core/objects as *
 
 fn default_theme() -> Theme
   return base::default_theme() with {
@@ -93,14 +97,23 @@ fn/! h3(text_value: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = tl(title_obj(title_text), 30, 30)
-  apply_text_block(title, theme.head)
+  let title = title_obj(title_text)
+  title.text = theme.head.text
+  title.layout = theme.head.layout
+  title.underline = theme.head.underline
+  ~ title.left == page.left + 30
+  ~ title.top == page.top - 30
   return title
 end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = tspan(sub_obj(subtitle_text), 96, 96, 150)
-  apply_text_block(subtitle, theme.subhead)
+  let subtitle = sub_obj(subtitle_text)
+  subtitle.text = theme.subhead.text
+  subtitle.layout = theme.subhead.layout
+  subtitle.underline = theme.subhead.underline
+  ~ subtitle.left == page.left + 96
+  ~ subtitle.right == page.right - 96
+  ~ subtitle.top == page.top - 150
   return subtitle
 end
 
@@ -117,11 +130,17 @@ fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme
 end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = tl(lab_obj(title_text), 30, 30)
-  apply_text_block(title, theme.toc.title)
+  let title = lab_obj(title_text)
+  title.text = theme.toc.title.text
+  title.layout = theme.toc.title.layout
+  title.underline = theme.toc.title.underline
   let list = toc_obj()
-  apply_text_block(list, theme.toc.body)
-  below(list, title, 35)
+  list.text = theme.toc.body.text
+  list.layout = theme.toc.body.layout
+  list.underline = theme.toc.body.underline
+  ~ title.left == page.left + 30
+  ~ title.top == page.top - 30
+  ~ list.top == title.bottom - 35
   return group(title, list)
 end
 
@@ -132,17 +151,30 @@ fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, date: String = "", theme: Theme = current_theme()) -> Object
-  let title = tl(title_obj(title_text), 72, 240)
+  let title = title_obj(title_text)
   let subtitle = sub_obj(subtitle_text)
   let author = by_obj(author_name)
   let date_text = by_obj(date)
-  apply_text_block(title, theme.cover.title)
-  apply_text_block(subtitle, theme.cover.subtitle)
-  apply_text_block(author, theme.cover.author)
-  apply_text_block(date_text, theme.cover.date)
+  title.text = theme.cover.title.text
+  title.layout = theme.cover.title.layout
+  title.underline = theme.cover.title.underline
+  subtitle.text = theme.cover.subtitle.text
+  subtitle.layout = theme.cover.subtitle.layout
+  subtitle.underline = theme.cover.subtitle.underline
+  author.text = theme.cover.author.text
+  author.layout = theme.cover.author.layout
+  author.underline = theme.cover.author.underline
+  date_text.text = theme.cover.date.text
+  date_text.layout = theme.cover.date.layout
+  date_text.underline = theme.cover.date.underline
 
-  below_l(subtitle, title, 0, 28)
-  below_l(author, subtitle, 0, 36)
-  below_l(date_text, author, 0, 18)
-  return title
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 240
+  ~ subtitle.left == title.left
+  ~ subtitle.top == title.bottom - 28
+  ~ author.left == subtitle.left
+  ~ author.top == subtitle.bottom - 36
+  ~ date_text.left == author.left
+  ~ date_text.top == author.bottom - 18
+  return group(title, subtitle, author, date_text)
 end

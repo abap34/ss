@@ -1,4 +1,4 @@
-import std:core/components as *
+import std:core/classes as *
 
 record TextBlockStyle {
   text: TextStyle = TextStyle {}
@@ -78,29 +78,3 @@ record Theme {
 extend Doc {
   theme: Theme? = none
 }
-
-fn apply_text_block(obj: Object, style: TextBlockStyle) -> Object
-  apply_text(obj, style.text)
-  apply_layout(obj, style.layout)
-  apply_underline(obj, style.underline)
-  return obj
-end
-
-fn apply_code_block(obj: Object, style: CodeBlockStyle) -> Object
-  apply_text(obj, style.text)
-  apply_layout(obj, style.layout)
-  code_theme(obj, style.highlight)
-  return obj
-end
-
-fn apply_figure_block(obj: Object, style: FigureBlockStyle) -> Object
-  apply_text(obj, style.text)
-  apply_layout(obj, style.layout)
-  return obj
-end
-
-fn apply_asset_block(obj: Object, style: AssetBlockStyle) -> Object
-  apply_layout(obj, style.layout)
-  apply_asset(obj, style.asset)
-  return obj
-end

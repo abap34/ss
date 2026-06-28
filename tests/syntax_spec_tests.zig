@@ -1013,6 +1013,26 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     );
 }
 
+test "syntax spec: constraints accept record member anchor paths" {
+    var parsed = try parse(
+        \\page Layout
+        \\  ~ caption.top == parts.root.bottom - 16
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const constraint = parsed.program.pages.items[0].statements.items[0].kind.constrain;
+    try testing.expectEqual(.node, constraint.target.kind);
+    try testing.expectEqualStrings("caption", constraint.target.node_name.?);
+    try testing.expectEqualStrings("caption", constraint.target.node_path.?);
+    try testing.expectEqual(.top, constraint.target.anchor);
+    try testing.expectEqual(.node, constraint.source.kind);
+    try testing.expectEqualStrings("parts", constraint.source.node_name.?);
+    try testing.expectEqualStrings("parts.root", constraint.source.node_path.?);
+    try testing.expectEqual(.bottom, constraint.source.anchor);
+}
+
 test "syntax spec: member expressions stay in the AST" {
     var parsed = try parse(
         \\page Members

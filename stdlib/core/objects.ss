@@ -1,5 +1,3 @@
-import std:core/layout as *
-
 fn/! obj(text_value: String, role_name: String, payload_name: String) -> Object
   return new(text_value, role_name, payload_name)
 end
@@ -52,8 +50,8 @@ end
 
 fn spacer(height: Number, width: Number = 1) -> Object
   let obj = panel_obj()
-  fix_h(obj, height)
-  fix_w(obj, width)
+  ~ obj.height == height
+  ~ obj.width == width
   return obj
 end
 

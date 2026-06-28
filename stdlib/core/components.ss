@@ -28,6 +28,18 @@ fn/! panel() -> Object
   return panel_obj()
 end
 
+fn/! byline(text_value: String) -> Object
+  return by_obj(text_value)
+end
+
+fn/! label(text_value: String) -> Object
+  return lab_obj(text_value)
+end
+
+fn/! rule() -> Object
+  return rule_obj()
+end
+
 fn page_bg(fill_name: Color?) -> Void
   pagectx().background_fill = fill_name
 end
@@ -43,7 +55,9 @@ end
 
 fn/! frame(text_value: String, role_name: String, payload_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
   let inner = raw_obj(text_value, role_name, payload_name)
-  flow(inner, left, right)
+  inner.layout_x = left
+  inner.layout_right_inset = right
+  inner.wrap = WrapMode.on
   let chrome = panel()
   box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout_spacing_after = 34
@@ -80,7 +94,9 @@ end
 
 fn code_in(text_value: String, language_name: String, left: Number, right: Number) -> Object
   let code = code_l(text_value, language_name)
-  flow(code, left, right)
+  code.layout_x = left
+  code.layout_right_inset = right
+  code.wrap = WrapMode.on
   return code
 end
 
@@ -106,30 +122,45 @@ fn/! text(text_value: String) -> Object
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = flow(tex_obj(text_value), 102, 102)
+  let obj = tex_obj(text_value)
+  obj.layout_x = 102
+  obj.layout_right_inset = 102
+  obj.wrap = WrapMode.on
   obj.math_scale = scale
   return obj
 end
 
 fn/! figure(text_value: String) -> Object
-  return flow(fig_obj(text_value), 102, 102)
+  let obj = fig_obj(text_value)
+  obj.layout_x = 102
+  obj.layout_right_inset = 102
+  obj.wrap = WrapMode.on
+  return obj
 end
 
 fn/! image(path_value: String, factor: Number = 1) -> Object
-  let obj = scale(flow(img_obj(path_value), 102, 102), factor)
+  let obj = scale(img_obj(path_value), factor)
+  obj.layout_x = 102
+  obj.layout_right_inset = 102
+  obj.wrap = WrapMode.on
   require_asset_exists(obj)
   return obj
 end
 
 fn/! pdf(path_value: String, factor: Number = 1) -> Object
-  let obj = scale(flow(pdf_obj(path_value), 102, 102), factor)
+  let obj = scale(pdf_obj(path_value), factor)
+  obj.layout_x = 102
+  obj.layout_right_inset = 102
+  obj.wrap = WrapMode.on
   require_asset_exists(obj)
   return obj
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
   let code = code_l(text_value, language_name)
-  flow(code, 102, 102)
+  code.layout_x = 102
+  code.layout_right_inset = 102
+  code.wrap = WrapMode.on
   return code
 end
 
@@ -138,7 +169,11 @@ fn/! code_file(path_value: String, language_name: String = "plain") -> Object
 end
 
 fn/! note(text_value: String) -> Object
-  return flow(note_obj(text_value), 120, 120)
+  let obj = note_obj(text_value)
+  obj.layout_x = 120
+  obj.layout_right_inset = 120
+  obj.wrap = WrapMode.on
+  return obj
 end
 
 fn/! citation(target: Object, number: Number, reference_text: String) -> Object
@@ -147,8 +182,10 @@ fn/! citation(target: Object, number: Number, reference_text: String) -> Object
   let id = "citation:" ++ str(page_index(pagectx())) ++ ":" ++ number_text
 
   let ref = link(cite_obj(marker ++ " " ++ reference_text), id)
-  inset_x(ref, 120, 90)
-  pin_t(ref, add(632, mul(sub(number, 1), 20)))
+  ref.layout_x = 120
+  ref.layout_right_inset = 90
+  ref.wrap = WrapMode.on
+  ~ ref.top == page.top - add(632, mul(sub(number, 1), 20))
   return ref
 end
 

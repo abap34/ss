@@ -1903,7 +1903,6 @@ fn executeStatement(
             }
         },
         .constrain => |decl| {
-            if (context != .page) return error.NoCurrentPage;
             const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
             const source = try resolveAnchorRef(ir, mode, env, origin, decl.source, false);
             const offset: f32 = if (decl.offset) |expr| blk: {
@@ -2202,10 +2201,8 @@ fn resolveAnchorRef(
             return .{ .page = anchor_ref.anchor };
         },
         .node => {
-            const value = env.get(anchor_ref.node_name.?) orelse {
-                try reportUnknownIdentifier(ir, anchor_ref.node_name.?, current_origin);
-                return error.UnknownIdentifier;
-            };
+            var value = try resolveAnchorPathValue(ir, env, current_origin, anchor_ref.node_path orelse anchor_ref.node_name.?);
+            defer value.deinit(ir.allocator);
             const node_id = try resolveValueObjectId(ir, mode, value);
             if (is_target) {
                 return .{ .node_id = node_id, .anchor = anchor_ref.anchor };
@@ -2213,4 +2210,34 @@ fn resolveAnchorRef(
             return .{ .node = .{ .node_id = node_id, .anchor = anchor_ref.anchor } };
         },
     }
+}
+
+fn resolveAnchorPathValue(
+    ir: *core.Ir,
+    env: *std.StringHashMap(core.Value),
+    current_origin: []const u8,
+    path: []const u8,
+) !core.Value {
+    var iter = std.mem.splitScalar(u8, path, '.');
+    const first = iter.next() orelse return error.UnknownIdentifier;
+    const base = env.get(first) orelse {
+        try reportUnknownIdentifier(ir, first, current_origin);
+        return error.UnknownIdentifier;
+    };
+    var current = try base.clone(ir.allocator);
+    while (iter.next()) |field_name| {
+        if (current != .record) {
+            current.deinit(ir.allocator);
+            return error.InvalidValueTag;
+        }
+        const field_value = current.record.field(field_name) orelse {
+            current.deinit(ir.allocator);
+            try reportUnknownIdentifier(ir, field_name, current_origin);
+            return error.UnknownIdentifier;
+        };
+        const next = try field_value.clone(ir.allocator);
+        current.deinit(ir.allocator);
+        current = next;
+    }
+    return current;
 }

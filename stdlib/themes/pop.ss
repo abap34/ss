@@ -1,5 +1,9 @@
 import std:themes/default as *
 import std:themes/default as base
+import std:core/classes as *
+import std:core/components as *
+import std:core/layout as *
+import std:core/objects as *
 
 fn default_theme() -> Theme
   return base::default_theme() with {
@@ -115,22 +119,36 @@ end
 
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   let chip = txt_obj(title_text, "label")
-  let title = tl(txt_obj(title_text, "title"), 72, 98)
-  apply_text_block(chip, theme.label)
-  apply_chrome(chip, ChromeStyle {
+  let chip_bg = panel()
+  let title = txt_obj(title_text, "title")
+  chip.text = theme.label.text
+  chip.layout = theme.label.layout
+  chip.underline = theme.label.underline
+  chip_bg.chrome = ChromeStyle {
     fill = c"1,0.3765,0.5098"
     stroke = c"1,0.6706,0.2941"
     line_width = 1
     radius = 10
-  })
-  apply_text_block(title, theme.head)
-  same_tr(chip, title, 72, 8)
-  return title
+  }
+  title.text = theme.head.text
+  title.layout = theme.head.layout
+  title.underline = theme.head.underline
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 98
+  ~ chip.right == page.right - 72
+  ~ chip.top == title.top + 8
+  surround(chip_bg, chip, 12, 6)
+  return group(title, chip_bg, chip)
 end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = tspan(sub_obj(subtitle_text), 110, 110, 150)
-  apply_text_block(subtitle, theme.subhead)
+  let subtitle = sub_obj(subtitle_text)
+  subtitle.text = theme.subhead.text
+  subtitle.layout = theme.subhead.layout
+  subtitle.underline = theme.subhead.underline
+  ~ subtitle.left == page.left + 110
+  ~ subtitle.right == page.right - 110
+  ~ subtitle.top == page.top - 150
   return subtitle
 end
 
@@ -139,7 +157,10 @@ fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = flow(tex_obj(text_value), 108, 108)
+  let obj = tex_obj(text_value)
+  obj.layout_x = 108
+  obj.layout_right_inset = 108
+  obj.wrap = WrapMode.on
   obj.math_scale = scale
   return obj
 end
@@ -166,18 +187,26 @@ end
 
 fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
   let note = note_obj(text_value)
-  apply_text_block(note, theme.note)
+  note.text = theme.note.text
+  note.layout = theme.note.layout
+  note.underline = theme.note.underline
   return note
 end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = tl(txt_obj(title_text, "label"), 72, 98)
-  apply_text_block(title, theme.toc.title)
+  let title = txt_obj(title_text, "label")
+  title.text = theme.toc.title.text
+  title.layout = theme.toc.title.layout
+  title.underline = theme.toc.title.underline
   let list = toc_obj()
-  apply_text_block(list, theme.toc.body)
+  list.text = theme.toc.body.text
+  list.layout = theme.toc.body.layout
+  list.underline = theme.toc.body.underline
   let chrome = panel()
-  apply_chrome(chrome, theme.toc.chrome)
-  below(list, title, 46)
+  chrome.chrome = theme.toc.chrome
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 98
+  ~ list.top == title.bottom - 46
   surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
 end
@@ -189,14 +218,24 @@ fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
-  let title = tl(txt_obj(title_text, "title"), 72, 152)
+  let title = txt_obj(title_text, "title")
   let subtitle = txt_obj(subtitle_text, "subtitle")
   let author = txt_obj(author_name, "byline")
-  apply_text_block(title, theme.cover.title)
-  apply_text_block(subtitle, theme.cover.subtitle)
-  apply_text_block(author, theme.cover.author)
+  title.text = theme.cover.title.text
+  title.layout = theme.cover.title.layout
+  title.underline = theme.cover.title.underline
+  subtitle.text = theme.cover.subtitle.text
+  subtitle.layout = theme.cover.subtitle.layout
+  subtitle.underline = theme.cover.subtitle.underline
+  author.text = theme.cover.author.text
+  author.layout = theme.cover.author.layout
+  author.underline = theme.cover.author.underline
 
-  below_l(subtitle, title, 6, 28)
-  same_tr(author, title, 72, -4)
-  return title
+  ~ title.left == page.left + 72
+  ~ title.top == page.top - 152
+  ~ subtitle.left == title.left + 6
+  ~ subtitle.top == title.bottom - 28
+  ~ author.right == page.right - 72
+  ~ author.top == title.top - 4
+  return group(title, subtitle, author)
 end

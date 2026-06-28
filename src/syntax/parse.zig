@@ -1438,8 +1438,8 @@ const Parser = struct {
             if (target.anchor_ref.kind == .page) return self.fail(error.PageCannotBeConstraintTarget);
             const offset = try self.parseExpr();
             return .{
-                .target = .{ .kind = .node, .anchor = dimension.target_anchor, .node_name = target.anchor_ref.node_name },
-                .source = .{ .kind = .node, .anchor = dimension.source_anchor, .node_name = target.anchor_ref.node_name },
+                .target = target.anchor_ref.withAnchor(dimension.target_anchor),
+                .source = target.anchor_ref.withAnchor(dimension.source_anchor),
                 .offset = offset,
             };
         }
@@ -1470,27 +1470,51 @@ const Parser = struct {
     }
 
     fn parseConstraintMemberRef(self: *Parser, allow_dimension: bool) !ConstraintMemberRef {
-        const object_name = try self.parseIdentifier();
         self.skipInlineSpaces();
-        try self.expectChar('.');
-        const member_name = try self.parseIdentifier();
+        const path_start = self.pos;
+        _ = try self.parseIdentifier();
+        var member_name: []const u8 = "";
+        var path_end: usize = path_start;
+        while (true) {
+            self.skipInlineSpaces();
+            path_end = self.pos;
+            try self.expectChar('.');
+            member_name = try self.parseIdentifier();
+            self.skipInlineSpaces();
+            if (self.eof() or self.source[self.pos] != '.') break;
+        }
+        const object_path = std.mem.trim(u8, self.source[path_start..path_end], " \t\r\n");
         if (allow_dimension) {
             if (std.mem.eql(u8, member_name, "width")) {
                 return .{
-                    .anchor_ref = .{ .kind = if (std.mem.eql(u8, object_name, "page")) .page else .node, .anchor = .right, .node_name = if (std.mem.eql(u8, object_name, "page")) null else object_name },
+                    .anchor_ref = makeParsedAnchorRef(object_path, .right),
                     .dimension = .{ .target_anchor = .right, .source_anchor = .left },
                 };
             }
             if (std.mem.eql(u8, member_name, "height")) {
                 return .{
-                    .anchor_ref = .{ .kind = if (std.mem.eql(u8, object_name, "page")) .page else .node, .anchor = .top, .node_name = if (std.mem.eql(u8, object_name, "page")) null else object_name },
+                    .anchor_ref = makeParsedAnchorRef(object_path, .top),
                     .dimension = .{ .target_anchor = .top, .source_anchor = .bottom },
                 };
             }
         }
         const anchor = names.parseAnchorName(member_name) orelse return self.fail(error.UnknownAnchor);
-        if (std.mem.eql(u8, object_name, "page")) return .{ .anchor_ref = .{ .kind = .page, .anchor = anchor } };
-        return .{ .anchor_ref = .{ .kind = .node, .anchor = anchor, .node_name = object_name } };
+        return .{ .anchor_ref = makeParsedAnchorRef(object_path, anchor) };
+    }
+
+    fn makeParsedAnchorRef(object_path: []const u8, anchor: core.Anchor) AnchorRef {
+        if (std.mem.eql(u8, object_path, "page")) return .{ .kind = .page, .anchor = anchor };
+        return .{
+            .kind = .node,
+            .anchor = anchor,
+            .node_name = firstPathSegment(object_path),
+            .node_path = object_path,
+        };
+    }
+
+    fn firstPathSegment(path: []const u8) []const u8 {
+        if (std.mem.indexOfScalar(u8, path, '.')) |index| return path[0..index];
+        return path;
     }
 
     fn makeNegCall(self: *Parser, expr: Expr) !Expr {
