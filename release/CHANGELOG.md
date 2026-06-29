@@ -4,6 +4,13 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-29
+
+### Fixed
+
+- Fixed a horizontal layout constraint cycle case that could fail to terminate
+  while building conflict diagnostics.
+
 ## [0.7.0] - 2026-06-29
 
 ### Added

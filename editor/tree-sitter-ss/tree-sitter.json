@@ -12,7 +12,7 @@
     }
   ],
   "metadata": {
-    "version": "0.7.0",
+    "version": "0.7.1",
     "license": "Apache-2.0",
     "description": "Tree-sitter grammar for the ss slide language.",
     "authors": [
