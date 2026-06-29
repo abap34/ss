@@ -672,6 +672,98 @@ test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
     try expectFloat(title_node.frame.x, byline_node.frame.x);
 }
 
+test "layout solver: same-target peer equalities form one fallback unit" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const a = try ir.makeObject(page, "a", null, .text, .text, "A");
+    const b = try ir.makeObject(page, "b", null, .text, .text, "B");
+    const c = try ir.makeObject(page, "c", null, .text, .text, "C");
+    try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-is-b");
+    try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, "a-is-c");
+
+    try ir.finalize();
+
+    const a_node = ir.getNode(a).?;
+    const b_node = ir.getNode(b).?;
+    const c_node = ir.getNode(c).?;
+    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(b_node.frame, .top));
+    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(c_node.frame, .top));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: chained peer equalities form one fallback unit" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const a = try ir.makeObject(page, "a", null, .text, .text, "A");
+    const b = try ir.makeObject(page, "b", null, .text, .text, "B");
+    const c = try ir.makeObject(page, "c", null, .text, .text, "C");
+    try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-is-b");
+    try ir.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, "b-is-c");
+
+    try ir.finalize();
+
+    const a_node = ir.getNode(a).?;
+    const b_node = ir.getNode(b).?;
+    const c_node = ir.getNode(c).?;
+    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(b_node.frame, .top));
+    try expectFloat(graph.anchorValue(a_node.frame, .top), graph.anchorValue(c_node.frame, .top));
+    try testing.expect(!ir.hasConstraintFailures());
+}
+
+test "layout solver: hard peer equality conflicts are independent of direction and chaining" {
+    var forward = try initEmptyIr();
+    defer forward.deinit();
+
+    const forward_page = try forward.addPage("Page");
+    const forward_a = try forward.makeObject(forward_page, "a", null, .text, .text, "A");
+    const forward_b = try forward.makeObject(forward_page, "b", null, .text, .text, "B");
+    try forward.addAnchorConstraint(forward_a, .top, .{ .page = .top }, -100, "a-top");
+    try forward.addAnchorConstraint(forward_b, .top, .{ .page = .top }, -200, "b-top");
+    try forward.addAnchorConstraint(forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, "a-is-b");
+    try testing.expectError(error.ConstraintConflict, forward.finalize());
+
+    var reverse = try initEmptyIr();
+    defer reverse.deinit();
+
+    const reverse_page = try reverse.addPage("Page");
+    const reverse_a = try reverse.makeObject(reverse_page, "a", null, .text, .text, "A");
+    const reverse_b = try reverse.makeObject(reverse_page, "b", null, .text, .text, "B");
+    try reverse.addAnchorConstraint(reverse_a, .top, .{ .page = .top }, -100, "a-top");
+    try reverse.addAnchorConstraint(reverse_b, .top, .{ .page = .top }, -200, "b-top");
+    try reverse.addAnchorConstraint(reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, "b-is-a");
+    try testing.expectError(error.ConstraintConflict, reverse.finalize());
+
+    var chain = try initEmptyIr();
+    defer chain.deinit();
+
+    const chain_page = try chain.addPage("Page");
+    const chain_a = try chain.makeObject(chain_page, "a", null, .text, .text, "A");
+    const chain_b = try chain.makeObject(chain_page, "b", null, .text, .text, "B");
+    const chain_c = try chain.makeObject(chain_page, "c", null, .text, .text, "C");
+    try chain.addAnchorConstraint(chain_a, .top, .{ .page = .top }, -100, "a-top");
+    try chain.addAnchorConstraint(chain_c, .top, .{ .page = .top }, -200, "c-top");
+    try chain.addAnchorConstraint(chain_a, .top, .{ .node = .{ .node_id = chain_b, .anchor = .top } }, 0, "a-is-b");
+    try chain.addAnchorConstraint(chain_b, .top, .{ .node = .{ .node_id = chain_c, .anchor = .top } }, 0, "b-is-c");
+    try testing.expectError(error.ConstraintConflict, chain.finalize());
+}
+
+test "layout solver: horizontal fallback does not seed inconsistent hard cycles" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const a = try ir.makeObject(page, "a", null, .text, .text, "aa");
+    const b = try ir.makeObject(page, "b", null, .text, .text, "bb");
+    try ir.addAnchorConstraint(a, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 100, "a-left");
+    try ir.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .left } }, 200, "b-left");
+
+    try testing.expectError(error.ConstraintConflict, ir.finalize());
+}
+
 test "layout solver: constrained group source forms one fallback unit" {
     var ir = try initEmptyIr();
     defer ir.deinit();
