@@ -4,6 +4,43 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-29
+
+### Added
+
+- Added expression-bodied functions and record update expressions.
+- Added bundled Tree-sitter highlighters built from pinned parser sources.
+- Added debug trace commands and native dependency version reporting in the
+  CLI.
+
+### Changed
+
+- Reworked PDF text measurement around recording surfaces and removed the old
+  unresolved-frame overflow diagnostics.
+- Refined layout solving, fallback placement, and stdlib layout helpers.
+- Optimized dependency analysis, scheduling, text measurement, assembled render
+  output caching, and layout solving.
+- Updated code highlighting defaults and parser update automation.
+- Organized Zig and runtime tests into subsystem and topic directories.
+
+### Fixed
+
+- Reported render artifact failures, page render failures, and render
+  diagnostics from source spans.
+- Recovered member completion from broken access expressions.
+- Stopped tinting math output with surrounding text color.
+- Fixed source locations for CLI, LSP, project config, import, function body,
+  and render diagnostics.
+- Removed stale VS Code preview snapshot handling and fixed
+  environment-sensitive CI checks.
+
+## [0.6.1] - 2026-06-27
+
+### Fixed
+
+- Improved layout constraint diagnostics without changing slide language syntax,
+  standard library APIs, or default rendering behavior.
+
 ## [0.6.0] - 2026-06-18
 
 ### Added
