@@ -34,6 +34,7 @@ pub fn buildHorizontalConstraints(ir: anytype, workspace: *const graph.AxisWorks
         else
             components.axisFallbackRootIndex(ir, root) orelse continue;
         const placement_id = workspace.nodeAt(placement_index);
+        if (!hardFallbackSeedAllowed(workspace, &components, root, placement_id, .horizontal)) continue;
         const placement_node = ir.getNode(placement_id) orelse return error.UnknownNode;
         try constraints.append(ir.allocator, .{
             .target_node = placement_id,
