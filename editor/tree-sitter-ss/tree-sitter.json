@@ -4,13 +4,15 @@
       "name": "ss",
       "camelcase": "Ss",
       "scope": "source.ss",
-      "file-types": ["ss"],
+      "file-types": [
+        "ss"
+      ],
       "injection-regex": "^ss$",
       "class-name": "TreeSitterSs"
     }
   ],
   "metadata": {
-    "version": "0.6.0",
+    "version": "0.7.0",
     "license": "Apache-2.0",
     "description": "Tree-sitter grammar for the ss slide language.",
     "authors": [

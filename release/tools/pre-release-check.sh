@@ -264,7 +264,11 @@ version_output="$(zig-out/bin/ss --version)"
 echo "$version_output"
 case "$version_output" in
   *"ss $version ($commit)"*) ;;
-  *) fail "unexpected ss --version output for $tag at $commit" ;;
+  *)
+    if ! grep -Fqx "ss $version" <<< "$version_output" || ! grep -Fqx "commit: $commit" <<< "$version_output"; then
+      fail "unexpected ss --version output for $tag at $commit"
+    fi
+    ;;
 esac
 
 if [[ "$release_metadata_only" != true ]]; then
