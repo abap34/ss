@@ -241,6 +241,27 @@ pub const Node = struct {
     }
 };
 
+pub const LayoutMeasurementMode = enum {
+    natural,
+    width_constrained,
+};
+
+pub const LayoutMeasurement = struct {
+    width: f32,
+    height: f32,
+};
+
+pub const LayoutMeasurementProvider = struct {
+    context: *anyopaque,
+    measure: *const fn (
+        context: *anyopaque,
+        ir: *anyopaque,
+        node: *const Node,
+        width: f32,
+        mode: LayoutMeasurementMode,
+    ) anyerror!?LayoutMeasurement,
+};
+
 pub const ValueTag = enum {
     none,
     document,

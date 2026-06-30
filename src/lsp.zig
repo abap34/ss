@@ -3,6 +3,7 @@ const ast = @import("ast");
 const build_options = @import("build_options");
 const core = @import("core");
 const app = @import("app.zig");
+const pdf = @import("render/pdf.zig");
 const syntax = @import("syntax.zig");
 const lowering = @import("lowering.zig");
 const analysis = @import("analysis.zig");
@@ -340,7 +341,7 @@ const Server = struct {
         analysis.analyzeProgram(self.allocator, &ir) catch {};
         try diagnostics.addIr(&ir);
         if (!diagnostics.hasErrors()) {
-            if (lowering.lowerToIr(&ir)) {
+            if (self.lowerToIrWithRenderMeasurements(&ir)) {
                 try diagnostics.addIr(&ir);
             } else |err| switch (err) {
                 error.ConstraintConflict,
@@ -370,6 +371,13 @@ const Server = struct {
         snapshot.dump_json = dump.toOwnedString(self.allocator, &ir) catch null;
         snapshot.completion_index = analysis_completion.Index.fromIr(self.allocator, &ir) catch null;
         return snapshot;
+    }
+
+    fn lowerToIrWithRenderMeasurements(self: *Server, ir: *core.Ir) !void {
+        try lowering.evaluateDocument(ir);
+        var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, self.io, ir);
+        defer measurement_scope.deinit();
+        try lowering.solveLayoutWithOptions(ir, .{ .measurement_provider = measurement_scope.provider() });
     }
 
     fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {

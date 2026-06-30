@@ -56,11 +56,20 @@ const MeasurementMap = std.HashMap(MeasurementKey, f32, MeasurementKeyContext, s
 pub const MeasurementCache = struct {
     allocator: std.mem.Allocator,
     values: MeasurementMap,
+    render_provider: ?model.LayoutMeasurementProvider = null,
 
     pub fn init(allocator: std.mem.Allocator) MeasurementCache {
         return .{
             .allocator = allocator,
             .values = MeasurementMap.init(allocator),
+        };
+    }
+
+    pub fn initWithRenderProvider(allocator: std.mem.Allocator, provider: ?model.LayoutMeasurementProvider) MeasurementCache {
+        return .{
+            .allocator = allocator,
+            .values = MeasurementMap.init(allocator),
+            .render_provider = provider,
         };
     }
 
@@ -111,6 +120,12 @@ pub const MeasurementCache = struct {
             return measured;
         };
         return measured;
+    }
+
+    fn renderedMeasurement(self: *MeasurementCache, ir: anytype, node: *const Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
+        const provider = self.render_provider orelse return null;
+        const ir_ptr: *anyopaque = @ptrCast(@alignCast(ir));
+        return try provider.measure(provider.context, ir_ptr, node, width, mode);
     }
 };
 
@@ -164,17 +179,23 @@ pub fn contentFrame(ir: anytype, node: *const Node) model.Frame {
 }
 
 pub fn intrinsicWidth(ir: anytype, node: *const Node) f32 {
-    return intrinsicWidthWithCache(ir, node, null);
+    return intrinsicWidthWithCache(ir, node, null) catch unreachable;
 }
 
-pub fn intrinsicWidthCached(ir: anytype, node: *const Node, cache: *MeasurementCache) f32 {
-    return intrinsicWidthWithCache(ir, node, cache);
+pub fn intrinsicWidthCached(ir: anytype, node: *const Node, cache: *MeasurementCache) !f32 {
+    return try intrinsicWidthWithCache(ir, node, cache);
 }
 
-fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) f32 {
+fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
     const style = styleForNode(ir, node);
     const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(ir, node);
+    if (cache) |measurements| {
+        const available_width = maxWidthForStyle(style) + chrome_width;
+        if (try measurements.renderedMeasurement(ir, node, available_width, .natural)) |measured| {
+            if (measured.width > 0) return @min(available_width, measured.width);
+        }
+    }
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
             const base_width = positiveNodeFloatProperty(ir, node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
@@ -218,16 +239,25 @@ fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementC
 }
 
 pub fn intrinsicHeight(ir: anytype, node: *const Node) f32 {
-    return intrinsicHeightWithCache(ir, node, null);
+    return intrinsicHeightWithCache(ir, node, null) catch unreachable;
 }
 
-pub fn intrinsicHeightCached(ir: anytype, node: *const Node, cache: *MeasurementCache) f32 {
-    return intrinsicHeightWithCache(ir, node, cache);
+pub fn intrinsicHeightCached(ir: anytype, node: *const Node, cache: *MeasurementCache) !f32 {
+    return try intrinsicHeightWithCache(ir, node, cache);
 }
 
-fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) f32 {
+fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
     const style = styleForNode(ir, node);
     const chrome_height = 2.0 * chromePadY(ir, node);
+    const measured_outer_width = if (node.frame.width > 0)
+        @max(@as(f32, 1.0), node.frame.width)
+    else
+        @max(@as(f32, 1.0), try intrinsicWidthWithCache(ir, node, cache));
+    if (cache) |measurements| {
+        if (try measurements.renderedMeasurement(ir, node, measured_outer_width, .width_constrained)) |measured| {
+            if (measured.height > 0) return measured.height;
+        }
+    }
     return switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => blk: {
             const base_height = positiveNodeFloatProperty(ir, node, "asset_height") orelse PageLayout.max_figure_height;
@@ -242,10 +272,7 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
         },
         else => blk: {
             const content = model.nodeDisplayContent(node);
-            const width = if (node.frame.width > 0)
-                @max(@as(f32, 1.0), node.frame.width - 2.0 * chromePadX(ir, node))
-            else
-                @max(@as(f32, 1.0), intrinsicWidthWithCache(ir, node, cache) - 2.0 * chromePadX(ir, node));
+            const width = @max(@as(f32, 1.0), measured_outer_width - 2.0 * chromePadX(ir, node));
             if (shouldWrapNode(ir, node) and markdown.shouldParseBlocksNode(ir, node)) {
                 var doc = markdown.parseMarkdownDocumentForNode(
                     ir.allocator,
