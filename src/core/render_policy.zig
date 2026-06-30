@@ -420,13 +420,7 @@ fn resolveRule(ir: anytype, node: *const Node) RulePaint {
 
 fn parseRenderKindProperty(ir: anytype, node: *const Node) ?RenderKind {
     const value = class_fields.property(ir, node, "render_kind") orelse return null;
-    if (std.mem.eql(u8, value, "text")) return .text;
-    if (std.mem.eql(u8, value, "code")) return .code;
-    if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
-    if (std.mem.eql(u8, value, "vector_asset")) return .vector_asset;
-    if (std.mem.eql(u8, value, "raster_asset")) return .raster_asset;
-    if (std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
-    return null;
+    return parseRenderKind(value);
 }
 
 fn parseRenderKindPropertyWithEnv(node: *const Node, sema: anytype) ?RenderKind {
@@ -435,13 +429,7 @@ fn parseRenderKindPropertyWithEnv(node: *const Node, sema: anytype) ?RenderKind 
 }
 
 fn parseRenderKind(value: []const u8) ?RenderKind {
-    if (std.mem.eql(u8, value, "text")) return .text;
-    if (std.mem.eql(u8, value, "code")) return .code;
-    if (std.mem.eql(u8, value, "vector_math")) return .vector_math;
-    if (std.mem.eql(u8, value, "vector_asset")) return .vector_asset;
-    if (std.mem.eql(u8, value, "raster_asset")) return .raster_asset;
-    if (std.mem.eql(u8, value, "chrome_only")) return .chrome_only;
-    return null;
+    return std.meta.stringToEnum(RenderKind, value);
 }
 
 fn parseHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {
@@ -494,10 +482,7 @@ fn explicitHorizontalAlignProperty(node: *const Node, key: []const u8) ?Horizont
 }
 
 fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {
-    if (std.mem.eql(u8, value, "left")) return .left;
-    if (std.mem.eql(u8, value, "center")) return .center;
-    if (std.mem.eql(u8, value, "right")) return .right;
-    return null;
+    return std.meta.stringToEnum(HorizontalAlign, value);
 }
 
 fn parseFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {

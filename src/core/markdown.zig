@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 pub const ParseMode = enum {
     none,
-    inline_text,
+    @"inline",
     block,
 };
 
@@ -239,11 +239,9 @@ const ImageState = struct {
 
 pub fn parseModeForNode(ir: anytype, node: anytype) ParseMode {
     if (class_fields.property(ir, node, "text_parse")) |mode| {
-        if (std.mem.eql(u8, mode, "none")) return .none;
-        if (std.mem.eql(u8, mode, "block")) return .block;
-        if (std.mem.eql(u8, mode, "inline")) return .inline_text;
+        if (std.meta.stringToEnum(ParseMode, mode)) |parsed| return parsed;
     }
-    return .inline_text;
+    return .@"inline";
 }
 
 pub fn shouldParseInlineNode(ir: anytype, node: anytype) bool {

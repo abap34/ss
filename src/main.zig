@@ -291,10 +291,7 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
 }
 
 fn parseColorMode(value: []const u8) error_report.ColorMode {
-    if (std.mem.eql(u8, value, "auto")) return .auto;
-    if (std.mem.eql(u8, value, "always")) return .always;
-    if (std.mem.eql(u8, value, "never")) return .never;
-    unreachable;
+    return std.meta.stringToEnum(error_report.ColorMode, value) orelse unreachable;
 }
 
 fn parseInitOptions(args: []const []const u8) !InitOptions {
