@@ -317,6 +317,29 @@ fn default_theme() -> Theme
         }
       }
     }
+    callout = MarkedCalloutStyle {
+      text_size = 24
+      text_line_height = 31
+      text_color = c"0.07,0.08,0.10"
+      target_color = c"0.04,0.06,0.09"
+      target_weight = 700
+      target_fill = none
+      target_border = none
+      target_border_width = 0
+      target_pad_x = 0
+      target_pad_y = 0
+      callout = CalloutStyle {
+        stroke = c"0.32,0.50,0.72"
+        line_width = 1.6
+        marker_size = 10
+        border = c"0.72,0.80,0.90"
+        border_width = 1
+        radius = 8
+        text_size = 17
+        text_line_height = 25
+        text_color = c"0.30,0.34,0.40"
+      }
+    }
     generated = GeneratedStyle {
       pageno = TextBlockStyle {
         text = TextStyle {
@@ -371,6 +394,16 @@ end
 
 fn current_theme() -> Theme
   return docctx().theme ?? default_theme()
+end
+
+fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
+  return marked_callout!(source_text, target_text, note_text, style)
+end
+
+fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
+  return marked_callout!(source_text, target_text, note_text, style with {
+    rises = false
+  })
 end
 
 fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object

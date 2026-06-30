@@ -591,6 +591,14 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  ~ target.left == source.right + 180
         \\  ~ target.top == source.top + 80
         \\  arrow_up!(source, target)
+        \\  bracket_callout!(source, "note", 560, 140, 220)
+        \\  annotate_down!("before target after", "target", "note", MarkedCalloutStyle {
+        \\    x = 160
+        \\    top_y = 320
+        \\    callout_x = 560
+        \\    callout_top_y = 420
+        \\    callout_width = 220
+        \\  })
         \\end
         \\
     );
@@ -634,6 +642,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
+        \\  annotate_down!("before target after", "target", "note")
         \\end
         \\
         \\page default_cover
@@ -654,6 +663,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code!("print('x')", "python")
         \\  code_file!("snippet.zig", "zig")
         \\  toc!("Contents")
+        \\  annotate_down!("before target after", "target", "note")
         \\end
         \\
         \\page academic_cover
@@ -678,6 +688,7 @@ test "compiler semantics: stdlib theme components build when imported by theme a
         \\  code_file!("snippet.zig", "zig")
         \\  note!("note")
         \\  toc!("Contents")
+        \\  annotate_down!("before target after", "target", "note")
         \\end
         \\
         \\page pop_cover
@@ -866,6 +877,21 @@ test "compiler semantics: branch-local let bindings do not escape their branch" 
         \\end
         \\
     );
+}
+
+test "compiler semantics: string search primitives evaluate" {
+    try expectDumpContains(
+        \\import std:themes/default as *
+        \\
+        \\page strings
+        \\  let source = "abc target xyz"
+        \\  text!(str_before(source, "target") ++ "|" ++ str_after(source, "target"))
+        \\  if not(str_contains(source, "target"))
+        \\    report_error("missing")
+        \\  end
+        \\end
+        \\
+    , &.{"\"content\":\"abc | xyz\""});
 }
 
 test "compiler semantics: let rebinding is rejected" {
