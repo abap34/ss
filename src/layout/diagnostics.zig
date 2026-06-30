@@ -111,8 +111,7 @@ fn shouldCheckContentOverflow(ir: anytype, node: *const Node) bool {
 fn overflowPolicy(node: *const Node) OverflowPolicy {
     const fit = model.nodeProperty(node, "fit");
     if (fit) |value| {
-        if (std.mem.eql(u8, value, "ignore")) return .ignore;
-        if (std.mem.eql(u8, value, "error")) return .@"error";
+        if (std.meta.stringToEnum(OverflowPolicy, value)) |parsed| return parsed;
     }
     return .warn;
 }

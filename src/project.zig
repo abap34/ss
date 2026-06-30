@@ -282,9 +282,7 @@ fn parsePageGuideConfig(source: []const u8) PageGuideConfig {
 
 fn parsePreviewOpenMode(source: []const u8, section: []const u8, key: []const u8, default: PreviewOpenMode) PreviewOpenMode {
     const value = parseString(source, section, key) orelse return default;
-    if (std.mem.eql(u8, value, "external")) return .external;
-    if (std.mem.eql(u8, value, "vscode")) return .vscode;
-    return default;
+    return std.meta.stringToEnum(PreviewOpenMode, value) orelse default;
 }
 
 fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, source: []const u8) !highlight.Config {

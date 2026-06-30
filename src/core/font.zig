@@ -138,25 +138,11 @@ pub fn textFacesForNodeWithEnv(node: *const Node, sema: anytype) TextFaces {
 }
 
 pub fn styleName(style: Style) []const u8 {
-    return switch (style) {
-        .normal => "normal",
-        .oblique => "oblique",
-        .italic => "italic",
-    };
+    return @tagName(style);
 }
 
 pub fn stretchName(stretch: Stretch) []const u8 {
-    return switch (stretch) {
-        .ultra_condensed => "ultra_condensed",
-        .extra_condensed => "extra_condensed",
-        .condensed => "condensed",
-        .semi_condensed => "semi_condensed",
-        .normal => "normal",
-        .semi_expanded => "semi_expanded",
-        .expanded => "expanded",
-        .extra_expanded => "extra_expanded",
-        .ultra_expanded => "ultra_expanded",
-    };
+    return @tagName(stretch);
 }
 
 pub fn styleCode(style: Style) c_int {
@@ -249,10 +235,7 @@ fn fontStylePropertyWithEnv(node: *const Node, sema: anytype, key: []const u8) ?
 }
 
 fn parseStyle(raw: []const u8) ?Style {
-    if (std.mem.eql(u8, raw, "normal")) return .normal;
-    if (std.mem.eql(u8, raw, "oblique")) return .oblique;
-    if (std.mem.eql(u8, raw, "italic")) return .italic;
-    return null;
+    return std.meta.stringToEnum(Style, raw);
 }
 
 fn fontStretchProperty(ir: anytype, node: *const Node, key: []const u8) ?Stretch {
@@ -266,14 +249,5 @@ fn fontStretchPropertyWithEnv(node: *const Node, sema: anytype, key: []const u8)
 }
 
 fn parseStretch(raw: []const u8) ?Stretch {
-    if (std.mem.eql(u8, raw, "ultra_condensed")) return .ultra_condensed;
-    if (std.mem.eql(u8, raw, "extra_condensed")) return .extra_condensed;
-    if (std.mem.eql(u8, raw, "condensed")) return .condensed;
-    if (std.mem.eql(u8, raw, "semi_condensed")) return .semi_condensed;
-    if (std.mem.eql(u8, raw, "normal")) return .normal;
-    if (std.mem.eql(u8, raw, "semi_expanded")) return .semi_expanded;
-    if (std.mem.eql(u8, raw, "expanded")) return .expanded;
-    if (std.mem.eql(u8, raw, "extra_expanded")) return .extra_expanded;
-    if (std.mem.eql(u8, raw, "ultra_expanded")) return .ultra_expanded;
-    return null;
+    return std.meta.stringToEnum(Stretch, raw);
 }

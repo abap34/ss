@@ -1470,7 +1470,7 @@ fn collectTextOpPreloads(
             defer doc.deinit();
             try collectMarkdownBlockPreloadsForPlan(ctx, doc.blocks.items, op.tex_preamble, target, tasks, seen, page_deps);
         },
-        .inline_text => {
+        .@"inline" => {
             var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
             defer layout.deinit(ctx.allocator);
             try collectLinePreloadsForPlan(ctx, layout.lines.items, op.tex_preamble, target, tasks, seen, page_deps);
@@ -2472,7 +2472,7 @@ fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPa
             defer doc.deinit();
             _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, op.tex_preamble);
         },
-        .inline_text => {
+        .@"inline" => {
             var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
             defer layout.deinit(ctx.allocator);
             const baseline = baselineBlForBox(frame, text.font_size);
