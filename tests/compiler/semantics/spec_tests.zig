@@ -1038,6 +1038,28 @@ test "compiler semantics: enum cases are resolved before evaluation" {
     });
 }
 
+test "compiler semantics: enum type names are not record constructors" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\type Mode = alpha | beta
+        \\
+        \\page bad
+        \\  let mode = Mode {}
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidRecordLiteral: Mode is an enum type, not a record; use Mode.<case>");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let style = FontStyle {}
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidRecordLiteral: FontStyle is an enum type, not a record; use FontStyle.<case>");
+}
+
 test "compiler semantics: enum names can be shadowed by values" {
     try buildSource(
         \\import std:themes/default as *
