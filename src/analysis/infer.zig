@@ -130,6 +130,10 @@ fn inferRecordInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const record_decl = sema.record(record.type_name) orelse {
+        if (sema.enumExistsAny(record.type_name)) {
+            try addUserReport(ir, origin, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
+            return error.InvalidType;
+        }
         try addUserReport(ir, origin, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
         return error.InvalidType;
     };

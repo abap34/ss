@@ -642,96 +642,53 @@ fn setDefaultPropertyValue(
 }
 
 fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]const u8 {
+    var value = (try staticPropertyValueFromExpr(allocator, expr)) orelse return null;
+    defer value.deinit(allocator);
+    if (value == .none) return try allocator.dupe(u8, "none");
+    const text = try core.value_text.propertyString(allocator, value);
+    if (core.value_text.propertyStringNeedsFree(value)) return text;
+    return try allocator.dupe(u8, text);
+}
+
+fn staticPropertyValueFromExpr(allocator: std.mem.Allocator, expr: ast.Expr) anyerror!?core.Value {
     return switch (expr) {
-        .string => |literal| try allocator.dupe(u8, literal.text),
-        .color => |text| try allocator.dupe(u8, text),
-        .number => |value| try std.fmt.allocPrint(allocator, "{d}", .{value}),
-        .boolean => |value| try allocator.dupe(u8, if (value) "true" else "false"),
-        .none => try allocator.dupe(u8, "none"),
-        .enum_case => |case| try allocator.dupe(u8, case.case_name),
-        .record => |record| try staticRecordDefaultPropertyValue(allocator, record),
-        .call => |call| try staticNumericDefaultPropertyValue(allocator, call),
+        .string => |literal| .{ .string = literal.text },
+        .color => |text| .{ .string = text },
+        .number => |value| .{ .number = value },
+        .boolean => |value| .{ .boolean = value },
+        .none => .{ .none = {} },
+        .enum_case => |case| .{ .enum_case = .{
+            .enum_name = case.enum_name,
+            .case_name = case.case_name,
+        } },
+        .record => |record| try staticRecordPropertyValue(allocator, record),
+        .call => |call| staticNumericPropertyValue(call),
         else => null,
     };
 }
 
-fn staticRecordDefaultPropertyValue(allocator: std.mem.Allocator, record: ast.RecordExpr) !?[]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    if (!try appendStaticTaggedExprJson(allocator, &out, .{ .record = record })) return null;
-    return try out.toOwnedSlice(allocator);
-}
-
-fn appendStaticTaggedExprJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr) !bool {
-    switch (expr) {
-        .none => try out.appendSlice(allocator, "{\"kind\":\"none\"}"),
-        .string => |literal| {
-            try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
-            try appendJsonString(allocator, out, literal.text);
-            try out.append(allocator, '}');
-        },
-        .color => |text| {
-            try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
-            try appendJsonString(allocator, out, text);
-            try out.append(allocator, '}');
-        },
-        .enum_case => |case| {
-            try out.appendSlice(allocator, "{\"kind\":\"enum\",\"type\":");
-            try appendJsonString(allocator, out, case.enum_name);
-            try out.appendSlice(allocator, ",\"case\":");
-            try appendJsonString(allocator, out, case.case_name);
-            try out.append(allocator, '}');
-        },
-        .number => |value| {
-            try out.appendSlice(allocator, "{\"kind\":\"number\",\"value\":");
-            try appendFloatText(allocator, out, value);
-            try out.append(allocator, '}');
-        },
-        .boolean => |value| try out.appendSlice(allocator, if (value) "{\"kind\":\"bool\",\"value\":true}" else "{\"kind\":\"bool\",\"value\":false}"),
-        .record => |record| {
-            try out.appendSlice(allocator, "{\"kind\":\"record\",\"type\":");
-            try appendJsonString(allocator, out, record.type_name);
-            try out.appendSlice(allocator, ",\"fields\":[");
-            for (record.fields.items, 0..) |field, index| {
-                if (index > 0) try out.append(allocator, ',');
-                try out.appendSlice(allocator, "{\"name\":");
-                try appendJsonString(allocator, out, field.name);
-                try out.appendSlice(allocator, ",\"explicit\":true");
-                try out.appendSlice(allocator, ",\"value\":");
-                if (!try appendStaticTaggedExprJson(allocator, out, field.value)) return false;
-                try out.append(allocator, '}');
-            }
-            try out.appendSlice(allocator, "]}");
-        },
-        .record_update => return false,
-        .call => |call| {
-            if (!std.mem.eql(u8, call.callee.name, "neg") or call.args.items.len != 1) return false;
-            if (call.args.items[0] != .number) return false;
-            try out.appendSlice(allocator, "{\"kind\":\"number\",\"value\":-");
-            try appendFloatText(allocator, out, call.args.items[0].number);
-            try out.append(allocator, '}');
-        },
-        else => return false,
+fn staticRecordPropertyValue(allocator: std.mem.Allocator, record_expr: ast.RecordExpr) anyerror!?core.Value {
+    var record = core.RecordValue.init(record_expr.type_name);
+    errdefer record.deinit(allocator);
+    for (record_expr.fields.items) |field| {
+        var value = (try staticPropertyValueFromExpr(allocator, field.value)) orelse {
+            record.deinit(allocator);
+            return null;
+        };
+        errdefer value.deinit(allocator);
+        try record.fields.append(allocator, .{
+            .name = field.name,
+            .value = value,
+            .explicit = true,
+        });
     }
-    return true;
+    return .{ .record = record };
 }
 
-fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
-    const escaped = try std.json.Stringify.valueAlloc(allocator, text, .{});
-    defer allocator.free(escaped);
-    try out.appendSlice(allocator, escaped);
-}
-
-fn appendFloatText(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f32) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
-}
-
-fn staticNumericDefaultPropertyValue(allocator: std.mem.Allocator, call: ast.CallExpr) !?[]const u8 {
+fn staticNumericPropertyValue(call: ast.CallExpr) ?core.Value {
     if (!std.mem.eql(u8, call.callee.name, "neg") or call.args.items.len != 1) return null;
     return switch (call.args.items[0]) {
-        .number => |value| try std.fmt.allocPrint(allocator, "-{d}", .{value}),
+        .number => |value| .{ .number = -value },
         else => null,
     };
 }

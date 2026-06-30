@@ -197,6 +197,14 @@ fn reportRecordUpdateError(ir: *core.Ir, origin: []const u8, comptime fmt: []con
     });
 }
 
+fn reportInvalidRecordLiteral(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
+    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{
+            .message = try std.fmt.allocPrint(ir.allocator, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ type_name, type_name }),
+        },
+    });
+}
+
 fn reportLowerDiagnostic(ir: *core.Ir, diagnostic: LowerDiagnostic) !void {
     var message_buf: [256]u8 = undefined;
     const message = formatLowerDiagnostic(&message_buf, diagnostic);
@@ -777,7 +785,7 @@ fn evalMember(
     const field = sema.field(class_name, member.name) orelse return .{ .string = value };
     var field_type = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse return .{ .string = value };
     defer field_type.deinit(ir.allocator);
-    return typedPropertyValue(ir.allocator, value, field_type);
+    return core.value_text.typedPropertyValue(ir.allocator, value, field_type);
 }
 
 fn evalRecord(
@@ -792,6 +800,10 @@ fn evalRecord(
     record: ast.RecordExpr,
 ) !core.Value {
     const resolved = findRecordDecl(ir, record.type_name) orelse {
+        if (findEnumDecl(ir, record.type_name) != null) {
+            try reportInvalidRecordLiteral(ir, current_origin, record.type_name);
+            return error.InvalidType;
+        }
         try reportNamedResolutionError(ir, error.UnknownType, "record type", record.type_name, current_origin);
         return error.UnknownType;
     };
@@ -910,6 +922,18 @@ fn findRecordDecl(ir: *const core.Ir, type_name: []const u8) ?ResolvedRecordDecl
     return null;
 }
 
+fn findEnumDecl(ir: *const core.Ir, type_name: []const u8) ?*const ast.TypeDecl {
+    var index = ir.module_order.items.len;
+    while (index > 0) {
+        index -= 1;
+        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        for (module.program.types.items) |*decl| {
+            if (std.mem.eql(u8, decl.name, type_name)) return decl;
+        }
+    }
+    return null;
+}
+
 fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, name: []const u8, value: core.Value, explicit: bool) !void {
     var owned = value;
     errdefer owned.deinit(allocator);
@@ -925,42 +949,6 @@ fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, 
         .value = owned,
         .explicit = explicit,
     });
-}
-
-fn typedPropertyValue(allocator: std.mem.Allocator, value: []const u8, ty: ast.Type) !core.Value {
-    if (ty.kind == .optional) {
-        const child = ty.optional_child orelse return .{ .string = value };
-        return typedPropertyValue(allocator, value, child.*);
-    }
-    return switch (ty.kind) {
-        .none => .{ .none = {} },
-        .string, .color => .{ .string = value },
-        .enum_type => .{ .enum_case = .{
-            .enum_name = ty.enum_name orelse "",
-            .case_name = value,
-        } },
-        .record => blk: {
-            var parsed = try eval_value.parsePropertyValue(allocator, value);
-            if (parsed != .record) {
-                parsed.deinit(allocator);
-                return error.InvalidValueTag;
-            }
-            if (ty.class_name) |expected| {
-                if (!std.mem.eql(u8, parsed.record.type_name, expected)) {
-                    parsed.deinit(allocator);
-                    return error.InvalidValueTag;
-                }
-            }
-            break :blk parsed;
-        },
-        .number => .{ .number = std.fmt.parseFloat(f32, value) catch return error.InvalidValueTag },
-        .boolean => blk: {
-            if (std.mem.eql(u8, value, "true")) break :blk .{ .boolean = true };
-            if (std.mem.eql(u8, value, "false")) break :blk .{ .boolean = false };
-            return error.InvalidValueTag;
-        },
-        else => .{ .string = value },
-    };
 }
 
 fn evalCall(
