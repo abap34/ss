@@ -92,6 +92,8 @@ const ResolvedRender = core.render_policy.ResolvedRender;
 const TextPaint = core.render_policy.TextPaint;
 const CodePaint = core.render_policy.CodePaint;
 const MathPaint = core.render_policy.MathPaint;
+const ShapePaint = core.render_policy.ShapePaint;
+const ShapeMarker = core.render_policy.ShapeMarker;
 const MarkdownDocument = core.markdown.MarkdownDocument;
 const Line = core.markdown.Line;
 const Block = core.markdown.Block;
@@ -110,7 +112,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-pub const page_pdf_cache_version = "ss-native-page-pdf-v22";
+pub const page_pdf_cache_version = "ss-native-page-pdf-v23";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
 pub const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -1128,6 +1130,7 @@ fn hashResolvedRender(hasher: *std.hash.Wyhash, op: *const RenderOp) void {
     hashOptionalTextPaint(hasher, render.text);
     hashOptionalMathPaint(hasher, render.math);
     hashOptionalCodePaint(hasher, render.code);
+    hashOptionalShapePaint(hasher, render.shape);
     hashChromePaint(hasher, render.chrome);
     hashUnderlinePaint(hasher, render.underline);
     hashRulePaint(hasher, render.rule);
@@ -1273,6 +1276,26 @@ fn hashOptionalCodePaint(hasher: *std.hash.Wyhash, maybe: ?CodePaint) void {
     }
 }
 
+fn hashOptionalShapePaint(hasher: *std.hash.Wyhash, maybe: ?ShapePaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |shape| {
+        hashOptionalColor(hasher, shape.stroke);
+        hashF32(hasher, shape.line_width);
+        hashBool(hasher, shape.dash != null);
+        if (shape.dash) |dash| {
+            hashF32(hasher, dash.on);
+            hashF32(hasher, dash.off);
+        }
+        hashF32(hasher, shape.start_x);
+        hashF32(hasher, shape.start_y);
+        hashF32(hasher, shape.end_x);
+        hashF32(hasher, shape.end_y);
+        hashShapeMarker(hasher, shape.marker_start);
+        hashShapeMarker(hasher, shape.marker_end);
+        hashF32(hasher, shape.marker_size);
+    }
+}
+
 fn hashChromePaint(hasher: *std.hash.Wyhash, chrome: core.render_policy.ChromePaint) void {
     hashOptionalColor(hasher, chrome.fill);
     hashOptionalColor(hasher, chrome.stroke);
@@ -1317,6 +1340,11 @@ fn hashColor(hasher: *std.hash.Wyhash, color: Color) void {
 }
 
 fn hashHorizontalAlign(hasher: *std.hash.Wyhash, value: HorizontalAlign) void {
+    const normalized: u32 = @intFromEnum(value);
+    hashU32(hasher, normalized);
+}
+
+fn hashShapeMarker(hasher: *std.hash.Wyhash, value: ShapeMarker) void {
     const normalized: u32 = @intFromEnum(value);
     hashU32(hasher, normalized);
 }
@@ -1423,7 +1451,7 @@ fn collectOpPreloads(
                 } });
             }
         },
-        .code, .chrome_only => {},
+        .code, .shape, .chrome_only => {},
     }
 }
 
@@ -1764,6 +1792,7 @@ fn renderOpLabel(op: *const RenderOp) []const u8 {
         .text => "text object",
         .code => "code block",
         .chrome_only => "object chrome",
+        .shape => "shape object",
         .vector_math => "math expression",
         .vector_asset => "vector asset",
         .raster_asset => "raster asset",
@@ -2076,6 +2105,7 @@ fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
         .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
         .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
         .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
+        .shape => if (op.render.shape) |shape| drawShapeOp(ctx, content_frame, shape),
     }
 }
 
@@ -2095,6 +2125,7 @@ fn measuredRenderOpVisualFrame(ctx: *DrawContext, op: *const RenderOp) !Frame {
             const measured = try measureRenderedOpContent(ctx, op, null);
             return expandFrameToMeasuredInk(op.frame, op.render, measured);
         },
+        .shape => return op.frame,
         else => {},
     }
     return op.frame;
@@ -2191,6 +2222,7 @@ fn measureRenderedOpContent(ctx: *DrawContext, op: *const RenderOp, maybe_text: 
         .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
         .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
         .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
+        .shape => if (op.render.shape) |shape| drawShapeOp(ctx, content_frame, shape),
         else => return null,
     }
     return try measurement.inkFrame();
@@ -2414,6 +2446,59 @@ fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
         .x_set = frame.x_set,
         .y_set = frame.y_set,
     };
+}
+
+fn drawShapeOp(ctx: *DrawContext, frame: Frame, shape: ShapePaint) void {
+    const stroke = shape.stroke orelse return;
+    if (shape.line_width <= 0) return;
+
+    const x1 = frame.x + frame.width * shape.start_x;
+    const y1 = toTopY(frame.y + frame.height * shape.start_y);
+    const x2 = frame.x + frame.width * shape.end_x;
+    const y2 = toTopY(frame.y + frame.height * shape.end_y);
+    const dash_on = if (shape.dash) |dash| dash.on else 0;
+    const dash_off = if (shape.dash) |dash| dash.off else 0;
+
+    strokeLine(ctx.pdf, x1, y1, x2, y2, shape.line_width, stroke, dash_on, dash_off);
+    if (shape.marker_start == .arrow) {
+        drawArrowHead(ctx.pdf, x1, y1, x1 - x2, y1 - y2, shape.line_width, stroke, shape.marker_size);
+    }
+    if (shape.marker_end == .arrow) {
+        drawArrowHead(ctx.pdf, x2, y2, x2 - x1, y2 - y1, shape.line_width, stroke, shape.marker_size);
+    }
+}
+
+fn drawArrowHead(pdf: *c.SsPdf, tip_x: f32, tip_y: f32, dir_x: f32, dir_y: f32, line_width: f32, color: Color, marker_size: f32) void {
+    const length = @sqrt(dir_x * dir_x + dir_y * dir_y);
+    if (length <= 0.001) return;
+
+    const size = @max(marker_size, line_width * 3.0);
+    const ux = dir_x / length;
+    const uy = dir_y / length;
+    const px = -uy;
+    const py = ux;
+    const wing = size * 0.42;
+    const base_x = tip_x - ux * size;
+    const base_y = tip_y - uy * size;
+
+    strokeLine(pdf, tip_x, tip_y, base_x + px * wing, base_y + py * wing, line_width, color, 0, 0);
+    strokeLine(pdf, tip_x, tip_y, base_x - px * wing, base_y - py * wing, line_width, color, 0, 0);
+}
+
+fn strokeLine(pdf: *c.SsPdf, x1: f32, y1: f32, x2: f32, y2: f32, line_width: f32, color: Color, dash_on: f32, dash_off: f32) void {
+    c.ss_pdf_stroke_line(
+        pdf,
+        x1,
+        y1,
+        x2,
+        y2,
+        line_width,
+        color.r,
+        color.g,
+        color.b,
+        dash_on,
+        dash_off,
+    );
 }
 
 fn drawObjectChrome(pdf: *c.SsPdf, frame: Frame, render: ResolvedRender) void {

@@ -40,6 +40,63 @@ fn/! rule() -> Object
   return rule_obj()
 end
 
+record LineStyle {
+  stroke: Color? = c"#4b5563"
+  line_width: Number = 1.6
+  dash: String = ""
+  marker_start: ShapeMarker = ShapeMarker.plain
+  marker_end: ShapeMarker = ShapeMarker.plain
+  marker_size: Number = 10
+}
+
+fn/! line() -> Object
+  return shape_obj()
+end
+
+fn line_s(obj: Object, style: LineStyle) -> Object
+  obj.shape_stroke = style.stroke
+  obj.shape_line_width = style.line_width
+  obj.shape_dash = style.dash
+  obj.shape_marker_start = style.marker_start
+  obj.shape_marker_end = style.marker_end
+  obj.shape_marker_size = style.marker_size
+  return obj
+end
+
+fn/! line_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
+  let obj = line_s(line(), style)
+  obj.shape_start_y = 0
+  obj.shape_end_y = 1
+  ~ obj.left == from.right
+  ~ obj.bottom == from.center_y
+  ~ obj.right == to.left
+  ~ obj.top == to.center_y
+  return obj
+end
+
+fn/! line_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
+  let obj = line_s(line(), style)
+  obj.shape_start_y = 1
+  obj.shape_end_y = 0
+  ~ obj.left == from.right
+  ~ obj.top == from.center_y
+  ~ obj.right == to.left
+  ~ obj.bottom == to.center_y
+  return obj
+end
+
+fn/! arrow_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
+  return line_up(from, to, style with {
+    marker_end = ShapeMarker.arrow
+  })
+end
+
+fn/! arrow_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
+  return line_down(from, to, style with {
+    marker_end = ShapeMarker.arrow
+  })
+end
+
 fn page_bg(fill_name: Color?) -> Void
   pagectx().background_fill = fill_name
 end
