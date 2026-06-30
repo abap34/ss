@@ -1,5 +1,6 @@
 type LayoutPolicy = top | top_flow | center | center_stack
-type RenderKind = text | code | vector_math | vector_asset | raster_asset | chrome_only
+type RenderKind = text | code | vector_math | vector_asset | raster_asset | shape | chrome_only
+type ShapeMarker = plain | arrow
 type TextParseMode = none | inline | block
 type WrapMode = on | off
 type FitPolicy = warn | error | ignore
@@ -119,6 +120,19 @@ record RuleStyle {
   stroke: Color? = none
   line_width: Number = 1
   dash: String = ""
+}
+
+record ShapeStyle {
+  stroke: Color? = c"#d0d7de"
+  line_width: Number = 1
+  dash: String = ""
+  start_x: Number = 0
+  start_y: Number = 0
+  end_x: Number = 1
+  end_y: Number = 1
+  marker_start: ShapeMarker = ShapeMarker.plain
+  marker_end: ShapeMarker = ShapeMarker.plain
+  marker_size: Number = 10
 }
 
 record AssetStyle {
@@ -452,6 +466,29 @@ type Rule = object {
   rule_stroke: Color? = c"#d0d7de"
   rule_line_width: Number = 1
   rule_dash: String = ""
+}
+
+type Shape = object {
+  base = Panel
+  roles = ["shape"]
+
+  shape: ShapeStyle
+  render_kind: RenderKind = RenderKind.shape
+  layout_font_size: Number = 1
+  layout_line_height: Number = 1
+  layout_spacing_after: Number = 0
+  chrome_fill: Color? = none
+  chrome_stroke: Color? = none
+  shape_stroke: Color? = c"#d0d7de"
+  shape_line_width: Number = 1
+  shape_dash: String = ""
+  shape_start_x: Number = 0
+  shape_start_y: Number = 0
+  shape_end_x: Number = 1
+  shape_end_y: Number = 1
+  shape_marker_start: ShapeMarker = ShapeMarker.plain
+  shape_marker_end: ShapeMarker = ShapeMarker.plain
+  shape_marker_size: Number = 10
 }
 
 type Pageno = object {

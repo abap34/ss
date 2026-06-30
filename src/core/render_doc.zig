@@ -122,6 +122,7 @@ fn buildWithPolicy(allocator: std.mem.Allocator, ir: anytype, comptime use_env: 
             .vector_math => if (resolved.math) |math| try appendMath(allocator, &doc, ir, node, math),
             .vector_asset => try appendAsset(allocator, &doc, node, "draw_vector_asset"),
             .raster_asset => try appendAsset(allocator, &doc, node, "draw_raster_asset"),
+            .shape => if (resolved.shape) |shape| try appendShape(allocator, &doc, node, shape),
             .chrome_only => {},
         }
     }
@@ -151,6 +152,25 @@ fn appendRule(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.
         try op.putFloat(allocator, "dash_on", dash.on);
         try op.putFloat(allocator, "dash_off", dash.off);
     }
+    try doc.ops.append(allocator, op);
+}
+
+fn appendShape(allocator: std.mem.Allocator, doc: *RenderDoc, node: *const model.Node, shape: render_policy.ShapePaint) !void {
+    var op = Op.init(node, "draw_shape");
+    errdefer op.deinit(allocator);
+    try op.putOptionalColor(allocator, "stroke", shape.stroke);
+    try op.putFloat(allocator, "line_width", shape.line_width);
+    if (shape.dash) |dash| {
+        try op.putFloat(allocator, "dash_on", dash.on);
+        try op.putFloat(allocator, "dash_off", dash.off);
+    }
+    try op.putFloat(allocator, "start_x", shape.start_x);
+    try op.putFloat(allocator, "start_y", shape.start_y);
+    try op.putFloat(allocator, "end_x", shape.end_x);
+    try op.putFloat(allocator, "end_y", shape.end_y);
+    try op.put(allocator, "marker_start", @tagName(shape.marker_start));
+    try op.put(allocator, "marker_end", @tagName(shape.marker_end));
+    try op.putFloat(allocator, "marker_size", shape.marker_size);
     try doc.ops.append(allocator, op);
 }
 

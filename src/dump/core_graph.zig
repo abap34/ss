@@ -183,6 +183,7 @@ fn writeRender(object: *json.Object, render: core.render_policy.ResolvedRender) 
     try writeOptionalTextPaint(&render_object, render.text);
     try writeOptionalMathPaint(&render_object, render.math);
     try writeOptionalCodePaint(&render_object, render.code);
+    try writeOptionalShapePaint(&render_object, render.shape);
     try writeChromePaint(&render_object, render.chrome);
     try writeUnderlinePaint(&render_object, render.underline);
     try writeRulePaint(&render_object, render.rule);
@@ -288,6 +289,33 @@ fn writeOptionalCodePaint(object: *json.Object, maybe_code: ?core.render_policy.
     try writeColor(&code, "comment_color", code_spec.comment);
     try writeColor(&code, "string_color", code_spec.string);
     try code.end();
+}
+
+fn writeOptionalShapePaint(object: *json.Object, maybe_shape: ?core.render_policy.ShapePaint) !void {
+    const shape_spec = maybe_shape orelse {
+        try object.nullField("shape");
+        return;
+    };
+
+    var shape = try object.objectField("shape");
+    try writeOptionalColor(&shape, "stroke", shape_spec.stroke);
+    try shape.floatField("line_width", shape_spec.line_width, "{d:.1}");
+    if (shape_spec.dash) |dash| {
+        var dash_array = try shape.arrayField("dash");
+        try dash_array.floatItem(dash.on, "{d:.4}");
+        try dash_array.floatItem(dash.off, "{d:.4}");
+        try dash_array.end();
+    } else {
+        try shape.nullField("dash");
+    }
+    try shape.floatField("start_x", shape_spec.start_x, "{d:.4}");
+    try shape.floatField("start_y", shape_spec.start_y, "{d:.4}");
+    try shape.floatField("end_x", shape_spec.end_x, "{d:.4}");
+    try shape.floatField("end_y", shape_spec.end_y, "{d:.4}");
+    try shape.enumTagField("marker_start", shape_spec.marker_start);
+    try shape.enumTagField("marker_end", shape_spec.marker_end);
+    try shape.floatField("marker_size", shape_spec.marker_size, "{d:.1}");
+    try shape.end();
 }
 
 fn writeChromePaint(object: *json.Object, chrome_spec: core.render_policy.ChromePaint) !void {

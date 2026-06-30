@@ -43,6 +43,11 @@ fn/! rule_obj() -> Object
   return obj
 end
 
+fn/! shape_obj() -> Object
+  let obj = txt_obj("", "shape")
+  return obj
+end
+
 fn/! panel_obj() -> Object
   let obj = txt_obj("", "panel")
   return obj

@@ -583,7 +583,41 @@ test "compiler semantics: stdlib core components build when called directly" {
         \\  citation!(target, 1, "reference")
         \\end
         \\
+        \\page shape_components
+        \\  let source = text!("source")
+        \\  let target = text!("target")
+        \\  ~ source.left == page.left + 120
+        \\  ~ source.top == page.top - 180
+        \\  ~ target.left == source.right + 180
+        \\  ~ target.top == source.top + 80
+        \\  arrow_up!(source, target)
+        \\end
+        \\
     );
+}
+
+test "compiler semantics: shape components resolve render shape" {
+    try expectDumpContains(
+        \\import std:core/components
+        \\
+        \\page shapes
+        \\  let source = text!("source")
+        \\  let target = text!("target")
+        \\  ~ source.left == page.left + 120
+        \\  ~ source.top == page.top - 180
+        \\  ~ target.left == source.right + 180
+        \\  ~ target.top == source.top + 80
+        \\  arrow_up!(source, target, LineStyle {
+        \\    stroke = c"#2563eb"
+        \\    line_width = 2
+        \\  })
+        \\end
+        \\
+    , &.{
+        "\"kind\":\"shape\"",
+        "\"marker_end\":\"arrow\"",
+        "\"line_width\":2.0",
+    });
 }
 
 test "compiler semantics: stdlib theme components build when imported by theme alias" {

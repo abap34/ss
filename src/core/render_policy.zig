@@ -24,7 +24,13 @@ pub const RenderKind = enum {
     vector_math,
     vector_asset,
     raster_asset,
+    shape,
     chrome_only,
+};
+
+pub const ShapeMarker = enum {
+    plain,
+    arrow,
 };
 
 pub const HorizontalAlign = enum {
@@ -127,11 +133,25 @@ pub const RulePaint = struct {
     dash: ?Dash,
 };
 
+pub const ShapePaint = struct {
+    stroke: ?Color,
+    line_width: f32,
+    dash: ?Dash,
+    start_x: f32,
+    start_y: f32,
+    end_x: f32,
+    end_y: f32,
+    marker_start: ShapeMarker,
+    marker_end: ShapeMarker,
+    marker_size: f32,
+};
+
 pub const ResolvedRender = struct {
     kind: RenderKind,
     text: ?TextPaint,
     math: ?MathPaint,
     code: ?CodePaint,
+    shape: ?ShapePaint,
     chrome: ChromePaint,
     underline: UnderlinePaint,
     rule: RulePaint,
@@ -147,6 +167,7 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
         .text = resolveText(ir, node, kind),
         .math = resolveMath(ir, node, kind),
         .code = resolveCode(ir, node, kind),
+        .shape = resolveShape(ir, node, kind),
         .chrome = resolveChrome(ir, node),
         .underline = resolveUnderline(ir, node),
         .rule = resolveRule(ir, node),
@@ -160,6 +181,7 @@ pub fn resolveWithEnv(ir: anytype, node: *const Node, sema: anytype) ResolvedRen
         .text = resolveTextWithEnv(ir, node, kind, sema),
         .math = resolveMathWithEnv(ir, node, kind, sema),
         .code = resolveCodeWithEnv(ir, node, kind, sema),
+        .shape = resolveShapeWithEnv(node, kind, sema),
         .chrome = resolveChromeWithEnv(node, sema),
         .underline = resolveUnderlineWithEnv(node, sema),
         .rule = resolveRuleWithEnv(node, sema),
@@ -276,6 +298,22 @@ fn resolveCode(ir: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     };
 }
 
+fn resolveShape(ir: anytype, node: *const Node, kind: RenderKind) ?ShapePaint {
+    if (kind != .shape) return null;
+    return .{
+        .stroke = parseColorProperty(ir, node, "shape_stroke"),
+        .line_width = nonNegativeFloatProperty(ir, node, "shape_line_width") orelse 0,
+        .dash = parseDashProperty(ir, node, "shape_dash"),
+        .start_x = parseFloatProperty(ir, node, "shape_start_x") orelse 0,
+        .start_y = parseFloatProperty(ir, node, "shape_start_y") orelse 0,
+        .end_x = parseFloatProperty(ir, node, "shape_end_x") orelse 1,
+        .end_y = parseFloatProperty(ir, node, "shape_end_y") orelse 1,
+        .marker_start = parseShapeMarkerProperty(ir, node, "shape_marker_start") orelse .plain,
+        .marker_end = parseShapeMarkerProperty(ir, node, "shape_marker_end") orelse .plain,
+        .marker_size = nonNegativeFloatProperty(ir, node, "shape_marker_size") orelse 0,
+    };
+}
+
 fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?TextPaint {
     switch (kind) {
         .text, .code => {},
@@ -364,6 +402,22 @@ fn resolveCodeWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: an
     };
 }
 
+fn resolveShapeWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?ShapePaint {
+    if (kind != .shape) return null;
+    return .{
+        .stroke = parseColorPropertyWithEnv(node, "shape_stroke", sema),
+        .line_width = nonNegativeFloatPropertyWithEnv(node, "shape_line_width", sema) orelse 0,
+        .dash = parseDashPropertyWithEnv(node, "shape_dash", sema),
+        .start_x = parseFloatPropertyWithEnv(node, "shape_start_x", sema) orelse 0,
+        .start_y = parseFloatPropertyWithEnv(node, "shape_start_y", sema) orelse 0,
+        .end_x = parseFloatPropertyWithEnv(node, "shape_end_x", sema) orelse 1,
+        .end_y = parseFloatPropertyWithEnv(node, "shape_end_y", sema) orelse 1,
+        .marker_start = parseShapeMarkerPropertyWithEnv(node, "shape_marker_start", sema) orelse .plain,
+        .marker_end = parseShapeMarkerPropertyWithEnv(node, "shape_marker_end", sema) orelse .plain,
+        .marker_size = nonNegativeFloatPropertyWithEnv(node, "shape_marker_size", sema) orelse 0,
+    };
+}
+
 fn resolveChromeWithEnv(node: *const Node, sema: anytype) ChromePaint {
     return .{
         .fill = parseColorPropertyWithEnv(node, "chrome_fill", sema),
@@ -430,6 +484,20 @@ fn parseRenderKindPropertyWithEnv(node: *const Node, sema: anytype) ?RenderKind 
 
 fn parseRenderKind(value: []const u8) ?RenderKind {
     return std.meta.stringToEnum(RenderKind, value);
+}
+
+fn parseShapeMarkerProperty(ir: anytype, node: *const Node, key: []const u8) ?ShapeMarker {
+    const value = class_fields.property(ir, node, key) orelse return null;
+    return parseShapeMarker(value);
+}
+
+fn parseShapeMarkerPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?ShapeMarker {
+    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    return parseShapeMarker(value);
+}
+
+fn parseShapeMarker(value: []const u8) ?ShapeMarker {
+    return std.meta.stringToEnum(ShapeMarker, value);
 }
 
 fn parseHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {
