@@ -73,6 +73,25 @@ fn default_theme() -> Theme
     cover.date.text.size = 14
     cover.date.text.line_height = 20
     cover.date.text.color = c"0,0,0.0353"
+    callout.text_size = 20
+    callout.text_line_height = 28
+    callout.text_color = c"0,0,0.0353"
+    callout.target_color = c"0,0,0.0353"
+    callout.target_weight = 700
+    callout.target_fill = none
+    callout.target_border = none
+    callout.target_border_width = 0
+    callout.target_pad_x = 0
+    callout.target_pad_y = 0
+    callout.callout.stroke = c"0,0,0.0353"
+    callout.callout.line_width = 1
+    callout.callout.marker_size = 8
+    callout.callout.border = c"0,0,0.0353"
+    callout.callout.border_width = 0.8
+    callout.callout.radius = 0
+    callout.callout.text_size = 14
+    callout.callout.text_line_height = 21
+    callout.callout.text_color = c"0,0,0.0353"
   }
 end
 
@@ -82,6 +101,16 @@ end
 
 fn current_theme() -> Theme
   return docctx().theme ?? default_theme()
+end
+
+fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
+  return marked_callout!(source_text, target_text, note_text, style)
+end
+
+fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
+  return marked_callout!(source_text, target_text, note_text, style with {
+    rises = false
+  })
 end
 
 fn/! h1(text_value: String, theme: Theme = current_theme()) -> Object

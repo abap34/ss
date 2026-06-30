@@ -1,4 +1,5 @@
 import std:core/classes as *
+import std:core/components as *
 
 record TextBlockStyle {
   text: TextStyle = TextStyle {}
@@ -73,6 +74,7 @@ record Theme {
   toc: TocStyle = TocStyle {}
   cover: CoverStyle = CoverStyle {}
   generated: GeneratedStyle = GeneratedStyle {}
+  callout: MarkedCalloutStyle = MarkedCalloutStyle {}
 }
 
 extend Doc {

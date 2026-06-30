@@ -87,6 +87,24 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             const new = try ctx.evalStringArg(call, 2);
             break :blk .{ .string = try ctx.ownString(try replaceAll(ctx.ir.allocator, text, old, new)) };
         },
+        .str_contains => blk: {
+            const text = try ctx.evalStringArg(call, 0);
+            const needle = try ctx.evalStringArg(call, 1);
+            break :blk .{ .boolean = std.mem.indexOf(u8, text, needle) != null };
+        },
+        .str_before => blk: {
+            const text = try ctx.evalStringArg(call, 0);
+            const needle = try ctx.evalStringArg(call, 1);
+            const match_start = std.mem.indexOf(u8, text, needle) orelse text.len;
+            break :blk .{ .string = try ctx.ownString(try ctx.ir.allocator.dupe(u8, text[0..match_start])) };
+        },
+        .str_after => blk: {
+            const text = try ctx.evalStringArg(call, 0);
+            const needle = try ctx.evalStringArg(call, 1);
+            const match_start = std.mem.indexOf(u8, text, needle) orelse text.len;
+            const after_start = if (match_start < text.len) match_start + needle.len else text.len;
+            break :blk .{ .string = try ctx.ownString(try ctx.ir.allocator.dupe(u8, text[after_start..])) };
+        },
         .readlines => blk: {
             const path = try ctx.evalStringArg(call, 0);
             break :blk .{ .string = try ctx.readlines(path) };
