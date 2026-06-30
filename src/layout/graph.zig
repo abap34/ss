@@ -39,6 +39,7 @@ pub const GroupTargetPolicy = enum {
 pub const SolveOptions = struct {
     record_diagnostics: bool = true,
     record_propagation: bool = false,
+    measurement_provider: ?model.LayoutMeasurementProvider = null,
 };
 
 pub const PropagationSlot = enum {

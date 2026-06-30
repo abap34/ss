@@ -19,8 +19,18 @@ pub fn solveLayout(ir: *core.Ir) !void {
     try editor.refreshSolvedFrameHints(ir.allocator, ir);
 }
 
+pub fn solveLayoutWithOptions(ir: *core.Ir, options: core.layout.graph.SolveOptions) !void {
+    try ir.finalizeWithLayoutTracePathAndOptions(null, options);
+    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+}
+
 pub fn solveLayoutWithTracePath(ir: *core.Ir, trace_path: []const u8) !void {
     try ir.finalizeWithLayoutTracePath(trace_path);
+    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+}
+
+pub fn solveLayoutWithTracePathAndOptions(ir: *core.Ir, trace_path: []const u8, options: core.layout.graph.SolveOptions) !void {
+    try ir.finalizeWithLayoutTracePathAndOptions(trace_path, options);
     try editor.refreshSolvedFrameHints(ir.allocator, ir);
 }
 

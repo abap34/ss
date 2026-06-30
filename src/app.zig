@@ -70,7 +70,7 @@ pub fn buildFileWithAssetBaseAndOverlay(
     var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay, .evaluation_schedule);
     errdefer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    try solveLayoutOrReport(&analyzed.ir, progress);
+    try solveLayoutOrReport(io, &analyzed.ir, progress);
     return analyzed.takeIr();
 }
 
@@ -210,11 +210,16 @@ fn evaluateDocumentOrReportWithSchedule(ir: *core.Ir, graph: *const analysis.sch
     if (progress) |p| p.step("Evaluate document");
 }
 
-fn solveLayoutOrReport(ir: *core.Ir, progress: ?*Progress) !void {
-    lowering.solveLayout(ir) catch |err| {
+fn solveLayoutOrReport(io: std.Io, ir: *core.Ir, progress: ?*Progress) !void {
+    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir);
+    defer measurement_scope.deinit();
+    lowering.solveLayoutWithOptions(ir, .{ .measurement_provider = measurement_scope.provider() }) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
-            else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir),
+            else => {
+                error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+                if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+            },
         }
         return err;
     };
@@ -223,11 +228,16 @@ fn solveLayoutOrReport(ir: *core.Ir, progress: ?*Progress) !void {
     if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
 }
 
-fn solveLayoutWithTracePathOrReport(ir: *core.Ir, trace_path: []const u8, progress: ?*Progress) !void {
-    lowering.solveLayoutWithTracePath(ir, trace_path) catch |err| {
+fn solveLayoutWithTracePathOrReport(io: std.Io, ir: *core.Ir, trace_path: []const u8, progress: ?*Progress) !void {
+    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir);
+    defer measurement_scope.deinit();
+    lowering.solveLayoutWithTracePathAndOptions(ir, trace_path, .{ .measurement_provider = measurement_scope.provider() }) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
-            else => error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir),
+            else => {
+                error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+                if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+            },
         }
         return err;
     };
@@ -305,7 +315,7 @@ pub fn writeLayoutTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allo
     var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
     defer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    try solveLayoutWithTracePathOrReport(&analyzed.ir, output_path, progress);
+    try solveLayoutWithTracePathOrReport(io, &analyzed.ir, output_path, progress);
 }
 
 pub fn layoutConflictReportJsonWithAssetBaseAndOverlay(
@@ -319,7 +329,9 @@ pub fn layoutConflictReportJsonWithAssetBaseAndOverlay(
     var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, overlay, .evaluation_schedule);
     defer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    lowering.solveLayout(&analyzed.ir) catch |err| switch (err) {
+    var measurement_scope = try pdf.LayoutMeasurementScope.init(analyzed.ir.allocator, io, &analyzed.ir);
+    defer measurement_scope.deinit();
+    lowering.solveLayoutWithOptions(&analyzed.ir, .{ .measurement_provider = measurement_scope.provider() }) catch |err| switch (err) {
         error.ConstraintConflict,
         error.NegativeFrameSize,
         => {},
@@ -357,15 +369,8 @@ pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, inpu
 }
 
 pub fn writePdfForFileWithWriteOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: PdfWriteOptions, progress: *Progress) !void {
-    var ir = try buildFile(io, allocator, input_path, progress);
-    defer ir.deinit();
-    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options.render, progress, options.diagnostics_json_path);
-    defer allocator.free(pdf_data);
-    try writeDiagnosticsJsonIfRequested(io, allocator, &ir, options.diagnostics_json_path);
-    try utils.render_cache.pruneFromEnv(io, allocator);
-    progress.step("Render pages");
-    try utils.fs.writeFile(io, output_path, pdf_data);
-    progress.step("Write PDF");
+    const asset_base_dir = std.fs.path.dirname(input_path) orelse ".";
+    return writePdfForFileWithAssetBaseAndWriteOptions(io, allocator, input_path, asset_base_dir, output_path, options, progress);
 }
 
 pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
@@ -377,7 +382,14 @@ pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.All
 }
 
 pub fn writePdfForFileWithAssetBaseAndWriteOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: PdfWriteOptions, progress: *Progress) !void {
-    var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
+    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
+    errdefer analyzed.deinit();
+    try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
+    solveLayoutOrReport(io, &analyzed.ir, progress) catch |err| {
+        try writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.ir, options.diagnostics_json_path);
+        return err;
+    };
+    var ir = analyzed.takeIr();
     defer ir.deinit();
     const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options.render, progress, options.diagnostics_json_path);
     defer allocator.free(pdf_data);

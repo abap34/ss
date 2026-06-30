@@ -16,8 +16,8 @@ They intentionally assert:
   matching subsystem and topic directories;
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
-- focused CLI，render，and LSP regressions through `tests/runtime/*_spec.mjs`, also
-  wired into `zig build test`.
+- focused CLI，render，and LSP regressions through spec files under
+  `tests/runtime/` subsystem directories，also wired into `zig build test`.
 
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that
@@ -29,8 +29,9 @@ has ever touched that subsystem.
 - `tests/smoke/lsp.mjs` spawns `ss lsp` and checks initialize, diagnostics,
   one global completion, hover, definition, and one ranged edit cycle.
 - Language semantics, static semantics, and detailed runtime/editor regressions
-  belong in the matching subsystem/topic directory, `tests/runtime/*_spec.mjs`,
-  or a focused regression fixture before being considered for smoke coverage.
+  belong in the matching subsystem/topic directory, a subsystem directory under
+  `tests/runtime/`, or a focused regression fixture before being considered for
+  smoke coverage.
 
 They intentionally avoid asserting behavior that is still an implementation
 detail or underspecified:

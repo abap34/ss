@@ -980,6 +980,59 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
     try expectFloat(expected_height, wrapped_node.frame.height);
 }
 
+const FakeMeasurementContext = struct {
+    target: model.NodeId,
+    natural_calls: usize = 0,
+    constrained_calls: usize = 0,
+    last_constrained_width: f32 = 0,
+};
+
+fn fakeLayoutMeasurement(
+    context: *anyopaque,
+    ir_ptr: *anyopaque,
+    node: *const model.Node,
+    width: f32,
+    mode: model.LayoutMeasurementMode,
+) anyerror!?model.LayoutMeasurement {
+    _ = ir_ptr;
+    const ctx: *FakeMeasurementContext = @ptrCast(@alignCast(context));
+    if (node.id != ctx.target) return null;
+    return switch (mode) {
+        .natural => blk: {
+            ctx.natural_calls += 1;
+            break :blk .{ .width = 321, .height = 1 };
+        },
+        .width_constrained => blk: {
+            ctx.constrained_calls += 1;
+            ctx.last_constrained_width = width;
+            break :blk .{ .width = width, .height = 87 };
+        },
+    };
+}
+
+test "layout solver uses render measurement provider for intrinsic object size" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "provider measured text");
+    var measurement = FakeMeasurementContext{ .target = object };
+
+    try solver.solveLayoutWithTracePathAndOptions(&ir, null, .{
+        .measurement_provider = .{
+            .context = &measurement,
+            .measure = fakeLayoutMeasurement,
+        },
+    });
+
+    const node = ir.getNode(object).?;
+    try expectFloat(321, node.frame.width);
+    try expectFloat(87, node.frame.height);
+    try expectFloat(321, measurement.last_constrained_width);
+    try testing.expect(measurement.natural_calls > 0);
+    try testing.expect(measurement.constrained_calls > 0);
+}
+
 test "layout metrics use measured font width for wrapped text height" {
     var ir = try initEmptyIr();
     defer ir.deinit();

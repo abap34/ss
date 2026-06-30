@@ -11,6 +11,7 @@ pub const TreeSitterHealthStatus = native.TreeSitterHealthStatus;
 pub const tree_sitter_language_version = native.tree_sitter_language_version;
 pub const tree_sitter_min_compatible_language_version = native.tree_sitter_min_compatible_language_version;
 pub const NativeRuntimeVersions = native.NativeRuntimeVersions;
+pub const LayoutMeasurementScope = native.LayoutMeasurementScope;
 pub const page_pdf_cache_version = native.page_pdf_cache_version;
 pub const qpdf_cache_version = native.qpdf_cache_version;
 pub const native_artifact_cache_version = native.native_artifact_cache_version;

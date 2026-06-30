@@ -1215,14 +1215,20 @@ pub const Ir = struct {
     }
 
     pub fn finalizeWithLayoutTracePath(self: *Ir, trace_path: ?[]const u8) !void {
+        try self.finalizeWithLayoutTracePathAndOptions(trace_path, .{});
+    }
+
+    pub fn finalizeWithLayoutTracePathAndOptions(self: *Ir, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !void {
         self.clearDiagnosticsForPhase(.layout);
         self.clearConstraintFailures();
-        try layout.solveLayoutWithTracePath(self, trace_path);
+        try layout.solveLayoutWithTracePathAndOptions(self, trace_path, options);
         if (self.constraint_failures.items.len > 0) {
             const first_kind = self.constraint_failures.items[0].kind;
             self.clearDiagnosticsForPhase(.layout);
             self.clearConstraintFailures();
-            try layout.solveLayoutWithTracePathAndOptions(self, trace_path, .{ .record_propagation = true });
+            var propagation_options = options;
+            propagation_options.record_propagation = true;
+            try layout.solveLayoutWithTracePathAndOptions(self, trace_path, propagation_options);
             if (self.constraint_failures.items.len == 0) {
                 switch (first_kind) {
                     .conflict => return error.ConstraintConflict,

@@ -29,7 +29,7 @@ pub fn solveLayoutWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, 
     layout_trace.beginSolve(ir.allocator, trace_path);
     defer layout_trace.endSolve(ir.allocator);
 
-    var measurement_cache = metrics.MeasurementCache.init(ir.allocator);
+    var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(ir.allocator, options.measurement_provider);
     defer measurement_cache.deinit();
 
     for (ir.nodes.items) |*node| {
@@ -50,8 +50,8 @@ pub fn solveLayoutWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, 
                 node.frame.y = 0;
                 node.frame.x_set = false;
                 node.frame.y_set = false;
-                node.frame.width = metrics.intrinsicWidthCached(ir, node, &measurement_cache);
-                node.frame.height = metrics.intrinsicHeightCached(ir, node, &measurement_cache);
+                node.frame.width = try metrics.intrinsicWidthCached(ir, node, &measurement_cache);
+                node.frame.height = try metrics.intrinsicHeightCached(ir, node, &measurement_cache);
             },
         }
     }
@@ -123,7 +123,7 @@ fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspac
         const solved_width = h_state.size orelse old_width;
         node.frame.width = solved_width;
         if (metrics.shouldWrapNode(ir, node) and @abs(solved_width - old_width) > ConstraintTolerance) {
-            node.frame.height = metrics.intrinsicHeightCached(ir, node, measurement_cache);
+            node.frame.height = try metrics.intrinsicHeightCached(ir, node, measurement_cache);
         }
         node.frame.x_set = false;
         if (h_state.start) |x| {

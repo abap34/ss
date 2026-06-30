@@ -59,7 +59,7 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
 
         if (shouldCheckContentOverflow(ir, node)) {
             const required_height = if (measurement_cache) |cache|
-                metrics.intrinsicHeightCached(ir, node, cache)
+                try metrics.intrinsicHeightCached(ir, node, cache)
             else
                 metrics.intrinsicHeight(ir, node);
             const overflow_height = @max(@as(f32, 0.0), required_height - node.frame.height);

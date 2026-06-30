@@ -22,7 +22,7 @@ fn propagateWidthCapToSubtree(ir: anytype, node_id: NodeId, max_right: f32, meas
         if (available < node.frame.width - graph.ConstraintTolerance) {
             node.frame.width = available;
             node.frame.height = if (measurement_cache) |cache|
-                metrics.intrinsicHeightCached(ir, node, cache)
+                try metrics.intrinsicHeightCached(ir, node, cache)
             else
                 metrics.intrinsicHeight(ir, node);
         }

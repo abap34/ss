@@ -112,7 +112,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-pub const page_pdf_cache_version = "ss-native-page-pdf-v24";
+pub const page_pdf_cache_version = "ss-native-page-pdf-v25";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
 pub const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -124,6 +124,7 @@ const warm_render_job_cap: usize = 4;
 const cold_render_job_cap: usize = 16;
 const artifact_job_slack: usize = 2;
 const highlight_query_read_limit = 1024 * 1024;
+const natural_measurement_width_guard: f32 = 1.0;
 pub const tree_sitter_language_version: u32 = build_options.tree_sitter_language_version;
 pub const tree_sitter_min_compatible_language_version: u32 = build_options.tree_sitter_min_compatible_language_version;
 
@@ -504,6 +505,114 @@ const MergeWork = struct {
 };
 
 var temp_cache_counter: usize = 0;
+
+pub const LayoutMeasurementScope = struct {
+    allocator: Allocator,
+    io: std.Io,
+    asset_cache_dir: []const u8,
+    pdf_path: []const u8,
+    ctx: DrawContext,
+
+    pub fn init(allocator: Allocator, io: std.Io, ir: *core.Ir) !LayoutMeasurementScope {
+        const default_options: RenderOptions = .{};
+        const cache_dir = default_options.cache_dir;
+        try std.Io.Dir.cwd().createDirPath(io, cache_dir);
+        const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
+        errdefer allocator.free(asset_cache_dir);
+        try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
+
+        const serial = @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic);
+        const pdf_path = try std.fmt.allocPrint(allocator, "{s}/layout-measure-{d}-{d}.pdf", .{ asset_cache_dir, std.c.getpid(), serial });
+        errdefer allocator.free(pdf_path);
+        const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+        defer allocator.free(pdf_path_z);
+        const pdf = c.ss_pdf_create(pdf_path_z.ptr, PageLayout.width, PageLayout.height) orelse return NativePdfError.CairoCreateFailed;
+        errdefer c.ss_pdf_destroy(pdf);
+        c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
+
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .asset_cache_dir = asset_cache_dir,
+            .pdf_path = pdf_path,
+            .ctx = .{
+                .allocator = allocator,
+                .io = io,
+                .pdf = pdf,
+                .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+                .cache_dir = asset_cache_dir,
+                .highlight_languages = &.{},
+            },
+        };
+    }
+
+    pub fn deinit(self: *LayoutMeasurementScope) void {
+        c.ss_pdf_destroy(self.ctx.pdf);
+        std.Io.Dir.cwd().deleteFile(self.io, self.pdf_path) catch {};
+        self.allocator.free(self.pdf_path);
+        self.allocator.free(self.asset_cache_dir);
+    }
+
+    pub fn provider(self: *LayoutMeasurementScope) core.LayoutMeasurementProvider {
+        return .{
+            .context = self,
+            .measure = measureLayoutNode,
+        };
+    }
+
+    fn measureLayoutNode(
+        context: *anyopaque,
+        ir_ptr: *anyopaque,
+        node: *const core.Node,
+        width: f32,
+        mode: core.LayoutMeasurementMode,
+    ) anyerror!?core.LayoutMeasurement {
+        const scope: *LayoutMeasurementScope = @ptrCast(@alignCast(context));
+        const ir: *core.Ir = @ptrCast(@alignCast(ir_ptr));
+        return try scope.measureNode(ir, node, width, mode);
+    }
+
+    fn measureNode(self: *LayoutMeasurementScope, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+        if (node.kind != .object) return null;
+        var op = try self.renderOpForNode(ir, node, width, mode);
+        defer op.deinit(self.allocator);
+        var sink = CommandFailureSink{ .allocator = ir.allocator };
+        defer sink.deinit();
+        var measurement_ctx = self.ctx;
+        measurement_ctx.command_failure = &sink;
+        return measureRenderOpIntrinsic(&measurement_ctx, &op, width, mode) catch |err| {
+            try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &op, err, sink.message);
+            return err;
+        };
+    }
+
+    fn renderOpForNode(self: *LayoutMeasurementScope, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
+        var env = try core.render_env.resolveForNode(self.allocator, ir, node);
+        defer env.deinit(self.allocator);
+        const uses_asset_content = switch (node.payload_kind orelse .text) {
+            .image_ref, .pdf_ref => true,
+            else => false,
+        };
+        var render = core.render_policy.resolve(ir, node);
+        if (mode == .natural) {
+            if (render.text) |*text| text.wrap = false;
+        }
+        return .{
+            .page_id = 0,
+            .node_id = node.id,
+            .frame = .{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height },
+            .content = if (uses_asset_content) node.content orelse "" else core.nodeDisplayContent(node),
+            .content_provenance = if (uses_asset_content) node.content_provenance.items else core.nodeDisplayContentProvenance(node),
+            .link_id = core.nodeProperty(node, "link_id"),
+            .render = render,
+            .parse_mode = core.markdown.parseModeForNode(ir, node),
+            .tex_preamble = try cloneTexPreambleEntries(self.allocator, env.tex_preamble.items),
+            .math_kind = mathKindForNode(node),
+            .origin = node.origin,
+            .payload_kind = node.payload_kind,
+        };
+    }
+};
 
 pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, ir: *core.Ir) ![]const u8 {
     return renderDocumentToPdfWithOptions(allocator, io, ir, .{}, null);
@@ -1780,6 +1889,40 @@ fn addRenderOpDiagnostic(ir: *core.Ir, op: *const RenderOp, err: anyerror, maybe
     try addTargetedRenderDiagnostic(ir, renderOpDiagnosticTarget(op), renderOpLabel(op), err, maybe_message);
 }
 
+fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
+    var tasks = std.ArrayList(PreloadTask).empty;
+    defer {
+        freePreloadTasks(ctx.allocator, tasks.items);
+        tasks.deinit(ctx.allocator);
+    }
+    var seen = std.StringHashMap(usize).init(ctx.allocator);
+    defer {
+        var key_it = seen.keyIterator();
+        while (key_it.next()) |key| ctx.allocator.free(key.*);
+        seen.deinit();
+    }
+    var page_deps = std.ArrayList(usize).empty;
+    defer page_deps.deinit(ctx.allocator);
+
+    collectOpPreloads(ctx, op, &tasks, &seen, &page_deps) catch {
+        try addRenderOpDiagnostic(ir, op, err, maybe_message);
+        return;
+    };
+
+    for (tasks.items) |task| {
+        var sink = CommandFailureSink{ .allocator = ir.allocator };
+        defer sink.deinit();
+        var diagnostic_ctx = ctx.*;
+        diagnostic_ctx.command_failure = &sink;
+        preloadOne(&diagnostic_ctx, task) catch |task_err| {
+            try addPreloadRenderDiagnostic(ir, task, task_err, sink.message);
+            return;
+        };
+    }
+
+    try addRenderOpDiagnostic(ir, op, err, maybe_message);
+}
+
 fn renderOpDiagnosticTarget(op: *const RenderOp) RenderDiagnosticTarget {
     const target = opDiagnosticTarget(op);
     return switch (op.render.kind) {
@@ -2229,6 +2372,158 @@ fn measureRenderedOpContent(ctx: *DrawContext, op: *const RenderOp, maybe_text: 
     return try measurement.inkFrame();
 }
 
+fn measureRenderOpIntrinsic(ctx: *DrawContext, op: *const RenderOp, outer_width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+    var render = op.render;
+    if (mode == .natural) {
+        if (render.text) |*text| text.wrap = false;
+    }
+    if (render.kind == .shape or render.kind == .chrome_only) {
+        const frame_width: f32 = if (mode == .natural) 1 else @max(outer_width, 1);
+        return try measureFrameIntrinsic(ctx, op, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
+    }
+    const frame = Frame{ .x = 0, .y = 0, .width = @max(outer_width, 1), .height = PageLayout.height };
+    const content_frame = contentFrameForRender(frame, render);
+    const content_measure = switch (render.kind) {
+        .text => if (render.text) |text|
+            try measureTextIntrinsic(ctx, op, content_frame.width, text, mode)
+        else
+            return null,
+        .code => if (render.text) |text| blk: {
+            var code_text = text;
+            code_text.font = text.code_font;
+            break :blk try measureCodeIntrinsic(ctx, op, content_frame.width, code_text);
+        } else return null,
+        .vector_math => try measureVectorMathIntrinsic(ctx, op, content_frame.width),
+        .vector_asset, .raster_asset => try measureAssetIntrinsic(ctx, op, content_frame.width),
+        .shape, .chrome_only => unreachable,
+    };
+    return expandContentMeasurement(render, content_measure);
+}
+
+fn measureFrameIntrinsic(ctx: *DrawContext, op: *const RenderOp, frame: Frame) !core.LayoutMeasurement {
+    var measurement = MeasurementScope.init(ctx);
+    try measurement.begin();
+    defer measurement.deinit();
+
+    drawObjectChrome(ctx.pdf, frame, op.render);
+    const content_frame = contentFrameForRender(frame, op.render);
+    switch (op.render.kind) {
+        .shape => if (op.render.shape) |shape| drawShapeOp(ctx, content_frame, shape),
+        .chrome_only => {},
+        else => unreachable,
+    }
+    if (try measurement.inkFrame()) |ink| {
+        return .{ .width = @max(ink.width, frame.width), .height = @max(ink.height, frame.height) };
+    }
+    return .{ .width = frame.width, .height = frame.height };
+}
+
+fn expandContentMeasurement(render: ResolvedRender, content: core.LayoutMeasurement) core.LayoutMeasurement {
+    return .{
+        .width = @max(content.width + render.chrome.pad_x * 2, 1),
+        .height = @max(content.height + render.chrome.pad_y * 2, 1),
+    };
+}
+
+fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text: TextPaint, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
+    const baseline_bl = PageLayout.height * 0.5;
+    return switch (op.parse_mode) {
+        .none => .{ .width = 1, .height = 1 },
+        .block => blk: {
+            var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
+            defer doc.deinit();
+            var measurement = MeasurementScope.init(ctx);
+            try measurement.begin();
+            defer measurement.deinit();
+            const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height };
+            const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0, op.tex_preamble);
+            var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, text.font_size, text.line_height);
+            if (mode == .natural) {
+                if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0, op.tex_preamble)) |natural_width| {
+                    measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
+                }
+            }
+            break :blk measured;
+        },
+        .@"inline" => blk: {
+            var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
+            defer layout.deinit(ctx.allocator);
+            var inline_text = text;
+            if (mode == .natural) inline_text.wrap = false;
+            var measurement = MeasurementScope.init(ctx);
+            try measurement.begin();
+            defer measurement.deinit();
+            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap, op.tex_preamble);
+            var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, inline_text.font_size, inline_text.line_height);
+            if (mode == .natural) {
+                if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text, op.tex_preamble)) |natural_width| {
+                    measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
+                }
+            }
+            break :blk measured;
+        },
+    };
+}
+
+fn measureCodeIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text: TextPaint) !core.LayoutMeasurement {
+    var measurement = MeasurementScope.init(ctx);
+    try measurement.begin();
+    defer measurement.deinit();
+    const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height };
+    try drawCodeBlock(ctx, frame, op.content, text, op.render.code);
+    if (try measurement.inkFrame()) |ink| {
+        return .{ .width = @max(ink.width, 1), .height = @max(ink.height, text.line_height) };
+    }
+    return .{ .width = 1, .height = text.line_height };
+}
+
+fn measureVectorMathIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !core.LayoutMeasurement {
+    const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
+    defer ctx.allocator.free(svg.path);
+    const fitted = fitMathBlockSize(svg.width, svg.height, @max(width, 1), PageLayout.height, op.render.math);
+    return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
+}
+
+fn measureAssetIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !core.LayoutMeasurement {
+    const source = try resolveAssetPath(ctx, op.content);
+    defer ctx.allocator.free(source);
+    const extension = std.fs.path.extension(source);
+    var natural: Size = undefined;
+    if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
+        const svg_path = try pdfToSvg(ctx, source);
+        defer ctx.allocator.free(svg_path);
+        const svg = try svgAsset(ctx, svg_path);
+        natural = .{ .width = svg.width, .height = svg.height };
+    } else if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
+        const svg = try svgAsset(ctx, source);
+        natural = .{ .width = svg.width, .height = svg.height };
+    } else {
+        const png_path = try rasterToSizedPng(ctx, source, @max(width, 1) * raster_cache_scale, PageLayout.height * raster_cache_scale);
+        defer ctx.allocator.free(png_path);
+        natural = try pngAssetSize(ctx, png_path);
+    }
+    const fitted = fitSize(natural.width, natural.height, @max(width, 1), PageLayout.height);
+    return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
+}
+
+fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl: f32, font_size: f32, line_height: f32) !core.LayoutMeasurement {
+    const content_top_bl = baseline_bl + font_size;
+    var left: f32 = 0;
+    var right: f32 = 1;
+    var top_overhang: f32 = 0;
+    var bottom_depth = @max(baseline_bl - next_bl, line_height);
+    if (try measurement.inkFrame()) |ink| {
+        left = @min(left, ink.x);
+        right = @max(right, ink.x + ink.width);
+        top_overhang = @max(@as(f32, 0), ink.y + ink.height - content_top_bl);
+        bottom_depth = @max(bottom_depth, content_top_bl - ink.y);
+    }
+    return .{
+        .width = @max(right - left, 1),
+        .height = @max(top_overhang + bottom_depth, line_height),
+    };
+}
+
 fn cloneTexPreambleEntries(allocator: Allocator, preamble: []const TexPreambleEntry) ![]const TexPreambleEntry {
     const cloned = try allocator.alloc(TexPreambleEntry, preamble.len);
     @memcpy(cloned, preamble);
@@ -2577,7 +2872,7 @@ fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block
         switch (block.kind) {
             .paragraph => {
                 if (block.paragraph) |paragraph| {
-                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, true, preamble);
+                    cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, text.wrap, preamble);
                 }
             },
             .code_block => cursor_bl = try drawMarkdownCodeBlock(ctx, frame.x, cursor_bl, frame.width, block, text),
@@ -2839,6 +3134,59 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
     return cursor_bl;
 }
 
+fn guardedNaturalMeasurementWidth(width: f32) f32 {
+    return @max(width + natural_measurement_width_guard, 1);
+}
+
+fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize, preamble: []const TexPreambleEntry) !?f32 {
+    var max_width: f32 = 0;
+    var found = false;
+    for (blocks) |block| {
+        switch (block.kind) {
+            .paragraph => {
+                if (block.paragraph) |paragraph| {
+                    if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, text, preamble)) |width| {
+                        max_width = @max(max_width, width);
+                        found = true;
+                    }
+                }
+            },
+            .bullet_list, .ordered_list => {
+                const list = block.list orelse continue;
+                const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
+                for (list.items.items, 0..) |item, item_index| {
+                    const marker = try listMarker(ctx.allocator, block.kind, list_depth, list.start + item_index);
+                    defer ctx.allocator.free(marker);
+                    const marker_width = try measureText(ctx, marker, text.font, text.font_size);
+                    const marker_gap = @max(@as(f32, 8.0), text.font_size * 0.35);
+                    const content_width = (try markdownBlocksNaturalInlineAdvance(ctx, item.blocks.items, text, list_depth + 1, preamble)) orelse 0;
+                    max_width = @max(max_width, list_inset + marker_width + marker_gap + content_width);
+                    found = true;
+                }
+            },
+            .code_block, .table => {},
+        }
+    }
+    if (!found) return null;
+    return max_width;
+}
+
+fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextPaint, preamble: []const TexPreambleEntry) !?f32 {
+    var max_width: f32 = 0;
+    var found = false;
+    for (lines) |line| {
+        if (lineContainsDisplayMath(line)) continue;
+        var atoms = std.ArrayList(Atom).empty;
+        defer atoms.deinit(ctx.allocator);
+        defer freeAtoms(ctx.allocator, atoms.items);
+        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        max_width = @max(max_width, atomLineAdvance(atoms.items, atomPaint(text)));
+        found = true;
+    }
+    if (!found) return null;
+    return max_width;
+}
+
 const InlineInkBlock = struct {
     top_overhang: f32,
     bottom_depth: f32,
@@ -2935,21 +3283,14 @@ fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32,
     const svg = try renderMathToSvg(ctx, source, preamble, .display);
     defer ctx.allocator.free(svg.path);
 
-    const block_height = displayMathBlockHeight(source, text);
-    const target_height = displayMathTargetHeight(source, text);
-    const scale = if (svg.width > 0 and svg.height > 0)
-        @min(width / svg.width, target_height / svg.height)
-    else
-        1;
-    const fitted = Size{
-        .width = @max(svg.width * scale, 1),
-        .height = @max(svg.height * scale, 1),
-    };
+    const fitted = fitDisplayMathBlockSize(svg.width, svg.height, width, text);
+    const vertical_pad = @max(text.line_height * 0.2, 2.0);
+    const block_height = fitted.height + vertical_pad * 2.0;
     const block_top = baseline_bl + text.font_size;
     const block_bottom = block_top - block_height;
     const draw_frame = Frame{
         .x = alignedX(x, width, fitted.width, text.math_align),
-        .y = block_bottom + @max((block_height - fitted.height) / 2, 0),
+        .y = block_bottom + vertical_pad,
         .width = fitted.width,
         .height = fitted.height,
     };
@@ -2967,14 +3308,11 @@ fn displayMathSource(allocator: Allocator, runs: []const Run) ![]const u8 {
     return allocator.dupe(u8, trimmed);
 }
 
-fn displayMathTargetHeight(source: []const u8, text: TextPaint) f32 {
-    const visual_lines = @as(f32, @floatFromInt(@max(mathVisualLineCount(source), 1)));
-    const line_height = @max(text.line_height, text.font_size * text.display_math_height_factor);
-    return visual_lines * line_height;
-}
-
-fn displayMathBlockHeight(source: []const u8, text: TextPaint) f32 {
-    return displayMathTargetHeight(source, text) + @max(text.line_height * 0.2, 2.0) * 2.0;
+fn fitDisplayMathBlockSize(source_width: f32, source_height: f32, max_width: f32, text: TextPaint) Size {
+    if (source_width <= 0 or source_height <= 0) return .{ .width = @max(max_width, 1), .height = @max(text.line_height, 1) };
+    const target_height = @max(text.line_height, text.font_size * text.display_math_height_factor);
+    const scale = @min(max_width / source_width, target_height / source_height);
+    return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
 }
 
 fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
@@ -3806,7 +4144,7 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
+    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
         .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
@@ -4252,36 +4590,22 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
 }
 
 fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8) !void {
-    var source_width: f64 = 0;
-    var source_height: f64 = 0;
+    const size = try pngAssetSize(ctx, png_path);
+    const fitted = fittedFrameForSize(frame, size);
     const png_z = try ctx.allocator.dupeZ(u8, png_path);
     defer ctx.allocator.free(png_z);
-    if (c.ss_png_size(png_z.ptr, &source_width, &source_height) != 0) return NativePdfError.ImageDecodeFailed;
-    const fitted = fitSize(@floatCast(source_width), @floatCast(source_height), frame.width, frame.height);
-    const draw_x = frame.x;
-    const draw_y = topOf(Frame{
-        .x = frame.x,
-        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
-        .width = fitted.width,
-        .height = fitted.height,
-    });
+    const draw_x = fitted.x;
+    const draw_y = topOf(fitted);
     if (c.ss_pdf_draw_png(ctx.pdf, png_z.ptr, draw_x, draw_y, fitted.width, fitted.height) != 0) return NativePdfError.ImageDecodeFailed;
 }
 
 fn drawSvgFit(ctx: *DrawContext, frame: Frame, svg_path: []const u8) !void {
-    var source_width: f64 = 0;
-    var source_height: f64 = 0;
+    const svg = try svgAsset(ctx, svg_path);
+    const fitted = fittedFrameForSize(frame, .{ .width = svg.width, .height = svg.height });
     const svg_z = try ctx.allocator.dupeZ(u8, svg_path);
     defer ctx.allocator.free(svg_z);
-    if (c.ss_svg_size(svg_z.ptr, &source_width, &source_height) != 0) return NativePdfError.ImageDecodeFailed;
-    const fitted = fitSize(@floatCast(source_width), @floatCast(source_height), frame.width, frame.height);
-    const draw_x = frame.x;
-    const draw_y = topOf(Frame{
-        .x = frame.x,
-        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
-        .width = fitted.width,
-        .height = fitted.height,
-    });
+    const draw_x = fitted.x;
+    const draw_y = topOf(fitted);
     if (c.ss_pdf_draw_svg(ctx.pdf, svg_z.ptr, draw_x, draw_y, fitted.width, fitted.height) != 0) return NativePdfError.ImageDecodeFailed;
 }
 
@@ -4299,13 +4623,32 @@ fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, col
 
 const Size = struct { width: f32, height: f32 };
 
+fn pngAssetSize(ctx: *DrawContext, png_path: []const u8) !Size {
+    var source_width: f64 = 0;
+    var source_height: f64 = 0;
+    const png_z = try ctx.allocator.dupeZ(u8, png_path);
+    defer ctx.allocator.free(png_z);
+    if (c.ss_png_size(png_z.ptr, &source_width, &source_height) != 0) return NativePdfError.ImageDecodeFailed;
+    return .{ .width = @floatCast(source_width), .height = @floatCast(source_height) };
+}
+
+fn fittedFrameForSize(frame: Frame, size: Size) Frame {
+    const fitted = fitSize(size.width, size.height, frame.width, frame.height);
+    return .{
+        .x = frame.x,
+        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
+        .width = fitted.width,
+        .height = fitted.height,
+    };
+}
+
 fn fitSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
     const scale = @min(max_width / source_width, max_height / source_height);
     return .{ .width = source_width * scale, .height = source_height * scale };
 }
 
-fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, source_text: []const u8, math: ?MathPaint) Size {
+fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, math: ?MathPaint) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
     const paint = math orelse MathPaint{
         .block_line_height = 22,
@@ -4314,12 +4657,13 @@ fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_h
         .scale = 1,
         .horizontal_align = .center,
     };
-    const target_height = @max(
-        paint.block_min_height,
-        @as(f32, @floatFromInt(mathVisualLineCount(source_text))) * paint.block_line_height + paint.block_vertical_padding,
-    ) * paint.scale;
-    const scale = @min(@min(max_width / source_width, max_height / source_height), target_height / source_height);
-    return .{ .width = source_width * scale, .height = source_height * scale };
+    _ = paint.block_line_height;
+    _ = paint.block_vertical_padding;
+    const styled_height = @max(source_height * paint.scale, paint.block_min_height * paint.scale);
+    const style_scale = styled_height / source_height;
+    const styled_width = source_width * style_scale;
+    const fit_scale = @min(@as(f32, 1.0), @min(max_width / styled_width, max_height / styled_height));
+    return .{ .width = styled_width * fit_scale, .height = styled_height * fit_scale };
 }
 
 fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: HorizontalAlign) f32 {
@@ -4329,21 +4673,6 @@ fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: Horizontal
         .center => x + slack / 2,
         .right => x + slack,
     };
-}
-
-fn mathVisualLineCount(source_text: []const u8) usize {
-    var count: usize = 0;
-    var lines = std.mem.splitScalar(u8, source_text, '\n');
-    while (lines.next()) |line| {
-        if (std.mem.trim(u8, line, " \t\r\n").len == 0) continue;
-        count += 1;
-        var cursor: usize = 0;
-        while (std.mem.indexOfPos(u8, line, cursor, "\\\\")) |break_index| {
-            count += 1;
-            cursor = break_index + 2;
-        }
-    }
-    return @max(count, 1);
 }
 
 fn resolveAssetPath(ctx: *DrawContext, rel_path: []const u8) ![]const u8 {
@@ -4372,16 +4701,13 @@ fn hashLogicalAssetPath(ctx: *DrawContext, hasher: *std.hash.Wyhash, source: []c
 
 fn rasterToSizedPng(ctx: *DrawContext, source: []const u8, target_width: f32, target_height: f32) ![]const u8 {
     if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".png")) {
-        var source_width: f64 = 0;
-        var source_height: f64 = 0;
-        const source_z = try ctx.allocator.dupeZ(u8, source);
-        defer ctx.allocator.free(source_z);
-        if (c.ss_png_size(source_z.ptr, &source_width, &source_height) == 0 and
-            source_width <= @as(f64, @floatCast(target_width)) and
-            source_height <= @as(f64, @floatCast(target_height)))
-        {
-            return ctx.allocator.dupe(u8, source);
-        }
+        const source_size = pngAssetSize(ctx, source) catch |err| switch (err) {
+            error.ImageDecodeFailed => null,
+            else => return err,
+        };
+        if (source_size) |size|
+            if (size.width <= target_width and size.height <= target_height)
+                return ctx.allocator.dupe(u8, source);
     }
 
     const out = try cachedSizedAssetPath(ctx, "raster-fit", source, target_width, target_height, "png");
