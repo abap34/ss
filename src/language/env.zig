@@ -3,6 +3,7 @@ const ast = @import("ast");
 const core = @import("core");
 
 const declarations = @import("declarations.zig");
+const name_resolution = @import("name_resolution.zig");
 const registry = @import("registry.zig");
 const type_defs = @import("type_defs.zig");
 
@@ -23,40 +24,8 @@ pub const ResolvedConst = struct {
     decl: ast.ConstDecl,
 };
 
-pub const FunctionResolution = union(enum) {
-    found: ResolvedFunction,
-    unknown,
-    unknown_alias: []const u8,
-};
-
-pub const ConstResolution = union(enum) {
-    found: ResolvedConst,
-    unknown,
-    unknown_alias: []const u8,
-};
-
-const ModuleVisitStack = struct {
-    items: [256]core.SourceModuleId = undefined,
-    len: usize = 0,
-
-    fn contains(self: *const ModuleVisitStack, module_id: core.SourceModuleId) bool {
-        for (self.items[0..self.len]) |item| {
-            if (item == module_id) return true;
-        }
-        return false;
-    }
-
-    fn push(self: *ModuleVisitStack, module_id: core.SourceModuleId) bool {
-        if (self.contains(module_id) or self.len >= self.items.len) return false;
-        self.items[self.len] = module_id;
-        self.len += 1;
-        return true;
-    }
-
-    fn pop(self: *ModuleVisitStack) void {
-        if (self.len > 0) self.len -= 1;
-    }
-};
+pub const FunctionResolution = name_resolution.Resolution(ResolvedFunction);
+pub const ConstResolution = name_resolution.Resolution(ResolvedConst);
 
 pub const SemanticEnv = struct {
     ir: ?*const core.Ir,
@@ -111,55 +80,17 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveFunction(self: *const SemanticEnv, callee: ast.CallableName) FunctionResolution {
-        if (callee.qualifier) |alias| {
-            const module_id = self.resolveAlias(alias) orelse return .{ .unknown_alias = alias };
-            return if (self.findFunctionInModule(module_id, callee.name)) |resolved|
-                .{ .found = resolved }
-            else
-                .unknown;
-        }
-
-        if (self.findFunctionInModule(self.module_id, callee.name)) |resolved| return .{ .found = resolved };
-        if (self.ir) |ir| {
-            const module = ir.moduleById(self.module_id) orelse return .unknown;
-            switch (self.resolveExplicitOpenFunction(module, callee.name)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-            switch (self.resolveImplicitOpenFunction(module, callee.name)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => return .unknown,
-            }
-        } else if (self.findFunctionByName(callee.name)) |resolved| {
-            return .{ .found = resolved };
-        }
-        return .unknown;
+        return name_resolution.resolve(ResolvedFunction, FunctionResolver{ .env = self }, self.module_id, .{
+            .qualifier = callee.qualifier,
+            .name = callee.name,
+        });
     }
 
     pub fn resolveConst(self: *const SemanticEnv, callee: ast.CallableName) ConstResolution {
-        if (callee.qualifier) |alias| {
-            const module_id = self.resolveAlias(alias) orelse return .{ .unknown_alias = alias };
-            return if (self.findConstInModule(module_id, callee.name)) |resolved|
-                .{ .found = resolved }
-            else
-                .unknown;
-        }
-
-        if (self.findConstInModule(self.module_id, callee.name)) |resolved| return .{ .found = resolved };
-        if (self.ir) |ir| {
-            const module = ir.moduleById(self.module_id) orelse return .unknown;
-            switch (self.resolveExplicitOpenConst(module, callee.name)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-            switch (self.resolveImplicitOpenConst(module, callee.name)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => return .unknown,
-            }
-        } else if (self.findConstByName(callee.name)) |resolved| {
-            return .{ .found = resolved };
-        }
-        return .unknown;
+        return name_resolution.resolve(ResolvedConst, ConstResolver{ .env = self }, self.module_id, .{
+            .qualifier = callee.qualifier,
+            .name = callee.name,
+        });
     }
 
     pub fn hasFunction(self: *const SemanticEnv, name: []const u8) bool {
@@ -333,6 +264,14 @@ pub const SemanticEnv = struct {
         return null;
     }
 
+    pub fn resolveTypeNameInContext(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
+        const delimiter = std.mem.indexOf(u8, name, "::") orelse return self.resolveTypeName(module_id, name);
+        const alias = name[0..delimiter];
+        const local_name = name[delimiter + 2 ..];
+        const target_module_id = self.resolveAliasInModule(module_id, alias) orelse return null;
+        return self.resolveTypeName(target_module_id, local_name);
+    }
+
     pub fn resolveTypeText(self: *const SemanticEnv, allocator: std.mem.Allocator, module_id: core.SourceModuleId, text: []const u8) !?ast.Type {
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
         if (trimmed.len == 0) return null;
@@ -349,9 +288,10 @@ pub const SemanticEnv = struct {
         }
         if (parseTypeConstructorArg(trimmed, "Object")) |inner_text| {
             const class_name = std.mem.trim(u8, inner_text, " \t\r\n");
-            return if (self.classExists(class_name)) ast.Type.objectClass(class_name) else null;
+            const resolved = self.resolveTypeNameInContext(module_id, class_name) orelse return null;
+            return if (resolved.kind == .object) resolved else null;
         }
-        return self.resolveTypeName(module_id, trimmed);
+        return self.resolveTypeNameInContext(module_id, trimmed);
     }
 
     pub fn callParamName(self: *const SemanticEnv, call_name: []const u8, index: usize) ?[]const u8 {
@@ -375,9 +315,9 @@ pub const SemanticEnv = struct {
         return null;
     }
 
-    fn resolveAlias(self: *const SemanticEnv, alias: []const u8) ?core.SourceModuleId {
+    fn resolveAliasInModule(self: *const SemanticEnv, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
         const ir = self.ir orelse return null;
-        const module = ir.moduleById(self.module_id) orelse return null;
+        const module = ir.moduleById(module_id) orelse return null;
         var index = module.program.imports.items.len;
         while (index > 0) {
             index -= 1;
@@ -412,122 +352,34 @@ pub const SemanticEnv = struct {
         return null;
     }
 
-    fn resolveExplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
-        var index = module.program.imports.items.len;
-        while (index > 0) {
-            index -= 1;
-            const import_decl = module.program.imports.items[index];
-            if (!import_decl.mode.unqualified) continue;
-            if (index >= module.resolved_import_ids.items.len) continue;
-            const imported_id = module.resolved_import_ids.items[index];
-            var stack = ModuleVisitStack{};
-            switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-        }
-        return .unknown;
+    fn explicitImportCount(self: *const SemanticEnv, module_id: core.SourceModuleId) usize {
+        const ir = self.ir orelse return 0;
+        const module = ir.moduleById(module_id) orelse return 0;
+        return module.program.imports.items.len;
     }
 
-    fn resolveImplicitOpenFunction(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) FunctionResolution {
-        var index = module.implicit_import_ids.items.len;
-        while (index > 0) {
-            index -= 1;
-            const imported_id = module.implicit_import_ids.items[index];
-            var stack = ModuleVisitStack{};
-            switch (self.resolveOpenFunctionInModule(imported_id, name, &stack)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-        }
-        return .unknown;
+    fn explicitImport(self: *const SemanticEnv, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+        const ir = self.ir orelse return null;
+        const module = ir.moduleById(module_id) orelse return null;
+        if (index >= module.program.imports.items.len) return null;
+        const import_decl = module.program.imports.items[index];
+        return .{
+            .unqualified = import_decl.mode.unqualified,
+            .module_id = if (index < module.resolved_import_ids.items.len) module.resolved_import_ids.items[index] else null,
+        };
     }
 
-    fn resolveExplicitOpenConst(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) ConstResolution {
-        var index = module.program.imports.items.len;
-        while (index > 0) {
-            index -= 1;
-            const import_decl = module.program.imports.items[index];
-            if (!import_decl.mode.unqualified) continue;
-            if (index >= module.resolved_import_ids.items.len) continue;
-            const imported_id = module.resolved_import_ids.items[index];
-            var stack = ModuleVisitStack{};
-            switch (self.resolveOpenConstInModule(imported_id, name, &stack)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-        }
-        return .unknown;
+    fn implicitImportCount(self: *const SemanticEnv, module_id: core.SourceModuleId) usize {
+        const ir = self.ir orelse return 0;
+        const module = ir.moduleById(module_id) orelse return 0;
+        return module.implicit_import_ids.items.len;
     }
 
-    fn resolveImplicitOpenConst(self: *const SemanticEnv, module: *const core.SourceModule, name: []const u8) ConstResolution {
-        var index = module.implicit_import_ids.items.len;
-        while (index > 0) {
-            index -= 1;
-            const imported_id = module.implicit_import_ids.items[index];
-            var stack = ModuleVisitStack{};
-            switch (self.resolveOpenConstInModule(imported_id, name, &stack)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-        }
-        return .unknown;
-    }
-
-    fn resolveOpenFunctionInModule(
-        self: *const SemanticEnv,
-        module_id: core.SourceModuleId,
-        name: []const u8,
-        stack: *ModuleVisitStack,
-    ) FunctionResolution {
-        const ir = self.ir orelse return if (self.findFunctionByName(name)) |resolved| .{ .found = resolved } else .unknown;
-        if (!stack.push(module_id)) return .unknown;
-        defer stack.pop();
-
-        if (self.findFunctionInModule(module_id, name)) |resolved| return .{ .found = resolved };
-
-        const module = ir.moduleById(module_id) orelse return .unknown;
-        var index = module.program.imports.items.len;
-        while (index > 0) {
-            index -= 1;
-            const import_decl = module.program.imports.items[index];
-            if (!import_decl.mode.unqualified) continue;
-            if (index >= module.resolved_import_ids.items.len) continue;
-            const imported_id = module.resolved_import_ids.items[index];
-            switch (self.resolveOpenFunctionInModule(imported_id, name, stack)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-        }
-        return .unknown;
-    }
-
-    fn resolveOpenConstInModule(
-        self: *const SemanticEnv,
-        module_id: core.SourceModuleId,
-        name: []const u8,
-        stack: *ModuleVisitStack,
-    ) ConstResolution {
-        const ir = self.ir orelse return if (self.findConstByName(name)) |resolved| .{ .found = resolved } else .unknown;
-        if (!stack.push(module_id)) return .unknown;
-        defer stack.pop();
-
-        if (self.findConstInModule(module_id, name)) |resolved| return .{ .found = resolved };
-
-        const module = ir.moduleById(module_id) orelse return .unknown;
-        var index = module.program.imports.items.len;
-        while (index > 0) {
-            index -= 1;
-            const import_decl = module.program.imports.items[index];
-            if (!import_decl.mode.unqualified) continue;
-            if (index >= module.resolved_import_ids.items.len) continue;
-            const imported_id = module.resolved_import_ids.items[index];
-            switch (self.resolveOpenConstInModule(imported_id, name, stack)) {
-                .found => |resolved| return .{ .found = resolved },
-                else => {},
-            }
-        }
-        return .unknown;
+    fn implicitImport(self: *const SemanticEnv, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+        const ir = self.ir orelse return null;
+        const module = ir.moduleById(module_id) orelse return null;
+        if (index >= module.implicit_import_ids.items.len) return null;
+        return module.implicit_import_ids.items[index];
     }
 
     fn findFunctionByName(self: *const SemanticEnv, name: []const u8) ?ResolvedFunction {
@@ -568,6 +420,62 @@ pub const SemanticEnv = struct {
         const key = core.constKey(module_id, name);
         if (ir.constants.contains(key)) return key;
         return null;
+    }
+};
+
+const FunctionResolver = struct {
+    env: *const SemanticEnv,
+
+    pub fn resolveAlias(self: FunctionResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+        return self.env.resolveAliasInModule(module_id, alias);
+    }
+
+    pub fn findInModule(self: FunctionResolver, module_id: core.SourceModuleId, name: []const u8) ?ResolvedFunction {
+        return self.env.findFunctionInModule(module_id, name);
+    }
+
+    pub fn explicitImportCount(self: FunctionResolver, module_id: core.SourceModuleId) usize {
+        return self.env.explicitImportCount(module_id);
+    }
+
+    pub fn explicitImport(self: FunctionResolver, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+        return self.env.explicitImport(module_id, index);
+    }
+
+    pub fn implicitImportCount(self: FunctionResolver, module_id: core.SourceModuleId) usize {
+        return self.env.implicitImportCount(module_id);
+    }
+
+    pub fn implicitImport(self: FunctionResolver, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+        return self.env.implicitImport(module_id, index);
+    }
+};
+
+const ConstResolver = struct {
+    env: *const SemanticEnv,
+
+    pub fn resolveAlias(self: ConstResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+        return self.env.resolveAliasInModule(module_id, alias);
+    }
+
+    pub fn findInModule(self: ConstResolver, module_id: core.SourceModuleId, name: []const u8) ?ResolvedConst {
+        return self.env.findConstInModule(module_id, name);
+    }
+
+    pub fn explicitImportCount(self: ConstResolver, module_id: core.SourceModuleId) usize {
+        return self.env.explicitImportCount(module_id);
+    }
+
+    pub fn explicitImport(self: ConstResolver, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+        return self.env.explicitImport(module_id, index);
+    }
+
+    pub fn implicitImportCount(self: ConstResolver, module_id: core.SourceModuleId) usize {
+        return self.env.implicitImportCount(module_id);
+    }
+
+    pub fn implicitImport(self: ConstResolver, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+        return self.env.implicitImport(module_id, index);
     }
 };
 

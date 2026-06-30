@@ -1098,6 +1098,34 @@ test "compiler semantics: enum cases are resolved before evaluation" {
     });
 }
 
+test "compiler semantics: qualified type names resolve in annotations records and enum cases" {
+    try buildSource(
+        \\import std:core/classes as classes
+        \\import std:core/objects as objects
+        \\
+        \\fn keep_style(style: classes::TextStyle) -> classes::TextStyle
+        \\  return style
+        \\end
+        \\
+        \\fn keep_align(align: classes::Align) -> classes::Align
+        \\  return align
+        \\end
+        \\
+        \\page ok
+        \\  let style = keep_style(classes::TextStyle {
+        \\    size = 32
+        \\    math_align = classes::Align.left
+        \\  })
+        \\  let align = keep_align(classes::Align.left)
+        \\  let body = objects::body_obj("qualified")
+        \\  body.text_size = style.size
+        \\  body.math_align = align
+        \\  objects::place!(body)
+        \\end
+        \\
+    );
+}
+
 test "compiler semantics: enum type names are not record constructors" {
     try expectDiagnostic(
         \\import std:themes/default as *

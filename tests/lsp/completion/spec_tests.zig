@@ -104,6 +104,28 @@ test "analysis completion: normal position follows import visibility" {
     try expectMissing(result, "text_size");
 }
 
+test "analysis completion: visible function prefers imported module definitions over re-exported names" {
+    var case = try CompletionCase.init(
+        \\import std:themes/default as *
+        \\
+        \\page title
+        \\  text!("body")
+        \\end
+        \\
+    );
+    defer case.deinit();
+
+    const offset = offsetAfter(case.source, "text");
+    const item = completion.visibleFunction(&case.index, case.allocator, .{
+        .doc_path = case.path,
+        .source = case.source,
+        .offset = offset,
+    }, "text", null) orelse return error.ExpectedFunction;
+
+    try testing.expectEqualStrings("text", item.label);
+    try testing.expectEqualStrings("text(text_value: String, theme: Theme = current_theme()) -> Object", item.detail orelse "");
+}
+
 test "analysis completion: normal positions include builtin and source type names" {
     var case = try CompletionCase.init(
         \\import std:themes/default as *

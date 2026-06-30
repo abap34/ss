@@ -5,6 +5,7 @@ const core = @import("core");
 const declarations = @import("../language/declarations.zig");
 const editor = @import("editor.zig");
 const language_names = @import("../language/names.zig");
+const name_resolution = @import("../language/name_resolution.zig");
 const registry = @import("../language/registry.zig");
 const program_analysis = @import("program.zig");
 
@@ -264,6 +265,19 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
     try appendTypeNameCompletions(&builder, index, request.source);
     for (index.roles) |item| try builder.add(.{ .label = item.name, .kind = .role, .detail = item.type_label });
     return try builder.finish();
+}
+
+pub fn visibleFunction(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8, qualifier: ?[]const u8) ?Candidate {
+    const function = resolveFunction(index, allocator, request.doc_path, .{
+        .qualifier = qualifier,
+        .name = name,
+    }) orelse return null;
+    return .{
+        .label = function.name,
+        .kind = .function,
+        .detail = function.signature,
+        .documentation = function.documentation,
+    };
 }
 
 pub fn accessBeforeOffset(source: []const u8, offset: usize) ?AccessContext {
@@ -1015,56 +1029,20 @@ fn moduleById(index: *const Index, module_id: core.SourceModuleId) ?ModuleInfo {
 
 fn resolveAliasModuleId(index: *const Index, allocator: std.mem.Allocator, doc_path: []const u8, alias: []const u8) ?core.SourceModuleId {
     const module = moduleForPath(index, allocator, doc_path) orelse return null;
-    var i = module.imports.len;
-    while (i > 0) {
-        i -= 1;
-        const item = module.imports[i];
-        if (!std.mem.eql(u8, item.alias orelse "", alias)) continue;
-        return item.module_id;
-    }
-    return null;
+    return (CompletionFunctionResolver{ .index = index }).resolveAlias(module.id, alias);
 }
 
 fn resolveFunction(index: *const Index, allocator: std.mem.Allocator, doc_path: []const u8, call: CallExpressionName) ?FunctionInfo {
-    if (call.qualifier) |qualifier| {
-        const module_id = resolveAliasModuleId(index, allocator, doc_path, qualifier) orelse return null;
-        return functionInModule(index, module_id, call.name);
-    }
-    if (moduleForPath(index, allocator, doc_path)) |module| {
-        if (functionInModule(index, module.id, call.name)) |function| return function;
-        var visiting = std.AutoHashMap(core.SourceModuleId, void).init(allocator);
-        defer visiting.deinit();
-        if (resolveOpenFunction(index, module, call.name, &visiting)) |function| return function;
-        var implicit_index = module.implicit_import_ids.len;
-        while (implicit_index > 0) {
-            implicit_index -= 1;
-            if (moduleById(index, module.implicit_import_ids[implicit_index])) |implicit_module| {
-                if (resolveOpenFunction(index, implicit_module, call.name, &visiting)) |function| return function;
-            }
-        }
-    }
-    return primitiveFunction(index, call.name);
-}
-
-fn resolveOpenFunction(
-    index: *const Index,
-    module: ModuleInfo,
-    name: []const u8,
-    visiting: *std.AutoHashMap(core.SourceModuleId, void),
-) ?FunctionInfo {
-    if (visiting.contains(module.id)) return null;
-    visiting.put(module.id, {}) catch return null;
-    if (functionInModule(index, module.id, name)) |function| return function;
-    var i = module.imports.len;
-    while (i > 0) {
-        i -= 1;
-        const import_info = module.imports[i];
-        if (!import_info.unqualified) continue;
-        const imported_id = import_info.module_id orelse continue;
-        const imported = moduleById(index, imported_id) orelse continue;
-        if (resolveOpenFunction(index, imported, name, visiting)) |function| return function;
-    }
-    return null;
+    const module = moduleForPath(index, allocator, doc_path) orelse return primitiveFunction(index, call.name);
+    const resolved = name_resolution.resolve(FunctionInfo, CompletionFunctionResolver{ .index = index }, module.id, .{
+        .qualifier = call.qualifier,
+        .name = call.name,
+    });
+    return switch (resolved) {
+        .found => |function| function,
+        .unknown => if (call.qualifier == null) primitiveFunction(index, call.name) else null,
+        .unknown_alias => if (call.qualifier == null) primitiveFunction(index, call.name) else null,
+    };
 }
 
 fn functionInModule(index: *const Index, module_id: core.SourceModuleId, name: []const u8) ?FunctionInfo {
@@ -1074,6 +1052,52 @@ fn functionInModule(index: *const Index, module_id: core.SourceModuleId, name: [
     }
     return null;
 }
+
+const CompletionFunctionResolver = struct {
+    index: *const Index,
+
+    pub fn resolveAlias(self: CompletionFunctionResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+        const module = moduleById(self.index, module_id) orelse return null;
+        var i = module.imports.len;
+        while (i > 0) {
+            i -= 1;
+            const item = module.imports[i];
+            if (!std.mem.eql(u8, item.alias orelse "", alias)) continue;
+            return item.module_id;
+        }
+        return null;
+    }
+
+    pub fn findInModule(self: CompletionFunctionResolver, module_id: core.SourceModuleId, name: []const u8) ?FunctionInfo {
+        return functionInModule(self.index, module_id, name);
+    }
+
+    pub fn explicitImportCount(self: CompletionFunctionResolver, module_id: core.SourceModuleId) usize {
+        const module = moduleById(self.index, module_id) orelse return 0;
+        return module.imports.len;
+    }
+
+    pub fn explicitImport(self: CompletionFunctionResolver, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+        const module = moduleById(self.index, module_id) orelse return null;
+        if (index >= module.imports.len) return null;
+        const import_info = module.imports[index];
+        return .{
+            .unqualified = import_info.unqualified,
+            .module_id = import_info.module_id,
+        };
+    }
+
+    pub fn implicitImportCount(self: CompletionFunctionResolver, module_id: core.SourceModuleId) usize {
+        const module = moduleById(self.index, module_id) orelse return 0;
+        return module.implicit_import_ids.len;
+    }
+
+    pub fn implicitImport(self: CompletionFunctionResolver, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+        const module = moduleById(self.index, module_id) orelse return null;
+        if (index >= module.implicit_import_ids.len) return null;
+        return module.implicit_import_ids[index];
+    }
+};
 
 fn primitiveFunction(index: *const Index, name: []const u8) ?FunctionInfo {
     for (index.functions) |function| {

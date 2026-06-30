@@ -461,77 +461,80 @@ fn resolveTypeReferences(
     ir: *core.Ir,
     sema: *const SemanticEnv,
 ) !void {
-    _ = allocator;
     for (ir.modules.items) |*module| {
-        try resolveProgramTypeReferences(&module.program, module.id, sema);
+        try resolveProgramTypeReferences(allocator, &module.program, module.id, sema);
     }
 }
 
 fn resolveProgramTypeReferences(
+    allocator: std.mem.Allocator,
     program: *ast.Program,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     for (program.records.items) |*record_decl| {
         for (record_decl.fields.items) |*field| {
-            if (field.default_value) |default_value| try resolveExprTypeReferences(default_value, module_id, sema);
+            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
         }
     }
     for (program.functions.items) |*func| {
-        try resolveFunctionTypeReferences(func, module_id, sema);
+        try resolveFunctionTypeReferences(allocator, func, module_id, sema);
     }
     for (program.constants.items) |*constant_decl| {
         try resolveTypeReference(&constant_decl.value_type, module_id, sema);
-        try resolveExprTypeReferences(&constant_decl.value, module_id, sema);
+        try resolveExprTypeReferences(allocator, &constant_decl.value, module_id, sema);
     }
     for (program.document_statements.items) |*stmt| {
-        try resolveStatementTypeReferences(stmt, module_id, sema);
+        try resolveStatementTypeReferences(allocator, stmt, module_id, sema);
     }
     for (program.pages.items) |*page| {
         for (page.statements.items) |*stmt| {
-            try resolveStatementTypeReferences(stmt, module_id, sema);
+            try resolveStatementTypeReferences(allocator, stmt, module_id, sema);
         }
     }
 }
 
 fn resolveFunctionTypeReferences(
+    allocator: std.mem.Allocator,
     func: *ast.FunctionDecl,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     for (func.params.items) |*param| {
         try resolveParamTypeReference(param, module_id, sema);
-        if (param.default_value) |default_value| try resolveExprTypeReferences(default_value, module_id, sema);
+        if (param.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
     }
     try resolveTypeReference(&func.result_type, module_id, sema);
     for (func.statements.items) |*stmt| {
-        try resolveStatementTypeReferences(stmt, module_id, sema);
+        try resolveStatementTypeReferences(allocator, stmt, module_id, sema);
     }
 }
 
 fn resolveStatementTypeReferences(
+    allocator: std.mem.Allocator,
     stmt: *ast.Statement,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |*binding| try resolveExprTypeReferences(&binding.expr, module_id, sema),
-        .return_expr => |*expr| try resolveExprTypeReferences(expr, module_id, sema),
+        .let_binding => |*binding| try resolveExprTypeReferences(allocator, &binding.expr, module_id, sema),
+        .return_expr => |*expr| try resolveExprTypeReferences(allocator, expr, module_id, sema),
         .return_void => {},
         .constrain => |*constraint| {
-            if (constraint.offset) |*offset| try resolveExprTypeReferences(offset, module_id, sema);
+            if (constraint.offset) |*offset| try resolveExprTypeReferences(allocator, offset, module_id, sema);
         },
-        .property_set => |*property_set| try resolveExprTypeReferences(&property_set.value, module_id, sema),
+        .property_set => |*property_set| try resolveExprTypeReferences(allocator, &property_set.value, module_id, sema),
         .if_stmt => |*if_stmt| {
-            try resolveExprTypeReferences(&if_stmt.condition, module_id, sema);
-            for (if_stmt.then_statements.items) |*nested| try resolveStatementTypeReferences(nested, module_id, sema);
-            for (if_stmt.else_statements.items) |*nested| try resolveStatementTypeReferences(nested, module_id, sema);
+            try resolveExprTypeReferences(allocator, &if_stmt.condition, module_id, sema);
+            for (if_stmt.then_statements.items) |*nested| try resolveStatementTypeReferences(allocator, nested, module_id, sema);
+            for (if_stmt.else_statements.items) |*nested| try resolveStatementTypeReferences(allocator, nested, module_id, sema);
         },
-        .expr_stmt => |*expr| try resolveExprTypeReferences(expr, module_id, sema),
+        .expr_stmt => |*expr| try resolveExprTypeReferences(allocator, expr, module_id, sema),
     }
 }
 
 fn resolveExprTypeReferences(
+    allocator: std.mem.Allocator,
     expr: *ast.Expr,
     module_id: core.SourceModuleId,
     sema: *const SemanticEnv,
@@ -539,28 +542,29 @@ fn resolveExprTypeReferences(
     switch (expr.*) {
         .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
-            for (call.args.items) |*arg| try resolveExprTypeReferences(arg, module_id, sema);
+            for (call.args.items) |*arg| try resolveExprTypeReferences(allocator, arg, module_id, sema);
         },
         .apply => |*apply| {
-            try resolveExprTypeReferences(apply.callee, module_id, sema);
-            for (apply.args.items) |*arg| try resolveExprTypeReferences(arg, module_id, sema);
+            try resolveExprTypeReferences(allocator, apply.callee, module_id, sema);
+            for (apply.args.items) |*arg| try resolveExprTypeReferences(allocator, arg, module_id, sema);
         },
         .lambda => |*lambda| {
             for (lambda.params.items) |*param| try resolveParamTypeReference(param, module_id, sema);
-            try resolveExprTypeReferences(lambda.body, module_id, sema);
+            try resolveExprTypeReferences(allocator, lambda.body, module_id, sema);
         },
         .record => |*record| {
-            for (record.fields.items) |*field| try resolveExprTypeReferences(&field.value, module_id, sema);
+            try resolveRecordTypeName(allocator, module_id, sema, record);
+            for (record.fields.items) |*field| try resolveExprTypeReferences(allocator, &field.value, module_id, sema);
         },
         .record_update => |*update| {
-            try resolveExprTypeReferences(update.target, module_id, sema);
-            for (update.fields.items) |*field| try resolveExprTypeReferences(&field.value, module_id, sema);
+            try resolveExprTypeReferences(allocator, update.target, module_id, sema);
+            for (update.fields.items) |*field| try resolveExprTypeReferences(allocator, &field.value, module_id, sema);
         },
-        .member => |*member| try resolveExprTypeReferences(member.target, module_id, sema),
-        .optional_check => |*check| try resolveExprTypeReferences(check.target, module_id, sema),
+        .member => |*member| try resolveExprTypeReferences(allocator, member.target, module_id, sema),
+        .optional_check => |*check| try resolveExprTypeReferences(allocator, check.target, module_id, sema),
         .coalesce => |*coalesce| {
-            try resolveExprTypeReferences(coalesce.target, module_id, sema);
-            try resolveExprTypeReferences(coalesce.fallback, module_id, sema);
+            try resolveExprTypeReferences(allocator, coalesce.target, module_id, sema);
+            try resolveExprTypeReferences(allocator, coalesce.fallback, module_id, sema);
         },
     }
 }
@@ -693,6 +697,24 @@ fn staticNumericPropertyValue(call: ast.CallExpr) ?core.Value {
     };
 }
 
+fn resolveRecordTypeName(
+    allocator: std.mem.Allocator,
+    module_id: core.SourceModuleId,
+    sema: *const SemanticEnv,
+    record: *ast.RecordExpr,
+) !void {
+    const resolved = sema.resolveTypeNameInContext(module_id, record.type_name) orelse return;
+    const resolved_name = switch (resolved.kind) {
+        .record, .object => resolved.class_name orelse return,
+        .enum_type => resolved.enum_name orelse return,
+        else => return,
+    };
+    if (std.mem.eql(u8, record.type_name, resolved_name)) return;
+    const owned_name = try allocator.dupe(u8, resolved_name);
+    allocator.free(record.type_name);
+    record.type_name = owned_name;
+}
+
 fn resolveFunctionEnumCases(
     allocator: std.mem.Allocator,
     module_id: core.SourceModuleId,
@@ -797,15 +819,20 @@ fn resolveMemberAsEnumCase(
 ) !bool {
     switch (member.target.*) {
         .ident => |enum_name| {
-            if (env.get(enum_name) != null or sema.function(enum_name) != null or sema.constant(enum_name) != null) return false;
-            if (!sema.enumHasCase(module_id, enum_name, member.name)) return false;
+            const qualified = std.mem.indexOf(u8, enum_name, "::") != null;
+            if (!qualified and (env.get(enum_name) != null or sema.function(enum_name) != null or sema.constant(enum_name) != null)) return false;
+            const resolved = sema.resolveTypeNameInContext(module_id, enum_name) orelse return false;
+            if (resolved.kind != .enum_type) return false;
+            const resolved_enum_name = resolved.enum_name orelse return false;
+            if (!sema.enumHasCase(module_id, resolved_enum_name, member.name)) return false;
             const target = member.target;
             const case_name = member.name;
             allocator.destroy(target);
             expr.* = .{ .enum_case = .{
-                .enum_name = enum_name,
+                .enum_name = try allocator.dupe(u8, resolved_enum_name),
                 .case_name = case_name,
             } };
+            allocator.free(enum_name);
             return true;
         },
         else => return false,
@@ -827,12 +854,13 @@ fn resolveTypeReference(
 ) !void {
     switch (ty.kind) {
         .object => if (ty.class_name) |name| {
-            if (!sema.classExists(name)) {
-                if (sema.recordExists(name)) {
-                    ty.* = ast.Type.recordType(name);
-                } else if (sema.enumDescriptor(module_id, name) != null) {
-                    ty.* = ast.Type.enumType(name);
-                }
+            if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
+                ty.* = resolved;
+            }
+        },
+        .selection => if (ty.param_class_name) |name| {
+            if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
+                if (resolved.kind == .object) ty.param_class_name = resolved.class_name;
             }
         },
         .function => {

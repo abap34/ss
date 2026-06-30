@@ -356,7 +356,9 @@ test "syntax spec: functions can use expression bodies" {
 
     const placing = parsed.program.functions.items[3];
     try testing.expectEqualStrings("badge!", placing.name);
-    _ = try expectCall(placing.statements.items[0].kind.return_expr, "place!", 1);
+    const place_on = try expectCall(placing.statements.items[0].kind.return_expr, "place_on!", 2);
+    _ = try expectCall(place_on.args.items[0], "pagectx", 0);
+    _ = try expectCall(place_on.args.items[1], "badge", 1);
 }
 
 test "syntax spec: expression-bodied functions require an expression" {
@@ -574,8 +576,9 @@ test "syntax spec: paired placement functions expand to plain and placing defini
     try testing.expectEqual(note.span.end, placing.span.end);
 
     const return_expr = placing.statements.items[0].kind.return_expr;
-    const place_call = try expectCall(return_expr, "place!", 1);
-    const inner_call = try expectCall(place_call.args.items[0], "note", 2);
+    const place_call = try expectCall(return_expr, "place_on!", 2);
+    _ = try expectCall(place_call.args.items[0], "pagectx", 0);
+    const inner_call = try expectCall(place_call.args.items[1], "note", 2);
     switch (inner_call.args.items[0]) {
         .ident => |name| try testing.expectEqualStrings("text_value", name),
         else => return error.ExpectedIdentifier,
@@ -672,6 +675,54 @@ test "syntax spec: optional types compose with functions and selections" {
     try testing.expectEqual(Type.Kind.selection, items.optional_child.?.kind);
     try testing.expectEqual(Type.Kind.object, items.optional_child.?.param);
     try testing.expectEqualStrings("Text", items.optional_child.?.param_class_name.?);
+}
+
+test "syntax spec: qualified type names parse in annotations and type parameters" {
+    var parsed = try parse(
+        \\import std:core/classes as classes
+        \\
+        \\fn keep(value: classes::TextStyle, items: Selection<classes::Text>) -> Object<classes::Text>
+        \\  return value
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const keep = parsed.program.functions.items[0];
+    try testing.expectEqual(Type.Kind.object, keep.params.items[0].ty.kind);
+    try testing.expectEqualStrings("classes::TextStyle", keep.params.items[0].ty.class_name.?);
+    try testing.expectEqual(Type.Kind.selection, keep.params.items[1].ty.kind);
+    try testing.expectEqualStrings("classes::Text", keep.params.items[1].ty.param_class_name.?);
+    try testing.expectEqual(Type.Kind.object, keep.result_type.kind);
+    try testing.expectEqualStrings("classes::Text", keep.result_type.class_name.?);
+}
+
+test "syntax spec: qualified record literals and enum targets parse" {
+    var parsed = try parse(
+        \\import std:core/classes as classes
+        \\
+        \\page Values
+        \\  let style = classes::TextStyle { size = 32 }
+        \\  let align = classes::Align.left
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    switch (statements[0].kind.let_binding.expr) {
+        .record => |record| {
+            try testing.expectEqualStrings("classes::TextStyle", record.type_name);
+            try testing.expectEqual(@as(usize, 1), record.fields.items.len);
+        },
+        else => return error.ExpectedRecordExpr,
+    }
+
+    const member = try expectMember(statements[1].kind.let_binding.expr, "left");
+    switch (member.target.*) {
+        .ident => |name| try testing.expectEqualStrings("classes::Align", name),
+        else => return error.ExpectedIdentifier,
+    }
 }
 
 test "syntax spec: enum values color literals and none stay explicit in the AST" {

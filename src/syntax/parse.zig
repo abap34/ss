@@ -288,13 +288,17 @@ const Parser = struct {
             outer_args.deinit(self.allocator);
         }
         try outer_args.append(self.allocator, .{ .call = .{
+            .callee = .{ .name = try self.allocator.dupe(u8, "pagectx") },
+            .args = .empty,
+        } });
+        try outer_args.append(self.allocator, .{ .call = .{
             .callee = .{ .name = try self.allocator.dupe(u8, func.name) },
             .args = inner_args,
         } });
         inner_args = .empty;
 
         const return_expr = Expr{ .call = .{
-            .callee = .{ .name = try self.allocator.dupe(u8, "place!") },
+            .callee = .{ .name = try self.allocator.dupe(u8, "place_on!") },
             .args = outer_args,
         } };
         outer_args = .empty;
@@ -649,7 +653,7 @@ const Parser = struct {
     }
 
     fn parsePrimaryTypeAnnotation(self: *Parser) anyerror!ast.Type {
-        const name = try self.parseIdentifier();
+        const name = try self.parseQualifiedTypeName();
         if (std.mem.eql(u8, name, "Document")) {
             self.allocator.free(name);
             return ast.Type.document;
@@ -702,12 +706,25 @@ const Parser = struct {
         return ast.Type.objectClass(name);
     }
 
+    fn parseQualifiedTypeName(self: *Parser) anyerror![]const u8 {
+        const first = try self.parseIdentifier();
+        errdefer self.allocator.free(first);
+        if (!self.startsWith("::")) return first;
+        self.pos += 2;
+        const second = try self.parseIdentifier();
+        defer {
+            self.allocator.free(first);
+            self.allocator.free(second);
+        }
+        return try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ first, second });
+    }
+
     fn parseObjectType(self: *Parser, object_name: []const u8) anyerror!ast.Type {
         defer self.allocator.free(object_name);
         self.skipInlineSpaces();
         if (self.eof() or self.source[self.pos] != '<') return ast.Type.object;
         try self.expectChar('<');
-        const class_name = try self.parseIdentifier();
+        const class_name = try self.parseQualifiedTypeName();
         try self.expectChar('>');
         return ast.Type.objectClass(class_name);
     }
@@ -1170,8 +1187,8 @@ const Parser = struct {
                 return .{ .boolean = value };
             }
         }
-        if (!name.isQualified() and !self.eof() and self.source[self.pos] == '{') {
-            return try self.parseRecordLiteralAfterName(name.name);
+        if (!self.eof() and self.source[self.pos] == '{') {
+            return try self.parseRecordLiteralAfterName(try self.qualifiedNameText(name));
         }
         if (!self.eof() and self.source[self.pos] == '(') {
             return .{ .call = try self.parseCallAfterName(name) };
@@ -1182,11 +1199,22 @@ const Parser = struct {
         if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
             return .{ .call = try self.makeUnaryStringCall(name, try self.parseStringLiteral()) };
         }
-        if (name.isQualified() or std.mem.endsWith(u8, name.name, "!")) return self.fail(error.ExpectedChar);
+        if (name.isQualified()) {
+            if (!self.eof() and self.source[self.pos] == '.') return .{ .ident = try self.qualifiedNameText(name) };
+            return self.fail(error.ExpectedChar);
+        }
+        if (std.mem.endsWith(u8, name.name, "!")) return self.fail(error.ExpectedChar);
         if (!self.eof() and self.source[self.pos] != '(') {
             return .{ .ident = name.name };
         }
         return .{ .ident = name.name };
+    }
+
+    fn qualifiedNameText(self: *Parser, name: ast.CallableName) ![]const u8 {
+        if (name.qualifier) |qualifier| {
+            return try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ qualifier, name.name });
+        }
+        return name.name;
     }
 
     fn parseRecordLiteralAfterName(self: *Parser, type_name: []const u8) !Expr {
