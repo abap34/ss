@@ -135,6 +135,11 @@ const PageContextRequirement = struct {
         try self.visiting.put(key, {});
         defer _ = self.visiting.remove(key);
 
+        const previous_sema = self.sema;
+        var module_sema = previous_sema.forModule(key.module_id);
+        self.sema = &module_sema;
+        defer self.sema = previous_sema;
+
         const requires = try self.functionBodyRequiresPage(func);
         try self.memo.put(key, requires);
         return requires;
@@ -145,6 +150,11 @@ const PageContextRequirement = struct {
         if (self.visiting.contains(key)) return false;
         try self.visiting.put(key, {});
         defer _ = self.visiting.remove(key);
+
+        const previous_sema = self.sema;
+        var module_sema = previous_sema.forModule(key.module_id);
+        self.sema = &module_sema;
+        defer self.sema = previous_sema;
 
         var scope = NameScope.init(self.allocator);
         defer scope.deinit();

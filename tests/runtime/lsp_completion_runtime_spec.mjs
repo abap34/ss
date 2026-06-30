@@ -164,6 +164,35 @@ end
     });
     assertPropertyCompletion(addedBrokenMemberCompletion, "added broken member completion");
 
+    const memberValidSource = `import std:themes/default
+import std:themes/default as *
+
+page ok
+  let t = text("body")
+  place!(t)
+end
+`;
+    const memberValidDiagnosticsPromise = client.waitForDiagnostics(
+      uri,
+      (diagnostics) => diagnostics.every((diagnostic) => diagnostic.severity !== 1),
+      "member valid diagnostics",
+    );
+    client.changeDocument({ uri, version: 5, text: memberValidSource });
+    const memberValidDiagnostics = await memberValidDiagnosticsPromise;
+    assert(
+      memberValidDiagnostics.params.diagnostics.every((diagnostic) => diagnostic.severity !== 1),
+      `member valid diagnostics: ${JSON.stringify(memberValidDiagnostics.params.diagnostics)}`,
+    );
+
+    const textHover = await client.request("textDocument/hover", {
+      textDocument: { uri },
+      position: positionAt(memberValidSource, "text(", 1),
+    });
+    assert(
+      textHover.contents?.value?.includes("text(text_value: String, theme: Theme = current_theme()) -> Object"),
+      `text hover did not show themed signature: ${JSON.stringify(textHover)}`,
+    );
+
     const memberBrokenSource = `import std:themes/default
 import std:themes/default as *
 
@@ -172,7 +201,7 @@ page ok
   t.
 end
 `;
-    client.changeDocument({ uri, version: 5, text: memberBrokenSource });
+    client.changeDocument({ uri, version: 6, text: memberBrokenSource });
     const memberCompletion = await client.request("textDocument/completion", {
       textDocument: { uri },
       position: positionAfter(memberBrokenSource, "t."),

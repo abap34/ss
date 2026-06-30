@@ -1470,11 +1470,12 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .hover)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer context.deinit(server.allocator);
-    if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
+    if (server.snapshot) |*snapshot| if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
-        const markdown = try hoverMarkdown(server.allocator, &root, &context) orelse return try jsonLiteral(server.allocator, "null");
+        const completion_index = if (snapshot.completion_index) |*index| index else null;
+        const markdown = try hoverMarkdown(server.allocator, &root, &context, completion_index) orelse return try jsonLiteral(server.allocator, "null");
         defer server.allocator.free(markdown);
         var out = std.ArrayList(u8).empty;
         try out.appendSlice(server.allocator, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
@@ -1485,7 +1486,12 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
     return try jsonLiteral(server.allocator, "null");
 }
 
-fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) !?[]u8 {
+fn hoverMarkdown(
+    allocator: std.mem.Allocator,
+    root: *const JsonObject,
+    context: *const RequestContext,
+    completion_index: ?*const analysis_completion.Index,
+) !?[]u8 {
     const target = context.target;
     if (qualifiedModuleIdForContext(allocator, root, context)) |module_id| {
         if (functionObject(root, target, module_id)) |item| {
@@ -1501,6 +1507,17 @@ fn hoverMarkdown(allocator: std.mem.Allocator, root: *const JsonObject, context:
     }
     if (lsp_scope.bestVisibleVariable(allocator, root, target, context)) |item| {
         return try std.fmt.allocPrint(allocator, "```ss\n({s}: {s})\n```", .{ target, stringField(item, "type") orelse "unknown" });
+    }
+    if (completion_index) |index| {
+        if (analysis_completion.visibleFunction(index, allocator, .{
+            .doc_path = context.doc_path,
+            .source = context.source,
+            .offset = context.offset,
+        }, target, null)) |item| {
+            const signature = item.detail orelse target;
+            const summary = item.documentation orelse "";
+            return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
+        }
     }
     if (functionObject(root, target, null)) |item| {
         const signature = stringField(item, "signature") orelse target;
