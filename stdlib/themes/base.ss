@@ -1,5 +1,5 @@
-import std:core/classes as *
-import std:core/components as *
+import std:core/classes as classes
+import std:core/components as components
 
 record TextBlockStyle {
   text: TextStyle = TextStyle {}

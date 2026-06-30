@@ -1,9 +1,9 @@
-import std:themes/default as *
 import std:themes/default as base
-import std:core/classes as *
-import std:core/components as *
-import std:core/layout as *
-import std:core/objects as *
+import std:core/classes as classes
+import std:core/components as components
+import std:core/layout as layout
+import std:core/objects as objects
+import std:core/generated as generated
 
 fn default_theme() -> Theme
   return base::default_theme() with {
@@ -104,11 +104,11 @@ fn current_theme() -> Theme
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return marked_callout!(source_text, target_text, note_text, style)
+  return components::marked_callout!(source_text, target_text, note_text, style)
 end
 
 fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return marked_callout!(source_text, target_text, note_text, style with {
+  return components::marked_callout!(source_text, target_text, note_text, style with {
     rises = false
   })
 end
@@ -126,7 +126,7 @@ fn/! h3(text_value: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = title_obj(title_text)
+  let title = objects::title_obj(title_text)
   title.text = theme.head.text
   title.layout = theme.head.layout
   title.underline = theme.head.underline
@@ -136,7 +136,7 @@ fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = sub_obj(subtitle_text)
+  let subtitle = objects::sub_obj(subtitle_text)
   subtitle.text = theme.subhead.text
   subtitle.layout = theme.subhead.layout
   subtitle.underline = theme.subhead.underline
@@ -150,6 +150,26 @@ fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
   return base::text(text_value, theme)
 end
 
+fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::note(text_value, theme)
+end
+
+fn/! tex(text_value: String, scale: Number = 1) -> Object
+  return base::tex(text_value, scale)
+end
+
+fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
+  return base::figure(text_value, theme)
+end
+
+fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+  return base::image(path_value, factor, theme)
+end
+
+fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+  return base::pdf(path_value, factor, theme)
+end
+
 fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
   return base::code(text_value, language_name, theme)
 end
@@ -159,11 +179,11 @@ fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme
 end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = lab_obj(title_text)
+  let title = objects::lab_obj(title_text)
   title.text = theme.toc.title.text
   title.layout = theme.toc.title.layout
   title.underline = theme.toc.title.underline
-  let list = toc_obj()
+  let list = generated::toc_obj()
   list.text = theme.toc.body.text
   list.layout = theme.toc.body.layout
   list.underline = theme.toc.body.underline
@@ -174,16 +194,16 @@ fn toc(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
-  let contents = place!(toc(title_text, theme))
-  pageno!()
+  let contents = objects::place!(toc(title_text, theme))
+  components::pageno!()
   return contents
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, date: String = "", theme: Theme = current_theme()) -> Object
-  let title = title_obj(title_text)
-  let subtitle = sub_obj(subtitle_text)
-  let author = by_obj(author_name)
-  let date_text = by_obj(date)
+  let title = objects::title_obj(title_text)
+  let subtitle = objects::sub_obj(subtitle_text)
+  let author = objects::by_obj(author_name)
+  let date_text = objects::by_obj(date)
   title.text = theme.cover.title.text
   title.layout = theme.cover.title.layout
   title.underline = theme.cover.title.underline

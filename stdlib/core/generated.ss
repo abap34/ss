@@ -1,6 +1,6 @@
-import std:core/classes as *
-import std:core/objects as *
-import std:core/selectors as *
+import std:core/classes as classes
+import std:core/objects as objects
+import std:core/selectors as selectors
 
 fn pageno_s(page_no: Object) -> Object
   page_no.text = TextStyle {
@@ -22,7 +22,7 @@ fn pageno_s(page_no: Object) -> Object
 end
 
 fn/! pageno_obj() -> Object
-  return pageno_s(obj("", "pageno", "text"))
+  return pageno_s(objects::obj("", "pageno", "text"))
 end
 
 fn pagenos!(format: String? = none) -> Void
@@ -69,14 +69,14 @@ end
 
 fn numbering!(counter_name: String, format: String = "{number}. {text}") -> Void
   foreach_enumerate(
-    doc_objs(docctx(), numbered_item_role(counter_name)),
+    selectors::doc_objs(docctx(), numbered_item_role(counter_name)),
     set_numbered_item,
     format
   )
 end
 
 fn mk_pagenos!(doc: Document, format: String?) -> Void
-  foreach(pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format))
+  foreach(selectors::pages(doc), (page_value: Page) |-> mk_pageno!(page_value, doc, format))
 end
 
 fn mk_pageno!(page_value: Page, doc: Document, format: String?) -> Page
@@ -88,7 +88,7 @@ end
 
 fn set_pagenos(doc: Document) -> Void
   foreach(
-    doc_objs(doc, "pageno"),
+    selectors::doc_objs(doc, "pageno"),
     (page_no: Object) |-> set_pageno(page_no, doc, none)
   )
 end
@@ -99,7 +99,7 @@ fn set_pageno(page_no: Object, doc: Document, format: String?) -> Object
 end
 
 fn pageno_repr(page_no: Object) -> String
-  let page_value = page_of(page_no)
+  let page_value = selectors::page_of(page_no)
   if page_no.pageno_format?
     let format_text = page_no.pageno_format ?? ""
     let page_text = replace(format_text, "{page}", str(page_index(page_value)))
@@ -110,7 +110,7 @@ end
 
 fn mk_footers!(doc: Document, text_value: String) -> Void
   foreach(
-    pages(doc),
+    selectors::pages(doc),
     (page_value: Page) |-> mk_footer!(page_value, text_value)
   )
 end
@@ -136,7 +136,7 @@ end
 
 fn mk_logos!(doc: Document, path_value: String, scale: Number) -> Void
   foreach(
-    pages(doc),
+    selectors::pages(doc),
     (page_value: Page) |-> mk_logo!(page_value, path_value, scale)
   )
 end
@@ -155,7 +155,7 @@ end
 
 fn mk_marks!(doc: Document, text_value: String) -> Void
   foreach(
-    pages(doc),
+    selectors::pages(doc),
     (page_value: Page) |-> mk_mark!(page_value, text_value)
   )
 end
@@ -182,13 +182,13 @@ fn mk_mark!(page_value: Page, text_value: String) -> Page
 end
 
 fn toc_obj() -> Object
-  let toc = obj("", "toc", "text")
+  let toc = objects::obj("", "toc", "text")
   return set_repr(toc, toc_repr)
 end
 
 fn set_tocs(doc: Document) -> Void
   foreach(
-    doc_objs(doc, "toc"),
+    selectors::doc_objs(doc, "toc"),
     (toc: Object) |-> set_toc(toc, doc)
   )
 end
@@ -201,11 +201,11 @@ end
 fn toc_text(doc: Document) -> String
   return "Table of Contents
 " ++ join(
-    pages(doc),
+    selectors::pages(doc),
     "",
     (page_value: Page) |->
       join(
-        objs(page_value, "title"),
+        selectors::objs(page_value, "title"),
         "",
         (title: Object) |-> toc_row(title, page_value)
       )
@@ -221,11 +221,11 @@ fn toc_repr(toc: Object) -> String
 end
 
 fn chk_titles(doc: Document) -> Void
-  foreach(pages(doc), warn_title)
+  foreach(selectors::pages(doc), warn_title)
 end
 
 fn warn_title(page_value: Page) -> Page
-  if selection_empty(objs(page_value, "title"))
+  if selection_empty(selectors::objs(page_value, "title"))
     report_warning("MissingTitle: Page has no title object")
   end
   return page_value

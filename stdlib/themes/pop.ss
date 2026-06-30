@@ -1,9 +1,9 @@
-import std:themes/default as *
 import std:themes/default as base
-import std:core/classes as *
-import std:core/components as *
-import std:core/layout as *
-import std:core/objects as *
+import std:core/classes as classes
+import std:core/components as components
+import std:core/layout as layout
+import std:core/objects as objects
+import std:core/generated as generated
 
 fn default_theme() -> Theme
   return base::default_theme() with {
@@ -131,11 +131,11 @@ fn current_theme() -> Theme
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return marked_callout!(source_text, target_text, note_text, style)
+  return components::marked_callout!(source_text, target_text, note_text, style)
 end
 
 fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return marked_callout!(source_text, target_text, note_text, style with {
+  return components::marked_callout!(source_text, target_text, note_text, style with {
     rises = false
   })
 end
@@ -148,10 +148,14 @@ fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
   return base::h2(subtitle_text, theme)
 end
 
+fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
+  return base::h3(subtitle_text, theme)
+end
+
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
-  let chip = txt_obj(title_text, "label")
-  let chip_bg = panel()
-  let title = txt_obj(title_text, "title")
+  let chip = objects::txt_obj(title_text, "label")
+  let chip_bg = components::panel()
+  let title = objects::txt_obj(title_text, "title")
   chip.text = theme.label.text
   chip.layout = theme.label.layout
   chip.underline = theme.label.underline
@@ -168,12 +172,12 @@ fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   ~ title.top == page.top - 98
   ~ chip.right == page.right - 72
   ~ chip.top == title.top + 8
-  surround(chip_bg, chip, 12, 6)
+  layout::surround(chip_bg, chip, 12, 6)
   return group(title, chip_bg, chip)
 end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = sub_obj(subtitle_text)
+  let subtitle = objects::sub_obj(subtitle_text)
   subtitle.text = theme.subhead.text
   subtitle.layout = theme.subhead.layout
   subtitle.underline = theme.subhead.underline
@@ -188,7 +192,7 @@ fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = tex_obj(text_value)
+  let obj = objects::tex_obj(text_value)
   obj.layout_x = 108
   obj.layout_right_inset = 108
   obj.wrap = WrapMode.on
@@ -217,7 +221,7 @@ fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme
 end
 
 fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
-  let note = note_obj(text_value)
+  let note = objects::note_obj(text_value)
   note.text = theme.note.text
   note.layout = theme.note.layout
   note.underline = theme.note.underline
@@ -225,33 +229,33 @@ fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
 end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = txt_obj(title_text, "label")
+  let title = objects::txt_obj(title_text, "label")
   title.text = theme.toc.title.text
   title.layout = theme.toc.title.layout
   title.underline = theme.toc.title.underline
-  let list = toc_obj()
+  let list = generated::toc_obj()
   list.text = theme.toc.body.text
   list.layout = theme.toc.body.layout
   list.underline = theme.toc.body.underline
-  let chrome = panel()
+  let chrome = components::panel()
   chrome.chrome = theme.toc.chrome
   ~ title.left == page.left + 72
   ~ title.top == page.top - 98
   ~ list.top == title.bottom - 46
-  surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
+  layout::surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
 end
 
 fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
-  let contents = place!(toc(title_text, theme))
-  pageno!()
+  let contents = objects::place!(toc(title_text, theme))
+  components::pageno!()
   return contents
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
-  let title = txt_obj(title_text, "title")
-  let subtitle = txt_obj(subtitle_text, "subtitle")
-  let author = txt_obj(author_name, "byline")
+  let title = objects::txt_obj(title_text, "title")
+  let subtitle = objects::txt_obj(subtitle_text, "subtitle")
+  let author = objects::txt_obj(author_name, "byline")
   title.text = theme.cover.title.text
   title.layout = theme.cover.title.layout
   title.underline = theme.cover.title.underline
