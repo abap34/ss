@@ -1,12 +1,13 @@
-import std:themes/base as *
-import std:core/classes as *
-import std:core/components as *
-import std:core/layout as *
-import std:core/objects as *
-import std:core/render as *
+import std:themes/base as base
+import std:core/classes as classes
+import std:core/components as components
+import std:core/layout as layout
+import std:core/objects as objects
+import std:core/render as render
+import std:core/generated as generated
 
 fn default_theme() -> Theme
-  let highlight = code_theme_github_light()
+  let highlight = render::code_theme_github_light()
   return Theme {
     body = TextBlockStyle {
       text = TextStyle {
@@ -397,17 +398,17 @@ fn current_theme() -> Theme
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return marked_callout!(source_text, target_text, note_text, style)
+  return components::marked_callout!(source_text, target_text, note_text, style)
 end
 
 fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return marked_callout!(source_text, target_text, note_text, style with {
+  return components::marked_callout!(source_text, target_text, note_text, style with {
     rises = false
   })
 end
 
 fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = title_obj(title_text)
+  let title = objects::title_obj(title_text)
   title.text = theme.h1.text
   title.layout = theme.h1.layout
   title.underline = theme.h1.underline
@@ -415,7 +416,7 @@ fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = sub_obj(subtitle_text)
+  let subtitle = objects::sub_obj(subtitle_text)
   subtitle.text = theme.h2.text
   subtitle.layout = theme.h2.layout
   subtitle.underline = theme.h2.underline
@@ -423,7 +424,7 @@ fn/! h2(subtitle_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = sub_obj(subtitle_text)
+  let subtitle = objects::sub_obj(subtitle_text)
   subtitle.text = theme.h3.text
   subtitle.layout = theme.h3.layout
   subtitle.underline = theme.h3.underline
@@ -431,8 +432,8 @@ fn/! h3(subtitle_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
-  let rule = rule()
-  let title = title_obj(title_text)
+  let rule = components::rule()
+  let title = objects::title_obj(title_text)
   title.text = theme.head.text
   title.layout = theme.head.layout
   title.underline = theme.head.underline
@@ -447,7 +448,7 @@ fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
-  let subtitle = sub_obj(subtitle_text)
+  let subtitle = objects::sub_obj(subtitle_text)
   subtitle.text = theme.subhead.text
   subtitle.layout = theme.subhead.layout
   subtitle.underline = theme.subhead.underline
@@ -458,16 +459,16 @@ fn/! subhead(subtitle_text: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! text(text_value: String, theme: Theme = current_theme()) -> Object
-  let body = body_obj(text_value)
+  let body = objects::body_obj(text_value)
   body.text = theme.body.text
   body.layout = theme.body.layout
   body.underline = theme.body.underline
-  code_theme(body, theme.code.highlight)
+  render::code_theme(body, theme.code.highlight)
   return body
 end
 
 fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
-  let note = note_obj(text_value)
+  let note = objects::note_obj(text_value)
   note.text = theme.note.text
   note.layout = theme.note.layout
   note.underline = theme.note.underline
@@ -475,7 +476,7 @@ fn/! note(text_value: String, theme: Theme = current_theme()) -> Object
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = tex_obj(text_value)
+  let obj = objects::tex_obj(text_value)
   obj.layout_x = 96
   obj.layout_right_inset = 96
   obj.wrap = WrapMode.on
@@ -484,19 +485,19 @@ fn/! tex(text_value: String, scale: Number = 1) -> Object
 end
 
 fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
-  let obj = raw_obj(text_value, "figure", "figure_text")
+  let obj = objects::raw_obj(text_value, "figure", "figure_text")
   obj.text = theme.figure.text
   obj.layout = theme.figure.layout
-  code_theme(obj, theme.code.highlight)
-  let chrome = panel()
+  render::code_theme(obj, theme.code.highlight)
+  let chrome = components::panel()
   chrome.chrome = theme.figure.chrome
   chrome.layout_spacing_after = theme.figure.layout.spacing_after
-  surround(chrome, obj, theme.figure.chrome.pad_x, theme.figure.chrome.pad_y)
+  layout::surround(chrome, obj, theme.figure.chrome.pad_x, theme.figure.chrome.pad_y)
   return obj
 end
 
 fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
-  let obj = img_obj(path_value)
+  let obj = objects::img_obj(path_value)
   let image_style = theme.image with {
     asset.scale = factor
   }
@@ -507,30 +508,30 @@ fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme(
 end
 
 fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
-  let obj = pdf_obj(path_value)
+  let obj = objects::pdf_obj(path_value)
   let pdf_style = theme.pdf with {
     asset.scale = factor
   }
   obj.layout = pdf_style.layout
   obj.asset = pdf_style.asset
-  let chrome = panel()
+  let chrome = components::panel()
   chrome.chrome = theme.pdf.chrome
   chrome.layout_spacing_after = theme.pdf.layout.spacing_after
-  surround(chrome, obj, theme.pdf.chrome.pad_x, theme.pdf.chrome.pad_y)
+  layout::surround(chrome, obj, theme.pdf.chrome.pad_x, theme.pdf.chrome.pad_y)
   require_asset_exists(obj)
   return obj
 end
 
 fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object
-  let code = code_obj(text_value)
+  let code = objects::code_obj(text_value)
   code.language = language_name
   code.text = theme.code.text
   code.layout = theme.code.layout
-  code_theme(code, theme.code.highlight)
-  let chrome = panel()
+  render::code_theme(code, theme.code.highlight)
+  let chrome = components::panel()
   chrome.chrome = theme.code.chrome
   chrome.layout_spacing_after = theme.code.layout.spacing_after
-  surround(chrome, code, theme.code.chrome.pad_x, theme.code.chrome.pad_y)
+  layout::surround(chrome, code, theme.code.chrome.pad_x, theme.code.chrome.pad_y)
   return code
 end
 
@@ -539,32 +540,32 @@ fn/! code_file(path_value: String, language_name: String = "plain", theme: Theme
 end
 
 fn toc(title_text: String, theme: Theme = current_theme()) -> Object
-  let title = lab_obj(title_text)
+  let title = objects::lab_obj(title_text)
   title.text = theme.toc.title.text
   title.layout = theme.toc.title.layout
   title.underline = theme.toc.title.underline
-  let list = toc_obj()
+  let list = generated::toc_obj()
   list.text = theme.toc.body.text
   list.layout = theme.toc.body.layout
   list.underline = theme.toc.body.underline
-  let chrome = panel()
+  let chrome = components::panel()
   chrome.chrome = theme.toc.chrome
   ~ list.top == title.bottom - 34
-  surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
+  layout::surround(chrome, list, theme.toc.chrome.pad_x, theme.toc.chrome.pad_y)
   return group(title, chrome, list)
 end
 
 fn toc!(title_text: String, theme: Theme = current_theme()) -> Object
-  let contents = place!(toc(title_text, theme))
-  pageno!()
+  let contents = objects::place!(toc(title_text, theme))
+  components::pageno!()
   return contents
 end
 
 fn/! cover(title_text: String, subtitle_text: String, author_name: String, theme: Theme = current_theme()) -> Object
-  let title = title_obj(title_text)
-  let subtitle = sub_obj(subtitle_text)
-  let author = by_obj(author_name)
-  let accent = rule()
+  let title = objects::title_obj(title_text)
+  let subtitle = objects::sub_obj(subtitle_text)
+  let author = objects::by_obj(author_name)
+  let accent = components::rule()
   title.text = theme.cover.title.text
   title.layout = theme.cover.title.layout
   title.underline = theme.cover.title.underline

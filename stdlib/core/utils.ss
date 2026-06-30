@@ -1,4 +1,4 @@
-import std:core/classes as *
+import std:core/classes as classes
 
 fn math_align(obj: Object, align_name: Align) -> Object
   obj.math_align = align_name

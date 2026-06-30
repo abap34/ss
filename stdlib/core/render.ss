@@ -1,5 +1,5 @@
-import std:core/classes as *
-import std:core/objects as *
+import std:core/classes as classes
+import std:core/objects as objects
 
 fn tex_preamble(src: String) -> Void
   extend_render_env(docctx(), "add", "math.tex.preamble", src)

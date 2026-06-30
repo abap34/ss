@@ -1,43 +1,43 @@
-import std:core/classes as *
-import std:core/layout as *
-import std:core/objects as *
-import std:core/render as *
-import std:core/selectors as *
-import std:core/utils as *
-import std:core/generated as *
+import std:core/classes as classes
+import std:core/layout as layout
+import std:core/objects as objects
+import std:core/render as render
+import std:core/selectors as selectors
+import std:core/utils as utils
+import std:core/generated as generated
 
 fn/! title(text_value: String) -> Object
-  return title_obj(text_value)
+  return objects::title_obj(text_value)
 end
 
 fn/! subtitle(text_value: String) -> Object
-  return sub_obj(text_value)
+  return objects::sub_obj(text_value)
 end
 
 fn/! math(text_value: String, scale: Number = 1) -> Object
-  let obj = math_obj(text_value)
+  let obj = objects::math_obj(text_value)
   obj.math_scale = scale
   return obj
 end
 
 fn/! mathtex(text_value: String) -> Object
-  return math_obj(text_value)
+  return objects::math_obj(text_value)
 end
 
 fn/! panel() -> Object
-  return panel_obj()
+  return objects::panel_obj()
 end
 
 fn/! byline(text_value: String) -> Object
-  return by_obj(text_value)
+  return objects::by_obj(text_value)
 end
 
 fn/! label(text_value: String) -> Object
-  return lab_obj(text_value)
+  return objects::lab_obj(text_value)
 end
 
 fn/! rule() -> Object
-  return rule_obj()
+  return objects::rule_obj()
 end
 
 record LineStyle {
@@ -94,7 +94,7 @@ record MarkedCalloutStyle {
 }
 
 fn/! line() -> Object
-  return shape_obj()
+  return objects::shape_obj()
 end
 
 fn line_s(obj: Object, style: LineStyle) -> Object
@@ -142,7 +142,7 @@ fn/! arrow_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Ob
 end
 
 fn/! callout_text(text_value: String, style: CalloutStyle) -> Object
-  let obj = body_obj(text_value)
+  let obj = objects::body_obj(text_value)
   obj.text = TextStyle {
     font = FontFace { family = "Helvetica" weight = style.text_weight }
     size = style.text_size
@@ -161,7 +161,7 @@ end
 
 fn/! callout_bar(color_name: Color?, thickness: Number) -> Object
   let obj = panel()
-  box(obj, color_name, none, 0, div(thickness, 2))
+  render::box(obj, color_name, none, 0, div(thickness, 2))
   obj.layout_font_size = 1
   obj.layout_line_height = 1
   return obj
@@ -202,8 +202,8 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
   ~ note.top == page.top - top_y
 
   let chrome = panel()
-  box(chrome, style.fill, style.border, style.border_width, style.radius)
-  surround(chrome, note, style.pad_x, style.pad_y)
+  render::box(chrome, style.fill, style.border, style.border_width, style.radius)
+  layout::surround(chrome, note, style.pad_x, style.pad_y)
 
   let connector_style = LineStyle {
     stroke = style.stroke
@@ -253,7 +253,7 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
 end
 
 fn/! marked_callout_text(text_value: String, color_name: Color, weight: Number, size: Number, line_height: Number) -> Object
-  let obj = body_obj(text_value)
+  let obj = objects::body_obj(text_value)
   obj.text = TextStyle {
     font = FontFace { family = "Helvetica" weight = weight }
     size = size
@@ -280,8 +280,8 @@ fn marked_callout!(source_text: String, target_text: String, note_text: String, 
   let after = marked_callout_text!(str_after(source_text, target_text), style.text_color, style.text_weight, style.text_size, style.text_line_height)
 
   let target_back = panel!()
-  box(target_back, style.target_fill, style.target_border, style.target_border_width, style.target_radius)
-  surround(target_back, target, style.target_pad_x, style.target_pad_y)
+  render::box(target_back, style.target_fill, style.target_border, style.target_border_width, style.target_radius)
+  layout::surround(target_back, target, style.target_pad_x, style.target_pad_y)
 
   ~ before.left == page.left + style.x
   ~ before.top == page.top - style.top_y
@@ -294,7 +294,7 @@ fn marked_callout!(source_text: String, target_text: String, note_text: String, 
     rises = style.rises
   }
   let callout = bracket_callout!(target, note_text, style.callout_x, style.callout_top_y, style.callout_width, callout_style)
-  return place!(group(before, target, after, target_back, callout))
+  return objects::place!(group(before, target, after, target_back, callout))
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = MarkedCalloutStyle {}) -> Object
@@ -321,25 +321,25 @@ fn/! frame_s(inner: Object, pad_x: Number, pad_y: Number) -> Object
 end
 
 fn/! frame(text_value: String, role_name: String, payload_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
-  let inner = raw_obj(text_value, role_name, payload_name)
+  let inner = objects::raw_obj(text_value, role_name, payload_name)
   inner.layout_x = left
   inner.layout_right_inset = right
   inner.wrap = WrapMode.on
   let chrome = panel()
-  box(chrome, fill_name, stroke_name, line_width_name, radius_name)
+  render::box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout_spacing_after = 34
-  surround(chrome, inner, pad_x, pad_y)
+  layout::surround(chrome, inner, pad_x, pad_y)
   return inner
 end
 
 fn surround_s(inner: Object, pad_x: Number, pad_y: Number) -> Object
   let chrome = panel()
-  surround(chrome, inner, pad_x, pad_y)
+  layout::surround(chrome, inner, pad_x, pad_y)
   return inner
 end
 
 fn border_p(inner: Object, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width: Number, radius: Number) -> Object
-  box(inner, fill_name, stroke_name, line_width, radius)
+  render::box(inner, fill_name, stroke_name, line_width, radius)
   inner.chrome_pad_x = pad_x
   inner.chrome_pad_y = pad_y
   return inner
@@ -354,7 +354,7 @@ fn outline(inner: Object, stroke_name: Color? = c"0.36,0.40,0.48", line_width: N
 end
 
 fn/! code_l(text_value: String, language_name: String) -> Object
-  let code = code_obj(text_value)
+  let code = objects::code_obj(text_value)
   code.language = language_name
   return code
 end
@@ -371,25 +371,25 @@ fn code_panel(text_value: String, language_name: String, left: Number, right: Nu
   let code = code_in(text_value, language_name, left, right)
   let chrome = panel()
   chrome.layout_spacing_after = 34
-  surround(chrome, code, pad_x, pad_y)
+  layout::surround(chrome, code, pad_x, pad_y)
   return code
 end
 
 fn code_box(text_value: String, language_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
   let code = code_in(text_value, language_name, left, right)
   let chrome = panel()
-  box(chrome, fill_name, stroke_name, line_width_name, radius_name)
+  render::box(chrome, fill_name, stroke_name, line_width_name, radius_name)
   chrome.layout_spacing_after = 34
-  surround(chrome, code, pad_x, pad_y)
+  layout::surround(chrome, code, pad_x, pad_y)
   return code
 end
 
 fn/! text(text_value: String) -> Object
-  return body_obj(text_value)
+  return objects::body_obj(text_value)
 end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
-  let obj = tex_obj(text_value)
+  let obj = objects::tex_obj(text_value)
   obj.layout_x = 102
   obj.layout_right_inset = 102
   obj.wrap = WrapMode.on
@@ -398,7 +398,7 @@ fn/! tex(text_value: String, scale: Number = 1) -> Object
 end
 
 fn/! figure(text_value: String) -> Object
-  let obj = fig_obj(text_value)
+  let obj = objects::fig_obj(text_value)
   obj.layout_x = 102
   obj.layout_right_inset = 102
   obj.wrap = WrapMode.on
@@ -406,7 +406,7 @@ fn/! figure(text_value: String) -> Object
 end
 
 fn/! image(path_value: String, factor: Number = 1) -> Object
-  let obj = scale(img_obj(path_value), factor)
+  let obj = render::scale(objects::img_obj(path_value), factor)
   obj.layout_x = 102
   obj.layout_right_inset = 102
   obj.wrap = WrapMode.on
@@ -415,7 +415,7 @@ fn/! image(path_value: String, factor: Number = 1) -> Object
 end
 
 fn/! pdf(path_value: String, factor: Number = 1) -> Object
-  let obj = scale(pdf_obj(path_value), factor)
+  let obj = render::scale(objects::pdf_obj(path_value), factor)
   obj.layout_x = 102
   obj.layout_right_inset = 102
   obj.wrap = WrapMode.on
@@ -436,7 +436,7 @@ fn/! code_file(path_value: String, language_name: String = "plain") -> Object
 end
 
 fn/! note(text_value: String) -> Object
-  let obj = note_obj(text_value)
+  let obj = objects::note_obj(text_value)
   obj.layout_x = 120
   obj.layout_right_inset = 120
   obj.wrap = WrapMode.on
@@ -448,7 +448,7 @@ fn/! citation(target: Object, number: Number, reference_text: String) -> Object
   let marker = "[" ++ number_text ++ "]"
   let id = "citation:" ++ str(page_index(pagectx())) ++ ":" ++ number_text
 
-  let ref = link(cite_obj(marker ++ " " ++ reference_text), id)
+  let ref = render::link(objects::cite_obj(marker ++ " " ++ reference_text), id)
   ref.layout_x = 120
   ref.layout_right_inset = 90
   ref.wrap = WrapMode.on
@@ -457,6 +457,6 @@ fn/! citation(target: Object, number: Number, reference_text: String) -> Object
 end
 
 fn/! pageno() -> Object
-  let page_no = pageno_obj()
+  let page_no = generated::pageno_obj()
   return page_no
 end
