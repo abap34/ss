@@ -117,6 +117,7 @@ fn writeInlineLines(object: *json.Object, key: []const u8, lines: []const core.m
             try run_item.enumTagField("kind", run.kind);
             try run_item.stringField("text", run.text);
             if (run.strikethrough) try run_item.boolField("strikethrough", true);
+            if (run.underline) try run_item.boolField("underline", true);
             try run_item.optionalStringField("url", run.url);
             try run_item.optionalStringField("icon", run.icon);
             try run_item.end();

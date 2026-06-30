@@ -112,7 +112,7 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-pub const page_pdf_cache_version = "ss-native-page-pdf-v23";
+pub const page_pdf_cache_version = "ss-native-page-pdf-v24";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
 pub const native_artifact_cache_version = "ss-native-artifacts-v2";
 const external_command_timeout = std.Io.Clock.Duration{
@@ -192,6 +192,7 @@ const Atom = struct {
     is_space: bool,
     is_emoji: bool = false,
     strikethrough: bool = false,
+    underline: bool = false,
     svg_path: ?[]const u8 = null,
     link_url: ?[]const u8 = null,
 };
@@ -2874,11 +2875,11 @@ fn layoutRunAtoms(ctx: *DrawContext, runs: []const Run, text: TextPaint, preambl
                 try appendMathAtom(ctx, atoms, run.text, text, preamble, if (run.kind == .display_math) .display else .inline_math);
             },
             .icon => if (run.icon) |source| try appendIconAtom(ctx, atoms, source, text),
-            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough),
-            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough),
-            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough),
-            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough),
-            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough),
+            .bold => try appendTextAtoms(ctx, atoms, run.text, text.bold_font, text.markdown_bold_color orelse text.color, text.font_size, null, run.strikethrough, run.underline),
+            .italic => try appendTextAtoms(ctx, atoms, run.text, text.italic_font, text.color, text.font_size, null, run.strikethrough, run.underline),
+            .code => try appendTextAtoms(ctx, atoms, run.text, text.code_font, text.color, text.font_size, null, run.strikethrough, run.underline),
+            .link => try appendTextAtoms(ctx, atoms, run.text, text.font, text.link_color, text.font_size, run.url, run.strikethrough, run.underline),
+            .text => try appendTextAtoms(ctx, atoms, run.text, text.font, text.color, text.font_size, null, run.strikethrough, run.underline),
         }
     }
 }
@@ -2982,7 +2983,7 @@ fn freeAtoms(allocator: Allocator, atoms: []const Atom) void {
     }
 }
 
-fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool) !void {
+fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const u8, font: FontFace, color: Color, font_size: f32, link_url: ?[]const u8, strikethrough: bool, underline: bool) !void {
     var tokenizer = text_tokenize.Tokenizer.init(value);
     while (tokenizer.next()) |token| {
         const is_emoji = text_tokenize.isEmojiToken(token);
@@ -3000,6 +3001,7 @@ fn appendTextAtoms(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []cons
             .is_space = text_tokenize.isWhitespace(token),
             .is_emoji = is_emoji,
             .strikethrough = strikethrough,
+            .underline = underline,
             .link_url = link_url,
         });
     }
@@ -3082,6 +3084,9 @@ fn drawAtomsWithOptions(
                 }
                 if (atom.strikethrough) {
                     drawStrikethrough(ctx, cursor_x, y_top, atom, paint);
+                }
+                if (atom.underline) {
+                    drawUnderline(ctx, cursor_x, y_top, atom, paint);
                 }
                 cursor.advance(measured_atom.advance);
             },
@@ -3180,7 +3185,7 @@ fn drawPlainTextAtTopWithOptions(
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
-    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false);
+    try appendTextAtoms(ctx, &atoms, content, font, color, font_size, null, false, false);
     const paint = AtomPaint{
         .font_size = font_size,
         .line_height = line_height,
@@ -3195,6 +3200,12 @@ fn drawPlainTextAtTopWithOptions(
 fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) void {
     const y = y_top + paint.font_size * 0.55;
     const line_width = @max(@as(f32, 1.0), paint.font_size * 0.065);
+    c.ss_pdf_stroke_line(ctx.pdf, x, y, x + @max(atom.width, 1), y, line_width, atom.color.r, atom.color.g, atom.color.b, 0, 0);
+}
+
+fn drawUnderline(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) void {
+    const y = y_top + paint.font_size * 1.25;
+    const line_width = @max(@as(f32, 0.8), paint.font_size * 0.055);
     c.ss_pdf_stroke_line(ctx.pdf, x, y, x + @max(atom.width, 1), y, line_width, atom.color.r, atom.color.g, atom.color.b, 0, 0);
 }
 
