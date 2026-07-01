@@ -4,6 +4,12 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-01
+
+### Fixed
+
+- Fixed LSP document requests after opening unrelated `.ss` files in VS Code.
+
 ## [0.7.2] - 2026-07-01
 
 ### Added
