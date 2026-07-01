@@ -915,7 +915,7 @@ fn constraintOriginLabel(allocator: std.mem.Allocator, ir: anytype, constraint: 
         path = module.path orelse module.spec;
         source = module.source;
     }
-    const loc = utils.err.computeLineColumn(source, located.span.start);
+    const loc = utils.source.locationAt(source, located.span.start);
     return std.fmt.allocPrint(allocator, "{s}:{d}", .{ path, loc.line });
 }
 

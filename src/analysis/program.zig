@@ -226,25 +226,19 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, ir: *core.Ir, sem
 }
 
 const DependencyQueryIterator = struct {
-    source: []const u8,
-    offset: usize = 0,
+    lines: utils.source.LineIterator,
 
-    fn init(source: []const u8) DependencyQueryIterator {
-        return .{ .source = source };
+    fn init(text: []const u8) DependencyQueryIterator {
+        return .{ .lines = utils.source.lineIterator(text) };
     }
 
     fn next(self: *DependencyQueryIterator) ?DependencyQuery {
-        while (self.offset < self.source.len) {
-            const line_start = self.offset;
-            var line_end = line_start;
-            while (line_end < self.source.len and self.source[line_end] != '\n') line_end += 1;
-            self.offset = if (line_end < self.source.len) line_end + 1 else line_end;
-
-            const line = self.source[line_start..line_end];
+        while (self.lines.next()) |view| {
+            const line = view.text(self.lines.source);
             const comment_index = std.mem.indexOf(u8, line, ";;") orelse continue;
             const comment = line[comment_index + 2 ..];
             const marker_index = std.mem.indexOf(u8, comment, "^dep?") orelse continue;
-            const start = line_start + comment_index + 2 + marker_index;
+            const start = view.span.start + comment_index + 2 + marker_index;
             return .{ .span = .{ .start = start, .end = start + "^dep?".len } };
         }
         return null;

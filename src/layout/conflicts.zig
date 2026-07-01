@@ -259,7 +259,7 @@ fn appendOriginObject(object: *json.Object, field_name: []const u8, ir: anytype,
         path = module.path orelse module.spec;
         source = module.source;
     }
-    const loc = utils.err.computeLineColumn(source, located.span.start);
+    const loc = utils.source.locationAt(source, located.span.start);
 
     var child = try object.objectField(field_name);
     try child.stringField("path", path);

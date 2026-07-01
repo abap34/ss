@@ -2964,9 +2964,10 @@ fn drawMarkdownCodeBlockContent(ctx: *DrawContext, x: f32, first_baseline_bl: f3
     }
 
     var cursor_bl = first_baseline_bl;
-    var physical = std.mem.splitScalar(u8, source, '\n');
-    while (physical.next()) |segment| {
-        if (segment.len == 0 and physical.index == null and source.len > 0 and source[source.len - 1] == '\n') break;
+    var physical = utils.source.lineIterator(source);
+    while (physical.next()) |line| {
+        const segment = line.text(source);
+        if (segment.len == 0 and line.raw_end == source.len and source.len > 0 and source[source.len - 1] == '\n') break;
         _ = try drawCodeTextAtTop(ctx, x, baselineTop(cursor_bl, text.markdown_code_font_size), width, text.markdown_code_line_height, segment, text.code_font, text.markdown_code_font_size, code_paint.plain, text.emoji_spacing);
         cursor_bl -= text.markdown_code_line_height;
     }
@@ -3015,10 +3016,7 @@ fn measureMarkdownCodeBlockContent(ctx: *DrawContext, source: []const u8, width:
 
 fn physicalCodeLineCount(source: []const u8) usize {
     if (source.len == 0) return 1;
-    var count: usize = 1;
-    for (source) |ch| {
-        if (ch == '\n') count += 1;
-    }
+    var count = utils.source.lineCount(source);
     if (source[source.len - 1] == '\n' and count > 1) count -= 1;
     return count;
 }
@@ -3574,9 +3572,10 @@ fn drawHighlightedCodeLines(
 ) !void {
     const language = code.language orelse {
         var cursor_bl = first_baseline_bl;
-        var plain_lines = std.mem.splitScalar(u8, content, '\n');
-        while (plain_lines.next()) |line| {
-            if (trim_trailing_empty_line and line.len == 0 and plain_lines.index == null and content.len > 0 and content[content.len - 1] == '\n') break;
+        var plain_lines = utils.source.lineIterator(content);
+        while (plain_lines.next()) |line_view| {
+            const line = line_view.text(content);
+            if (trim_trailing_empty_line and line.len == 0 and line_view.raw_end == content.len and content.len > 0 and content[content.len - 1] == '\n') break;
             _ = try drawCodeTextAtTop(ctx, x, baselineTop(cursor_bl, font_size), width, line_height, line, font, font_size, code.plain, emoji_spacing);
             cursor_bl -= line_height;
         }
@@ -3587,15 +3586,14 @@ fn drawHighlightedCodeLines(
     defer spans.deinit(ctx.allocator);
 
     var cursor_bl = first_baseline_bl;
-    var offset: usize = 0;
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        if (trim_trailing_empty_line and line.len == 0 and lines.index == null and content.len > 0 and content[content.len - 1] == '\n') break;
-        const line_start = offset;
-        const line_end = line_start + line.len;
+    var lines = utils.source.lineIterator(content);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(content);
+        if (trim_trailing_empty_line and line.len == 0 and line_view.raw_end == content.len and content.len > 0 and content[content.len - 1] == '\n') break;
+        const line_start = line_view.span.start;
+        const line_end = line_view.span.end;
         try drawHighlightedCodeLine(ctx, x, baselineTop(cursor_bl, font_size), width, content, line_start, line_end, spans.items, font, font_size, line_height, code.plain, emoji_spacing);
         cursor_bl -= line_height;
-        offset = @min(line_end + 1, content.len);
     }
 }
 
@@ -4050,8 +4048,9 @@ fn drawCodeBlock(ctx: *DrawContext, frame: Frame, content: []const u8, text: Tex
         }
     }
     var cursor_bl = baselineBlForBox(frame, text.font_size);
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
+    var lines = utils.source.lineIterator(content);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(content);
         try drawCodeLine(ctx, frame.x, baselineTop(cursor_bl, text.font_size), frame.width, line, text.code_font, text.font_size, text.line_height, code_paint, text.emoji_spacing);
         cursor_bl -= text.line_height;
     }
@@ -4084,13 +4083,13 @@ fn drawCodeLine(
             break;
         }
         if (byte == '"' or byte == '\'') {
-            index = stringLiteralEnd(line, index);
+            index = utils.source.skipQuotedString(line, index, line.len, byte);
             try drawCodeSegment(ctx, &cursor_x, y_top, line[start..index], font, font_size, line_height, code.string, emoji_spacing);
             continue;
         }
-        if (isIdentifierStart(byte)) {
+        if (utils.source.isIdentifierStart(byte)) {
             index += 1;
-            while (index < line.len and isIdentifierContinue(line[index])) index += 1;
+            while (index < line.len and utils.source.isIdentifierContinue(line[index])) index += 1;
             const segment = line[start..index];
             try drawCodeSegment(ctx, &cursor_x, y_top, segment, font, font_size, line_height, if (isPythonKeyword(segment)) code.keyword else code.plain, emoji_spacing);
             continue;
@@ -4104,27 +4103,6 @@ fn drawCodeSegment(ctx: *DrawContext, cursor_x: *f32, y_top: f32, segment: []con
     if (segment.len == 0) return;
     const segment_width = try drawCodeTextAtTop(ctx, cursor_x.*, y_top, 1, line_height, segment, font, font_size, color, emoji_spacing);
     cursor_x.* += segment_width;
-}
-
-fn stringLiteralEnd(line: []const u8, start: usize) usize {
-    const quote = line[start];
-    var index = start + 1;
-    while (index < line.len) : (index += 1) {
-        if (line[index] == '\\') {
-            index += 1;
-            continue;
-        }
-        if (line[index] == quote) return index + 1;
-    }
-    return line.len;
-}
-
-fn isIdentifierStart(byte: u8) bool {
-    return std.ascii.isAlphabetic(byte) or byte == '_';
-}
-
-fn isIdentifierContinue(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
 fn isPythonKeyword(segment: []const u8) bool {
@@ -4869,8 +4847,9 @@ fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]
         .block => {
             var normalized = std.ArrayList(u8).empty;
             defer normalized.deinit(allocator);
-            var lines = std.mem.splitScalar(u8, source, '\n');
-            while (lines.next()) |line| {
+            var lines = utils.source.lineIterator(source);
+            while (lines.next()) |line_view| {
+                const line = line_view.text(source);
                 const trimmed = std.mem.trim(u8, line, " \t\r\n");
                 if (trimmed.len == 0) continue;
                 if (normalized.items.len > 0) try normalized.append(allocator, '\n');
@@ -5201,8 +5180,9 @@ fn commandOutputSummary(allocator: Allocator, output: []const u8) ![]u8 {
     defer summary.deinit(allocator);
 
     var include_following: usize = 0;
-    var lines = std.mem.splitScalar(u8, output, '\n');
-    while (lines.next()) |line| {
+    var lines = utils.source.lineIterator(output);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(output);
         const trimmed_line = std.mem.trim(u8, line, " \t\r\n");
         const interesting = commandOutputLineLooksRelevant(trimmed_line);
         if (interesting) include_following = 2;
