@@ -95,8 +95,34 @@ end
     });
     assertSameLabels(libraryMemberCompletion, repeatedLibraryCompletion, "repeated imported library member completion");
 
-    const libraryRestoredDiagnosticsPromise = client.waitForDiagnostics(partsUri);
-    client.changeDocument({ uri: partsUri, version: 3, text: libraryValidSource });
+    const libraryRecordUpdateBrokenSource = libraryValidSource.replace("body.text.size = 24", "bod");
+    client.changeDocument({ uri: partsUri, version: 3, text: libraryRecordUpdateBrokenSource });
+    const recordUpdateBaseCompletion = await client.request("textDocument/completion", {
+      textDocument: { uri: partsUri },
+      position: positionAfter(libraryRecordUpdateBrokenSource, "with {\n    "),
+    });
+    assertThemeRecordCompletion(recordUpdateBaseCompletion, "record update base completion");
+
+    const recordUpdatePrefixCompletion = await client.request("textDocument/completion", {
+      textDocument: { uri: partsUri },
+      position: positionAfter(libraryRecordUpdateBrokenSource, "bod"),
+    });
+    assertThemeRecordCompletion(recordUpdatePrefixCompletion, "record update prefix completion");
+
+    const libraryRecordUpdateNestedBrokenSource = libraryValidSource.replace("body.text.size = 24", "body.text.");
+    client.changeDocument({ uri: partsUri, version: 4, text: libraryRecordUpdateNestedBrokenSource });
+    const recordUpdateNestedCompletion = await client.request("textDocument/completion", {
+      textDocument: { uri: partsUri },
+      position: positionAfter(libraryRecordUpdateNestedBrokenSource, "body.text."),
+    });
+    assertTextStyleRecordCompletion(recordUpdateNestedCompletion, "record update nested completion");
+
+    const libraryRestoredDiagnosticsPromise = client.waitForDiagnostics(
+      partsUri,
+      (diagnostics) => diagnostics.length === 0,
+      "empty diagnostics after restoring library source",
+    );
+    client.changeDocument({ uri: partsUri, version: 5, text: libraryValidSource });
     const libraryRestoredDiagnostics = await libraryRestoredDiagnosticsPromise;
     assert(libraryRestoredDiagnostics.params.diagnostics.length === 0, `library restored diagnostics: ${JSON.stringify(libraryRestoredDiagnostics.params.diagnostics)}`);
 
@@ -470,6 +496,21 @@ function assertPropertyCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
   assertCompletionHas(completion, "text_size", label);
   assertCompletionMissing(completion, ["page", "add", "String"], label);
+}
+
+function assertThemeRecordCompletion(completion, label) {
+  assertUniqueCompletionLabels(completion, label);
+  assertCompletionHas(completion, "body", label);
+  assertCompletionHas(completion, "h1", label);
+  assertCompletionHas(completion, "callout", label);
+  assertCompletionMissing(completion, ["page", "String", "size"], label);
+}
+
+function assertTextStyleRecordCompletion(completion, label) {
+  assertUniqueCompletionLabels(completion, label);
+  assertCompletionHas(completion, "size", label);
+  assertCompletionHas(completion, "color", label);
+  assertCompletionMissing(completion, ["page", "String", "body"], label);
 }
 
 function assertSameLabels(left, right, label) {

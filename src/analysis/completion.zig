@@ -125,6 +125,13 @@ const FieldInfo = struct {
     type_label: []u8,
 };
 
+const RecordFieldInfo = struct {
+    name: []u8,
+    record_name: []u8,
+    type_label: []u8,
+    module_id: core.SourceModuleId,
+};
+
 const ClassInfo = struct {
     name: []u8,
     base: ?[]u8,
@@ -144,6 +151,7 @@ pub const Index = struct {
     constants: []FunctionInfo = &.{},
     variables: []VariableInfo = &.{},
     fields: []FieldInfo = &.{},
+    record_fields: []RecordFieldInfo = &.{},
     classes: []ClassInfo = &.{},
     records: []DeclInfo = &.{},
     types: []DeclInfo = &.{},
@@ -161,6 +169,7 @@ pub const Index = struct {
         var decls = try declarations.build(allocator, ir);
         defer decls.deinit();
         out.fields = try buildFields(allocator, decls.fields.items);
+        out.record_fields = try buildRecordFields(allocator, decls.record_fields.items);
         out.classes = try buildClasses(allocator, decls.classes.items);
         out.records = try buildRecords(allocator, decls.records.items);
         out.types = try buildTypes(allocator, decls.types.items);
@@ -177,6 +186,7 @@ pub const Index = struct {
         out.constants = try cloneFunctions(allocator, self.constants);
         out.variables = try cloneVariables(allocator, self.variables);
         out.fields = try cloneFields(allocator, self.fields);
+        out.record_fields = try cloneRecordFields(allocator, self.record_fields);
         out.classes = try cloneClasses(allocator, self.classes);
         out.records = try cloneDecls(allocator, self.records);
         out.types = try cloneDecls(allocator, self.types);
@@ -224,6 +234,12 @@ pub const Index = struct {
             self.allocator.free(item.type_label);
         }
         self.allocator.free(self.fields);
+        for (self.record_fields) |item| {
+            self.allocator.free(item.name);
+            self.allocator.free(item.record_name);
+            self.allocator.free(item.type_label);
+        }
+        self.allocator.free(self.record_fields);
         for (self.classes) |item| {
             self.allocator.free(item.name);
             if (item.base) |base| self.allocator.free(base);
@@ -254,6 +270,7 @@ pub const AccessContext = struct {
 const PropertyTarget = union(enum) {
     class: []const u8,
     any_object,
+    record: []const u8,
 };
 
 pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Request) !Result {
@@ -275,6 +292,11 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
                 return try builder.finish();
             },
         }
+    }
+
+    if (recordUpdatePropertyTargetAtOffset(allocator, index, request)) |target| {
+        try appendProperties(&builder, index, target);
+        return try builder.finish();
     }
 
     const keywords = [_][]const u8{ "import", "as", "with", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
@@ -355,7 +377,7 @@ pub fn accessBeforeOffset(source: []const u8, offset: usize) ?AccessContext {
         return null;
 
     var receiver_start = separator_offset;
-    while (receiver_start > 0 and isReceiverChar(source[receiver_start - 1])) receiver_start -= 1;
+    while (receiver_start > 0 and receiverCharForSeparator(source[receiver_start - 1], separator)) receiver_start -= 1;
     if (receiver_start == separator_offset) return null;
 
     return .{
@@ -576,6 +598,27 @@ fn buildFields(allocator: std.mem.Allocator, fields: []const declarations.FieldD
     return out.toOwnedSlice(allocator);
 }
 
+fn buildRecordFields(allocator: std.mem.Allocator, fields: []const declarations.RecordFieldDescriptor) ![]RecordFieldInfo {
+    var out = std.ArrayList(RecordFieldInfo).empty;
+    errdefer {
+        for (out.items) |item| {
+            allocator.free(item.name);
+            allocator.free(item.record_name);
+            allocator.free(item.type_label);
+        }
+        out.deinit(allocator);
+    }
+    for (fields) |field| {
+        try out.append(allocator, .{
+            .name = try allocator.dupe(u8, field.name),
+            .record_name = try allocator.dupe(u8, field.record_name),
+            .type_label = try allocator.dupe(u8, field.value_type),
+            .module_id = field.module_id,
+        });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 fn buildClasses(allocator: std.mem.Allocator, classes: []const declarations.ClassDescriptor) ![]ClassInfo {
     var out = std.ArrayList(ClassInfo).empty;
     errdefer {
@@ -746,6 +789,27 @@ fn cloneFields(allocator: std.mem.Allocator, fields: []const FieldInfo) ![]Field
             .name = try allocator.dupe(u8, item.name),
             .class_name = try allocator.dupe(u8, item.class_name),
             .type_label = try allocator.dupe(u8, item.type_label),
+        });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn cloneRecordFields(allocator: std.mem.Allocator, fields: []const RecordFieldInfo) ![]RecordFieldInfo {
+    var out = std.ArrayList(RecordFieldInfo).empty;
+    errdefer {
+        for (out.items) |item| {
+            allocator.free(item.name);
+            allocator.free(item.record_name);
+            allocator.free(item.type_label);
+        }
+        out.deinit(allocator);
+    }
+    for (fields) |item| {
+        try out.append(allocator, .{
+            .name = try allocator.dupe(u8, item.name),
+            .record_name = try allocator.dupe(u8, item.record_name),
+            .type_label = try allocator.dupe(u8, item.type_label),
+            .module_id = item.module_id,
         });
     }
     return out.toOwnedSlice(allocator);
@@ -979,6 +1043,14 @@ fn sourceStartsKeyword(text: []const u8, keyword: []const u8) bool {
 }
 
 fn appendProperties(builder: *CandidateBuilder, index: *const Index, target: PropertyTarget) !void {
+    switch (target) {
+        .record => |record_name| {
+            try appendRecordFields(builder, index, record_name);
+            return;
+        },
+        else => {},
+    }
+
     var i = index.fields.len;
     while (i > 0) {
         i -= 1;
@@ -989,10 +1061,21 @@ fn appendProperties(builder: *CandidateBuilder, index: *const Index, target: Pro
     try builder.add(.{ .label = "content", .kind = .property, .detail = "String" });
 }
 
+fn appendRecordFields(builder: *CandidateBuilder, index: *const Index, record_name: []const u8) !void {
+    var i = index.record_fields.len;
+    while (i > 0) {
+        i -= 1;
+        const field = index.record_fields[i];
+        if (!std.mem.eql(u8, field.record_name, record_name)) continue;
+        try builder.add(.{ .label = field.name, .kind = .property, .detail = field.type_label });
+    }
+}
+
 fn fieldAppliesToTarget(index: *const Index, field: FieldInfo, target: PropertyTarget) bool {
     return switch (target) {
         .any_object => true,
         .class => |class_name| classContains(index, class_name, field.class_name),
+        .record => false,
     };
 }
 
@@ -1016,25 +1099,270 @@ fn classBase(index: *const Index, class_name: []const u8) ?[]const u8 {
 }
 
 fn propertyTargetForReceiver(allocator: std.mem.Allocator, index: *const Index, request: Request, receiver: []const u8) ?PropertyTarget {
+    if (recordUpdatePropertyTargetForReceiver(allocator, index, request, receiver)) |target| return target;
     if (bestVisibleVariable(index, allocator, receiver, request)) |variable| {
-        if (propertyTargetForVariable(variable)) |target| return target;
+        if (propertyTargetForVariable(index, variable)) |target| return target;
     }
     return sourcePropertyTarget(allocator, index, request, receiver);
 }
 
-fn propertyTargetForVariable(variable: VariableInfo) ?PropertyTarget {
+fn propertyTargetForVariable(index: *const Index, variable: VariableInfo) ?PropertyTarget {
     if (variable.object_class) |class_name| if (class_name.len != 0) return .{ .class = class_name };
-    return propertyTargetForTypeLabel(variable.type_label);
+    return propertyTargetForTypeLabel(index, variable.type_label);
 }
 
-fn propertyTargetForTypeLabel(type_label: []const u8) ?PropertyTarget {
+fn propertyTargetForTypeLabel(index: *const Index, type_label: []const u8) ?PropertyTarget {
     if (std.mem.eql(u8, type_label, "Document")) return .{ .class = "Doc" };
     if (std.mem.eql(u8, type_label, "Page")) return .{ .class = "PageContext" };
     if (std.mem.startsWith(u8, type_label, "Object<") and std.mem.endsWith(u8, type_label, ">")) {
         return .{ .class = type_label["Object<".len .. type_label.len - 1] };
     }
     if (std.mem.eql(u8, type_label, "Object") or std.mem.startsWith(u8, type_label, "Selection<Object")) return .any_object;
+    if (recordNameForTypeLabel(index, type_label)) |record_name| return .{ .record = record_name };
     return null;
+}
+
+fn recordUpdatePropertyTargetAtOffset(allocator: std.mem.Allocator, index: *const Index, request: Request) ?PropertyTarget {
+    const context = recordUpdateContextBeforeOffset(request.source, request.offset) orelse return null;
+    if (!cursorInRecordUpdatePath(request.source, request.offset, context.body_start)) return null;
+    const record_name = recordUpdateBaseRecordName(allocator, index, request, context) orelse return null;
+    return .{ .record = record_name };
+}
+
+fn recordUpdatePropertyTargetForReceiver(allocator: std.mem.Allocator, index: *const Index, request: Request, receiver: []const u8) ?PropertyTarget {
+    const context = recordUpdateContextBeforeOffset(request.source, request.offset) orelse return null;
+    if (!cursorInRecordUpdatePath(request.source, request.offset, context.body_start)) return null;
+    const record_name = recordUpdateBaseRecordName(allocator, index, request, context) orelse return null;
+    return recordTargetAfterPath(index, record_name, receiver);
+}
+
+const RecordUpdateContext = struct {
+    target: SourceRange,
+    body_start: usize,
+};
+
+const SourceRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn recordUpdateContextBeforeOffset(source: []const u8, offset: usize) ?RecordUpdateContext {
+    const safe_offset = @min(offset, source.len);
+    const BraceKind = enum { record_update, other };
+    const BraceContext = struct {
+        kind: BraceKind,
+        target: SourceRange = .{ .start = 0, .end = 0 },
+        body_start: usize = 0,
+    };
+    var stack: [256]BraceContext = undefined;
+    var depth: usize = 0;
+    var cursor: usize = 0;
+    while (cursor < safe_offset) {
+        if (lineCommentStartsAt(source, cursor)) {
+            cursor = lineEndAfter(source, cursor, safe_offset);
+            continue;
+        }
+        if (source[cursor] == '"') {
+            cursor = quotedStringEndAfter(source, cursor + 1, safe_offset);
+            continue;
+        }
+        switch (source[cursor]) {
+            '{' => {
+                if (depth < stack.len) {
+                    if (recordUpdateTargetBeforeBrace(source, cursor)) |target| {
+                        stack[depth] = .{ .kind = .record_update, .target = target, .body_start = cursor + 1 };
+                    } else {
+                        stack[depth] = .{ .kind = .other };
+                    }
+                    depth += 1;
+                }
+            },
+            '}' => {
+                if (depth > 0) depth -= 1;
+            },
+            else => {},
+        }
+        cursor += 1;
+    }
+    if (depth == 0) return null;
+    const current = stack[depth - 1];
+    if (current.kind != .record_update) return null;
+    return .{ .target = current.target, .body_start = current.body_start };
+}
+
+fn recordUpdateTargetBeforeBrace(source: []const u8, brace_index: usize) ?SourceRange {
+    var cursor = brace_index;
+    while (cursor > 0 and std.ascii.isWhitespace(source[cursor - 1])) cursor -= 1;
+    const keyword_end = cursor;
+    while (cursor > 0 and isIdentChar(source[cursor - 1])) cursor -= 1;
+    const keyword = source[cursor..keyword_end];
+    if (!std.mem.eql(u8, keyword, "with")) return null;
+    if (cursor > 0 and isIdentChar(source[cursor - 1])) return null;
+    if (keyword_end < source.len and isIdentChar(source[keyword_end])) return null;
+
+    var target_end = cursor;
+    while (target_end > 0 and std.ascii.isWhitespace(source[target_end - 1])) target_end -= 1;
+    const target_start = expressionStartBefore(source, target_end);
+    return trimRange(source, target_start, target_end);
+}
+
+fn expressionStartBefore(source: []const u8, end: usize) usize {
+    var cursor = @min(end, source.len);
+    var paren_depth: usize = 0;
+    var brace_depth: usize = 0;
+    while (cursor > 0) {
+        const byte = source[cursor - 1];
+        switch (byte) {
+            ')' => paren_depth += 1,
+            '(' => {
+                if (paren_depth == 0 and brace_depth == 0) break;
+                if (paren_depth > 0) paren_depth -= 1;
+            },
+            '}' => brace_depth += 1,
+            '{' => {
+                if (brace_depth == 0 and paren_depth == 0) break;
+                if (brace_depth > 0) brace_depth -= 1;
+            },
+            '\n', '=', ',' => if (paren_depth == 0 and brace_depth == 0) break,
+            else => {},
+        }
+        cursor -= 1;
+    }
+    return cursor;
+}
+
+fn trimRange(source: []const u8, start: usize, end: usize) ?SourceRange {
+    var trimmed_start = @min(start, source.len);
+    var trimmed_end = @min(end, source.len);
+    while (trimmed_start < trimmed_end and std.ascii.isWhitespace(source[trimmed_start])) trimmed_start += 1;
+    while (trimmed_end > trimmed_start and std.ascii.isWhitespace(source[trimmed_end - 1])) trimmed_end -= 1;
+    if (trimmed_start >= trimmed_end) return null;
+    return .{ .start = trimmed_start, .end = trimmed_end };
+}
+
+fn cursorInRecordUpdatePath(source: []const u8, offset: usize, body_start: usize) bool {
+    const safe_offset = @min(offset, source.len);
+    var line_start = safe_offset;
+    while (line_start > body_start and source[line_start - 1] != '\n') line_start -= 1;
+    line_start = @max(line_start, @min(body_start, source.len));
+    const before = source[line_start..safe_offset];
+    const uncommented = stripLineComment(before);
+    if (uncommented.len != before.len) return false;
+    const trimmed = std.mem.trim(u8, before, " \t\r");
+    for (trimmed) |byte| {
+        if (isReceiverChar(byte) or byte == '.' or isAccessTrivia(byte)) continue;
+        return false;
+    }
+    return true;
+}
+
+fn recordUpdateBaseRecordName(allocator: std.mem.Allocator, index: *const Index, request: Request, context: RecordUpdateContext) ?[]const u8 {
+    var bindings = sourceBindingsInScope(allocator, request.source, request.offset) catch return null;
+    defer bindings.deinit(allocator);
+    const expr = expressionWithoutStatementPrefix(request.source[context.target.start..context.target.end]);
+    const target = propertyTargetForExpression(allocator, index, request, bindings.items, expr, 0) orelse return null;
+    return switch (target) {
+        .record => |record_name| record_name,
+        else => null,
+    };
+}
+
+fn expressionWithoutStatementPrefix(expr: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, expr, " \t\r\n");
+    if (sourceStartsKeyword(trimmed, "return")) return std.mem.trim(u8, trimmed["return".len..], " \t\r\n");
+    return trimmed;
+}
+
+fn recordTargetAfterPath(index: *const Index, base_record_name: []const u8, path: []const u8) ?PropertyTarget {
+    var current_record_name = base_record_name;
+    var parts = std.mem.splitScalar(u8, path, '.');
+    while (parts.next()) |part| {
+        const segment = std.mem.trim(u8, part, " \t\r");
+        if (segment.len == 0) return null;
+        const field = recordField(index, current_record_name, segment) orelse return null;
+        current_record_name = recordNameForTypeLabel(index, field.type_label) orelse return null;
+    }
+    return .{ .record = current_record_name };
+}
+
+fn recordField(index: *const Index, record_name: []const u8, field_name: []const u8) ?RecordFieldInfo {
+    var i = index.record_fields.len;
+    while (i > 0) {
+        i -= 1;
+        const field = index.record_fields[i];
+        if (!std.mem.eql(u8, field.record_name, record_name)) continue;
+        if (std.mem.eql(u8, field.name, field_name)) return field;
+    }
+    return null;
+}
+
+fn recordNameForTypeLabel(index: *const Index, type_label: []const u8) ?[]const u8 {
+    const name = bareTypeName(type_label) orelse return null;
+    var i = index.records.len;
+    while (i > 0) {
+        i -= 1;
+        const record = index.records[i];
+        if (std.mem.eql(u8, record.name, name)) return record.name;
+    }
+    return null;
+}
+
+fn bareTypeName(type_label: []const u8) ?[]const u8 {
+    var trimmed = std.mem.trim(u8, type_label, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    if (trimmed[trimmed.len - 1] == '?') return null;
+    if (std.mem.indexOfAny(u8, trimmed, "<>|")) |_| return null;
+    if (std.mem.lastIndexOf(u8, trimmed, "::")) |separator| trimmed = trimmed[separator + 2 ..];
+    if (trimmed.len == 0 or !isIdentifierStart(trimmed[0])) return null;
+    for (trimmed[1..]) |byte| if (!isReceiverChar(byte)) return null;
+    return trimmed;
+}
+
+fn recordLiteralTypeName(expr: []const u8) ?[]const u8 {
+    var cursor: usize = 0;
+    const start = cursor;
+    if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+    cursor += 1;
+    while (cursor < expr.len and isReceiverChar(expr[cursor])) cursor += 1;
+    if (cursor + 2 <= expr.len and std.mem.eql(u8, expr[cursor .. cursor + 2], "::")) {
+        cursor += 2;
+        if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+        cursor += 1;
+        while (cursor < expr.len and isReceiverChar(expr[cursor])) cursor += 1;
+    }
+    const end = cursor;
+    while (cursor < expr.len and std.ascii.isWhitespace(expr[cursor])) cursor += 1;
+    if (cursor >= expr.len or expr[cursor] != '{') return null;
+    return expr[start..end];
+}
+
+fn lineCommentStartsAt(source: []const u8, cursor: usize) bool {
+    if (cursor >= source.len) return false;
+    if (source[cursor] == '#') return true;
+    if (cursor + 1 >= source.len) return false;
+    return std.mem.eql(u8, source[cursor .. cursor + 2], "//") or
+        std.mem.eql(u8, source[cursor .. cursor + 2], ";;");
+}
+
+fn lineEndAfter(source: []const u8, cursor: usize, limit: usize) usize {
+    var out = cursor;
+    const safe_limit = @min(limit, source.len);
+    while (out < safe_limit and source[out] != '\n') out += 1;
+    return out;
+}
+
+fn quotedStringEndAfter(source: []const u8, cursor: usize, limit: usize) usize {
+    var out = cursor;
+    const safe_limit = @min(limit, source.len);
+    while (out < safe_limit) {
+        if (source[out] == '\\') {
+            out = @min(out + 2, safe_limit);
+            continue;
+        }
+        if (source[out] == '"') return out + 1;
+        out += 1;
+    }
+    return out;
 }
 
 fn bestVisibleVariable(index: *const Index, allocator: std.mem.Allocator, name: []const u8, request: Request) ?VariableInfo {
@@ -1289,20 +1617,26 @@ fn propertyTargetForExpression(
 ) ?PropertyTarget {
     const trimmed = std.mem.trim(u8, expr, " \t\r\n");
     if (singleIdentifier(trimmed)) |ident| {
+        if (bestVisibleVariable(index, allocator, ident, request)) |variable| {
+            if (propertyTargetForVariable(index, variable)) |target| return target;
+        }
         if (propertyTargetForBindingName(allocator, index, request, bindings, ident, depth + 1)) |target| return target;
         if (resolveFunction(index, allocator, request.doc_path, .{ .name = ident })) |function| {
-            if (propertyTargetForTypeLabel(function.result_type)) |target| return target;
+            if (propertyTargetForTypeLabel(index, function.result_type)) |target| return target;
         }
         if (sourceFunctionResultType(request.source, ident)) |type_label| {
-            if (propertyTargetForTypeLabel(type_label)) |target| return target;
+            if (propertyTargetForTypeLabel(index, type_label)) |target| return target;
         }
+    }
+    if (recordLiteralTypeName(trimmed)) |type_label| {
+        if (recordNameForTypeLabel(index, type_label)) |record_name| return .{ .record = record_name };
     }
     if (callExpressionName(trimmed)) |call| {
         if (resolveFunction(index, allocator, request.doc_path, call)) |function| {
-            if (propertyTargetForTypeLabel(function.result_type)) |target| return target;
+            if (propertyTargetForTypeLabel(index, function.result_type)) |target| return target;
         }
         if (sourceFunctionResultType(request.source, call.name)) |type_label| {
-            if (propertyTargetForTypeLabel(type_label)) |target| return target;
+            if (propertyTargetForTypeLabel(index, type_label)) |target| return target;
         }
         return null;
     }
@@ -1618,6 +1952,10 @@ fn isIdentChar(byte: u8) bool {
 
 fn isReceiverChar(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+fn receiverCharForSeparator(byte: u8, separator: AccessSeparator) bool {
+    return isReceiverChar(byte) or (separator == .dot and byte == '.');
 }
 
 fn isAccessTrivia(byte: u8) bool {

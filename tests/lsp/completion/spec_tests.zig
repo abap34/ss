@@ -22,6 +22,11 @@ test "analysis completion: access context detects dot and module qualifiers" {
     try std.testing.expectEqual(completion.AccessSeparator.dot, dot_with_space.separator);
     try std.testing.expectEqualStrings("title", dot_with_space.receiver);
 
+    const nested_dot_source = "body.text.";
+    const nested_dot = completion.accessBeforeOffset(nested_dot_source, nested_dot_source.len) orelse return error.ExpectedDotAccess;
+    try std.testing.expectEqual(completion.AccessSeparator.dot, nested_dot.separator);
+    try std.testing.expectEqualStrings("body.text", nested_dot.receiver);
+
     const module_with_space_source = "default:: ";
     const module_with_space = completion.accessBeforeOffset(module_with_space_source, module_with_space_source.len) orelse return error.ExpectedModuleAccess;
     try std.testing.expectEqual(completion.AccessSeparator.double_colon, module_with_space.separator);
@@ -261,6 +266,112 @@ test "analysis completion: fn paired function and const result annotations drive
         try expectUnique(result);
         try expectHas(result, "text_size");
         try expectMissing(result, "page");
+    }
+}
+
+test "analysis completion: record update paths complete record fields" {
+    var case = try CompletionCase.init(
+        \\import std:themes/default as *
+        \\
+        \\page title
+        \\  let local = current_theme() with {
+        \\    body.text.size = 20
+        \\  }
+        \\  text!("body", local)
+        \\end
+        \\
+    );
+    defer case.deinit();
+
+    const request_source =
+        \\import std:themes/default as *
+        \\
+        \\page title
+        \\  let local = current_theme() with {
+        \\
+        \\    bod
+        \\    body.
+        \\    body.text.
+        \\    body.text.size =
+        \\  }
+        \\  text!("body", local)
+        \\end
+        \\
+    ;
+
+    {
+        var result = try case.completeSourceAfter(request_source, "with {\n");
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectHas(result, "body");
+        try expectHas(result, "h1");
+        try expectHas(result, "callout");
+        try expectMissing(result, "size");
+        try expectMissing(result, "page");
+        try expectMissing(result, "String");
+    }
+
+    {
+        var result = try case.completeSourceAfter(request_source, "body.");
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectHas(result, "text");
+        try expectHas(result, "layout");
+        try expectMissing(result, "size");
+        try expectMissing(result, "page");
+    }
+
+    {
+        var result = try case.completeSourceAfter(request_source, "body.text.");
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectHas(result, "size");
+        try expectHas(result, "color");
+        try expectMissing(result, "text");
+        try expectMissing(result, "page");
+    }
+
+    {
+        var result = try case.completeSourceAfter(request_source, "bod");
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectHas(result, "body");
+        try expectHas(result, "h1");
+        try expectHas(result, "callout");
+        try expectMissing(result, "size");
+        try expectMissing(result, "page");
+        try expectMissing(result, "String");
+    }
+
+    {
+        const unindented_source =
+            \\import std:themes/default as *
+            \\
+            \\page title
+            \\  let local = current_theme() with  {
+            \\bod
+            \\  }
+            \\  text!("body", local)
+            \\end
+            \\
+        ;
+        var result = try case.completeSourceAfter(unindented_source, "bod");
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectHas(result, "body");
+        try expectHas(result, "h1");
+        try expectHas(result, "callout");
+        try expectMissing(result, "size");
+        try expectMissing(result, "page");
+        try expectMissing(result, "String");
+    }
+
+    {
+        var result = try case.completeSourceAfter(request_source, "body.text.size =");
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectMissing(result, "callout");
+        try expectHas(result, "page");
     }
 }
 
