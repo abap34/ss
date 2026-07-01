@@ -13,6 +13,10 @@ pub fn hasBangSuffix(text: []const u8) bool {
     return text.len > 0 and text[text.len - 1] == '!';
 }
 
+pub fn isCallableNameChar(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!';
+}
+
 pub fn bangName(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}!", .{text});
 }
