@@ -4,6 +4,27 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-01
+
+### Added
+
+- Added shape line rendering, callout annotation components, and Markdown
+  underline rendering.
+- Added qualified module references for type annotations, record literals,
+  enum cases, and editor-visible function lookup.
+
+### Changed
+
+- Refined property value handling and enum value parsing.
+- Replaced stdlib open imports with explicit module aliases and prelude
+  wrappers.
+
+### Fixed
+
+- Fixed render-based layout measurement.
+- Fixed LSP go-to-definition resolution for imported functions, constants,
+  types, and import specs.
+
 ## [0.7.1] - 2026-06-29
 
 ### Fixed
