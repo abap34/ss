@@ -1,5 +1,6 @@
 const std = @import("std");
 const json = @import("json.zig");
+const source = @import("source.zig");
 
 pub const Severity = enum {
     note,
@@ -19,25 +20,9 @@ pub fn setColorMode(mode: ColorMode) void {
     color_mode = mode;
 }
 
-pub const ByteSpan = struct {
-    start: usize,
-    end: usize,
-};
-
 pub const LocatedOrigin = struct {
     path: ?[]const u8,
-    span: ByteSpan,
-};
-
-pub const Location = struct {
-    line: usize,
-    column: usize,
-};
-
-const Line = struct {
-    number: usize,
-    start: usize,
-    end: usize,
+    span: source.ByteSpan,
 };
 
 pub const SourceReport = struct {
@@ -45,11 +30,11 @@ pub const SourceReport = struct {
     source: []const u8,
     severity: Severity,
     message: []const u8,
-    span: ?ByteSpan = null,
+    span: ?source.ByteSpan = null,
     context_lines: usize = 2,
 };
 
-pub fn parseByteOrigin(origin: []const u8) ?ByteSpan {
+pub fn parseByteOrigin(origin: []const u8) ?source.ByteSpan {
     if (!std.mem.startsWith(u8, origin, "bytes:")) return null;
     const payload = origin["bytes:".len..];
     const dash = std.mem.indexOfScalar(u8, payload, '-') orelse return null;
@@ -72,23 +57,7 @@ pub fn parseLocatedOrigin(origin: []const u8) ?LocatedOrigin {
     };
 }
 
-pub fn computeLineColumn(source: []const u8, byte_index: usize) Location {
-    var line: usize = 1;
-    var line_start: usize = 0;
-    const limit = @min(byte_index, source.len);
-    var index: usize = 0;
-    while (index < limit) : (index += 1) {
-        if (source[index] == '\n') {
-            line += 1;
-            line_start = index + 1;
-        }
-    }
-    const prefix = source[line_start..limit];
-    const column = (std.unicode.utf8CountCodepoints(prefix) catch prefix.len) + 1;
-    return .{ .line = line, .column = column };
-}
-
-pub fn spanFromOrigin(origin: ?[]const u8) ?ByteSpan {
+pub fn spanFromOrigin(origin: ?[]const u8) ?source.ByteSpan {
     const text = origin orelse return null;
     const located = parseLocatedOrigin(text) orelse return null;
     return located.span;
@@ -98,7 +67,7 @@ pub fn print(report: SourceReport) void {
     printSeverityPrefix(report.severity);
     const span = report.span;
     if (span) |s| {
-        const loc = computeLineColumn(report.source, s.start);
+        const loc = source.locationAt(report.source, s.start);
         printColor(report.severity);
         if (report.path.len != 0) {
             std.debug.print("{s}:{d}:{d}: {s}", .{ report.path, loc.line, loc.column, report.message });
@@ -125,14 +94,14 @@ pub fn printNote(message: []const u8) void {
     std.debug.print("  note: {s}\n", .{message});
 }
 
-pub fn printLabeledOrigin(source: []const u8, label: []const u8, origin: ?[]const u8) void {
+pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?[]const u8) void {
     const span = spanFromOrigin(origin) orelse return;
-    const loc = computeLineColumn(source, span.start);
+    const loc = source.locationAt(text, span.start);
     printDim();
     std.debug.print("  {s} from {d}:{d}", .{ label, loc.line, loc.column });
     printReset();
     std.debug.print("\n", .{});
-    printExcerpt(source, span, .note, label, 0);
+    printExcerpt(text, span, .note, label, 0);
 }
 
 fn sourceForLocatedOrigin(
@@ -182,7 +151,7 @@ fn printLabeledLocatedOrigin(
     const origin_text = origin orelse return;
     const located = parseLocatedOrigin(origin_text) orelse return;
     const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
-    const loc = computeLineColumn(resolved.source, located.span.start);
+    const loc = source.locationAt(resolved.source, located.span.start);
     printDim();
     std.debug.print("  {s} from {s}:{d}:{d}", .{ label, resolved.path, loc.line, loc.column });
     printReset();
@@ -190,12 +159,12 @@ fn printLabeledLocatedOrigin(
     printExcerpt(resolved.source, located.span, .note, label, 0);
 }
 
-pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diagnostic: anytype) void {
+pub fn printParseError(path: []const u8, text: []const u8, err: anyerror, diagnostic: anytype) void {
     const parsed_diagnostic = diagnostic orelse {
         var message_buf: [128]u8 = undefined;
         print(.{
             .path = path,
-            .source = source,
+            .source = text,
             .severity = .@"error",
             .message = formatParseFailureWithoutDiagnostic(&message_buf, err),
             .span = null,
@@ -206,20 +175,20 @@ pub fn printParseError(path: []const u8, source: []const u8, err: anyerror, diag
     const message = formatParseDiagnostic(&message_buf, parsed_diagnostic);
     print(.{
         .path = path,
-        .source = source,
+        .source = text,
         .severity = .@"error",
         .message = message,
         .span = .{ .start = parsed_diagnostic.span.start, .end = parsed_diagnostic.span.end },
     });
 }
 
-pub fn printIrDiagnostics(path: []const u8, source: []const u8, ir: anytype) void {
+pub fn printIrDiagnostics(path: []const u8, text: []const u8, ir: anytype) void {
     for (ir.diagnostics.items) |diagnostic| {
-        var resolved = resolveIrDiagnostic(ir.allocator, path, source, ir, diagnostic) catch {
+        var resolved = resolveIrDiagnostic(ir.allocator, path, text, ir, diagnostic) catch {
             var message_buf: [128]u8 = undefined;
             print(.{
                 .path = path,
-                .source = source,
+                .source = text,
                 .severity = .@"error",
                 .message = fallbackIrDiagnosticMessage(&message_buf, diagnostic),
                 .span = null,
@@ -281,7 +250,7 @@ const ResolvedIrDiagnostic = struct {
     message: []const u8,
     path: []const u8,
     source: []const u8,
-    span: ?ByteSpan,
+    span: ?source.ByteSpan,
 
     fn deinit(self: *ResolvedIrDiagnostic, allocator: std.mem.Allocator) void {
         allocator.free(self.message);
@@ -338,8 +307,8 @@ fn writeIrDiagnosticJson(
     try item.end();
 }
 
-fn writeJsonLocation(object: *json.Object, key: []const u8, source: []const u8, byte_index: usize) !void {
-    const location = computeLineColumn(source, byte_index);
+fn writeJsonLocation(object: *json.Object, key: []const u8, text: []const u8, byte_index: usize) !void {
+    const location = source.locationAt(text, byte_index);
     var child = try object.objectField(key);
     try child.intField("line", if (location.line == 0) 0 else location.line - 1);
     try child.intField("character", if (location.column == 0) 0 else location.column - 1);
@@ -351,7 +320,7 @@ fn resolveIrDiagnosticLocation(
     default_source: []const u8,
     ir: anytype,
     diagnostic: anytype,
-) struct { path: []const u8, source: []const u8, span: ?ByteSpan } {
+) struct { path: []const u8, source: []const u8, span: ?source.ByteSpan } {
     const located = if (diagnostic.origin) |origin|
         parseLocatedOrigin(origin)
     else if (diagnostic.node_id) |node_id| blk: {
@@ -405,7 +374,7 @@ pub fn hasIrErrors(ir: anytype) bool {
 
 pub fn printConstraintFailure(
     path: []const u8,
-    source: []const u8,
+    text: []const u8,
     ir: anytype,
     err: anyerror,
 ) void {
@@ -413,7 +382,7 @@ pub fn printConstraintFailure(
         var message_buf: [128]u8 = undefined;
         print(.{
             .path = path,
-            .source = source,
+            .source = text,
             .severity = .@"error",
             .message = std.fmt.bufPrint(
                 &message_buf,
@@ -440,21 +409,21 @@ pub fn printConstraintFailure(
         const limit = @min(failures.len, 3);
         for (failures[0..limit], 0..) |failure, index| {
             if (index != 0 or count > 1) std.debug.print("\n", .{});
-            printConstraintFailureItem(path, source, ir, failure);
+            printConstraintFailureItem(path, text, ir, failure);
         }
         return;
     }
 
-    printConstraintFailureItem(path, source, ir, ir.last_constraint_failure.?);
+    printConstraintFailureItem(path, text, ir, ir.last_constraint_failure.?);
 }
 
-fn printConstraintFailureItem(path: []const u8, source: []const u8, ir: anytype, failure: anytype) void {
+fn printConstraintFailureItem(path: []const u8, text: []const u8, ir: anytype, failure: anytype) void {
     const code = constraintFailureCode(failure);
     printColor(.@"error");
     std.debug.print("error: {s}: {s}\n", .{ code, constraintFailureReasonLabel(failure) });
     printReset();
 
-    const located = printRustLocatedOrigin(path, source, ir, .@"error", constraintFailurePrimaryLabel(failure), failure.constraint.origin);
+    const located = printRustLocatedOrigin(path, text, ir, .@"error", constraintFailurePrimaryLabel(failure), failure.constraint.origin);
     if (!located and path.len != 0) {
         printDim();
         std.debug.print("  --> {s}\n", .{path});
@@ -475,7 +444,7 @@ fn printRustLocatedOrigin(
     const origin_text = origin orelse return false;
     const located = parseLocatedOrigin(origin_text) orelse return false;
     const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
-    const loc = computeLineColumn(resolved.source, located.span.start);
+    const loc = source.locationAt(resolved.source, located.span.start);
     printDim();
     std.debug.print("  --> {s}:{d}:{d}\n", .{ resolved.path, loc.line, loc.column });
     std.debug.print("   |\n", .{});
@@ -516,8 +485,8 @@ fn printConstraintPropagationBox(failure: anytype, propagation: anytype) void {
         printBoxBlankLine();
         printBoxHeading(path.title);
         for (path.lines, 0..) |line, index| {
-            const source = if (index < path.line_sources.len) path.line_sources[index] else null;
-            printBoxIndentedLineWithSource(line, source);
+            const origin_source = if (index < path.line_sources.len) path.line_sources[index] else null;
+            printBoxIndentedLineWithSource(line, origin_source);
         }
     }
     if (propagation.result.len > 0) {
@@ -572,12 +541,12 @@ fn printBoxIndentedLine(text: []const u8) void {
     printBoxIndentedLineWithSource(text, null);
 }
 
-fn printBoxIndentedLineWithSource(text: []const u8, source: ?[]const u8) void {
+fn printBoxIndentedLineWithSource(text: []const u8, origin_source: ?[]const u8) void {
     printDim();
     std.debug.print("│   ", .{});
     printReset();
     std.debug.print("{s}", .{text});
-    if (source) |origin| {
+    if (origin_source) |origin| {
         if (origin.len > 0) {
             printDim();
             std.debug.print("  {s}", .{origin});
@@ -760,21 +729,21 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
     };
 }
 
-fn printExcerpt(source: []const u8, span: ByteSpan, severity: Severity, label: []const u8, context: usize) void {
-    const target = lineAt(source, span.start);
+fn printExcerpt(text: []const u8, span: source.ByteSpan, severity: Severity, label: []const u8, context: usize) void {
+    const target = source.lineAt(text, span.start);
     const first_line = if (target.number > context) target.number - context else 1;
-    const last_line = @min(lineCount(source), target.number + context);
+    const last_line = @min(source.lineCount(text), target.number + context);
     const width = decimalWidth(last_line);
 
     var line = first_line;
     while (line <= last_line) : (line += 1) {
-        const current = lineByNumber(source, line) orelse break;
+        const current = source.lineByNumber(text, line) orelse break;
         printDim();
         std.debug.print(" ", .{});
         printSpaces(width - decimalWidth(line));
         std.debug.print("{d} | ", .{line});
         printReset();
-        printHighlightedSlice(source[current.start..current.end]);
+        printHighlightedSlice(current.text(text));
         std.debug.print("\n", .{});
         if (line == target.number) {
             printDim();
@@ -782,9 +751,9 @@ fn printExcerpt(source: []const u8, span: ByteSpan, severity: Severity, label: [
             printSpaces(width);
             std.debug.print(" | ", .{});
             printReset();
-            printSpaces(displayWidthBetween(source, current.start, span.start));
+            printSpaces(displayWidthBetween(text, current.span.start, span.start));
             printColor(severity);
-            printRule(caretWidthOnLine(source, span, current));
+            printRule(caretWidthOnLine(text, span, current));
             if (label.len != 0) {
                 std.debug.print(" {s}", .{label});
             }
@@ -794,43 +763,11 @@ fn printExcerpt(source: []const u8, span: ByteSpan, severity: Severity, label: [
     }
 }
 
-fn lineAt(source: []const u8, byte_index: usize) Line {
-    const limit = @min(byte_index, source.len);
-    var start: usize = limit;
-    while (start > 0 and source[start - 1] != '\n') : (start -= 1) {}
-    var end: usize = limit;
-    while (end < source.len and source[end] != '\n') : (end += 1) {}
-    return .{ .number = computeLineColumn(source, limit).line, .start = start, .end = end };
-}
-
-fn lineByNumber(source: []const u8, number: usize) ?Line {
-    var current: usize = 1;
-    var start: usize = 0;
-    var index: usize = 0;
-    while (index <= source.len) : (index += 1) {
-        if (index == source.len or source[index] == '\n') {
-            if (current == number) return .{ .number = current, .start = start, .end = index };
-            current += 1;
-            start = index + 1;
-        }
-    }
-    return null;
-}
-
-fn lineCount(source: []const u8) usize {
-    if (source.len == 0) return 1;
-    var count: usize = 1;
-    for (source) |ch| {
-        if (ch == '\n') count += 1;
-    }
-    return count;
-}
-
-fn caretWidthOnLine(source: []const u8, span: ByteSpan, line: Line) usize {
-    const start = @max(span.start, line.start);
-    const end = @min(@max(span.end, span.start + 1), line.end);
+fn caretWidthOnLine(text: []const u8, span: source.ByteSpan, line: source.Line) usize {
+    const start = @max(span.start, line.span.start);
+    const end = @min(@max(span.end, span.start + 1), line.span.end);
     if (end <= start) return 1;
-    return @max(1, displayWidthSlice(source[start..end]));
+    return @max(1, displayWidthSlice(text[start..end]));
 }
 
 fn decimalWidth(value: usize) usize {
@@ -859,7 +796,7 @@ fn printHighlightedSlice(slice: []const u8) void {
             continue;
         }
 
-        if (commentStart(slice, index) != null) {
+        if (source.lineCommentMarkerLength(slice, index) != null) {
             printAnsi("90");
             printDisplayRaw(slice[index..]);
             printReset();
@@ -867,7 +804,7 @@ fn printHighlightedSlice(slice: []const u8) void {
         }
 
         if (slice[index] == '"') {
-            const end = stringEnd(slice, index);
+            const end = source.skipDoubleQuotedString(slice, index, slice.len);
             printAnsi("32");
             printDisplayRaw(slice[index..end]);
             printReset();
@@ -884,8 +821,8 @@ fn printHighlightedSlice(slice: []const u8) void {
             continue;
         }
 
-        if (isAsciiIdentifierStart(slice[index])) {
-            const end = asciiIdentifierEnd(slice, index);
+        if (source.isIdentifierStart(slice[index])) {
+            const end = source.wordSpanAt(slice, index, source.isIdentifierContinue).?.end;
             const token = slice[index..end];
             if (isKeyword(token)) {
                 printAnsi("34;1");
@@ -921,31 +858,6 @@ fn printDisplayRaw(slice: []const u8) void {
     }
 }
 
-fn commentStart(slice: []const u8, index: usize) ?usize {
-    if (slice[index] == '#') return 1;
-    if (index + 1 >= slice.len) return null;
-    if (slice[index] == ';' and slice[index + 1] == ';') return 2;
-    if (slice[index] == '/' and slice[index + 1] == '/') return 2;
-    return null;
-}
-
-fn stringEnd(slice: []const u8, start: usize) usize {
-    var index = start + 1;
-    var escaped = false;
-    while (index < slice.len) : (index += 1) {
-        if (escaped) {
-            escaped = false;
-            continue;
-        }
-        if (slice[index] == '\\') {
-            escaped = true;
-            continue;
-        }
-        if (slice[index] == '"') return index + 1;
-    }
-    return slice.len;
-}
-
 fn numberEnd(slice: []const u8, start: usize) usize {
     var index = start;
     if (slice[index] == '-') index += 1;
@@ -958,16 +870,6 @@ fn numberEnd(slice: []const u8, start: usize) usize {
         }
         break;
     }
-    return index;
-}
-
-fn isAsciiIdentifierStart(ch: u8) bool {
-    return std.ascii.isAlphabetic(ch) or ch == '_';
-}
-
-fn asciiIdentifierEnd(slice: []const u8, start: usize) usize {
-    var index = start + 1;
-    while (index < slice.len and (std.ascii.isAlphanumeric(slice[index]) or slice[index] == '_')) : (index += 1) {}
     return index;
 }
 
@@ -996,8 +898,8 @@ fn printSeverityPrefix(severity: Severity) void {
     }
 }
 
-fn displayWidthBetween(source: []const u8, start: usize, end: usize) usize {
-    return displayWidthSlice(source[@min(start, source.len)..@min(end, source.len)]);
+fn displayWidthBetween(text: []const u8, start: usize, end: usize) usize {
+    return displayWidthSlice(text[@min(start, text.len)..@min(end, text.len)]);
 }
 
 fn displayWidthSlice(slice: []const u8) usize {

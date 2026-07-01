@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const source = @import("utils").source;
 
 const declarations = @import("declarations.zig");
 const name_resolution = @import("name_resolution.zig");
@@ -534,8 +535,7 @@ pub fn isBuiltinTypeName(name: []const u8) bool {
 
 fn parseTypeConstructorArg(text: []const u8, constructor: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, text, constructor)) return null;
-    var pos = constructor.len;
-    while (pos < text.len and std.ascii.isWhitespace(text[pos])) : (pos += 1) {}
+    const pos = source.skipWhitespaceUntil(text, constructor.len, text.len);
     if (pos >= text.len or text[pos] != '<') return null;
     if (text[text.len - 1] != '>') return null;
     return text[pos + 1 .. text.len - 1];

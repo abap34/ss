@@ -1,5 +1,6 @@
 const std = @import("std");
 const class_fields = @import("class_fields.zig");
+const source = @import("utils").source;
 
 const c = @cImport({
     @cInclude("md4c.h");
@@ -369,14 +370,12 @@ pub fn codeBlockPhysicalLineCount(block: *const Block) usize {
 }
 
 fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u8) !void {
-    var it = std.mem.splitScalar(u8, content, '\n');
+    var it = source.lineIterator(content);
     var saw_any = false;
-    var line_offset: usize = 0;
-    while (it.next()) |line_text| {
+    while (it.next()) |line_view| {
         saw_any = true;
-        const line = try parseInlineLineAt(allocator, line_text, line_offset);
+        const line = try parseInlineLineAt(allocator, line_view.text(content), line_view.span.start);
         try layout.lines.append(allocator, line);
-        line_offset += line_text.len + 1;
     }
     if (!saw_any) {
         try layout.lines.append(allocator, .{});
@@ -769,7 +768,7 @@ fn sourceSpanForText(
     state: *T,
     text_ptr: [*c]const c.MD_CHAR,
     size: c.MD_SIZE,
-) struct { start: usize, end: usize } {
+) source.ByteSpan {
     if (state.source.len == 0 or size == 0) {
         return .{ .start = state.source_offset, .end = state.source_offset };
     }

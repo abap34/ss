@@ -7,6 +7,7 @@ const text_measure = @import("../render/text_measure.zig");
 const text_tokenize = @import("../core/text_tokenize.zig");
 const wrap_layout = @import("../render/wrap.zig");
 const style_defaults = @import("style.zig");
+const source = @import("utils").source;
 
 const Node = model.Node;
 const PageLayout = model.PageLayout;
@@ -229,8 +230,9 @@ fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementC
     if (max_width <= 0) {
         const fonts = font_model.textFacesForNode(ir, node);
         const plain_font = plainTextFaceForNode(ir, node, fonts);
-        var lines = std.mem.splitScalar(u8, content, '\n');
-        while (lines.next()) |line| {
+        var lines = source.lineIterator(content);
+        while (lines.next()) |line_view| {
+            const line = line_view.text(content);
             max_width = @max(max_width, measuredTextDrawExtent(cache, ir.allocator, line, plain_font, style, textEmojiSpacing(ir, node)));
         }
     }
@@ -266,7 +268,7 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
         .figure_text => PageLayout.max_figure_height + chrome_height,
         .math_text, .math_tex => blk: {
             const content = model.nodeDisplayContent(node);
-            const lines = @max(lineCount(content), 1);
+            const lines = @max(source.lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
             break :blk @min(PageLayout.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node)) + chrome_height;
         },
@@ -286,7 +288,7 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
             const lines = if (shouldWrapNode(ir, node))
                 wrappedLineCount(ir, node, cache, style, content, width)
             else
-                lineCount(content);
+                source.lineCount(content);
             break :blk @as(f32, @floatFromInt(lines)) * style.line_height + chrome_height;
         },
     };
@@ -296,7 +298,7 @@ fn measuredPlainTextHeight(ir: anytype, node: *const Node, cache: ?*MeasurementC
     const lines = if (shouldWrapNode(ir, node))
         wrappedLineCount(ir, node, cache, style, content, width)
     else
-        lineCount(content);
+        source.lineCount(content);
     return @as(f32, @floatFromInt(lines)) * style.line_height;
 }
 
@@ -591,7 +593,7 @@ fn displayMathBlockHeightForLines(style: TextStyle, visual_lines: usize, height_
 
 fn shouldUseFullWrapWidth(ir: anytype, node: *const Node, content: []const u8) bool {
     if (!shouldWrapNode(ir, node)) return false;
-    if (lineCount(content) > 1) return true;
+    if (source.lineCount(content) > 1) return true;
     if (!markdown.shouldParseBlocksNode(ir, node)) return false;
 
     var doc = markdown.parseMarkdownDocumentForNode(
@@ -631,21 +633,13 @@ fn nonNegativeNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8)
     return if (value >= 0) value else null;
 }
 
-pub fn lineCount(text: []const u8) usize {
-    if (text.len == 0) return 1;
-    var count: usize = 1;
-    for (text) |ch| {
-        if (ch == '\n') count += 1;
-    }
-    return count;
-}
-
 fn wrappedLineCount(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, text: []const u8, max_width: f32) usize {
     const fonts = font_model.textFacesForNode(ir, node);
     const plain_font = plainTextFaceForNode(ir, node, fonts);
     var total: usize = 0;
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    while (lines.next()) |line| {
+    var lines = source.lineIterator(text);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(text);
         const trimmed = std.mem.trim(u8, line, " \t");
         if (trimmed.len == 0) {
             total += 1;

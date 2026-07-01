@@ -5,7 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 const scanner = @import("scanner.zig");
 const names = @import("../language/names.zig");
 const utils = @import("utils");
-const source_utils = utils.source;
+const source = utils.source;
 const color_utils = utils.color;
 
 const Allocator = std.mem.Allocator;
@@ -26,14 +26,14 @@ pub const ParseDiagnostic = diagnostics.ParseDiagnostic;
 
 var last_diagnostic: ?ParseDiagnostic = null;
 
-pub fn parse(allocator: Allocator, source: []const u8) !Program {
-    return parseWithSourceName(allocator, source, "");
+pub fn parse(allocator: Allocator, text: []const u8) !Program {
+    return parseWithSourceName(allocator, text, "");
 }
 
-pub fn parseWithSourceName(allocator: Allocator, source: []const u8, source_name: []const u8) !Program {
+pub fn parseWithSourceName(allocator: Allocator, text: []const u8, source_name: []const u8) !Program {
     var parser = Parser{
         .allocator = allocator,
-        .source = source,
+        .source = text,
         .source_name = source_name,
         .pos = 0,
         .error_pos = 0,
@@ -42,19 +42,19 @@ pub fn parseWithSourceName(allocator: Allocator, source: []const u8, source_name
     };
     last_diagnostic = null;
     return parser.parseProgram() catch |err| {
-        const pos = @min(parser.error_pos, source.len);
+        const pos = @min(parser.error_pos, text.len);
         const span = if (parser.error_span) |span|
             ast.Span{
-                .start = @min(span.start, source.len),
-                .end = @min(@max(span.end, span.start + 1), source.len),
+                .start = @min(span.start, text.len),
+                .end = @min(@max(span.end, span.start + 1), text.len),
             }
         else
-            ast.Span{ .start = pos, .end = @min(pos + 1, source.len) };
+            ast.Span{ .start = pos, .end = @min(pos + 1, text.len) };
         last_diagnostic = .{
             .err = err,
             .span = span,
             .expected = diagnostics.expected(err),
-            .found = diagnostics.foundToken(source, pos),
+            .found = diagnostics.foundToken(text, pos),
         };
         return err;
     };
@@ -78,7 +78,7 @@ const Parser = struct {
         errdefer program.deinit(self.allocator);
         var imports_allowed = true;
 
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof()) {
             const item_start = self.pos;
             if (self.source[self.pos] == '@') return self.fail(error.ExpectedKeyword);
@@ -165,7 +165,7 @@ const Parser = struct {
                 try program.pages.append(self.allocator, page);
                 try program.top_level_items.append(self.allocator, .{ .page = page_index });
             }
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
         }
         return program;
     }
@@ -180,7 +180,7 @@ const Parser = struct {
             defer self.allocator.free(name);
             return self.failAt(self.pos - 1, error.PairedFunctionNameCannotEndWithBang);
         }
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('(');
 
         var params = std.ArrayList(ast.ParamDecl).empty;
@@ -189,15 +189,15 @@ const Parser = struct {
             params.deinit(self.allocator);
         }
         var seen_default = false;
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar(')')) {
             const param_name = try self.parseIdentifier();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             const param_type = try self.parseTypeAnnotation();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             var default_value: ?*Expr = null;
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
@@ -214,19 +214,19 @@ const Parser = struct {
                 .ty = param_type,
                 .default_value = default_value,
             });
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
             break;
         }
         try self.expectChar(')');
-        self.skipInlineSpaces();
-        if (!self.startsWith("->")) return self.fail(error.ExpectedTypeAnnotation);
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (!source.startsWithAt(self.source, self.pos, "->")) return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 2;
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         const result_type = try self.parseTypeAnnotation();
         const statements = try self.parseFunctionBody(result_type);
         if (result_type.kind != .void and !functionBodyReturns(statements.items)) return self.fail(error.ExpectedReturn);
@@ -234,7 +234,7 @@ const Parser = struct {
     }
 
     fn parseFunctionBody(self: *Parser, result_type: ast.Type) !std.ArrayList(Statement) {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '=') {
             return try self.parseInlineFunctionBody(result_type);
         }
@@ -250,7 +250,7 @@ const Parser = struct {
 
         const start = self.pos;
         try self.expectChar('=');
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         var expr = try self.parseExpr();
         var expr_moved = false;
         errdefer if (!expr_moved) expr.deinit(self.allocator);
@@ -314,12 +314,12 @@ const Parser = struct {
 
     fn parseConstAfterKeyword(self: *Parser, start: usize) !ConstDecl {
         const name = try self.parseIdentifier();
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
         self.pos += 1;
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         const result_type = try self.parseTypeAnnotation();
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('=');
         const expr = try self.parseExpr();
         try self.consumeStatementTerminator();
@@ -339,9 +339,9 @@ const Parser = struct {
 
     fn parseTypeItemAfterKeyword(self: *Parser, start: usize) !TypeItem {
         const name = try self.parseIdentifier();
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         try self.expectChar('=');
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (try self.consumeKeyword("object")) {
             return .{ .object = try self.parseObjectDeclBody(start, name) };
         }
@@ -355,15 +355,15 @@ const Parser = struct {
             cases.deinit(self.allocator);
         }
         while (true) {
-            self.skipInlineSpaces();
-            if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or self.lineCommentStart()) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or source.lineCommentMarkerLength(self.source, self.pos) != null) {
                 if (needs_case) return self.fail(error.ExpectedTypeAnnotation);
                 break;
             }
             try cases.append(self.allocator, try self.parseIdentifier());
             needs_case = false;
-            self.skipInlineSpaces();
-            if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or self.lineCommentStart()) break;
+            source.skipInlineSpaces(self.source, &self.pos);
+            if (self.eof() or self.source[self.pos] == '\n' or self.source[self.pos] == '@' or source.lineCommentMarkerLength(self.source, self.pos) != null) break;
             if (self.source[self.pos] != '|') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
             needs_case = true;
@@ -378,7 +378,7 @@ const Parser = struct {
 
     fn parseObjectExtensionAfterKeyword(self: *Parser, start: usize) !ObjectExtensionDecl {
         const target = try self.parseIdentifier();
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         var extension = ObjectExtensionDecl{
             .target = target,
@@ -393,7 +393,7 @@ const Parser = struct {
     }
 
     fn parseObjectDeclBody(self: *Parser, start: usize, name: []const u8) !ObjectDecl {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         var decl = ObjectDecl{
             .name = name,
@@ -413,7 +413,7 @@ const Parser = struct {
     }
 
     fn parseRecordDeclBody(self: *Parser, start: usize, name: []const u8) !RecordDecl {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('{');
         var decl = RecordDecl{
             .name = name,
@@ -427,27 +427,27 @@ const Parser = struct {
     }
 
     fn parseRecordMembers(self: *Parser, fields: *std.ArrayList(ast.ObjectFieldDecl)) !void {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar('}')) {
             const member_start = self.pos;
             const name = try self.parseIdentifier();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             const type_start = self.pos;
             while (!self.eof() and self.source[self.pos] != '=' and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
-                if (self.lineCommentStart()) break;
+                if (source.lineCommentMarkerLength(self.source, self.pos) != null) break;
                 self.pos += 1;
             }
             const type_text = trimRightSpaces(self.source[type_start..self.pos]);
             if (type_text.len == 0) return self.fail(error.ExpectedTypeAnnotation);
             var default_value: ?*Expr = null;
             var default_property_value: ?[]const u8 = null;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 const parsed_default = try self.parseObjectFieldDefault();
                 default_value = parsed_default.expr;
                 default_property_value = parsed_default.property_value;
@@ -460,7 +460,7 @@ const Parser = struct {
                 .span = .{ .start = member_start, .end = self.pos },
             });
             try self.consumeStatementTerminator();
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
         }
         try self.expectChar('}');
         try self.consumeStatementTerminator();
@@ -473,14 +473,14 @@ const Parser = struct {
         roles: *std.ArrayList([]const u8),
         fields: *std.ArrayList(ast.ObjectFieldDecl),
     ) !void {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar('}')) {
             const member_start = self.pos;
             const name = try self.parseIdentifier();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 if (std.mem.eql(u8, name, "base")) {
                     if (maybe_base) |base| {
                         if (base.*) |existing| self.allocator.free(existing);
@@ -502,25 +502,25 @@ const Parser = struct {
                 }
                 self.allocator.free(name);
                 try self.consumeStatementTerminator();
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             const type_start = self.pos;
             while (!self.eof() and self.source[self.pos] != '=' and self.source[self.pos] != '\n' and self.source[self.pos] != '}') {
-                if (self.lineCommentStart()) break;
+                if (source.lineCommentMarkerLength(self.source, self.pos) != null) break;
                 self.pos += 1;
             }
             const type_text = trimRightSpaces(self.source[type_start..self.pos]);
             if (type_text.len == 0) return self.fail(error.ExpectedTypeAnnotation);
             var default_value: ?*Expr = null;
             var default_property_value: ?[]const u8 = null;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=') {
                 self.pos += 1;
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 const parsed_default = try self.parseObjectFieldDefault();
                 default_value = parsed_default.expr;
                 default_property_value = parsed_default.property_value;
@@ -533,7 +533,7 @@ const Parser = struct {
                 .span = .{ .start = member_start, .end = self.pos },
             });
             try self.consumeStatementTerminator();
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
         }
         try self.expectChar('}');
         try self.consumeStatementTerminator();
@@ -556,15 +556,15 @@ const Parser = struct {
     }
 
     fn parseStringListInto(self: *Parser, out: *std.ArrayList([]const u8)) !void {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         try self.expectChar('[');
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar(']')) {
             try out.append(self.allocator, try self.parseString());
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
             break;
@@ -581,7 +581,7 @@ const Parser = struct {
     fn parseTypeAnnotation(self: *Parser) anyerror!ast.Type {
         var ty = try self.parseFunctionTypeAnnotation();
         errdefer ty.deinit(self.allocator);
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '?') {
             self.pos += 1;
             const optional_ty = try ast.Type.optional(self.allocator, ty);
@@ -592,7 +592,7 @@ const Parser = struct {
     }
 
     fn parseFunctionTypeAnnotation(self: *Parser) anyerror!ast.Type {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '(') {
             const start = self.pos;
             try self.expectChar('(');
@@ -601,23 +601,23 @@ const Parser = struct {
                 for (params.items) |*param| param.deinit(self.allocator);
                 params.deinit(self.allocator);
             }
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             while (!self.eof() and !self.peekChar(')')) {
                 const param_type = try self.parseTypeAnnotation();
                 try params.append(self.allocator, param_type);
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 if (!self.eof() and self.source[self.pos] == ',') {
                     self.pos += 1;
-                    self.skipInlineSpaces();
+                    source.skipInlineSpaces(self.source, &self.pos);
                     continue;
                 }
                 break;
             }
             try self.expectChar(')');
-            self.skipInlineSpaces();
-            if (self.startsWith("->")) {
+            source.skipInlineSpaces(self.source, &self.pos);
+            if (source.startsWithAt(self.source, self.pos, "->")) {
                 self.pos += 2;
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 const result_type = try self.parseTypeAnnotation();
                 defer {
                     for (params.items) |*param| param.deinit(self.allocator);
@@ -638,10 +638,10 @@ const Parser = struct {
 
         var left = try self.parsePrimaryTypeAnnotation();
         errdefer left.deinit(self.allocator);
-        self.skipInlineSpaces();
-        if (!self.startsWith("->")) return left;
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (!source.startsWithAt(self.source, self.pos, "->")) return left;
         self.pos += 2;
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         const result_type = try self.parseTypeAnnotation();
         defer {
             var owned_left = left;
@@ -709,7 +709,7 @@ const Parser = struct {
     fn parseQualifiedTypeName(self: *Parser) anyerror![]const u8 {
         const first = try self.parseIdentifier();
         errdefer self.allocator.free(first);
-        if (!self.startsWith("::")) return first;
+        if (!source.startsWithAt(self.source, self.pos, "::")) return first;
         self.pos += 2;
         const second = try self.parseIdentifier();
         defer {
@@ -721,7 +721,7 @@ const Parser = struct {
 
     fn parseObjectType(self: *Parser, object_name: []const u8) anyerror!ast.Type {
         defer self.allocator.free(object_name);
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != '<') return ast.Type.object;
         try self.expectChar('<');
         const class_name = try self.parseQualifiedTypeName();
@@ -730,7 +730,7 @@ const Parser = struct {
     }
 
     fn parseOptionalTypeParam(self: *Parser) anyerror!ast.Type {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != '<') return ast.Type.any;
         return try self.parseTypeParam();
     }
@@ -755,7 +755,7 @@ const Parser = struct {
     }
 
     fn parsePageName(self: *Parser) ![]const u8 {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '"') {
             const name_start = self.pos;
             const name = try self.parseString();
@@ -766,7 +766,7 @@ const Parser = struct {
         const start = self.pos;
         while (!self.eof()) {
             const ch = self.source[self.pos];
-            if (scanner.isInlineSpace(ch) or ch == '\n') break;
+            if (source.isInlineSpace(ch) or ch == '\n') break;
             if (ch == '#') break;
             if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
@@ -807,14 +807,14 @@ const Parser = struct {
     }
 
     fn parseImportSpec(self: *Parser) ![]const u8 {
-        self.skipInlineSpaces();
-        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
             return self.parseString();
         }
         const start = self.pos;
         while (!self.eof()) {
             const ch = self.source[self.pos];
-            if (scanner.isInlineSpace(ch) or ch == '\n') break;
+            if (source.isInlineSpace(ch) or ch == '\n') break;
             if (ch == '#') break;
             if (ch == ';' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == ';') break;
             if (ch == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') break;
@@ -825,9 +825,9 @@ const Parser = struct {
     }
 
     fn parseImportMode(self: *Parser, spec: []const u8) !ast.ImportDecl.Mode {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (self.consumeKeywordNoTrivia("as")) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '*') {
                 self.pos += 1;
                 return .{ .unqualified = true };
@@ -848,7 +848,7 @@ const Parser = struct {
     }
 
     fn parseBodyStatements(self: *Parser) !std.ArrayList(Statement) {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         try self.expectLineBreakAfterHeader();
         return try self.parseStatementsUntilEnd();
     }
@@ -860,14 +860,14 @@ const Parser = struct {
             statements.deinit(self.allocator);
         }
 
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof()) {
             if (self.peekStandaloneKeyword("end")) {
                 try self.consumeStandaloneKeyword("end");
                 return statements;
             }
             try statements.append(self.allocator, try self.parseStatement());
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
         }
         return self.fail(error.ExpectedEnd);
     }
@@ -889,7 +889,7 @@ const Parser = struct {
             statements.deinit(self.allocator);
         }
 
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof()) {
             if (self.peekStandaloneKeyword("else")) {
                 try self.consumeStandaloneKeyword("else");
@@ -900,18 +900,18 @@ const Parser = struct {
                 return .{ .statements = statements, .terminator = .end };
             }
             try statements.append(self.allocator, try self.parseStatement());
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
         }
         return self.fail(error.ExpectedEnd);
     }
 
     fn parseStatement(self: *Parser) anyerror!Statement {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         const start = self.pos;
 
         if (try self.consumeKeyword("if")) {
             const condition = try self.parseExpr();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             try self.expectLineBreakAfterHeader();
             const then_block = try self.parseStatementsUntilElseOrEnd();
             var else_statements = std.ArrayList(Statement).empty;
@@ -937,7 +937,7 @@ const Parser = struct {
         }
         if (try self.consumeKeyword("let")) {
             const name = try self.parseIdentifier();
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             try self.expectChar('=');
             const expr = try self.parseExpr();
             try self.consumeStatementTerminator();
@@ -964,7 +964,7 @@ const Parser = struct {
 
     fn parseCallSugarStatement(self: *Parser, start: usize) !Statement {
         const name = try self.parseCallableName();
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
 
         if (!self.eof() and self.source[self.pos] == '(') {
             const call = try self.parseCallAfterName(name);
@@ -972,14 +972,14 @@ const Parser = struct {
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
         }
 
-        if (self.startsWith("<<")) {
+        if (source.startsWithAt(self.source, self.pos, "<<")) {
             const text = try self.parseChevronBlockStringLiteral();
             const call = try self.makeUnaryStringCall(name, text);
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
         }
 
-        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
             const text = try self.parseStringLiteral();
             const call = try self.makeUnaryStringCall(name, text);
             try self.consumeStatementTerminator();
@@ -1001,8 +1001,8 @@ const Parser = struct {
     fn parseConcatExpr(self: *Parser) anyerror!Expr {
         var left = try self.parseAddSubExpr();
         while (true) {
-            self.skipInlineSpaces();
-            if (!self.startsWith("++")) return left;
+            source.skipInlineSpaces(self.source, &self.pos);
+            if (!source.startsWithAt(self.source, self.pos, "++")) return left;
             self.pos += 2;
             const right = try self.parseAddSubExpr();
             left = try self.makeBinaryCall("concat", left, right);
@@ -1012,9 +1012,9 @@ const Parser = struct {
     fn parseAddSubExpr(self: *Parser) anyerror!Expr {
         var left = try self.parseMulDivExpr();
         while (true) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof()) return left;
-            if (self.startsWith("++")) return left;
+            if (source.startsWithAt(self.source, self.pos, "++")) return left;
             const op = self.source[self.pos];
             if (op != '+' and op != '-') return left;
             self.pos += 1;
@@ -1026,7 +1026,7 @@ const Parser = struct {
     fn parseMulDivExpr(self: *Parser) anyerror!Expr {
         var left = try self.parseUnaryExpr();
         while (true) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof()) return left;
             const op = self.source[self.pos];
             if (op != '*' and op != '/') return left;
@@ -1037,7 +1037,7 @@ const Parser = struct {
     }
 
     fn parseUnaryExpr(self: *Parser) anyerror!Expr {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '!') {
             self.pos += 1;
             var args = std.ArrayList(Expr).empty;
@@ -1059,13 +1059,13 @@ const Parser = struct {
         var expr = try self.parsePrimaryExpr();
         errdefer expr.deinit(self.allocator);
         while (true) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof()) return expr;
             if (self.consumeKeywordNoTrivia("with")) {
                 expr = try self.parseRecordUpdateAfterTarget(expr);
                 continue;
             }
-            if (self.startsWith("??")) {
+            if (source.startsWithAt(self.source, self.pos, "??")) {
                 self.pos += 2;
                 const fallback = try self.parseExpr();
                 expr = try self.makeCoalesceExpr(expr, fallback);
@@ -1095,7 +1095,7 @@ const Parser = struct {
             fields.deinit(self.allocator);
         }
 
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar('}')) {
             var path = std.ArrayList([]const u8).empty;
             errdefer {
@@ -1104,23 +1104,23 @@ const Parser = struct {
             }
             try path.append(self.allocator, try self.parseIdentifier());
             while (true) {
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 if (self.eof() or self.source[self.pos] != '.') break;
                 self.pos += 1;
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 try path.append(self.allocator, try self.parseIdentifier());
             }
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             try self.expectChar('=');
             const value = try self.parseExpr();
             try fields.append(self.allocator, .{
                 .path = path,
                 .value = value,
             });
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
         }
@@ -1138,13 +1138,13 @@ const Parser = struct {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try self.expectChar('(');
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         while (!self.eof() and !self.peekChar(')')) {
             try args.append(self.allocator, try self.parseExpr());
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipInlineSpaces();
+                source.skipInlineSpaces(self.source, &self.pos);
                 continue;
             }
             break;
@@ -1154,7 +1154,7 @@ const Parser = struct {
     }
 
     fn parsePrimaryExpr(self: *Parser) anyerror!Expr {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '(') {
             if (self.startsLambdaExpr()) return try self.parseLambdaExpr();
             self.pos += 1;
@@ -1165,17 +1165,17 @@ const Parser = struct {
         if (self.startsColorLiteral()) {
             return .{ .color = try self.parseColorLiteralString() };
         }
-        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
             return .{ .string = try self.parseStringLiteral() };
         }
-        if (self.startsWith("<<")) {
+        if (source.startsWithAt(self.source, self.pos, "<<")) {
             return .{ .string = try self.parseChevronBlockStringLiteral() };
         }
         if (self.startsNumberLiteral()) {
             return .{ .number = try self.parseNumber() };
         }
         const name = try self.parseCallableName();
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (!name.isQualified() and std.mem.eql(u8, name.name, "none")) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
                 return .none;
@@ -1193,10 +1193,10 @@ const Parser = struct {
         if (!self.eof() and self.source[self.pos] == '(') {
             return .{ .call = try self.parseCallAfterName(name) };
         }
-        if (self.startsWith("<<")) {
+        if (source.startsWithAt(self.source, self.pos, "<<")) {
             return .{ .call = try self.makeUnaryStringCall(name, try self.parseChevronBlockStringLiteral()) };
         }
-        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
             return .{ .call = try self.makeUnaryStringCall(name, try self.parseStringLiteral()) };
         }
         if (name.isQualified()) {
@@ -1225,20 +1225,20 @@ const Parser = struct {
             for (fields.items) |*field| field.deinit(self.allocator);
             fields.deinit(self.allocator);
         }
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar('}')) {
             const field_name = try self.parseIdentifier();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             try self.expectChar('=');
             const value = try self.parseExpr();
             try fields.append(self.allocator, .{
                 .name = field_name,
                 .value = value,
             });
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
         }
@@ -1252,14 +1252,14 @@ const Parser = struct {
     fn startsLambdaExpr(self: *Parser) bool {
         if (self.eof() or self.source[self.pos] != '(') return false;
         var probe = self.pos + 1;
-        scanner.skipTrivia(self.source, &probe);
+        source.skipTriviaFrom(self.source, &probe);
         if (probe < self.source.len and self.source[probe] == ')') {
             probe += 1;
-            scanner.skipTrivia(self.source, &probe);
-            return scanner.startsWith(self.source, probe, "|->");
+            source.skipTriviaFrom(self.source, &probe);
+            return source.startsWithAt(self.source, probe, "|->");
         }
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        scanner.skipInlineSpaces(self.source, &probe);
+        source.skipInlineSpaces(self.source, &probe);
         if (probe < self.source.len and self.source[probe] == ':') return true;
 
         var depth: usize = 1;
@@ -1270,8 +1270,8 @@ const Parser = struct {
                     depth -= 1;
                     if (depth == 0) {
                         probe += 1;
-                        scanner.skipTrivia(self.source, &probe);
-                        return scanner.startsWith(self.source, probe, "|->");
+                        source.skipTriviaFrom(self.source, &probe);
+                        return source.startsWithAt(self.source, probe, "|->");
                     }
                 },
                 '\n' => return false,
@@ -1289,32 +1289,32 @@ const Parser = struct {
             for (params.items) |*param| param.deinit(self.allocator);
             params.deinit(self.allocator);
         }
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and !self.peekChar(')')) {
             const param_name = try self.parseIdentifier();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != ':') return self.fail(error.ExpectedTypeAnnotation);
             self.pos += 1;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             const param_type = try self.parseTypeAnnotation();
             try params.append(self.allocator, .{
                 .name = param_name,
                 .ty = param_type,
                 .default_value = null,
             });
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
             break;
         }
         try self.expectChar(')');
-        self.skipTrivia();
-        if (!self.startsWith("|->")) return self.fail(error.ExpectedChar);
+        source.skipTriviaFrom(self.source, &self.pos);
+        if (!source.startsWithAt(self.source, self.pos, "|->")) return self.fail(error.ExpectedChar);
         self.pos += 3;
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         const body = try self.allocator.create(Expr);
         errdefer self.allocator.destroy(body);
         body.* = try self.parseExpr();
@@ -1339,13 +1339,13 @@ const Parser = struct {
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
 
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         while (!self.eof() and self.source[self.pos] != ')') {
             try args.append(self.allocator, try self.parseExpr());
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
-                self.skipTrivia();
+                source.skipTriviaFrom(self.source, &self.pos);
                 continue;
             }
             break;
@@ -1371,16 +1371,16 @@ const Parser = struct {
         errdefer target.deinit(self.allocator);
 
         while (true) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != '.') {
                 target.deinit(self.allocator);
                 self.pos = saved;
                 return null;
             }
             self.pos += 1;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             const member_name = try self.parseIdentifier();
-            self.skipTrivia();
+            source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=' and (self.pos + 1 >= self.source.len or self.source[self.pos + 1] != '=')) {
                 self.pos += 1;
                 const value = try self.parseExpr();
@@ -1399,7 +1399,7 @@ const Parser = struct {
         var expr = try self.parsePrimaryExpr();
         errdefer expr.deinit(self.allocator);
         while (true) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != '(') return expr;
             expr = try self.parseApplyAfterCallee(expr);
         }
@@ -1472,9 +1472,9 @@ const Parser = struct {
             };
         }
         const target_anchor = target.anchor_ref;
-        const source = try self.parseAnchorMemberRef();
+        const source_anchor = try self.parseAnchorMemberRef();
         var offset: ?Expr = null;
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         if (!self.eof() and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
             const sign = self.source[self.pos];
             self.pos += 1;
@@ -1482,7 +1482,7 @@ const Parser = struct {
             if (sign == '-') expr = try self.makeNegCall(expr);
             offset = expr;
         }
-        return .{ .target = target_anchor, .source = source, .offset = offset };
+        return .{ .target = target_anchor, .source = source_anchor, .offset = offset };
     }
 
     const ConstraintMemberRef = struct {
@@ -1498,17 +1498,17 @@ const Parser = struct {
     }
 
     fn parseConstraintMemberRef(self: *Parser, allow_dimension: bool) !ConstraintMemberRef {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         const path_start = self.pos;
         _ = try self.parseIdentifier();
         var member_name: []const u8 = "";
         var path_end: usize = path_start;
         while (true) {
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             path_end = self.pos;
             try self.expectChar('.');
             member_name = try self.parseIdentifier();
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != '.') break;
         }
         const object_path = std.mem.trim(u8, self.source[path_start..path_end], " \t\r\n");
@@ -1553,9 +1553,9 @@ const Parser = struct {
     }
 
     fn parseTextArg(self: *Parser) ![]const u8 {
-        self.skipInlineSpaces();
-        if (self.startsWith("<<")) return self.parseChevronBlockString();
-        if (!self.eof() and (self.source[self.pos] == '"' or self.startsWith("\"\"\""))) {
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (source.startsWithAt(self.source, self.pos, "<<")) return self.parseChevronBlockString();
+        if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
             return self.parseString();
         }
         return self.parseLineText();
@@ -1567,7 +1567,7 @@ const Parser = struct {
     }
 
     fn parseLineTextLiteral(self: *Parser) !ast.StringLiteral {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         const start = self.pos;
         while (!self.eof() and self.source[self.pos] != '\n') {
             self.pos += 1;
@@ -1585,10 +1585,10 @@ const Parser = struct {
     }
 
     fn parseChevronBlockStringLiteral(self: *Parser) !ast.StringLiteral {
-        self.skipInlineSpaces();
-        if (!self.startsWith("<<")) return self.fail(error.ExpectedString);
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (!source.startsWithAt(self.source, self.pos, "<<")) return self.fail(error.ExpectedString);
         self.pos += 2;
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         try self.expectLineBreak();
 
         const content_start = self.pos;
@@ -1611,14 +1611,13 @@ const Parser = struct {
     }
 
     fn isChevronTerminatorAtCurrentLine(self: *Parser) bool {
-        var line_start = self.pos;
-        while (line_start > 0 and self.source[line_start - 1] != '\n') line_start -= 1;
-        var probe = line_start;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        const line_span = source.lineAt(self.source, self.pos).span;
+        var probe = line_span.start;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         if (probe + 2 > self.source.len) return false;
         if (!std.mem.eql(u8, self.source[probe .. probe + 2], ">>")) return false;
         probe += 2;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         if (probe + 1 < self.source.len and std.mem.eql(u8, self.source[probe .. probe + 2], ";;")) {
             return true;
         }
@@ -1632,12 +1631,12 @@ const Parser = struct {
     }
 
     fn consumeChevronTerminatorLine(self: *Parser) void {
-        while (!self.eof() and self.source[self.pos] != '\n') self.pos += 1;
-        if (!self.eof() and self.source[self.pos] == '\n') self.pos += 1;
+        const line = source.lineAt(self.source, self.pos);
+        self.pos = if (line.raw_end < self.source.len) line.raw_end + 1 else line.raw_end;
     }
 
     fn parseNumber(self: *Parser) !f32 {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         const start = self.pos;
         var saw_dot = false;
         while (!self.eof()) {
@@ -1659,7 +1658,7 @@ const Parser = struct {
     }
 
     fn parseSignedNumber(self: *Parser) !f32 {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         var sign: f32 = 1;
         if (!self.eof() and self.source[self.pos] == '-') {
             sign = -1;
@@ -1680,11 +1679,11 @@ const Parser = struct {
     }
 
     fn parseStringLiteral(self: *Parser) !ast.StringLiteral {
-        self.skipTrivia();
-        if (self.startsWith("\"\"\"")) {
+        source.skipTriviaFrom(self.source, &self.pos);
+        if (source.startsWithAt(self.source, self.pos, "\"\"\"")) {
             self.pos += 3;
             const start = self.pos;
-            while (!self.eof() and !self.startsWith("\"\"\"")) {
+            while (!self.eof() and !source.startsWithAt(self.source, self.pos, "\"\"\"")) {
                 self.pos += 1;
             }
             if (self.eof()) return self.fail(error.UnterminatedString);
@@ -1747,7 +1746,7 @@ const Parser = struct {
 
     fn parseCallableName(self: *Parser) !ast.CallableName {
         const first = try self.parseName(.identifier);
-        if (self.startsWith("::")) {
+        if (source.startsWithAt(self.source, self.pos, "::")) {
             self.pos += 2;
             const name = try self.parseName(.callable);
             return ast.CallableName.qualified(first, name);
@@ -1760,12 +1759,12 @@ const Parser = struct {
     }
 
     fn parseName(self: *Parser, kind: NameKind) ![]const u8 {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         if (self.eof()) return self.fail(error.ExpectedIdentifier);
         const start = self.pos;
-        if (!source_utils.isIdentifierStart(self.source[self.pos])) return self.fail(error.ExpectedIdentifier);
+        if (!source.isIdentifierStart(self.source[self.pos])) return self.fail(error.ExpectedIdentifier);
         self.pos += 1;
-        while (!self.eof() and source_utils.isIdentifierContinue(self.source[self.pos])) {
+        while (!self.eof() and source.isIdentifierContinue(self.source[self.pos])) {
             self.pos += 1;
         }
         const ident_end = self.pos;
@@ -1779,9 +1778,9 @@ const Parser = struct {
     }
 
     fn isValidIdentifier(ident: []const u8) bool {
-        if (ident.len == 0 or !source_utils.isIdentifierStart(ident[0])) return false;
+        if (ident.len == 0 or !source.isIdentifierStart(ident[0])) return false;
         for (ident[1..]) |ch| {
-            if (!source_utils.isIdentifierContinue(ch)) return false;
+            if (!source.isIdentifierContinue(ch)) return false;
         }
         return true;
     }
@@ -1815,7 +1814,7 @@ const Parser = struct {
     }
 
     fn consumeKeyword(self: *Parser, keyword: []const u8) !bool {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         return self.consumeKeywordNoTrivia(keyword);
     }
 
@@ -1824,20 +1823,20 @@ const Parser = struct {
     }
 
     fn consumePairedFunctionMarker(self: *Parser) bool {
-        if (!self.startsWith("/!")) return false;
+        if (!source.startsWithAt(self.source, self.pos, "/!")) return false;
         self.pos += 2;
         return true;
     }
 
     fn expectChar(self: *Parser, ch: u8) !void {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != ch) return self.fail(error.ExpectedChar);
         self.pos += 1;
     }
 
     fn expectEqualityOperator(self: *Parser) !void {
-        self.skipTrivia();
-        if (self.startsWith("==")) {
+        source.skipTriviaFrom(self.source, &self.pos);
+        if (source.startsWithAt(self.source, self.pos, "==")) {
             self.pos += 2;
             return;
         }
@@ -1845,15 +1844,15 @@ const Parser = struct {
     }
 
     fn consumeConstraintMarker(self: *Parser) bool {
-        self.skipInlineSpaces();
+        source.skipInlineSpaces(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != '~') return false;
         self.pos += 1;
         return true;
     }
 
     fn expectLineBreakAfterHeader(self: *Parser) !void {
-        self.skipInlineSpaces();
-        if (self.lineCommentStart()) self.skipLineComment();
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (source.lineCommentMarkerLength(self.source, self.pos) != null) source.skipLineComment(self.source, &self.pos);
         try self.expectLineBreak();
     }
 
@@ -1864,16 +1863,16 @@ const Parser = struct {
     }
 
     fn consumeStatementTerminator(self: *Parser) !void {
-        self.skipInlineSpaces();
-        if (self.lineCommentStart()) {
-            self.skipLineComment();
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (source.lineCommentMarkerLength(self.source, self.pos) != null) {
+            source.skipLineComment(self.source, &self.pos);
             return;
         }
         if (!self.eof() and self.source[self.pos] == ';') {
             self.pos += 1;
-            self.skipInlineSpaces();
+            source.skipInlineSpaces(self.source, &self.pos);
         }
-        if (self.lineCommentStart()) self.skipLineComment();
+        if (source.lineCommentMarkerLength(self.source, self.pos) != null) source.skipLineComment(self.source, &self.pos);
     }
 
     fn atStatementBoundary(self: *Parser) bool {
@@ -1882,32 +1881,32 @@ const Parser = struct {
 
     fn peekAnchorAssignment(self: *Parser) bool {
         var probe = self.pos;
-        source_utils.skipTriviaFrom(self.source, &probe);
+        source.skipTriviaFrom(self.source, &probe);
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '.') return false;
         probe += 1;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         const member_start = probe;
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
         const member_name = self.source[member_start..probe];
         if (names.parseAnchorName(member_name) == null and
             !std.mem.eql(u8, member_name, "width") and
             !std.mem.eql(u8, member_name, "height")) return false;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
-        return scanner.startsWith(self.source, probe, "==");
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
+        return source.startsWithAt(self.source, probe, "==");
     }
 
     fn peekPropertyAssignment(self: *Parser) bool {
         var probe = self.pos;
-        source_utils.skipTriviaFrom(self.source, &probe);
+        source.skipTriviaFrom(self.source, &probe);
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '.') return false;
         probe += 1;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        source_utils.skipTriviaFrom(self.source, &probe);
+        source.skipTriviaFrom(self.source, &probe);
         if (probe >= self.source.len or self.source[probe] != '=') return false;
         if (probe + 1 < self.source.len and self.source[probe + 1] == '=') return false;
         return true;
@@ -1915,9 +1914,9 @@ const Parser = struct {
 
     fn peekSimpleAssignment(self: *Parser) bool {
         var probe = self.pos;
-        source_utils.skipTriviaFrom(self.source, &probe);
+        source.skipTriviaFrom(self.source, &probe);
         if (!scanner.scanIdentifier(self.source, &probe)) return false;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         if (probe >= self.source.len or self.source[probe] != '=') return false;
         if (probe + 1 < self.source.len and self.source[probe + 1] == '=') return false;
         return true;
@@ -1925,46 +1924,26 @@ const Parser = struct {
 
     fn peekStandaloneKeyword(self: *Parser, keyword: []const u8) bool {
         var probe = self.pos;
-        source_utils.skipTriviaFrom(self.source, &probe);
+        source.skipTriviaFrom(self.source, &probe);
         if (probe + keyword.len > self.source.len) return false;
         if (!std.mem.eql(u8, self.source[probe .. probe + keyword.len], keyword)) return false;
         const end = probe + keyword.len;
-        if (end < self.source.len and source_utils.isIdentifierContinue(self.source[end])) return false;
+        if (end < self.source.len and source.isIdentifierContinue(self.source[end])) return false;
         probe = end;
-        while (probe < self.source.len and scanner.isInlineSpace(self.source[probe])) probe += 1;
+        while (probe < self.source.len and source.isInlineSpace(self.source[probe])) probe += 1;
         return probe == self.source.len or self.source[probe] == '\n';
     }
 
     fn consumeStandaloneKeyword(self: *Parser, keyword: []const u8) !void {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         if (!self.consumeKeywordNoTrivia(keyword)) return self.fail(error.ExpectedKeyword);
-        self.skipInlineSpaces();
-        if (self.lineCommentStart()) self.skipLineComment();
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (source.lineCommentMarkerLength(self.source, self.pos) != null) source.skipLineComment(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '\n') self.pos += 1;
     }
 
-    fn skipInlineSpaces(self: *Parser) void {
-        scanner.skipInlineSpaces(self.source, &self.pos);
-    }
-
-    fn lineCommentStart(self: *Parser) bool {
-        return scanner.lineCommentStart(self.source, self.pos);
-    }
-
-    fn skipLineComment(self: *Parser) void {
-        scanner.skipLineComment(self.source, &self.pos);
-    }
-
-    fn skipTrivia(self: *Parser) void {
-        scanner.skipTrivia(self.source, &self.pos);
-    }
-
-    fn startsWith(self: *Parser, text: []const u8) bool {
-        return scanner.startsWith(self.source, self.pos, text);
-    }
-
     fn peekChar(self: *Parser, ch: u8) bool {
-        self.skipTrivia();
+        source.skipTriviaFrom(self.source, &self.pos);
         return !self.eof() and self.source[self.pos] == ch;
     }
 
@@ -2021,12 +2000,12 @@ fn normalizedBlockStringBounds(raw: []const u8) ast.Span {
 
 fn trimRightSpaces(raw: []const u8) []const u8 {
     var end = raw.len;
-    while (end > 0 and scanner.isInlineSpace(raw[end - 1])) end -= 1;
+    while (end > 0 and source.isInlineSpace(raw[end - 1])) end -= 1;
     return raw[0..end];
 }
 
 fn trimLeftSpaces(raw: []const u8) []const u8 {
     var start: usize = 0;
-    while (start < raw.len and scanner.isInlineSpace(raw[start])) start += 1;
+    while (start < raw.len and source.isInlineSpace(raw[start])) start += 1;
     return raw[start..];
 }

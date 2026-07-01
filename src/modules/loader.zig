@@ -6,6 +6,7 @@ const names = @import("../language/names.zig");
 const stdlib_assets = @import("stdlib_assets");
 const utils = @import("utils");
 const error_report = utils.err;
+const source = utils.source;
 
 const max_module_bytes = 256 * 1024;
 const implicit_prelude_spec = "std:core/prelude";
@@ -30,16 +31,16 @@ pub const SourceOverlay = struct {
         self.by_path.deinit();
     }
 
-    pub fn put(self: *SourceOverlay, path: []const u8, source: []const u8) !void {
+    pub fn put(self: *SourceOverlay, path: []const u8, text: []const u8) !void {
         const absolute = try std.fs.path.resolve(self.allocator, &.{path});
         errdefer self.allocator.free(absolute);
-        const text = try self.allocator.dupe(u8, source);
-        errdefer self.allocator.free(text);
+        const owned_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned_text);
         if (self.by_path.fetchRemove(absolute)) |entry| {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
         }
-        try self.by_path.put(absolute, text);
+        try self.by_path.put(absolute, owned_text);
     }
 
     pub fn get(self: *const SourceOverlay, path: []const u8) ?[]const u8 {
@@ -92,7 +93,7 @@ pub const LoadDiagnostic = struct {
     severity: core.DiagnosticSeverity,
     code: []u8,
     message: []u8,
-    span: ?error_report.ByteSpan,
+    span: ?source.ByteSpan,
 
     pub fn deinit(self: *LoadDiagnostic, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
@@ -118,15 +119,15 @@ pub const LoadDiagnostics = struct {
     pub fn add(
         self: *LoadDiagnostics,
         path: []const u8,
-        source: []const u8,
+        text: []const u8,
         severity: core.DiagnosticSeverity,
         code: []const u8,
         message: []const u8,
-        span: ?error_report.ByteSpan,
+        span: ?source.ByteSpan,
     ) !void {
         try self.items.append(self.allocator, .{
             .path = try self.allocator.dupe(u8, path),
-            .source = try self.allocator.dupe(u8, source),
+            .source = try self.allocator.dupe(u8, text),
             .severity = severity,
             .code = try self.allocator.dupe(u8, code),
             .message = try self.allocator.dupe(u8, message),
@@ -271,7 +272,7 @@ pub fn importFailureSpan(
     program: *const ast.Program,
     overlay: ?*const SourceOverlay,
     diagnostics: *const LoadDiagnostics,
-) ?error_report.ByteSpan {
+) ?source.ByteSpan {
     for (diagnostics.items.items) |diagnostic| {
         for (program.imports.items) |import_decl| {
             if (importMatchesDiagnosticPath(allocator, io, base_dir, import_decl.spec, diagnostic.path, overlay) catch false) {
@@ -336,14 +337,14 @@ const Builder = struct {
     fn addDiagnostic(
         self: *Builder,
         path: []const u8,
-        source: []const u8,
+        text: []const u8,
         severity: core.DiagnosticSeverity,
         code: []const u8,
         message: []const u8,
-        span: ?error_report.ByteSpan,
+        span: ?source.ByteSpan,
     ) !void {
         if (self.diagnostics) |diagnostics| {
-            try diagnostics.add(path, source, severity, code, message, span);
+            try diagnostics.add(path, text, severity, code, message, span);
         }
     }
 
@@ -367,20 +368,20 @@ const Builder = struct {
         const module_id = self.next_id;
         self.next_id += 1;
 
-        const source = try self.allocator.dupe(u8, resolved.source);
+        const text = try self.allocator.dupe(u8, resolved.source);
         var owns_source = true;
-        errdefer if (owns_source) self.allocator.free(source);
+        errdefer if (owns_source) self.allocator.free(text);
         const parse_path = resolved.path orelse resolved.spec;
-        const program = syntax.parseWithSourceName(self.allocator, source, parse_path) catch |err| {
+        const program = syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
             const diagnostic = syntax.lastDiagnostic();
             var message_buf: [256]u8 = undefined;
             const message = if (diagnostic) |diag|
                 error_report.formatParseDiagnostic(&message_buf, diag)
             else
                 error_report.formatParseFailureWithoutDiagnostic(&message_buf, err);
-            try self.addDiagnostic(parse_path, source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
+            try self.addDiagnostic(parse_path, text, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
             if (self.print_diagnostics) {
-                error_report.printParseError(parse_path, source, err, diagnostic);
+                error_report.printParseError(parse_path, text, err, diagnostic);
             }
             return err;
         };
@@ -409,7 +410,7 @@ const Builder = struct {
             .kind = kind,
             .spec = spec,
             .path = path,
-            .source = source,
+            .source = text,
             .program = program,
             .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,
@@ -430,11 +431,11 @@ const Builder = struct {
                 if (err == error.UnknownImport) {
                     const message = try formatUnknownImportMessage(self.allocator, importer_base_dir, import_decl.spec);
                     defer self.allocator.free(message);
-                    try self.addDiagnostic(path orelse spec, source, .@"error", "UnknownImport", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
+                    try self.addDiagnostic(path orelse spec, text, .@"error", "UnknownImport", message, .{ .start = import_decl.span.start, .end = import_decl.span.end });
                     if (self.print_diagnostics) {
                         error_report.print(.{
                             .path = path orelse spec,
-                            .source = source,
+                            .source = text,
                             .severity = .@"error",
                             .message = message,
                             .span = .{ .start = import_decl.span.start, .end = import_decl.span.end },
@@ -503,7 +504,7 @@ const Builder = struct {
 
     fn reportImportCycle(self: *Builder, module: *const core.SourceModule, import_index: ?usize) !void {
         const path = module.path orelse module.spec;
-        const span: ?error_report.ByteSpan = if (import_index) |index| blk: {
+        const span: ?source.ByteSpan = if (import_index) |index| blk: {
             if (index >= module.program.imports.items.len) break :blk null;
             const import_span = module.program.imports.items[index].span;
             break :blk .{ .start = import_span.start, .end = import_span.end };
@@ -545,7 +546,7 @@ fn resolveImport(
     }
     const path = try resolveExplicitPath(allocator, importer_dir, import_spec);
     errdefer allocator.free(path);
-    const source = if (overlay) |source_overlay|
+    const module_text = if (overlay) |source_overlay|
         if (source_overlay.get(path)) |text|
             try allocator.dupe(u8, text)
         else
@@ -561,7 +562,7 @@ fn resolveImport(
     return .{
         .key = try allocator.dupe(u8, path),
         .path = path,
-        .source = source,
+        .source = module_text,
         .spec = try allocator.dupe(u8, import_spec),
     };
 }
