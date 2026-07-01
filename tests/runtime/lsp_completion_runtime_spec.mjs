@@ -307,6 +307,17 @@ end
         `qualified definition did not jump to default h2: ${JSON.stringify(definition)}`,
       );
 
+      const aliasDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(qualifiedSource, "default::", 1),
+      });
+      assert(Array.isArray(aliasDefinition), `expected qualified alias definition array, got ${JSON.stringify(aliasDefinition)}`);
+      assert(aliasDefinition.length === 1, `qualified alias definition was not unique: ${JSON.stringify(aliasDefinition)}`);
+      assert(
+        isDefinitionLocation(aliasDefinition[0], { uri: defaultThemeUri, line: 0, character: 0 }),
+        `qualified alias definition did not jump to default theme: ${JSON.stringify(aliasDefinition)}`,
+      );
+
       const semanticTokens = await client.request("textDocument/semanticTokens/full", {
         textDocument: { uri: localUri },
       });

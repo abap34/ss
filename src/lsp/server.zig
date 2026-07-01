@@ -13,7 +13,6 @@ const dump = @import("../dump.zig");
 const utils = @import("utils");
 const analysis_completion = @import("../analysis/completion.zig");
 const analysis_editor = @import("../analysis/editor.zig");
-const lsp_cursor = @import("cursor.zig");
 const lsp_diagnostics = @import("diagnostics.zig");
 const document_features = @import("document_features.zig");
 const protocol = @import("protocol.zig");
@@ -22,8 +21,6 @@ const source = utils.source;
 
 const JsonValue = protocol.JsonValue;
 const JsonObject = protocol.JsonObject;
-const RequestPosition = lsp_cursor.PositionRequest;
-const RequestContext = lsp_cursor.TargetRequest;
 const Snapshot = lsp_state.Snapshot;
 const CompletionCache = lsp_state.CompletionCache;
 const DocumentCompletionCache = lsp_state.DocumentCompletionCache;
@@ -57,6 +54,32 @@ const appendRange = protocol.appendRange;
 const locationJson = protocol.locationJson;
 const appendLocationObject = protocol.appendLocationObject;
 const samePath = protocol.samePath;
+
+const RequestPosition = struct {
+    doc_path: []u8,
+    source: []const u8,
+    offset: usize,
+    line: usize,
+    character: usize,
+
+    pub fn deinit(self: *RequestPosition, allocator: std.mem.Allocator) void {
+        allocator.free(self.doc_path);
+    }
+};
+
+const RequestContext = struct {
+    target: []u8,
+    doc_path: []u8,
+    source: []const u8,
+    offset: usize,
+    program: ?ast.Program = null,
+
+    pub fn deinit(self: *RequestContext, allocator: std.mem.Allocator) void {
+        if (self.program) |*program| program.deinit(allocator);
+        allocator.free(self.target);
+        allocator.free(self.doc_path);
+    }
+};
 
 const Server = struct {
     io: std.Io,
@@ -1020,17 +1043,43 @@ fn definitionObject(root: *const JsonObject, target: []const u8, module_id: i64,
 }
 
 fn qualifiedModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
-    const alias = lsp_cursor.qualifiedAliasBeforeOffset(context.source, context.offset) orelse return null;
+    const alias = qualifiedCallableAliasForContext(context) orelse return null;
     return resolveAliasModuleId(allocator, root, context.doc_path, alias);
 }
 
 fn aliasModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
-    if (!lsp_cursor.targetFollowedByDoubleColon(context) and !lsp_cursor.isImportAliasTarget(context)) return null;
+    if (!isQualifiedCallableAliasTarget(context) and !isImportAliasTarget(context)) return null;
     return resolveAliasModuleId(allocator, root, context.doc_path, context.target);
 }
 
+fn qualifiedCallableAliasForContext(context: *const RequestContext) ?[]const u8 {
+    const program = if (context.program) |*program| program else return null;
+    return analysis_editor.qualifiedCallableQualifierForName(program, context.offset);
+}
+
+fn isQualifiedCallableAliasTarget(context: *const RequestContext) bool {
+    const program = if (context.program) |*program| program else return false;
+    return analysis_editor.isQualifiedCallableQualifierAt(program, context.offset);
+}
+
+fn definitionKindForContext(context: *const RequestContext) core.DefinitionKind {
+    if (context.program) |*program| {
+        if (analysis_editor.callableAt(program, context.offset)) |target| {
+            if (target.role == .name) return .function;
+        }
+    }
+    if (std.mem.endsWith(u8, context.target, "!")) return .function;
+    return .constant;
+}
+
+fn isImportAliasTarget(context: *const RequestContext) bool {
+    const program = if (context.program) |*program| program else return false;
+    return analysis_editor.isImportAliasAt(program, context.offset);
+}
+
 fn importSpecModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
-    const spec = lsp_cursor.importSpecAtOffset(context.source, context.offset) orelse return null;
+    const program = if (context.program) |*program| program else return null;
+    const spec = analysis_editor.importSpecAt(program, context.offset) orelse return null;
     const module = moduleForPath(allocator, root, context.doc_path) orelse return null;
     if (arrayFieldObject(module, "imports")) |imports| {
         for (imports.items) |item| {
@@ -1125,7 +1174,7 @@ fn hoverMarkdown(
             .doc_path = context.doc_path,
             .source = context.source,
             .offset = context.offset,
-        }, target, lsp_cursor.qualifiedAliasBeforeOffset(context.source, context.offset))) |item| {
+        }, target, qualifiedCallableAliasForContext(context))) |item| {
             const signature = item.detail orelse target;
             const summary = item.documentation orelse "";
             return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
@@ -1177,7 +1226,7 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
                     return out.toOwnedSlice(server.allocator);
                 }
             }
-            if (definitionObject(&root, context.target, module_id, lsp_cursor.definitionKindForRequest(&context))) |definition| {
+            if (definitionObject(&root, context.target, module_id, definitionKindForContext(&context))) |definition| {
                 try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
                 try out.append(server.allocator, ']');
                 return out.toOwnedSlice(server.allocator);
@@ -1206,10 +1255,10 @@ fn resolvedDefinitionObject(
     index: *const analysis_completion.Index,
     context: *const RequestContext,
 ) ?*const JsonObject {
-    const qualifier = lsp_cursor.qualifiedAliasBeforeOffset(context.source, context.offset);
+    const qualifier = qualifiedCallableAliasForContext(context);
     const request = completionRequest(context);
     if (resolvedDefinitionObjectOfKind(allocator, root, index, request, context.target, null, .variable)) |definition| return definition;
-    const primary_kind = lsp_cursor.definitionKindForRequest(context);
+    const primary_kind = definitionKindForContext(context);
     if (resolvedDefinitionObjectOfKind(allocator, root, index, request, context.target, qualifier, primary_kind)) |definition| return definition;
     const fallback_kind: core.DefinitionKind = if (primary_kind == .function) .constant else .function;
     return resolvedDefinitionObjectOfKind(allocator, root, index, request, context.target, qualifier, fallback_kind);
@@ -1238,7 +1287,7 @@ fn appendResolvedTypeDefinitionLocation(
     fallback_path: []const u8,
     first: *bool,
 ) !bool {
-    const qualifier = lsp_cursor.qualifiedAliasBeforeOffset(context.source, context.offset);
+    const qualifier = qualifiedCallableAliasForContext(context);
     const request = completionRequest(context);
     const resolved = analysis_completion.visibleTypeDefinition(index, allocator, request, context.target, qualifier) orelse return false;
     const module_id: i64 = @intCast(resolved.module_id);
@@ -1585,10 +1634,18 @@ fn requestPosition(server: *Server, params: ?JsonValue) !?RequestPosition {
     return .{
         .doc_path = doc_path,
         .source = text,
-        .offset = lsp_cursor.offsetForPosition(text, line, character),
+        .offset = source.offsetForUtf16Position(text, line, character),
         .line = line,
         .character = character,
     };
+}
+
+fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Program) !?[]u8 {
+    if (program) |parsed| {
+        if (analysis_editor.importSpecAt(parsed, offset)) |spec| return try allocator.dupe(u8, spec);
+    }
+    const location = analysis_editor.sourceCallableNameAt(text, offset) orelse return null;
+    return try allocator.dupe(u8, text[location.offset .. location.offset + location.length]);
 }
 
 fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
@@ -1605,8 +1662,11 @@ fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
         server.allocator.free(doc_path);
         return null;
     };
-    const offset = lsp_cursor.offsetForPosition(text, line, character);
-    const target = try lsp_cursor.targetAtPosition(server.allocator, text, line, character) orelse {
+    const offset = source.offsetForUtf16Position(text, line, character);
+    var cursor_program: ?ast.Program = syntax.parse(server.allocator, text) catch null;
+    const program_ptr: ?*const ast.Program = if (cursor_program) |*program| program else null;
+    const target = try targetAtOffset(server.allocator, text, offset, program_ptr) orelse {
+        if (cursor_program) |*program| program.deinit(server.allocator);
         server.allocator.free(doc_path);
         return null;
     };
@@ -1615,6 +1675,7 @@ fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
         .doc_path = doc_path,
         .source = text,
         .offset = offset,
+        .program = cursor_program,
     };
 }
 
