@@ -19,6 +19,7 @@ const defaultThemeSource = await readFile(defaultTheme, "utf8");
 const coverDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "cover");
 
 await testStdlibDefinitionOutsideWorkspace();
+await testDefinitionAfterOpeningUnrelatedFile();
 await testLspConfiguration();
 await testLspDebouncesDocumentChanges();
 await testConstraintConflictDiagnosticMatchesCli();
@@ -59,6 +60,54 @@ end
       assert(
         definition.some((location) => isDefinitionLocation(location, coverDefinition)),
         `outside workspace definition did not jump to default theme cover: ${JSON.stringify(definition)}`,
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testDefinitionAfterOpeningUnrelatedFile() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-definition-snapshot-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const side = path.join(project, "side.ss");
+    const slideUri = pathToFileURL(slide).toString();
+    const sideUri = pathToFileURL(side).toString();
+    const slideSource = `import std:themes/default
+
+page title
+default::cover!(
+  "Hello",
+  "Subtitle",
+  "Author"
+)
+end
+`;
+    const sideSource = `page side
+end
+`;
+    await writeFile(slide, slideSource, "utf8");
+    await writeFile(side, sideSource, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      let diagnosticsPromise = client.waitForDiagnostics(slideUri);
+      client.openDocument({ uri: slideUri, text: slideSource });
+      await diagnosticsPromise;
+
+      diagnosticsPromise = client.waitForDiagnostics(sideUri);
+      client.openDocument({ uri: sideUri, text: sideSource });
+      await diagnosticsPromise;
+
+      const definition = await client.request("textDocument/definition", {
+        textDocument: { uri: slideUri },
+        position: positionAt(slideSource, "cover!", 2),
+      });
+      assert(Array.isArray(definition), `expected definition array after snapshot switch, got ${JSON.stringify(definition)}`);
+      assert(
+        definition.some((location) => isDefinitionLocation(location, coverDefinition)),
+        `definition after snapshot switch did not jump to default theme cover: ${JSON.stringify(definition)}`,
       );
     });
   } finally {

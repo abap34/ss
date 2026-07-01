@@ -1162,6 +1162,14 @@ const LspFeature = enum {
 
 fn lspFeatureEnabled(server: *const Server, feature: LspFeature) bool {
     const cfg = if (server.snapshot) |snapshot| snapshot.lsp else project.LspConfig{};
+    return lspFeatureEnabledInConfig(cfg, feature);
+}
+
+fn lspFeatureEnabledForSnapshot(snapshot: *const Snapshot, feature: LspFeature) bool {
+    return lspFeatureEnabledInConfig(snapshot.lsp, feature);
+}
+
+fn lspFeatureEnabledInConfig(cfg: project.LspConfig, feature: LspFeature) bool {
     if (!cfg.enabled) return false;
     return switch (feature) {
         .completion => cfg.completion,
@@ -1173,6 +1181,17 @@ fn lspFeatureEnabled(server: *const Server, feature: LspFeature) bool {
         .semantic_tokens => cfg.semantic_tokens,
         .colors => cfg.colors,
     };
+}
+
+fn snapshotForDocument(server: *Server, doc_path: []const u8, owned_snapshot: *?Snapshot) !?*Snapshot {
+    if (server.snapshot) |*snapshot| {
+        if (snapshotCoversPath(snapshot, doc_path)) return snapshot;
+    }
+    var diagnostics = DiagnosticSet.init(server.allocator);
+    defer diagnostics.deinit();
+    owned_snapshot.* = try server.buildSnapshot(doc_path, &diagnostics);
+    if (owned_snapshot.*) |*snapshot| return snapshot;
+    return null;
 }
 
 fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
@@ -1522,10 +1541,13 @@ fn spanContainsOffset(item: *const JsonObject, offset: usize) bool {
 }
 
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .hover)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer context.deinit(server.allocator);
-    if (server.snapshot) |*snapshot| if (snapshot.dump_json) |json_text| {
+    var owned_snapshot: ?Snapshot = null;
+    defer if (owned_snapshot) |*snapshot| snapshot.deinit(server.allocator);
+    const snapshot = try snapshotForDocument(server, context.doc_path, &owned_snapshot) orelse return try jsonLiteral(server.allocator, "null");
+    if (!lspFeatureEnabledForSnapshot(snapshot, .hover)) return try jsonLiteral(server.allocator, "null");
+    if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
@@ -1537,7 +1559,7 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
         try appendJsonString(server.allocator, &out, markdown);
         try out.appendSlice(server.allocator, "}}");
         return out.toOwnedSlice(server.allocator);
-    };
+    }
     return try jsonLiteral(server.allocator, "null");
 }
 
@@ -1586,10 +1608,13 @@ fn hoverMarkdown(
 }
 
 fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .definition)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer context.deinit(server.allocator);
-    if (server.snapshot) |*snapshot| if (snapshot.dump_json) |json_text| {
+    var owned_snapshot: ?Snapshot = null;
+    defer if (owned_snapshot) |*snapshot| snapshot.deinit(server.allocator);
+    const snapshot = try snapshotForDocument(server, context.doc_path, &owned_snapshot) orelse return try jsonLiteral(server.allocator, "null");
+    if (!lspFeatureEnabledForSnapshot(snapshot, .definition)) return try jsonLiteral(server.allocator, "null");
+    if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
@@ -1634,7 +1659,7 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
         if (first) return try jsonLiteral(server.allocator, "null");
         try out.append(server.allocator, ']');
         return out.toOwnedSlice(server.allocator);
-    };
+    }
     return try jsonLiteral(server.allocator, "null");
 }
 
@@ -1783,20 +1808,23 @@ fn appendDefinitionLocation(
 }
 
 fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .inlay_hints)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
+    var owned_snapshot: ?Snapshot = null;
+    defer if (owned_snapshot) |*snapshot| snapshot.deinit(server.allocator);
+    const snapshot = try snapshotForDocument(server, doc_path, &owned_snapshot) orelse return try jsonLiteral(server.allocator, "[]");
+    if (!lspFeatureEnabledForSnapshot(snapshot, .inlay_hints)) return try jsonLiteral(server.allocator, "[]");
     var out = std.ArrayList(u8).empty;
     try out.append(server.allocator, '[');
     var first = true;
-    if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
+    if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "[]");
         defer parsed.deinit();
         if (arrayFieldObject(&parsed.value.object, "hints")) |hints| for (hints.items) |item| if (item == .object) {
             const file = stringField(&item.object, "file") orelse continue;
             if (!samePath(server.allocator, file, doc_path)) continue;
             const kind = stringField(&item.object, "kind") orelse "";
-            if (!inlayHintKindEnabled(server, kind)) continue;
+            if (!inlayHintKindEnabled(snapshot, kind)) continue;
             if (!first) try out.append(server.allocator, ',');
             first = false;
             const line: usize = @intCast(@max(0, (intField(&item.object, "line") orelse 1) - 1));
@@ -1812,13 +1840,13 @@ fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
             try appendInt(server.allocator, &out, hint_kind);
             try out.appendSlice(server.allocator, ",\"paddingLeft\":true}");
         };
-    };
+    }
     try out.append(server.allocator, ']');
     return out.toOwnedSlice(server.allocator);
 }
 
-fn inlayHintKindEnabled(server: *const Server, kind: []const u8) bool {
-    const cfg = if (server.snapshot) |snapshot| snapshot.lsp else project.LspConfig{};
+fn inlayHintKindEnabled(snapshot: *const Snapshot, kind: []const u8) bool {
+    const cfg = snapshot.lsp;
     if (std.mem.eql(u8, kind, "parameter_names")) return cfg.inlay_hint_arguments;
     if (std.mem.eql(u8, kind, "solved_frame")) return cfg.inlay_hint_positions;
     return true;
