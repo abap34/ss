@@ -8,6 +8,7 @@ import {
   assertCompletionHas,
   functionDefinitionLocation,
   isDefinitionLocation,
+  positionAfter,
   positionAt,
   root,
   withLspClient,
@@ -29,6 +30,7 @@ await testDirectUnknownImportDiagnosticLocation();
 await testImportedUnknownImportReportsBothFiles();
 await testImportCycleDiagnosticLocation();
 await testBrokenProjectConfigKeepsCompletionAlive();
+await testLspFeatureSurface();
 
 async function testStdlibDefinitionOutsideWorkspace() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-outside-"));
@@ -217,6 +219,97 @@ asset_base_dir = "."
       completionPosition: { line: 0, character: 0 },
     });
     assertCompletionHas(broken.completion, "page", "broken ss.toml completion");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testLspFeatureSurface() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-feature-surface-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = featureSource("Title", "0.2,0.4,0.6");
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      const initialize = await client.initialize();
+      assert(initialize.capabilities?.completionProvider, `initialize missing completion capability: ${JSON.stringify(initialize)}`);
+      assert(initialize.capabilities?.hoverProvider === true, `initialize missing hover capability: ${JSON.stringify(initialize)}`);
+      assert(initialize.capabilities?.definitionProvider === true, `initialize missing definition capability: ${JSON.stringify(initialize)}`);
+      assert(initialize.capabilities?.documentSymbolProvider === true, `initialize missing document symbol capability: ${JSON.stringify(initialize)}`);
+      assert(initialize.capabilities?.foldingRangeProvider === true, `initialize missing folding capability: ${JSON.stringify(initialize)}`);
+      assert(initialize.capabilities?.semanticTokensProvider?.full === true, `initialize missing semantic tokens capability: ${JSON.stringify(initialize)}`);
+      assert(initialize.capabilities?.colorProvider === true, `initialize missing color capability: ${JSON.stringify(initialize)}`);
+
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(diagnostics.length === 0, `feature surface diagnostics: ${JSON.stringify(diagnostics)}`);
+
+      const completion = await client.request("textDocument/completion", {
+        textDocument: { uri },
+        position: positionAfter(source, "let heading = "),
+      });
+      assertCompletionHas(completion, "text!", "feature surface completion");
+
+      const hover = await client.request("textDocument/hover", {
+        textDocument: { uri },
+        position: positionAt(source, "text!", 1),
+      });
+      assert(hover?.contents?.value?.includes("text"), `feature surface hover missing text signature: ${JSON.stringify(hover)}`);
+
+      const definition = await client.request("textDocument/definition", {
+        textDocument: { uri },
+        position: positionAt(source, "text!", 1),
+      });
+      assert(Array.isArray(definition) && definition.length > 0, `feature surface definition missing: ${JSON.stringify(definition)}`);
+
+      const inlayHints = await client.request("textDocument/inlayHint", {
+        textDocument: { uri },
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: source.split("\n").length, character: 0 },
+        },
+      });
+      assert(Array.isArray(inlayHints), `feature surface inlay hints were not an array: ${JSON.stringify(inlayHints)}`);
+
+      const symbols = await client.request("textDocument/documentSymbol", { textDocument: { uri } });
+      assert(
+        Array.isArray(symbols) &&
+          symbols.some((symbol) => symbol.name === "feature") &&
+          symbols.some((symbol) => symbol.name === "LocalStyle") &&
+          symbols.some((symbol) => symbol.name === "Badge"),
+        `feature surface document symbols missing parsed declarations: ${JSON.stringify(symbols)}`,
+      );
+
+      const foldingRanges = await client.request("textDocument/foldingRange", { textDocument: { uri } });
+      assert(Array.isArray(foldingRanges) && foldingRanges.length >= 3, `feature surface folding ranges missing parsed blocks: ${JSON.stringify(foldingRanges)}`);
+
+      const semanticTokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri } });
+      assert(Array.isArray(semanticTokens.data) && semanticTokens.data.length > 0, `feature surface semantic tokens missing: ${JSON.stringify(semanticTokens)}`);
+
+      const colors = await client.request("textDocument/documentColor", { textDocument: { uri } });
+      assert(Array.isArray(colors) && colors.length >= 2, `feature surface document colors missing: ${JSON.stringify(colors)}`);
+
+      const presentations = await client.request("textDocument/colorPresentation", {
+        textDocument: { uri },
+        color: { red: 0.2, green: 0.4, blue: 0.6, alpha: 1 },
+        range: colors[0].range,
+      });
+      assert(
+        Array.isArray(presentations) && presentations.some((item) => item.label === 'c"#336699"'),
+        `feature surface color presentation missing hex label: ${JSON.stringify(presentations)}`,
+      );
+
+      const projectInfo = await client.request("ss/projectInfo", { textDocument: { uri } });
+      assert(projectInfo.entryPath === slide, `feature surface projectInfo entry mismatch: ${JSON.stringify(projectInfo)}`);
+      assert(projectInfo.lsp?.completion === true, `feature surface projectInfo missing LSP settings: ${JSON.stringify(projectInfo)}`);
+
+      const conflicts = await client.request("ss/layoutConflicts", { textDocument: { uri } });
+      assert(conflicts.kind === "ss-layout-conflicts", `feature surface layout conflict response kind mismatch: ${JSON.stringify(conflicts)}`);
+      assert(Array.isArray(conflicts.failures), `feature surface layout conflict failures missing: ${JSON.stringify(conflicts)}`);
+    });
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -484,6 +577,26 @@ end
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+function featureSource(title, color) {
+  return `import std:themes/default as *
+
+record LocalStyle {
+  color: Color = c"${color}"
+}
+
+type Badge = object {
+  label: String = "badge"
+}
+
+page feature
+let heading = text!("${title}", current_theme() with {
+  body.text.color = c"${color}"
+})
+place!(heading)
+end
+`;
 }
 
 async function configuredResponses({ cwd, fixture, source, completionPosition }) {

@@ -67,6 +67,17 @@ const RequestPosition = struct {
     }
 };
 
+const DocumentText = struct {
+    path: []u8,
+    source: []const u8,
+    owned_source: ?[]u8 = null,
+
+    fn deinit(self: *DocumentText, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        if (self.owned_source) |text| allocator.free(text);
+    }
+};
+
 const RequestContext = struct {
     target: []u8,
     doc_path: []u8,
@@ -1401,44 +1412,51 @@ fn inlayHintKindEnabled(snapshot: *const Snapshot, kind: []const u8) bool {
     return true;
 }
 
+fn documentTextFromParams(server: *Server, params: ?JsonValue) !?DocumentText {
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return null;
+    errdefer server.allocator.free(doc_path);
+    if (server.sourceForPath(doc_path)) |text| {
+        return .{ .path = doc_path, .source = text };
+    }
+    const owned = utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return null;
+    errdefer server.allocator.free(owned);
+    return .{ .path = doc_path, .source = owned, .owned_source = owned };
+}
+
 fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .document_symbols)) return try server.allocator.dupe(u8, "[]");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
-    defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "[]");
-    const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(text);
-    return document_features.documentSymbolsJson(server.allocator, text);
+    var doc = try documentTextFromParams(server, params) orelse return try server.allocator.dupe(u8, "[]");
+    defer doc.deinit(server.allocator);
+    var parsed = syntax.parseWithSourceName(server.allocator, doc.source, doc.path) catch {
+        return document_features.documentSymbolsJson(server.allocator, doc.source);
+    };
+    defer parsed.deinit(server.allocator);
+    return document_features.documentSymbolsFromProgramJson(server.allocator, doc.source, parsed);
 }
 
 fn foldingRangeResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .folding_ranges)) return try server.allocator.dupe(u8, "[]");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
-    defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "[]");
-    const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(text);
-    return document_features.foldingRangesJson(server.allocator, text);
+    var doc = try documentTextFromParams(server, params) orelse return try server.allocator.dupe(u8, "[]");
+    defer doc.deinit(server.allocator);
+    var parsed = syntax.parseWithSourceName(server.allocator, doc.source, doc.path) catch {
+        return document_features.foldingRangesJson(server.allocator, doc.source);
+    };
+    defer parsed.deinit(server.allocator);
+    return document_features.foldingRangesFromProgramJson(server.allocator, doc.source, parsed);
 }
 
 fn semanticTokensResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .semantic_tokens)) return try server.allocator.dupe(u8, "{\"data\":[]}");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "{\"data\":[]}");
-    defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "{\"data\":[]}");
-    const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(text);
-    return document_features.semanticTokensJson(server.allocator, text);
+    var doc = try documentTextFromParams(server, params) orelse return try server.allocator.dupe(u8, "{\"data\":[]}");
+    defer doc.deinit(server.allocator);
+    return document_features.semanticTokensJson(server.allocator, doc.source);
 }
 
 fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .colors)) return try server.allocator.dupe(u8, "[]");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
-    defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "[]");
-    const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(text);
-    return document_features.documentColorsJson(server.allocator, text);
+    var doc = try documentTextFromParams(server, params) orelse return try server.allocator.dupe(u8, "[]");
+    defer doc.deinit(server.allocator);
+    return document_features.documentColorsJson(server.allocator, doc.source);
 }
 
 fn colorPresentationResult(server: *Server, params: ?JsonValue) ![]const u8 {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ast = @import("ast");
 const language_names = @import("../language/names.zig");
 const protocol = @import("protocol.zig");
 const utils = @import("utils");
@@ -34,6 +35,32 @@ pub fn documentSymbolsJson(allocator: std.mem.Allocator, text: []const u8) ![]co
     return out.toOwnedSlice(allocator);
 }
 
+pub fn documentSymbolsFromProgramJson(allocator: std.mem.Allocator, text: []const u8, program: ast.Program) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    try out.append(allocator, '[');
+    var first = true;
+    for (program.functions.items) |decl| {
+        try appendSymbolFromSpan(allocator, &out, &first, text, decl.name, 12, decl.span);
+    }
+    for (program.constants.items) |decl| {
+        try appendSymbolFromSpan(allocator, &out, &first, text, decl.name, 13, decl.span);
+    }
+    for (program.pages.items) |decl| {
+        try appendSymbolFromSpan(allocator, &out, &first, text, decl.name, 5, decl.span);
+    }
+    for (program.types.items) |decl| {
+        try appendSymbolFromSpan(allocator, &out, &first, text, decl.name, 5, decl.span);
+    }
+    for (program.records.items) |decl| {
+        try appendSymbolFromSpan(allocator, &out, &first, text, decl.name, 23, decl.span);
+    }
+    for (program.objects.items) |decl| {
+        try appendSymbolFromSpan(allocator, &out, &first, text, decl.name, 5, decl.span);
+    }
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
+}
+
 pub fn foldingRangesJson(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var out = std.ArrayList(u8).empty;
     try out.append(allocator, '[');
@@ -58,6 +85,20 @@ pub fn foldingRangesJson(allocator: std.mem.Allocator, text: []const u8) ![]cons
             block_start = null;
         };
     }
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn foldingRangesFromProgramJson(allocator: std.mem.Allocator, text: []const u8, program: ast.Program) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    try out.append(allocator, '[');
+    var first = true;
+    for (program.functions.items) |decl| try appendFoldingFromSpan(allocator, &out, &first, text, decl.span);
+    for (program.pages.items) |decl| try appendFoldingFromSpan(allocator, &out, &first, text, decl.span);
+    for (program.document_blocks.items) |decl| try appendFoldingFromSpan(allocator, &out, &first, text, decl.span);
+    for (program.records.items) |decl| try appendFoldingFromSpan(allocator, &out, &first, text, decl.span);
+    for (program.objects.items) |decl| try appendFoldingFromSpan(allocator, &out, &first, text, decl.span);
+    for (program.object_extensions.items) |decl| try appendFoldingFromSpan(allocator, &out, &first, text, decl.span);
     try out.append(allocator, ']');
     return out.toOwnedSlice(allocator);
 }
@@ -167,6 +208,39 @@ fn appendSymbol(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []c
     try out.appendSlice(allocator, "}}}");
 }
 
+fn appendSymbolFromSpan(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    first: *bool,
+    text: []const u8,
+    name: []const u8,
+    kind: usize,
+    span: ast.Span,
+) !void {
+    const range = protocol.rangeFromSpan(text, .{ .start = span.start, .end = span.end });
+    const selection = protocol.rangeFromSpan(text, nameSpan(text, span, name));
+    if (!first.*) try out.append(allocator, ',');
+    first.* = false;
+    try out.appendSlice(allocator, "{\"name\":");
+    try protocol.appendJsonString(allocator, out, name);
+    try out.appendSlice(allocator, ",\"kind\":");
+    try protocol.appendInt(allocator, out, kind);
+    try out.appendSlice(allocator, ",\"range\":");
+    try protocol.appendRange(allocator, out, range);
+    try out.appendSlice(allocator, ",\"selectionRange\":");
+    try protocol.appendRange(allocator, out, selection);
+    try out.append(allocator, '}');
+}
+
+fn nameSpan(text: []const u8, span: ast.Span, name: []const u8) source.ByteSpan {
+    const start = @min(span.start, text.len);
+    const end = @min(@max(span.end, span.start), text.len);
+    if (std.mem.indexOf(u8, text[start..end], name)) |offset| {
+        return .{ .start = start + offset, .end = start + offset + name.len };
+    }
+    return .{ .start = start, .end = @min(start + name.len, text.len) };
+}
+
 fn appendFolding(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *bool, start: usize, end: usize) !void {
     if (end <= start) return;
     if (!first.*) try out.append(allocator, ',');
@@ -176,6 +250,17 @@ fn appendFolding(allocator: std.mem.Allocator, out: *std.ArrayList(u8), first: *
     try out.appendSlice(allocator, ",\"endLine\":");
     try protocol.appendInt(allocator, out, end);
     try out.append(allocator, '}');
+}
+
+fn appendFoldingFromSpan(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    first: *bool,
+    text: []const u8,
+    span: ast.Span,
+) !void {
+    const range = protocol.rangeFromSpan(text, .{ .start = span.start, .end = span.end });
+    try appendFolding(allocator, out, first, range.start_line, range.end_line);
 }
 
 const SemanticToken = struct {
