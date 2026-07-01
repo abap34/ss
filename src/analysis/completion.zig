@@ -8,6 +8,7 @@ const language_names = @import("../language/names.zig");
 const name_resolution = @import("../language/name_resolution.zig");
 const registry = @import("../language/registry.zig");
 const program_analysis = @import("program.zig");
+const utils = @import("utils");
 
 const JsonObject = std.json.ObjectMap;
 
@@ -383,7 +384,7 @@ pub fn accessBeforeOffset(source: []const u8, offset: usize) ?AccessContext {
     const original_cursor = cursor;
     while (cursor > 0 and isAccessTrivia(source[cursor - 1])) cursor -= 1;
     if (cursor != original_cursor and !endsWithSeparator(source, cursor)) return null;
-    while (cursor > 0 and isIdentChar(source[cursor - 1])) cursor -= 1;
+    while (cursor > 0 and language_names.isCallableNameChar(source[cursor - 1])) cursor -= 1;
     while (cursor > 0 and isAccessTrivia(source[cursor - 1])) cursor -= 1;
 
     const separator: AccessSeparator, const separator_offset: usize = if (cursor >= 2 and std.mem.eql(u8, source[cursor - 2 .. cursor], "::"))
@@ -1045,12 +1046,10 @@ fn appendTypeNameCompletions(builder: *CandidateBuilder, index: *const Index, so
 }
 
 fn appendSourceTypeNameCompletions(builder: *CandidateBuilder, source: []const u8) !void {
-    var cursor: usize = 0;
     var in_chevron = false;
-    while (cursor < source.len) {
-        const line_start = cursor;
-        while (cursor < source.len and source[cursor] != '\n') cursor += 1;
-        const line = source[line_start..cursor];
+    var lines = utils.source.lineIterator(source);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(source);
         if (in_chevron) {
             if (std.mem.indexOf(u8, line, ">>") != null) in_chevron = false;
         } else {
@@ -1059,10 +1058,9 @@ fn appendSourceTypeNameCompletions(builder: *CandidateBuilder, source: []const u
                 .kind = decl.kind,
                 .detail = decl.detail,
             });
-            const stripped = stripLineComment(line);
+            const stripped = utils.source.stripLineComment(line);
             if (std.mem.indexOf(u8, stripped, "<<") != null and std.mem.indexOf(u8, stripped, ">>") == null) in_chevron = true;
         }
-        if (cursor < source.len and source[cursor] == '\n') cursor += 1;
     }
 }
 
@@ -1073,20 +1071,20 @@ const SourceTypeDecl = struct {
 };
 
 fn sourceTypeDeclOnLine(line: []const u8) ?SourceTypeDecl {
-    const trimmed = std.mem.trim(u8, stripLineComment(line), " \t\r");
+    const trimmed = std.mem.trim(u8, utils.source.stripLineComment(line), " \t\r");
     if (!std.mem.startsWith(u8, trimmed, "type")) return null;
-    if (trimmed.len <= "type".len or !std.ascii.isWhitespace(trimmed["type".len])) return null;
+    if (trimmed.len <= "type".len or !utils.source.isInlineSpace(trimmed["type".len])) return null;
     var cursor: usize = "type".len;
-    while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) cursor += 1;
+    cursor = utils.source.skipInlineSpacesUntil(trimmed, cursor, trimmed.len);
     const name_start = cursor;
-    if (cursor >= trimmed.len or !isIdentifierStart(trimmed[cursor])) return null;
+    if (cursor >= trimmed.len or !utils.source.isIdentifierStart(trimmed[cursor])) return null;
     cursor += 1;
-    while (cursor < trimmed.len and isReceiverChar(trimmed[cursor])) cursor += 1;
+    while (cursor < trimmed.len and utils.source.isIdentifierContinue(trimmed[cursor])) cursor += 1;
     const name = trimmed[name_start..cursor];
-    while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) cursor += 1;
+    cursor = utils.source.skipInlineSpacesUntil(trimmed, cursor, trimmed.len);
     if (cursor < trimmed.len and trimmed[cursor] == '=') {
         cursor += 1;
-        while (cursor < trimmed.len and std.ascii.isWhitespace(trimmed[cursor])) cursor += 1;
+        cursor = utils.source.skipInlineSpacesUntil(trimmed, cursor, trimmed.len);
         if (sourceStartsKeyword(trimmed[cursor..], "object") or sourceStartsKeyword(trimmed[cursor..], "protocol")) {
             return .{ .name = name, .kind = .class, .detail = null };
         }
@@ -1095,8 +1093,8 @@ fn sourceTypeDeclOnLine(line: []const u8) ?SourceTypeDecl {
 }
 
 fn sourceStartsKeyword(text: []const u8, keyword: []const u8) bool {
-    if (!std.mem.startsWith(u8, text, keyword)) return false;
-    return text.len == keyword.len or !isIdentChar(text[keyword.len]);
+    if (!utils.source.startsWithAt(text, 0, keyword)) return false;
+    return text.len == keyword.len or !language_names.isCallableNameChar(text[keyword.len]);
 }
 
 fn appendProperties(builder: *CandidateBuilder, index: *const Index, target: PropertyTarget) !void {
@@ -1237,13 +1235,8 @@ fn recordUpdatePropertyTargetForReceiver(allocator: std.mem.Allocator, index: *c
 }
 
 const RecordUpdateContext = struct {
-    target: SourceRange,
+    target: utils.source.ByteSpan,
     body_start: usize,
-};
-
-const SourceRange = struct {
-    start: usize,
-    end: usize,
 };
 
 fn recordUpdateContextBeforeOffset(source: []const u8, offset: usize) ?RecordUpdateContext {
@@ -1251,19 +1244,19 @@ fn recordUpdateContextBeforeOffset(source: []const u8, offset: usize) ?RecordUpd
     const BraceKind = enum { record_update, other };
     const BraceContext = struct {
         kind: BraceKind,
-        target: SourceRange = .{ .start = 0, .end = 0 },
+        target: utils.source.ByteSpan = .{ .start = 0, .end = 0 },
         body_start: usize = 0,
     };
     var stack: [256]BraceContext = undefined;
     var depth: usize = 0;
     var cursor: usize = 0;
     while (cursor < safe_offset) {
-        if (lineCommentStartsAt(source, cursor)) {
-            cursor = lineEndAfter(source, cursor, safe_offset);
+        if (utils.source.lineCommentMarkerLength(source, cursor) != null) {
+            cursor = @min(utils.source.lineAt(source, cursor).span.end, safe_offset);
             continue;
         }
         if (source[cursor] == '"') {
-            cursor = quotedStringEndAfter(source, cursor + 1, safe_offset);
+            cursor = utils.source.skipDoubleQuotedString(source, cursor, safe_offset);
             continue;
         }
         switch (source[cursor]) {
@@ -1290,20 +1283,19 @@ fn recordUpdateContextBeforeOffset(source: []const u8, offset: usize) ?RecordUpd
     return .{ .target = current.target, .body_start = current.body_start };
 }
 
-fn recordUpdateTargetBeforeBrace(source: []const u8, brace_index: usize) ?SourceRange {
-    var cursor = brace_index;
-    while (cursor > 0 and std.ascii.isWhitespace(source[cursor - 1])) cursor -= 1;
+fn recordUpdateTargetBeforeBrace(source: []const u8, brace_index: usize) ?utils.source.ByteSpan {
+    var cursor = utils.source.trimWhitespaceSpan(source, .{ .start = 0, .end = brace_index }).end;
     const keyword_end = cursor;
-    while (cursor > 0 and isIdentChar(source[cursor - 1])) cursor -= 1;
+    while (cursor > 0 and language_names.isCallableNameChar(source[cursor - 1])) cursor -= 1;
     const keyword = source[cursor..keyword_end];
     if (!std.mem.eql(u8, keyword, "with")) return null;
-    if (cursor > 0 and isIdentChar(source[cursor - 1])) return null;
-    if (keyword_end < source.len and isIdentChar(source[keyword_end])) return null;
+    if (cursor > 0 and language_names.isCallableNameChar(source[cursor - 1])) return null;
+    if (keyword_end < source.len and language_names.isCallableNameChar(source[keyword_end])) return null;
 
-    var target_end = cursor;
-    while (target_end > 0 and std.ascii.isWhitespace(source[target_end - 1])) target_end -= 1;
+    const target_end = utils.source.trimWhitespaceSpan(source, .{ .start = 0, .end = cursor }).end;
     const target_start = expressionStartBefore(source, target_end);
-    return trimRange(source, target_start, target_end);
+    const target = utils.source.trimInlineSpaceSpan(source, .{ .start = target_start, .end = target_end });
+    return if (target.start < target.end) target else null;
 }
 
 fn expressionStartBefore(source: []const u8, end: usize) usize {
@@ -1331,26 +1323,16 @@ fn expressionStartBefore(source: []const u8, end: usize) usize {
     return cursor;
 }
 
-fn trimRange(source: []const u8, start: usize, end: usize) ?SourceRange {
-    var trimmed_start = @min(start, source.len);
-    var trimmed_end = @min(end, source.len);
-    while (trimmed_start < trimmed_end and std.ascii.isWhitespace(source[trimmed_start])) trimmed_start += 1;
-    while (trimmed_end > trimmed_start and std.ascii.isWhitespace(source[trimmed_end - 1])) trimmed_end -= 1;
-    if (trimmed_start >= trimmed_end) return null;
-    return .{ .start = trimmed_start, .end = trimmed_end };
-}
-
 fn cursorInRecordUpdatePath(source: []const u8, offset: usize, body_start: usize) bool {
     const safe_offset = @min(offset, source.len);
-    var line_start = safe_offset;
-    while (line_start > body_start and source[line_start - 1] != '\n') line_start -= 1;
-    line_start = @max(line_start, @min(body_start, source.len));
+    const line_span = utils.source.lineAt(source, safe_offset).span;
+    const line_start = @max(line_span.start, @min(body_start, source.len));
     const before = source[line_start..safe_offset];
-    const uncommented = stripLineComment(before);
+    const uncommented = utils.source.stripLineComment(before);
     if (uncommented.len != before.len) return false;
     const trimmed = std.mem.trim(u8, before, " \t\r");
     for (trimmed) |byte| {
-        if (isReceiverChar(byte) or byte == '.' or isAccessTrivia(byte)) continue;
+        if (utils.source.isIdentifierContinue(byte) or byte == '.' or isAccessTrivia(byte)) continue;
         return false;
     }
     return true;
@@ -1413,56 +1395,27 @@ fn bareTypeName(type_label: []const u8) ?[]const u8 {
     if (trimmed[trimmed.len - 1] == '?') return null;
     if (std.mem.indexOfAny(u8, trimmed, "<>|")) |_| return null;
     if (std.mem.lastIndexOf(u8, trimmed, "::")) |separator| trimmed = trimmed[separator + 2 ..];
-    if (trimmed.len == 0 or !isIdentifierStart(trimmed[0])) return null;
-    for (trimmed[1..]) |byte| if (!isReceiverChar(byte)) return null;
+    if (trimmed.len == 0 or !utils.source.isIdentifierStart(trimmed[0])) return null;
+    for (trimmed[1..]) |byte| if (!utils.source.isIdentifierContinue(byte)) return null;
     return trimmed;
 }
 
 fn recordLiteralTypeName(expr: []const u8) ?[]const u8 {
     var cursor: usize = 0;
     const start = cursor;
-    if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+    if (cursor >= expr.len or !utils.source.isIdentifierStart(expr[cursor])) return null;
     cursor += 1;
-    while (cursor < expr.len and isReceiverChar(expr[cursor])) cursor += 1;
+    while (cursor < expr.len and utils.source.isIdentifierContinue(expr[cursor])) cursor += 1;
     if (cursor + 2 <= expr.len and std.mem.eql(u8, expr[cursor .. cursor + 2], "::")) {
         cursor += 2;
-        if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+        if (cursor >= expr.len or !utils.source.isIdentifierStart(expr[cursor])) return null;
         cursor += 1;
-        while (cursor < expr.len and isReceiverChar(expr[cursor])) cursor += 1;
+        while (cursor < expr.len and utils.source.isIdentifierContinue(expr[cursor])) cursor += 1;
     }
     const end = cursor;
-    while (cursor < expr.len and std.ascii.isWhitespace(expr[cursor])) cursor += 1;
+    cursor = utils.source.skipWhitespaceUntil(expr, cursor, expr.len);
     if (cursor >= expr.len or expr[cursor] != '{') return null;
     return expr[start..end];
-}
-
-fn lineCommentStartsAt(source: []const u8, cursor: usize) bool {
-    if (cursor >= source.len) return false;
-    if (source[cursor] == '#') return true;
-    if (cursor + 1 >= source.len) return false;
-    return std.mem.eql(u8, source[cursor .. cursor + 2], "//") or
-        std.mem.eql(u8, source[cursor .. cursor + 2], ";;");
-}
-
-fn lineEndAfter(source: []const u8, cursor: usize, limit: usize) usize {
-    var out = cursor;
-    const safe_limit = @min(limit, source.len);
-    while (out < safe_limit and source[out] != '\n') out += 1;
-    return out;
-}
-
-fn quotedStringEndAfter(source: []const u8, cursor: usize, limit: usize) usize {
-    var out = cursor;
-    const safe_limit = @min(limit, source.len);
-    while (out < safe_limit) {
-        if (source[out] == '\\') {
-            out = @min(out + 2, safe_limit);
-            continue;
-        }
-        if (source[out] == '"') return out + 1;
-        out += 1;
-    }
-    return out;
 }
 
 fn bestVisibleVariable(index: *const Index, allocator: std.mem.Allocator, name: []const u8, request: Request) ?VariableInfo {
@@ -1768,39 +1721,42 @@ fn sourceBindingsInScope(allocator: std.mem.Allocator, source: []const u8, offse
     const start = scopeStartBeforeOffset(source, offset);
     const end = scopeEndFromStart(source, start);
     var out = std.ArrayList(SourceBinding).empty;
-    var cursor = start;
     var in_chevron = false;
-    while (cursor < end and cursor < source.len) {
-        const line_start = cursor;
-        while (cursor < end and cursor < source.len and source[cursor] != '\n') cursor += 1;
-        const line = source[line_start..cursor];
+    var lines = utils.source.lineIterator(source);
+    while (lines.next()) |line_view| {
+        if (line_view.raw_end < start) continue;
+        if (line_view.span.start >= end) break;
+        const line_start = @max(line_view.span.start, start);
+        const line_end = @min(line_view.span.end, end);
+        if (line_start >= line_end) continue;
+        const line = source[line_start..line_end];
         if (in_chevron) {
             if (std.mem.indexOf(u8, line, ">>") != null) in_chevron = false;
         } else {
             if (letBindingOnLine(line)) |binding| try out.append(allocator, binding);
-            if (std.mem.indexOf(u8, stripLineComment(line), "<<") != null and std.mem.indexOf(u8, stripLineComment(line), ">>") == null) {
+            if (std.mem.indexOf(u8, utils.source.stripLineComment(line), "<<") != null and std.mem.indexOf(u8, utils.source.stripLineComment(line), ">>") == null) {
                 in_chevron = true;
             }
         }
-        if (cursor < source.len and source[cursor] == '\n') cursor += 1;
     }
     return out;
 }
 
 fn scopeStartBeforeOffset(source: []const u8, offset: usize) usize {
     const safe_offset = @min(offset, source.len);
-    var cursor: usize = 0;
     var stack = [_]struct { kind: BlockKind, start: usize }{.{ .kind = .other, .start = 0 }} ** 256;
     var depth: usize = 0;
     var in_chevron = false;
-    while (cursor < safe_offset) {
-        const line_start = cursor;
-        while (cursor < safe_offset and cursor < source.len and source[cursor] != '\n') cursor += 1;
-        const line = source[line_start..cursor];
+    var lines = utils.source.lineIterator(source);
+    while (lines.next()) |line_view| {
+        if (line_view.span.start >= safe_offset) break;
+        const line_start = line_view.span.start;
+        const line_end = @min(line_view.span.end, safe_offset);
+        const line = source[line_start..line_end];
         if (in_chevron) {
             if (std.mem.indexOf(u8, line, ">>") != null) in_chevron = false;
         } else {
-            const trimmed = std.mem.trim(u8, stripLineComment(line), " \t\r");
+            const trimmed = std.mem.trim(u8, utils.source.stripLineComment(line), " \t\r");
             if (blockOpeningKind(trimmed)) |kind| {
                 if (depth < stack.len) {
                     stack[depth] = .{ .kind = kind, .start = line_start };
@@ -1811,7 +1767,6 @@ fn scopeStartBeforeOffset(source: []const u8, offset: usize) usize {
             }
             if (std.mem.indexOf(u8, trimmed, "<<") != null and std.mem.indexOf(u8, trimmed, ">>") == null) in_chevron = true;
         }
-        if (cursor < source.len and source[cursor] == '\n') cursor += 1;
     }
     var i = depth;
     while (i > 0) {
@@ -1825,18 +1780,20 @@ fn scopeStartBeforeOffset(source: []const u8, offset: usize) usize {
 }
 
 fn scopeEndFromStart(source: []const u8, start: usize) usize {
-    var cursor = @min(start, source.len);
+    const safe_start = @min(start, source.len);
     var depth: usize = 0;
     var in_chevron = false;
-    while (cursor < source.len) {
-        const line_start = cursor;
-        while (cursor < source.len and source[cursor] != '\n') cursor += 1;
-        const line_end = cursor;
+    var lines = utils.source.lineIterator(source);
+    while (lines.next()) |line_view| {
+        if (line_view.raw_end < safe_start) continue;
+        const line_start = @max(line_view.span.start, safe_start);
+        const line_end = line_view.span.end;
+        if (line_start >= line_end) continue;
         const line = source[line_start..line_end];
         if (in_chevron) {
             if (std.mem.indexOf(u8, line, ">>") != null) in_chevron = false;
         } else {
-            const trimmed = std.mem.trim(u8, stripLineComment(line), " \t\r");
+            const trimmed = std.mem.trim(u8, utils.source.stripLineComment(line), " \t\r");
             if (blockOpeningKind(trimmed) != null) {
                 depth += 1;
             } else if (std.mem.eql(u8, trimmed, "end")) {
@@ -1846,7 +1803,6 @@ fn scopeEndFromStart(source: []const u8, start: usize) usize {
             }
             if (std.mem.indexOf(u8, trimmed, "<<") != null and std.mem.indexOf(u8, trimmed, ">>") == null) in_chevron = true;
         }
-        if (cursor < source.len and source[cursor] == '\n') cursor += 1;
     }
     return source.len;
 }
@@ -1867,14 +1823,14 @@ fn blockOpeningKind(line: []const u8) ?BlockKind {
 }
 
 fn letBindingOnLine(line: []const u8) ?SourceBinding {
-    const trimmed = std.mem.trim(u8, stripLineComment(line), " \t\r");
+    const trimmed = std.mem.trim(u8, utils.source.stripLineComment(line), " \t\r");
     if (!std.mem.startsWith(u8, trimmed, "let ")) return null;
     var cursor: usize = "let ".len;
     while (cursor < trimmed.len and isAccessTrivia(trimmed[cursor])) cursor += 1;
     const name_start = cursor;
-    if (cursor >= trimmed.len or !isIdentifierStart(trimmed[cursor])) return null;
+    if (cursor >= trimmed.len or !utils.source.isIdentifierStart(trimmed[cursor])) return null;
     cursor += 1;
-    while (cursor < trimmed.len and isIdentChar(trimmed[cursor])) cursor += 1;
+    while (cursor < trimmed.len and language_names.isCallableNameChar(trimmed[cursor])) cursor += 1;
     const name = trimmed[name_start..cursor];
     while (cursor < trimmed.len and isAccessTrivia(trimmed[cursor])) cursor += 1;
     if (cursor >= trimmed.len or trimmed[cursor] != '=') return null;
@@ -1886,21 +1842,18 @@ fn letBindingOnLine(line: []const u8) ?SourceBinding {
 }
 
 fn sourceFunctionResultType(source: []const u8, target: []const u8) ?[]const u8 {
-    var cursor: usize = 0;
     var in_chevron = false;
-    while (cursor < source.len) {
-        const line_start = cursor;
-        while (cursor < source.len and source[cursor] != '\n') cursor += 1;
-        const line = source[line_start..cursor];
+    var lines = utils.source.lineIterator(source);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(source);
         if (in_chevron) {
             if (std.mem.indexOf(u8, line, ">>") != null) in_chevron = false;
         } else {
-            const trimmed = std.mem.trim(u8, stripLineComment(line), " \t\r");
+            const trimmed = std.mem.trim(u8, utils.source.stripLineComment(line), " \t\r");
             if (functionLineResultType(trimmed, target)) |result_type| return result_type;
             if (constLineResultType(trimmed, target)) |result_type| return result_type;
             if (std.mem.indexOf(u8, trimmed, "<<") != null and std.mem.indexOf(u8, trimmed, ">>") == null) in_chevron = true;
         }
-        if (cursor < source.len and source[cursor] == '\n') cursor += 1;
     }
     return null;
 }
@@ -1913,12 +1866,12 @@ fn functionLineResultType(line: []const u8, target: []const u8) ?[]const u8 {
         paired = true;
         cursor += 2;
     }
-    if (cursor >= line.len or !std.ascii.isWhitespace(line[cursor])) return null;
-    while (cursor < line.len and std.ascii.isWhitespace(line[cursor])) cursor += 1;
+    if (cursor >= line.len or !utils.source.isInlineSpace(line[cursor])) return null;
+    cursor = utils.source.skipInlineSpacesUntil(line, cursor, line.len);
     const name_start = cursor;
-    if (cursor >= line.len or !isIdentifierStart(line[cursor])) return null;
+    if (cursor >= line.len or !utils.source.isIdentifierStart(line[cursor])) return null;
     cursor += 1;
-    while (cursor < line.len and isIdentChar(line[cursor])) cursor += 1;
+    while (cursor < line.len and language_names.isCallableNameChar(line[cursor])) cursor += 1;
     const name = line[name_start..cursor];
     if (!callableNameMatches(target, name, paired)) return null;
     const arrow = std.mem.indexOfPos(u8, line, cursor, "->") orelse return null;
@@ -1928,14 +1881,14 @@ fn functionLineResultType(line: []const u8, target: []const u8) ?[]const u8 {
 fn constLineResultType(line: []const u8, target: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, line, "const ")) return null;
     var cursor: usize = "const ".len;
-    while (cursor < line.len and std.ascii.isWhitespace(line[cursor])) cursor += 1;
+    cursor = utils.source.skipInlineSpacesUntil(line, cursor, line.len);
     const name_start = cursor;
-    if (cursor >= line.len or !isIdentifierStart(line[cursor])) return null;
+    if (cursor >= line.len or !utils.source.isIdentifierStart(line[cursor])) return null;
     cursor += 1;
-    while (cursor < line.len and isReceiverChar(line[cursor])) cursor += 1;
+    while (cursor < line.len and utils.source.isIdentifierContinue(line[cursor])) cursor += 1;
     const name = line[name_start..cursor];
     if (!std.mem.eql(u8, name, target)) return null;
-    while (cursor < line.len and std.ascii.isWhitespace(line[cursor])) cursor += 1;
+    cursor = utils.source.skipInlineSpacesUntil(line, cursor, line.len);
     if (cursor >= line.len or line[cursor] != ':') return null;
     cursor += 1;
     const type_start = cursor;
@@ -1958,18 +1911,18 @@ const CallExpressionName = struct {
 
 fn callExpressionName(expr: []const u8) ?CallExpressionName {
     var cursor: usize = 0;
-    while (cursor < expr.len and std.ascii.isWhitespace(expr[cursor])) cursor += 1;
+    cursor = utils.source.skipWhitespaceUntil(expr, cursor, expr.len);
     const first_start = cursor;
-    if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+    if (cursor >= expr.len or !utils.source.isIdentifierStart(expr[cursor])) return null;
     cursor += 1;
-    while (cursor < expr.len and isIdentChar(expr[cursor])) cursor += 1;
+    while (cursor < expr.len and language_names.isCallableNameChar(expr[cursor])) cursor += 1;
     const first = expr[first_start..cursor];
     if (cursor + 2 <= expr.len and std.mem.eql(u8, expr[cursor .. cursor + 2], "::")) {
         cursor += 2;
         const second_start = cursor;
-        if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+        if (cursor >= expr.len or !utils.source.isIdentifierStart(expr[cursor])) return null;
         cursor += 1;
-        while (cursor < expr.len and isIdentChar(expr[cursor])) cursor += 1;
+        while (cursor < expr.len and language_names.isCallableNameChar(expr[cursor])) cursor += 1;
         return .{ .qualifier = first, .name = expr[second_start..cursor] };
     }
     return .{ .name = first };
@@ -1977,11 +1930,11 @@ fn callExpressionName(expr: []const u8) ?CallExpressionName {
 
 fn singleIdentifier(expr: []const u8) ?[]const u8 {
     var cursor: usize = 0;
-    if (cursor >= expr.len or !isIdentifierStart(expr[cursor])) return null;
+    if (cursor >= expr.len or !utils.source.isIdentifierStart(expr[cursor])) return null;
     cursor += 1;
-    while (cursor < expr.len and isIdentChar(expr[cursor])) cursor += 1;
+    while (cursor < expr.len and language_names.isCallableNameChar(expr[cursor])) cursor += 1;
     const ident = expr[0..cursor];
-    while (cursor < expr.len and std.ascii.isWhitespace(expr[cursor])) cursor += 1;
+    cursor = utils.source.skipWhitespaceUntil(expr, cursor, expr.len);
     return if (cursor == expr.len) ident else null;
 }
 
@@ -1995,8 +1948,7 @@ fn appendImportAsCompletions(builder: *CandidateBuilder, source: []const u8, off
 
 fn importAsSpecBeforeCursor(source: []const u8, offset: usize) ?[]const u8 {
     const safe_offset = @min(offset, source.len);
-    var line_start = safe_offset;
-    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
+    const line_start = utils.source.lineAt(source, safe_offset).span.start;
     const before = std.mem.trim(u8, source[line_start..safe_offset], " \t\r");
     if (!std.mem.startsWith(u8, before, "import ")) return null;
     const as_index = std.mem.lastIndexOf(u8, before, " as") orelse return null;
@@ -2018,9 +1970,9 @@ fn defaultAliasCandidate(spec: []const u8) ?[]const u8 {
 }
 
 fn isValidAlias(alias: []const u8) bool {
-    if (alias.len == 0 or !isIdentifierStart(alias[0])) return false;
+    if (alias.len == 0 or !utils.source.isIdentifierStart(alias[0])) return false;
     for (alias[1..]) |byte| {
-        if (!std.ascii.isAlphanumeric(byte) and byte != '_') return false;
+        if (!utils.source.isIdentifierContinue(byte)) return false;
     }
     return true;
 }
@@ -2029,16 +1981,6 @@ fn isKeyword(text: []const u8) bool {
     const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
     for (keywords) |keyword| if (std.mem.eql(u8, text, keyword)) return true;
     return false;
-}
-
-fn stripLineComment(line: []const u8) []const u8 {
-    var i: usize = 0;
-    while (i < line.len) : (i += 1) {
-        if (line[i] == '#') return line[0..i];
-        if (i + 1 < line.len and std.mem.eql(u8, line[i .. i + 2], "//")) return line[0..i];
-        if (i + 1 < line.len and std.mem.eql(u8, line[i .. i + 2], ";;")) return line[0..i];
-    }
-    return line;
 }
 
 fn samePath(allocator: std.mem.Allocator, left: []const u8, right: []const u8) bool {
@@ -2063,20 +2005,8 @@ fn cwdAlloc(allocator: std.mem.Allocator) ![]u8 {
     return allocator.dupe(u8, buffer[0..len]);
 }
 
-fn isIdentifierStart(byte: u8) bool {
-    return std.ascii.isAlphabetic(byte) or byte == '_';
-}
-
-fn isIdentChar(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!';
-}
-
-fn isReceiverChar(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_';
-}
-
 fn receiverCharForSeparator(byte: u8, separator: AccessSeparator) bool {
-    return isReceiverChar(byte) or (separator == .dot and (byte == '.' or byte == ':'));
+    return utils.source.isIdentifierContinue(byte) or (separator == .dot and (byte == '.' or byte == ':'));
 }
 
 fn isAccessTrivia(byte: u8) bool {

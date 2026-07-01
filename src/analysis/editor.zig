@@ -7,9 +7,13 @@ const registry = @import("../language/registry.zig");
 const semantic_env = @import("../language/env.zig");
 const analysis_scope = @import("scope.zig");
 const utils = @import("utils");
-const source_utils = utils.source;
 
 const SemanticEnv = semantic_env.SemanticEnv;
+
+pub const SourceIdentifierLocation = struct {
+    offset: usize,
+    length: usize,
+};
 
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
@@ -206,8 +210,8 @@ fn collectDefinitionsFromProgram(
     definitions: *std.ArrayList(core.Definition),
 ) !void {
     for (program.functions.items) |func| {
-        if (findIdentifierOffsetAfterKeyword(source, func.span.start, "fn", func.name)) |location| {
-            const loc = utils.err.computeLineColumn(source, location.offset);
+        if (identifierOffsetAfterKeyword(source, func.span.start, "fn", func.name)) |location| {
+            const loc = utils.source.locationAt(source, location.offset);
             try putDefinition(allocator, definitions, func.name, loc.line, loc.column, location.offset, location.length, 0, source.len, .function, module_id, file, .module, null);
         }
         if (include_variables) {
@@ -218,8 +222,8 @@ fn collectDefinitionsFromProgram(
         }
     }
     for (program.constants.items) |constant_decl| {
-        if (findIdentifierOffsetAfterKeyword(source, constant_decl.span.start, "const", constant_decl.name)) |location| {
-            const loc = utils.err.computeLineColumn(source, location.offset);
+        if (identifierOffsetAfterKeyword(source, constant_decl.span.start, "const", constant_decl.name)) |location| {
+            const loc = utils.source.locationAt(source, location.offset);
             try putDefinition(allocator, definitions, constant_decl.name, loc.line, loc.column, location.offset, location.length, 0, source.len, .constant, module_id, file, .module, null);
         }
     }
@@ -274,8 +278,8 @@ fn putStatementDefinition(
     scope_name: ?[]const u8,
     visible_end: usize,
 ) !void {
-    if (findIdentifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
-        const loc = utils.err.computeLineColumn(source, location.offset);
+    if (identifierOffsetAfterKeyword(source, stmt.span.start, keyword, name)) |location| {
+        const loc = utils.source.locationAt(source, location.offset);
         try putDefinition(allocator, definitions, name, loc.line, loc.column, location.offset, location.length, stmt.span.start, visible_end, .variable, module_id, null, scope_kind, scope_name);
     }
 }
@@ -453,7 +457,7 @@ fn collectSolvedSizeHints(
             " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
             .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height },
         );
-        try appendInlayHint(allocator, hints, module.source, module.file, module.id, trimHintByteIndexToLineEnd(module.source, origin.span.end), label, .solved_frame);
+        try appendInlayHint(allocator, hints, module.source, module.file, module.id, utils.source.lineAt(module.source, origin.span.end).span.end, label, .solved_frame);
     }
 }
 
@@ -476,7 +480,7 @@ fn appendInlayHint(
     label: []const u8,
     kind: core.InlayHintKind,
 ) !void {
-    const loc = utils.err.computeLineColumn(source, @min(byte_index, source.len));
+    const loc = utils.source.locationAt(source, @min(byte_index, source.len));
     try hints.append(allocator, .{
         .line = loc.line,
         .column = loc.column,
@@ -485,12 +489,6 @@ fn appendInlayHint(
         .module_id = module_id,
         .file = source_path,
     });
-}
-
-fn trimHintByteIndexToLineEnd(source: []const u8, byte_index: usize) usize {
-    var index = @min(byte_index, source.len);
-    while (index < source.len and source[index] != '\n') : (index += 1) {}
-    return index;
 }
 
 fn findCallArgStartOffsets(
@@ -504,12 +502,19 @@ fn findCallArgStartOffsets(
 
     const name_pos = std.mem.indexOf(u8, slice, call_name) orelse return try allocator.alloc(usize, 0);
     var index: usize = name_pos + call_name.len;
-    while (index < slice.len and std.ascii.isWhitespace(slice[index])) : (index += 1) {}
+    index = utils.source.skipWhitespaceUntil(slice, index, slice.len);
     if (index >= slice.len or slice[index] != '(') return try allocator.alloc(usize, 0);
     index += 1;
 
     while (index < slice.len and offsets.items.len < arg_count) {
-        while (index < slice.len and (std.ascii.isWhitespace(slice[index]) or slice[index] == ',')) : (index += 1) {}
+        while (index < slice.len) {
+            index = utils.source.skipWhitespaceUntil(slice, index, slice.len);
+            if (index < slice.len and slice[index] == ',') {
+                index += 1;
+                continue;
+            }
+            break;
+        }
         if (index >= slice.len or slice[index] == ')') break;
         try offsets.append(allocator, index);
         index = skipExpr(slice, index);
@@ -523,7 +528,10 @@ fn skipExpr(slice: []const u8, start: usize) usize {
     while (index < slice.len) : (index += 1) {
         const ch = slice[index];
         switch (ch) {
-            '"' => index = skipString(slice, index),
+            '"' => {
+                const after = utils.source.skipDoubleQuotedString(slice, index, slice.len);
+                index = if (after == 0) after else after - 1;
+            },
             '(' => depth += 1,
             ')' => {
                 if (depth == 0) break;
@@ -537,27 +545,21 @@ fn skipExpr(slice: []const u8, start: usize) usize {
     return index;
 }
 
-fn skipString(slice: []const u8, start: usize) usize {
-    var index = start + 1;
-    while (index < slice.len) : (index += 1) {
-        if (slice[index] == '"') return index;
-    }
-    return slice.len;
-}
-
-fn findIdentifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: []const u8, expected_name: []const u8) ?struct { offset: usize, length: usize } {
-    var index = start;
-    while (index < source.len and std.ascii.isWhitespace(source[index])) : (index += 1) {}
-    if (index + keyword.len > source.len or !std.mem.eql(u8, source[index .. index + keyword.len], keyword)) return null;
+pub fn identifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: []const u8, expected_name: []const u8) ?SourceIdentifierLocation {
+    const line = utils.source.lineAt(source, start).span;
+    const line_end = line.end;
+    var index = utils.source.skipInlineSpacesUntil(source, start, line_end);
+    if (index + keyword.len > line_end or !std.mem.eql(u8, source[index .. index + keyword.len], keyword)) return null;
     index += keyword.len;
-    const paired_function = std.mem.eql(u8, keyword, "fn") and index + 2 <= source.len and std.mem.eql(u8, source[index .. index + 2], "/!");
+    const paired_function = std.mem.eql(u8, keyword, "fn") and index + 2 <= line_end and std.mem.eql(u8, source[index .. index + 2], "/!");
     if (paired_function) index += 2;
-    while (index < source.len and std.ascii.isWhitespace(source[index])) : (index += 1) {}
+    if (index < line_end and language_names.isCallableNameChar(source[index])) return null;
+    index = utils.source.skipInlineSpacesUntil(source, index, line_end);
     const ident_start = index;
-    if (index >= source.len or !source_utils.isIdentifierStart(source[index])) return null;
+    if (index >= line_end or !utils.source.isIdentifierStart(source[index])) return null;
     index += 1;
-    while (index < source.len and source_utils.isIdentifierContinue(source[index])) : (index += 1) {}
-    if (std.mem.eql(u8, keyword, "fn") and index < source.len and source[index] == '!') index += 1;
+    while (index < line_end and language_names.isCallableNameChar(source[index])) : (index += 1) {}
+    if (std.mem.eql(u8, keyword, "fn") and index < line_end and source[index] == '!') index += 1;
     const source_name = source[ident_start..index];
     const matches_source_name = std.mem.eql(u8, source_name, expected_name);
     const matches_paired_generated_name = paired_function and expected_name.len == source_name.len + 1 and expected_name[expected_name.len - 1] == '!' and std.mem.eql(u8, source_name, expected_name[0 .. expected_name.len - 1]);

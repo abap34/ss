@@ -12,7 +12,10 @@ const project = @import("project.zig");
 const dump = @import("dump.zig");
 const utils = @import("utils");
 const analysis_completion = @import("analysis/completion.zig");
+const analysis_editor = @import("analysis/editor.zig");
+const language_names = @import("language/names.zig");
 const lsp_scope = @import("lsp/scope.zig");
+const source = utils.source;
 
 const JsonValue = std.json.Value;
 const JsonObject = std.json.ObjectMap;
@@ -110,13 +113,13 @@ const Server = struct {
     fn replaceDocument(self: *Server, uri: []const u8, text: []const u8) !void {
         const path = try pathFromUri(self.allocator, uri);
         errdefer self.allocator.free(path);
-        const source = try self.allocator.dupe(u8, text);
-        errdefer self.allocator.free(source);
+        const document_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(document_text);
         if (self.documents.fetchRemove(path)) |entry| {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
         }
-        try self.documents.put(path, source);
+        try self.documents.put(path, document_text);
     }
 
     fn applyDocumentChange(self: *Server, uri: []const u8, change: *const JsonObject) !void {
@@ -137,8 +140,8 @@ const Server = struct {
         const path = try pathFromUri(self.allocator, uri);
         errdefer self.allocator.free(path);
         const old_source = self.documents.get(path) orelse "";
-        const start_offset = positionOffset(old_source, lspLine(start), lspCharacter(start));
-        const end_offset = positionOffset(old_source, lspLine(end), lspCharacter(end));
+        const start_offset = source.offsetForUtf16Position(old_source, lspLine(start), lspCharacter(start));
+        const end_offset = source.offsetForUtf16Position(old_source, lspLine(end), lspCharacter(end));
         if (end_offset < start_offset) return error.InvalidLspRange;
 
         var next = std.ArrayList(u8).empty;
@@ -146,14 +149,14 @@ const Server = struct {
         try next.appendSlice(self.allocator, old_source[0..start_offset]);
         try next.appendSlice(self.allocator, text);
         try next.appendSlice(self.allocator, old_source[end_offset..]);
-        const source = try next.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(source);
+        const document_text = try next.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(document_text);
 
         if (self.documents.fetchRemove(path)) |entry| {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
         }
-        try self.documents.put(path, source);
+        try self.documents.put(path, document_text);
     }
 
     fn removeDocument(self: *Server, uri: []const u8) void {
@@ -280,7 +283,7 @@ const Server = struct {
             try overlay.put(entry.key_ptr.*, entry.value_ptr.*);
         }
 
-        var source = if (self.sourceForPath(entry_path)) |text|
+        var entry_source = if (self.sourceForPath(entry_path)) |text|
             try self.allocator.dupe(u8, text)
         else
             utils.fs.readFileAlloc(self.io, self.allocator, entry_path) catch |err| {
@@ -288,15 +291,15 @@ const Server = struct {
                 return snapshot;
             };
 
-        var program = syntax.parseWithSourceName(self.allocator, source, entry_path) catch |err| {
+        var program = syntax.parseWithSourceName(self.allocator, entry_source, entry_path) catch |err| {
             const diagnostic = syntax.lastParseDiagnostic();
             var message_buf: [256]u8 = undefined;
             const message = if (diagnostic) |diag|
                 utils.err.formatParseDiagnostic(&message_buf, diag)
             else
                 utils.err.formatParseFailureWithoutDiagnostic(&message_buf, err);
-            try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
-            self.allocator.free(source);
+            try diagnostics.add(entry_path, entry_source, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
+            self.allocator.free(entry_source);
             return snapshot;
         };
 
@@ -310,30 +313,30 @@ const Server = struct {
             try diagnostics.addLoadDiagnostics(&load_diagnostics);
             if (load_diagnostics.items.items.len != 0) {
                 const span = module_loader.importFailureSpan(self.allocator, self.io, asset_base_dir, &program, &overlay, &load_diagnostics);
-                try diagnostics.add(entry_path, source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span);
+                try diagnostics.add(entry_path, entry_source, .@"error", "ImportFailed", "ImportFailed: imported module failed to load", span);
             } else if (err == error.UnknownImport) {
                 if (try module_loader.findUnknownImportReport(self.allocator, self.io, asset_base_dir, program, &overlay)) |found| {
                     var report = found;
                     defer report.deinit(self.allocator);
-                    try diagnostics.add(entry_path, source, .@"error", "UnknownImport", report.message, .{ .start = report.span.start, .end = report.span.end });
+                    try diagnostics.add(entry_path, entry_source, .@"error", "UnknownImport", report.message, .{ .start = report.span.start, .end = report.span.end });
                 }
             } else {
                 const message = try std.fmt.allocPrint(self.allocator, "ProjectLoadFailed: {s}", .{@errorName(err)});
                 defer self.allocator.free(message);
-                try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, null);
+                try diagnostics.add(entry_path, entry_source, .@"error", @errorName(err), message, null);
             }
             program.deinit(self.allocator);
-            self.allocator.free(source);
+            self.allocator.free(entry_source);
             return snapshot;
         };
         defer index.deinit();
 
-        var ir = analysis.buildIrWithOptions(self.allocator, entry_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch |err| {
+        var ir = analysis.buildIrWithOptions(self.allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{ .allow_diagnostics = true }) catch |err| {
             const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
             defer self.allocator.free(message);
-            try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, null);
+            try diagnostics.add(entry_path, entry_source, .@"error", @errorName(err), message, null);
             program.deinit(self.allocator);
-            if (source.len != 0) self.allocator.free(source);
+            if (entry_source.len != 0) self.allocator.free(entry_source);
             return snapshot;
         };
         defer ir.deinit();
@@ -352,7 +355,7 @@ const Server = struct {
                     if (!diagnostics.hasErrors()) {
                         const message = try std.fmt.allocPrint(self.allocator, "BuildFailed: {s}", .{@errorName(err)});
                         defer self.allocator.free(message);
-                        try diagnostics.add(entry_path, source, .@"error", @errorName(err), message, null);
+                        try diagnostics.add(entry_path, entry_source, .@"error", @errorName(err), message, null);
                     }
                 },
             }
@@ -382,14 +385,14 @@ const Server = struct {
 
     fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {
         var owned_source: ?[]u8 = null;
-        defer if (owned_source) |source| self.allocator.free(source);
-        const source = self.sourceForPath(path) orelse blk: {
+        defer if (owned_source) |text| self.allocator.free(text);
+        const text = self.sourceForPath(path) orelse blk: {
             owned_source = utils.fs.readFileAlloc(self.io, self.allocator, path) catch null;
             break :blk owned_source orelse "";
         };
         const message = try std.fmt.allocPrint(self.allocator, "ProjectConfigFailed: {s}", .{@errorName(err)});
         defer self.allocator.free(message);
-        try diagnostics.add(path, source, .@"error", @errorName(err), message, project.configErrorSpan(source, err));
+        try diagnostics.add(path, text, .@"error", @errorName(err), message, project.configErrorSpan(text, err));
     }
 
     fn addProjectEntryReadDiagnostic(
@@ -403,12 +406,12 @@ const Server = struct {
         defer self.allocator.free(message);
         if (project_path) |path| {
             var owned_source: ?[]u8 = null;
-            defer if (owned_source) |source| self.allocator.free(source);
-            const source = self.sourceForPath(path) orelse blk: {
+            defer if (owned_source) |text| self.allocator.free(text);
+            const text = self.sourceForPath(path) orelse blk: {
                 owned_source = utils.fs.readFileAlloc(self.io, self.allocator, path) catch null;
                 break :blk owned_source orelse "";
             };
-            try diagnostics.add(path, source, .@"error", "ProjectReadFailed", message, project.tomlKeySpan(source, "project", "entry") orelse project.tomlSectionSpan(source, "project"));
+            try diagnostics.add(path, text, .@"error", "ProjectReadFailed", message, project.tomlKeySpan(text, "project", "entry") orelse project.tomlSectionSpan(text, "project"));
             return;
         }
         try diagnostics.add(entry_path, "", .@"error", "ProjectReadFailed", message, null);
@@ -460,8 +463,8 @@ const Server = struct {
     }
 
     fn refreshDocumentCompletionCache(self: *Server, path: []const u8) !void {
-        const source = self.sourceForPath(path) orelse return;
-        const source_hash = completionSourceHash(source);
+        const text = self.sourceForPath(path) orelse return;
+        const source_hash = completionSourceHash(text);
         if (self.snapshot) |*snapshot| {
             if (snapshot.completion_index) |*index| {
                 if (index.containsDocument(self.allocator, path)) {
@@ -471,7 +474,7 @@ const Server = struct {
                 }
             }
         }
-        const index = try buildDocumentCompletionIndex(self, path, source) orelse return;
+        const index = try buildDocumentCompletionIndex(self, path, text) orelse return;
         try self.rememberDocumentCompletion(path, source_hash, index);
     }
 
@@ -581,28 +584,28 @@ const DiagnosticSet = struct {
     fn add(
         self: *DiagnosticSet,
         path: []const u8,
-        source: []const u8,
+        text: []const u8,
         severity: core.DiagnosticSeverity,
         code: []const u8,
         message: []const u8,
-        span: ?utils.err.ByteSpan,
+        span: ?source.ByteSpan,
     ) !void {
-        try self.addWithRelated(path, source, severity, code, message, span, &.{});
+        try self.addWithRelated(path, text, severity, code, message, span, &.{});
     }
 
     fn addWithRelated(
         self: *DiagnosticSet,
         path: []const u8,
-        source: []const u8,
+        text: []const u8,
         severity: core.DiagnosticSeverity,
         code: []const u8,
         message: []const u8,
-        span: ?utils.err.ByteSpan,
+        span: ?source.ByteSpan,
         related: []const LspRelatedInput,
     ) !void {
         const primary_span = span orelse return;
         const uri = try uriFromPath(self.allocator, path);
-        const range = rangeFromSpan(source, primary_span);
+        const range = rangeFromSpan(text, primary_span);
         const code_copy = self.allocator.dupe(u8, code) catch |err| {
             self.allocator.free(uri);
             return err;
@@ -726,7 +729,7 @@ const DiagnosticSet = struct {
 const LspRelatedInput = struct {
     path: []const u8,
     source: []const u8,
-    span: ?utils.err.ByteSpan,
+    span: ?source.ByteSpan,
     message: []const u8,
 };
 
@@ -753,13 +756,13 @@ fn constraintFailureOrigin(failure: core.ConstraintFailure) ?[]const u8 {
 const ConstraintFailureLocation = struct {
     path: []const u8,
     source: []const u8,
-    span: ?utils.err.ByteSpan,
+    span: ?source.ByteSpan,
 };
 
 fn constraintFailureLocation(ir: *core.Ir, origin: ?[]const u8) ConstraintFailureLocation {
     var report_path = ir.projectPath();
     var report_source = ir.projectSource();
-    var span: ?utils.err.ByteSpan = null;
+    var span: ?source.ByteSpan = null;
     if (origin) |origin_text| {
         if (utils.err.parseLocatedOrigin(origin_text)) |located| {
             span = located.span;
@@ -776,7 +779,7 @@ fn constraintFailureLocation(ir: *core.Ir, origin: ?[]const u8) ConstraintFailur
     return .{ .path = report_path, .source = report_source, .span = span };
 }
 
-fn spanEq(left: utils.err.ByteSpan, right: utils.err.ByteSpan) bool {
+fn spanEq(left: source.ByteSpan, right: source.ByteSpan) bool {
     return left.start == right.start and left.end == right.end;
 }
 
@@ -827,8 +830,8 @@ fn appendConstraintPropagationMessage(
         for (path.lines, 0..) |line, index| {
             try message.appendSlice(allocator, "\n  ");
             try message.appendSlice(allocator, line);
-            const source = if (index < path.line_sources.len) path.line_sources[index] else null;
-            if (source) |origin| {
+            const origin_source = if (index < path.line_sources.len) path.line_sources[index] else null;
+            if (origin_source) |origin| {
                 try message.appendSlice(allocator, "  ");
                 try message.appendSlice(allocator, origin);
             }
@@ -1270,22 +1273,20 @@ fn buildAccessRecoveryCompletionIndex(
     if (access.separator != .dot) return null;
     if (access.separator_offset >= doc_source.len) return null;
 
-    var source = try server.allocator.dupe(u8, doc_source);
-    defer server.allocator.free(source);
+    var recovered_text = try server.allocator.dupe(u8, doc_source);
+    defer server.allocator.free(recovered_text);
 
-    var start = access.separator_offset;
-    while (start > 0 and source[start - 1] != '\n') start -= 1;
-
-    var cursor = start;
-    while (cursor < source.len and source[cursor] != '\n') : (cursor += 1) {
-        source[cursor] = ' ';
+    const line_span = source.lineAt(recovered_text, access.separator_offset).span;
+    var cursor = line_span.start;
+    while (cursor < line_span.end) : (cursor += 1) {
+        recovered_text[cursor] = ' ';
     }
 
-    return buildDocumentCompletionIndex(server, doc_path, source);
+    return buildDocumentCompletionIndex(server, doc_path, recovered_text);
 }
 
-fn completionSourceHash(source: []const u8) u64 {
-    return std.hash.Wyhash.hash(0, source);
+fn completionSourceHash(text: []const u8) u64 {
+    return std.hash.Wyhash.hash(0, text);
 }
 
 fn currentSnapshotCompletionIndex(server: *const Server) ?*const analysis_completion.Index {
@@ -1309,9 +1310,9 @@ fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_sourc
     }
     try overlay.put(doc_path, doc_source);
 
-    var source = try server.allocator.dupe(u8, doc_source);
-    var program = syntax.parseWithSourceName(server.allocator, source, doc_path) catch {
-        server.allocator.free(source);
+    var parsed_text = try server.allocator.dupe(u8, doc_source);
+    var program = syntax.parseWithSourceName(server.allocator, parsed_text, doc_path) catch {
+        server.allocator.free(parsed_text);
         return null;
     };
 
@@ -1323,14 +1324,14 @@ fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_sourc
         .print_diagnostics = false,
     }) catch {
         program.deinit(server.allocator);
-        server.allocator.free(source);
+        server.allocator.free(parsed_text);
         return null;
     };
     defer index.deinit();
 
-    var ir = analysis.buildIrWithOptions(server.allocator, doc_path, asset_base_dir, &source, &program, &index, .{ .allow_diagnostics = true }) catch {
+    var ir = analysis.buildIrWithOptions(server.allocator, doc_path, asset_base_dir, &parsed_text, &program, &index, .{ .allow_diagnostics = true }) catch {
         program.deinit(server.allocator);
-        if (source.len != 0) server.allocator.free(source);
+        if (parsed_text.len != 0) server.allocator.free(parsed_text);
         return null;
     };
     defer ir.deinit();
@@ -1340,33 +1341,30 @@ fn buildDocumentCompletionIndex(server: *Server, doc_path: []const u8, doc_sourc
 }
 
 fn buildImportEnvironmentCompletionIndex(server: *Server, doc_path: []const u8, doc_source: []const u8) !?analysis_completion.Index {
-    var source = std.ArrayList(u8).empty;
-    defer source.deinit(server.allocator);
+    var generated_text = std.ArrayList(u8).empty;
+    defer generated_text.deinit(server.allocator);
 
-    var cursor: usize = 0;
-    while (cursor < doc_source.len) {
-        const line_start = cursor;
-        while (cursor < doc_source.len and doc_source[cursor] != '\n') cursor += 1;
-        const line = doc_source[line_start..cursor];
+    var lines = source.lineIterator(doc_source);
+    while (lines.next()) |line_view| {
+        const line = line_view.text(doc_source);
         const trimmed = std.mem.trim(u8, line, " \t\r");
         if (std.mem.startsWith(u8, trimmed, "import ") and trimmed.len > "import ".len) {
-            try source.appendSlice(server.allocator, line);
-            try source.append(server.allocator, '\n');
+            try generated_text.appendSlice(server.allocator, line);
+            try generated_text.append(server.allocator, '\n');
         }
-        if (cursor < doc_source.len and doc_source[cursor] == '\n') cursor += 1;
     }
-    try source.appendSlice(server.allocator, "\npage __completion_probe\nend\n");
-    return buildDocumentCompletionIndex(server, doc_path, source.items);
+    try generated_text.appendSlice(server.allocator, "\npage __completion_probe\nend\n");
+    return buildDocumentCompletionIndex(server, doc_path, generated_text.items);
 }
 
-fn qualifiedAliasBeforeOffset(source: []const u8, offset: usize) ?[]const u8 {
-    var cursor = @min(offset, source.len);
-    while (cursor > 0 and isIdentChar(source[cursor - 1])) cursor -= 1;
-    if (cursor < 2 or !std.mem.eql(u8, source[cursor - 2 .. cursor], "::")) return null;
+fn qualifiedAliasBeforeOffset(text: []const u8, offset: usize) ?[]const u8 {
+    var cursor = @min(offset, text.len);
+    while (cursor > 0 and language_names.isCallableNameChar(text[cursor - 1])) cursor -= 1;
+    if (cursor < 2 or !std.mem.eql(u8, text[cursor - 2 .. cursor], "::")) return null;
     var alias_start = cursor - 2;
-    while (alias_start > 0 and (std.ascii.isAlphanumeric(source[alias_start - 1]) or source[alias_start - 1] == '_')) alias_start -= 1;
+    while (alias_start > 0 and source.isIdentifierContinue(text[alias_start - 1])) alias_start -= 1;
     if (alias_start == cursor - 2) return null;
-    return source[alias_start .. cursor - 2];
+    return text[alias_start .. cursor - 2];
 }
 
 fn resolveAliasModuleId(allocator: std.mem.Allocator, root: *const JsonObject, doc_path: []const u8, alias: []const u8) ?i64 {
@@ -1445,69 +1443,50 @@ fn importSpecModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonO
 }
 
 fn targetFollowedByDoubleColon(context: *const RequestContext) bool {
-    const bounds = wordBoundsAtOffset(context.source, context.offset) orelse return false;
+    const bounds = source.wordSpanAt(context.source, context.offset, language_names.isCallableNameChar) orelse return false;
     return bounds.end + 2 <= context.source.len and std.mem.eql(u8, context.source[bounds.end .. bounds.end + 2], "::");
 }
 
 fn isImportAliasTarget(context: *const RequestContext) bool {
-    const bounds = wordBoundsAtOffset(context.source, context.offset) orelse return false;
-    var line_start = bounds.start;
-    while (line_start > 0 and context.source[line_start - 1] != '\n') line_start -= 1;
-    var line_end = bounds.end;
-    while (line_end < context.source.len and context.source[line_end] != '\n') line_end += 1;
-    const line = context.source[line_start..line_end];
+    const bounds = source.wordSpanAt(context.source, context.offset, language_names.isCallableNameChar) orelse return false;
+    const line_span = source.lineAt(context.source, bounds.start).span;
+    const line = context.source[line_span.start..line_span.end];
     const trimmed = std.mem.trim(u8, line, " \t");
     if (!std.mem.startsWith(u8, trimmed, "import ")) return false;
     const as_index = std.mem.lastIndexOf(u8, line, " as ") orelse return false;
-    return bounds.start >= line_start + as_index + " as ".len;
+    return bounds.start >= line_span.start + as_index + " as ".len;
 }
 
-fn importSpecAtOffset(source: []const u8, offset: usize) ?[]const u8 {
-    const pos = @min(offset, source.len);
-    var line_start = pos;
-    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
-    var line_end = pos;
-    while (line_end < source.len and source[line_end] != '\n') line_end += 1;
+fn importSpecAtOffset(text: []const u8, offset: usize) ?[]const u8 {
+    const pos = @min(offset, text.len);
+    const line_span = source.lineAt(text, pos).span;
+    const line_start = line_span.start;
+    const line_end = line_span.end;
 
-    var cursor = line_start;
-    while (cursor < line_end and (source[cursor] == ' ' or source[cursor] == '\t')) cursor += 1;
-    if (cursor + "import".len > line_end or !std.mem.eql(u8, source[cursor .. cursor + "import".len], "import")) return null;
+    var cursor = source.skipInlineSpacesUntil(text, line_start, line_end);
+    if (cursor + "import".len > line_end or !std.mem.eql(u8, text[cursor .. cursor + "import".len], "import")) return null;
     cursor += "import".len;
-    if (cursor >= line_end or !std.ascii.isWhitespace(source[cursor])) return null;
-    while (cursor < line_end and std.ascii.isWhitespace(source[cursor])) cursor += 1;
+    if (cursor >= line_end or !source.isInlineSpace(text[cursor])) return null;
+    cursor = source.skipInlineSpacesUntil(text, cursor, line_end);
     if (cursor >= line_end) return null;
 
     const spec_start = cursor;
-    const inner_start: usize = if (source[cursor] == '"') blk: {
+    const inner_start: usize = if (text[cursor] == '"') blk: {
         cursor += 1;
         break :blk cursor;
     } else spec_start;
     while (cursor < line_end) : (cursor += 1) {
-        if (source[spec_start] == '"') {
-            if (source[cursor] == '"') break;
-        } else if (std.ascii.isWhitespace(source[cursor])) {
+        if (text[spec_start] == '"') {
+            if (text[cursor] == '"') break;
+        } else if (source.isInlineSpace(text[cursor])) {
             break;
         }
     }
     const inner_end = cursor;
-    const spec_end = if (cursor < line_end and source[spec_start] == '"') cursor + 1 else cursor;
+    const spec_end = if (cursor < line_end and text[spec_start] == '"') cursor + 1 else cursor;
     if (pos < spec_start or pos > spec_end) return null;
     if (inner_end <= inner_start) return null;
-    return source[inner_start..inner_end];
-}
-
-fn wordBoundsAtOffset(source: []const u8, offset: usize) ?struct { start: usize, end: usize } {
-    const pos = @min(offset, source.len);
-    var line_start = pos;
-    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
-    var line_end = pos;
-    while (line_end < source.len and source[line_end] != '\n') line_end += 1;
-    var start = pos;
-    while (start > line_start and isIdentChar(source[start - 1])) start -= 1;
-    var end = pos;
-    while (end < line_end and isIdentChar(source[end])) end += 1;
-    if (end <= start) return null;
-    return .{ .start = start, .end = end };
+    return text[inner_start..inner_end];
 }
 
 fn appendModuleDefinitionLocation(
@@ -1698,10 +1677,10 @@ fn resolvedDefinitionObjectOfKind(
 
 fn definitionKindForContext(context: *const RequestContext) core.DefinitionKind {
     if (std.mem.endsWith(u8, context.target, "!")) return .function;
-    const bounds = wordBoundsAtOffset(context.source, context.offset) orelse return .constant;
-    var cursor = bounds.end;
-    while (cursor < context.source.len and std.ascii.isWhitespace(context.source[cursor])) cursor += 1;
-    if (cursor < context.source.len and context.source[cursor] == '(') return .function;
+    const bounds = source.wordSpanAt(context.source, context.offset, language_names.isCallableNameChar) orelse return .constant;
+    const line = source.lineAt(context.source, bounds.end).span;
+    const cursor = source.skipInlineSpacesUntil(context.source, bounds.end, line.end);
+    if (cursor < line.end and context.source[cursor] == '(') return .function;
     return .constant;
 }
 
@@ -1723,65 +1702,44 @@ fn appendResolvedTypeDefinitionLocation(
     const resolved = analysis_completion.visibleTypeDefinition(index, allocator, request, context.target, qualifier) orelse return false;
     const module_id: i64 = @intCast(resolved.module_id);
     const module = moduleObjectById(root, module_id) orelse return false;
-    const source = stringField(module, "source") orelse return false;
-    const location = typeDeclarationLocation(module, source, resolved.name) orelse return false;
+    const module_source = stringField(module, "source") orelse return false;
+    const location = typeDeclarationLocation(module, module_source, resolved.name) orelse return false;
     const path = try modulePathForDefinition(allocator, root, module_id);
     defer if (path) |value| allocator.free(value);
-    try appendSourceLocation(allocator, out, path orelse fallback_path, source, location.offset, location.length, first);
+    try appendSourceLocation(allocator, out, path orelse fallback_path, module_source, location.offset, location.length, first);
     return true;
 }
 
-const TypeDeclarationLocation = struct {
-    offset: usize,
-    length: usize,
-};
-
-fn typeDeclarationLocation(module: *const JsonObject, source: []const u8, name: []const u8) ?TypeDeclarationLocation {
+fn typeDeclarationLocation(module: *const JsonObject, text: []const u8, name: []const u8) ?analysis_editor.SourceIdentifierLocation {
     const program = objectFieldObject(module, "program") orelse return null;
-    if (typeDeclarationLocationIn(program, source, "records", "record", name)) |location| return location;
-    if (typeDeclarationLocationIn(program, source, "objects", "type", name)) |location| return location;
-    return typeDeclarationLocationIn(program, source, "types", "type", name);
+    if (typeDeclarationLocationIn(program, text, "records", "record", name)) |location| return location;
+    if (typeDeclarationLocationIn(program, text, "objects", "type", name)) |location| return location;
+    return typeDeclarationLocationIn(program, text, "types", "type", name);
 }
 
-fn typeDeclarationLocationIn(program: *const JsonObject, source: []const u8, field: []const u8, keyword: []const u8, name: []const u8) ?TypeDeclarationLocation {
+fn typeDeclarationLocationIn(program: *const JsonObject, text: []const u8, field: []const u8, keyword: []const u8, name: []const u8) ?analysis_editor.SourceIdentifierLocation {
     if (arrayFieldObject(program, field)) |items| for (items.items) |item| if (item == .object) {
         if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", name)) continue;
         const span = objectFieldObject(&item.object, "span") orelse continue;
         const start = lsp_scope.usizeField(span, "start") orelse continue;
-        if (identifierOffsetAfterKeyword(source, start, keyword, name)) |location| return location;
+        if (analysis_editor.identifierOffsetAfterKeyword(text, start, keyword, name)) |location| return location;
     };
     return null;
-}
-
-fn identifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: []const u8, name: []const u8) ?TypeDeclarationLocation {
-    var cursor = @min(start, source.len);
-    while (cursor < source.len and std.ascii.isWhitespace(source[cursor])) cursor += 1;
-    if (cursor + keyword.len > source.len or !std.mem.eql(u8, source[cursor .. cursor + keyword.len], keyword)) return null;
-    cursor += keyword.len;
-    if (cursor < source.len and isIdentChar(source[cursor])) return null;
-    while (cursor < source.len and std.ascii.isWhitespace(source[cursor])) cursor += 1;
-    const ident_start = cursor;
-    if (cursor >= source.len or !isIdentifierStart(source[cursor])) return null;
-    cursor += 1;
-    while (cursor < source.len and isIdentChar(source[cursor])) cursor += 1;
-    const ident = source[ident_start..cursor];
-    if (!std.mem.eql(u8, ident, name)) return null;
-    return .{ .offset = ident_start, .length = ident.len };
 }
 
 fn appendSourceLocation(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     path: []const u8,
-    source: []const u8,
+    text: []const u8,
     offset: usize,
     length: usize,
     first: *bool,
 ) !void {
     const uri = try uriFromPath(allocator, path);
     defer allocator.free(uri);
-    const start = lspPositionFromOffset(source, offset);
-    const end = lspPositionFromOffset(source, @min(source.len, offset + @max(length, 1)));
+    const start = source.utf16PositionAt(text, offset);
+    const end = source.utf16PositionAt(text, @min(text.len, offset + @max(length, 1)));
     if (!first.*) try out.append(allocator, ',');
     first.* = false;
     try appendLocationObject(allocator, out, uri, start.line, start.character, end.line, end.character);
@@ -1857,15 +1815,16 @@ fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .document_symbols)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(source);
+    defer if (owned_source) server.allocator.free(text);
     var out = std.ArrayList(u8).empty;
     try out.append(server.allocator, '[');
     var first = true;
-    var line_index: usize = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| : (line_index += 1) {
+    var lines = source.lineIterator(text);
+    while (lines.next()) |view| {
+        const line_index = view.number - 1;
+        const line = view.text(text);
         const trimmed = trimLeft(line, " \t");
         const kind: ?usize = if (std.mem.startsWith(u8, trimmed, "fn "))
             12
@@ -1891,18 +1850,19 @@ fn foldingRangeResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .folding_ranges)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(source);
+    defer if (owned_source) server.allocator.free(text);
     var out = std.ArrayList(u8).empty;
     try out.append(server.allocator, '[');
     var first = true;
     var stack = std.ArrayList(usize).empty;
     defer stack.deinit(server.allocator);
     var block_start: ?usize = null;
-    var line_index: usize = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| : (line_index += 1) {
+    var lines = source.lineIterator(text);
+    while (lines.next()) |view| {
+        const line_index = view.number - 1;
+        const line = view.text(text);
         const trimmed = trimLeft(line, " \t");
         if (std.mem.startsWith(u8, trimmed, "page ") or std.mem.startsWith(u8, trimmed, "fn ")) {
             try stack.append(server.allocator, line_index);
@@ -1931,15 +1891,16 @@ fn semanticTokensResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .semantic_tokens)) return try jsonLiteral(server.allocator, "{\"data\":[]}");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "{\"data\":[]}");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "{\"data\":[]}");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "{\"data\":[]}");
     const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(source);
+    defer if (owned_source) server.allocator.free(text);
 
     var tokens = std.ArrayList(SemanticToken).empty;
     defer tokens.deinit(server.allocator);
-    var line_index: usize = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
-    while (lines.next()) |line| : (line_index += 1) {
+    var lines = source.lineIterator(text);
+    while (lines.next()) |view| {
+        const line_index = view.number - 1;
+        const line = view.text(text);
         try scanSemanticLine(server.allocator, &tokens, line, line_index);
     }
 
@@ -1974,7 +1935,7 @@ fn scanSemanticLine(allocator: std.mem.Allocator, tokens: *std.ArrayList(Semanti
         if (byte == ';' and index + 1 < line.len and line[index + 1] == ';') break;
         if (byte == '/' and index + 1 < line.len and line[index + 1] == '/') break;
         if (byte == '#') break;
-        if (std.ascii.isWhitespace(byte)) {
+        if (source.isInlineSpace(byte)) {
             index += 1;
             continue;
         }
@@ -1986,13 +1947,8 @@ fn scanSemanticLine(allocator: std.mem.Allocator, tokens: *std.ArrayList(Semanti
         }
         if ((byte == 'c' and index + 1 < line.len and line[index + 1] == '"') or byte == '"') {
             const start = index;
-            index += if (byte == 'c') @as(usize, 2) else 1;
-            while (index < line.len) : (index += 1) {
-                if (line[index] == '"') {
-                    index += 1;
-                    break;
-                }
-            }
+            const quote_start = if (byte == 'c') index + 1 else index;
+            index = source.skipDoubleQuotedString(line, quote_start, line.len);
             try appendSemanticToken(allocator, tokens, line, line_index, start, @min(index, line.len), 3);
             previous_word = null;
             continue;
@@ -2005,10 +1961,10 @@ fn scanSemanticLine(allocator: std.mem.Allocator, tokens: *std.ArrayList(Semanti
             previous_word = null;
             continue;
         }
-        if (isIdentifierStart(byte)) {
+        if (source.isIdentifierStart(byte)) {
             const start = index;
             index += 1;
-            while (index < line.len and isIdentChar(line[index])) index += 1;
+            while (index < line.len and language_names.isCallableNameChar(line[index])) index += 1;
             const word = line[start..index];
             const next = nextNonSpace(line, index);
             const prev = previousNonSpace(line, start);
@@ -2033,8 +1989,8 @@ fn appendSemanticToken(
 ) !void {
     try tokens.append(allocator, .{
         .line = line_index,
-        .start = utf16Units(line[0..start]),
-        .length = @max(1, utf16Units(line[start..end])),
+        .start = source.utf16Units(line[0..start]),
+        .length = @max(1, source.utf16Units(line[start..end])),
         .token_type = token_type,
     });
 }
@@ -2063,63 +2019,33 @@ fn isBuiltinType(word: []const u8) bool {
     return false;
 }
 
-fn isIdentifierStart(byte: u8) bool {
-    return std.ascii.isAlphabetic(byte) or byte == '_';
-}
-
 fn nextNonSpace(line: []const u8, start: usize) ?u8 {
-    var index = start;
-    while (index < line.len) : (index += 1) {
-        if (!std.ascii.isWhitespace(line[index])) return line[index];
-    }
-    return null;
+    const index = source.skipInlineSpacesUntil(line, start, line.len);
+    return if (index < line.len) line[index] else null;
 }
 
 fn previousNonSpace(line: []const u8, start: usize) ?u8 {
-    var index = start;
-    while (index > 0) {
-        index -= 1;
-        if (!std.ascii.isWhitespace(line[index])) return line[index];
-    }
-    return null;
-}
-
-fn utf16Units(bytes: []const u8) usize {
-    var units: usize = 0;
-    var index: usize = 0;
-    while (index < bytes.len) {
-        const len = std.unicode.utf8ByteSequenceLength(bytes[index]) catch 1;
-        const end = @min(index + len, bytes.len);
-        const cp = std.unicode.utf8Decode(bytes[index..end]) catch bytes[index];
-        units += if (cp > 0xFFFF) @as(usize, 2) else 1;
-        index = end;
-    }
-    return units;
+    const span = source.trimInlineSpaceSpan(line, .{ .start = 0, .end = start });
+    return if (span.end > 0) line[span.end - 1] else null;
 }
 
 fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .colors)) return try jsonLiteral(server.allocator, "[]");
     const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
     defer server.allocator.free(doc_path);
-    const source = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
-    defer if (owned_source) server.allocator.free(source);
+    defer if (owned_source) server.allocator.free(text);
     var out = std.ArrayList(u8).empty;
     try out.append(server.allocator, '[');
     var first = true;
     var index: usize = 0;
-    while (std.mem.indexOfPos(u8, source, index, "c\"")) |start| {
-        var end = start + 2;
-        while (end < source.len) : (end += 1) {
-            if (source[end] == '"') {
-                end += 1;
-                break;
-            }
-        }
-        if (end <= source.len) if (parseColor(source[start..end])) |rgb| {
+    while (std.mem.indexOfPos(u8, text, index, "c\"")) |start| {
+        const end = source.skipDoubleQuotedString(text, start + 1, text.len);
+        if (end <= text.len) if (parseColor(text[start..end])) |rgb| {
             if (!first) try out.append(server.allocator, ',');
             first = false;
-            const range = rangeFromSpan(source, .{ .start = start, .end = end });
+            const range = rangeFromSpan(text, .{ .start = start, .end = end });
             try out.appendSlice(server.allocator, "{\"range\":");
             try appendRange(server.allocator, &out, range);
             try out.appendSlice(server.allocator, ",\"color\":{\"red\":");
@@ -2455,33 +2381,6 @@ fn lspCharacter(object: *const JsonObject) usize {
     return @intCast(@max(0, intField(object, "character") orelse 0));
 }
 
-fn positionOffset(source: []const u8, target_line: usize, target_character: usize) usize {
-    var line: usize = 0;
-    var line_start: usize = 0;
-    var index: usize = 0;
-    while (index < source.len and line < target_line) : (index += 1) {
-        if (source[index] == '\n') {
-            line += 1;
-            line_start = index + 1;
-        }
-    }
-    if (line < target_line) return source.len;
-
-    var character: usize = 0;
-    index = line_start;
-    while (index < source.len and source[index] != '\n') {
-        if (character >= target_character) return index;
-        const len = std.unicode.utf8ByteSequenceLength(source[index]) catch 1;
-        const end = @min(index + len, source.len);
-        const cp = std.unicode.utf8Decode(source[index..end]) catch source[index];
-        const width: usize = if (cp >= 0x10000) 2 else 1;
-        if (character + width > target_character) return index;
-        character += width;
-        index = end;
-    }
-    return index;
-}
-
 fn numberField(object: *const JsonObject, key: []const u8) ?f64 {
     const value = @constCast(object).getPtr(key) orelse return null;
     return switch (value.*) {
@@ -2534,14 +2433,14 @@ fn requestPosition(server: *Server, params: ?JsonValue) !?RequestPosition {
     };
     const line: usize = @intCast(@max(0, intField(pos_obj, "line") orelse 0));
     const character: usize = @intCast(@max(0, intField(pos_obj, "character") orelse 0));
-    const source = server.sourceForPath(doc_path) orelse {
+    const text = server.sourceForPath(doc_path) orelse {
         server.allocator.free(doc_path);
         return null;
     };
     return .{
         .doc_path = doc_path,
-        .source = source,
-        .offset = positionOffset(source, line, character),
+        .source = text,
+        .offset = source.offsetForUtf16Position(text, line, character),
         .line = line,
         .character = character,
     };
@@ -2557,12 +2456,12 @@ fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
     };
     const line: usize = @intCast(@max(0, intField(pos_obj, "line") orelse 0));
     const character: usize = @intCast(@max(0, intField(pos_obj, "character") orelse 0));
-    const source = server.sourceForPath(doc_path) orelse {
+    const text = server.sourceForPath(doc_path) orelse {
         server.allocator.free(doc_path);
         return null;
     };
-    const offset = positionOffset(source, line, character);
-    const target = try wordAt(server.allocator, source, line, character) orelse if (importSpecAtOffset(source, offset)) |spec|
+    const offset = source.offsetForUtf16Position(text, line, character);
+    const target = try wordAt(server.allocator, text, line, character) orelse if (importSpecAtOffset(text, offset)) |spec|
         try server.allocator.dupe(u8, spec)
     else {
         server.allocator.free(doc_path);
@@ -2571,27 +2470,15 @@ fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
     return .{
         .target = target,
         .doc_path = doc_path,
-        .source = source,
+        .source = text,
         .offset = offset,
     };
 }
 
-fn wordAt(allocator: std.mem.Allocator, source: []const u8, target_line: usize, character: usize) !?[]u8 {
-    const pos = positionOffset(source, target_line, character);
-    var line_start = pos;
-    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
-    var line_end = pos;
-    while (line_end < source.len and source[line_end] != '\n') line_end += 1;
-    var start = pos;
-    while (start > line_start and isIdentChar(source[start - 1])) start -= 1;
-    var end = pos;
-    while (end < line_end and isIdentChar(source[end])) end += 1;
-    if (end <= start) return null;
-    return try allocator.dupe(u8, source[start..end]);
-}
-
-fn isIdentChar(byte: u8) bool {
-    return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '!';
+fn wordAt(allocator: std.mem.Allocator, text: []const u8, target_line: usize, character: usize) !?[]u8 {
+    const pos = source.offsetForUtf16Position(text, target_line, character);
+    const span = source.wordSpanAt(text, pos, language_names.isCallableNameChar) orelse return null;
+    return try allocator.dupe(u8, text[span.start..span.end]);
 }
 
 fn pathFromUri(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
@@ -2633,31 +2520,14 @@ fn percentDecode(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-fn rangeFromSpan(source: []const u8, s: utils.err.ByteSpan) LspRange {
-    const start = lspPositionFromOffset(source, @min(s.start, source.len));
-    const end = lspPositionFromOffset(source, @min(@max(s.end, s.start + 1), source.len));
+fn rangeFromSpan(text: []const u8, s: source.ByteSpan) LspRange {
+    const start = source.utf16PositionAt(text, @min(s.start, text.len));
+    const end = source.utf16PositionAt(text, @min(@max(s.end, s.start + 1), text.len));
     return .{
         .start_line = start.line,
         .start_character = start.character,
         .end_line = end.line,
         .end_character = end.character,
-    };
-}
-
-fn lspPositionFromOffset(source: []const u8, byte_offset: usize) struct { line: usize, character: usize } {
-    const limit = @min(byte_offset, source.len);
-    var line: usize = 0;
-    var line_start: usize = 0;
-    var index: usize = 0;
-    while (index < limit) : (index += 1) {
-        if (source[index] == '\n') {
-            line += 1;
-            line_start = index + 1;
-        }
-    }
-    return .{
-        .line = line,
-        .character = utf16Units(source[line_start..limit]),
     };
 }
 
