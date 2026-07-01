@@ -992,7 +992,7 @@ test "compiler semantics: selection values can be reused after lookup" {
     );
 }
 
-test "compiler semantics: dynamically built residual text survives lowering" {
+test "compiler semantics: dynamically built text survives lowering" {
     try expectObjectContent(
         \\import std:themes/default as *
         \\
