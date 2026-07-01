@@ -3,6 +3,7 @@ const project = @import("../project.zig");
 const analysis_completion = @import("../analysis/completion.zig");
 
 pub const Snapshot = struct {
+    generation: u64 = 0,
     entry_path: []u8,
     asset_base_dir: []u8,
     lsp: project.LspConfig = .{},
