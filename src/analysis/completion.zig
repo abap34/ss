@@ -28,6 +28,17 @@ pub const Candidate = struct {
     documentation: ?[]const u8 = null,
 };
 
+pub const VisibleDefinition = struct {
+    name: []const u8,
+    kind: core.DefinitionKind,
+    module_id: ?core.SourceModuleId,
+};
+
+pub const VisibleTypeDefinition = struct {
+    name: []const u8,
+    module_id: core.SourceModuleId,
+};
+
 pub const Result = struct {
     items: []Candidate,
 
@@ -56,6 +67,13 @@ const builtin_type_names = [_][]const u8{
     "None",
     "Selection",
 };
+
+fn isBuiltinTypeName(name: []const u8) bool {
+    for (builtin_type_names) |candidate| {
+        if (std.mem.eql(u8, candidate, name)) return true;
+    }
+    return false;
+}
 
 const ImportInfo = struct {
     alias: ?[]u8 = null,
@@ -110,11 +128,13 @@ const FieldInfo = struct {
 const ClassInfo = struct {
     name: []u8,
     base: ?[]u8,
+    module_id: core.SourceModuleId,
 };
 
 const DeclInfo = struct {
     name: []u8,
     type_label: []u8 = "",
+    module_id: core.SourceModuleId,
 };
 
 pub const Index = struct {
@@ -125,6 +145,7 @@ pub const Index = struct {
     variables: []VariableInfo = &.{},
     fields: []FieldInfo = &.{},
     classes: []ClassInfo = &.{},
+    records: []DeclInfo = &.{},
     types: []DeclInfo = &.{},
     roles: []DeclInfo = &.{},
 
@@ -141,6 +162,7 @@ pub const Index = struct {
         defer decls.deinit();
         out.fields = try buildFields(allocator, decls.fields.items);
         out.classes = try buildClasses(allocator, decls.classes.items);
+        out.records = try buildRecords(allocator, decls.records.items);
         out.types = try buildTypes(allocator, decls.types.items);
         out.roles = try buildRoles(allocator, decls.roles.items);
 
@@ -156,6 +178,7 @@ pub const Index = struct {
         out.variables = try cloneVariables(allocator, self.variables);
         out.fields = try cloneFields(allocator, self.fields);
         out.classes = try cloneClasses(allocator, self.classes);
+        out.records = try cloneDecls(allocator, self.records);
         out.types = try cloneDecls(allocator, self.types);
         out.roles = try cloneDecls(allocator, self.roles);
         return out;
@@ -206,6 +229,7 @@ pub const Index = struct {
             if (item.base) |base| self.allocator.free(base);
         }
         self.allocator.free(self.classes);
+        deinitDecls(self.allocator, self.records);
         deinitDecls(self.allocator, self.types);
         deinitDecls(self.allocator, self.roles);
         self.* = .{ .allocator = self.allocator };
@@ -268,16 +292,51 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
 }
 
 pub fn visibleFunction(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8, qualifier: ?[]const u8) ?Candidate {
-    const function = resolveFunction(index, allocator, request.doc_path, .{
-        .qualifier = qualifier,
-        .name = name,
-    }) orelse return null;
+    const function = visibleFunctionInfo(index, allocator, request, name, qualifier) orelse return null;
     return .{
         .label = function.name,
         .kind = .function,
         .detail = function.signature,
         .documentation = function.documentation,
     };
+}
+
+pub fn visibleDefinition(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8, qualifier: ?[]const u8, kind: core.DefinitionKind) ?VisibleDefinition {
+    const resolved = switch (kind) {
+        .function => visibleFunctionInfo(index, allocator, request, name, qualifier),
+        .constant => visibleConstantInfo(index, allocator, request, name, qualifier),
+        .variable => null,
+    } orelse return null;
+    return .{
+        .name = resolved.name,
+        .kind = kind,
+        .module_id = resolved.module_id,
+    };
+}
+
+pub fn visibleTypeDefinition(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8, qualifier: ?[]const u8) ?VisibleTypeDefinition {
+    if (isBuiltinTypeName(name)) return null;
+    const module = moduleForPath(index, allocator, request.doc_path) orelse return visibleTypeByName(index, name);
+    if (qualifier) |alias| {
+        const module_id = (CompletionResolver{ .index = index, .kind = .function }).resolveAlias(module.id, alias) orelse return null;
+        return typeInModule(index, module_id, name);
+    }
+    if (typeInModule(index, module.id, name)) |resolved| return resolved;
+    return visibleTypeByName(index, name);
+}
+
+fn visibleFunctionInfo(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8, qualifier: ?[]const u8) ?FunctionInfo {
+    return resolveFunction(index, allocator, request.doc_path, .{
+        .qualifier = qualifier,
+        .name = name,
+    });
+}
+
+fn visibleConstantInfo(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8, qualifier: ?[]const u8) ?FunctionInfo {
+    return resolveConst(index, allocator, request.doc_path, .{
+        .qualifier = qualifier,
+        .name = name,
+    });
 }
 
 pub fn accessBeforeOffset(source: []const u8, offset: usize) ?AccessContext {
@@ -530,6 +589,20 @@ fn buildClasses(allocator: std.mem.Allocator, classes: []const declarations.Clas
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, class.name),
             .base = if (class.base) |base| try allocator.dupe(u8, base) else null,
+            .module_id = class.module_id,
+        });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn buildRecords(allocator: std.mem.Allocator, records: []const declarations.RecordDescriptor) ![]DeclInfo {
+    var out = std.ArrayList(DeclInfo).empty;
+    errdefer deinitDecls(allocator, out.items);
+    for (records) |item| {
+        try out.append(allocator, .{
+            .name = try allocator.dupe(u8, item.name),
+            .type_label = try allocator.dupe(u8, "record"),
+            .module_id = item.module_id,
         });
     }
     return out.toOwnedSlice(allocator);
@@ -542,6 +615,7 @@ fn buildTypes(allocator: std.mem.Allocator, types: []const declarations.TypeDesc
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .type_label = try allocator.dupe(u8, "type"),
+            .module_id = item.module_id,
         });
     }
     return out.toOwnedSlice(allocator);
@@ -554,6 +628,7 @@ fn buildRoles(allocator: std.mem.Allocator, roles: []const declarations.RoleDesc
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .type_label = try allocator.dupe(u8, item.class_name),
+            .module_id = item.module_id,
         });
     }
     return out.toOwnedSlice(allocator);
@@ -689,6 +764,7 @@ fn cloneClasses(allocator: std.mem.Allocator, classes: []const ClassInfo) ![]Cla
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .base = if (item.base) |base| try allocator.dupe(u8, base) else null,
+            .module_id = item.module_id,
         });
     }
     return out.toOwnedSlice(allocator);
@@ -701,6 +777,7 @@ fn cloneDecls(allocator: std.mem.Allocator, decls: []const DeclInfo) ![]DeclInfo
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .type_label = try allocator.dupe(u8, item.type_label),
+            .module_id = item.module_id,
         });
     }
     return out.toOwnedSlice(allocator);
@@ -841,6 +918,7 @@ fn appendConstCandidate(builder: *CandidateBuilder, constant_decl: FunctionInfo)
 fn appendTypeNameCompletions(builder: *CandidateBuilder, index: *const Index, source: []const u8) !void {
     for (builtin_type_names) |name| try builder.add(.{ .label = name, .kind = .type_decl, .detail = "builtin type" });
     try appendSourceTypeNameCompletions(builder, source);
+    for (index.records) |item| try builder.add(.{ .label = item.name, .kind = .type_decl, .detail = item.type_label });
     for (index.types) |item| try builder.add(.{ .label = item.name, .kind = .type_decl, .detail = item.type_label });
     for (index.classes) |item| try builder.add(.{ .label = item.name, .kind = .class });
 }
@@ -1027,14 +1105,60 @@ fn moduleById(index: *const Index, module_id: core.SourceModuleId) ?ModuleInfo {
     return null;
 }
 
+fn visibleTypeByName(index: *const Index, name: []const u8) ?VisibleTypeDefinition {
+    if (typeByNameIn(index.records, name)) |resolved| return resolved;
+    var class_index = index.classes.len;
+    while (class_index > 0) {
+        class_index -= 1;
+        const class = index.classes[class_index];
+        if (std.mem.eql(u8, class.name, name)) {
+            return .{ .name = class.name, .module_id = class.module_id };
+        }
+    }
+    if (typeByNameIn(index.types, name)) |resolved| return resolved;
+    return null;
+}
+
+fn typeInModule(index: *const Index, module_id: core.SourceModuleId, name: []const u8) ?VisibleTypeDefinition {
+    if (typeByNameInModule(index.records, module_id, name)) |resolved| return resolved;
+    for (index.classes) |class| {
+        if (class.module_id != module_id) continue;
+        if (std.mem.eql(u8, class.name, name)) {
+            return .{ .name = class.name, .module_id = class.module_id };
+        }
+    }
+    return typeByNameInModule(index.types, module_id, name);
+}
+
+fn typeByNameIn(items: []const DeclInfo, name: []const u8) ?VisibleTypeDefinition {
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        const item = items[i];
+        if (std.mem.eql(u8, item.name, name)) return .{ .name = item.name, .module_id = item.module_id };
+    }
+    return null;
+}
+
+fn typeByNameInModule(items: []const DeclInfo, module_id: core.SourceModuleId, name: []const u8) ?VisibleTypeDefinition {
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        const item = items[i];
+        if (item.module_id != module_id) continue;
+        if (std.mem.eql(u8, item.name, name)) return .{ .name = item.name, .module_id = item.module_id };
+    }
+    return null;
+}
+
 fn resolveAliasModuleId(index: *const Index, allocator: std.mem.Allocator, doc_path: []const u8, alias: []const u8) ?core.SourceModuleId {
     const module = moduleForPath(index, allocator, doc_path) orelse return null;
-    return (CompletionFunctionResolver{ .index = index }).resolveAlias(module.id, alias);
+    return (CompletionResolver{ .index = index, .kind = .function }).resolveAlias(module.id, alias);
 }
 
 fn resolveFunction(index: *const Index, allocator: std.mem.Allocator, doc_path: []const u8, call: CallExpressionName) ?FunctionInfo {
     const module = moduleForPath(index, allocator, doc_path) orelse return primitiveFunction(index, call.name);
-    const resolved = name_resolution.resolve(FunctionInfo, CompletionFunctionResolver{ .index = index }, module.id, .{
+    const resolved = name_resolution.resolve(FunctionInfo, CompletionResolver{ .index = index, .kind = .function }, module.id, .{
         .qualifier = call.qualifier,
         .name = call.name,
     });
@@ -1045,18 +1169,36 @@ fn resolveFunction(index: *const Index, allocator: std.mem.Allocator, doc_path: 
     };
 }
 
-fn functionInModule(index: *const Index, module_id: core.SourceModuleId, name: []const u8) ?FunctionInfo {
-    for (index.functions) |function| {
-        if (function.module_id == null or function.module_id.? != module_id) continue;
-        if (std.mem.eql(u8, function.name, name)) return function;
+fn resolveConst(index: *const Index, allocator: std.mem.Allocator, doc_path: []const u8, call: CallExpressionName) ?FunctionInfo {
+    const module = moduleForPath(index, allocator, doc_path) orelse return null;
+    const resolved = name_resolution.resolve(FunctionInfo, CompletionResolver{ .index = index, .kind = .constant }, module.id, .{
+        .qualifier = call.qualifier,
+        .name = call.name,
+    });
+    return switch (resolved) {
+        .found => |constant| constant,
+        else => null,
+    };
+}
+
+fn symbolInModule(index: *const Index, kind: core.DefinitionKind, module_id: core.SourceModuleId, name: []const u8) ?FunctionInfo {
+    const symbols = switch (kind) {
+        .function => index.functions,
+        .constant => index.constants,
+        .variable => return null,
+    };
+    for (symbols) |symbol| {
+        if (symbol.module_id == null or symbol.module_id.? != module_id) continue;
+        if (std.mem.eql(u8, symbol.name, name)) return symbol;
     }
     return null;
 }
 
-const CompletionFunctionResolver = struct {
+const CompletionResolver = struct {
     index: *const Index,
+    kind: core.DefinitionKind,
 
-    pub fn resolveAlias(self: CompletionFunctionResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+    pub fn resolveAlias(self: CompletionResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
         const module = moduleById(self.index, module_id) orelse return null;
         var i = module.imports.len;
         while (i > 0) {
@@ -1068,16 +1210,16 @@ const CompletionFunctionResolver = struct {
         return null;
     }
 
-    pub fn findInModule(self: CompletionFunctionResolver, module_id: core.SourceModuleId, name: []const u8) ?FunctionInfo {
-        return functionInModule(self.index, module_id, name);
+    pub fn findInModule(self: CompletionResolver, module_id: core.SourceModuleId, name: []const u8) ?FunctionInfo {
+        return symbolInModule(self.index, self.kind, module_id, name);
     }
 
-    pub fn explicitImportCount(self: CompletionFunctionResolver, module_id: core.SourceModuleId) usize {
+    pub fn explicitImportCount(self: CompletionResolver, module_id: core.SourceModuleId) usize {
         const module = moduleById(self.index, module_id) orelse return 0;
         return module.imports.len;
     }
 
-    pub fn explicitImport(self: CompletionFunctionResolver, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
+    pub fn explicitImport(self: CompletionResolver, module_id: core.SourceModuleId, index: usize) ?name_resolution.OpenImport {
         const module = moduleById(self.index, module_id) orelse return null;
         if (index >= module.imports.len) return null;
         const import_info = module.imports[index];
@@ -1087,12 +1229,12 @@ const CompletionFunctionResolver = struct {
         };
     }
 
-    pub fn implicitImportCount(self: CompletionFunctionResolver, module_id: core.SourceModuleId) usize {
+    pub fn implicitImportCount(self: CompletionResolver, module_id: core.SourceModuleId) usize {
         const module = moduleById(self.index, module_id) orelse return 0;
         return module.implicit_import_ids.len;
     }
 
-    pub fn implicitImport(self: CompletionFunctionResolver, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
+    pub fn implicitImport(self: CompletionResolver, module_id: core.SourceModuleId, index: usize) ?core.SourceModuleId {
         const module = moduleById(self.index, module_id) orelse return null;
         if (index >= module.implicit_import_ids.len) return null;
         return module.implicit_import_ids[index];

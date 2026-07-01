@@ -1390,11 +1390,11 @@ fn functionObject(root: *const JsonObject, target: []const u8, module_id: ?i64) 
     return null;
 }
 
-fn definitionObject(root: *const JsonObject, target: []const u8, module_id: i64) ?*const JsonObject {
+fn definitionObject(root: *const JsonObject, target: []const u8, module_id: i64, kind: core.DefinitionKind) ?*const JsonObject {
     if (arrayFieldObject(root, "definitions")) |defs| for (defs.items) |*item| if (item.* == .object) {
         if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) continue;
+        if (!std.mem.eql(u8, stringField(&item.object, "kind") orelse "", @tagName(kind))) continue;
         if ((intField(&item.object, "moduleId") orelse -1) != module_id) continue;
-        if (std.mem.eql(u8, stringField(&item.object, "kind") orelse "", "variable")) continue;
         return &item.object;
     };
     return null;
@@ -1408,6 +1408,20 @@ fn qualifiedModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonOb
 fn aliasModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
     if (!targetFollowedByDoubleColon(context) and !isImportAliasTarget(context)) return null;
     return resolveAliasModuleId(allocator, root, context.doc_path, context.target);
+}
+
+fn importSpecModuleIdForContext(allocator: std.mem.Allocator, root: *const JsonObject, context: *const RequestContext) ?i64 {
+    const spec = importSpecAtOffset(context.source, context.offset) orelse return null;
+    const module = moduleForPath(allocator, root, context.doc_path) orelse return null;
+    if (arrayFieldObject(module, "imports")) |imports| {
+        for (imports.items) |item| {
+            if (item != .object) continue;
+            if (!spanContainsOffset(&item.object, context.offset)) continue;
+            if (!std.mem.eql(u8, stringField(&item.object, "spec") orelse "", spec)) continue;
+            return intField(&item.object, "module_id");
+        }
+    }
+    return null;
 }
 
 fn targetFollowedByDoubleColon(context: *const RequestContext) bool {
@@ -1426,6 +1440,40 @@ fn isImportAliasTarget(context: *const RequestContext) bool {
     if (!std.mem.startsWith(u8, trimmed, "import ")) return false;
     const as_index = std.mem.lastIndexOf(u8, line, " as ") orelse return false;
     return bounds.start >= line_start + as_index + " as ".len;
+}
+
+fn importSpecAtOffset(source: []const u8, offset: usize) ?[]const u8 {
+    const pos = @min(offset, source.len);
+    var line_start = pos;
+    while (line_start > 0 and source[line_start - 1] != '\n') line_start -= 1;
+    var line_end = pos;
+    while (line_end < source.len and source[line_end] != '\n') line_end += 1;
+
+    var cursor = line_start;
+    while (cursor < line_end and (source[cursor] == ' ' or source[cursor] == '\t')) cursor += 1;
+    if (cursor + "import".len > line_end or !std.mem.eql(u8, source[cursor .. cursor + "import".len], "import")) return null;
+    cursor += "import".len;
+    if (cursor >= line_end or !std.ascii.isWhitespace(source[cursor])) return null;
+    while (cursor < line_end and std.ascii.isWhitespace(source[cursor])) cursor += 1;
+    if (cursor >= line_end) return null;
+
+    const spec_start = cursor;
+    const inner_start: usize = if (source[cursor] == '"') blk: {
+        cursor += 1;
+        break :blk cursor;
+    } else spec_start;
+    while (cursor < line_end) : (cursor += 1) {
+        if (source[spec_start] == '"') {
+            if (source[cursor] == '"') break;
+        } else if (std.ascii.isWhitespace(source[cursor])) {
+            break;
+        }
+    }
+    const inner_end = cursor;
+    const spec_end = if (cursor < line_end and source[spec_start] == '"') cursor + 1 else cursor;
+    if (pos < spec_start or pos > spec_end) return null;
+    if (inner_end <= inner_start) return null;
+    return source[inner_start..inner_end];
 }
 
 fn wordBoundsAtOffset(source: []const u8, offset: usize) ?struct { start: usize, end: usize } {
@@ -1466,6 +1514,13 @@ fn modulePathForDefinition(allocator: std.mem.Allocator, root: *const JsonObject
     return null;
 }
 
+fn spanContainsOffset(item: *const JsonObject, offset: usize) bool {
+    const span = objectFieldObject(item, "span") orelse return false;
+    const start = lsp_scope.usizeField(span, "start") orelse return false;
+    const end = lsp_scope.usizeField(span, "end") orelse return false;
+    return offset >= start and offset <= end;
+}
+
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .hover)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
@@ -1493,13 +1548,6 @@ fn hoverMarkdown(
     completion_index: ?*const analysis_completion.Index,
 ) !?[]u8 {
     const target = context.target;
-    if (qualifiedModuleIdForContext(allocator, root, context)) |module_id| {
-        if (functionObject(root, target, module_id)) |item| {
-            const signature = stringField(item, "signature") orelse target;
-            const summary = stringField(item, "summary") orelse "";
-            return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
-        }
-    }
     if (aliasModuleIdForContext(allocator, root, context)) |module_id| {
         if (moduleObjectById(root, module_id)) |module| {
             return try std.fmt.allocPrint(allocator, "```ss\nimport {s}\n```", .{stringField(module, "spec") orelse context.target});
@@ -1513,16 +1561,18 @@ fn hoverMarkdown(
             .doc_path = context.doc_path,
             .source = context.source,
             .offset = context.offset,
-        }, target, null)) |item| {
+        }, target, qualifiedAliasBeforeOffset(context.source, context.offset))) |item| {
             const signature = item.detail orelse target;
             const summary = item.documentation orelse "";
             return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
         }
     }
-    if (functionObject(root, target, null)) |item| {
-        const signature = stringField(item, "signature") orelse target;
-        const summary = stringField(item, "summary") orelse "";
-        return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
+    if (qualifiedModuleIdForContext(allocator, root, context)) |module_id| {
+        if (functionObject(root, target, module_id)) |item| {
+            const signature = stringField(item, "signature") orelse target;
+            const summary = stringField(item, "summary") orelse "";
+            return try std.fmt.allocPrint(allocator, "```ss\n{s}\n```\n{s}", .{ signature, summary });
+        }
     }
     if (objectFieldObject(root, "declarations")) |decls| {
         if (arrayFieldObject(decls, "classes")) |classes| for (classes.items) |item| if (item == .object and std.mem.eql(u8, stringField(&item.object, "name") orelse "", target)) {
@@ -1539,7 +1589,7 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
     if (!lspFeatureEnabled(server, .definition)) return try jsonLiteral(server.allocator, "null");
     var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
     defer context.deinit(server.allocator);
-    if (server.snapshot) |snapshot| if (snapshot.dump_json) |json_text| {
+    if (server.snapshot) |*snapshot| if (snapshot.dump_json) |json_text| {
         var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
@@ -1547,13 +1597,25 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
         errdefer out.deinit(server.allocator);
         try out.append(server.allocator, '[');
         var first = true;
+        if (importSpecModuleIdForContext(server.allocator, &root, &context)) |module_id| {
+            try appendModuleDefinitionLocation(server.allocator, &out, &root, module_id, snapshot.entry_path, &first);
+            try out.append(server.allocator, ']');
+            return out.toOwnedSlice(server.allocator);
+        }
         if (lsp_scope.bestVisibleDefinition(server.allocator, &root, context.target, &context)) |definition| {
             try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
             try out.append(server.allocator, ']');
             return out.toOwnedSlice(server.allocator);
         }
         if (qualifiedModuleIdForContext(server.allocator, &root, &context)) |module_id| {
-            if (definitionObject(&root, context.target, module_id)) |definition| {
+            if (snapshot.completion_index) |*index| {
+                if (resolvedDefinitionObject(server.allocator, &root, index, &context)) |definition| {
+                    try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
+                    try out.append(server.allocator, ']');
+                    return out.toOwnedSlice(server.allocator);
+                }
+            }
+            if (definitionObject(&root, context.target, module_id, definitionKindForContext(&context))) |definition| {
                 try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
                 try out.append(server.allocator, ']');
                 return out.toOwnedSlice(server.allocator);
@@ -1564,16 +1626,139 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
             try out.append(server.allocator, ']');
             return out.toOwnedSlice(server.allocator);
         }
-        if (arrayFieldObject(&root, "definitions")) |defs| for (defs.items) |item| if (item == .object) {
-            if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", context.target)) continue;
-            if (std.mem.eql(u8, stringField(&item.object, "kind") orelse "", "variable")) continue;
-            try appendDefinitionLocation(server.allocator, &out, &root, &item.object, snapshot.entry_path, &first);
-        };
+        if (snapshot.completion_index) |*index| {
+            if (resolvedDefinitionObject(server.allocator, &root, index, &context)) |definition| {
+                try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
+            } else if (try appendResolvedTypeDefinitionLocation(server.allocator, &out, &root, index, &context, snapshot.entry_path, &first)) {}
+        }
         if (first) return try jsonLiteral(server.allocator, "null");
         try out.append(server.allocator, ']');
         return out.toOwnedSlice(server.allocator);
     };
     return try jsonLiteral(server.allocator, "null");
+}
+
+fn resolvedDefinitionObject(
+    allocator: std.mem.Allocator,
+    root: *const JsonObject,
+    index: *const analysis_completion.Index,
+    context: *const RequestContext,
+) ?*const JsonObject {
+    const qualifier = qualifiedAliasBeforeOffset(context.source, context.offset);
+    const request = analysis_completion.Request{
+        .doc_path = context.doc_path,
+        .source = context.source,
+        .offset = context.offset,
+    };
+    const primary_kind = definitionKindForContext(context);
+    if (resolvedDefinitionObjectOfKind(allocator, root, index, request, context.target, qualifier, primary_kind)) |definition| return definition;
+    const fallback_kind: core.DefinitionKind = if (primary_kind == .function) .constant else .function;
+    return resolvedDefinitionObjectOfKind(allocator, root, index, request, context.target, qualifier, fallback_kind);
+}
+
+fn resolvedDefinitionObjectOfKind(
+    allocator: std.mem.Allocator,
+    root: *const JsonObject,
+    index: *const analysis_completion.Index,
+    request: analysis_completion.Request,
+    target: []const u8,
+    qualifier: ?[]const u8,
+    kind: core.DefinitionKind,
+) ?*const JsonObject {
+    const resolved = analysis_completion.visibleDefinition(index, allocator, request, target, qualifier, kind) orelse return null;
+    const module_id = resolved.module_id orelse return null;
+    return definitionObject(root, resolved.name, module_id, resolved.kind);
+}
+
+fn definitionKindForContext(context: *const RequestContext) core.DefinitionKind {
+    if (std.mem.endsWith(u8, context.target, "!")) return .function;
+    const bounds = wordBoundsAtOffset(context.source, context.offset) orelse return .constant;
+    var cursor = bounds.end;
+    while (cursor < context.source.len and std.ascii.isWhitespace(context.source[cursor])) cursor += 1;
+    if (cursor < context.source.len and context.source[cursor] == '(') return .function;
+    return .constant;
+}
+
+fn appendResolvedTypeDefinitionLocation(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    root: *const JsonObject,
+    index: *const analysis_completion.Index,
+    context: *const RequestContext,
+    fallback_path: []const u8,
+    first: *bool,
+) !bool {
+    const qualifier = qualifiedAliasBeforeOffset(context.source, context.offset);
+    const request = analysis_completion.Request{
+        .doc_path = context.doc_path,
+        .source = context.source,
+        .offset = context.offset,
+    };
+    const resolved = analysis_completion.visibleTypeDefinition(index, allocator, request, context.target, qualifier) orelse return false;
+    const module_id: i64 = @intCast(resolved.module_id);
+    const module = moduleObjectById(root, module_id) orelse return false;
+    const source = stringField(module, "source") orelse return false;
+    const location = typeDeclarationLocation(module, source, resolved.name) orelse return false;
+    const path = try modulePathForDefinition(allocator, root, module_id);
+    defer if (path) |value| allocator.free(value);
+    try appendSourceLocation(allocator, out, path orelse fallback_path, source, location.offset, location.length, first);
+    return true;
+}
+
+const TypeDeclarationLocation = struct {
+    offset: usize,
+    length: usize,
+};
+
+fn typeDeclarationLocation(module: *const JsonObject, source: []const u8, name: []const u8) ?TypeDeclarationLocation {
+    const program = objectFieldObject(module, "program") orelse return null;
+    if (typeDeclarationLocationIn(program, source, "records", "record", name)) |location| return location;
+    if (typeDeclarationLocationIn(program, source, "objects", "type", name)) |location| return location;
+    return typeDeclarationLocationIn(program, source, "types", "type", name);
+}
+
+fn typeDeclarationLocationIn(program: *const JsonObject, source: []const u8, field: []const u8, keyword: []const u8, name: []const u8) ?TypeDeclarationLocation {
+    if (arrayFieldObject(program, field)) |items| for (items.items) |item| if (item == .object) {
+        if (!std.mem.eql(u8, stringField(&item.object, "name") orelse "", name)) continue;
+        const span = objectFieldObject(&item.object, "span") orelse continue;
+        const start = lsp_scope.usizeField(span, "start") orelse continue;
+        if (identifierOffsetAfterKeyword(source, start, keyword, name)) |location| return location;
+    };
+    return null;
+}
+
+fn identifierOffsetAfterKeyword(source: []const u8, start: usize, keyword: []const u8, name: []const u8) ?TypeDeclarationLocation {
+    var cursor = @min(start, source.len);
+    while (cursor < source.len and std.ascii.isWhitespace(source[cursor])) cursor += 1;
+    if (cursor + keyword.len > source.len or !std.mem.eql(u8, source[cursor .. cursor + keyword.len], keyword)) return null;
+    cursor += keyword.len;
+    if (cursor < source.len and isIdentChar(source[cursor])) return null;
+    while (cursor < source.len and std.ascii.isWhitespace(source[cursor])) cursor += 1;
+    const ident_start = cursor;
+    if (cursor >= source.len or !isIdentifierStart(source[cursor])) return null;
+    cursor += 1;
+    while (cursor < source.len and isIdentChar(source[cursor])) cursor += 1;
+    const ident = source[ident_start..cursor];
+    if (!std.mem.eql(u8, ident, name)) return null;
+    return .{ .offset = ident_start, .length = ident.len };
+}
+
+fn appendSourceLocation(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    path: []const u8,
+    source: []const u8,
+    offset: usize,
+    length: usize,
+    first: *bool,
+) !void {
+    const uri = try uriFromPath(allocator, path);
+    defer allocator.free(uri);
+    const start = lspPositionFromOffset(source, offset);
+    const end = lspPositionFromOffset(source, @min(source.len, offset + @max(length, 1)));
+    if (!first.*) try out.append(allocator, ',');
+    first.* = false;
+    try appendLocationObject(allocator, out, uri, start.line, start.character, end.line, end.character);
 }
 
 fn appendDefinitionLocation(
@@ -2347,7 +2532,10 @@ fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
         server.allocator.free(doc_path);
         return null;
     };
-    const target = try wordAt(server.allocator, source, line, character) orelse {
+    const offset = positionOffset(source, line, character);
+    const target = try wordAt(server.allocator, source, line, character) orelse if (importSpecAtOffset(source, offset)) |spec|
+        try server.allocator.dupe(u8, spec)
+    else {
         server.allocator.free(doc_path);
         return null;
     };
@@ -2355,7 +2543,7 @@ fn requestContext(server: *Server, params: ?JsonValue) !?RequestContext {
         .target = target,
         .doc_path = doc_path,
         .source = source,
-        .offset = positionOffset(source, line, character),
+        .offset = offset,
     };
 }
 
