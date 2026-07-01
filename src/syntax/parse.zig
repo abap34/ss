@@ -86,14 +86,17 @@ const Parser = struct {
             if (try self.consumeKeyword("import")) {
                 if (!imports_allowed) return self.failAt(item_start, error.ImportMustBeAtTop);
                 const spec = try self.parseImportSpec();
-                errdefer self.allocator.free(spec);
-                try self.validateImportSpec(spec);
-                const mode = try self.parseImportMode(spec);
+                errdefer self.allocator.free(spec.text);
+                try self.validateImportSpec(spec.text);
+                const mode = try self.parseImportMode(spec.text);
+                errdefer if (mode.mode.alias) |alias| self.allocator.free(alias);
                 try self.consumeStatementTerminator();
                 const import_index = program.imports.items.len;
                 try program.imports.append(self.allocator, .{
-                    .spec = spec,
-                    .mode = mode,
+                    .spec = spec.text,
+                    .spec_span = spec.span,
+                    .mode = mode.mode,
+                    .alias_span = mode.alias_span,
                     .span = .{ .start = item_start, .end = self.pos },
                 });
                 try program.top_level_items.append(self.allocator, .{ .import = import_index });
@@ -806,10 +809,21 @@ const Parser = struct {
         return std.fmt.allocPrint(self.allocator, "#gen_{s}_{x}_{d}", .{ label.items, source_hash, self.generated_page_count });
     }
 
-    fn parseImportSpec(self: *Parser) ![]const u8 {
+    const ParsedImportSpec = struct {
+        text: []const u8,
+        span: ast.Span,
+    };
+
+    const ParsedImportMode = struct {
+        mode: ast.ImportDecl.Mode,
+        alias_span: ?ast.Span = null,
+    };
+
+    fn parseImportSpec(self: *Parser) !ParsedImportSpec {
         source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and (self.source[self.pos] == '"' or source.startsWithAt(self.source, self.pos, "\"\"\""))) {
-            return self.parseString();
+            const literal = try self.parseStringLiteral();
+            return .{ .text = literal.text, .span = literal.source_span.? };
         }
         const start = self.pos;
         while (!self.eof()) {
@@ -821,20 +835,28 @@ const Parser = struct {
             self.pos += 1;
         }
         if (start == self.pos) return self.fail(error.ExpectedString);
-        return self.allocator.dupe(u8, self.source[start..self.pos]);
+        return .{
+            .text = try self.allocator.dupe(u8, self.source[start..self.pos]),
+            .span = .{ .start = start, .end = self.pos },
+        };
     }
 
-    fn parseImportMode(self: *Parser, spec: []const u8) !ast.ImportDecl.Mode {
+    fn parseImportMode(self: *Parser, spec: []const u8) !ParsedImportMode {
         source.skipInlineSpaces(self.source, &self.pos);
         if (self.consumeKeywordNoTrivia("as")) {
             source.skipInlineSpaces(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '*') {
                 self.pos += 1;
-                return .{ .unqualified = true };
+                return .{ .mode = .{ .unqualified = true } };
             }
-            return .{ .alias = try self.parseIdentifier() };
+            const alias_start = self.pos;
+            const alias = try self.parseIdentifier();
+            return .{
+                .mode = .{ .alias = alias },
+                .alias_span = .{ .start = alias_start, .end = self.pos },
+            };
         }
-        return .{ .alias = try self.defaultImportAlias(spec), .unqualified = true };
+        return .{ .mode = .{ .alias = try self.defaultImportAlias(spec), .unqualified = true } };
     }
 
     fn validateImportSpec(self: *Parser, spec: []const u8) !void {
@@ -1745,17 +1767,39 @@ const Parser = struct {
     }
 
     fn parseCallableName(self: *Parser) !ast.CallableName {
+        source.skipTriviaFrom(self.source, &self.pos);
+        const first_start = self.pos;
         const first = try self.parseName(.identifier);
+        errdefer self.allocator.free(first);
+        const first_span: ast.Span = .{ .start = first_start, .end = self.pos };
         if (source.startsWithAt(self.source, self.pos, "::")) {
             self.pos += 2;
+            source.skipTriviaFrom(self.source, &self.pos);
+            const name_start = self.pos;
             const name = try self.parseName(.callable);
-            return ast.CallableName.qualified(first, name);
+            return .{
+                .qualifier = first,
+                .name = name,
+                .qualifier_span = first_span,
+                .name_span = .{ .start = name_start, .end = self.pos },
+                .span = .{ .start = first_span.start, .end = self.pos },
+            };
         }
         if (!self.eof() and self.source[self.pos] == '!') {
             self.pos += 1;
-            return ast.CallableName.bare(try std.fmt.allocPrint(self.allocator, "{s}!", .{first}));
+            const name = try std.fmt.allocPrint(self.allocator, "{s}!", .{first});
+            self.allocator.free(first);
+            return .{
+                .name = name,
+                .name_span = .{ .start = first_span.start, .end = self.pos },
+                .span = .{ .start = first_span.start, .end = self.pos },
+            };
         }
-        return ast.CallableName.bare(first);
+        return .{
+            .name = first,
+            .name_span = first_span,
+            .span = first_span,
+        };
     }
 
     fn parseName(self: *Parser, kind: NameKind) ![]const u8 {
