@@ -100,6 +100,7 @@ const Server = struct {
     last_good_completion: ?CompletionCache = null,
     document_completion_cache: std.StringHashMap(DocumentCompletionCache),
     published_diagnostic_uris: std.StringHashMap(void),
+    generation: u64 = 0,
     pending_rebuild_path: ?[]u8 = null,
     pending_rebuild_due_ms: u64 = 0,
     shutdown: bool = false,
@@ -138,6 +139,7 @@ const Server = struct {
             self.allocator.free(entry.value);
         }
         try self.documents.put(path, document_text);
+        self.generation += 1;
     }
 
     fn applyDocumentChange(self: *Server, uri: []const u8, change: *const JsonObject) !void {
@@ -175,6 +177,7 @@ const Server = struct {
             self.allocator.free(entry.value);
         }
         try self.documents.put(path, document_text);
+        self.generation += 1;
     }
 
     fn removeDocument(self: *Server, uri: []const u8) void {
@@ -183,6 +186,7 @@ const Server = struct {
         if (self.documents.fetchRemove(path)) |entry| {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
+            self.generation += 1;
         }
         self.removeDocumentCompletionCache(path);
     }
@@ -199,8 +203,13 @@ const Server = struct {
 
         var diagnostics = DiagnosticSet.init(self.allocator);
         defer diagnostics.deinit();
+        const rebuild_generation = self.generation;
         var snapshot = try self.buildSnapshot(changed_path, &diagnostics);
         errdefer snapshot.deinit(self.allocator);
+        if (snapshot.generation != self.generation or rebuild_generation != self.generation) {
+            snapshot.deinit(self.allocator);
+            return;
+        }
         if (snapshot.dump_json != null) try self.rememberCompletionSnapshot(&snapshot);
         self.snapshot = snapshot;
         try self.refreshDocumentCompletionCache(changed_path);
@@ -285,6 +294,7 @@ const Server = struct {
         errdefer self.allocator.free(asset_base_dir);
 
         var snapshot = Snapshot{
+            .generation = self.generation,
             .entry_path = entry_path,
             .asset_base_dir = asset_base_dir,
             .lsp = if (config) |cfg| cfg.lsp else .{},
