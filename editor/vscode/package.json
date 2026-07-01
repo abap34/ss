@@ -93,6 +93,16 @@
         }
       ]
     },
+    "configurationDefaults": {
+      "[ss-slide]": {
+        "editor.quickSuggestions": {
+          "comments": "off",
+          "strings": "off",
+          "other": "on"
+        },
+        "editor.suggestOnTriggerCharacters": true
+      }
+    },
     "configuration": {
       "title": "ss",
       "properties": {
