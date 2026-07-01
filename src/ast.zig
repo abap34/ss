@@ -66,7 +66,9 @@ pub const ImportDecl = struct {
     };
 
     spec: []const u8,
+    spec_span: Span,
     mode: Mode,
+    alias_span: ?Span = null,
     span: Span,
 };
 
@@ -238,6 +240,9 @@ pub const ParamDecl = struct {
 pub const CallableName = struct {
     qualifier: ?[]const u8 = null,
     name: []const u8,
+    qualifier_span: ?Span = null,
+    name_span: ?Span = null,
+    span: ?Span = null,
 
     pub fn bare(name: []const u8) CallableName {
         return .{ .name = name };
@@ -262,6 +267,9 @@ pub const CallableName = struct {
         return .{
             .qualifier = if (self.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
             .name = try allocator.dupe(u8, self.name),
+            .qualifier_span = self.qualifier_span,
+            .name_span = self.name_span,
+            .span = self.span,
         };
     }
 };

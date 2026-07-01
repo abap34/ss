@@ -151,8 +151,14 @@ fn expectImportMode(import_decl: ast.ImportDecl, expected_alias: ?[]const u8, ex
     try testing.expectEqual(expected_unqualified, import_decl.mode.unqualified);
 }
 
+fn expectSpanText(source: []const u8, span: ast.Span, expected: []const u8) !void {
+    try testing.expect(span.start <= span.end);
+    try testing.expect(span.end <= source.len);
+    try testing.expectEqualStrings(expected, source[span.start..span.end]);
+}
+
 test "syntax spec: imports and pages preserve source order" {
-    var parsed = try parse(
+    const source_text =
         \\// Leading trivia is not part of the AST.
         \\import core
         \\import "themes/default"; // comments may follow terminators
@@ -169,13 +175,16 @@ test "syntax spec: imports and pages preserve source order" {
         \\  title("Done");
         \\end
         \\
-    );
+    ;
+    var parsed = try parse(source_text);
     defer parsed.deinit();
     const program = &parsed.program;
 
     try testing.expectEqual(@as(usize, 2), program.imports.items.len);
     try testing.expectEqualStrings("core", program.imports.items[0].spec);
     try testing.expectEqualStrings("themes/default", program.imports.items[1].spec);
+    try expectSpanText(source_text, program.imports.items[0].spec_span, "core");
+    try expectSpanText(source_text, program.imports.items[1].spec_span, "themes/default");
     try testing.expectEqual(@as(usize, 1), program.document_blocks.items.len);
     try testing.expectEqual(@as(usize, 1), program.document_statements.items.len);
     try testing.expectEqual(@as(usize, 0), program.document_blocks.items[0].statement_start);
@@ -193,7 +202,7 @@ test "syntax spec: imports and pages preserve source order" {
 }
 
 test "syntax spec: import modes are explicit in the AST" {
-    var parsed = try parse(
+    const source_text =
         \\import std:themes/default
         \\import std:themes/default as base
         \\import std:themes/default as *
@@ -203,7 +212,8 @@ test "syntax spec: import modes are explicit in the AST" {
         \\page ok
         \\end
         \\
-    );
+    ;
+    var parsed = try parse(source_text);
     defer parsed.deinit();
 
     try testing.expectEqual(@as(usize, 5), parsed.program.imports.items.len);
@@ -212,6 +222,37 @@ test "syntax spec: import modes are explicit in the AST" {
     try expectImportMode(parsed.program.imports.items[2], null, true);
     try expectImportMode(parsed.program.imports.items[3], null, true);
     try expectImportMode(parsed.program.imports.items[4], "seminar_theme", false);
+    try expectSpanText(source_text, parsed.program.imports.items[0].spec_span, "std:themes/default");
+    try expectSpanText(source_text, parsed.program.imports.items[1].spec_span, "std:themes/default");
+    try expectSpanText(source_text, parsed.program.imports.items[1].alias_span.?, "base");
+    try testing.expect(parsed.program.imports.items[0].alias_span == null);
+    try testing.expect(parsed.program.imports.items[2].alias_span == null);
+    try testing.expect(parsed.program.imports.items[3].alias_span == null);
+    try expectSpanText(source_text, parsed.program.imports.items[4].alias_span.?, "seminar_theme");
+}
+
+test "syntax spec: qualified callable names preserve source spans" {
+    const source_text =
+        \\page ok
+        \\  let value = theme::text("hi")
+        \\end
+        \\
+    ;
+    var parsed = try parse(source_text);
+    defer parsed.deinit();
+
+    const stmt = parsed.program.pages.items[0].statements.items[0];
+    const expr = switch (stmt.kind) {
+        .let_binding => |binding| binding.expr,
+        else => return error.ExpectedLetBinding,
+    };
+    const call = try expectCall(expr, "text", 1);
+
+    try testing.expect(call.callee.qualifier != null);
+    try testing.expectEqualStrings("theme", call.callee.qualifier.?);
+    try expectSpanText(source_text, call.callee.qualifier_span.?, "theme");
+    try expectSpanText(source_text, call.callee.name_span.?, "text");
+    try expectSpanText(source_text, call.callee.span.?, "theme::text");
 }
 
 test "syntax spec: imports must precede other top-level items" {
