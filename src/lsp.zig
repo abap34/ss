@@ -1143,6 +1143,7 @@ fn completionKind(kind: analysis_completion.CompletionKind) usize {
         .function => 3,
         .variable => 6,
         .property => 10,
+        .enum_case => 20,
         .type_decl => 25,
         .class => 7,
         .role => 20,

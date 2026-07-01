@@ -27,6 +27,11 @@ test "analysis completion: access context detects dot and module qualifiers" {
     try std.testing.expectEqual(completion.AccessSeparator.dot, nested_dot.separator);
     try std.testing.expectEqualStrings("body.text", nested_dot.receiver);
 
+    const qualified_type_dot_source = "classes::Align.";
+    const qualified_type_dot = completion.accessBeforeOffset(qualified_type_dot_source, qualified_type_dot_source.len) orelse return error.ExpectedDotAccess;
+    try std.testing.expectEqual(completion.AccessSeparator.dot, qualified_type_dot.separator);
+    try std.testing.expectEqualStrings("classes::Align", qualified_type_dot.receiver);
+
     const module_with_space_source = "default:: ";
     const module_with_space = completion.accessBeforeOffset(module_with_space_source, module_with_space_source.len) orelse return error.ExpectedModuleAccess;
     try std.testing.expectEqual(completion.AccessSeparator.double_colon, module_with_space.separator);
@@ -163,6 +168,46 @@ test "analysis completion: normal positions include builtin and source type name
     try expectHas(result, "SourceOnly");
     try expectHas(result, "SourceCard");
     try expectMissing(result, "text_size");
+}
+
+test "analysis completion: enum type dot completes cases" {
+    var case = try CompletionCase.init(
+        \\import std:themes/default as *
+        \\import std:core/classes as classes
+        \\
+        \\page title
+        \\  let style = TextStyle { math_align = Align.center }
+        \\  let qualified = TextStyle { math_align = classes::Align.left }
+        \\end
+        \\
+    );
+    defer case.deinit();
+
+    const request_source =
+        \\import std:themes/default as *
+        \\import std:core/classes as classes
+        \\
+        \\page title
+        \\  Align.
+        \\  classes::Align.
+        \\end
+        \\
+    ;
+
+    inline for (.{ "Align.", "classes::Align." }) |needle| {
+        var result = try case.completeSourceAfter(request_source, needle);
+        defer result.deinit(case.allocator);
+        try expectUnique(result);
+        try expectHas(result, "left");
+        try expectHas(result, "center");
+        try expectHas(result, "right");
+        try expectKind(result, "left", .enum_case);
+        try expectKind(result, "center", .enum_case);
+        try expectKind(result, "right", .enum_case);
+        try expectMissing(result, "page");
+        try expectMissing(result, "String");
+        try expectMissing(result, "text_size");
+    }
 }
 
 test "analysis completion: source fallback sees same-scope bindings before and after cursor" {
@@ -498,6 +543,15 @@ fn offsetAfter(source: []const u8, needle: []const u8) usize {
 fn expectHas(result: completion.Result, label: []const u8) !void {
     for (result.items) |item| {
         if (std.mem.eql(u8, item.label, label)) return;
+    }
+    return error.ExpectedCompletionMissing;
+}
+
+fn expectKind(result: completion.Result, label: []const u8, kind: completion.CompletionKind) !void {
+    for (result.items) |item| {
+        if (!std.mem.eql(u8, item.label, label)) continue;
+        try testing.expectEqual(kind, item.kind);
+        return;
     }
     return error.ExpectedCompletionMissing;
 }
