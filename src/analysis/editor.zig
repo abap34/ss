@@ -15,6 +15,183 @@ pub const SourceIdentifierLocation = struct {
     length: usize,
 };
 
+pub fn sourceCallableNameAt(source_text: []const u8, offset: usize) ?SourceIdentifierLocation {
+    const span = utils.source.wordSpanAt(source_text, offset, language_names.isCallableNameChar) orelse return null;
+    return .{
+        .offset = span.start,
+        .length = span.end - span.start,
+    };
+}
+
+pub const QualifiedCallableRole = enum {
+    qualifier,
+    name,
+};
+
+pub const QualifiedCallableTarget = struct {
+    qualifier: []const u8,
+    name: []const u8,
+    role: QualifiedCallableRole,
+};
+
+pub const CallableTarget = struct {
+    callee: ast.CallableName,
+    role: QualifiedCallableRole,
+};
+
+pub fn callableAt(program: *const ast.Program, offset: usize) ?CallableTarget {
+    for (program.records.items) |record| {
+        if (callableInFields(record.fields.items, offset)) |target| return target;
+    }
+    for (program.objects.items) |object| {
+        if (callableInFields(object.fields.items, offset)) |target| return target;
+    }
+    for (program.object_extensions.items) |extension| {
+        if (callableInFields(extension.fields.items, offset)) |target| return target;
+    }
+    for (program.constants.items) |constant_decl| {
+        if (callableInExpr(constant_decl.value, offset)) |target| return target;
+    }
+    for (program.functions.items) |func| {
+        if (callableInStatements(func.statements.items, offset)) |target| return target;
+    }
+    if (callableInStatements(program.document_statements.items, offset)) |target| return target;
+    for (program.pages.items) |page| {
+        if (callableInStatements(page.statements.items, offset)) |target| return target;
+    }
+    return null;
+}
+
+pub fn qualifiedCallableAt(program: *const ast.Program, offset: usize) ?QualifiedCallableTarget {
+    const target = callableAt(program, offset) orelse return null;
+    const qualifier = target.callee.qualifier orelse return null;
+    return .{
+        .qualifier = qualifier,
+        .name = target.callee.name,
+        .role = target.role,
+    };
+}
+
+pub fn qualifiedCallableQualifierForName(program: *const ast.Program, offset: usize) ?[]const u8 {
+    const target = qualifiedCallableAt(program, offset) orelse return null;
+    if (target.role != .name) return null;
+    return target.qualifier;
+}
+
+pub fn isQualifiedCallableQualifierAt(program: *const ast.Program, offset: usize) bool {
+    const target = qualifiedCallableAt(program, offset) orelse return false;
+    return target.role == .qualifier;
+}
+
+pub fn isImportAliasAt(program: *const ast.Program, offset: usize) bool {
+    for (program.imports.items) |import_decl| {
+        const alias_span = import_decl.alias_span orelse continue;
+        if (spanContainsOffset(alias_span, offset)) return true;
+    }
+    return false;
+}
+
+pub fn importSpecAt(program: *const ast.Program, offset: usize) ?[]const u8 {
+    for (program.imports.items) |import_decl| {
+        if (spanContainsOffset(import_decl.spec_span, offset)) return import_decl.spec;
+    }
+    return null;
+}
+
+fn callableInFields(fields: []const ast.ObjectFieldDecl, offset: usize) ?CallableTarget {
+    for (fields) |field| {
+        const default_value = field.default_value orelse continue;
+        if (callableInExpr(default_value.*, offset)) |target| return target;
+    }
+    return null;
+}
+
+fn callableInStatements(statements: []const ast.Statement, offset: usize) ?CallableTarget {
+    for (statements) |stmt| {
+        if (callableInStatement(stmt, offset)) |target| return target;
+    }
+    return null;
+}
+
+fn callableInStatement(stmt: ast.Statement, offset: usize) ?CallableTarget {
+    return switch (stmt.kind) {
+        .let_binding => |binding| callableInExpr(binding.expr, offset),
+        .return_expr => |expr| callableInExpr(expr, offset),
+        .return_void => null,
+        .constrain => |constraint| if (constraint.offset) |expr| callableInExpr(expr, offset) else null,
+        .property_set => |property_set| callableInExpr(property_set.value, offset),
+        .if_stmt => |if_stmt| blk: {
+            if (callableInExpr(if_stmt.condition, offset)) |target| break :blk target;
+            if (callableInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
+            break :blk callableInStatements(if_stmt.else_statements.items, offset);
+        },
+        .expr_stmt => |expr| callableInExpr(expr, offset),
+    };
+}
+
+fn callableInExpr(expr: ast.Expr, offset: usize) ?CallableTarget {
+    return switch (expr) {
+        .call => |call| blk: {
+            if (callableNameAt(call.callee, offset)) |target| break :blk target;
+            for (call.args.items) |arg| {
+                if (callableInExpr(arg, offset)) |target| break :blk target;
+            }
+            break :blk null;
+        },
+        .apply => |apply| blk: {
+            if (callableInExpr(apply.callee.*, offset)) |target| break :blk target;
+            for (apply.args.items) |arg| {
+                if (callableInExpr(arg, offset)) |target| break :blk target;
+            }
+            break :blk null;
+        },
+        .lambda => |lambda| callableInExpr(lambda.body.*, offset),
+        .record => |record| blk: {
+            for (record.fields.items) |field| {
+                if (callableInExpr(field.value, offset)) |target| break :blk target;
+            }
+            break :blk null;
+        },
+        .record_update => |update| blk: {
+            if (callableInExpr(update.target.*, offset)) |target| break :blk target;
+            for (update.fields.items) |field| {
+                if (callableInExpr(field.value, offset)) |target| break :blk target;
+            }
+            break :blk null;
+        },
+        .member => |member| callableInExpr(member.target.*, offset),
+        .optional_check => |check| callableInExpr(check.target.*, offset),
+        .coalesce => |coalesce| blk: {
+            if (callableInExpr(coalesce.target.*, offset)) |target| break :blk target;
+            break :blk callableInExpr(coalesce.fallback.*, offset);
+        },
+        else => null,
+    };
+}
+
+fn callableNameAt(name: ast.CallableName, offset: usize) ?CallableTarget {
+    if (name.qualifier_span) |qualifier_span| {
+        if (spanContainsOffset(qualifier_span, offset)) {
+            return .{
+                .callee = name,
+                .role = .qualifier,
+            };
+        }
+    }
+    const name_span = name.name_span orelse return null;
+    if (spanContainsOffset(name_span, offset)) {
+        return .{
+            .callee = name,
+            .role = .name,
+        };
+    }
+    return null;
+}
+
+fn spanContainsOffset(span: ast.Span, offset: usize) bool {
+    return offset >= span.start and offset <= span.end;
+}
+
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
