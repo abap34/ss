@@ -252,6 +252,19 @@ end
     });
     assertPropertyCompletion(memberCompletion, "member completion");
     assertCompletionMissing(memberCompletion, ["Align"], "member completion");
+
+    const enumBrokenSource = `import std:themes/default as *
+
+page ok
+  let style = TextStyle { math_align = Align. }
+end
+`;
+    client.changeDocument({ uri, version: 7, text: enumBrokenSource });
+    const enumCompletion = await client.request("textDocument/completion", {
+      textDocument: { uri },
+      position: positionAfter(enumBrokenSource, "Align."),
+    });
+    assertEnumCaseCompletion(enumCompletion, "enum case completion");
   });
 }
 
@@ -511,6 +524,23 @@ function assertTextStyleRecordCompletion(completion, label) {
   assertCompletionHas(completion, "size", label);
   assertCompletionHas(completion, "color", label);
   assertCompletionMissing(completion, ["page", "String", "body"], label);
+}
+
+function assertEnumCaseCompletion(completion, label) {
+  assertUniqueCompletionLabels(completion, label);
+  assertCompletionHas(completion, "left", label);
+  assertCompletionHas(completion, "center", label);
+  assertCompletionHas(completion, "right", label);
+  assertCompletionKind(completion, "left", 20, label);
+  assertCompletionKind(completion, "center", 20, label);
+  assertCompletionKind(completion, "right", 20, label);
+  assertCompletionMissing(completion, ["page", "String", "text_size"], label);
+}
+
+function assertCompletionKind(completion, label, kind, context) {
+  const item = completion.items?.find((candidate) => candidate.label === label);
+  assert(item, `${context} did not include ${label}: ${JSON.stringify(completion)}`);
+  assert(item.kind === kind, `${context} expected ${label} kind ${kind}, got ${JSON.stringify(item)}`);
 }
 
 function assertSameLabels(left, right, label) {

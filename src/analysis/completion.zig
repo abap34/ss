@@ -16,6 +16,7 @@ pub const CompletionKind = enum {
     function,
     variable,
     property,
+    enum_case,
     type_decl,
     class,
     role,
@@ -138,6 +139,12 @@ const ClassInfo = struct {
     module_id: core.SourceModuleId,
 };
 
+const EnumCaseInfo = struct {
+    name: []u8,
+    enum_name: []u8,
+    module_id: core.SourceModuleId,
+};
+
 const DeclInfo = struct {
     name: []u8,
     type_label: []u8 = "",
@@ -155,6 +162,7 @@ pub const Index = struct {
     classes: []ClassInfo = &.{},
     records: []DeclInfo = &.{},
     types: []DeclInfo = &.{},
+    enum_cases: []EnumCaseInfo = &.{},
     roles: []DeclInfo = &.{},
 
     pub fn fromIr(allocator: std.mem.Allocator, ir: *core.Ir) !Index {
@@ -173,6 +181,7 @@ pub const Index = struct {
         out.classes = try buildClasses(allocator, decls.classes.items);
         out.records = try buildRecords(allocator, decls.records.items);
         out.types = try buildTypes(allocator, decls.types.items);
+        out.enum_cases = try buildEnumCases(allocator, decls.types.items);
         out.roles = try buildRoles(allocator, decls.roles.items);
 
         return out;
@@ -190,6 +199,7 @@ pub const Index = struct {
         out.classes = try cloneClasses(allocator, self.classes);
         out.records = try cloneDecls(allocator, self.records);
         out.types = try cloneDecls(allocator, self.types);
+        out.enum_cases = try cloneEnumCases(allocator, self.enum_cases);
         out.roles = try cloneDecls(allocator, self.roles);
         return out;
     }
@@ -247,6 +257,11 @@ pub const Index = struct {
         self.allocator.free(self.classes);
         deinitDecls(self.allocator, self.records);
         deinitDecls(self.allocator, self.types);
+        for (self.enum_cases) |item| {
+            self.allocator.free(item.name);
+            self.allocator.free(item.enum_name);
+        }
+        self.allocator.free(self.enum_cases);
         deinitDecls(self.allocator, self.roles);
         self.* = .{ .allocator = self.allocator };
     }
@@ -286,7 +301,9 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
                 return try builder.finish();
             },
             .dot => {
-                if (propertyTargetForReceiver(allocator, index, request, access.receiver)) |target| {
+                if (enumTypeForReceiver(index, allocator, request, access.receiver)) |enum_type| {
+                    try appendEnumCases(&builder, index, enum_type);
+                } else if (propertyTargetForReceiver(allocator, index, request, access.receiver)) |target| {
                     try appendProperties(&builder, index, target);
                 }
                 return try builder.finish();
@@ -664,6 +681,27 @@ fn buildTypes(allocator: std.mem.Allocator, types: []const declarations.TypeDesc
     return out.toOwnedSlice(allocator);
 }
 
+fn buildEnumCases(allocator: std.mem.Allocator, types: []const declarations.TypeDescriptor) ![]EnumCaseInfo {
+    var out = std.ArrayList(EnumCaseInfo).empty;
+    errdefer {
+        for (out.items) |item| {
+            allocator.free(item.name);
+            allocator.free(item.enum_name);
+        }
+        out.deinit(allocator);
+    }
+    for (types) |item| {
+        for (item.cases) |case_name| {
+            try out.append(allocator, .{
+                .name = try allocator.dupe(u8, case_name),
+                .enum_name = try allocator.dupe(u8, item.name),
+                .module_id = item.module_id,
+            });
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 fn buildRoles(allocator: std.mem.Allocator, roles: []const declarations.RoleDescriptor) ![]DeclInfo {
     var out = std.ArrayList(DeclInfo).empty;
     errdefer deinitDecls(allocator, out.items);
@@ -828,6 +866,25 @@ fn cloneClasses(allocator: std.mem.Allocator, classes: []const ClassInfo) ![]Cla
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, item.name),
             .base = if (item.base) |base| try allocator.dupe(u8, base) else null,
+            .module_id = item.module_id,
+        });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn cloneEnumCases(allocator: std.mem.Allocator, cases: []const EnumCaseInfo) ![]EnumCaseInfo {
+    var out = std.ArrayList(EnumCaseInfo).empty;
+    errdefer {
+        for (out.items) |item| {
+            allocator.free(item.name);
+            allocator.free(item.enum_name);
+        }
+        out.deinit(allocator);
+    }
+    for (cases) |item| {
+        try out.append(allocator, .{
+            .name = try allocator.dupe(u8, item.name),
+            .enum_name = try allocator.dupe(u8, item.enum_name),
             .module_id = item.module_id,
         });
     }
@@ -1071,6 +1128,17 @@ fn appendRecordFields(builder: *CandidateBuilder, index: *const Index, record_na
     }
 }
 
+fn appendEnumCases(builder: *CandidateBuilder, index: *const Index, enum_type: VisibleTypeDefinition) !void {
+    var i = index.enum_cases.len;
+    while (i > 0) {
+        i -= 1;
+        const case = index.enum_cases[i];
+        if (case.module_id != enum_type.module_id) continue;
+        if (!std.mem.eql(u8, case.enum_name, enum_type.name)) continue;
+        try builder.add(.{ .label = case.name, .kind = .enum_case, .detail = case.enum_name });
+    }
+}
+
 fn fieldAppliesToTarget(index: *const Index, field: FieldInfo, target: PropertyTarget) bool {
     return switch (target) {
         .any_object => true,
@@ -1096,6 +1164,38 @@ fn classBase(index: *const Index, class_name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, item.name, class_name)) return item.base;
     }
     return null;
+}
+
+fn enumTypeForReceiver(index: *const Index, allocator: std.mem.Allocator, request: Request, receiver: []const u8) ?VisibleTypeDefinition {
+    const type_name = typeNameReceiver(receiver) orelse return null;
+    const module = moduleForPath(index, allocator, request.doc_path) orelse {
+        if (type_name.qualifier != null) return null;
+        return enumTypeByName(index, type_name.name);
+    };
+    if (type_name.qualifier) |alias| {
+        const module_id = (CompletionResolver{ .index = index, .kind = .function }).resolveAlias(module.id, alias) orelse return null;
+        return enumTypeInModule(index, module_id, type_name.name);
+    }
+    if (enumTypeInModule(index, module.id, type_name.name)) |resolved| return resolved;
+    return enumTypeByName(index, type_name.name);
+}
+
+const TypeNameReceiver = struct {
+    qualifier: ?[]const u8 = null,
+    name: []const u8,
+};
+
+fn typeNameReceiver(receiver: []const u8) ?TypeNameReceiver {
+    if (receiver.len == 0 or std.mem.indexOfScalar(u8, receiver, '.') != null) return null;
+    if (std.mem.lastIndexOf(u8, receiver, "::")) |separator| {
+        const qualifier = receiver[0..separator];
+        const name = receiver[separator + 2 ..];
+        if (!isValidAlias(qualifier) or !isValidAlias(name)) return null;
+        return .{ .qualifier = qualifier, .name = name };
+    }
+    if (std.mem.indexOfScalar(u8, receiver, ':') != null) return null;
+    if (!isValidAlias(receiver)) return null;
+    return .{ .name = receiver };
 }
 
 fn propertyTargetForReceiver(allocator: std.mem.Allocator, index: *const Index, request: Request, receiver: []const u8) ?PropertyTarget {
@@ -1456,6 +1556,27 @@ fn typeInModule(index: *const Index, module_id: core.SourceModuleId, name: []con
         }
     }
     return typeByNameInModule(index.types, module_id, name);
+}
+
+fn enumTypeByName(index: *const Index, name: []const u8) ?VisibleTypeDefinition {
+    var i = index.enum_cases.len;
+    while (i > 0) {
+        i -= 1;
+        const item = index.enum_cases[i];
+        if (std.mem.eql(u8, item.enum_name, name)) return .{ .name = item.enum_name, .module_id = item.module_id };
+    }
+    return null;
+}
+
+fn enumTypeInModule(index: *const Index, module_id: core.SourceModuleId, name: []const u8) ?VisibleTypeDefinition {
+    var i = index.enum_cases.len;
+    while (i > 0) {
+        i -= 1;
+        const item = index.enum_cases[i];
+        if (item.module_id != module_id) continue;
+        if (std.mem.eql(u8, item.enum_name, name)) return .{ .name = item.enum_name, .module_id = item.module_id };
+    }
+    return null;
 }
 
 fn typeByNameIn(items: []const DeclInfo, name: []const u8) ?VisibleTypeDefinition {
@@ -1955,7 +2076,7 @@ fn isReceiverChar(byte: u8) bool {
 }
 
 fn receiverCharForSeparator(byte: u8, separator: AccessSeparator) bool {
-    return isReceiverChar(byte) or (separator == .dot and byte == '.');
+    return isReceiverChar(byte) or (separator == .dot and (byte == '.' or byte == ':'));
 }
 
 fn isAccessTrivia(byte: u8) bool {
