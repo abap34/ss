@@ -136,6 +136,68 @@ test "analysis completion: visible function prefers imported module definitions 
     try testing.expectEqualStrings("text(text_value: String, theme: Theme = current_theme()) -> Object", item.detail orelse "");
 }
 
+test "analysis completion: visible variables and definitions use shared scope resolution" {
+    var case = try CompletionCase.init(
+        \\document
+        \\  let x = "document"
+        \\  let doc_probe = x
+        \\end
+        \\
+        \\page title
+        \\  let x = 1
+        \\  let page_probe = x
+        \\end
+        \\
+        \\fn make() -> Bool
+        \\  let x = true
+        \\  let fn_probe = x
+        \\  return x
+        \\end
+        \\
+    );
+    defer case.deinit();
+
+    {
+        const request = completion.Request{
+            .doc_path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, "doc_probe = x"),
+        };
+        const variable = completion.visibleVariable(&case.index, case.allocator, request, "x") orelse return error.ExpectedVariable;
+        try testing.expectEqualStrings("x", variable.name);
+        try testing.expectEqualStrings("String", variable.type_label);
+        const definition = completion.visibleDefinition(&case.index, case.allocator, request, "x", null, .variable) orelse return error.ExpectedDefinition;
+        try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
+        try testing.expect(definition.module_id != null);
+    }
+
+    {
+        const request = completion.Request{
+            .doc_path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, "page_probe = x"),
+        };
+        const variable = completion.visibleVariable(&case.index, case.allocator, request, "x") orelse return error.ExpectedVariable;
+        try testing.expectEqualStrings("Number", variable.type_label);
+        const definition = completion.visibleDefinition(&case.index, case.allocator, request, "x", null, .variable) orelse return error.ExpectedDefinition;
+        try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
+        try testing.expect(definition.module_id != null);
+    }
+
+    {
+        const request = completion.Request{
+            .doc_path = case.path,
+            .source = case.source,
+            .offset = offsetAfter(case.source, "fn_probe = x"),
+        };
+        const variable = completion.visibleVariable(&case.index, case.allocator, request, "x") orelse return error.ExpectedVariable;
+        try testing.expectEqualStrings("Bool", variable.type_label);
+        const definition = completion.visibleDefinition(&case.index, case.allocator, request, "x", null, .variable) orelse return error.ExpectedDefinition;
+        try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
+        try testing.expect(definition.module_id != null);
+    }
+}
+
 test "analysis completion: normal positions include builtin and source type names" {
     var case = try CompletionCase.init(
         \\import std:themes/default as *

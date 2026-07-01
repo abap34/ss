@@ -36,6 +36,12 @@ pub const VisibleDefinition = struct {
     module_id: ?core.SourceModuleId,
 };
 
+pub const VisibleVariable = struct {
+    name: []const u8,
+    type_label: []const u8,
+    module_id: core.SourceModuleId,
+};
+
 pub const VisibleTypeDefinition = struct {
     name: []const u8,
     module_id: core.SourceModuleId,
@@ -317,8 +323,7 @@ pub fn complete(allocator: std.mem.Allocator, index: *const Index, request: Requ
         return try builder.finish();
     }
 
-    const keywords = [_][]const u8{ "import", "as", "with", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
-    for (keywords) |keyword| try builder.add(.{ .label = keyword, .kind = .keyword, .detail = "keyword" });
+    for (language_names.keywordLabels()) |keyword| try builder.add(.{ .label = keyword, .kind = .keyword, .detail = "keyword" });
     try appendImportAsCompletions(&builder, request.source, request.offset);
     try appendVisibleFunctions(&builder, index, allocator, request.doc_path);
     for (index.variables) |variable| {
@@ -345,12 +350,28 @@ pub fn visibleDefinition(index: *const Index, allocator: std.mem.Allocator, requ
     const resolved = switch (kind) {
         .function => visibleFunctionInfo(index, allocator, request, name, qualifier),
         .constant => visibleConstantInfo(index, allocator, request, name, qualifier),
-        .variable => null,
+        .variable => {
+            const variable = visibleVariable(index, allocator, request, name) orelse return null;
+            return .{
+                .name = variable.name,
+                .kind = .variable,
+                .module_id = variable.module_id,
+            };
+        },
     } orelse return null;
     return .{
         .name = resolved.name,
         .kind = kind,
         .module_id = resolved.module_id,
+    };
+}
+
+pub fn visibleVariable(index: *const Index, allocator: std.mem.Allocator, request: Request, name: []const u8) ?VisibleVariable {
+    const variable = bestVisibleVariable(index, allocator, name, request) orelse return null;
+    return .{
+        .name = variable.name,
+        .type_label = variable.type_label,
+        .module_id = variable.module_id,
     };
 }
 
@@ -1965,7 +1986,7 @@ fn unquoteImportSpec(spec: []const u8) []const u8 {
 fn defaultAliasCandidate(spec: []const u8) ?[]const u8 {
     if (language_names.importSpecHasFileExtension(spec)) return null;
     const base = language_names.defaultImportAlias(spec);
-    if (!isValidAlias(base) or isKeyword(base)) return null;
+    if (!isValidAlias(base) or language_names.isKeyword(base)) return null;
     return base;
 }
 
@@ -1975,12 +1996,6 @@ fn isValidAlias(alias: []const u8) bool {
         if (!utils.source.isIdentifierContinue(byte)) return false;
     }
     return true;
-}
-
-fn isKeyword(text: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "as", "const", "document", "page", "fn", "let", "return", "end", "type", "extend", "if", "then", "else" };
-    for (keywords) |keyword| if (std.mem.eql(u8, text, keyword)) return true;
-    return false;
 }
 
 fn samePath(allocator: std.mem.Allocator, left: []const u8, right: []const u8) bool {
