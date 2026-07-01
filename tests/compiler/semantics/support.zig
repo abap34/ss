@@ -284,34 +284,29 @@ pub fn expectVariableObjectClasses(
 
     const text = try compiler.dump.toOwnedString(allocator, &ir);
     defer allocator.free(text);
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, text, .{});
+    var parsed = try utils.json.parseValue(allocator, text, .{});
     defer parsed.deinit();
 
-    const root = parsed.value.object;
-    const variables = root.get("variables") orelse return error.ExpectedDumpTextMissing;
-    if (variables != .array) return error.ExpectedDumpTextMissing;
+    if (parsed.value != .object) return error.ExpectedDumpTextMissing;
+    const root = &parsed.value.object;
+    const variables = utils.json.arrayFieldObject(root, "variables") orelse return error.ExpectedDumpTextMissing;
 
     for (expected) |item| {
-        if (!dumpVariableObjectClassMatches(&variables.array, item)) return error.ExpectedDumpTextMissing;
+        if (!dumpVariableObjectClassMatches(variables, item)) return error.ExpectedDumpTextMissing;
     }
 }
 
-fn dumpVariableObjectClassMatches(variables: *const std.json.Array, expected: VariableObjectClassExpectation) bool {
+fn dumpVariableObjectClassMatches(variables: *const utils.json.ValueArray, expected: VariableObjectClassExpectation) bool {
     for (variables.items) |value| {
         if (value != .object) continue;
         const object = &value.object;
-        if (!std.mem.eql(u8, jsonStringField(object, "name") orelse "", expected.name)) continue;
-        if (!std.mem.eql(u8, jsonStringField(object, "scopeKind") orelse "", expected.scope_kind)) continue;
-        if (!optionalStringEql(jsonStringField(object, "scopeName"), expected.scope_name)) continue;
-        if (!optionalStringEql(jsonStringField(object, "objectClass"), expected.object_class)) continue;
+        if (!std.mem.eql(u8, utils.json.stringField(object, "name") orelse "", expected.name)) continue;
+        if (!std.mem.eql(u8, utils.json.stringField(object, "scopeKind") orelse "", expected.scope_kind)) continue;
+        if (!optionalStringEql(utils.json.stringField(object, "scopeName"), expected.scope_name)) continue;
+        if (!optionalStringEql(utils.json.stringField(object, "objectClass"), expected.object_class)) continue;
         return true;
     }
     return false;
-}
-
-fn jsonStringField(object: *const std.json.ObjectMap, key: []const u8) ?[]const u8 {
-    const value = object.get(key) orelse return null;
-    return if (value == .string) value.string else null;
 }
 
 fn optionalStringEql(left: ?[]const u8, right: ?[]const u8) bool {

@@ -1,6 +1,9 @@
 const std = @import("std");
 const ast = @import("ast");
 const model = @import("model");
+const utils = @import("utils");
+
+const json = utils.json;
 
 pub fn propertyString(allocator: std.mem.Allocator, value: model.Value) ![]const u8 {
     return switch (value) {
@@ -23,7 +26,7 @@ pub fn propertyStringNeedsFree(value: model.Value) bool {
 }
 
 pub fn parsePropertyValue(allocator: std.mem.Allocator, text: []const u8) !model.Value {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, text, .{});
+    var parsed = try json.parseValue(allocator, text, .{});
     defer parsed.deinit();
     return try parseTaggedValue(allocator, parsed.value);
 }
@@ -78,24 +81,24 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
         },
         .string => |text| {
             try out.appendSlice(allocator, "{\"kind\":\"string\",\"value\":");
-            try appendJsonString(allocator, out, text);
+            try json.appendString(allocator, out, text);
             try out.append(allocator, '}');
         },
         .enum_case => |case| {
             try out.appendSlice(allocator, "{\"kind\":\"enum\",\"type\":");
-            try appendJsonString(allocator, out, case.enum_name);
+            try json.appendString(allocator, out, case.enum_name);
             try out.appendSlice(allocator, ",\"case\":");
-            try appendJsonString(allocator, out, case.case_name);
+            try json.appendString(allocator, out, case.case_name);
             try out.append(allocator, '}');
         },
         .record => |record| {
             try out.appendSlice(allocator, "{\"kind\":\"record\",\"type\":");
-            try appendJsonString(allocator, out, record.type_name);
+            try json.appendString(allocator, out, record.type_name);
             try out.appendSlice(allocator, ",\"fields\":[");
             for (record.fields.items, 0..) |field, index| {
                 if (index > 0) try out.append(allocator, ',');
                 try out.appendSlice(allocator, "{\"name\":");
-                try appendJsonString(allocator, out, field.name);
+                try json.appendString(allocator, out, field.name);
                 try out.appendSlice(allocator, ",\"explicit\":");
                 try out.appendSlice(allocator, if (field.explicit) "true" else "false");
                 try out.appendSlice(allocator, ",\"value\":");
@@ -118,69 +121,52 @@ fn appendTaggedValueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), 
     }
 }
 
-fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
-    const escaped = try std.json.Stringify.valueAlloc(allocator, text, .{});
-    defer allocator.free(escaped);
-    try out.appendSlice(allocator, escaped);
-}
-
-fn parseTaggedValue(allocator: std.mem.Allocator, value: std.json.Value) !model.Value {
+fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Value {
     if (value != .object) return error.InvalidValueTag;
-    const object = value.object;
-    const kind_value = object.get("kind") orelse return error.InvalidValueTag;
-    if (kind_value != .string) return error.InvalidValueTag;
-    const kind = kind_value.string;
+    const object = &value.object;
+    const kind = json.stringField(object, "kind") orelse return error.InvalidValueTag;
     if (std.mem.eql(u8, kind, "none")) return .{ .none = {} };
     if (std.mem.eql(u8, kind, "string")) {
-        const raw = object.get("value") orelse return error.InvalidValueTag;
-        if (raw != .string) return error.InvalidValueTag;
-        return .{ .string = try allocator.dupe(u8, raw.string) };
+        const raw = json.stringField(object, "value") orelse return error.InvalidValueTag;
+        return .{ .string = try allocator.dupe(u8, raw) };
     }
     if (std.mem.eql(u8, kind, "enum")) {
-        const type_value = object.get("type") orelse return error.InvalidValueTag;
-        const case_value = object.get("case") orelse return error.InvalidValueTag;
-        if (type_value != .string or case_value != .string) return error.InvalidValueTag;
+        const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;
+        const case_value = json.stringField(object, "case") orelse return error.InvalidValueTag;
         return .{ .enum_case = .{
-            .enum_name = try allocator.dupe(u8, type_value.string),
-            .case_name = try allocator.dupe(u8, case_value.string),
+            .enum_name = try allocator.dupe(u8, type_value),
+            .case_name = try allocator.dupe(u8, case_value),
         } };
     }
     if (std.mem.eql(u8, kind, "record")) {
-        const type_value = object.get("type") orelse return error.InvalidValueTag;
-        const fields_value = object.get("fields") orelse return error.InvalidValueTag;
-        if (type_value != .string or fields_value != .array) return error.InvalidValueTag;
-        var record = model.RecordValue.init(try allocator.dupe(u8, type_value.string));
+        const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;
+        const fields = json.arrayFieldObject(object, "fields") orelse return error.InvalidValueTag;
+        var record = model.RecordValue.init(try allocator.dupe(u8, type_value));
         errdefer record.deinit(allocator);
-        for (fields_value.array.items) |field_item| {
+        for (fields.items) |field_item| {
             if (field_item != .object) return error.InvalidValueTag;
-            const field_object = field_item.object;
-            const name_value = field_object.get("name") orelse return error.InvalidValueTag;
-            const nested_value = field_object.get("value") orelse return error.InvalidValueTag;
-            if (name_value != .string) return error.InvalidValueTag;
-            const explicit = if (field_object.get("explicit")) |explicit_value| blk: {
-                if (explicit_value != .bool) return error.InvalidValueTag;
+            const field_object = &field_item.object;
+            const name_value = json.stringField(field_object, "name") orelse return error.InvalidValueTag;
+            const nested_value = json.fieldValue(field_object, "value") orelse return error.InvalidValueTag;
+            const explicit = if (json.fieldValue(field_object, "explicit")) |explicit_value| blk: {
+                if (explicit_value.* != .bool) return error.InvalidValueTag;
                 break :blk explicit_value.bool;
             } else true;
             try record.fields.append(allocator, .{
-                .name = try allocator.dupe(u8, name_value.string),
-                .value = try parseTaggedValue(allocator, nested_value),
+                .name = try allocator.dupe(u8, name_value),
+                .value = try parseTaggedValue(allocator, nested_value.*),
                 .explicit = explicit,
             });
         }
         return .{ .record = record };
     }
     if (std.mem.eql(u8, kind, "number")) {
-        const raw = object.get("value") orelse return error.InvalidValueTag;
-        return switch (raw) {
-            .integer => |integer| .{ .number = @floatFromInt(integer) },
-            .float => |float| .{ .number = @floatCast(float) },
-            else => error.InvalidValueTag,
-        };
+        const raw = json.numberField(object, "value") orelse return error.InvalidValueTag;
+        return .{ .number = @floatCast(raw) };
     }
     if (std.mem.eql(u8, kind, "bool")) {
-        const raw = object.get("value") orelse return error.InvalidValueTag;
-        if (raw != .bool) return error.InvalidValueTag;
-        return .{ .boolean = raw.bool };
+        const raw = json.boolField(object, "value") orelse return error.InvalidValueTag;
+        return .{ .boolean = raw };
     }
     return error.InvalidValueTag;
 }

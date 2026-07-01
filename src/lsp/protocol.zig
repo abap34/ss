@@ -3,10 +3,24 @@ const project = @import("../project.zig");
 const utils = @import("utils");
 
 const source = utils.source;
+const json = utils.json;
 
-pub const JsonValue = std.json.Value;
-pub const JsonObject = std.json.ObjectMap;
-pub const JsonArray = std.json.Array;
+pub const JsonValue = json.Value;
+pub const JsonObject = json.ObjectMap;
+pub const JsonArray = json.ValueArray;
+pub const appendJsonValue = json.appendValue;
+pub const appendJsonString = json.appendString;
+pub const appendInt = json.appendInt;
+pub const appendBool = json.appendBool;
+pub const appendFloat = json.appendFloat4;
+pub const stringField = json.stringField;
+pub const intField = json.intField;
+pub const usizeField = json.usizeField;
+pub const numberField = json.numberField;
+pub const objectField = json.objectField;
+pub const objectFieldObject = json.objectFieldObject;
+pub const arrayField = json.arrayField;
+pub const arrayFieldObject = json.arrayFieldObject;
 
 pub const Range = struct {
     start_line: usize,
@@ -14,10 +28,6 @@ pub const Range = struct {
     end_line: usize,
     end_character: usize,
 };
-
-pub fn jsonLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    return allocator.dupe(u8, text);
-}
 
 pub fn readMessage(allocator: std.mem.Allocator) !?[]u8 {
     var header = std.ArrayList(u8).empty;
@@ -106,95 +116,12 @@ pub fn sendNotification(allocator: std.mem.Allocator, method: []const u8, params
     try sendRaw(out.items);
 }
 
-pub fn appendJsonValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: JsonValue) !void {
-    const text = try std.json.Stringify.valueAlloc(allocator, value, .{});
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
-}
-
-pub fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
-    const escaped = try std.json.Stringify.valueAlloc(allocator, text, .{});
-    defer allocator.free(escaped);
-    try out.appendSlice(allocator, escaped);
-}
-
-pub fn appendInt(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: anytype) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
-}
-
-pub fn appendBool(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: bool) !void {
-    try out.appendSlice(allocator, if (value) "true" else "false");
-}
-
-pub fn appendFloat(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: f64) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d:.4}", .{value});
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
-}
-
-pub fn stringField(object: *const JsonObject, key: []const u8) ?[]const u8 {
-    const value = @constCast(object).getPtr(key) orelse return null;
-    return if (value.* == .string) value.string else null;
-}
-
-pub fn intField(object: *const JsonObject, key: []const u8) ?i64 {
-    const value = @constCast(object).getPtr(key) orelse return null;
-    return switch (value.*) {
-        .integer => |v| v,
-        .float => |v| @intFromFloat(v),
-        else => null,
-    };
-}
-
-pub fn usizeField(object: *const JsonObject, key: []const u8) ?usize {
-    const value = intField(object, key) orelse return null;
-    if (value < 0) return null;
-    return @intCast(value);
-}
-
 pub fn lspLine(object: *const JsonObject) usize {
     return @intCast(@max(0, intField(object, "line") orelse 0));
 }
 
 pub fn lspCharacter(object: *const JsonObject) usize {
     return @intCast(@max(0, intField(object, "character") orelse 0));
-}
-
-pub fn numberField(object: *const JsonObject, key: []const u8) ?f64 {
-    const value = @constCast(object).getPtr(key) orelse return null;
-    return switch (value.*) {
-        .integer => |v| @floatFromInt(v),
-        .float => |v| v,
-        else => null,
-    };
-}
-
-pub fn objectField(value: JsonValue, key: []const u8) ?*const JsonObject {
-    if (value != .object) return null;
-    const child = @constCast(&value.object).getPtr(key) orelse return null;
-    if (child.* != .object) return null;
-    return &child.object;
-}
-
-pub fn objectFieldObject(object: *const JsonObject, key: []const u8) ?*const JsonObject {
-    const child = @constCast(object).getPtr(key) orelse return null;
-    if (child.* != .object) return null;
-    return &child.object;
-}
-
-pub fn arrayField(value: JsonValue, key: []const u8) ?*const JsonArray {
-    if (value != .object) return null;
-    const child = @constCast(&value.object).getPtr(key) orelse return null;
-    if (child.* != .array) return null;
-    return &child.array;
-}
-
-pub fn arrayFieldObject(object: *const JsonObject, key: []const u8) ?*const JsonArray {
-    const child = @constCast(object).getPtr(key) orelse return null;
-    if (child.* != .array) return null;
-    return &child.array;
 }
 
 pub fn docPathFromParams(allocator: std.mem.Allocator, params: ?JsonValue) !?[]u8 {

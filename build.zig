@@ -312,6 +312,9 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/utils/fs/spec_tests.zig", &.{
         import("utils", modules.utils),
     }, true);
+    addModuleTest(ctx, test_step, "tests/utils/json/spec_tests.zig", &.{
+        import("utils", modules.utils),
+    }, true);
     addModuleTest(ctx, test_step, "tests/project/config/spec_tests.zig", &.{
         import("project", modules.project),
         import("utils", modules.utils),

@@ -30,7 +30,6 @@ const DocumentCompletionCache = lsp_state.DocumentCompletionCache;
 const DiagnosticSet = lsp_diagnostics.DiagnosticSet;
 const max_poll_timeout_ms = std.math.maxInt(i32);
 
-const jsonLiteral = protocol.jsonLiteral;
 const readMessage = protocol.readMessage;
 const respond = protocol.respond;
 const respondError = protocol.respondError;
@@ -552,12 +551,13 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn handleMessage(server: *Server, body: []const u8) !void {
-    var parsed = std.json.parseFromSlice(JsonValue, server.allocator, body, .{}) catch return;
+    var parsed = utils.json.parseValue(server.allocator, body, .{}) catch return;
     defer parsed.deinit();
+    if (parsed.value != .object) return;
     const root = parsed.value.object;
     const method = stringField(&root, "method") orelse return;
-    const id = root.get("id");
-    const params = root.get("params");
+    const id = if (utils.json.fieldValue(&root, "id")) |value| value.* else null;
+    const params = if (utils.json.fieldValue(&root, "params")) |value| value.* else null;
 
     if (std.mem.eql(u8, method, "initialize")) {
         const result = try initializeResult(server.allocator);
@@ -810,7 +810,7 @@ fn snapshotForDocument(server: *Server, doc_path: []const u8, owned_snapshot: *?
 }
 
 fn completionResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .completion)) return try jsonLiteral(server.allocator, "{\"isIncomplete\":false,\"items\":[]}");
+    if (!lspFeatureEnabled(server, .completion)) return try server.allocator.dupe(u8, "{\"isIncomplete\":false,\"items\":[]}");
     var out = std.ArrayList(u8).empty;
     const allocator = server.allocator;
     var position = try requestPosition(server, params);
@@ -1083,18 +1083,18 @@ fn completionRequest(context: *const RequestContext) analysis_completion.Request
 }
 
 fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
+    var context = try requestContext(server, params) orelse return try server.allocator.dupe(u8, "null");
     defer context.deinit(server.allocator);
     var owned_snapshot: ?Snapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit(server.allocator);
-    const snapshot = try snapshotForDocument(server, context.doc_path, &owned_snapshot) orelse return try jsonLiteral(server.allocator, "null");
-    if (!lspFeatureEnabledForSnapshot(snapshot, .hover)) return try jsonLiteral(server.allocator, "null");
+    const snapshot = try snapshotForDocument(server, context.doc_path, &owned_snapshot) orelse return try server.allocator.dupe(u8, "null");
+    if (!lspFeatureEnabledForSnapshot(snapshot, .hover)) return try server.allocator.dupe(u8, "null");
     if (snapshot.dump_json) |json_text| {
-        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
+        var parsed = utils.json.parseValue(server.allocator, json_text, .{}) catch return try server.allocator.dupe(u8, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
         const completion_index = if (snapshot.completion_index) |*index| index else null;
-        const markdown = try hoverMarkdown(server.allocator, &root, &context, completion_index) orelse return try jsonLiteral(server.allocator, "null");
+        const markdown = try hoverMarkdown(server.allocator, &root, &context, completion_index) orelse return try server.allocator.dupe(u8, "null");
         defer server.allocator.free(markdown);
         var out = std.ArrayList(u8).empty;
         try out.appendSlice(server.allocator, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
@@ -1102,7 +1102,7 @@ fn hoverResult(server: *Server, params: ?JsonValue) ![]const u8 {
         try out.appendSlice(server.allocator, "}}");
         return out.toOwnedSlice(server.allocator);
     }
-    return try jsonLiteral(server.allocator, "null");
+    return try server.allocator.dupe(u8, "null");
 }
 
 fn hoverMarkdown(
@@ -1150,14 +1150,14 @@ fn hoverMarkdown(
 }
 
 fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    var context = try requestContext(server, params) orelse return try jsonLiteral(server.allocator, "null");
+    var context = try requestContext(server, params) orelse return try server.allocator.dupe(u8, "null");
     defer context.deinit(server.allocator);
     var owned_snapshot: ?Snapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit(server.allocator);
-    const snapshot = try snapshotForDocument(server, context.doc_path, &owned_snapshot) orelse return try jsonLiteral(server.allocator, "null");
-    if (!lspFeatureEnabledForSnapshot(snapshot, .definition)) return try jsonLiteral(server.allocator, "null");
+    const snapshot = try snapshotForDocument(server, context.doc_path, &owned_snapshot) orelse return try server.allocator.dupe(u8, "null");
+    if (!lspFeatureEnabledForSnapshot(snapshot, .definition)) return try server.allocator.dupe(u8, "null");
     if (snapshot.dump_json) |json_text| {
-        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "null");
+        var parsed = utils.json.parseValue(server.allocator, json_text, .{}) catch return try server.allocator.dupe(u8, "null");
         defer parsed.deinit();
         const root = parsed.value.object;
         var out = std.ArrayList(u8).empty;
@@ -1193,11 +1193,11 @@ fn definitionResult(server: *Server, params: ?JsonValue) ![]const u8 {
                 try appendDefinitionLocation(server.allocator, &out, &root, definition, snapshot.entry_path, &first);
             } else if (try appendResolvedTypeDefinitionLocation(server.allocator, &out, &root, index, &context, snapshot.entry_path, &first)) {}
         }
-        if (first) return try jsonLiteral(server.allocator, "null");
+        if (first) return try server.allocator.dupe(u8, "null");
         try out.append(server.allocator, ']');
         return out.toOwnedSlice(server.allocator);
     }
-    return try jsonLiteral(server.allocator, "null");
+    return try server.allocator.dupe(u8, "null");
 }
 
 fn resolvedDefinitionObject(
@@ -1308,17 +1308,17 @@ fn appendDefinitionLocation(
 }
 
 fn inlayHintResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
     defer server.allocator.free(doc_path);
     var owned_snapshot: ?Snapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit(server.allocator);
-    const snapshot = try snapshotForDocument(server, doc_path, &owned_snapshot) orelse return try jsonLiteral(server.allocator, "[]");
-    if (!lspFeatureEnabledForSnapshot(snapshot, .inlay_hints)) return try jsonLiteral(server.allocator, "[]");
+    const snapshot = try snapshotForDocument(server, doc_path, &owned_snapshot) orelse return try server.allocator.dupe(u8, "[]");
+    if (!lspFeatureEnabledForSnapshot(snapshot, .inlay_hints)) return try server.allocator.dupe(u8, "[]");
     var out = std.ArrayList(u8).empty;
     try out.append(server.allocator, '[');
     var first = true;
     if (snapshot.dump_json) |json_text| {
-        var parsed = std.json.parseFromSlice(JsonValue, server.allocator, json_text, .{}) catch return try jsonLiteral(server.allocator, "[]");
+        var parsed = utils.json.parseValue(server.allocator, json_text, .{}) catch return try server.allocator.dupe(u8, "[]");
         defer parsed.deinit();
         if (arrayFieldObject(&parsed.value.object, "hints")) |hints| for (hints.items) |item| if (item == .object) {
             const file = stringField(&item.object, "file") orelse continue;
@@ -1353,47 +1353,47 @@ fn inlayHintKindEnabled(snapshot: *const Snapshot, kind: []const u8) bool {
 }
 
 fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .document_symbols)) return try jsonLiteral(server.allocator, "[]");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
+    if (!lspFeatureEnabled(server, .document_symbols)) return try server.allocator.dupe(u8, "[]");
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
     defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(text);
     return document_features.documentSymbolsJson(server.allocator, text);
 }
 
 fn foldingRangeResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .folding_ranges)) return try jsonLiteral(server.allocator, "[]");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
+    if (!lspFeatureEnabled(server, .folding_ranges)) return try server.allocator.dupe(u8, "[]");
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
     defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(text);
     return document_features.foldingRangesJson(server.allocator, text);
 }
 
 fn semanticTokensResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .semantic_tokens)) return try jsonLiteral(server.allocator, "{\"data\":[]}");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "{\"data\":[]}");
+    if (!lspFeatureEnabled(server, .semantic_tokens)) return try server.allocator.dupe(u8, "{\"data\":[]}");
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "{\"data\":[]}");
     defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "{\"data\":[]}");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "{\"data\":[]}");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(text);
     return document_features.semanticTokensJson(server.allocator, text);
 }
 
 fn documentColorResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .colors)) return try jsonLiteral(server.allocator, "[]");
-    const doc_path = try docPathFromParams(server.allocator, params) orelse return try jsonLiteral(server.allocator, "[]");
+    if (!lspFeatureEnabled(server, .colors)) return try server.allocator.dupe(u8, "[]");
+    const doc_path = try docPathFromParams(server.allocator, params) orelse return try server.allocator.dupe(u8, "[]");
     defer server.allocator.free(doc_path);
-    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try jsonLiteral(server.allocator, "[]");
+    const text = server.sourceForPath(doc_path) orelse utils.fs.readFileAlloc(server.io, server.allocator, doc_path) catch return try server.allocator.dupe(u8, "[]");
     const owned_source = server.sourceForPath(doc_path) == null;
     defer if (owned_source) server.allocator.free(text);
     return document_features.documentColorsJson(server.allocator, text);
 }
 
 fn colorPresentationResult(server: *Server, params: ?JsonValue) ![]const u8 {
-    if (!lspFeatureEnabled(server, .colors)) return try jsonLiteral(server.allocator, "[]");
+    if (!lspFeatureEnabled(server, .colors)) return try server.allocator.dupe(u8, "[]");
     const color = if (params) |p| objectField(p, "color") else null;
     const red = if (color) |c| numberField(c, "red") orelse 0 else 0;
     const green = if (color) |c| numberField(c, "green") orelse 0 else 0;
