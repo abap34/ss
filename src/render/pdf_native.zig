@@ -7,6 +7,7 @@ const declarations = @import("../language/declarations.zig");
 const semantic_env = @import("../language/env.zig");
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
+const json = utils.json;
 
 const c = @cImport({
     @cInclude("pdf.h");
@@ -919,12 +920,11 @@ fn readCurrentGenerationId(ctx: *DrawContext, current_path: []const u8) !?[]u8 {
         else => return err,
     };
     defer ctx.allocator.free(text);
-    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, text, .{}) catch return null;
+    var parsed = json.parseValue(ctx.allocator, text, .{}) catch return null;
     defer parsed.deinit();
     if (parsed.value != .object) return null;
-    const value = parsed.value.object.getPtr("generation") orelse return null;
-    if (value.* != .string) return null;
-    return try ctx.allocator.dupe(u8, value.string);
+    const value = json.stringField(&parsed.value.object, "generation") orelse return null;
+    return try ctx.allocator.dupe(u8, value);
 }
 
 fn readPageManifest(ctx: *DrawContext, generation_dir: []const u8) !PageManifest {
@@ -932,14 +932,13 @@ fn readPageManifest(ctx: *DrawContext, generation_dir: []const u8) !PageManifest
     defer ctx.allocator.free(path);
     const text = try std.Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.allocator, .limited(1024 * 1024));
     defer ctx.allocator.free(text);
-    var parsed = try std.json.parseFromSlice(std.json.Value, ctx.allocator, text, .{});
+    var parsed = try json.parseValue(ctx.allocator, text, .{});
     defer parsed.deinit();
     if (parsed.value != .object) return error.InvalidRenderCacheManifest;
-    const value = parsed.value.object.getPtr("pageHashes") orelse return error.InvalidRenderCacheManifest;
-    if (value.* != .array) return error.InvalidRenderCacheManifest;
-    const hashes = try ctx.allocator.alloc(u64, value.array.items.len);
+    const value = json.arrayFieldObject(&parsed.value.object, "pageHashes") orelse return error.InvalidRenderCacheManifest;
+    const hashes = try ctx.allocator.alloc(u64, value.items.len);
     errdefer ctx.allocator.free(hashes);
-    for (value.array.items, 0..) |item, index| {
+    for (value.items, 0..) |item, index| {
         if (item != .string) return error.InvalidRenderCacheManifest;
         hashes[index] = std.fmt.parseUnsigned(u64, item.string, 16) catch return error.InvalidRenderCacheManifest;
     }
@@ -1004,13 +1003,13 @@ fn writeLeaseFile(ctx: *DrawContext, lease_path: []const u8, deck_id: []const u8
     var out = std.ArrayList(u8).empty;
     defer out.deinit(ctx.allocator);
     try out.appendSlice(ctx.allocator, "{\"schema\":1,\"pid\":");
-    try appendUnsignedJson(ctx.allocator, &out, @as(u64, @intCast(std.c.getpid())));
+    try json.appendInt(ctx.allocator, &out, @as(u64, @intCast(std.c.getpid())));
     try out.appendSlice(ctx.allocator, ",\"runId\":");
-    try appendJsonString(ctx.allocator, &out, run_id);
+    try json.appendString(ctx.allocator, &out, run_id);
     try out.appendSlice(ctx.allocator, ",\"deckId\":");
-    try appendJsonString(ctx.allocator, &out, deck_id);
+    try json.appendString(ctx.allocator, &out, deck_id);
     try out.appendSlice(ctx.allocator, ",\"protectedGenerations\":[");
-    if (previous_generation) |id| try appendJsonString(ctx.allocator, &out, id);
+    if (previous_generation) |id| try json.appendString(ctx.allocator, &out, id);
     try out.appendSlice(ctx.allocator, "]}");
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
     try renameReplacing(ctx, tmp, lease_path);
@@ -1027,11 +1026,9 @@ fn writeRenderManifest(ctx: *DrawContext, plan: *const RenderPlan) !void {
     try out.appendSlice(ctx.allocator, "{\"schema\":1,\"pageHashes\":[");
     for (plan.pages, 0..) |page, index| {
         if (index != 0) try out.append(ctx.allocator, ',');
-        try out.append(ctx.allocator, '"');
         const text = try std.fmt.allocPrint(ctx.allocator, "{x}", .{page.page_hash});
         defer ctx.allocator.free(text);
-        try out.appendSlice(ctx.allocator, text);
-        try out.append(ctx.allocator, '"');
+        try json.appendString(ctx.allocator, &out, text);
     }
     try out.appendSlice(ctx.allocator, "]}");
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
@@ -1056,7 +1053,7 @@ fn writeCurrentGeneration(ctx: *DrawContext, current_path: []const u8, generatio
     var out = std.ArrayList(u8).empty;
     defer out.deinit(ctx.allocator);
     try out.appendSlice(ctx.allocator, "{\"schema\":1,\"generation\":");
-    try appendJsonString(ctx.allocator, &out, generation_id);
+    try json.appendString(ctx.allocator, &out, generation_id);
     try out.appendSlice(ctx.allocator, "}");
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
     try renameReplacing(ctx, tmp, current_path);
@@ -1131,13 +1128,12 @@ fn leaseBelongsToLiveProcess(ctx: *DrawContext, lease_path: []const u8) !bool {
         else => return err,
     };
     defer ctx.allocator.free(text);
-    var parsed = std.json.parseFromSlice(std.json.Value, ctx.allocator, text, .{}) catch return false;
+    var parsed = json.parseValue(ctx.allocator, text, .{}) catch return false;
     defer parsed.deinit();
     if (parsed.value != .object) return false;
-    const pid_value = parsed.value.object.getPtr("pid") orelse return false;
-    if (pid_value.* != .integer) return false;
-    if (pid_value.integer <= 0 or pid_value.integer > std.math.maxInt(std.c.pid_t)) return false;
-    const pid: std.c.pid_t = @intCast(pid_value.integer);
+    const pid_value = json.integerField(&parsed.value.object, "pid") orelse return false;
+    if (pid_value <= 0 or pid_value > std.math.maxInt(std.c.pid_t)) return false;
+    const pid: std.c.pid_t = @intCast(pid_value);
     const signal: std.c.SIG = @enumFromInt(0);
     switch (std.c.errno(std.c.kill(pid, signal))) {
         .SUCCESS => return true,
@@ -1145,25 +1141,6 @@ fn leaseBelongsToLiveProcess(ctx: *DrawContext, lease_path: []const u8) !bool {
         .PERM => return true,
         else => return true,
     }
-}
-
-fn appendUnsignedJson(allocator: Allocator, out: *std.ArrayList(u8), value: u64) !void {
-    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    defer allocator.free(text);
-    try out.appendSlice(allocator, text);
-}
-
-fn appendJsonString(allocator: Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
-    try out.append(allocator, '"');
-    for (value) |byte| switch (byte) {
-        '\\' => try out.appendSlice(allocator, "\\\\"),
-        '"' => try out.appendSlice(allocator, "\\\""),
-        '\n' => try out.appendSlice(allocator, "\\n"),
-        '\r' => try out.appendSlice(allocator, "\\r"),
-        '\t' => try out.appendSlice(allocator, "\\t"),
-        else => try out.append(allocator, byte),
-    };
-    try out.append(allocator, '"');
 }
 
 fn renameReplacing(ctx: *DrawContext, tmp_path: []const u8, final_path: []const u8) !void {

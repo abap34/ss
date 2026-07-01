@@ -1,4 +1,5 @@
 const std = @import("std");
+const json = @import("json.zig");
 
 pub const path = ".ss-cache/render";
 const artifacts_path = path ++ "/artifacts";
@@ -188,13 +189,12 @@ fn leaseBelongsToLiveProcess(io: std.Io, allocator: std.mem.Allocator, lease_pat
         else => return err,
     };
     defer allocator.free(text);
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch return false;
+    var parsed = json.parseValue(allocator, text, .{}) catch return false;
     defer parsed.deinit();
     if (parsed.value != .object) return false;
-    const pid_value = parsed.value.object.getPtr("pid") orelse return false;
-    if (pid_value.* != .integer) return false;
-    if (pid_value.integer <= 0 or pid_value.integer > std.math.maxInt(std.c.pid_t)) return false;
-    const pid: std.c.pid_t = @intCast(pid_value.integer);
+    const pid_value = json.integerField(&parsed.value.object, "pid") orelse return false;
+    if (pid_value <= 0 or pid_value > std.math.maxInt(std.c.pid_t)) return false;
+    const pid: std.c.pid_t = @intCast(pid_value);
     const signal: std.c.SIG = @enumFromInt(0);
     switch (std.c.errno(std.c.kill(pid, signal))) {
         .SUCCESS => return true,

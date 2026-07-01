@@ -10,8 +10,6 @@ const registry = @import("../language/registry.zig");
 const program_analysis = @import("program.zig");
 const utils = @import("utils");
 
-const JsonObject = std.json.ObjectMap;
-
 pub const CompletionKind = enum {
     keyword,
     function,
