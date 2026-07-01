@@ -2,6 +2,7 @@ pub const check = @import("analysis/check.zig");
 pub const cache = @import("analysis/cache.zig");
 pub const contracts = @import("analysis/contracts.zig");
 pub const dependencies = @import("analysis/dependencies.zig");
+pub const document_features = @import("analysis/document_features.zig");
 pub const infer = @import("analysis/infer.zig");
 pub const program = @import("analysis/program.zig");
 pub const schedule = @import("analysis/schedule.zig");

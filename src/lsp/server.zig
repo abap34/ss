@@ -1428,7 +1428,7 @@ fn documentSymbolResult(server: *Server, params: ?JsonValue) ![]const u8 {
     var doc = try documentTextFromParams(server, params) orelse return try server.allocator.dupe(u8, "[]");
     defer doc.deinit(server.allocator);
     var parsed = syntax.parseWithSourceName(server.allocator, doc.source, doc.path) catch {
-        return document_features.documentSymbolsJson(server.allocator, doc.source);
+        return try server.allocator.dupe(u8, "[]");
     };
     defer parsed.deinit(server.allocator);
     return document_features.documentSymbolsFromProgramJson(server.allocator, doc.source, parsed);
@@ -1439,7 +1439,7 @@ fn foldingRangeResult(server: *Server, params: ?JsonValue) ![]const u8 {
     var doc = try documentTextFromParams(server, params) orelse return try server.allocator.dupe(u8, "[]");
     defer doc.deinit(server.allocator);
     var parsed = syntax.parseWithSourceName(server.allocator, doc.source, doc.path) catch {
-        return document_features.foldingRangesJson(server.allocator, doc.source);
+        return try server.allocator.dupe(u8, "[]");
     };
     defer parsed.deinit(server.allocator);
     return document_features.foldingRangesFromProgramJson(server.allocator, doc.source, parsed);
