@@ -271,6 +271,17 @@ fn expectLoweredDiagnostic(source: []const u8, expected_message: []const u8) !vo
     try compiler_semantics.expectLoweredDiagnostic(testing.io, allocator, path, source, expected_message);
 }
 
+fn expectLoweredDiagnosticWithOrigin(source: []const u8, expected_origin: []const u8, expected_message: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectLoweredDiagnosticWithOrigin(testing.io, allocator, path, source, expected_origin, expected_message);
+}
+
 fn expectLoweringErrorDiagnostic(source: []const u8, expected_message: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4210,6 +4221,31 @@ test "compiler semantics: returned object placement covers connected generated o
         \\end
         \\
     , "UnplacedObject");
+}
+
+test "compiler semantics: page overflow points at generated object call site" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\fn make_box() -> Object
+        \\  return new("wide", "body", "text")
+        \\end
+        \\
+        \\page overflow
+        \\  let box = place!(make_box())
+        \\  ~ box.left == page.right + 10
+        \\  ~ box.bottom == page.bottom + 20
+        \\end
+        \\
+    ;
+    const marker = "let box = place!(make_box())";
+    const start = std.mem.indexOf(u8, source, marker) orelse return error.ExpectedMarker;
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const expected_origin = try std.fmt.allocPrint(allocator, "case.ss:bytes:{d}-", .{start});
+    try expectLoweredDiagnosticWithOrigin(source, expected_origin, "PageOverflow: object exceeds page bounds");
 }
 
 test "compiler semantics: returned object placement follows constraints and group edges" {

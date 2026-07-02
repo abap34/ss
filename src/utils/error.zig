@@ -203,6 +203,15 @@ pub fn printIrDiagnostics(path: []const u8, text: []const u8, ir: anytype) void 
             .message = resolved.message,
             .span = resolved.span,
         });
+        printIrDiagnosticDetails(ir, diagnostic);
+    }
+}
+
+fn printIrDiagnosticDetails(ir: anytype, diagnostic: anytype) void {
+    switch (diagnostic.data) {
+        .page_overflow => |data| printPageOverflowBox(ir, diagnostic, data),
+        .content_overflow => |data| printContentOverflowBox(ir, diagnostic, data),
+        else => {},
     }
 }
 
@@ -475,6 +484,154 @@ fn printConstraintFailureBox(ir: anytype, failure: anytype) void {
     printReset();
 }
 
+fn printPageOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
+    printDim();
+    std.debug.print("╭─ page overflow\n", .{});
+    printReset();
+
+    printDiagnosticPageField(ir, diagnostic.page_id);
+    printDiagnosticNodeField(ir, diagnostic.node_id);
+    printDiagnosticContentField(ir, diagnostic.node_id);
+    printDiagnosticFrameField(ir, diagnostic.node_id);
+    printDiagnosticPageFrameField(ir, diagnostic.page_id);
+    printOverflowField(data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom);
+    printOverflowEdgesField(ir, diagnostic.node_id);
+
+    printDim();
+    std.debug.print("╰─\n", .{});
+    printReset();
+}
+
+fn printContentOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
+    printDim();
+    std.debug.print("╭─ content overflow\n", .{});
+    printReset();
+
+    printDiagnosticPageField(ir, diagnostic.page_id);
+    printDiagnosticNodeField(ir, diagnostic.node_id);
+    printDiagnosticContentField(ir, diagnostic.node_id);
+    printDiagnosticFrameField(ir, diagnostic.node_id);
+    printFloatTripleField("height", data.required_height, data.frame_height, data.overflow_height);
+
+    printDim();
+    std.debug.print("╰─\n", .{});
+    printReset();
+}
+
+fn printDiagnosticPageField(ir: anytype, page_id: anytype) void {
+    const id = page_id orelse return;
+    const page = ir.getNode(id) orelse return;
+    var buffer: [128]u8 = undefined;
+    const label = if (page.page_index) |index|
+        std.fmt.bufPrint(&buffer, "#{d} page {d}", .{ id, index + 1 }) catch return
+    else
+        std.fmt.bufPrint(&buffer, "#{d}", .{id}) catch return;
+    printBoxField("page", label);
+}
+
+fn printDiagnosticNodeField(ir: anytype, node_id: anytype) void {
+    const id = node_id orelse return;
+    const node = ir.getNode(id) orelse return;
+    var buffer: [192]u8 = undefined;
+    const role = node.role orelse "-";
+    const payload = if (node.payload_kind) |payload_kind| @tagName(payload_kind) else "-";
+    const label = std.fmt.bufPrint(&buffer, "#{d} {s} role={s} payload={s}", .{ id, node.name, role, payload }) catch return;
+    printBoxField("object", label);
+}
+
+fn printDiagnosticContentField(ir: anytype, node_id: anytype) void {
+    const id = node_id orelse return;
+    const node = ir.getNode(id) orelse return;
+    const content = node.content orelse return;
+    const preview = diagnosticContentPreview(ir.allocator, content, 96) catch return;
+    defer ir.allocator.free(preview);
+    printBoxField("content", preview);
+}
+
+fn printDiagnosticFrameField(ir: anytype, node_id: anytype) void {
+    const id = node_id orelse return;
+    const node = ir.getNode(id) orelse return;
+    var buffer: [160]u8 = undefined;
+    const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height }) catch return;
+    printBoxField("frame", label);
+}
+
+fn printDiagnosticPageFrameField(ir: anytype, page_id: anytype) void {
+    const id = page_id orelse return;
+    const page = ir.getNode(id) orelse return;
+    var buffer: [160]u8 = undefined;
+    const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ page.frame.x, page.frame.y, page.frame.width, page.frame.height }) catch return;
+    printBoxField("page frame", label);
+}
+
+fn printOverflowField(left: f32, right: f32, top: f32, bottom: f32) void {
+    var buffer: [192]u8 = undefined;
+    const label = std.fmt.bufPrint(&buffer, "left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}", .{ left, right, top, bottom }) catch return;
+    printBoxField("overflow", label);
+}
+
+fn printOverflowEdgesField(ir: anytype, node_id: anytype) void {
+    const id = node_id orelse return;
+    const node = ir.getNode(id) orelse return;
+    var buffer: [192]u8 = undefined;
+    const label = std.fmt.bufPrint(
+        &buffer,
+        "left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
+        .{ node.frame.x, node.frame.x + node.frame.width, node.frame.y + node.frame.height, node.frame.y },
+    ) catch return;
+    printBoxField("object edges", label);
+}
+
+fn printFloatTripleField(name: []const u8, required: f32, actual: f32, overflow: f32) void {
+    var buffer: [160]u8 = undefined;
+    const label = std.fmt.bufPrint(&buffer, "required={d:.1} frame={d:.1} overflow={d:.1}", .{ required, actual, overflow }) catch return;
+    printBoxField(name, label);
+}
+
+fn diagnosticContentPreview(allocator: std.mem.Allocator, text: []const u8, max_chars: usize) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var iter = std.unicode.Utf8View.init(text) catch {
+        return diagnosticBytePreview(allocator, text, max_chars);
+    };
+    var codepoints = iter.iterator();
+    var count: usize = 0;
+    while (codepoints.nextCodepointSlice()) |slice| {
+        if (count >= max_chars) {
+            try out.appendSlice(allocator, "...");
+            break;
+        }
+        if (std.mem.eql(u8, slice, "\n")) {
+            try out.appendSlice(allocator, "\\n");
+        } else if (std.mem.eql(u8, slice, "\t")) {
+            try out.appendSlice(allocator, "\\t");
+        } else {
+            try out.appendSlice(allocator, slice);
+        }
+        count += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn diagnosticBytePreview(allocator: std.mem.Allocator, text: []const u8, max_bytes: usize) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var count: usize = 0;
+    for (text) |byte| {
+        if (count >= max_bytes) {
+            try out.appendSlice(allocator, "...");
+            break;
+        }
+        switch (byte) {
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            else => try out.append(allocator, byte),
+        }
+        count += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 fn printConstraintPropagationBox(failure: anytype, propagation: anytype) void {
     printDim();
     std.debug.print("╭─ propagation\n", .{});
@@ -718,12 +875,12 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
         ),
         .page_overflow => |data| std.fmt.allocPrint(
             allocator,
-            "PageOverflow: left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
+            "PageOverflow: object exceeds page bounds by left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
             .{ data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom },
         ),
         .content_overflow => |data| std.fmt.allocPrint(
             allocator,
-            "ContentOverflow: required_height={d:.1} frame_height={d:.1} overflow={d:.1}",
+            "ContentOverflow: content requires height={d:.1}, frame height={d:.1}, overflow={d:.1}",
             .{ data.required_height, data.frame_height, data.overflow_height },
         ),
     };

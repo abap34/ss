@@ -531,6 +531,27 @@ pub fn expectLoweredDiagnostic(
     return error.ExpectedDiagnosticMissing;
 }
 
+pub fn expectLoweredDiagnosticWithOrigin(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    source: []const u8,
+    expected_origin: []const u8,
+    expected_message: []const u8,
+) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    for (ir.diagnostics.items) |diagnostic| {
+        const origin = diagnostic.origin orelse continue;
+        if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
+        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        defer allocator.free(message);
+        if (std.mem.indexOf(u8, message, expected_message) != null) return;
+    }
+    return error.ExpectedDiagnosticMissing;
+}
+
 pub fn expectNoLoweredDiagnostic(
     io: std.Io,
     allocator: std.mem.Allocator,
