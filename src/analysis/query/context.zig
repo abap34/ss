@@ -15,8 +15,18 @@ pub const Context = struct {
     offset: usize,
 
     pub fn init(allocator: std.mem.Allocator, req: types.SourceRequest) !Context {
+        return initWithBudget(allocator, req, null);
+    }
+
+    pub fn initWithBudget(allocator: std.mem.Allocator, req: types.SourceRequest, budget: ?types.QueryBudget) !Context {
         var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch null;
         errdefer if (parsed) |*result| result.deinit(allocator);
+        if (budget) |query_budget| {
+            if (query_budget.expired()) {
+                if (parsed) |*result| result.deinit(allocator);
+                parsed = null;
+            }
+        }
         const parsed_program = if (parsed) |*result| &result.program else null;
         const target = try targetAtOffset(allocator, req.source, req.offset, parsed_program) orelse return error.NoQueryTarget;
         return .{
