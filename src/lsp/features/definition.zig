@@ -5,6 +5,7 @@ const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const project = @import("../../project.zig");
 const utils = @import("utils");
 const protocol = @import("../protocol.zig");
+const query_budget = @import("../query_budget.zig");
 const lsp_state = @import("../state.zig");
 
 pub const Context = struct {
@@ -25,7 +26,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .source = position.source,
         .offset = position.offset,
         .source_version = snapshot.generation,
-    }, .{ .budget_ms = 10 });
+    }, .{ .budget_ms = query_budget.definition_ms });
     defer ctx.allocator.free(targets);
     return json(ctx.allocator, targets);
 }

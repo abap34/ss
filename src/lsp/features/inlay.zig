@@ -3,6 +3,7 @@ const core = @import("core");
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const protocol = @import("../protocol.zig");
+const query_budget = @import("../query_budget.zig");
 const lsp_state = @import("../state.zig");
 
 const ProjectFacts = analysis_snapshot.ProjectFacts;
@@ -19,7 +20,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try ctx.allocator.dupe(u8, "[]");
     if (!lsp_state.featureEnabledForSnapshot(snapshot, .inlay_hints)) return try ctx.allocator.dupe(u8, "[]");
-    const hints = analysis_snapshot.inlayHints(snapshot, doc_path, .{ .budget_ms = 10 });
+    const hints = analysis_snapshot.inlayHints(snapshot, doc_path, .{ .budget_ms = query_budget.inlay_ms });
     return json(ctx.allocator, &snapshot.project, doc_path, hints);
 }
 

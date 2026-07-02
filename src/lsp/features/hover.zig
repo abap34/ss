@@ -3,6 +3,7 @@ const std = @import("std");
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const lsp_state = @import("../state.zig");
 const protocol = @import("../protocol.zig");
+const query_budget = @import("../query_budget.zig");
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -22,7 +23,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .source = position.source,
         .offset = position.offset,
         .source_version = snapshot.generation,
-    }, .{ .budget_ms = 10 }) orelse return nullJson(ctx.allocator);
+    }, .{ .budget_ms = query_budget.hover_ms }) orelse return nullJson(ctx.allocator);
     defer hover.deinit(ctx.allocator);
     return json(ctx.allocator, hover);
 }
