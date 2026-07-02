@@ -566,7 +566,7 @@ const RecordFieldMapping = struct {
     property: []const u8,
 };
 
-fn expandStyleRecordProperty(ctx: anytype, node_id: core.NodeId, key: []const u8, value: core.Value) !void {
+pub fn expandStyleRecordProperty(ctx: anytype, node_id: core.NodeId, key: []const u8, value: core.Value) !void {
     if (value != .record) return;
     const record = value.record;
     if (std.mem.eql(u8, key, "layout")) {

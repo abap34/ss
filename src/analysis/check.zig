@@ -413,7 +413,7 @@ fn checkTopLevelStatement(
         },
         .property_set => |property_set| {
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, property_set.value);
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
+            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, if_stmt.condition);
@@ -588,7 +588,7 @@ fn checkStatement(
             }
         },
         .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin);
+            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
             const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);

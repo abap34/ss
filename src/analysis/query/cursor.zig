@@ -398,8 +398,8 @@ fn sourceNameInStatement(stmt: ast.Statement, offset: usize) ?SourceNameTarget {
                 .text = property_set.object_name,
                 .kind = .identifier,
             };
-            if (spanContainsOptional(property_set.property_name_span, offset)) break :blk .{
-                .text = property_set.property_name,
+            if (pathSegmentAt(property_set.path.items, offset)) |target| break :blk .{
+                .text = target.segment.name,
                 .kind = .member_name,
                 .qualifier = property_set.object_name,
             };
@@ -453,9 +453,10 @@ fn memberInStatement(stmt: ast.Statement, offset: usize) ?MemberTarget {
         .return_expr => |expr| memberInExpr(expr, offset),
         .constrain => |constraint| if (constraint.offset) |expr| memberInExpr(expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (spanContainsOptional(property_set.property_name_span, offset)) break :blk .{
+            const target = pathSegmentAt(property_set.path.items, offset) orelse break :blk memberInExpr(property_set.value, offset);
+            if (target.index == 0) break :blk .{
                 .target = .{ .ident = .{ .name = property_set.object_name, .name_span = property_set.object_name_span } },
-                .name = property_set.property_name,
+                .name = target.segment.name,
             };
             break :blk memberInExpr(property_set.value, offset);
         },
@@ -726,6 +727,21 @@ fn pathPrefixLengthAt(path: []const ast.RecordPathSegment, offset: usize) usize 
         if (offset <= segment.span.end) return index;
     }
     return path.len;
+}
+
+const PathSegmentTarget = struct {
+    segment: ast.RecordPathSegment,
+    index: usize,
+};
+
+fn pathSegmentAt(path: []const ast.RecordPathSegment, offset: usize) ?PathSegmentTarget {
+    for (path, 0..) |segment, index| {
+        if (spanContainsOffset(segment.span, offset)) return .{
+            .segment = segment,
+            .index = index,
+        };
+    }
+    return null;
 }
 
 fn memberInExpr(expr: ast.Expr, offset: usize) ?MemberTarget {

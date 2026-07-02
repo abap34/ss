@@ -780,8 +780,7 @@ pub const Statement = struct {
         property_set: struct {
             object_name: []const u8,
             object_name_span: ?Span = null,
-            property_name: []const u8,
-            property_name_span: ?Span = null,
+            path: std.ArrayList(RecordPathSegment),
             value: Expr,
         },
         if_stmt: struct {
@@ -805,7 +804,8 @@ pub const Statement = struct {
             .constrain => |*decl| decl.deinit(allocator),
             .property_set => |*property_set| {
                 allocator.free(property_set.object_name);
-                allocator.free(property_set.property_name);
+                for (property_set.path.items) |*segment| segment.deinit(allocator);
+                property_set.path.deinit(allocator);
                 property_set.value.deinit(allocator);
             },
             .if_stmt => |*if_stmt| {
