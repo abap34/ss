@@ -1892,6 +1892,16 @@ fn executeStatement(
             }
             const text = try resolveValuePropertyString(ir.allocator, value);
             defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
+            if (std.mem.eql(u8, property_set.property_name, "content")) {
+                ir.setNodeContent(object_id, text) catch |err| switch (err) {
+                    error.DuplicateContentDefinition => {
+                        try reportDuplicateContentDefinition(ir, origin);
+                        return err;
+                    },
+                    else => return err,
+                };
+                return .none;
+            }
             ir.setNodeProperty(object_id, property_set.property_name, text) catch |err| switch (err) {
                 error.DuplicatePropertyDefinition => {
                     try reportDuplicatePropertyDefinition(ir, origin, property_set.property_name);

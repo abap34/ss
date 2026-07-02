@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const eval_toplevel = @import("../eval/toplevel.zig");
-const editor = @import("../analysis/editor.zig");
+const analysis_index = @import("../analysis/index.zig");
 const schedule = @import("../analysis/schedule.zig");
 
 pub fn evaluateDocument(ir: *core.Ir) !void {
@@ -16,22 +16,22 @@ pub fn evaluateDocumentWithSchedule(ir: *core.Ir, graph: *const schedule.Schedul
 
 pub fn solveLayout(ir: *core.Ir) !void {
     try ir.finalize();
-    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
 }
 
 pub fn solveLayoutWithOptions(ir: *core.Ir, options: core.layout.graph.SolveOptions) !void {
     try ir.finalizeWithLayoutTracePathAndOptions(null, options);
-    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
 }
 
 pub fn solveLayoutWithTracePath(ir: *core.Ir, trace_path: []const u8) !void {
     try ir.finalizeWithLayoutTracePath(trace_path);
-    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
 }
 
 pub fn solveLayoutWithTracePathAndOptions(ir: *core.Ir, trace_path: []const u8, options: core.layout.graph.SolveOptions) !void {
     try ir.finalizeWithLayoutTracePathAndOptions(trace_path, options);
-    try editor.refreshSolvedFrameHints(ir.allocator, ir);
+    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
 }
 
 pub fn lowerToIr(ir: *core.Ir) !void {

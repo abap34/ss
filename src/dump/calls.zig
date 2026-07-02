@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 
-const editor = @import("../analysis/editor.zig");
+const query_signature = @import("../analysis/query/signature.zig");
 const registry = @import("../language/registry.zig");
 const json = @import("utils").json;
 
@@ -67,7 +67,7 @@ pub fn writeQueryContractsField(allocator: std.mem.Allocator, root: *json.Object
 }
 
 fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, descriptor: registry.PrimitiveDescriptor) !void {
-    const signature = try editor.formatPrimitiveSignature(allocator, descriptor);
+    const signature = try query_signature.formatPrimitiveSignature(allocator, descriptor);
     defer allocator.free(signature);
 
     var item = try functions.objectItem();
@@ -84,7 +84,7 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
     try item.stringField("summary", descriptor.summary);
     var params = try item.arrayField("params");
     for (descriptor.arg_names, 0..) |_, index| {
-        const label = try editor.formatPrimitiveParam(allocator, descriptor, index);
+        const label = try query_signature.formatPrimitiveParam(allocator, descriptor, index);
         defer allocator.free(label);
         try params.stringItem(label);
     }
@@ -100,7 +100,7 @@ fn writeUserFunction(
     func: ast.FunctionDecl,
     module_id: core.SourceModuleId,
 ) !void {
-    const signature = try editor.formatUserSignature(allocator, name, func);
+    const signature = try query_signature.formatUserSignature(allocator, name, func);
     defer allocator.free(signature);
 
     var item = try functions.objectItem();
@@ -123,7 +123,7 @@ fn writeUserFunction(
     try item.stringField("summary", "");
     var params = try item.arrayField("params");
     for (func.params.items) |param| {
-        const label = try editor.formatUserParam(allocator, param);
+        const label = try query_signature.formatUserParam(allocator, param);
         defer allocator.free(label);
         try params.stringItem(label);
     }
@@ -139,7 +139,7 @@ fn writeUserConst(
     constant_decl: ast.ConstDecl,
     module_id: core.SourceModuleId,
 ) !void {
-    const signature = try editor.formatConstSignature(allocator, name, constant_decl);
+    const signature = try query_signature.formatConstSignature(allocator, name, constant_decl);
     defer allocator.free(signature);
 
     var item = try constants.objectItem();

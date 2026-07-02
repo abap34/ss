@@ -5,7 +5,7 @@ const core = @import("core");
 const language_names = @import("../../language/names.zig");
 const type_resolution = @import("../../language/type_resolution.zig");
 const resolve_query = @import("resolve.zig");
-const editor = @import("../editor.zig");
+const cursor = @import("cursor.zig");
 const syntax = @import("../../syntax.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
@@ -89,7 +89,7 @@ const CandidateBuilder = struct {
 
 fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !?Result {
     const parsed = program orelse return null;
-    const callable = editor.callableAt(parsed, req.offset) orelse return null;
+    const callable = cursor.callableAt(parsed, req.offset) orelse return null;
     if (callable.role != .name) return null;
     const alias = callable.callee.qualifier orelse return null;
     var builder = CandidateBuilder.init(allocator);
@@ -103,7 +103,7 @@ fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
 
 fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !?Result {
     const parsed = program orelse return null;
-    const member = editor.memberAt(parsed, req.offset) orelse return null;
+    const member = cursor.memberAt(parsed, req.offset) orelse return null;
     var builder = CandidateBuilder.init(allocator);
     defer builder.deinit();
     if (enumTypeForExpr(snapshot, req, member.target)) |enum_type| {
@@ -116,7 +116,7 @@ fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
 
 fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !?Result {
     const parsed = program orelse return null;
-    const target = editor.recordUpdateCompletionAt(parsed, req.offset) orelse return null;
+    const target = cursor.recordUpdateCompletionAt(parsed, req.offset) orelse return null;
     const base_record_name = recordNameForCompletionExpr(snapshot, req, parsed, target.target, 0) orelse return null;
     const record_name = resolve_query.recordNameAfterPath(snapshot, base_record_name, target.path_prefix) orelse return null;
     var builder = CandidateBuilder.init(allocator);
@@ -342,7 +342,7 @@ fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *
             if (resolve_query.visibleVariableBinding(snapshot, module.id, req.offset, ident.name)) |variable| {
                 if (propertyTargetForVariable(snapshot, variable)) |target| break :blk target;
             }
-            if (editor.visibleLetBindingAt(program, req.offset, ident.name)) |binding| {
+            if (cursor.visibleLetBindingAt(program, req.offset, ident.name)) |binding| {
                 if (propertyTargetForExpr(snapshot, req, program, binding.expr, depth + 1)) |target| break :blk target;
             }
             if (resolve_query.valueBinding(snapshot, module.id, ident.name, null, .constant)) |constant| {
@@ -367,7 +367,7 @@ fn recordNameForCompletionExpr(snapshot: anytype, req: types.SourceRequest, prog
     if (depth > 16) return null;
     return switch (expr) {
         .ident => |ident| blk: {
-            const binding = editor.visibleLetBindingAt(program, req.offset, ident.name) orelse break :blk null;
+            const binding = cursor.visibleLetBindingAt(program, req.offset, ident.name) orelse break :blk null;
             break :blk recordNameForCompletionExpr(snapshot, req, program, binding.expr, depth + 1);
         },
         else => null,

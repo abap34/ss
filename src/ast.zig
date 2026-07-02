@@ -779,7 +779,9 @@ pub const Statement = struct {
         constrain: ConstraintDecl,
         property_set: struct {
             object_name: []const u8,
+            object_name_span: ?Span = null,
             property_name: []const u8,
+            property_name_span: ?Span = null,
             value: Expr,
         },
         if_stmt: struct {
@@ -801,7 +803,11 @@ pub const Statement = struct {
             .return_expr => |*expr| expr.deinit(allocator),
             .return_void => {},
             .constrain => |*decl| decl.deinit(allocator),
-            .property_set => |*property_set| property_set.value.deinit(allocator),
+            .property_set => |*property_set| {
+                allocator.free(property_set.object_name);
+                allocator.free(property_set.property_name);
+                property_set.value.deinit(allocator);
+            },
             .if_stmt => |*if_stmt| {
                 if_stmt.condition.deinit(allocator);
                 for (if_stmt.then_statements.items) |*stmt| stmt.deinit(allocator);

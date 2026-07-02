@@ -1351,7 +1351,23 @@ const Parser = struct {
                 .value = value.expr,
                 .value_span = value.span,
             });
-            if (self.recovering and fields.items[fields.items.len - 1].value == .hole and (self.eof() or self.source[self.pos] != ',')) break;
+            if (self.recovering and fields.items[fields.items.len - 1].value == .hole) {
+                var close_probe = self.pos;
+                source.skipTriviaFrom(self.source, &close_probe);
+                if (close_probe >= self.source.len or self.source[close_probe] == '}') {
+                    self.pos = close_probe;
+                    break;
+                }
+                const before_recovery_skip = self.pos;
+                source.skipTriviaFrom(self.source, &self.pos);
+                if (!self.eof() and self.source[self.pos] == ',') {
+                    self.pos += 1;
+                    source.skipTriviaFrom(self.source, &self.pos);
+                    continue;
+                }
+                if (self.pos != before_recovery_skip) continue;
+                break;
+            }
             source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == ',') {
                 self.pos += 1;
@@ -1720,6 +1736,15 @@ const Parser = struct {
                 self.pos += 1;
                 const value = try self.parseExpr();
                 try self.consumeStatementTerminator();
+                if (target == .ident) {
+                    return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .property_set = .{
+                        .object_name = target.ident.name,
+                        .object_name_span = target.ident.name_span,
+                        .property_name = member_name.text,
+                        .property_name_span = member_name.span,
+                        .value = value,
+                    } } };
+                }
                 const call = if (std.mem.eql(u8, member_name.text, "content")) blk: {
                     self.allocator.free(member_name.text);
                     break :blk try self.makeCall2("set_content", target, value);

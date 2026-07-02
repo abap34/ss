@@ -1192,6 +1192,10 @@ fn validatePropertySetStatementWithOptions(
     const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
     if (!options.validate_contracts) return;
     if (ir) |sink| {
+        if (std.mem.eql(u8, property_name, "content")) {
+            try ensureType(sink, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
+            return;
+        }
         if (lookupFieldForTarget(sema, object_info, property_name)) |field| {
             try validateFieldValue(sink, field, property_name, value_info, origin);
             return;
