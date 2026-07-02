@@ -1182,7 +1182,7 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
 
     const property = statements[4].kind.property_set;
     try testing.expectEqualStrings("box", property.object_name);
-    try testing.expectEqualStrings("left", property.property_name);
+    try expectPath(property.path.items, &.{"left"});
     try expectString(property.value, "red");
 
     try expectParseError(error.ExpectedConstraintMarker,
@@ -1229,7 +1229,7 @@ test "syntax spec: member expressions stay in the AST" {
     const statements = parsed.program.pages.items[0].statements.items;
     const content_set = statements[1].kind.property_set;
     try testing.expectEqualStrings("target", content_set.object_name);
-    try testing.expectEqualStrings("content", content_set.property_name);
+    try expectPath(content_set.path.items, &.{"content"});
     const concat = try expectCall(content_set.value, "concat", 2);
     _ = try expectMember(concat.args.items[0], "content");
     try expectString(concat.args.items[1], "!");
@@ -1265,25 +1265,40 @@ test "syntax spec: chained member assignment targets the enclosing expression" {
     defer parsed.deinit();
 
     const statements = parsed.program.pages.items[0].statements.items;
-    const color_set = try expectCall(statements[1].kind.expr_stmt, "set_prop", 3);
-    const color_target = try expectMember(color_set.args.items[0], "middle");
-    switch (color_target.target.*) {
-        .ident => |ident| try testing.expectEqualStrings("pipe", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-    try expectString(color_set.args.items[1], "text_color");
-    try expectColor(color_set.args.items[2], "1,0,0");
+    const color_set = statements[1].kind.property_set;
+    try testing.expectEqualStrings("pipe", color_set.object_name);
+    try expectPath(color_set.path.items, &.{ "middle", "text_color" });
+    try expectColor(color_set.value, "1,0,0");
 
-    const content_set = try expectCall(statements[2].kind.expr_stmt, "set_content", 2);
-    const content_target = try expectMember(content_set.args.items[0], "middle");
-    switch (content_target.target.*) {
-        .ident => |ident| try testing.expectEqualStrings("pipe", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-    const concat = try expectCall(content_set.args.items[1], "concat", 2);
+    const content_set = statements[2].kind.property_set;
+    try testing.expectEqualStrings("pipe", content_set.object_name);
+    try expectPath(content_set.path.items, &.{ "middle", "content" });
+    const concat = try expectCall(content_set.value, "concat", 2);
     const read_content = try expectMember(concat.args.items[0], "content");
     _ = try expectMember(read_content.target.*, "middle");
     try expectString(concat.args.items[1], "!");
+}
+
+test "syntax spec: member assignments keep nested property paths" {
+    var parsed = try parse(
+        \\page Members
+        \\  box.layout.x = 102
+        \\  box.text.font.family = "Avenir"
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    const layout = statements[0].kind.property_set;
+    try testing.expectEqualStrings("box", layout.object_name);
+    try expectPath(layout.path.items, &.{ "layout", "x" });
+    try expectNumber(layout.value, 102);
+
+    const font = statements[1].kind.property_set;
+    try testing.expectEqualStrings("box", font.object_name);
+    try expectPath(font.path.items, &.{ "text", "font", "family" });
+    try expectString(font.value, "Avenir");
 }
 
 test "syntax spec: place is an ordinary identifier and bind is removed" {

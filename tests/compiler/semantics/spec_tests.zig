@@ -167,6 +167,17 @@ fn expectObjectProperty(source: []const u8, key: []const u8, expected: []const u
     try compiler_semantics.expectObjectProperty(testing.io, allocator, path, source, key, expected);
 }
 
+fn expectObjectPropertyMissing(source: []const u8, key: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectPropertyMissing(testing.io, allocator, path, source, key);
+}
+
 fn expectObjectPropertyWithThemeOverlay(source: []const u8, theme_source: []const u8, key: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1463,6 +1474,121 @@ test "compiler semantics: structured style values expand to render properties" {
     try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
     try expectObjectProperty(source, "text_font_family", "Menlo");
     try expectObjectProperty(source, "text_font_weight", "700");
+}
+
+test "compiler semantics: nested property assignment updates style records" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = body_obj("style")
+        \\  body.text.size = 33
+        \\  body.text.color = c"#123456"
+        \\  body.text.font.family = "Menlo"
+        \\  body.text.font.weight = 650
+        \\  body.text.font.style = FontStyle.italic
+        \\  body.text.font.stretch = FontStretch.expanded
+        \\  body.layout.x = 123
+        \\  body.layout.wrap = WrapMode.off
+        \\
+        \\  let formula = math_obj("x")
+        \\  formula.math.scale = 2
+        \\  formula.math.align = Align.left
+        \\end
+        \\
+    ;
+    try expectObjectProperty(source, "text_size", "33");
+    try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
+    try expectObjectProperty(source, "text_font_family", "Menlo");
+    try expectObjectProperty(source, "text_font_weight", "650");
+    try expectObjectProperty(source, "text_font_style", "italic");
+    try expectObjectProperty(source, "text_font_stretch", "expanded");
+    try expectObjectProperty(source, "layout_x", "123");
+    try expectObjectProperty(source, "wrap", "off");
+    try expectObjectProperty(source, "math_scale", "2");
+    try expectObjectProperty(source, "math_align", "left");
+}
+
+test "compiler semantics: nested property assignment preserves existing style record leaves" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = body_obj("style")
+        \\  body.text = TextStyle {
+        \\    size = 21
+        \\    font = FontFace { family = "Avenir", weight = 600 }
+        \\    markdown_bold_color = c"#445566"
+        \\  }
+        \\  body.text.color = c"#123456"
+        \\  body.text.font.style = FontStyle.italic
+        \\end
+        \\
+    ;
+    try expectObjectProperty(source, "text_size", "21");
+    try expectObjectProperty(source, "text_font_family", "Avenir");
+    try expectObjectProperty(source, "text_font_weight", "600");
+    try expectObjectProperty(source, "text_font_style", "italic");
+    try expectObjectProperty(source, "text_markdown_bold_color", "0.26666668,0.33333334,0.4");
+    try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
+}
+
+test "compiler semantics: nested property assignment can unset optional style leaves" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\page ok
+        \\  let body = body_obj("style")
+        \\  body.text = TextStyle {
+        \\    markdown_bold_color = c"#445566"
+        \\  }
+        \\  body.text.markdown_bold_color = none
+        \\end
+        \\
+    ;
+    try expectObjectPropertyMissing(source, "text_markdown_bold_color");
+}
+
+test "compiler semantics: nested property assignment rejects invalid paths and values" {
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = body_obj("bad")
+        \\  body.text.missing = 1
+        \\end
+        \\
+    , "case.ss:bytes:", "UnknownRecordField: record type 'TextStyle' has no field 'missing'");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = body_obj("bad")
+        \\  body.text.size.value = 1
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidRecordUpdatePath: field 'text.size' is Number, not a record");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = body_obj("bad")
+        \\  body.link_id.value = "id"
+        \\end
+        \\
+    , "case.ss:bytes:", "InvalidRecordUpdatePath: field 'link_id' is String, not a record");
+
+    try expectDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page bad
+        \\  let body = body_obj("bad")
+        \\  body.text.size = "large"
+        \\end
+        \\
+    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
 }
 
 test "compiler semantics: code theme helpers set code and markdown colors" {

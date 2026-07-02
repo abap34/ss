@@ -143,6 +143,18 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
     return error.ExpectedObjectPropertyMissing;
 }
 
+pub fn expectObjectPropertyMissing(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8) !void {
+    var ir = try buildLoweredIr(io, allocator, path, source);
+    defer ir.deinit();
+
+    for (ir.nodes.items) |node| {
+        if (node.kind != .object) continue;
+        for (node.properties.items) |property| {
+            if (std.mem.eql(u8, property.key, key)) return error.ExpectedObjectPropertyAbsent;
+        }
+    }
+}
+
 pub fn expectObjectPropertyWithOverlays(
     io: std.Io,
     allocator: std.mem.Allocator,

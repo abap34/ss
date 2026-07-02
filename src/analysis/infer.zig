@@ -314,13 +314,24 @@ fn inferMemberInfo(
 
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, member.target.*, origin, options);
     if (target_info.hole != null) return target_info;
+    return inferMemberInfoFromTargetInfo(allocator, ir, sema, target_info, member.name, origin);
+}
+
+fn inferMemberInfoFromTargetInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    target_info: TypeInfo,
+    member_name: []const u8,
+    origin: []const u8,
+) !TypeInfo {
     if (target_info.ty.kind == .record) {
         const record_name = target_info.ty.class_name orelse {
             try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
             return error.InvalidType;
         };
-        const field = sema.recordField(record_name, member.name) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member.name });
+        const field = sema.recordField(record_name, member_name) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -332,9 +343,9 @@ fn inferMemberInfo(
         try addUserReport(ir, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
         return error.InvalidType;
     }
-    if (std.mem.eql(u8, member.name, "content")) return infoFromType(Type.string);
-    const field = lookupFieldForTarget(sema, target_info, member.name) orelse {
-        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member.name});
+    if (std.mem.eql(u8, member_name, "content")) return infoFromType(Type.string);
+    const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member_name});
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -756,7 +767,7 @@ fn inferReturnInfoFromStatements(
             },
             .return_void => {},
             .property_set => |property_set| {
-                try validatePropertySetStatementWithOptions(allocator, ir, sema, env, property_set.object_name, property_set.property_name, property_set.value, origin, options);
+                try validatePropertySetStatementWithOptions(allocator, ir, sema, env, property_set.object_name, property_set.path.items, property_set.value, origin, options);
             },
             .if_stmt => |if_stmt| {
                 _ = try exprInfoWithOptions(allocator, ir, sema, env, if_stmt.condition, origin, options);
@@ -1160,11 +1171,11 @@ pub fn validatePropertySetStatement(
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     object_name: []const u8,
-    property_name: []const u8,
+    path: []const ast.RecordPathSegment,
     value: ast.Expr,
     origin: []const u8,
 ) !void {
-    return validatePropertySetStatementWithOptions(allocator, ir, sema, env, object_name, property_name, value, origin, .{});
+    return validatePropertySetStatementWithOptions(allocator, ir, sema, env, object_name, path, value, origin, .{});
 }
 
 fn validatePropertySetStatementWithOptions(
@@ -1173,17 +1184,21 @@ fn validatePropertySetStatementWithOptions(
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     object_name: []const u8,
-    property_name: []const u8,
+    path: []const ast.RecordPathSegment,
     value: ast.Expr,
     origin: []const u8,
     options: InferenceOptions,
 ) !void {
-    const object_info = env.get(object_name) orelse {
-        try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{object_name});
-        return error.UnknownIdentifier;
-    };
+    if (path.len == 0) return;
+    const object_info = env.get(object_name) orelse try exprInfoWithOptions(allocator, ir, sema, env, .{ .ident = .{ .name = object_name } }, origin, options);
     if (object_info.hole != null) return;
     if (!isPropertyTarget(object_info)) {
+        const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
+        if (!options.validate_contracts) return;
+        if (path.len > 1) {
+            try validateMemberTargetPropertySetPath(allocator, ir, sema, object_info, path, value_info, origin);
+            return;
+        }
         const actual_label = try typeInfoLabelAlloc(allocator, object_info);
         defer allocator.free(actual_label);
         try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
@@ -1192,16 +1207,113 @@ fn validatePropertySetStatementWithOptions(
     const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
     if (!options.validate_contracts) return;
     if (ir) |sink| {
-        if (std.mem.eql(u8, property_name, "content")) {
+        const first = path[0];
+        if (path.len == 1 and std.mem.eql(u8, first.name, "content")) {
             try ensureType(sink, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
             return;
         }
-        if (lookupFieldForTarget(sema, object_info, property_name)) |field| {
-            try validateFieldValue(sink, field, property_name, value_info, origin);
+        if (lookupFieldForTarget(sema, object_info, first.name)) |field| {
+            if (path.len == 1) {
+                try validateFieldValue(sink, field, first.name, value_info, origin);
+                return;
+            }
+            try validateNestedPropertySetPath(allocator, sink, sema, path, field.value_type, value_info, origin);
             return;
         }
-        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{first.name});
         return error.InvalidType;
+    }
+}
+
+fn memberPathPrefixInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    initial_info: TypeInfo,
+    path_prefix: []const ast.RecordPathSegment,
+    origin: []const u8,
+) !TypeInfo {
+    var current_info = initial_info;
+    for (path_prefix) |segment| {
+        if (segment.name_hole != null) return infoFromHole(segment.name_hole.?);
+        if (current_info.hole != null) return current_info;
+        current_info = try inferMemberInfoFromTargetInfo(allocator, ir, sema, current_info, segment.name, origin);
+    }
+    return current_info;
+}
+
+fn validateMemberTargetPropertySetPath(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    object_info: TypeInfo,
+    path: []const ast.RecordPathSegment,
+    value_info: TypeInfo,
+    origin: []const u8,
+) !void {
+    const target_info = try memberPathPrefixInfo(allocator, ir, sema, object_info, path[0 .. path.len - 1], origin);
+    if (target_info.hole != null) return;
+    if (!isPropertyTarget(target_info)) {
+        const actual_label = try typeInfoLabelAlloc(allocator, target_info);
+        defer allocator.free(actual_label);
+        try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+        return error.InvalidType;
+    }
+    const last = path[path.len - 1];
+    if (std.mem.eql(u8, last.name, "content")) {
+        try ensureType(ir, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
+        return;
+    }
+    const field = lookupFieldForTarget(sema, target_info, last.name) orelse {
+        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{last.name});
+        return error.InvalidType;
+    };
+    if (ir) |sink| try validateFieldValue(sink, field, last.name, value_info, origin);
+}
+
+fn validateNestedPropertySetPath(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    path: []const ast.RecordPathSegment,
+    root_type: Type,
+    value_info: TypeInfo,
+    origin: []const u8,
+) !void {
+    if (root_type.kind != .record) {
+        const path_text = try ast.formatRecordPath(allocator, path[0..1]);
+        defer allocator.free(path_text);
+        const label = try typeLabelAlloc(allocator, root_type);
+        defer allocator.free(label);
+        try addUserReport(ir, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+        return error.InvalidType;
+    }
+    var current_record_name = root_type.class_name orelse {
+        try addUserReport(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+        return error.InvalidType;
+    };
+    for (path[1..], 1..) |segment, index| {
+        if (segment.name_hole != null) return;
+        const field = sema.recordField(current_record_name, segment.name) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+            return error.InvalidType;
+        };
+        if (index + 1 == path.len) {
+            try ensureType(ir, allocator, value_info, field.value_type, origin, .UnmatchedArgumentType);
+            return;
+        }
+        if (field.value_type.kind != .record) {
+            const path_text = try ast.formatRecordPath(allocator, path[0 .. index + 1]);
+            defer allocator.free(path_text);
+            const label = try typeLabelAlloc(allocator, field.value_type);
+            defer allocator.free(label);
+            try addUserReport(ir, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+            return error.InvalidType;
+        }
+        current_record_name = field.value_type.class_name orelse {
+            try addUserReport(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+            return error.InvalidType;
+        };
     }
 }
 

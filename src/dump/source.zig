@@ -371,7 +371,9 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
         .property_set => |property_set| {
             try item.stringField("kind", "property_set");
             try item.stringField("object_name", property_set.object_name);
-            try item.stringField("property_name", property_set.property_name);
+            const property_path = try ast.formatRecordPath(allocator, property_set.path.items);
+            defer allocator.free(property_path);
+            try item.stringField("property_path", property_path);
             try writeExpr(allocator, &item, "value", property_set.value);
         },
         .if_stmt => |if_stmt| {

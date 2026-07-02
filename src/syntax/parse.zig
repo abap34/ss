@@ -1700,6 +1700,52 @@ const Parser = struct {
         return .{ .callee = name, .args = args };
     }
 
+    const PropertySetTarget = struct {
+        object_name: []const u8,
+        object_name_span: ?ast.Span,
+        path: std.ArrayList(ast.RecordPathSegment),
+    };
+
+    const PropertySetRoot = struct {
+        name: []const u8,
+        span: ?ast.Span,
+    };
+
+    fn propertySetTargetFromMember(self: *Parser, target: Expr, member_name: ParsedName) !?PropertySetTarget {
+        var path = std.ArrayList(ast.RecordPathSegment).empty;
+        errdefer {
+            for (path.items) |*segment| segment.deinit(self.allocator);
+            path.deinit(self.allocator);
+        }
+        const root = try self.appendPropertySetTargetPath(target, &path) orelse return null;
+        try path.append(self.allocator, .{
+            .name = try self.allocator.dupe(u8, member_name.text),
+            .span = member_name.span,
+        });
+        return .{
+            .object_name = try self.allocator.dupe(u8, root.name),
+            .object_name_span = root.span,
+            .path = path,
+        };
+    }
+
+    fn appendPropertySetTargetPath(self: *Parser, target: Expr, path: *std.ArrayList(ast.RecordPathSegment)) !?PropertySetRoot {
+        return switch (target) {
+            .ident => |ident| .{ .name = ident.name, .span = ident.name_span },
+            .member => |member| blk: {
+                const root = try self.appendPropertySetTargetPath(member.target.*, path) orelse break :blk null;
+                const span = member.name_span orelse return error.ExpectedMemberName;
+                try path.append(self.allocator, .{
+                    .name = try self.allocator.dupe(u8, member.name),
+                    .span = span,
+                    .name_hole = member.name_hole,
+                });
+                break :blk root;
+            },
+            else => null,
+        };
+    }
+
     fn parseMemberAssignmentStatement(self: *Parser, start: usize) !?Statement {
         const saved = self.pos;
         var target = self.parseCallTargetExpr() catch {
@@ -1734,14 +1780,16 @@ const Parser = struct {
             source.skipTriviaFrom(self.source, &self.pos);
             if (!self.eof() and self.source[self.pos] == '=' and (self.pos + 1 >= self.source.len or self.source[self.pos + 1] != '=')) {
                 self.pos += 1;
-                const value = try self.parseExpr();
+                var value = try self.parseExpr();
+                errdefer value.deinit(self.allocator);
                 try self.consumeStatementTerminator();
-                if (target == .ident) {
+                if (try self.propertySetTargetFromMember(target, member_name)) |property_target| {
+                    target.deinit(self.allocator);
+                    self.allocator.free(member_name.text);
                     return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .property_set = .{
-                        .object_name = target.ident.name,
-                        .object_name_span = target.ident.name_span,
-                        .property_name = member_name.text,
-                        .property_name_span = member_name.span,
+                        .object_name = property_target.object_name,
+                        .object_name_span = property_target.object_name_span,
+                        .path = property_target.path,
                         .value = value,
                     } } };
                 }

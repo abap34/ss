@@ -782,8 +782,15 @@ pub const Analyzer = struct {
                 var expr = try self.analyzeExpr(property_set.value);
                 defer expr.deinit();
                 try summary.merge(expr);
-                const target = self.property_target_bindings.get(property_set.object_name) orelse PropertyTarget.any();
-                try summary.addWrite(Resource.makeProperty(target.owner, property_set.property_name));
+                const maybe_target = self.property_target_bindings.get(property_set.object_name);
+                const target = maybe_target orelse PropertyTarget.any();
+                const property_name = if (property_set.path.items.len == 0)
+                    null
+                else if (maybe_target != null)
+                    property_set.path.items[0].name
+                else
+                    property_set.path.items[property_set.path.items.len - 1].name;
+                try summary.addWrite(Resource.makeProperty(target.owner, property_name));
                 summary.writes_layout_input = true;
             },
             .if_stmt => |if_stmt| {
