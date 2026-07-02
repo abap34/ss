@@ -138,7 +138,10 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (!std.mem.eql(u8, field.key, key)) continue;
-            const value = try core.value_text.propertyString(allocator, field.value);
+            const value = core.value_text.propertyString(allocator, field.value) catch |err| switch (err) {
+                error.ExpectedStringArgument => continue,
+                else => return err,
+            };
             defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(value);
             if (std.mem.eql(u8, value, expected)) return;
         }
@@ -174,7 +177,10 @@ pub fn expectObjectFieldPath(
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
-        const actual = try core.value_text.propertyString(allocator, value_at_path);
+        const actual = core.value_text.propertyString(allocator, value_at_path) catch |err| switch (err) {
+            error.ExpectedStringArgument => continue,
+            else => return err,
+        };
         defer if (core.value_text.propertyStringNeedsFree(value_at_path)) allocator.free(actual);
         if (std.mem.eql(u8, actual, expected)) return;
     }
@@ -241,7 +247,10 @@ pub fn expectObjectPropertyWithOverlays(
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (!std.mem.eql(u8, field.key, key)) continue;
-            const value = try core.value_text.propertyString(allocator, field.value);
+            const value = core.value_text.propertyString(allocator, field.value) catch |err| switch (err) {
+                error.ExpectedStringArgument => continue,
+                else => return err,
+            };
             defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(value);
             if (std.mem.eql(u8, value, expected)) return;
         }
@@ -269,14 +278,21 @@ pub fn expectClassDefaultProperty(
         if (node.kind != .object) continue;
         const node_role = node.role orelse continue;
         if (!std.mem.eql(u8, node_role, role)) continue;
-        const actual = core.fields.readWithEnv(allocator, &node, key, &.{}, &sema, .text);
+        var slot = (try core.fields.getWithEnv(allocator, &node, key, &sema)) orelse {
+            if (expected == null) return;
+            return error.ExpectedObjectPropertyMissing;
+        };
+        defer slot.deinit(allocator);
         if (expected) |value| {
-            if (actual) |found| {
-                if (std.mem.eql(u8, found, value)) return;
-            }
+            const actual = core.value_text.propertyString(allocator, slot.value) catch |err| switch (err) {
+                error.ExpectedStringArgument => return error.ExpectedObjectPropertyMissing,
+                else => return err,
+            };
+            defer if (core.value_text.propertyStringNeedsFree(slot.value)) allocator.free(actual);
+            if (std.mem.eql(u8, actual, value)) return;
             return error.ExpectedObjectPropertyMissing;
         }
-        if (actual == null) return;
+        if (slot.value == .none) return;
         return error.ExpectedObjectPropertyMissing;
     }
     return error.ExpectedObjectPropertyMissing;

@@ -619,8 +619,9 @@ asset_base_dir = "."
 
 function assertPropertyCompletion(completion, label) {
   assertUniqueCompletionLabels(completion, label);
-  assertCompletionHas(completion, "text_size", label);
-  assertCompletionMissing(completion, ["page", "add", "String"], label);
+  assertCompletionHas(completion, "text", label);
+  assertCompletionHas(completion, "layout", label);
+  assertCompletionMissing(completion, ["page", "add", "String", "text_size"], label);
 }
 
 function assertThemeRecordCompletion(completion, label) {

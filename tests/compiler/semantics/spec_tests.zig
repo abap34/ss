@@ -1486,7 +1486,7 @@ test "compiler semantics: Color is a static type" {
         \\  body.text.markdown_code_fill = "red"
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_code_fill' expects Color?, got String");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -1496,7 +1496,7 @@ test "compiler semantics: Color is a static type" {
         \\  body.text.markdown_bold_color = "red"
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_bold_color' expects Color?, got String");
 }
 
 test "compiler semantics: structured style values expand to render properties" {
@@ -1631,7 +1631,7 @@ test "compiler semantics: nested property assignment rejects invalid paths and v
         \\  body.text.size = "large"
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Number, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.size' expects Number, got String");
 }
 
 test "compiler semantics: code theme helpers set code and markdown colors" {
@@ -1686,7 +1686,7 @@ test "compiler semantics: default theme applies code theme to code and markdown"
 }
 
 test "compiler semantics: structured style value members are typed" {
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\page ok
@@ -1709,7 +1709,7 @@ test "compiler semantics: structured style value members are typed" {
 }
 
 test "compiler semantics: record update copies nested fields" {
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\record Inner {
@@ -1938,7 +1938,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\  body.text.color = none
         \\end
         \\
-    , "case.ss:bytes:", "TypeMismatch: expected Color, got None");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got None");
 
     try expectObjectContent(
         \\import std:themes/default as *
@@ -2162,7 +2162,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\  apply_palette(body, none, c"0.3,0.3,0.3")
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got Color?");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2295,7 +2295,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\  paint_target(body, none, true)
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got Color?");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2411,7 +2411,7 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\  configure_text(body, true)
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_size' expects Number, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.size' expects Number, got String");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2604,7 +2604,7 @@ test "compiler semantics: properties require known fields" {
         \\  body.text.color = 1
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Number");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got Number");
 }
 
 test "compiler semantics: typed properties reject optional and wrong static values" {
@@ -2616,7 +2616,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\  set_prop(body, "text_color", body.text.markdown_code_fill)
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
+    , "case.ss:bytes:", "UnknownField: unknown field: text_color");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2638,7 +2638,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\  objs_here("body").text.color = none
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.color' expects Color, got None");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2648,7 +2648,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\  body.text.markdown_code_fill = 1
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got Number");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'text.markdown_code_fill' expects Color?, got Number");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -2658,7 +2658,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\  set_prop(body, "text_markdown_code_fill", "red")
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got String");
+    , "case.ss:bytes:", "UnknownField: unknown field: text_markdown_code_fill");
 }
 
 test "compiler semantics: object field defaults are statically typed" {
@@ -2830,7 +2830,7 @@ test "compiler semantics: document page and selection properties are typed" {
         \\  objs_here("body").layout.wrap = "off"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'wrap' expects WrapMode, got String");
+    , "case.ss:bytes:", "InvalidFieldValue: field 'layout.wrap' expects WrapMode, got String");
 }
 
 test "compiler semantics: document math alignment helpers update the document setting" {
