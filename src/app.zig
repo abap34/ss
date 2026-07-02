@@ -44,6 +44,21 @@ const AnalyzedFile = struct {
     }
 };
 
+const ParsedSource = struct {
+    program: parser.Program,
+    holes: parser.HoleTable,
+
+    fn deinit(self: *ParsedSource, allocator: std.mem.Allocator) void {
+        self.program.deinit(allocator);
+        self.holes.deinit(allocator);
+    }
+
+    fn clearHoles(self: *ParsedSource, allocator: std.mem.Allocator) void {
+        self.holes.deinit(allocator);
+        self.holes = .{ .holes = &.{}, .diagnostics = &.{} };
+    }
+};
+
 pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     return buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
@@ -106,23 +121,23 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
     errdefer allocator.free(source);
     if (progress) |p| p.step("Read inputs");
 
-    var program = try parseSource(allocator, source, path);
-    errdefer program.deinit(allocator);
+    var parsed = try parseSource(allocator, source, path);
+    errdefer parsed.deinit(allocator);
     if (progress) |p| p.step("Parse source");
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = analysis.loadProgramIndexWithOptions(allocator, io, asset_base_dir, program, .{
+    var index = analysis.loadProgramIndexWithOptions(allocator, io, asset_base_dir, parsed.program, .{
         .overlay = overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
     }) catch |err| {
         if (load_diagnostics.items.items.len != 0) {
             printLoadDiagnostics(&load_diagnostics);
-            printImportFailureDiagnostic(allocator, io, path, source, asset_base_dir, &program, overlay, &load_diagnostics);
+            printImportFailureDiagnostic(allocator, io, path, source, asset_base_dir, &parsed.program, overlay, &load_diagnostics);
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
-            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
+            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, parsed.program, overlay) orelse return err;
             defer report.deinit(allocator);
             error_report.print(.{
                 .path = path,
@@ -140,9 +155,11 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
     };
     if (progress) |p| p.step("Load modules");
 
-    var ir = analysis.buildIr(allocator, path, asset_base_dir, &source, &program, &index) catch |err| {
+    var ir = analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source, &parsed.program, &index, .{
+        .parse_holes = parsed.holes,
+    }) catch |err| {
         if (err == error.UnknownImport) {
-            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, program, overlay) orelse return err;
+            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, parsed.program, overlay) orelse return err;
             defer report.deinit(allocator);
             error_report.print(.{
                 .path = path,
@@ -167,6 +184,7 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
         }
         return err;
     };
+    parsed.clearHoles(allocator);
     defer index.deinit();
     errdefer ir.deinit();
 
@@ -423,11 +441,12 @@ fn writeDiagnosticsJsonIfRequested(io: std.Io, allocator: std.mem.Allocator, ir:
     try utils.fs.writeFile(io, path, data);
 }
 
-fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !parser.Program {
-    return parser.parseWithSourceName(allocator, source, path) catch |err| {
+fn parseSource(allocator: std.mem.Allocator, source: []const u8, path: []const u8) !ParsedSource {
+    const result = parser.parseRecoveringWithSourceName(allocator, source, path) catch |err| {
         error_report.printParseError(path, source, err, parser.lastParseDiagnostic());
         return err;
     };
+    return .{ .program = result.program, .holes = result.holes };
 }
 
 fn printLoadDiagnostics(diagnostics: *const module_loader.LoadDiagnostics) void {

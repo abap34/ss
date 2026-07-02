@@ -13,6 +13,7 @@ const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 const TypeInfo = semantic_types.TypeInfo;
 const ensureType = semantic_types.ensureType;
+const infoFromHole = semantic_types.infoFromHole;
 const infoFromType = semantic_types.infoFromType;
 const isPropertyTarget = semantic_types.isPropertyTarget;
 const mergeObjectClass = semantic_types.mergeObjectClass;
@@ -20,6 +21,7 @@ const mergeTypeInfo = semantic_types.mergeTypeInfo;
 const resolveStringLiteral = semantic_types.resolveStringLiteral;
 const singleFunctionLabel = semantic_types.singleFunctionLabel;
 const targetClassForInfo = semantic_types.targetClassForInfo;
+const typeInfoLabelAlloc = semantic_types.typeInfoLabelAlloc;
 const typeLabelAlloc = semantic_types.typeLabelAlloc;
 const FunctionVisitSet = std.HashMap(core.FunctionKey, void, core.FunctionKeyContext, std.hash_map.default_max_load_percentage);
 
@@ -41,6 +43,51 @@ fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, 
     if (!env.contains(name)) return;
     try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
+}
+
+fn checkedLetBindingInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    binding: anytype,
+    inferred: TypeInfo,
+    origin: []const u8,
+) !TypeInfo {
+    const annotation = binding.type_annotation orelse return inferred;
+    try ensureType(ir, allocator, inferred, annotation, origin, .UnmatchedReturnType);
+    return infoFromType(annotation);
+}
+
+fn firstHoleInArgs(args: []const ast.Expr) ?ast.HoleId {
+    for (args) |arg| {
+        if (firstHoleInExpr(arg)) |hole_id| return hole_id;
+    }
+    return null;
+}
+
+fn firstHoleInExpr(expr: ast.Expr) ?ast.HoleId {
+    return switch (expr) {
+        .hole => |id| id,
+        .call => |call| firstHoleInArgs(call.args.items),
+        .apply => |apply| firstHoleInExpr(apply.callee.*) orelse firstHoleInArgs(apply.args.items),
+        .lambda => |lambda| firstHoleInExpr(lambda.body.*),
+        .record => |record| blk: {
+            for (record.fields.items) |field| {
+                if (firstHoleInExpr(field.value)) |hole_id| break :blk hole_id;
+            }
+            break :blk null;
+        },
+        .record_update => |update| blk: {
+            if (firstHoleInExpr(update.target.*)) |hole_id| break :blk hole_id;
+            for (update.fields.items) |field| {
+                if (firstHoleInExpr(field.value)) |hole_id| break :blk hole_id;
+            }
+            break :blk null;
+        },
+        .member => |member| firstHoleInExpr(member.target.*),
+        .optional_check => |check| firstHoleInExpr(check.target.*),
+        .coalesce => |coalesce| firstHoleInExpr(coalesce.target.*) orelse firstHoleInExpr(coalesce.fallback.*),
+        .ident, .string, .color, .number, .boolean, .none, .enum_case => null,
+    };
 }
 
 fn originPathForFunction(sema: *const SemanticEnv, func: ast.FunctionDecl) []const u8 {
@@ -78,6 +125,7 @@ fn exprInfoWithOptions(
     options: InferenceOptions,
 ) anyerror!TypeInfo {
     return switch (expr) {
+        .hole => |id| infoFromHole(id),
         .string => |literal| blk: {
             var info = infoFromType(Type.string);
             info.string_literal = literal.text;
@@ -96,7 +144,8 @@ fn exprInfoWithOptions(
             info.string_literal = case.case_name;
             break :blk info;
         },
-        .ident => |name| blk: {
+        .ident => |ident| blk: {
+            const name = ident.name;
             if (env.get(name)) |info| break :blk info;
             if (sema.resolvedConst(ast.CallableName.bare(name))) |constant_decl| {
                 break :blk infoFromType(constant_decl.decl.value_type);
@@ -149,11 +198,7 @@ fn inferRecordInfo(
             try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
         };
-        var expected = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
-            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-            return error.InvalidType;
-        };
-        defer expected.deinit(allocator);
+        const expected = field.value_type;
         const actual = try exprInfoWithOptions(allocator, ir, sema, env, field_expr.value, origin, options);
         try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
@@ -170,8 +215,9 @@ fn inferRecordUpdateInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, update.target.*, origin, options);
+    if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .record) {
-        const actual = try typeLabelAlloc(allocator, target_info.ty);
+        const actual = try typeInfoLabelAlloc(allocator, target_info);
         defer allocator.free(actual);
         try addUserReport(ir, origin, "InvalidRecordUpdate: with expects a record value, got {s}", .{actual});
         return error.InvalidType;
@@ -196,33 +242,15 @@ fn rejectOverlappingRecordUpdateFields(
 ) !void {
     for (fields, 0..) |left, left_index| {
         for (fields[left_index + 1 ..]) |right| {
-            if (!recordUpdatePathsOverlap(left.path.items, right.path.items)) continue;
-            const left_text = try formatRecordUpdatePath(allocator, left.path.items);
+            if (!ast.recordPathsOverlap(left.path.items, right.path.items)) continue;
+            const left_text = try ast.formatRecordPath(allocator, left.path.items);
             defer allocator.free(left_text);
-            const right_text = try formatRecordUpdatePath(allocator, right.path.items);
+            const right_text = try ast.formatRecordPath(allocator, right.path.items);
             defer allocator.free(right_text);
             try addUserReport(ir, origin, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
             return error.InvalidType;
         }
     }
-}
-
-fn recordUpdatePathsOverlap(left: []const []const u8, right: []const []const u8) bool {
-    const shared = @min(left.len, right.len);
-    for (0..shared) |index| {
-        if (!std.mem.eql(u8, left[index], right[index])) return false;
-    }
-    return true;
-}
-
-fn formatRecordUpdatePath(allocator: std.mem.Allocator, path: []const []const u8) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    for (path, 0..) |segment, index| {
-        if (index > 0) try out.append(allocator, '.');
-        try out.appendSlice(allocator, segment);
-    }
-    return try out.toOwnedSlice(allocator);
 }
 
 fn inferRecordUpdateField(
@@ -237,15 +265,12 @@ fn inferRecordUpdateField(
 ) !void {
     var current_record_name = base_record_name;
     for (update_field.path.items, 0..) |segment, index| {
-        const field = sema.recordField(current_record_name, segment) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment });
+        if (segment.name_hole != null) return;
+        const field = sema.recordField(current_record_name, segment.name) orelse {
+            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
             return error.InvalidType;
         };
-        var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
-            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-            return error.InvalidType;
-        };
-        defer field_type.deinit(allocator);
+        const field_type = field.value_type;
 
         if (index + 1 == update_field.path.items.len) {
             const actual = try exprInfoWithOptions(allocator, ir, sema, env, update_field.value, origin, options);
@@ -253,7 +278,7 @@ fn inferRecordUpdateField(
             return;
         }
         if (field_type.kind != .record) {
-            const path = try formatRecordUpdatePath(allocator, update_field.path.items[0 .. index + 1]);
+            const path = try ast.formatRecordPath(allocator, update_field.path.items[0 .. index + 1]);
             defer allocator.free(path);
             const label = try typeLabelAlloc(allocator, field_type);
             defer allocator.free(label);
@@ -276,8 +301,9 @@ fn inferMemberInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
+    if (member.name_hole) |hole_id| return infoFromHole(hole_id);
     if (member.target.* == .ident) {
-        const enum_name = member.target.ident;
+        const enum_name = member.target.ident.name;
         if (env.get(enum_name) == null and sema.function(enum_name) == null) {
             if (sema.enumExistsAny(enum_name)) {
                 try addUserReport(ir, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
@@ -287,6 +313,7 @@ fn inferMemberInfo(
     }
 
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, member.target.*, origin, options);
+    if (target_info.hole != null) return target_info;
     if (target_info.ty.kind == .record) {
         const record_name = target_info.ty.class_name orelse {
             try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
@@ -296,11 +323,7 @@ fn inferMemberInfo(
             try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member.name });
             return error.InvalidType;
         };
-        var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
-            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-            return error.InvalidType;
-        };
-        defer field_type.deinit(allocator);
+        const field_type = field.value_type;
         var result_type = try field_type.clone(allocator);
         errdefer result_type.deinit(allocator);
         return infoFromType(result_type);
@@ -314,11 +337,7 @@ fn inferMemberInfo(
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member.name});
         return error.InvalidType;
     };
-    var field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
-        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidType;
-    };
-    defer field_type.deinit(allocator);
+    const field_type = field.value_type;
     var result_type = if (field_type.kind == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
     errdefer result_type.deinit(allocator);
     return infoFromType(result_type);
@@ -334,6 +353,7 @@ fn inferOptionalCheckInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, target, origin, options);
+    if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .optional) {
         try addUserReport(ir, origin, "TypeMismatch: '?' expects an optional value", .{});
         return error.InvalidType;
@@ -351,6 +371,7 @@ fn inferCoalesceInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     const target_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.target.*, origin, options);
+    if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .optional) {
         try addUserReport(ir, origin, "TypeMismatch: '??' expects an optional value", .{});
         return error.InvalidType;
@@ -394,6 +415,7 @@ fn inferLambdaInfo(
         try local_env.put(param.name, infoFromType(param.ty));
     }
     const body_info = try exprInfoWithOptions(allocator, ir, sema, &local_env, lambda.body.*, origin, options);
+    if (body_info.hole != null) return body_info;
     if (body_info.ty.kind == .void) {
         try addUserReport(ir, origin, "VoidValue: lambda bodies must produce a value", .{});
         return error.InvalidType;
@@ -412,8 +434,10 @@ fn inferCallInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) anyerror!TypeInfo {
+    if (call.callee.name_hole) |hole_id| return infoFromHole(hole_id);
     if (!call.callee.isQualified()) {
         if (env.get(call.callee.name)) |callee_info| {
+            if (callee_info.hole != null) return callee_info;
             if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
                 return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin, options);
             }
@@ -481,13 +505,15 @@ fn inferFunctionValueCallInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
+    if (callee_info.hole != null) return callee_info;
     if (callee_info.ty.kind != .function or callee_info.ty.fn_result == null) {
-        const actual_label = try typeLabelAlloc(allocator, callee_info.ty);
+        const actual_label = try typeInfoLabelAlloc(allocator, callee_info);
         defer allocator.free(actual_label);
         try addUserReport(ir, origin, "TypeMismatch: expected Function, got {s}", .{actual_label});
         return error.InvalidType;
     }
     if (args.len != callee_info.ty.fn_params.len) {
+        if (firstHoleInArgs(args)) |hole_id| return infoFromHole(hole_id);
         try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
         return error.InvalidArity;
     }
@@ -512,6 +538,7 @@ fn inferUserCallInfo(
     const min_arity = contracts.requiredParamCount(func);
     const max_arity = func.params.items.len;
     if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
+        if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (min_arity == max_arity) {
             try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
         } else {
@@ -538,6 +565,7 @@ fn inferPrimitiveCallInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
+        if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (descriptor.min_arity == descriptor.max_arity) {
             try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
         } else {
@@ -575,12 +603,14 @@ fn validateKnownPropertyKeyCall(
     if (call.args.items.len < 2) return;
     const key = switch (call.args.items[1]) {
         .string => |literal| literal.text,
+        .hole => return,
         else => {
             try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
             return error.InvalidType;
         },
     };
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    if (target_info.hole != null) return;
     if (lookupFieldForTarget(sema, target_info, key) == null) {
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
         return error.InvalidType;
@@ -599,6 +629,8 @@ fn validateSetReprCall(
     if (call.args.items.len < 2) return;
     const object_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
     const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[1], origin, options);
+    if (object_info.hole != null) return;
+    if (callback_info.hole != null) return;
     if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
         try addUserReport(ir, origin, "InvalidCallback: set_repr expects Object -> String", .{});
         return error.InvalidType;
@@ -709,10 +741,12 @@ fn inferReturnInfoFromStatements(
         const origin = try statementOrigin(allocator, origin_path, stmt.span);
         defer allocator.free(origin);
         switch (stmt.kind) {
+            .hole => {},
             .let_binding => |binding| {
                 const binds_name = !language_names.isDiscardBindingName(binding.name);
                 if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
-                const info = try exprInfoWithOptions(allocator, ir, sema, env, binding.expr, origin, options);
+                const inferred = try exprInfoWithOptions(allocator, ir, sema, env, binding.expr, origin, options);
+                const info = try checkedLetBindingInfo(allocator, ir, binding, inferred, origin);
                 if (!binds_name) continue;
                 try env.put(binding.name, info);
             },
@@ -780,6 +814,7 @@ fn primitiveResultTypeInfo(
         .first_selection_item => {
             if (call.args.items.len == 0) return infoFromType(Type.object);
             const selection_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
+            if (selection_info.hole != null) return selection_info;
             var info = switch (selection_info.ty.param) {
                 .page => infoFromType(Type.page),
                 .object, .any, .none => infoFromType(Type.object),
@@ -800,6 +835,7 @@ fn primitiveResultTypeInfo(
         .target_arg => {
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(Type.object);
             const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
+            if (target_info.hole != null) return target_info;
             return .{
                 .ty = switch (target_info.ty.kind) {
                     .document, .page, .object, .selection => target_info.ty,
@@ -840,6 +876,8 @@ fn validateCallbackShape(
 ) !void {
     if (call.args.items.len <= function_arg_index) return;
     const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index], origin, options);
+    if (callback_info.hole != null) return;
+    if (selection_info.hole != null) return;
     if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
         try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
         return error.InvalidType;
@@ -899,6 +937,8 @@ fn inferSelectionAlgebraInfo(
     const right = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[1], origin, options);
     try ensureType(ir, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
     try ensureType(ir, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
+    if (left.hole != null) return left;
+    if (right.hole != null) return right;
 
     if (left.ty.param != .any and right.ty.param != .any and left.ty.param != right.ty.param) {
         const left_label = try typeLabelAlloc(allocator, left.ty);
@@ -989,14 +1029,16 @@ fn validateSetPropCall(
     if (call.args.items.len < 3) return;
     const key = switch (call.args.items[1]) {
         .string => |literal| literal.text,
+        .hole => return,
         else => {
             try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
             return error.InvalidType;
         },
     };
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    if (target_info.hole != null) return;
     if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeLabelAlloc(ir.allocator, target_info.ty);
+        const actual_label = try typeInfoLabelAlloc(ir.allocator, target_info);
         defer ir.allocator.free(actual_label);
         try addUserReport(
             ir,
@@ -1008,12 +1050,13 @@ fn validateSetPropCall(
     }
 
     const value_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[2], origin);
+    if (value_info.hole != null) return;
     if (value_info.ty.kind == .function) {
         try addUserReport(ir, origin, "InvalidProperty: function values cannot be stored as properties", .{});
         return error.InvalidType;
     }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
-        try validateFieldValue(ir, sema, field, key, value_info, origin);
+        try validateFieldValue(ir, field, key, value_info, origin);
         return;
     }
 
@@ -1030,8 +1073,9 @@ fn validateExtendRenderEnvCall(
 ) !void {
     if (call.args.items.len < 4) return;
     const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    if (target_info.hole != null) return;
     if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeLabelAlloc(ir.allocator, target_info.ty);
+        const actual_label = try typeInfoLabelAlloc(ir.allocator, target_info);
         defer ir.allocator.free(actual_label);
         try addUserReport(
             ir,
@@ -1084,21 +1128,21 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
 
 fn validateFieldValue(
     ir: *core.Ir,
-    sema: *const SemanticEnv,
     field: declarations.FieldDescriptor,
     key: []const u8,
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    var expected = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse {
-        try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-        return error.InvalidType;
-    };
-    defer expected.deinit(ir.allocator);
-    if (!Type.accepts(expected, value_info.ty)) {
+    const expected = field.value_type;
+    switch (semantic_types.assignability(value_info, expected)) {
+        .assignable => return,
+        .blocked_by_hole => return,
+        .mismatch => {},
+    }
+    {
         const expected_label = try expected.formatAlloc(ir.allocator);
         defer ir.allocator.free(expected_label);
-        const actual_label = try value_info.ty.formatAlloc(ir.allocator);
+        const actual_label = try typeInfoLabelAlloc(ir.allocator, value_info);
         defer ir.allocator.free(actual_label);
         try addUserReport(
             ir,
@@ -1138,8 +1182,9 @@ fn validatePropertySetStatementWithOptions(
         try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{object_name});
         return error.UnknownIdentifier;
     };
+    if (object_info.hole != null) return;
     if (!isPropertyTarget(object_info)) {
-        const actual_label = try typeLabelAlloc(allocator, object_info.ty);
+        const actual_label = try typeInfoLabelAlloc(allocator, object_info);
         defer allocator.free(actual_label);
         try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
         return error.InvalidType;
@@ -1148,7 +1193,7 @@ fn validatePropertySetStatementWithOptions(
     if (!options.validate_contracts) return;
     if (ir) |sink| {
         if (lookupFieldForTarget(sema, object_info, property_name)) |field| {
-            try validateFieldValue(sink, sema, field, property_name, value_info, origin);
+            try validateFieldValue(sink, field, property_name, value_info, origin);
             return;
         }
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{property_name});

@@ -38,6 +38,7 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
     }
     return switch (ty.kind) {
         .none => .{ .none = {} },
+        .hole => error.InvalidValueTag,
         .string, .color => .{ .string = text },
         .enum_type => .{ .enum_case = .{
             .enum_name = ty.enum_name orelse "",

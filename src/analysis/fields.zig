@@ -19,14 +19,14 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
         try checkObjectNamesUnique(allocator, ir, origin_path, module.program.objects.items);
         try checkRecordNamesUnique(allocator, ir, origin_path, module.program.records.items);
         for (module.program.records.items) |record_decl| {
-            try checkRecordDeclaration(allocator, ir, sema, module.id, origin_path, record_decl);
+            try checkRecordDeclaration(allocator, ir, sema, origin_path, record_decl);
         }
         for (module.program.objects.items) |object_decl| {
-            try checkObjectDeclaration(allocator, ir, sema, module.id, origin_path, object_decl);
+            try checkObjectDeclaration(allocator, ir, sema, origin_path, object_decl);
             try checkRolesUnique(allocator, ir, origin_path, &roles, object_decl.name, object_decl.roles.items, object_decl.span);
         }
         for (module.program.object_extensions.items) |extension| {
-            try checkObjectExtension(allocator, ir, sema, module.id, origin_path, extension);
+            try checkObjectExtension(allocator, ir, sema, origin_path, extension);
             try checkRolesUnique(allocator, ir, origin_path, &roles, extension.target, extension.roles.items, extension.span);
         }
     }
@@ -55,11 +55,10 @@ fn checkRecordDeclaration(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
     origin_path: []const u8,
     record_decl: ast.RecordDecl,
 ) !void {
-    try checkObjectFields(allocator, ir, sema, module_id, origin_path, record_decl.fields.items);
+    try checkObjectFields(allocator, ir, sema, origin_path, record_decl.fields.items);
 }
 
 fn checkObjectNamesUnique(
@@ -85,7 +84,6 @@ fn checkObjectDeclaration(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
     origin_path: []const u8,
     object_decl: ast.ObjectDecl,
 ) !void {
@@ -97,14 +95,13 @@ fn checkObjectDeclaration(
             return error.InvalidType;
         }
     }
-    try checkObjectFields(allocator, ir, sema, module_id, origin_path, object_decl.fields.items);
+    try checkObjectFields(allocator, ir, sema, origin_path, object_decl.fields.items);
 }
 
 fn checkObjectExtension(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
     origin_path: []const u8,
     extension: ast.ObjectExtensionDecl,
 ) !void {
@@ -120,25 +117,21 @@ fn checkObjectExtension(
             return error.InvalidType;
         }
     }
-    try checkObjectFields(allocator, ir, sema, module_id, origin_path, extension.fields.items);
+    try checkObjectFields(allocator, ir, sema, origin_path, extension.fields.items);
 }
 
 fn checkObjectFields(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
-    module_id: core.SourceModuleId,
     origin_path: []const u8,
     fields: []const ast.ObjectFieldDecl,
 ) !void {
     for (fields) |field| {
         const origin = try statementOrigin(allocator, origin_path, field.span);
         defer allocator.free(origin);
-        var field_type = (try sema.resolveTypeText(allocator, module_id, field.value_type)) orelse {
-            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-            return error.InvalidType;
-        };
-        defer field_type.deinit(allocator);
+        const field_type = field.value_type;
+        if (field_type.kind == .hole) continue;
         if (field.default_value) |default_value| {
             try checkFieldDefault(allocator, ir, sema, origin, field_type, default_value.*, field.default_property_value);
         }
@@ -160,6 +153,7 @@ fn checkFieldDefault(
         error.InvalidType, error.UnknownIdentifier => return error.InvalidType,
         else => return err,
     };
+    if (actual.hole != null) return;
     if (fieldDefaultHasStaticPropertyValue(default_value, default_property_value) and fieldDefaultTypeAccepts(ty, actual.ty, default_value)) return;
     const label = try fieldTypeLabel(allocator, ty);
     defer allocator.free(label);

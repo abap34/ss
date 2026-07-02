@@ -709,6 +709,7 @@ pub const Analyzer = struct {
     }
 
     fn callCallee(self: *Analyzer, callee: ast.CallableName) !?semantic_env.CallDescriptor {
+        if (callee.name_hole != null) return null;
         if (try self.resolvedFunction(callee)) |func| return .{ .function = func };
         if (!callee.isQualified()) {
             if (self.sema.primitive(callee.name)) |descriptor| return .{ .primitive = descriptor };
@@ -731,6 +732,7 @@ pub const Analyzer = struct {
         var summary = AccessSummary.init(self.allocator);
         errdefer summary.deinit();
         switch (stmt.kind) {
+            .hole => {},
             .let_binding => |binding| {
                 var expr = try self.analyzeExpr(binding.expr);
                 defer expr.deinit();
@@ -831,7 +833,9 @@ pub const Analyzer = struct {
 
     fn analyzeExpr(self: *Analyzer, value: ast.Expr) anyerror!AccessSummary {
         return switch (value) {
-            .ident => |name| blk: {
+            .hole => AccessSummary.init(self.allocator),
+            .ident => |ident| blk: {
+                const name = ident.name;
                 var summary = AccessSummary.init(self.allocator);
                 errdefer summary.deinit();
                 try self.addVariableRead(&summary, name);
@@ -907,6 +911,7 @@ pub const Analyzer = struct {
     }
 
     fn analyzeCall(self: *Analyzer, call: ast.CallExpr) anyerror!AccessSummary {
+        if (call.callee.name_hole != null) return try self.callArgs(call);
         if (try self.resolvedConst(call.callee)) |resolved| {
             var summary = try self.callArgs(call);
             errdefer summary.deinit();
@@ -1753,7 +1758,8 @@ pub const Analyzer = struct {
         defer callback_summary.deinit();
         if (call.args.items.len > callback_spec.function_arg_index) {
             switch (call.args.items[callback_spec.function_arg_index]) {
-                .ident => |callback_name| {
+                .ident => |callback_ident| {
+                    const callback_name = callback_ident.name;
                     if (try self.resolvedConst(ast.CallableName.bare(callback_name))) |callback| {
                         callback_summary = try self.constValue(callback);
                     } else if (try self.resolvedFunction(ast.CallableName.bare(callback_name))) |callback| {
@@ -1845,7 +1851,8 @@ pub const Analyzer = struct {
 
     fn propertyTargetExpr(self: *Analyzer, expr: ast.Expr) anyerror!?PropertyTarget {
         return switch (expr) {
-            .ident => |name| blk: {
+            .ident => |ident| blk: {
+                const name = ident.name;
                 if (self.property_target_bindings.get(name)) |target| break :blk target;
                 if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                     break :blk try self.propertyTargetConst(resolved);
@@ -1994,7 +2001,8 @@ pub const Analyzer = struct {
 
     fn objectRoleExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
         return switch (expr) {
-            .ident => |name| blk: {
+            .ident => |ident| blk: {
+                const name = ident.name;
                 if (self.object_role_bindings.get(name)) |role_name| break :blk role_name;
                 if (try self.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                     break :blk try self.objectRoleConst(resolved);
@@ -2246,7 +2254,7 @@ fn literalStringExpr(self: *Analyzer, expr: ast.Expr) anyerror!?[]const u8 {
     return switch (expr) {
         .string => |literal| literal.text,
         .color => |value| value,
-        .ident => |name| self.string_bindings.get(name),
+        .ident => |ident| self.string_bindings.get(ident.name),
         .call => |call| try literalStringCall(self, call),
         else => null,
     };

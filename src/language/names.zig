@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const scanner = @import("../syntax/scanner.zig");
 
 pub fn isDiscardBindingName(text: []const u8) bool {
     return isSingleUnderscore(text);
@@ -18,40 +19,12 @@ pub fn isCallableNameChar(byte: u8) bool {
 }
 
 pub fn isKeyword(text: []const u8) bool {
-    for (keywords) |keyword| if (std.mem.eql(u8, text, keyword)) return true;
-    return false;
+    return scanner.isKeyword(text);
 }
 
 pub fn keywordLabels() []const []const u8 {
-    return &keywords;
+    return scanner.keywordLabels();
 }
-
-const keywords = [_][]const u8{
-    "import",
-    "as",
-    "with",
-    "const",
-    "document",
-    "page",
-    "fn",
-    "let",
-    "bind",
-    "return",
-    "end",
-    "type",
-    "record",
-    "protocol",
-    "extend",
-    "base",
-    "implements",
-    "roles",
-    "if",
-    "then",
-    "else",
-    "for",
-    "in",
-    "property",
-};
 
 pub fn bangName(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}!", .{text});

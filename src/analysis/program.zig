@@ -16,6 +16,7 @@ const schedule = @import("schedule.zig");
 const analysis_scope = @import("scope.zig");
 const semantic_types = @import("types.zig");
 const syntax = @import("../syntax/parse.zig");
+const syntax_hole = @import("../syntax/hole.zig");
 const type_defs = @import("../language/type_defs.zig");
 const utils = @import("utils");
 const SemanticEnv = semantic_env.SemanticEnv;
@@ -59,6 +60,7 @@ pub const ProgramIndex = struct {
 
 pub const BuildIrOptions = struct {
     allow_diagnostics: bool = false,
+    parse_holes: ?syntax_hole.Result = null,
 };
 
 pub fn collectFunctionsFromPrograms(
@@ -110,6 +112,7 @@ fn checkFunctionDefinitionsWithEnv(
 ) !void {
     try calls.checkFunctionCallGraph(allocator, ir, sema);
 
+    var had_diagnostics = false;
     var const_it = ir.constants.iterator();
     while (const_it.next()) |entry| {
         const module_id = entry.key_ptr.module_id;
@@ -118,7 +121,11 @@ fn checkFunctionDefinitionsWithEnv(
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
-        try checker.checkConst(allocator, ir, &module_sema, origin_path, entry.value_ptr.*);
+        const diagnostic_count = ir.diagnostics.items.len;
+        checker.checkConst(allocator, ir, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+            try continueAfterDiagnostic(ir, diagnostic_count, err);
+            had_diagnostics = true;
+        };
     }
 
     var it = sema.functions.iterator();
@@ -129,8 +136,18 @@ fn checkFunctionDefinitionsWithEnv(
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
-        try checker.checkFunction(allocator, ir, &module_sema, origin_path, entry.value_ptr.*);
+        const diagnostic_count = ir.diagnostics.items.len;
+        checker.checkFunction(allocator, ir, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+            try continueAfterDiagnostic(ir, diagnostic_count, err);
+            had_diagnostics = true;
+        };
     }
+    if (had_diagnostics) return error.DiagnosticsFailed;
+}
+
+fn continueAfterDiagnostic(ir: *const core.Ir, diagnostic_count_before: usize, err: anyerror) !void {
+    if (ir.diagnostics.items.len > diagnostic_count_before) return;
+    return err;
 }
 
 pub fn analyzeProgram(
@@ -167,8 +184,8 @@ fn analyzeProgramWithoutSchedule(
     try rebuildConstDeclarations(allocator, ir);
     try rebuildFunctionDeclarations(allocator, ir);
     try checkDuplicateValueDeclarations(allocator, ir);
-    try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checkTypeAnnotations(allocator, ir, &sema);
+    try fields.checkObjectDeclarations(allocator, ir, &sema);
     try checker.checkPageNamesUnique(allocator, ir);
     try checkPlacementEffectDeclarations(allocator, ir);
     try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
@@ -416,38 +433,122 @@ fn checkTypeAnnotations(
     ir: *core.Ir,
     sema: *const SemanticEnv,
 ) !void {
+    var had_diagnostics = false;
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         const origin_path = checker.originPathForModule(module);
+
+        for (module.program.records.items) |record_decl| {
+            for (record_decl.fields.items) |field| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+        }
+        for (module.program.objects.items) |object_decl| {
+            for (object_decl.fields.items) |field| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+        }
+        for (module.program.object_extensions.items) |extension| {
+            for (extension.fields.items) |field| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+        }
 
         for (module.program.functions.items) |func| {
             const origin = try originForModuleSpan(allocator, origin_path, func.span);
             defer allocator.free(origin);
             for (func.params.items) |param| {
-                try checkTypeAnnotation(ir, sema, module_id, param.ty, origin);
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkTypeAnnotation(ir, sema, module_id, param.ty, origin) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
                 if (param.default_value) |default_value| {
-                    try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, default_value.*);
+                    const expr_diagnostic_count = ir.diagnostics.items.len;
+                    checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, default_value.*) catch |err| {
+                        try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+                        had_diagnostics = true;
+                    };
                 }
             }
-            try checkTypeAnnotation(ir, sema, module_id, func.result_type, origin);
+            const result_diagnostic_count = ir.diagnostics.items.len;
+            checkTypeAnnotation(ir, sema, module_id, func.result_type, origin) catch |err| {
+                try continueAfterDiagnostic(ir, result_diagnostic_count, err);
+                had_diagnostics = true;
+            };
         }
 
         for (module.program.constants.items) |constant_decl| {
             const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
             defer allocator.free(origin);
-            try checkTypeAnnotation(ir, sema, module_id, constant_decl.value_type, origin);
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, constant_decl.value);
+            const type_diagnostic_count = ir.diagnostics.items.len;
+            checkTypeAnnotation(ir, sema, module_id, constant_decl.value_type, origin) catch |err| {
+                try continueAfterDiagnostic(ir, type_diagnostic_count, err);
+                had_diagnostics = true;
+            };
+            const expr_diagnostic_count = ir.diagnostics.items.len;
+            checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, constant_decl.value) catch |err| {
+                try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+                had_diagnostics = true;
+            };
         }
 
         for (module.program.document_statements.items) |stmt| {
-            try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt);
+            const diagnostic_count = ir.diagnostics.items.len;
+            checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt) catch |err| {
+                try continueAfterDiagnostic(ir, diagnostic_count, err);
+                had_diagnostics = true;
+            };
         }
         for (module.program.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt);
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
             }
         }
     }
+    if (had_diagnostics) return error.DiagnosticsFailed;
+}
+
+fn checkFieldTypeAnnotation(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
+    origin_path: []const u8,
+    field: ast.ObjectFieldDecl,
+) !void {
+    const origin = try originForModuleSpan(allocator, origin_path, field.span);
+    defer allocator.free(origin);
+    var had_diagnostics = false;
+    const type_diagnostic_count = ir.diagnostics.items.len;
+    checkTypeAnnotation(ir, sema, module_id, field.value_type, origin) catch |err| {
+        try continueAfterDiagnostic(ir, type_diagnostic_count, err);
+        had_diagnostics = true;
+    };
+    if (field.default_value) |default_value| {
+        const expr_diagnostic_count = ir.diagnostics.items.len;
+        checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, default_value.*) catch |err| {
+            try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+            had_diagnostics = true;
+        };
+    }
+    if (had_diagnostics) return error.DiagnosticsFailed;
 }
 
 fn resolveTypeReferences(
@@ -468,6 +569,19 @@ fn resolveProgramTypeReferences(
 ) !void {
     for (program.records.items) |*record_decl| {
         for (record_decl.fields.items) |*field| {
+            try resolveTypeReference(&field.value_type, module_id, sema);
+            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
+        }
+    }
+    for (program.objects.items) |*object_decl| {
+        for (object_decl.fields.items) |*field| {
+            try resolveTypeReference(&field.value_type, module_id, sema);
+            if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
+        }
+    }
+    for (program.object_extensions.items) |*extension| {
+        for (extension.fields.items) |*field| {
+            try resolveTypeReference(&field.value_type, module_id, sema);
             if (field.default_value) |default_value| try resolveExprTypeReferences(allocator, default_value, module_id, sema);
         }
     }
@@ -511,7 +625,11 @@ fn resolveStatementTypeReferences(
     sema: *const SemanticEnv,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |*binding| try resolveExprTypeReferences(allocator, &binding.expr, module_id, sema),
+        .hole => {},
+        .let_binding => |*binding| {
+            if (binding.type_annotation) |*annotation| try resolveTypeReference(annotation, module_id, sema);
+            try resolveExprTypeReferences(allocator, &binding.expr, module_id, sema);
+        },
         .return_expr => |*expr| try resolveExprTypeReferences(allocator, expr, module_id, sema),
         .return_void => {},
         .constrain => |*constraint| {
@@ -534,7 +652,7 @@ fn resolveExprTypeReferences(
     sema: *const SemanticEnv,
 ) !void {
     switch (expr.*) {
-        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
             for (call.args.items) |*arg| try resolveExprTypeReferences(allocator, arg, module_id, sema);
         },
@@ -736,9 +854,14 @@ fn resolveStatementEnumCases(
     stmt: *ast.Statement,
 ) !void {
     switch (stmt.kind) {
+        .hole => {},
         .let_binding => |*binding| {
             try resolveExprEnumCases(allocator, module_id, sema, env, &binding.expr);
-            try env.put(binding.name, semantic_types.infoFromType(ast.Type.any));
+            const info = if (binding.type_annotation) |annotation|
+                semantic_types.infoFromType(annotation)
+            else
+                semantic_types.infoFromType(ast.Type.any);
+            try env.put(binding.name, info);
         },
         .return_expr => |*expr| try resolveExprEnumCases(allocator, module_id, sema, env, expr),
         .return_void => {},
@@ -767,7 +890,7 @@ fn resolveExprEnumCases(
     expr: *ast.Expr,
 ) !void {
     switch (expr.*) {
-        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |*call| {
             for (call.args.items) |*arg| try resolveExprEnumCases(allocator, module_id, sema, env, arg);
         },
@@ -812,7 +935,8 @@ fn resolveMemberAsEnumCase(
     member: *ast.MemberExpr,
 ) !bool {
     switch (member.target.*) {
-        .ident => |enum_name| {
+        .ident => |enum_ident| {
+            const enum_name = enum_ident.name;
             const qualified = std.mem.indexOf(u8, enum_name, "::") != null;
             if (!qualified and (env.get(enum_name) != null or sema.function(enum_name) != null or sema.constant(enum_name) != null)) return false;
             const resolved = sema.resolveTypeNameInContext(module_id, enum_name) orelse return false;
@@ -824,7 +948,9 @@ fn resolveMemberAsEnumCase(
             allocator.destroy(target);
             expr.* = .{ .enum_case = .{
                 .enum_name = try allocator.dupe(u8, resolved_enum_name),
+                .enum_name_span = enum_ident.name_span,
                 .case_name = case_name,
+                .case_name_span = member.name_span,
             } };
             allocator.free(enum_name);
             return true;
@@ -849,12 +975,20 @@ fn resolveTypeReference(
     switch (ty.kind) {
         .object => if (ty.class_name) |name| {
             if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
+                const class_name_span = ty.class_name_span;
                 ty.* = resolved;
+                switch (ty.kind) {
+                    .object, .record => ty.class_name_span = class_name_span,
+                    .enum_type => ty.enum_name_span = class_name_span,
+                    else => {},
+                }
             }
         },
         .selection => if (ty.param_class_name) |name| {
             if (sema.resolveTypeNameInContext(module_id, name)) |resolved| {
+                const param_class_name_span = ty.param_class_name_span;
                 if (resolved.kind == .object) ty.param_class_name = resolved.class_name;
+                ty.param_class_name_span = param_class_name_span;
             }
         },
         .function => {
@@ -899,14 +1033,46 @@ fn checkStatementTypeAnnotations(
     stmt: ast.Statement,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, binding.expr),
+        .hole => {},
+        .let_binding => |binding| {
+            const origin = try originForModuleSpan(allocator, origin_path, stmt.span);
+            defer allocator.free(origin);
+            var had_diagnostics = false;
+            if (binding.type_annotation) |annotation| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkTypeAnnotation(ir, sema, module_id, annotation, origin) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            const expr_diagnostic_count = ir.diagnostics.items.len;
+            checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, binding.expr) catch |err| {
+                try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+                had_diagnostics = true;
+            };
+            if (had_diagnostics) return error.DiagnosticsFailed;
+        },
         .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
         .return_void => {},
         .property_set => |property_set| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.value),
         .if_stmt => |if_stmt| {
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, if_stmt.condition);
-            for (if_stmt.then_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested);
-            for (if_stmt.else_statements.items) |nested| try checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested);
+            var had_diagnostics = false;
+            for (if_stmt.then_statements.items) |nested| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            for (if_stmt.else_statements.items) |nested| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .expr_stmt => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
         .constrain => |constraint| {
@@ -924,28 +1090,70 @@ fn checkExprTypeAnnotations(
     expr: ast.Expr,
 ) !void {
     switch (expr) {
-        .ident, .string, .color, .number, .boolean, .none, .enum_case => {},
+        .ident, .hole, .string, .color, .number, .boolean, .none, .enum_case => {},
         .call => |call| {
-            for (call.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg);
+            var had_diagnostics = false;
+            for (call.args.items) |arg| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .apply => |apply| {
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, apply.callee.*);
-            for (apply.args.items) |arg| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg);
+            var had_diagnostics = false;
+            for (apply.args.items) |arg| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .lambda => |lambda| {
             const origin = try originForModuleSpan(allocator, origin_path, lambda.span);
             defer allocator.free(origin);
+            var had_diagnostics = false;
             for (lambda.params.items) |param| {
-                try checkTypeAnnotation(ir, sema, module_id, param.ty, origin);
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkTypeAnnotation(ir, sema, module_id, param.ty, origin) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
             }
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, lambda.body.*);
+            const body_diagnostic_count = ir.diagnostics.items.len;
+            checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, lambda.body.*) catch |err| {
+                try continueAfterDiagnostic(ir, body_diagnostic_count, err);
+                had_diagnostics = true;
+            };
+            if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .record => |record| {
-            for (record.fields.items) |field| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value);
+            var had_diagnostics = false;
+            for (record.fields.items) |field| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .record_update => |update| {
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, update.target.*);
-            for (update.fields.items) |field| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value);
+            var had_diagnostics = false;
+            for (update.fields.items) |field| {
+                const diagnostic_count = ir.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value) catch |err| {
+                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                    had_diagnostics = true;
+                };
+            }
+            if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .member => |member| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, member.target.*),
         .optional_check => |check| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, check.target.*),
@@ -963,7 +1171,7 @@ fn checkTypeAnnotation(
     ty: ast.Type,
     origin: []const u8,
 ) !void {
-    if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none) return;
+    if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole) return;
     if (ty.kind == .optional) {
         if (ty.optional_child) |child| try checkTypeAnnotation(ir, sema, module_id, child.*, origin);
         return;
@@ -980,8 +1188,22 @@ fn checkTypeAnnotation(
         if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
     }
     if (ty.kind == .function) {
-        for (ty.fn_params) |param| try checkTypeAnnotation(ir, sema, module_id, param, origin);
-        if (ty.fn_result) |result| try checkTypeAnnotation(ir, sema, module_id, result.*, origin);
+        var had_diagnostics = false;
+        for (ty.fn_params) |param| {
+            const diagnostic_count = ir.diagnostics.items.len;
+            checkTypeAnnotation(ir, sema, module_id, param, origin) catch |err| {
+                try continueAfterDiagnostic(ir, diagnostic_count, err);
+                had_diagnostics = true;
+            };
+        }
+        if (ty.fn_result) |result| {
+            const diagnostic_count = ir.diagnostics.items.len;
+            checkTypeAnnotation(ir, sema, module_id, result.*, origin) catch |err| {
+                try continueAfterDiagnostic(ir, diagnostic_count, err);
+                had_diagnostics = true;
+            };
+        }
+        if (had_diagnostics) return error.DiagnosticsFailed;
     }
 }
 
@@ -1130,7 +1352,8 @@ pub fn collectScopedVariableInfoFromProgram(
             const info = semantic_types.infoFromType(param.ty);
             try env.put(param.name, info);
             const func_scope = analysis_scope.functionScope(func);
-            try appendScopedVariable(allocator, &variables, param.name, info, module_id, func_scope, func.span.start, func.span.start, func.span.start, func.span.end);
+            const param_span = param.name_span orelse func.span;
+            try appendScopedVariable(allocator, &variables, param.name, info, module_id, func_scope, param_span.start, param_span.end, func.span.start, func.span.end);
         }
 
         for (func.statements.items) |stmt| {
@@ -1212,6 +1435,9 @@ pub fn buildIrWithOptions(
     project_source.* = &.{};
     project_program.* = ast.Program.init();
     errdefer ir.deinit();
+    if (options.parse_holes) |holes| {
+        try addParseHoleDiagnostics(&ir, holes);
+    }
 
     ir.constants = index.constants;
     index.constants = core.ConstMap.init(allocator);
@@ -1237,7 +1463,8 @@ pub fn buildIrWithOptions(
         try rebuildConstDeclarations(allocator, &ir);
         try rebuildFunctionDeclarations(allocator, &ir);
     }
-    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), &ir) catch |err| blk: {
+    const variable_diagnostic_ir: ?*core.Ir = if (options.allow_diagnostics) null else &ir;
+    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromProgram(allocator, &ir.functions, ir.projectProgram(), variable_diagnostic_ir) catch |err| blk: {
         if (!options.allow_diagnostics) {
             printIrDiagnosticsOrFallback(&ir, err);
             return error.DiagnosticsFailed;
@@ -1247,6 +1474,19 @@ pub fn buildIrWithOptions(
     if (variable_infos) |*infos| infos.deinit();
     try editor.populateIrAnalysis(allocator, &ir);
     return ir;
+}
+
+fn addParseHoleDiagnostics(ir: *core.Ir, holes: syntax_hole.Result) !void {
+    const origin_path = ir.projectPath();
+    for (holes.diagnostics) |diagnostic| {
+        const origin = try originForModuleSpan(ir.allocator, origin_path, diagnostic.span);
+        defer ir.allocator.free(origin);
+        var message_buf: [256]u8 = undefined;
+        const message_text = utils.err.formatParseDiagnostic(&message_buf, diagnostic);
+        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try ir.allocator.dupe(u8, message_text) },
+        });
+    }
 }
 
 fn printIrDiagnosticsOrFallback(ir: *core.Ir, err: anyerror) void {
@@ -1287,6 +1527,7 @@ pub const LoadProgramIndexOptions = struct {
     overlay: ?*const module_loader.SourceOverlay = null,
     diagnostics: ?*module_loader.LoadDiagnostics = null,
     print_diagnostics: bool = true,
+    recovering: bool = false,
 };
 
 pub fn loadProgramIndexWithOptions(
@@ -1300,6 +1541,7 @@ pub fn loadProgramIndexWithOptions(
         .overlay = options.overlay,
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,
+        .recovering = options.recovering,
     });
     errdefer graph.deinit();
 
@@ -1350,8 +1592,10 @@ fn collectVariableTypesFromStatement(
     const origin = try statementOrigin(allocator, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
+        .hole => {},
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            const info = letBindingInfo(binding, inferred);
             if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
@@ -1402,8 +1646,10 @@ fn collectScopedVariableTypesFromStatement(
     const origin = try statementOrigin(allocator, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
+        .hole => {},
         .let_binding => |binding| {
-            const info = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(allocator, diagnostic_ir, sema, env, binding.expr, origin);
+            const info = letBindingInfo(binding, inferred);
             if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
@@ -1440,6 +1686,11 @@ fn collectScopedVariableTypesFromStatement(
             }
         },
     }
+}
+
+fn letBindingInfo(binding: anytype, inferred: VariableInfo) VariableInfo {
+    if (binding.type_annotation) |annotation| return semantic_types.infoFromType(annotation);
+    return inferred;
 }
 
 fn appendScopedVariable(

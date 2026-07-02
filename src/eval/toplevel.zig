@@ -654,7 +654,9 @@ fn evalExpr(
     expr: Expr,
 ) anyerror!core.Value {
     return switch (expr) {
-        .ident => |name| blk: {
+        .hole => error.HoleExpression,
+        .ident => |ident| blk: {
+            const name = ident.name;
             if (env.get(name)) |value| break :blk try value.clone(ir.allocator);
             const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
             if (sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
@@ -783,9 +785,7 @@ fn evalMember(
     const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
     const class_name = core.class_fields.classNameForNodeWithEnv(node, &sema) orelse return .{ .string = value };
     const field = sema.field(class_name, member.name) orelse return .{ .string = value };
-    var field_type = (try sema.resolveTypeText(ir.allocator, field.module_id, field.value_type)) orelse return .{ .string = value };
-    defer field_type.deinit(ir.allocator);
-    return core.value_text.typedPropertyValue(ir.allocator, value, field_type);
+    return core.value_text.typedPropertyValue(ir.allocator, value, field.value_type);
 }
 
 fn evalRecord(
@@ -854,13 +854,13 @@ fn evalRecordUpdate(
         errdefer if (!field_value_moved) field_value.deinit(ir.allocator);
         updateRecordFieldPath(ir.allocator, &target.record, field.path.items, field_value) catch |err| switch (err) {
             error.InvalidValueTag => {
-                const path = try formatRecordUpdatePath(ir.allocator, field.path.items);
+                const path = try ast.formatRecordPath(ir.allocator, field.path.items);
                 defer ir.allocator.free(path);
                 try reportRecordUpdateError(ir, current_origin, "InvalidRecordUpdatePath: '{s}' does not resolve to a nested record", .{path});
                 return err;
             },
             error.UnknownRecordField => {
-                const path = try formatRecordUpdatePath(ir.allocator, field.path.items);
+                const path = try ast.formatRecordPath(ir.allocator, field.path.items);
                 defer ir.allocator.free(path);
                 try reportRecordUpdateError(ir, current_origin, "MissingRecordField: record update path '{s}' is not present at runtime", .{path});
                 return err;
@@ -875,31 +875,21 @@ fn evalRecordUpdate(
 fn updateRecordFieldPath(
     allocator: std.mem.Allocator,
     record: *core.RecordValue,
-    path: []const []const u8,
+    path: []const ast.RecordPathSegment,
     value: core.Value,
 ) !void {
     if (path.len == 0) return error.UnknownRecordField;
     if (path.len == 1) {
-        try putRecordFieldValue(allocator, record, path[0], value, true);
+        try putRecordFieldValue(allocator, record, path[0].name, value, true);
         return;
     }
     for (record.fields.items) |*field| {
-        if (!std.mem.eql(u8, field.name, path[0])) continue;
+        if (!std.mem.eql(u8, field.name, path[0].name)) continue;
         if (field.value != .record) return error.InvalidValueTag;
         try updateRecordFieldPath(allocator, &field.value.record, path[1..], value);
         return;
     }
     return error.UnknownRecordField;
-}
-
-fn formatRecordUpdatePath(allocator: std.mem.Allocator, path: []const []const u8) ![]const u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    for (path, 0..) |segment, index| {
-        if (index > 0) try out.append(allocator, '.');
-        try out.appendSlice(allocator, segment);
-    }
-    return try out.toOwnedSlice(allocator);
 }
 
 const ResolvedRecordDecl = struct {
@@ -1864,6 +1854,7 @@ fn executeStatement(
 ) anyerror!ExecFlow {
     const origin = if (origin_override) |override| override else try statementOrigin(ir.allocator, stmt.span);
     switch (stmt.kind) {
+        .hole => return error.HoleStatement,
         .let_binding => |binding| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, binding.expr);
             if (names.isDiscardBindingName(binding.name)) {

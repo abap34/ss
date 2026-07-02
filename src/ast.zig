@@ -4,6 +4,7 @@ pub const types = @import("language_type");
 
 const Allocator = std.mem.Allocator;
 pub const Type = types.Type;
+pub const HoleId = u32;
 
 pub const Program = struct {
     imports: std.ArrayList(ImportDecl),
@@ -74,26 +75,37 @@ pub const ImportDecl = struct {
 
 pub const TypeDecl = struct {
     name: []const u8,
-    cases: std.ArrayList([]const u8),
+    name_span: ?Span = null,
+    cases: std.ArrayList(EnumCaseDecl),
     span: Span,
 
     pub fn deinit(self: *TypeDecl, allocator: Allocator) void {
         allocator.free(self.name);
-        for (self.cases.items) |case_name| allocator.free(case_name);
+        for (self.cases.items) |*case_decl| case_decl.deinit(allocator);
         self.cases.deinit(allocator);
+    }
+};
+
+pub const EnumCaseDecl = struct {
+    name: []const u8,
+    name_span: ?Span = null,
+
+    pub fn deinit(self: *EnumCaseDecl, allocator: Allocator) void {
+        allocator.free(self.name);
     }
 };
 
 pub const ObjectFieldDecl = struct {
     name: []const u8,
-    value_type: []const u8,
+    name_span: ?Span = null,
+    value_type: Type,
     default_value: ?*Expr = null,
     default_property_value: ?[]const u8 = null,
     span: Span,
 
     pub fn deinit(self: *ObjectFieldDecl, allocator: Allocator) void {
         allocator.free(self.name);
-        allocator.free(self.value_type);
+        self.value_type.deinit(allocator);
         if (self.default_value) |expr| {
             expr.deinit(allocator);
             allocator.destroy(expr);
@@ -104,6 +116,7 @@ pub const ObjectFieldDecl = struct {
 
 pub const ObjectDecl = struct {
     name: []const u8,
+    name_span: ?Span = null,
     base: ?[]const u8 = null,
     roles: std.ArrayList([]const u8),
     fields: std.ArrayList(ObjectFieldDecl),
@@ -121,6 +134,7 @@ pub const ObjectDecl = struct {
 
 pub const RecordDecl = struct {
     name: []const u8,
+    name_span: ?Span = null,
     fields: std.ArrayList(ObjectFieldDecl),
     span: Span,
 
@@ -133,6 +147,7 @@ pub const RecordDecl = struct {
 
 pub const ObjectExtensionDecl = struct {
     target: []const u8,
+    target_span: ?Span = null,
     implements: ?[]const u8 = null,
     roles: std.ArrayList([]const u8),
     fields: std.ArrayList(ObjectFieldDecl),
@@ -150,6 +165,7 @@ pub const ObjectExtensionDecl = struct {
 
 pub const PageDecl = struct {
     name: []const u8,
+    name_span: ?Span = null,
     statements: std.ArrayList(Statement),
     span: Span,
 };
@@ -162,6 +178,7 @@ pub const DocumentBlockDecl = struct {
 
 pub const ConstDecl = struct {
     name: []const u8,
+    name_span: ?Span = null,
     span: Span,
     value_type: Type,
     value: Expr,
@@ -175,12 +192,14 @@ pub const ConstDecl = struct {
 
 pub const FunctionDecl = struct {
     name: []const u8,
+    name_span: ?Span = null,
     span: Span,
     params: std.ArrayList(ParamDecl),
     result_type: Type,
     statements: std.ArrayList(Statement),
 
     pub fn deinit(self: *FunctionDecl, allocator: Allocator) void {
+        allocator.free(self.name);
         for (self.params.items) |*param| param.deinit(allocator);
         self.params.deinit(allocator);
         self.result_type.deinit(allocator);
@@ -200,6 +219,7 @@ pub const FunctionDecl = struct {
 
         return .{
             .name = try allocator.dupe(u8, name),
+            .name_span = self.name_span,
             .span = span,
             .params = params,
             .result_type = try self.result_type.clone(allocator),
@@ -210,10 +230,12 @@ pub const FunctionDecl = struct {
 
 pub const ParamDecl = struct {
     name: []const u8,
+    name_span: ?Span = null,
     ty: Type,
     default_value: ?*Expr = null,
 
     pub fn deinit(self: *ParamDecl, allocator: Allocator) void {
+        allocator.free(self.name);
         self.ty.deinit(allocator);
         if (self.default_value) |expr| {
             expr.deinit(allocator);
@@ -231,6 +253,7 @@ pub const ParamDecl = struct {
         }
         return .{
             .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
             .ty = try self.ty.clone(allocator),
             .default_value = default_value,
         };
@@ -240,6 +263,7 @@ pub const ParamDecl = struct {
 pub const CallableName = struct {
     qualifier: ?[]const u8 = null,
     name: []const u8,
+    name_hole: ?HoleId = null,
     qualifier_span: ?Span = null,
     name_span: ?Span = null,
     span: ?Span = null,
@@ -257,6 +281,10 @@ pub const CallableName = struct {
     }
 
     pub fn displayAlloc(self: CallableName, allocator: Allocator) ![]const u8 {
+        if (self.name_hole != null) {
+            if (self.qualifier) |qualifier| return std.fmt.allocPrint(allocator, "{s}::<hole>", .{qualifier});
+            return allocator.dupe(u8, "<hole>");
+        }
         if (self.qualifier) |qualifier| {
             return std.fmt.allocPrint(allocator, "{s}::{s}", .{ qualifier, self.name });
         }
@@ -267,6 +295,7 @@ pub const CallableName = struct {
         return .{
             .qualifier = if (self.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,
             .name = try allocator.dupe(u8, self.name),
+            .name_hole = self.name_hole,
             .qualifier_span = self.qualifier_span,
             .name_span = self.name_span,
             .span = self.span,
@@ -277,10 +306,12 @@ pub const CallableName = struct {
 pub const CallExpr = struct {
     callee: CallableName,
     args: std.ArrayList(Expr),
+    arg_spans: std.ArrayList(Span) = .empty,
 
     pub fn deinit(self: *CallExpr, allocator: Allocator) void {
         for (self.args.items) |*arg| arg.deinit(allocator);
         self.args.deinit(allocator);
+        self.arg_spans.deinit(allocator);
     }
 
     pub fn clone(self: CallExpr, allocator: Allocator) anyerror!CallExpr {
@@ -292,9 +323,13 @@ pub const CallExpr = struct {
         for (self.args.items) |arg| {
             try args.append(allocator, try arg.clone(allocator));
         }
+        var arg_spans = std.ArrayList(Span).empty;
+        errdefer arg_spans.deinit(allocator);
+        try arg_spans.appendSlice(allocator, self.arg_spans.items);
         return .{
             .callee = try self.callee.clone(allocator),
             .args = args,
+            .arg_spans = arg_spans,
         };
     }
 };
@@ -302,12 +337,14 @@ pub const CallExpr = struct {
 pub const ApplyExpr = struct {
     callee: *Expr,
     args: std.ArrayList(Expr),
+    arg_spans: std.ArrayList(Span) = .empty,
 
     pub fn deinit(self: *ApplyExpr, allocator: Allocator) void {
         self.callee.deinit(allocator);
         allocator.destroy(self.callee);
         for (self.args.items) |*arg| arg.deinit(allocator);
         self.args.deinit(allocator);
+        self.arg_spans.deinit(allocator);
     }
 
     pub fn clone(self: ApplyExpr, allocator: Allocator) anyerror!ApplyExpr {
@@ -323,10 +360,14 @@ pub const ApplyExpr = struct {
         for (self.args.items) |arg| {
             try args.append(allocator, try arg.clone(allocator));
         }
+        var arg_spans = std.ArrayList(Span).empty;
+        errdefer arg_spans.deinit(allocator);
+        try arg_spans.appendSlice(allocator, self.arg_spans.items);
 
         return .{
             .callee = callee,
             .args = args,
+            .arg_spans = arg_spans,
         };
     }
 };
@@ -368,6 +409,8 @@ pub const LambdaExpr = struct {
 pub const MemberExpr = struct {
     target: *Expr,
     name: []const u8,
+    name_span: ?Span = null,
+    name_hole: ?HoleId = null,
 
     pub fn deinit(self: *MemberExpr, allocator: Allocator) void {
         self.target.deinit(allocator);
@@ -382,12 +425,15 @@ pub const MemberExpr = struct {
         return .{
             .target = target,
             .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+            .name_hole = self.name_hole,
         };
     }
 };
 
 pub const RecordFieldExpr = struct {
     name: []const u8,
+    name_span: ?Span = null,
     value: Expr,
 
     pub fn deinit(self: *RecordFieldExpr, allocator: Allocator) void {
@@ -398,6 +444,7 @@ pub const RecordFieldExpr = struct {
     pub fn clone(self: RecordFieldExpr, allocator: Allocator) anyerror!RecordFieldExpr {
         return .{
             .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
             .value = try self.value.clone(allocator),
         };
     }
@@ -405,6 +452,7 @@ pub const RecordFieldExpr = struct {
 
 pub const RecordExpr = struct {
     type_name: []const u8,
+    type_name_span: ?Span = null,
     fields: std.ArrayList(RecordFieldExpr),
 
     pub fn deinit(self: *RecordExpr, allocator: Allocator) void {
@@ -424,33 +472,74 @@ pub const RecordExpr = struct {
         }
         return .{
             .type_name = try allocator.dupe(u8, self.type_name),
+            .type_name_span = self.type_name_span,
             .fields = fields,
         };
     }
 };
 
+pub const RecordPathSegment = struct {
+    name: []const u8,
+    span: Span,
+    name_hole: ?HoleId = null,
+
+    pub fn deinit(self: *RecordPathSegment, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
+
+    pub fn clone(self: RecordPathSegment, allocator: Allocator) !RecordPathSegment {
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .span = self.span,
+            .name_hole = self.name_hole,
+        };
+    }
+};
+
+pub fn formatRecordPath(allocator: Allocator, path: []const RecordPathSegment) ![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (path, 0..) |segment, index| {
+        if (index > 0) try out.append(allocator, '.');
+        try out.appendSlice(allocator, segment.name);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+pub fn recordPathsOverlap(left: []const RecordPathSegment, right: []const RecordPathSegment) bool {
+    const shared = @min(left.len, right.len);
+    for (0..shared) |index| {
+        if (!std.mem.eql(u8, left[index].name, right[index].name)) return false;
+    }
+    return true;
+}
+
 pub const RecordUpdateFieldExpr = struct {
-    path: std.ArrayList([]const u8),
+    path: std.ArrayList(RecordPathSegment),
+    path_span: Span,
     value: Expr,
+    value_span: Span,
 
     pub fn deinit(self: *RecordUpdateFieldExpr, allocator: Allocator) void {
-        for (self.path.items) |segment| allocator.free(segment);
+        for (self.path.items) |*segment| segment.deinit(allocator);
         self.path.deinit(allocator);
         self.value.deinit(allocator);
     }
 
     pub fn clone(self: RecordUpdateFieldExpr, allocator: Allocator) anyerror!RecordUpdateFieldExpr {
-        var path = std.ArrayList([]const u8).empty;
+        var path = std.ArrayList(RecordPathSegment).empty;
         errdefer {
-            for (path.items) |segment| allocator.free(segment);
+            for (path.items) |*segment| segment.deinit(allocator);
             path.deinit(allocator);
         }
         for (self.path.items) |segment| {
-            try path.append(allocator, try allocator.dupe(u8, segment));
+            try path.append(allocator, try segment.clone(allocator));
         }
         return .{
             .path = path,
+            .path_span = self.path_span,
             .value = try self.value.clone(allocator),
+            .value_span = self.value_span,
         };
     }
 };
@@ -458,6 +547,7 @@ pub const RecordUpdateFieldExpr = struct {
 pub const RecordUpdateExpr = struct {
     target: *Expr,
     fields: std.ArrayList(RecordUpdateFieldExpr),
+    body_span: Span,
 
     pub fn deinit(self: *RecordUpdateExpr, allocator: Allocator) void {
         self.target.deinit(allocator);
@@ -482,13 +572,16 @@ pub const RecordUpdateExpr = struct {
         return .{
             .target = target,
             .fields = fields,
+            .body_span = self.body_span,
         };
     }
 };
 
 pub const EnumCaseExpr = struct {
     enum_name: []const u8,
+    enum_name_span: ?Span = null,
     case_name: []const u8,
+    case_name_span: ?Span = null,
 
     pub fn deinit(self: *EnumCaseExpr, allocator: Allocator) void {
         allocator.free(self.enum_name);
@@ -498,7 +591,9 @@ pub const EnumCaseExpr = struct {
     pub fn clone(self: EnumCaseExpr, allocator: Allocator) anyerror!EnumCaseExpr {
         return .{
             .enum_name = try allocator.dupe(u8, self.enum_name),
+            .enum_name_span = self.enum_name_span,
             .case_name = try allocator.dupe(u8, self.case_name),
+            .case_name_span = self.case_name_span,
         };
     }
 };
@@ -546,10 +641,7 @@ pub const CoalesceExpr = struct {
     }
 };
 
-pub const Span = struct {
-    start: usize,
-    end: usize,
-};
+pub const Span = types.SourceSpan;
 
 pub const StringLiteral = struct {
     text: []const u8,
@@ -567,8 +659,25 @@ pub const StringLiteral = struct {
     }
 };
 
+pub const IdentifierExpr = struct {
+    name: []const u8,
+    name_span: ?Span = null,
+
+    pub fn deinit(self: *IdentifierExpr, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
+
+    pub fn clone(self: IdentifierExpr, allocator: Allocator) !IdentifierExpr {
+        return .{
+            .name = try allocator.dupe(u8, self.name),
+            .name_span = self.name_span,
+        };
+    }
+};
+
 pub const Expr = union(enum) {
-    ident: []const u8,
+    ident: IdentifierExpr,
+    hole: HoleId,
     string: StringLiteral,
     color: []const u8,
     number: f32,
@@ -586,7 +695,8 @@ pub const Expr = union(enum) {
 
     pub fn deinit(self: *Expr, allocator: Allocator) void {
         switch (self.*) {
-            .ident, .color => |text| allocator.free(text),
+            .ident => |*ident| ident.deinit(allocator),
+            .color => |text| allocator.free(text),
             .string => |*literal| literal.deinit(allocator),
             .call => |*call| call.deinit(allocator),
             .apply => |*apply| apply.deinit(allocator),
@@ -603,7 +713,8 @@ pub const Expr = union(enum) {
 
     pub fn clone(self: Expr, allocator: Allocator) anyerror!Expr {
         return switch (self) {
-            .ident => |text| .{ .ident = try allocator.dupe(u8, text) },
+            .ident => |ident| .{ .ident = try ident.clone(allocator) },
+            .hole => |id| .{ .hole = id },
             .string => |literal| .{ .string = try literal.clone(allocator) },
             .color => |text| .{ .color = try allocator.dupe(u8, text) },
             .number => |value| .{ .number = value },
@@ -656,8 +767,11 @@ pub const Statement = struct {
     kind: Kind,
 
     pub const Kind = union(enum) {
+        hole: HoleId,
         let_binding: struct {
             name: []const u8,
+            name_span: ?Span = null,
+            type_annotation: ?Type = null,
             expr: Expr,
         },
         return_expr: Expr,
@@ -678,7 +792,12 @@ pub const Statement = struct {
 
     pub fn deinit(self: *Statement, allocator: Allocator) void {
         switch (self.kind) {
-            .let_binding => |*binding| binding.expr.deinit(allocator),
+            .hole => {},
+            .let_binding => |*binding| {
+                allocator.free(binding.name);
+                if (binding.type_annotation) |*annotation| annotation.deinit(allocator);
+                binding.expr.deinit(allocator);
+            },
             .return_expr => |*expr| expr.deinit(allocator),
             .return_void => {},
             .constrain => |*decl| decl.deinit(allocator),
