@@ -25,6 +25,7 @@ const themeDefinition = typeDefinitionLocation(baseThemeUri, baseThemeSource, "r
 
 await testStdlibDefinitionOutsideWorkspace();
 await testDefinitionAfterOpeningUnrelatedFile();
+await testLargeDocumentDefinitionUsesSnapshotFallback();
 await testLspConfiguration();
 await testLspDebouncesDocumentChanges();
 await testConstraintConflictDiagnosticMatchesCli();
@@ -133,6 +134,80 @@ end
         definition.some((location) => isDefinitionLocation(location, coverDefinition)),
         `definition after snapshot switch did not jump to default theme cover: ${JSON.stringify(definition)}`,
       );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testLargeDocumentDefinitionUsesSnapshotFallback() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-large-definition-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const theme = path.join(project, "theme.ss");
+    const slideUri = pathToFileURL(slide).toString();
+    const themeUri = pathToFileURL(theme).toString();
+    const themeSource = `import std:themes/default
+
+fn/! ultra_big(content: String) -> Object
+  return default::h1(content)
+end
+`;
+    const filler = Array.from({ length: 8000 }, (_, index) => `# filler ${index}`).join("\n");
+    const slideSource = `import "./theme" as *
+
+page title
+  let t1 = ultra_big! "Title"
+  ~ t1.left == page.left
+end
+
+${filler}
+`;
+    await writeFile(theme, themeSource, "utf8");
+    await writeFile(slide, slideSource, "utf8");
+    const ultraBigDefinition = functionDefinitionLocation(themeUri, themeSource, "ultra_big");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(slideUri);
+      client.openDocument({ uri: slideUri, text: slideSource });
+      const diagnostics = await diagnosticsPromise;
+      assert(diagnostics.params.diagnostics.length === 0, `large definition diagnostics: ${JSON.stringify(diagnostics.params.diagnostics)}`);
+
+      const functionDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: slideUri },
+        position: positionAt(slideSource, "ultra_big!", 1),
+      });
+      assert(Array.isArray(functionDefinition), `expected large function definition array, got ${JSON.stringify(functionDefinition)}`);
+      assert(
+        functionDefinition.some((location) => isDefinitionLocation(location, ultraBigDefinition)),
+        `large function definition did not jump to local theme: ${JSON.stringify(functionDefinition)}`,
+      );
+
+      const localDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: slideUri },
+        position: positionAt(slideSource, "t1.left", 1),
+      });
+      assert(Array.isArray(localDefinition), `expected large local definition array, got ${JSON.stringify(localDefinition)}`);
+      assert(
+        isDefinitionLocation(localDefinition[0], { uri: slideUri, line: 3, character: 6 }),
+        `large local definition did not jump to let binding: ${JSON.stringify(localDefinition)}`,
+      );
+
+      const hover = await client.request("textDocument/hover", {
+        textDocument: { uri: slideUri },
+        position: positionAt(slideSource, "ultra_big!", 1),
+      });
+      assert(
+        hover.contents?.value?.includes("ultra_big!(content: String) -> Object"),
+        `large hover did not use local theme signature: ${JSON.stringify(hover)}`,
+      );
+
+      const completion = await client.request("textDocument/completion", {
+        textDocument: { uri: slideUri },
+        position: positionAfter(slideSource, "let t1 = "),
+      });
+      assertCompletionHas(completion, "ultra_big!", "large source completion");
     });
   } finally {
     await rm(project, { recursive: true, force: true });

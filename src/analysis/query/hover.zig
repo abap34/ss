@@ -13,17 +13,15 @@ pub fn at(
 ) !?types.HoverInfo {
     const budget = types.QueryBudget.start(opts);
     if (budget.expired()) return null;
-    var context = context_query.Context.init(allocator, req) catch |err| switch (err) {
+    var context = context_query.Context.initWithBudget(allocator, req, budget) catch |err| switch (err) {
         error.NoQueryTarget => return null,
         else => return err,
     };
     defer context.deinit(allocator);
-    if (budget.expired()) return null;
 
     if (try importHoverMarkdown(allocator, snapshot, &context, req.path)) |markdown| {
         return .{ .markdown = markdown };
     }
-    if (budget.expired()) return null;
 
     const module = snapshot.moduleForPath(req.path) orelse return null;
     if (resolve_query.visibleVariableBinding(snapshot, module.id, req.offset, context.target)) |variable| {

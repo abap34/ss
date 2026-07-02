@@ -17,12 +17,11 @@ pub fn at(
 ) ![]types.DefinitionTarget {
     const budget = types.QueryBudget.start(opts);
     if (budget.expired()) return allocator.alloc(types.DefinitionTarget, 0);
-    var context = context_query.Context.init(allocator, req) catch |err| switch (err) {
+    var context = context_query.Context.initWithBudget(allocator, req, budget) catch |err| switch (err) {
         error.NoQueryTarget => return allocator.alloc(types.DefinitionTarget, 0),
         else => return err,
     };
     defer context.deinit(allocator);
-    if (budget.expired()) return allocator.alloc(types.DefinitionTarget, 0);
 
     var out = std.ArrayList(types.DefinitionTarget).empty;
     errdefer out.deinit(allocator);

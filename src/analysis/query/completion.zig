@@ -29,8 +29,11 @@ pub fn at(
     if (budget.expired()) return emptyResult(allocator);
     var parsed = syntax.parseRecoveringWithSourceName(allocator, req.source, req.path) catch null;
     defer if (parsed) |*result| result.deinit(allocator);
+    if (budget.expired()) {
+        if (parsed) |*result| result.deinit(allocator);
+        parsed = null;
+    }
     const parsed_program = if (parsed) |*result| &result.program else null;
-    if (budget.expired()) return emptyResult(allocator);
     if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_program)) |result| return result;
     if (try completeModuleAccessAt(allocator, snapshot, req, parsed_program)) |result| return result;
     if (try completeMemberAccessAt(allocator, snapshot, req, parsed_program)) |result| return result;
