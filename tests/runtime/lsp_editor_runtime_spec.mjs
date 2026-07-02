@@ -18,6 +18,10 @@ const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
 const defaultThemeUri = pathToFileURL(defaultTheme).toString();
 const defaultThemeSource = await readFile(defaultTheme, "utf8");
 const coverDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "cover");
+const baseTheme = path.join(root, "stdlib", "themes", "base.ss");
+const baseThemeUri = pathToFileURL(baseTheme).toString();
+const baseThemeSource = await readFile(baseTheme, "utf8");
+const themeDefinition = typeDefinitionLocation(baseThemeUri, baseThemeSource, "record", "Theme");
 
 await testStdlibDefinitionOutsideWorkspace();
 await testDefinitionAfterOpeningUnrelatedFile();
@@ -30,7 +34,12 @@ await testDirectUnknownImportDiagnosticLocation();
 await testImportedUnknownImportReportsBothFiles();
 await testImportCycleDiagnosticLocation();
 await testBrokenProjectConfigKeepsCompletionAlive();
+await testMultipleHoleParseDiagnostics();
+await testMixedHoleParseDiagnosticsAfterEdit();
+await testHoleAndSemanticDiagnosticsTogether();
+await testMultipleTypeDiagnostics();
 await testLspFeatureSurface();
+await testRandomizedLspOperationsAreStable();
 
 async function testStdlibDefinitionOutsideWorkspace() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-outside-"));
@@ -62,6 +71,19 @@ end
       assert(
         definition.some((location) => isDefinitionLocation(location, coverDefinition)),
         `outside workspace definition did not jump to default theme cover: ${JSON.stringify(definition)}`,
+      );
+      const importDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri },
+        position: positionAt(source, "std:themes/default", 1),
+      });
+      assert(Array.isArray(importDefinition), `expected import definition array, got ${JSON.stringify(importDefinition)}`);
+      assert(
+        importDefinition.some((location) =>
+          location.uri === defaultThemeUri &&
+          location.range?.start?.line === 0 &&
+          location.range?.start?.character === 0
+        ),
+        `import spec definition did not jump to default theme file: ${JSON.stringify(importDefinition)}`,
       );
     });
   } finally {
@@ -224,6 +246,169 @@ asset_base_dir = "."
   }
 }
 
+async function testMultipleHoleParseDiagnostics() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-hole-diagnostics-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `page broken
+let first =
+let second =
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (diagnostics) => diagnostics.filter((diagnostic) => diagnostic.code === "ExpectedExpression").length >= 2,
+        "multiple hole parse diagnostics",
+      );
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      const expressionDiagnostics = diagnostics.filter((diagnostic) => diagnostic.code === "ExpectedExpression");
+      assert(expressionDiagnostics.length >= 2, `expected multiple hole diagnostics: ${JSON.stringify(diagnostics)}`);
+      assert(
+        expressionDiagnostics.some((diagnostic) => diagnostic.range.start.line === 1),
+        `missing first expression hole diagnostic: ${JSON.stringify(expressionDiagnostics)}`,
+      );
+      assert(
+        expressionDiagnostics.some((diagnostic) => diagnostic.range.start.line === 2),
+        `missing second expression hole diagnostic: ${JSON.stringify(expressionDiagnostics)}`,
+      );
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testMixedHoleParseDiagnosticsAfterEdit() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-mixed-hole-diagnostics-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const valid = `page stable
+let first = "ok"
+end
+`;
+    const broken = mixedHoleSource();
+    await writeFile(slide, valid, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      let diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: valid });
+      let diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(diagnostics.length === 0, `mixed-hole initial diagnostics were not empty: ${JSON.stringify(diagnostics)}`);
+
+      diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (items) =>
+          items.some((diagnostic) => diagnostic.code === "InvalidImportSpec") &&
+          items.some((diagnostic) => diagnostic.code === "ExpectedMemberName") &&
+          items.filter((diagnostic) => diagnostic.code === "ExpectedExpression").length >= 3,
+        "mixed hole diagnostics after full edit",
+      );
+      client.changeDocument({ uri, version: 2, text: broken });
+      diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assertUniqueDiagnosticLocations(diagnostics, "mixed hole diagnostics");
+      assertDiagnosticAt(diagnostics, "InvalidImportSpec", 0, "mixed import hole");
+      assertDiagnosticAt(diagnostics, "ExpectedExpression", 3, "mixed expression hole");
+      assertDiagnosticAt(diagnostics, "ExpectedMemberName", 4, "mixed member-name hole");
+      assertDiagnosticAt(diagnostics, "ExpectedExpression", 5, "mixed leading call-argument hole");
+      assertDiagnosticAt(diagnostics, "ExpectedExpression", 6, "mixed trailing call-argument hole");
+
+      const rangeFixed = broken.replace("let first =", 'let first = "fixed"');
+      diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (items) =>
+          !items.some((diagnostic) => diagnostic.range.start.line === 3) &&
+          items.some((diagnostic) => diagnostic.code === "ExpectedMemberName") &&
+          items.filter((diagnostic) => diagnostic.code === "ExpectedExpression").length >= 2,
+        "mixed hole diagnostics after range fix",
+      );
+      client.changeDocumentRange({
+        uri,
+        version: 3,
+        range: {
+          start: positionAfter(broken, "let first ="),
+          end: positionAfter(broken, "let first ="),
+        },
+        text: ' "fixed"',
+      });
+      diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(!diagnostics.some((diagnostic) => diagnostic.range.start.line === 3), `range fix left stale line 4 diagnostic: ${JSON.stringify(diagnostics)}`);
+      assertDiagnosticAt(diagnostics, "ExpectedMemberName", 4, "mixed member-name hole after range fix");
+      assertDiagnosticAt(diagnostics, "ExpectedExpression", 5, "mixed leading call-argument hole after range fix");
+      assertDiagnosticAt(diagnostics, "ExpectedExpression", 6, "mixed trailing call-argument hole after range fix");
+      assert(rangeFixed.includes('let first = "fixed"'), "range-fixed fixture construction failed");
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testHoleAndSemanticDiagnosticsTogether() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-hole-semantic-diagnostics-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `page broken
+let x =
+let y: Missing = 1
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (items) =>
+          items.some((diagnostic) => diagnostic.code === "ExpectedExpression") &&
+          items.some((diagnostic) => diagnostic.code === "UnknownType"),
+        "hole and semantic diagnostics together",
+      );
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assertDiagnosticAt(diagnostics, "ExpectedExpression", 1, "hole and semantic expression hole");
+      assertDiagnosticAt(diagnostics, "UnknownType", 2, "hole and semantic unknown type");
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testMultipleTypeDiagnostics() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-multiple-type-diagnostics-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const uri = pathToFileURL(slide).toString();
+    const source = `page typed
+let first: String = 1
+let second: Number = "wrong"
+end
+`;
+    await writeFile(slide, source, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(
+        uri,
+        (items) => items.filter((diagnostic) => diagnostic.code === "TypeMismatch").length >= 2,
+        "multiple type diagnostics",
+      );
+      client.openDocument({ uri, text: source });
+      const diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assertDiagnosticAt(diagnostics, "TypeMismatch", 1, "first type mismatch");
+      assertDiagnosticAt(diagnostics, "TypeMismatch", 2, "second type mismatch");
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testLspFeatureSurface() {
   const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-feature-surface-"));
   try {
@@ -264,6 +449,16 @@ async function testLspFeatureSurface() {
         position: positionAt(source, "text!", 1),
       });
       assert(Array.isArray(definition) && definition.length > 0, `feature surface definition missing: ${JSON.stringify(definition)}`);
+
+      const themeDefinitionResult = await client.request("textDocument/definition", {
+        textDocument: { uri },
+        position: positionAt(source, "Theme", 0),
+      });
+      assert(Array.isArray(themeDefinitionResult), `feature surface type definition was not an array: ${JSON.stringify(themeDefinitionResult)}`);
+      assert(
+        themeDefinitionResult.some((location) => isDefinitionLocation(location, themeDefinition)),
+        `feature surface Theme definition did not jump to stdlib base: ${JSON.stringify(themeDefinitionResult)}`,
+      );
 
       const inlayHints = await client.request("textDocument/inlayHint", {
         textDocument: { uri },
@@ -309,6 +504,139 @@ async function testLspFeatureSurface() {
       const conflicts = await client.request("ss/layoutConflicts", { textDocument: { uri } });
       assert(conflicts.kind === "ss-layout-conflicts", `feature surface layout conflict response kind mismatch: ${JSON.stringify(conflicts)}`);
       assert(Array.isArray(conflicts.failures), `feature surface layout conflict failures missing: ${JSON.stringify(conflicts)}`);
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testRandomizedLspOperationsAreStable() {
+  const seed = 0x5eed2026;
+  const random = makePrng(seed);
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-random-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const lib = path.join(project, "lib.ss");
+    const slideUri = pathToFileURL(slide).toString();
+    const libUri = pathToFileURL(lib).toString();
+    await writeFile(path.join(project, "ss.toml"), `[project]
+entry = "slide.ss"
+asset_base_dir = "."
+`, "utf8");
+    const libSource = `import std:themes/default as *
+
+fn label!(value: String) -> Object
+  return text!(value)
+end
+`;
+    let slideSource = randomizedSource("Main", "0.1,0.2,0.3");
+    await writeFile(slide, slideSource, "utf8");
+    await writeFile(lib, libSource, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      let diagnosticsPromise = client.waitForDiagnostics(slideUri);
+      client.openDocument({ uri: slideUri, text: slideSource });
+      let diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(diagnostics.length === 0, `random initial diagnostics: ${JSON.stringify(diagnostics)}`);
+
+      diagnosticsPromise = client.waitForDiagnostics(slideUri);
+      client.openDocument({ uri: libUri, text: libSource, version: 1 });
+      diagnostics = (await diagnosticsPromise).params.diagnostics;
+      assert(diagnostics.length === 0, `random library open changed project diagnostics: ${JSON.stringify(diagnostics)}`);
+
+      let version = 1;
+      for (let step = 0; step < 32; step += 1) {
+        const op = Math.floor(random() * 10);
+        if (op === 0) {
+          slideSource = randomizedSource(`Main ${step}`, "0.1,0.2,0.3");
+          version += 1;
+          const wait = client.waitForDiagnostics(slideUri);
+          client.changeDocument({ uri: slideUri, version, text: slideSource });
+          await wait;
+        } else if (op === 1) {
+          slideSource = `import "./lib" as *
+
+page random
+let title = label!("after hole")
+let broken =
+end
+`;
+          version += 1;
+          const wait = client.waitForDiagnostics(
+            slideUri,
+            (items) => items.some((diagnostic) => diagnostic.code === "ExpectedExpression"),
+            `random hole diagnostics at step ${step}`,
+          );
+          client.changeDocument({ uri: slideUri, version, text: slideSource });
+          await wait;
+        } else if (op === 2) {
+          if (!slideSource.includes("Main")) {
+            slideSource = randomizedSource(`Main ${step}`, "0.1,0.2,0.3");
+            version += 1;
+            const wait = client.waitForDiagnostics(slideUri);
+            client.changeDocument({ uri: slideUri, version, text: slideSource });
+            await wait;
+            continue;
+          }
+          const next = slideSource.replace(/Main(?: \d+)?/, `Main ${step}`);
+          version += 1;
+          const wait = client.waitForDiagnostics(slideUri);
+          client.changeDocumentRange({
+            uri: slideUri,
+            version,
+            range: {
+              start: positionAt(slideSource, "Main", 0),
+              end: positionAt(slideSource, "Main", "Main".length),
+            },
+            text: `Main ${step}`,
+          });
+          slideSource = next;
+          await wait;
+        } else if (op === 3) {
+          const completion = await client.request("textDocument/completion", {
+            textDocument: { uri: slideUri },
+            position: completionPositionFor(slideSource),
+          });
+          assert(Array.isArray(completion.items), `random completion did not return items at step ${step}: ${JSON.stringify(completion)}`);
+        } else if (op === 4) {
+          const hover = await client.request("textDocument/hover", {
+            textDocument: { uri: slideUri },
+            position: positionAt(slideSource, "label!", 1),
+          });
+          assert(hover === null || typeof hover === "object", `random hover returned invalid value at step ${step}: ${JSON.stringify(hover)}`);
+        } else if (op === 5) {
+          const definition = await client.request("textDocument/definition", {
+            textDocument: { uri: slideUri },
+            position: positionAt(slideSource, "label!", 1),
+          });
+          assert(definition === null || Array.isArray(definition), `random definition returned invalid value at step ${step}: ${JSON.stringify(definition)}`);
+        } else if (op === 6) {
+          const inlayHints = await client.request("textDocument/inlayHint", {
+            textDocument: { uri: slideUri },
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: slideSource.split("\n").length, character: 0 },
+            },
+          });
+          assert(Array.isArray(inlayHints), `random inlay hints did not return an array at step ${step}: ${JSON.stringify(inlayHints)}`);
+        } else if (op === 7) {
+          const symbols = await client.request("textDocument/documentSymbol", { textDocument: { uri: slideUri } });
+          assert(Array.isArray(symbols), `random symbols did not return an array at step ${step}: ${JSON.stringify(symbols)}`);
+          const foldingRanges = await client.request("textDocument/foldingRange", { textDocument: { uri: slideUri } });
+          assert(Array.isArray(foldingRanges), `random folding did not return an array at step ${step}: ${JSON.stringify(foldingRanges)}`);
+        } else if (op === 8) {
+          const semanticTokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: slideUri } });
+          assert(Array.isArray(semanticTokens.data), `random semantic tokens did not return data at step ${step}: ${JSON.stringify(semanticTokens)}`);
+          const colors = await client.request("textDocument/documentColor", { textDocument: { uri: slideUri } });
+          assert(Array.isArray(colors), `random document colors did not return an array at step ${step}: ${JSON.stringify(colors)}`);
+        } else {
+          const projectInfo = await client.request("ss/projectInfo", { textDocument: { uri: slideUri } });
+          assert(projectInfo.entryPath === slide, `random projectInfo entry mismatch at step ${step}: ${JSON.stringify(projectInfo)}`);
+          const conflicts = await client.request("ss/layoutConflicts", { textDocument: { uri: slideUri } });
+          assert(conflicts.kind === "ss-layout-conflicts", `random layout conflicts response mismatch at step ${step}: ${JSON.stringify(conflicts)}`);
+        }
+      }
     });
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -407,6 +735,14 @@ end
       assert(
         report.failures.every((failure) => !("difference" in failure)),
         `conflict report should not expose difference: ${JSON.stringify(report.failures)}`,
+      );
+
+      client.changeDocument({ uri, version: 3, text: "page broken\nlet x =\nend\n" });
+      const staleReport = await client.request("ss/layoutConflicts", { textDocument: { uri } });
+      assert(staleReport.kind === "ss-layout-conflicts", `stale conflict report kind mismatch: ${JSON.stringify(staleReport)}`);
+      assert(
+        staleReport.failures?.some((failure) => failure.reason === "anchor_value_conflict" && Math.abs((failure.expected ?? 0) - 30) < 0.1),
+        `layout conflict fallback did not return the last successful report: ${JSON.stringify(staleReport.failures)}`,
       );
     });
   } finally {
@@ -582,6 +918,10 @@ end
 function featureSource(title, color) {
   return `import std:themes/default as *
 
+fn themed!(theme: Theme) -> Object
+  return text!("typed", theme)
+end
+
 record LocalStyle {
   color: Color = c"${color}"
 }
@@ -597,6 +937,71 @@ let heading = text!("${title}", current_theme() with {
 place!(heading)
 end
 `;
+}
+
+function typeDefinitionLocation(uri, text, keyword, name) {
+  const needle = `${keyword} ${name}`;
+  const lines = text.split("\n");
+  const line = lines.findIndex((lineText) => lineText.includes(needle));
+  assert(line >= 0, `fixture did not contain ${needle}`);
+  const character = lines[line].indexOf(name);
+  assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);
+  return { uri, line, character };
+}
+
+function randomizedSource(title, color) {
+  return `import "./lib" as *
+
+page random
+let title = label!("${title}")
+let colored = label!("colored")
+let accent = c"${color}"
+place!(title)
+place!(colored)
+end
+`;
+}
+
+function mixedHoleSource() {
+  return `import
+
+page mixed
+let first =
+let member = text!("body").
+let call = text!(,)
+let trailing = text!("body",)
+end
+`;
+}
+
+function assertDiagnosticAt(diagnostics, code, line, context) {
+  assert(
+    diagnostics.some((diagnostic) => diagnostic.code === code && diagnostic.range?.start?.line === line),
+    `${context} did not include ${code} at line ${line}: ${JSON.stringify(diagnostics)}`,
+  );
+}
+
+function assertUniqueDiagnosticLocations(diagnostics, context) {
+  const seen = new Set();
+  for (const diagnostic of diagnostics) {
+    const key = `${diagnostic.code}:${diagnostic.range?.start?.line}:${diagnostic.range?.start?.character}`;
+    assert(!seen.has(key), `${context} contained duplicate diagnostic ${key}: ${JSON.stringify(diagnostics)}`);
+    seen.add(key);
+  }
+}
+
+function completionPositionFor(source) {
+  if (source.includes("let title = ")) return positionAfter(source, "let title = ");
+  if (source.includes("let title =")) return positionAfter(source, "let title =");
+  return { line: 0, character: 0 };
+}
+
+function makePrng(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
 }
 
 async function configuredResponses({ cwd, fixture, source, completionPosition }) {

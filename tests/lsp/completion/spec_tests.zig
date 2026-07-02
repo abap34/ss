@@ -1,45 +1,10 @@
 const std = @import("std");
 const compiler = @import("compiler");
-const completion = compiler.completion;
+const query_types = compiler.analysis.query.types;
+const resolve_query = compiler.analysis.query.resolve;
+const snapshot_api = compiler.analysis.snapshot;
 
 const testing = std.testing;
-
-test "analysis completion: access context detects dot and module qualifiers" {
-    const dot_source = "page main\n  title.text";
-    const dot = completion.accessBeforeOffset(dot_source, dot_source.len) orelse return error.ExpectedDotAccess;
-    try std.testing.expectEqual(completion.AccessSeparator.dot, dot.separator);
-    try std.testing.expectEqualStrings("title", dot.receiver);
-    try std.testing.expectEqual(std.mem.indexOfScalar(u8, dot_source, '.').?, dot.separator_offset);
-
-    const module_source = "default::h";
-    const module = completion.accessBeforeOffset(module_source, module_source.len) orelse return error.ExpectedModuleAccess;
-    try std.testing.expectEqual(completion.AccessSeparator.double_colon, module.separator);
-    try std.testing.expectEqualStrings("default", module.receiver);
-    try std.testing.expectEqual(std.mem.indexOf(u8, module_source, "::").?, module.separator_offset);
-
-    const dot_with_space_source = "page main\n  title. ";
-    const dot_with_space = completion.accessBeforeOffset(dot_with_space_source, dot_with_space_source.len) orelse return error.ExpectedDotAccess;
-    try std.testing.expectEqual(completion.AccessSeparator.dot, dot_with_space.separator);
-    try std.testing.expectEqualStrings("title", dot_with_space.receiver);
-
-    const nested_dot_source = "body.text.";
-    const nested_dot = completion.accessBeforeOffset(nested_dot_source, nested_dot_source.len) orelse return error.ExpectedDotAccess;
-    try std.testing.expectEqual(completion.AccessSeparator.dot, nested_dot.separator);
-    try std.testing.expectEqualStrings("body.text", nested_dot.receiver);
-
-    const qualified_type_dot_source = "classes::Align.";
-    const qualified_type_dot = completion.accessBeforeOffset(qualified_type_dot_source, qualified_type_dot_source.len) orelse return error.ExpectedDotAccess;
-    try std.testing.expectEqual(completion.AccessSeparator.dot, qualified_type_dot.separator);
-    try std.testing.expectEqualStrings("classes::Align", qualified_type_dot.receiver);
-
-    const module_with_space_source = "default:: ";
-    const module_with_space = completion.accessBeforeOffset(module_with_space_source, module_with_space_source.len) orelse return error.ExpectedModuleAccess;
-    try std.testing.expectEqual(completion.AccessSeparator.double_colon, module_with_space.separator);
-    try std.testing.expectEqualStrings("default", module_with_space.receiver);
-
-    try std.testing.expect(completion.accessBeforeOffset("title.text ", "title.text ".len) == null);
-    try std.testing.expect(completion.accessBeforeOffset("title", 5) == null);
-}
 
 test "analysis completion: dot module and normal positions keep candidate kinds separate" {
     var case = try CompletionCase.init(
@@ -125,15 +90,12 @@ test "analysis completion: visible function prefers imported module definitions 
     );
     defer case.deinit();
 
-    const offset = offsetAfter(case.source, "text");
-    const item = completion.visibleFunction(&case.index, case.allocator, .{
-        .doc_path = case.path,
-        .source = case.source,
-        .offset = offset,
-    }, "text", null) orelse return error.ExpectedFunction;
+    const snapshot = try case.snapshotFor(case.source);
+    const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
+    const item = resolve_query.valueBinding(snapshot, module.id, "text", null, .function) orelse return error.ExpectedFunction;
 
-    try testing.expectEqualStrings("text", item.label);
-    try testing.expectEqualStrings("text(text_value: String, theme: Theme = current_theme()) -> Object", item.detail orelse "");
+    try testing.expectEqualStrings("text", item.name);
+    try testing.expectEqualStrings("text(text_value: String, theme: Theme = current_theme()) -> Object", item.signature);
 }
 
 test "analysis completion: visible variables and definitions use shared scope resolution" {
@@ -158,43 +120,37 @@ test "analysis completion: visible variables and definitions use shared scope re
     defer case.deinit();
 
     {
-        const request = completion.Request{
-            .doc_path = case.path,
-            .source = case.source,
-            .offset = offsetAfter(case.source, "doc_probe = x"),
-        };
-        const variable = completion.visibleVariable(&case.index, case.allocator, request, "x") orelse return error.ExpectedVariable;
+        const snapshot = try case.snapshotFor(case.source);
+        const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
+        const offset = offsetAfter(case.source, "doc_probe = x");
+        const variable = resolve_query.visibleVariableBinding(snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
         try testing.expectEqualStrings("x", variable.name);
         try testing.expectEqualStrings("String", variable.type_label);
-        const definition = completion.visibleDefinition(&case.index, case.allocator, request, "x", null, .variable) orelse return error.ExpectedDefinition;
+        const definition = resolve_query.visibleVariable(snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
         try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
-        try testing.expect(definition.module_id != null);
+        try testing.expectEqual(module.id, definition.module_id);
     }
 
     {
-        const request = completion.Request{
-            .doc_path = case.path,
-            .source = case.source,
-            .offset = offsetAfter(case.source, "page_probe = x"),
-        };
-        const variable = completion.visibleVariable(&case.index, case.allocator, request, "x") orelse return error.ExpectedVariable;
+        const snapshot = try case.snapshotFor(case.source);
+        const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
+        const offset = offsetAfter(case.source, "page_probe = x");
+        const variable = resolve_query.visibleVariableBinding(snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
         try testing.expectEqualStrings("Number", variable.type_label);
-        const definition = completion.visibleDefinition(&case.index, case.allocator, request, "x", null, .variable) orelse return error.ExpectedDefinition;
+        const definition = resolve_query.visibleVariable(snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
         try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
-        try testing.expect(definition.module_id != null);
+        try testing.expectEqual(module.id, definition.module_id);
     }
 
     {
-        const request = completion.Request{
-            .doc_path = case.path,
-            .source = case.source,
-            .offset = offsetAfter(case.source, "fn_probe = x"),
-        };
-        const variable = completion.visibleVariable(&case.index, case.allocator, request, "x") orelse return error.ExpectedVariable;
+        const snapshot = try case.snapshotFor(case.source);
+        const module = snapshot.moduleForPath(case.path) orelse return error.ExpectedModule;
+        const offset = offsetAfter(case.source, "fn_probe = x");
+        const variable = resolve_query.visibleVariableBinding(snapshot, module.id, offset, "x") orelse return error.ExpectedVariable;
         try testing.expectEqualStrings("Bool", variable.type_label);
-        const definition = completion.visibleDefinition(&case.index, case.allocator, request, "x", null, .variable) orelse return error.ExpectedDefinition;
+        const definition = resolve_query.visibleVariable(snapshot, module.id, offset, "x") orelse return error.ExpectedDefinition;
         try testing.expectEqual(compiler.core.DefinitionKind.variable, definition.kind);
-        try testing.expect(definition.module_id != null);
+        try testing.expectEqual(module.id, definition.module_id);
     }
 }
 
@@ -272,7 +228,7 @@ test "analysis completion: enum type dot completes cases" {
     }
 }
 
-test "analysis completion: source fallback sees same-scope bindings before and after cursor" {
+test "analysis completion: source recovery sees preceding same-scope bindings" {
     var case = try CompletionCase.init(
         \\import std:themes/default as *
         \\
@@ -291,11 +247,11 @@ test "analysis completion: source fallback sees same-scope bindings before and a
         \\import std:themes/default as *
         \\
         \\page title
-        \\  alias.
         \\  let t = h2! "before"
         \\  let alias = t
-        \\  later.
+        \\  alias.
         \\  let later = h2! "after"
+        \\  later.
         \\end
         \\
     ;
@@ -535,7 +491,7 @@ const CompletionCase = struct {
     allocator: std.mem.Allocator,
     path: []const u8,
     source: []const u8,
-    index: completion.Index,
+    snapshot: ?snapshot_api.AnalysisSnapshot = null,
 
     fn init(source: []const u8) !CompletionCase {
         var tmp = testing.tmpDir(.{});
@@ -551,50 +507,48 @@ const CompletionCase = struct {
         try std.Io.Dir.cwd().createDirPath(testing.io, root);
         const path = try std.fs.path.join(allocator, &.{ root, "case.ss" });
         const owned_source = try allocator.dupe(u8, source);
-        const index = try buildIndex(allocator, path, source);
         return .{
             .arena = arena,
             .allocator = allocator,
             .path = path,
             .source = owned_source,
-            .index = index,
         };
     }
 
     fn deinit(self: *CompletionCase) void {
-        _ = self.index;
+        if (self.snapshot) |*snapshot| snapshot.deinit();
         self.arena.deinit();
         testing.allocator.destroy(self.arena);
     }
 
-    fn completeAfter(self: *CompletionCase, needle: []const u8) !completion.Result {
+    fn completeAfter(self: *CompletionCase, needle: []const u8) !query_types.CompletionResult {
         return self.completeSourceAfter(self.source, needle);
     }
 
-    fn completeSourceAfter(self: *CompletionCase, source: []const u8, needle: []const u8) !completion.Result {
+    fn completeSourceAfter(self: *CompletionCase, source: []const u8, needle: []const u8) !query_types.CompletionResult {
         const offset = offsetAfter(source, needle);
-        return completion.complete(self.allocator, &self.index, .{
-            .doc_path = self.path,
+        const snapshot = try self.snapshotFor(source);
+        return snapshot_api.completeAt(self.allocator, snapshot, .{
+            .path = self.path,
             .source = source,
             .offset = offset,
-        });
+            .source_version = snapshot.generation,
+        }, .{ .budget_ms = 10 });
+    }
+
+    fn snapshotFor(self: *CompletionCase, source: []const u8) !*snapshot_api.AnalysisSnapshot {
+        if (self.snapshot) |*snapshot| snapshot.deinit();
+        self.snapshot = try buildSnapshot(self.allocator, self.path, source);
+        return if (self.snapshot) |*snapshot| snapshot else unreachable;
     }
 };
 
-fn buildIndex(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !completion.Index {
+fn buildSnapshot(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !snapshot_api.AnalysisSnapshot {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
-    var source_buf = try allocator.dupe(u8, source);
-    var program = try compiler.syntax.parseWithSourceName(allocator, source_buf, path);
-    var program_index = try compiler.analysis.loadProgramIndex(allocator, testing.io, asset_base_dir, program);
-    defer program_index.deinit();
-
-    var ir = try compiler.analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &program_index, .{
-        .allow_diagnostics = true,
-    });
-    defer ir.deinit();
-
-    compiler.analysis.analyzeProgram(allocator, &ir) catch {};
-    return completion.Index.fromIr(allocator, &ir);
+    var sources = snapshot_api.SourceSet.init(allocator, testing.io);
+    defer sources.deinit();
+    try sources.put(path, source);
+    return snapshot_api.buildSnapshot(allocator, &sources, path, asset_base_dir, .{});
 }
 
 fn offsetAfter(source: []const u8, needle: []const u8) usize {
@@ -602,14 +556,14 @@ fn offsetAfter(source: []const u8, needle: []const u8) usize {
     return start + needle.len;
 }
 
-fn expectHas(result: completion.Result, label: []const u8) !void {
+fn expectHas(result: query_types.CompletionResult, label: []const u8) !void {
     for (result.items) |item| {
         if (std.mem.eql(u8, item.label, label)) return;
     }
     return error.ExpectedCompletionMissing;
 }
 
-fn expectKind(result: completion.Result, label: []const u8, kind: completion.CompletionKind) !void {
+fn expectKind(result: query_types.CompletionResult, label: []const u8, kind: query_types.CompletionKind) !void {
     for (result.items) |item| {
         if (!std.mem.eql(u8, item.label, label)) continue;
         try testing.expectEqual(kind, item.kind);
@@ -618,13 +572,13 @@ fn expectKind(result: completion.Result, label: []const u8, kind: completion.Com
     return error.ExpectedCompletionMissing;
 }
 
-fn expectMissing(result: completion.Result, label: []const u8) !void {
+fn expectMissing(result: query_types.CompletionResult, label: []const u8) !void {
     for (result.items) |item| {
         if (std.mem.eql(u8, item.label, label)) return error.UnexpectedCompletionPresent;
     }
 }
 
-fn expectUnique(result: completion.Result) !void {
+fn expectUnique(result: query_types.CompletionResult) !void {
     var seen = std.StringHashMap(void).init(testing.allocator);
     defer seen.deinit();
     for (result.items) |item| {

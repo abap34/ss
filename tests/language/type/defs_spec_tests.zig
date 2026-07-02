@@ -3,9 +3,13 @@ const type_defs = @import("type_defs");
 
 const testing = std.testing;
 
+const Case = struct {
+    name: []const u8,
+};
+
 test "type defs spec: enum lookup matches complete case names" {
-    const cases = [_][]const u8{ "left", "center", "right" };
-    const mixed = [_][]const u8{ "Left", "Center", "RIGHT" };
+    const cases = [_]Case{ .{ .name = "left" }, .{ .name = "center" }, .{ .name = "right" } };
+    const mixed = [_]Case{ .{ .name = "Left" }, .{ .name = "Center" }, .{ .name = "RIGHT" } };
     try testing.expect(type_defs.enumCasesContain(&cases, "left"));
     try testing.expect(type_defs.enumCasesContain(&cases, "right"));
     try testing.expect(type_defs.enumCasesContain(&mixed, "Left"));
@@ -15,8 +19,8 @@ test "type defs spec: enum lookup matches complete case names" {
 }
 
 test "type defs spec: duplicate enum cases are reported by name" {
-    const valid = [_][]const u8{ "left", "center", "right" };
-    const invalid = [_][]const u8{ "left", "center", "left" };
+    const valid = [_]Case{ .{ .name = "left" }, .{ .name = "center" }, .{ .name = "right" } };
+    const invalid = [_]Case{ .{ .name = "left" }, .{ .name = "center" }, .{ .name = "left" } };
     try testing.expectEqual(@as(?[]const u8, null), try type_defs.duplicateEnumCase(testing.allocator, &valid));
     const duplicate = try type_defs.duplicateEnumCase(testing.allocator, &invalid);
     try testing.expect(duplicate != null);
@@ -24,7 +28,7 @@ test "type defs spec: duplicate enum cases are reported by name" {
 }
 
 test "type defs spec: enum labels preserve user-facing case order" {
-    const cases = [_][]const u8{ "String", "Number", "Done" };
+    const cases = [_]Case{ .{ .name = "String" }, .{ .name = "Number" }, .{ .name = "Done" } };
     const label = try type_defs.enumCasesLabel(testing.allocator, &cases);
     defer testing.allocator.free(label);
     try testing.expectEqualStrings("String | Number | Done", label);
