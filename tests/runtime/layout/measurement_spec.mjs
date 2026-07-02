@@ -17,6 +17,9 @@ if (pdflatexAvailable) {
 if (pdflatexAvailable && await commandAvailable("pdftoppm") && await commandAvailable("magick")) {
   await testVectorMathKeepsAspectRatio();
 }
+if (await commandAvailable("pdftocairo")) {
+  await testPdfFactorScalesMeasuredAssetFrame();
+}
 
 async function testNaturalTitleWidthDoesNotSelfWrap() {
   const project = await mkdtempProject("ss-layout-measure-title-");
@@ -221,6 +224,47 @@ end
   }
 }
 
+async function testPdfFactorScalesMeasuredAssetFrame() {
+  const project = await mkdtempProject("ss-layout-measure-pdf-scale-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const dumpPath = path.join(project, "dump.json");
+    const pdfPath = path.join(project, "asset.pdf");
+    await writeMinimalPdf(pdfPath, 200, 100);
+    await writeFile(
+      slide,
+      `import std:core/prelude as *
+
+page pdf_scale
+  let small = pdf("asset.pdf", 0.3)
+  small.link_id = "small"
+  place!(small)
+
+  let large = pdf("asset.pdf", 100)
+  large.link_id = "large"
+  place!(large)
+end
+`,
+      "utf8",
+    );
+
+    const dump = await dumpSlide(project, dumpPath);
+    const assets = dump.nodes
+      .filter((candidate) => candidate.content === "asset.pdf")
+      .sort((left, right) => left.height - right.height);
+    assert(assets.length === 2, `expected two PDF asset nodes, got ${assets.length}`);
+    const [small, large] = assets;
+    assert(small.height < 40, `small pdf factor should keep the asset near scaled natural height, got ${frameSummary(small)}`);
+    assert(small.width < 80, `small pdf factor should keep the asset near scaled natural width, got ${frameSummary(small)}`);
+    assert(large.height > small.height * 10, `pdf factor should affect measured height, small ${frameSummary(small)}, large ${frameSummary(large)}`);
+    assert(large.width > small.width * 10, `pdf factor should affect measured width, small ${frameSummary(small)}, large ${frameSummary(large)}`);
+
+    await runSs(["render", "slide.ss", path.join(project, "out.pdf"), "--cache-id", "pdf-scale"], project);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 function bodyBoxSource() {
   return `import std:themes/default as *
 
@@ -279,6 +323,29 @@ function frameSummary(node) {
 
 function close(left, right) {
   return Math.abs(left - right) <= 0.01;
+}
+
+async function writeMinimalPdf(filePath, width, height) {
+  const stream = `0.9 0.1 0.1 rg\n0 0 ${width} ${height} re\nf\n`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Contents 4 0 R >>`,
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const [index, body] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index < offsets.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  await writeFile(filePath, pdf, "binary");
 }
 
 async function runSs(args, cwd) {

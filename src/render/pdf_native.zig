@@ -1216,6 +1216,7 @@ fn hashResolvedRender(hasher: *std.hash.Wyhash, op: *const RenderOp) void {
     hashString(hasher, @tagName(render.kind));
     hashOptionalTextPaint(hasher, render.text);
     hashOptionalMathPaint(hasher, render.math);
+    hashOptionalAssetPaint(hasher, render.asset);
     hashOptionalCodePaint(hasher, render.code);
     hashOptionalShapePaint(hasher, render.shape);
     hashChromePaint(hasher, render.chrome);
@@ -1342,6 +1343,13 @@ fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
         hashF32(hasher, math.block_vertical_padding);
         hashF32(hasher, math.scale);
         hashHorizontalAlign(hasher, math.horizontal_align);
+    }
+}
+
+fn hashOptionalAssetPaint(hasher: *std.hash.Wyhash, maybe: ?core.render_policy.AssetPaint) void {
+    hashBool(hasher, maybe != null);
+    if (maybe) |asset| {
+        hashF32(hasher, asset.scale);
     }
 }
 
@@ -2224,8 +2232,8 @@ fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
         },
         .chrome_only => {},
         .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
-        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
-        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content, op.render.asset),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content, op.render.asset),
         .shape => if (op.render.shape) |shape| drawShapeOp(ctx, content_frame, shape),
     }
 }
@@ -2341,8 +2349,8 @@ fn measureRenderedOpContent(ctx: *DrawContext, op: *const RenderOp, maybe_text: 
         .text => if (maybe_text) |text| try drawTextOp(ctx, op, content_frame, text),
         .code => if (maybe_text) |text| try drawCodeBlock(ctx, content_frame, op.content, text, op.render.code),
         .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
-        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content),
-        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content, op.render.asset),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content, op.render.asset),
         .shape => if (op.render.shape) |shape| drawShapeOp(ctx, content_frame, shape),
         else => return null,
     }
@@ -2479,7 +2487,8 @@ fn measureAssetIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !co
         defer ctx.allocator.free(png_path);
         natural = try pngAssetSize(ctx, png_path);
     }
-    const fitted = fitSize(natural.width, natural.height, @max(width, 1), PageLayout.height);
+    const scaled = scaledAssetSize(natural, op.render.asset);
+    const fitted = fitSize(scaled.width, scaled.height, @max(width, 1), PageLayout.height);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
@@ -4110,33 +4119,33 @@ fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: 
     try drawSvgFrame(ctx, draw_frame, svg.path);
 }
 
-fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
+fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const source = try resolveAssetPath(ctx, content);
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
     if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
-        try drawSvgFit(ctx, frame, source);
+        try drawSvgFit(ctx, frame, source, asset);
         return;
     }
     if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
         const svg_path = try pdfToSvg(ctx, source);
         defer ctx.allocator.free(svg_path);
-        try drawSvgFit(ctx, frame, svg_path);
+        try drawSvgFit(ctx, frame, svg_path, asset);
         return;
     }
     return NativePdfError.UnsupportedAssetType;
 }
 
-fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8) !void {
+fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const source = try resolveAssetPath(ctx, content);
     defer ctx.allocator.free(source);
     if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
-        try drawSvgFit(ctx, frame, source);
+        try drawSvgFit(ctx, frame, source, asset);
         return;
     }
     const png_path = try rasterToSizedPng(ctx, source, frame.width * raster_cache_scale, frame.height * raster_cache_scale);
     defer ctx.allocator.free(png_path);
-    try drawPngFit(ctx, frame, png_path);
+    try drawPngFit(ctx, frame, png_path, asset);
 }
 
 const direct_merge_page_limit: usize = 16;
@@ -4544,9 +4553,9 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
     return allocator.dupe(u8, if (depth == 0) "•" else "◦");
 }
 
-fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8) !void {
+fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const size = try pngAssetSize(ctx, png_path);
-    const fitted = fittedFrameForSize(frame, size);
+    const fitted = fittedFrameForSize(frame, scaledAssetSize(size, asset));
     const png_z = try ctx.allocator.dupeZ(u8, png_path);
     defer ctx.allocator.free(png_z);
     const draw_x = fitted.x;
@@ -4554,9 +4563,9 @@ fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8) !void {
     if (c.ss_pdf_draw_png(ctx.pdf, png_z.ptr, draw_x, draw_y, fitted.width, fitted.height) != 0) return NativePdfError.ImageDecodeFailed;
 }
 
-fn drawSvgFit(ctx: *DrawContext, frame: Frame, svg_path: []const u8) !void {
+fn drawSvgFit(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const svg = try svgAsset(ctx, svg_path);
-    const fitted = fittedFrameForSize(frame, .{ .width = svg.width, .height = svg.height });
+    const fitted = fittedFrameForSize(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
     const svg_z = try ctx.allocator.dupeZ(u8, svg_path);
     defer ctx.allocator.free(svg_z);
     const draw_x = fitted.x;
@@ -4601,6 +4610,19 @@ fn fitSize(source_width: f32, source_height: f32, max_width: f32, max_height: f3
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
     const scale = @min(max_width / source_width, max_height / source_height);
     return .{ .width = source_width * scale, .height = source_height * scale };
+}
+
+fn assetScale(asset: ?core.render_policy.AssetPaint) f32 {
+    if (asset) |paint| return @max(paint.scale, 0.0001);
+    return 1;
+}
+
+fn scaledAssetSize(size: Size, asset: ?core.render_policy.AssetPaint) Size {
+    const scale = assetScale(asset);
+    return .{
+        .width = size.width * scale,
+        .height = size.height * scale,
+    };
 }
 
 fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, math: ?MathPaint) Size {
