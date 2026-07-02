@@ -4245,7 +4245,7 @@ test "compiler semantics: page overflow points at generated object call site" {
     defer arena.deinit();
     const allocator = arena.allocator();
     const expected_origin = try std.fmt.allocPrint(allocator, "case.ss:bytes:{d}-", .{start});
-    try expectLoweredDiagnosticWithOrigin(source, expected_origin, "PageOverflow: object exceeds page bounds");
+    try expectLoweredDiagnosticWithOrigin(source, expected_origin, "PageOverflow: object extends");
 }
 
 test "compiler semantics: returned object placement follows constraints and group edges" {

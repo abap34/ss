@@ -491,11 +491,10 @@ fn printPageOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
 
     printDiagnosticPageField(ir, diagnostic.page_id);
     printDiagnosticNodeField(ir, diagnostic.node_id);
-    printDiagnosticContentField(ir, diagnostic.node_id);
     printDiagnosticFrameField(ir, diagnostic.node_id);
-    printDiagnosticPageFrameField(ir, diagnostic.page_id);
-    printOverflowField(data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom);
-    printOverflowEdgesField(ir, diagnostic.node_id);
+    const directions = formatPageOverflowDirections(ir.allocator, data, false) catch null;
+    defer if (directions) |text| ir.allocator.free(text);
+    if (directions) |text| printBoxField("outside page", text);
 
     printDim();
     std.debug.print("╰─\n", .{});
@@ -553,39 +552,65 @@ fn printDiagnosticFrameField(ir: anytype, node_id: anytype) void {
     const node = ir.getNode(id) orelse return;
     var buffer: [160]u8 = undefined;
     const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height }) catch return;
-    printBoxField("frame", label);
-}
-
-fn printDiagnosticPageFrameField(ir: anytype, page_id: anytype) void {
-    const id = page_id orelse return;
-    const page = ir.getNode(id) orelse return;
-    var buffer: [160]u8 = undefined;
-    const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ page.frame.x, page.frame.y, page.frame.width, page.frame.height }) catch return;
-    printBoxField("page frame", label);
-}
-
-fn printOverflowField(left: f32, right: f32, top: f32, bottom: f32) void {
-    var buffer: [192]u8 = undefined;
-    const label = std.fmt.bufPrint(&buffer, "left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}", .{ left, right, top, bottom }) catch return;
-    printBoxField("overflow", label);
-}
-
-fn printOverflowEdgesField(ir: anytype, node_id: anytype) void {
-    const id = node_id orelse return;
-    const node = ir.getNode(id) orelse return;
-    var buffer: [192]u8 = undefined;
-    const label = std.fmt.bufPrint(
-        &buffer,
-        "left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
-        .{ node.frame.x, node.frame.x + node.frame.width, node.frame.y + node.frame.height, node.frame.y },
-    ) catch return;
-    printBoxField("object edges", label);
+    printBoxField("object frame", label);
 }
 
 fn printFloatTripleField(name: []const u8, required: f32, actual: f32, overflow: f32) void {
     var buffer: [160]u8 = undefined;
     const label = std.fmt.bufPrint(&buffer, "required={d:.1} frame={d:.1} overflow={d:.1}", .{ required, actual, overflow }) catch return;
     printBoxField(name, label);
+}
+
+const PageOverflowDirection = struct {
+    short: []const u8,
+    sentence: []const u8,
+    amount: f32,
+};
+
+const page_overflow_display_epsilon: f32 = 0.05;
+
+fn formatPageOverflowDiagnostic(allocator: std.mem.Allocator, data: anytype) ![]u8 {
+    const directions = try formatPageOverflowDirections(allocator, data, true);
+    defer allocator.free(directions);
+    return std.fmt.allocPrint(allocator, "PageOverflow: object extends {s}", .{directions});
+}
+
+fn formatPageOverflowDirections(allocator: std.mem.Allocator, data: anytype, sentence: bool) ![]u8 {
+    var directions: [4]PageOverflowDirection = undefined;
+    var len: usize = 0;
+    appendPageOverflowDirection(&directions, &len, data.overflow_left, "left", "left of page");
+    appendPageOverflowDirection(&directions, &len, data.overflow_right, "right", "right of page");
+    appendPageOverflowDirection(&directions, &len, data.overflow_top, "above", "above page");
+    appendPageOverflowDirection(&directions, &len, data.overflow_bottom, "below", "below page");
+    if (len == 0) return allocator.dupe(u8, "outside page");
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    if (sentence and len > 1) try out.appendSlice(allocator, "outside page: ");
+    for (directions[0..len], 0..) |direction, index| {
+        if (index != 0) try out.appendSlice(allocator, ", ");
+        const name = if (sentence and len == 1) direction.sentence else direction.short;
+        const text = try std.fmt.allocPrint(allocator, "{s} by {d:.1}", .{ name, direction.amount });
+        defer allocator.free(text);
+        try out.appendSlice(allocator, text);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn appendPageOverflowDirection(
+    directions: *[4]PageOverflowDirection,
+    len: *usize,
+    amount: f32,
+    short: []const u8,
+    sentence: []const u8,
+) void {
+    if (amount <= page_overflow_display_epsilon) return;
+    directions[len.*] = .{
+        .short = short,
+        .sentence = sentence,
+        .amount = amount,
+    };
+    len.* += 1;
 }
 
 fn diagnosticContentPreview(allocator: std.mem.Allocator, text: []const u8, max_chars: usize) ![]u8 {
@@ -873,11 +898,7 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
             "RecursiveFunction: recursive function cycle involving {s}",
             .{data.function_name},
         ),
-        .page_overflow => |data| std.fmt.allocPrint(
-            allocator,
-            "PageOverflow: object exceeds page bounds by left={d:.1} right={d:.1} top={d:.1} bottom={d:.1}",
-            .{ data.overflow_left, data.overflow_right, data.overflow_top, data.overflow_bottom },
-        ),
+        .page_overflow => |data| formatPageOverflowDiagnostic(allocator, data),
         .content_overflow => |data| std.fmt.allocPrint(
             allocator,
             "ContentOverflow: content requires height={d:.1}, frame height={d:.1}, overflow={d:.1}",
