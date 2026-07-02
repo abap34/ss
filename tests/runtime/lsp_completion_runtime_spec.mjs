@@ -21,17 +21,24 @@ const partsFixture = path.join(root, "tests", "fixtures", "project-basic", "part
 const themeTempFixture = path.join(root, "tests", "fixtures", "project-basic", "theme-temp.ss");
 const defaultTheme = path.join(root, "stdlib", "themes", "default.ss");
 const baseTheme = path.join(root, "stdlib", "themes", "base.ss");
+const classes = path.join(root, "stdlib", "core", "classes.ss");
 const uri = pathToFileURL(fixture).toString();
 const partsUri = pathToFileURL(partsFixture).toString();
 const themeTempUri = pathToFileURL(themeTempFixture).toString();
 const defaultThemeUri = pathToFileURL(defaultTheme).toString();
 const baseThemeUri = pathToFileURL(baseTheme).toString();
+const classesUri = pathToFileURL(classes).toString();
 const source = await readFile(fixture, "utf8");
 const defaultThemeSource = await readFile(defaultTheme, "utf8");
 const baseThemeSource = await readFile(baseTheme, "utf8");
+const classesSource = await readFile(classes, "utf8");
 const defaultThemeH2Definition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "h2");
 const defaultThemeTextDefinition = functionDefinitionLocation(defaultThemeUri, defaultThemeSource, "text");
 const baseThemeThemeDefinition = declarationDefinitionLocation(baseThemeUri, baseThemeSource, "record", "Theme");
+const baseThemeBodyFieldDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "Theme", "body");
+const baseThemeTextBlockTextDefinition = recordFieldDefinitionLocation(baseThemeUri, baseThemeSource, "TextBlockStyle", "text");
+const classesTextStyleSizeDefinition = recordFieldDefinitionLocation(classesUri, classesSource, "TextStyle", "size");
+const alignCenterDefinition = enumCaseDefinitionLocation(classesUri, classesSource, "Align", "center");
 
 await testProjectCompletionLifecycle();
 await testQualifiedModuleCompletion();
@@ -259,12 +266,22 @@ page ok
   let style = TextStyle { math_align = Align. }
 end
 `;
+    const enumDiagnosticsPromise = client.waitForDiagnostics(
+      uri,
+      (diagnostics) => diagnostics.some((diagnostic) => diagnostic.code === "ExpectedMemberName"),
+      "enum member-name hole diagnostics",
+    );
     client.changeDocument({ uri, version: 7, text: enumBrokenSource });
     const enumCompletion = await client.request("textDocument/completion", {
       textDocument: { uri },
       position: positionAfter(enumBrokenSource, "Align."),
     });
     assertEnumCaseCompletion(enumCompletion, "enum case completion");
+    const enumDiagnostics = (await enumDiagnosticsPromise).params.diagnostics;
+    assert(
+      !enumDiagnostics.some((diagnostic) => diagnostic.code === "UnknownEnumCase"),
+      `enum member-name hole produced a secondary UnknownEnumCase diagnostic: ${JSON.stringify(enumDiagnostics)}`,
+    );
   });
 }
 
@@ -384,6 +401,13 @@ async function testTypeAndImportDefinition() {
     const localSource = `import std:themes/default as *
 
 fn themed(theme_value: Theme) -> Object
+  let override = Theme {
+    body = theme_value.body
+  }
+  let changed = override with {
+    body.text.size = 24
+  }
+  let align_value = Align.center
   return text("body", theme_value)
 end
 
@@ -420,6 +444,83 @@ end
       assert(
         isDefinitionLocation(typeDefinition[0], baseThemeThemeDefinition),
         `type definition did not jump to Theme record: ${JSON.stringify(typeDefinition)}`,
+      );
+
+      const fieldDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "body ="),
+      });
+      assert(Array.isArray(fieldDefinition), `expected record field definition array, got ${JSON.stringify(fieldDefinition)}`);
+      assert(fieldDefinition.length === 1, `record field definition was not unique: ${JSON.stringify(fieldDefinition)}`);
+      assert(
+        isDefinitionLocation(fieldDefinition[0], baseThemeBodyFieldDefinition),
+        `record field definition did not jump to Theme.body: ${JSON.stringify(fieldDefinition)}`,
+      );
+
+      const memberFieldDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "theme_value.body", "theme_value.".length),
+      });
+      assert(Array.isArray(memberFieldDefinition), `expected member field definition array, got ${JSON.stringify(memberFieldDefinition)}`);
+      assert(memberFieldDefinition.length === 1, `member field definition was not unique: ${JSON.stringify(memberFieldDefinition)}`);
+      assert(
+        isDefinitionLocation(memberFieldDefinition[0], baseThemeBodyFieldDefinition),
+        `member field definition did not jump to Theme.body: ${JSON.stringify(memberFieldDefinition)}`,
+      );
+
+      const updateBodyDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "body.text.size"),
+      });
+      assert(Array.isArray(updateBodyDefinition), `expected record update body definition array, got ${JSON.stringify(updateBodyDefinition)}`);
+      assert(updateBodyDefinition.length === 1, `record update body definition was not unique: ${JSON.stringify(updateBodyDefinition)}`);
+      assert(
+        isDefinitionLocation(updateBodyDefinition[0], baseThemeBodyFieldDefinition),
+        `record update body definition did not jump to Theme.body: ${JSON.stringify(updateBodyDefinition)}`,
+      );
+
+      const updateTextDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "text.size"),
+      });
+      assert(Array.isArray(updateTextDefinition), `expected record update text definition array, got ${JSON.stringify(updateTextDefinition)}`);
+      assert(updateTextDefinition.length === 1, `record update text definition was not unique: ${JSON.stringify(updateTextDefinition)}`);
+      assert(
+        isDefinitionLocation(updateTextDefinition[0], baseThemeTextBlockTextDefinition),
+        `record update text definition did not jump to TextBlockStyle.text: ${JSON.stringify(updateTextDefinition)}`,
+      );
+
+      const updateSizeDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "size = 24"),
+      });
+      assert(Array.isArray(updateSizeDefinition), `expected record update size definition array, got ${JSON.stringify(updateSizeDefinition)}`);
+      assert(updateSizeDefinition.length === 1, `record update size definition was not unique: ${JSON.stringify(updateSizeDefinition)}`);
+      assert(
+        isDefinitionLocation(updateSizeDefinition[0], classesTextStyleSizeDefinition),
+        `record update size definition did not jump to TextStyle.size: ${JSON.stringify(updateSizeDefinition)}`,
+      );
+
+      const enumCaseDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "center"),
+      });
+      assert(Array.isArray(enumCaseDefinition), `expected enum case definition array, got ${JSON.stringify(enumCaseDefinition)}`);
+      assert(enumCaseDefinition.length === 1, `enum case definition was not unique: ${JSON.stringify(enumCaseDefinition)}`);
+      assert(
+        isDefinitionLocation(enumCaseDefinition[0], alignCenterDefinition),
+        `enum case definition did not jump to Align.center: ${JSON.stringify(enumCaseDefinition)}`,
+      );
+
+      const paramDefinition = await client.request("textDocument/definition", {
+        textDocument: { uri: localUri },
+        position: positionAt(localSource, "theme_value)", 1),
+      });
+      assert(Array.isArray(paramDefinition), `expected param definition array, got ${JSON.stringify(paramDefinition)}`);
+      assert(paramDefinition.length === 1, `param definition was not unique: ${JSON.stringify(paramDefinition)}`);
+      assert(
+        isDefinitionLocation(paramDefinition[0], functionParamDefinitionLocation(localUri, localSource, "themed", "theme_value")),
+        `param definition did not jump to themed(theme_value): ${JSON.stringify(paramDefinition)}`,
       );
     });
   } finally {
@@ -570,5 +671,35 @@ function declarationDefinitionLocation(uri, text, keyword, name) {
   assert(line >= 0, `fixture did not contain ${needle}`);
   const character = lines[line].indexOf(name);
   assert(character >= 0, `fixture did not contain ${name} on ${needle} line`);
+  return { uri, line, character };
+}
+
+function recordFieldDefinitionLocation(uri, text, recordName, fieldName) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((lineText) => lineText.includes(`record ${recordName}`));
+  assert(start >= 0, `fixture did not contain record ${recordName}`);
+  for (let line = start + 1; line < lines.length; line += 1) {
+    if (lines[line].trim() === "}") break;
+    const character = lines[line].indexOf(`${fieldName}:`);
+    if (character >= 0) return { uri, line, character };
+  }
+  throw new Error(`fixture did not contain field ${recordName}.${fieldName}`);
+}
+
+function enumCaseDefinitionLocation(uri, text, typeName, caseName) {
+  const lines = text.split("\n");
+  const line = lines.findIndex((lineText) => lineText.includes(`type ${typeName} =`) && lineText.includes(caseName));
+  assert(line >= 0, `fixture did not contain enum ${typeName}.${caseName}`);
+  const character = lines[line].indexOf(caseName);
+  assert(character >= 0, `fixture did not contain case ${caseName}`);
+  return { uri, line, character };
+}
+
+function functionParamDefinitionLocation(uri, text, functionName, paramName) {
+  const lines = text.split("\n");
+  const line = lines.findIndex((lineText) => lineText.includes(`fn ${functionName}(`) && lineText.includes(paramName));
+  assert(line >= 0, `fixture did not contain function ${functionName}`);
+  const character = lines[line].indexOf(paramName);
+  assert(character >= 0, `fixture did not contain param ${paramName}`);
   return { uri, line, character };
 }

@@ -273,10 +273,25 @@ fn addTestStep(
         import("language_type", modules.language_type),
         import("syntax", syntax_mod),
     }, true);
+    const scanner_mod = createModule(ctx, "src/syntax/scanner.zig", &.{
+        import("utils", modules.utils),
+    }, null);
+    addModuleTest(ctx, test_step, "tests/syntax/scanner/spec_tests.zig", &.{
+        import("scanner", scanner_mod),
+    }, null);
     addModuleTest(ctx, test_step, "tests/language/type/spec_tests.zig", &.{
         import("model", modules.model),
         import("language_type", modules.language_type),
     }, null);
+    const analysis_mod = createCommonTestModule(ctx, test_step, "src/analysis.zig", modules, true);
+    addModuleTest(ctx, test_step, "tests/analysis/types/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("language_type", modules.language_type),
+        import("analysis", analysis_mod),
+    }, true);
+    addModuleTest(ctx, test_step, "tests/analysis/query/spec_tests.zig", &.{
+        import("analysis", analysis_mod),
+    }, true);
     const type_defs_mod = createModule(ctx, "src/language/type_defs.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/language/type/defs_spec_tests.zig", &.{
         import("type_defs", type_defs_mod),
