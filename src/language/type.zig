@@ -1,14 +1,23 @@
 const std = @import("std");
 
+pub const SourceSpan = struct {
+    start: usize,
+    end: usize,
+};
+
 pub const Type = struct {
     kind: Kind,
     param: Kind = .none,
     class_name: ?[]const u8 = null,
+    class_name_span: ?SourceSpan = null,
     param_class_name: ?[]const u8 = null,
+    param_class_name_span: ?SourceSpan = null,
     enum_name: ?[]const u8 = null,
+    enum_name_span: ?SourceSpan = null,
     optional_child: ?*Type = null,
     fn_params: []Type = &.{},
     fn_result: ?*Type = null,
+    hole_id: ?u32 = null,
 
     pub const Kind = enum {
         none,
@@ -27,6 +36,7 @@ pub const Type = struct {
         enum_type,
         record,
         optional,
+        hole,
         void,
     };
 
@@ -47,12 +57,28 @@ pub const Type = struct {
         return .{ .kind = .object, .class_name = name };
     }
 
+    pub fn objectClassAt(name: []const u8, span: SourceSpan) Type {
+        return .{ .kind = .object, .class_name = name, .class_name_span = span };
+    }
+
     pub fn enumType(name: []const u8) Type {
         return .{ .kind = .enum_type, .enum_name = name };
     }
 
+    pub fn enumTypeAt(name: []const u8, span: SourceSpan) Type {
+        return .{ .kind = .enum_type, .enum_name = name, .enum_name_span = span };
+    }
+
     pub fn recordType(name: []const u8) Type {
         return .{ .kind = .record, .class_name = name };
+    }
+
+    pub fn recordTypeAt(name: []const u8, span: SourceSpan) Type {
+        return .{ .kind = .record, .class_name = name, .class_name_span = span };
+    }
+
+    pub fn hole(hole_id: u32) Type {
+        return .{ .kind = .hole, .hole_id = hole_id };
     }
 
     pub fn optional(allocator: std.mem.Allocator, child: Type) !Type {
@@ -71,6 +97,7 @@ pub const Type = struct {
             .kind = .selection,
             .param = normalizeParam(item.kind),
             .param_class_name = if (item.kind == .object) item.class_name else null,
+            .param_class_name_span = if (item.kind == .object) item.class_name_span else null,
         };
     }
 
@@ -137,6 +164,7 @@ pub const Type = struct {
 
     pub fn eql(a: Type, b: Type) bool {
         if (a.kind != b.kind) return false;
+        if (a.kind == .hole) return a.hole_id == b.hole_id;
         if (a.kind == .function) {
             if ((a.fn_result == null) != (b.fn_result == null)) return false;
             if (a.fn_params.len != b.fn_params.len) return false;
@@ -164,6 +192,7 @@ pub const Type = struct {
     }
 
     pub fn accepts(expected: Type, actual: Type) bool {
+        if (expected.kind == .hole or actual.kind == .hole) return false;
         if (expected.kind == .any or actual.kind == .any) return true;
         if (expected.kind == .optional) {
             if (actual.kind == .none) return true;
@@ -280,6 +309,7 @@ pub const Type = struct {
                 try out.appendSlice(allocator, name)
             else
                 try out.appendSlice(allocator, displayName(self.kind)),
+            .hole => try out.appendSlice(allocator, displayName(self.kind)),
             else => try out.appendSlice(allocator, displayName(self.kind)),
         }
     }
@@ -306,6 +336,7 @@ pub const Type = struct {
             .enum_type => "Enum",
             .record => "Record",
             .optional => "Optional",
+            .hole => "HoleType",
             .void => "Void",
         };
     }

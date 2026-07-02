@@ -229,6 +229,7 @@ const Analyzer = struct {
     ) anyerror!void {
         for (statements) |stmt| {
             switch (stmt.kind) {
+                .hole => {},
                 .let_binding => |binding| {
                     const labels = try self.exprLabels(binding.expr, env, owner);
                     if (language_names.isDiscardBindingName(binding.name)) continue;
@@ -261,7 +262,9 @@ const Analyzer = struct {
 
     fn exprLabels(self: *Analyzer, expr: ast.Expr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!LabelSet {
         switch (expr) {
-            .ident => |name| {
+            .hole => return LabelSet.init(self.allocator),
+            .ident => |ident| {
+                const name = ident.name;
                 if (env.get(name)) |labels| return try labels.clone(self.allocator);
                 if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                     return try self.constLabels(resolved);
@@ -317,6 +320,7 @@ const Analyzer = struct {
     }
 
     fn callLabels(self: *Analyzer, call: ast.CallExpr, env: *const FunctionEnv, owner: ?ast.FunctionDecl) anyerror!LabelSet {
+        if (call.callee.name_hole != null) return LabelSet.init(self.allocator);
         if (!call.callee.isQualified()) {
             if (env.get(call.callee.name)) |callee_labels| {
                 const arg_labels = try self.argumentLabelSets(call.args.items, env, owner);

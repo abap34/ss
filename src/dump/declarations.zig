@@ -14,7 +14,7 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
     for (index.types.items) |ty| {
         var item = try types.objectItem();
         try item.stringField("name", ty.name);
-        try writeStringArrayField(&item, "cases", ty.cases);
+        try writeEnumCasesField(&item, "cases", ty.cases);
         try item.intField("moduleId", ty.module_id);
         try item.end();
     }
@@ -52,9 +52,11 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
     var fields = try object.arrayField("fields");
     for (index.fields.items) |field| {
         var item = try fields.objectItem();
+        const type_label = try field.value_type.formatAlloc(allocator);
+        defer allocator.free(type_label);
         try item.stringField("name", field.name);
         try item.stringField("class", field.class_name);
-        try item.stringField("type", field.value_type);
+        try item.stringField("type", type_label);
         try item.optionalStringField("defaultProperty", field.default_property_value);
         try item.intField("moduleId", field.module_id);
         try item.end();
@@ -64,9 +66,11 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
     var record_fields = try object.arrayField("recordFields");
     for (index.record_fields.items) |field| {
         var item = try record_fields.objectItem();
+        const type_label = try field.value_type.formatAlloc(allocator);
+        defer allocator.free(type_label);
         try item.stringField("name", field.name);
         try item.stringField("record", field.record_name);
-        try item.stringField("type", field.value_type);
+        try item.stringField("type", type_label);
         try item.optionalStringField("defaultProperty", field.default_property_value);
         try item.intField("moduleId", field.module_id);
         try item.end();
@@ -79,5 +83,11 @@ pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir
 fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const []const u8) !void {
     var array = try object.arrayField(name);
     for (values) |value| try array.stringItem(value);
+    try array.end();
+}
+
+fn writeEnumCasesField(object: *json.Object, name: []const u8, values: anytype) !void {
+    var array = try object.arrayField(name);
+    for (values) |value| try array.stringItem(value.name);
     try array.end();
 }

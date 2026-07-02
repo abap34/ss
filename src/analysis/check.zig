@@ -61,7 +61,9 @@ const PageContextRequirement = struct {
 
     fn exprRequirement(self: *PageContextRequirement, scope: *const NameScope, expr: ast.Expr) anyerror!?Requirement {
         return switch (expr) {
-            .ident => |name| blk: {
+            .hole => null,
+            .ident => |ident| blk: {
+                const name = ident.name;
                 if (scope.contains(name)) break :blk null;
                 if (self.sema.resolvedConst(ast.CallableName.bare(name))) |resolved| {
                     break :blk if (try self.constRequiresPage(resolved.key, resolved.decl)) .{ .constant = resolved.decl } else null;
@@ -180,6 +182,7 @@ const PageContextRequirement = struct {
 
     fn statementRequiresPage(self: *PageContextRequirement, scope: *NameScope, stmt: ast.Statement) anyerror!bool {
         return switch (stmt.kind) {
+            .hole => false,
             .let_binding => |binding| blk: {
                 if ((try self.exprRequirement(scope, binding.expr)) != null) break :blk true;
                 if (language_names.isDiscardBindingName(binding.name)) break :blk false;
@@ -226,6 +229,11 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
+}
+
+fn continueAfterDiagnostic(ir: *const core.Ir, diagnostic_count_before: usize, err: anyerror) !void {
+    if (ir.diagnostics.items.len > diagnostic_count_before) return;
+    return err;
 }
 
 fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
@@ -277,9 +285,15 @@ pub fn checkFunction(
         try env.put(param.name, infoFromType(param.ty));
     }
 
+    var had_diagnostics = false;
     for (func.statements.items) |stmt| {
-        try checkStatement(allocator, ir, sema, origin_path, &env, func.result_type, stmt);
+        const diagnostic_count = ir.diagnostics.items.len;
+        checkStatement(allocator, ir, sema, origin_path, &env, func.result_type, stmt) catch |err| {
+            try continueAfterDiagnostic(ir, diagnostic_count, err);
+            had_diagnostics = true;
+        };
     }
+    if (had_diagnostics) return error.DiagnosticsFailed;
 }
 
 pub fn checkConst(
@@ -299,9 +313,27 @@ pub fn checkConst(
     var page_context = PageContextRequirement.init(allocator, sema);
     defer page_context.deinit();
 
-    try rejectPageOnlyExpr(ir, .document, origin, &page_context, &scope, constant_decl.value);
-    const actual = try inferExprInfo(allocator, ir, sema, &env, constant_decl.value, origin);
-    try ensureType(ir, allocator, actual, constant_decl.value_type, origin, .UnmatchedReturnType);
+    var had_diagnostics = false;
+    {
+        const diagnostic_count = ir.diagnostics.items.len;
+        rejectPageOnlyExpr(ir, .document, origin, &page_context, &scope, constant_decl.value) catch |err| {
+            try continueAfterDiagnostic(ir, diagnostic_count, err);
+            had_diagnostics = true;
+        };
+    }
+    {
+        const diagnostic_count = ir.diagnostics.items.len;
+        const actual = inferExprInfo(allocator, ir, sema, &env, constant_decl.value, origin) catch |err| {
+            try continueAfterDiagnostic(ir, diagnostic_count, err);
+            had_diagnostics = true;
+            return error.DiagnosticsFailed;
+        };
+        ensureType(ir, allocator, actual, constant_decl.value_type, origin, .UnmatchedReturnType) catch |err| {
+            try continueAfterDiagnostic(ir, diagnostic_count, err);
+            had_diagnostics = true;
+        };
+    }
+    if (had_diagnostics) return error.DiagnosticsFailed;
 }
 
 pub fn checkPageStatements(
@@ -313,6 +345,7 @@ pub fn checkPageStatements(
 ) !void {
     var page_context = PageContextRequirement.init(allocator, sema);
     defer page_context.deinit();
+    var had_diagnostics = false;
 
     {
         var env = TypeEnv.init(allocator);
@@ -320,7 +353,11 @@ pub fn checkPageStatements(
         var scope = NameScope.init(allocator);
         defer scope.deinit();
         for (program.document_statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, origin_path, .document, &env, &scope, &page_context, stmt);
+            const diagnostic_count = ir.diagnostics.items.len;
+            checkTopLevelStatement(allocator, ir, sema, origin_path, .document, &env, &scope, &page_context, stmt) catch |err| {
+                try continueAfterDiagnostic(ir, diagnostic_count, err);
+                had_diagnostics = true;
+            };
         }
     }
     for (program.pages.items) |page| {
@@ -330,9 +367,14 @@ pub fn checkPageStatements(
         defer scope.deinit();
 
         for (page.statements.items) |stmt| {
-            try checkTopLevelStatement(allocator, ir, sema, origin_path, .page, &env, &scope, &page_context, stmt);
+            const diagnostic_count = ir.diagnostics.items.len;
+            checkTopLevelStatement(allocator, ir, sema, origin_path, .page, &env, &scope, &page_context, stmt) catch |err| {
+                try continueAfterDiagnostic(ir, diagnostic_count, err);
+                had_diagnostics = true;
+            };
         }
     }
+    if (had_diagnostics) return error.DiagnosticsFailed;
 }
 
 fn checkTopLevelStatement(
@@ -349,11 +391,13 @@ fn checkTopLevelStatement(
     const origin = try statementOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
+        .hole => return,
         .let_binding => |binding| {
             const binds_name = !language_names.isDiscardBindingName(binding.name);
             if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, binding.expr);
-            const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
+            const info = try checkedLetBindingInfo(allocator, ir, binding, inferred, origin);
             try rejectVoidValue(ir, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);
@@ -411,9 +455,22 @@ fn checkTopLevelStatement(
 }
 
 fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const u8) !void {
+    if (info.hole != null) return;
     if (info.ty.kind != .void) return;
     try addUserReport(ir, origin, "VoidValue: void results can only be used as statements", .{});
     return error.InvalidType;
+}
+
+fn checkedLetBindingInfo(
+    allocator: std.mem.Allocator,
+    ir: *core.Ir,
+    binding: anytype,
+    inferred: semantic_types.TypeInfo,
+    origin: []const u8,
+) !semantic_types.TypeInfo {
+    const annotation = binding.type_annotation orelse return inferred;
+    try ensureType(ir, allocator, inferred, annotation, origin, .UnmatchedReturnType);
+    return infoFromType(annotation);
 }
 
 fn rejectPageOnlyExpr(
@@ -447,7 +504,8 @@ fn validateAnchorRef(
         },
         .node => {
             const path = anchorObjectPath(anchor_ref) orelse return;
-            const info = try resolveAnchorPathInfo(allocator, ir, sema, env, origin, path);
+            const info = try resolveAnchorPathInfo(ir, sema, env, origin, path);
+            if (info.hole != null) return;
             if (!isObjectLike(info)) {
                 try ensureType(ir, allocator, info, Type.object, origin, .UnmatchedArgumentType);
             }
@@ -460,7 +518,6 @@ fn anchorObjectPath(anchor_ref: ast.AnchorRef) ?[]const u8 {
 }
 
 fn resolveAnchorPathInfo(
-    allocator: std.mem.Allocator,
     ir: *core.Ir,
     sema: *const SemanticEnv,
     env: *TypeEnv,
@@ -474,6 +531,7 @@ fn resolveAnchorPathInfo(
         return error.UnknownIdentifier;
     };
     while (iter.next()) |field_name| {
+        if (info.hole != null) return info;
         if (info.ty.kind != .record) {
             try addUserReport(ir, origin, "InvalidConstraintObject: anchor path '{s}' does not resolve through a record", .{path});
             return error.InvalidType;
@@ -486,11 +544,7 @@ fn resolveAnchorPathInfo(
             try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, field_name });
             return error.InvalidType;
         };
-        const field_type = (try sema.resolveTypeText(allocator, field.module_id, field.value_type)) orelse {
-            try addUserReport(ir, origin, "InvalidFieldSchema: unknown field value type: {s}", .{field.value_type});
-            return error.InvalidType;
-        };
-        info = infoFromType(field_type);
+        info = infoFromType(field.value_type);
     }
     return info;
 }
@@ -514,10 +568,12 @@ fn checkStatement(
     const origin = try statementOrigin(allocator, origin_path, stmt.span);
     defer allocator.free(origin);
     switch (stmt.kind) {
+        .hole => return,
         .let_binding => |binding| {
             const binds_name = !language_names.isDiscardBindingName(binding.name);
             if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
-            const info = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(allocator, ir, sema, env, binding.expr, origin);
+            const info = try checkedLetBindingInfo(allocator, ir, binding, inferred, origin);
             try rejectVoidValue(ir, info, origin);
             if (!binds_name) return;
             try env.put(binding.name, info);

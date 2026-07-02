@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const syntax = @import("../syntax/parse.zig");
+const syntax_hole = @import("../syntax/hole.zig");
 const names = @import("../language/names.zig");
 const stdlib_assets = @import("stdlib_assets");
 const utils = @import("utils");
@@ -140,6 +141,7 @@ pub const LoadOptions = struct {
     overlay: ?*const SourceOverlay = null,
     diagnostics: ?*LoadDiagnostics = null,
     print_diagnostics: bool = true,
+    recovering: bool = false,
 };
 
 pub fn loadGraph(
@@ -174,6 +176,7 @@ pub fn loadGraphWithOptions(
         .overlay = options.overlay,
         .diagnostics = options.diagnostics,
         .print_diagnostics = options.print_diagnostics,
+        .recovering = options.recovering,
         .modules = std.ArrayList(core.SourceModule).empty,
         .by_key = std.StringHashMap(core.SourceModuleId).init(allocator),
         .state_by_id = std.AutoHashMap(core.SourceModuleId, VisitState).init(allocator),
@@ -320,6 +323,7 @@ const Builder = struct {
     overlay: ?*const SourceOverlay,
     diagnostics: ?*LoadDiagnostics,
     print_diagnostics: bool,
+    recovering: bool,
     modules: std.ArrayList(core.SourceModule),
     by_key: std.StringHashMap(core.SourceModuleId),
     state_by_id: std.AutoHashMap(core.SourceModuleId, VisitState),
@@ -348,6 +352,36 @@ const Builder = struct {
         }
     }
 
+    fn addParseFailureDiagnostic(self: *Builder, path: []const u8, text: []const u8, err: anyerror) !void {
+        const diagnostic = syntax.lastDiagnostic();
+        var message_buf: [256]u8 = undefined;
+        const message = if (diagnostic) |diag|
+            error_report.formatParseDiagnostic(&message_buf, diag)
+        else
+            error_report.formatParseFailureWithoutDiagnostic(&message_buf, err);
+        try self.addDiagnostic(path, text, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
+        if (self.print_diagnostics) {
+            error_report.printParseError(path, text, err, diagnostic);
+        }
+    }
+
+    fn addParseHoleDiagnostics(self: *Builder, path: []const u8, text: []const u8, hole_diagnostics: []const syntax_hole.Diagnostic) !void {
+        for (hole_diagnostics) |diagnostic| {
+            const expected = diagnostic.expected orelse "syntax";
+            const found = diagnostic.found orelse "unknown";
+            const message = try std.fmt.allocPrint(
+                self.allocator,
+                "ParseHole: expected {s}, found {s}",
+                .{ expected, found },
+            );
+            defer self.allocator.free(message);
+            try self.addDiagnostic(path, text, .@"error", @errorName(diagnostic.err), message, .{
+                .start = diagnostic.span.start,
+                .end = diagnostic.span.end,
+            });
+        }
+    }
+
     fn takeModules(self: *Builder) !std.ArrayList(core.SourceModule) {
         const out = self.modules;
         self.modules = .empty;
@@ -372,17 +406,17 @@ const Builder = struct {
         var owns_source = true;
         errdefer if (owns_source) self.allocator.free(text);
         const parse_path = resolved.path orelse resolved.spec;
-        const program = syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
-            const diagnostic = syntax.lastDiagnostic();
-            var message_buf: [256]u8 = undefined;
-            const message = if (diagnostic) |diag|
-                error_report.formatParseDiagnostic(&message_buf, diag)
-            else
-                error_report.formatParseFailureWithoutDiagnostic(&message_buf, err);
-            try self.addDiagnostic(parse_path, text, .@"error", @errorName(err), message, if (diagnostic) |diag| .{ .start = diag.span.start, .end = diag.span.end } else null);
-            if (self.print_diagnostics) {
-                error_report.printParseError(parse_path, text, err, diagnostic);
-            }
+        const program = if (self.recovering) blk: {
+            var result = syntax.parseRecoveringWithSourceName(self.allocator, text, parse_path) catch |err| {
+                try self.addParseFailureDiagnostic(parse_path, text, err);
+                return err;
+            };
+            errdefer result.program.deinit(self.allocator);
+            defer result.holes.deinit(self.allocator);
+            try self.addParseHoleDiagnostics(parse_path, text, result.holes.diagnostics);
+            break :blk result.program;
+        } else syntax.parseWithSourceName(self.allocator, text, parse_path) catch |err| {
+            try self.addParseFailureDiagnostic(parse_path, text, err);
             return err;
         };
         var owns_program = true;

@@ -12,6 +12,8 @@ pub fn expected(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.ExpectedString => "string or page name",
         error.ExpectedIdentifier => "identifier",
+        error.ExpectedExpression => "expression",
+        error.ExpectedMemberName => "member name",
         error.ReservedIdentifier => "non-keyword identifier",
         error.InvalidImportSpec => "import path without a file extension",
         error.InvalidImportAlias => "valid import alias; use 'as name' or 'as *'",

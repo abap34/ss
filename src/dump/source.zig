@@ -92,22 +92,22 @@ fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast
     for (program.types.items) |type_decl| {
         var item = try types.objectItem();
         try item.stringField("name", type_decl.name);
-        try writeStringArrayField(&item, "cases", type_decl.cases.items);
+        try writeEnumCasesField(&item, "cases", type_decl.cases.items);
         try writeSpan(&item, type_decl.span);
         try item.end();
     }
     try types.end();
 
     var records = try program_object.arrayField("records");
-    for (program.records.items) |record_decl| try writeRecordDeclaration(&records, record_decl);
+    for (program.records.items) |record_decl| try writeRecordDeclaration(allocator, &records, record_decl);
     try records.end();
 
     var objects = try program_object.arrayField("objects");
-    for (program.objects.items) |object_decl| try writeObjectDeclaration(&objects, object_decl);
+    for (program.objects.items) |object_decl| try writeObjectDeclaration(allocator, &objects, object_decl);
     try objects.end();
 
     var object_extensions = try program_object.arrayField("objectExtensions");
-    for (program.object_extensions.items) |extension| try writeObjectExtension(&object_extensions, extension);
+    for (program.object_extensions.items) |extension| try writeObjectExtension(allocator, &object_extensions, extension);
     try object_extensions.end();
 
     var constants = try program_object.arrayField("constants");
@@ -188,40 +188,42 @@ fn writeImportMode(object: *json.Object, mode: ast.ImportDecl.Mode) !void {
     try object.boolField("unqualified", mode.unqualified);
 }
 
-fn writeObjectDeclaration(objects: *json.Array, object_decl: ast.ObjectDecl) !void {
+fn writeObjectDeclaration(allocator: std.mem.Allocator, objects: *json.Array, object_decl: ast.ObjectDecl) !void {
     var item = try objects.objectItem();
     try item.stringField("name", object_decl.name);
     try item.optionalStringField("base", object_decl.base);
     try writeStringArrayField(&item, "roles", object_decl.roles.items);
-    try writeObjectFieldsField(&item, object_decl.fields.items);
+    try writeObjectFieldsField(allocator, &item, object_decl.fields.items);
     try writeSpan(&item, object_decl.span);
     try item.end();
 }
 
-fn writeRecordDeclaration(records: *json.Array, record_decl: ast.RecordDecl) !void {
+fn writeRecordDeclaration(allocator: std.mem.Allocator, records: *json.Array, record_decl: ast.RecordDecl) !void {
     var item = try records.objectItem();
     try item.stringField("name", record_decl.name);
-    try writeObjectFieldsField(&item, record_decl.fields.items);
+    try writeObjectFieldsField(allocator, &item, record_decl.fields.items);
     try writeSpan(&item, record_decl.span);
     try item.end();
 }
 
-fn writeObjectExtension(extensions: *json.Array, extension: ast.ObjectExtensionDecl) !void {
+fn writeObjectExtension(allocator: std.mem.Allocator, extensions: *json.Array, extension: ast.ObjectExtensionDecl) !void {
     var item = try extensions.objectItem();
     try item.stringField("target", extension.target);
     try item.optionalStringField("implements", extension.implements);
     try writeStringArrayField(&item, "roles", extension.roles.items);
-    try writeObjectFieldsField(&item, extension.fields.items);
+    try writeObjectFieldsField(allocator, &item, extension.fields.items);
     try writeSpan(&item, extension.span);
     try item.end();
 }
 
-fn writeObjectFieldsField(object: *json.Object, fields: []const ast.ObjectFieldDecl) !void {
+fn writeObjectFieldsField(allocator: std.mem.Allocator, object: *json.Object, fields: []const ast.ObjectFieldDecl) !void {
     var array = try object.arrayField("fields");
     for (fields) |field| {
         var item = try array.objectItem();
+        const type_label = try field.value_type.formatAlloc(allocator);
+        defer allocator.free(type_label);
         try item.stringField("name", field.name);
-        try item.stringField("type", field.value_type);
+        try item.stringField("type", type_label);
         if (field.default_value) |default_value| {
             var default_object = try item.objectField("default");
             try writeExprValue(&default_object, default_value.*);
@@ -242,11 +244,21 @@ fn writeStringArrayField(object: *json.Object, name: []const u8, values: []const
     try array.end();
 }
 
+fn writeEnumCasesField(object: *json.Object, name: []const u8, values: anytype) !void {
+    var array = try object.arrayField(name);
+    for (values) |value| try array.stringItem(value.name);
+    try array.end();
+}
+
 fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
     switch (expr) {
-        .ident => |name| {
+        .hole => |id| {
+            try object.stringField("exprKind", "hole");
+            try object.intField("holeId", id);
+        },
+        .ident => |ident| {
             try object.stringField("exprKind", "ident");
-            try object.stringField("value", name);
+            try object.stringField("value", ident.name);
         },
         .string => |literal| {
             try object.stringField("exprKind", "string");
@@ -271,6 +283,7 @@ fn writeExprValue(object: *json.Object, expr: ast.Expr) !void {
             try object.stringField("exprKind", "call");
             try object.stringField("name", call.callee.name);
             try object.optionalStringField("qualifier", call.callee.qualifier);
+            if (call.callee.name_hole) |id| try object.intField("nameHoleId", id);
         },
         .apply => |apply| {
             try object.stringField("exprKind", "apply");
@@ -320,9 +333,18 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
     var item = try statements.objectItem();
     try writeSpan(&item, stmt.span);
     switch (stmt.kind) {
+        .hole => |id| {
+            try item.stringField("kind", "hole");
+            try item.intField("holeId", id);
+        },
         .let_binding => |binding| {
             try item.stringField("kind", "let_binding");
             try item.stringField("name", binding.name);
+            if (binding.type_annotation) |annotation| {
+                const label = try annotation.formatAlloc(allocator);
+                defer allocator.free(label);
+                try item.stringField("type", label);
+            }
             try writeExpr(allocator, &item, "expr", binding.expr);
         },
         .return_expr => |expr| {
@@ -389,9 +411,13 @@ fn writeExprItem(allocator: std.mem.Allocator, items: *json.Array, expr: ast.Exp
 
 fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.Expr) anyerror!void {
     switch (expr) {
-        .ident => |name| {
+        .hole => |id| {
+            try item.stringField("kind", "hole");
+            try item.intField("holeId", id);
+        },
+        .ident => |ident| {
             try item.stringField("kind", "ident");
-            try item.stringField("name", name);
+            try item.stringField("name", ident.name);
         },
         .string => |literal| {
             try item.stringField("kind", "string");
@@ -416,6 +442,7 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             try item.stringField("kind", "call");
             try item.stringField("name", call.callee.name);
             try item.optionalStringField("qualifier", call.callee.qualifier);
+            if (call.callee.name_hole) |id| try item.intField("nameHoleId", id);
             var args = try item.arrayField("args");
             for (call.args.items) |arg| try writeExprItem(allocator, &args, arg);
             try args.end();
@@ -460,7 +487,7 @@ fn writeExprFields(allocator: std.mem.Allocator, item: *json.Object, expr: ast.E
             for (update.fields.items) |field| {
                 var field_item = try fields.objectItem();
                 var path = try field_item.arrayField("path");
-                for (field.path.items) |segment| try path.stringItem(segment);
+                for (field.path.items) |segment| try path.stringItem(segment.name);
                 try path.end();
                 try writeExpr(allocator, &field_item, "value", field.value);
                 try field_item.end();
