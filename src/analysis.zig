@@ -2,10 +2,14 @@ pub const check = @import("analysis/check.zig");
 pub const cache = @import("analysis/cache.zig");
 pub const contracts = @import("analysis/contracts.zig");
 pub const dependencies = @import("analysis/dependencies.zig");
-pub const document_features = @import("analysis/document_features.zig");
+pub const diagnostics = @import("analysis/diagnostics.zig");
+pub const hole_facts = @import("analysis/hole_facts.zig");
 pub const infer = @import("analysis/infer.zig");
 pub const program = @import("analysis/program.zig");
+pub const query = @import("analysis/query.zig");
 pub const schedule = @import("analysis/schedule.zig");
+pub const snapshot = @import("analysis/snapshot.zig");
+pub const syntax_hole = @import("syntax/hole.zig");
 pub const types = @import("analysis/types.zig");
 
 pub const VariableInfo = program.VariableInfo;

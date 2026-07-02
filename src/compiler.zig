@@ -1,7 +1,6 @@
 pub const syntax = @import("syntax.zig");
 pub const lowering = @import("lowering.zig");
 pub const analysis = @import("analysis.zig");
-pub const completion = @import("analysis/completion.zig");
 pub const analysis_env = @import("analysis/env.zig");
 pub const analysis_scope = @import("analysis/scope.zig");
 pub const module_loader = @import("modules/loader.zig");
