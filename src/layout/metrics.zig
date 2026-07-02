@@ -151,7 +151,7 @@ fn maxWidthForStyle(style: TextStyle) f32 {
 }
 
 fn assetScale(ir: anytype, node: *const Node) f32 {
-    return positiveNodeFloatProperty(ir, node, "asset_scale") orelse 1.0;
+    return positiveRecordFloatProperty(ir, node, "asset", "scale") orelse 1.0;
 }
 
 fn mathScale(ir: anytype, node: *const Node) f32 {

@@ -98,6 +98,10 @@ pub const MathPaint = struct {
     horizontal_align: HorizontalAlign,
 };
 
+pub const AssetPaint = struct {
+    scale: f32,
+};
+
 pub const CodePaint = struct {
     language: ?[]const u8,
     plain: Color,
@@ -150,6 +154,7 @@ pub const ResolvedRender = struct {
     kind: RenderKind,
     text: ?TextPaint,
     math: ?MathPaint,
+    asset: ?AssetPaint,
     code: ?CodePaint,
     shape: ?ShapePaint,
     chrome: ChromePaint,
@@ -166,6 +171,7 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
         .kind = kind,
         .text = resolveText(ir, node, kind),
         .math = resolveMath(ir, node, kind),
+        .asset = resolveAsset(ir, node, kind),
         .code = resolveCode(ir, node, kind),
         .shape = resolveShape(ir, node, kind),
         .chrome = resolveChrome(ir, node),
@@ -262,6 +268,15 @@ fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
         .block_vertical_padding = nonNegativeRecordFloatProperty(ir, node, "math", "block_vertical_padding") orelse 2,
         .scale = positiveRecordFloatProperty(ir, node, "math", "scale") orelse 1,
         .horizontal_align = inheritedMathHorizontalAlign(ir, node) orelse .center,
+    };
+}
+
+fn resolveAsset(ir: anytype, node: *const Node, kind: RenderKind) ?AssetPaint {
+    return switch (kind) {
+        .vector_asset, .raster_asset => .{
+            .scale = positiveRecordFloatProperty(ir, node, "asset", "scale") orelse 1,
+        },
+        else => null,
     };
 }
 
