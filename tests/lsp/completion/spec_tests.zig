@@ -14,7 +14,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         \\
         \\page title
         \\  let t = default::h1("body")
-        \\  t.text_size = 20
+        \\  t.text.size = 20
         \\end
         \\
     );
@@ -24,8 +24,10 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         var result = try case.completeAfter("t.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text_size");
+        try expectHas(result, "text");
+        try expectHas(result, "layout");
         try expectHas(result, "content");
+        try expectMissing(result, "text_size");
         try expectMissing(result, "page");
         try expectMissing(result, "add");
         try expectMissing(result, "Align");
@@ -236,8 +238,8 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         \\  let t = h2! "before"
         \\  let alias = t
         \\  let later = h2! "after"
-        \\  alias.text_size = 1
-        \\  later.text_size = 1
+        \\  alias.text.size = 1
+        \\  later.text.size = 1
         \\end
         \\
     );
@@ -260,7 +262,9 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         var result = try case.completeSourceAfter(request_source, "alias.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text_size");
+        try expectHas(result, "text");
+        try expectHas(result, "layout");
+        try expectMissing(result, "text_size");
         try expectMissing(result, "page");
     }
 
@@ -268,7 +272,9 @@ test "analysis completion: source recovery sees preceding same-scope bindings" {
         var result = try case.completeSourceAfter(request_source, "later.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text_size");
+        try expectHas(result, "text");
+        try expectHas(result, "layout");
+        try expectMissing(result, "text_size");
         try expectMissing(result, "page");
     }
 }
@@ -289,11 +295,11 @@ test "analysis completion: fn paired function and const result annotations drive
         \\
         \\page title
         \\  let a = make_plain()
-        \\  a.text_size = 1
+        \\  a.text.size = 1
         \\  let b = make_paired! "paired"
-        \\  b.text_size = 1
+        \\  b.text.size = 1
         \\  let c = make_const
-        \\  c.text_size = 1
+        \\  c.text.size = 1
         \\end
         \\
     );
@@ -327,7 +333,9 @@ test "analysis completion: fn paired function and const result annotations drive
         var result = try case.completeSourceAfter(request_source, needle);
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text_size");
+        try expectHas(result, "text");
+        try expectHas(result, "layout");
+        try expectMissing(result, "text_size");
         try expectMissing(result, "page");
     }
 }
@@ -448,7 +456,7 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         \\let fake_block = h2! "block"
         \\end
         \\>>
-        \\  t.text_size = 1
+        \\  t.text.size = 1
         \\end
         \\
     );
@@ -472,7 +480,9 @@ test "analysis completion: chevron blocks and comments do not create fake bindin
         var result = try case.completeSourceAfter(request_source, "t.");
         defer result.deinit(case.allocator);
         try expectUnique(result);
-        try expectHas(result, "text_size");
+        try expectHas(result, "text");
+        try expectHas(result, "layout");
+        try expectMissing(result, "text_size");
         try expectMissing(result, "page");
     }
 
