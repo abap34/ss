@@ -241,6 +241,7 @@ const Analyzer = struct {
                 },
                 .return_void => {},
                 .property_set => |property_set| {
+                    _ = try self.exprLabels(property_set.target, env, owner);
                     _ = try self.exprLabels(property_set.value, env, owner);
                 },
                 .if_stmt => |if_stmt| {

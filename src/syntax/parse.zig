@@ -1250,17 +1250,11 @@ const Parser = struct {
         source.skipInlineSpaces(self.source, &self.pos);
         if (!self.eof() and self.source[self.pos] == '!') {
             self.pos += 1;
-            var args = std.ArrayList(Expr).empty;
-            errdefer args.deinit(self.allocator);
-            try args.append(self.allocator, try self.parseUnaryExpr());
-            return .{ .call = .{ .callee = ast.CallableName.bare("not"), .args = args } };
+            return .{ .call = try self.makeCall1("not", try self.parseUnaryExpr()) };
         }
         if (!self.eof() and self.source[self.pos] == '-') {
             self.pos += 1;
-            var args = std.ArrayList(Expr).empty;
-            errdefer args.deinit(self.allocator);
-            try args.append(self.allocator, try self.parseUnaryExpr());
-            return .{ .call = .{ .callee = ast.CallableName.bare("neg"), .args = args } };
+            return .{ .call = try self.makeCall1("neg", try self.parseUnaryExpr()) };
         }
         return self.parsePostfixExpr();
     }
@@ -1485,21 +1479,25 @@ const Parser = struct {
         if (self.startsNumberLiteral()) {
             return .{ .number = try self.parseNumber() };
         }
-        const name = try self.parseCallableName();
+        var name = try self.parseCallableName();
         source.skipInlineSpaces(self.source, &self.pos);
         if (!name.isQualified() and std.mem.eql(u8, name.name, "none")) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
+                name.deinit(self.allocator);
                 return .none;
             }
         }
         if (!name.isQualified() and (std.mem.eql(u8, name.name, "true") or std.mem.eql(u8, name.name, "false"))) {
             if (self.eof() or (self.source[self.pos] != '(' and self.source[self.pos] != '.')) {
                 const value = std.mem.eql(u8, name.name, "true");
+                name.deinit(self.allocator);
                 return .{ .boolean = value };
             }
         }
         if (!self.eof() and self.source[self.pos] == '{') {
-            return try self.parseRecordLiteralAfterName(try self.qualifiedNameText(name), name.span);
+            const type_name_span = name.span;
+            const type_name = try self.takeQualifiedNameText(name);
+            return try self.parseRecordLiteralAfterName(type_name, type_name_span);
         }
         if (!self.eof() and self.source[self.pos] == '(') {
             return .{ .call = try self.parseCallAfterName(name) };
@@ -1511,18 +1509,28 @@ const Parser = struct {
             return .{ .call = try self.makeUnaryStringCall(name, try self.parseStringLiteral()) };
         }
         if (name.isQualified()) {
-            if (!self.eof() and self.source[self.pos] == '.') return .{ .ident = .{ .name = try self.qualifiedNameText(name), .name_span = name.span } };
+            if (!self.eof() and self.source[self.pos] == '.') {
+                const name_span = name.span;
+                const text = try self.takeQualifiedNameText(name);
+                return .{ .ident = .{ .name = text, .name_span = name_span } };
+            }
+            name.deinit(self.allocator);
             return self.fail(error.ExpectedChar);
         }
-        if (std.mem.endsWith(u8, name.name, "!")) return self.fail(error.ExpectedChar);
+        if (std.mem.endsWith(u8, name.name, "!")) {
+            name.deinit(self.allocator);
+            return self.fail(error.ExpectedChar);
+        }
         if (!self.eof() and self.source[self.pos] != '(') {
             return .{ .ident = .{ .name = name.name, .name_span = name.name_span } };
         }
         return .{ .ident = .{ .name = name.name, .name_span = name.name_span } };
     }
 
-    fn qualifiedNameText(self: *Parser, name: ast.CallableName) ![]const u8 {
+    fn takeQualifiedNameText(self: *Parser, name: ast.CallableName) ![]const u8 {
         if (name.qualifier) |qualifier| {
+            defer self.allocator.free(qualifier);
+            defer self.allocator.free(name.name);
             return try std.fmt.allocPrint(self.allocator, "{s}::{s}", .{ qualifier, name.name });
         }
         return name.name;
@@ -1641,11 +1649,7 @@ const Parser = struct {
     }
 
     fn makeBinaryCall(self: *Parser, name: []const u8, left: Expr, right: Expr) !Expr {
-        var args = std.ArrayList(Expr).empty;
-        errdefer args.deinit(self.allocator);
-        try args.append(self.allocator, left);
-        try args.append(self.allocator, right);
-        return .{ .call = .{ .callee = ast.CallableName.bare(name), .args = args } };
+        return .{ .call = try self.makeCall2(name, left, right) };
     }
 
     fn parseCallAfterName(self: *Parser, name: ast.CallableName) anyerror!ast.CallExpr {
@@ -1701,39 +1705,33 @@ const Parser = struct {
     }
 
     const PropertySetTarget = struct {
-        object_name: []const u8,
-        object_name_span: ?ast.Span,
+        target: Expr,
         path: std.ArrayList(ast.RecordPathSegment),
     };
 
-    const PropertySetRoot = struct {
-        name: []const u8,
-        span: ?ast.Span,
-    };
-
-    fn propertySetTargetFromMember(self: *Parser, target: Expr, member_name: ParsedName) !?PropertySetTarget {
+    fn propertySetTargetFromMember(self: *Parser, target: Expr, member_name: ParsedName) !PropertySetTarget {
         var path = std.ArrayList(ast.RecordPathSegment).empty;
         errdefer {
             for (path.items) |*segment| segment.deinit(self.allocator);
             path.deinit(self.allocator);
         }
-        const root = try self.appendPropertySetTargetPath(target, &path) orelse return null;
+        var root = try self.clonePropertySetRoot(target, &path);
+        errdefer root.deinit(self.allocator);
         try path.append(self.allocator, .{
             .name = try self.allocator.dupe(u8, member_name.text),
             .span = member_name.span,
         });
         return .{
-            .object_name = try self.allocator.dupe(u8, root.name),
-            .object_name_span = root.span,
+            .target = root,
             .path = path,
         };
     }
 
-    fn appendPropertySetTargetPath(self: *Parser, target: Expr, path: *std.ArrayList(ast.RecordPathSegment)) !?PropertySetRoot {
+    fn clonePropertySetRoot(self: *Parser, target: Expr, path: *std.ArrayList(ast.RecordPathSegment)) !Expr {
         return switch (target) {
-            .ident => |ident| .{ .name = ident.name, .span = ident.name_span },
             .member => |member| blk: {
-                const root = try self.appendPropertySetTargetPath(member.target.*, path) orelse break :blk null;
+                var root = try self.clonePropertySetRoot(member.target.*, path);
+                errdefer root.deinit(self.allocator);
                 const span = member.name_span orelse return error.ExpectedMemberName;
                 try path.append(self.allocator, .{
                     .name = try self.allocator.dupe(u8, member.name),
@@ -1742,7 +1740,7 @@ const Parser = struct {
                 });
                 break :blk root;
             },
-            else => null,
+            else => try target.clone(self.allocator),
         };
     }
 
@@ -1783,21 +1781,14 @@ const Parser = struct {
                 var value = try self.parseExpr();
                 errdefer value.deinit(self.allocator);
                 try self.consumeStatementTerminator();
-                if (try self.propertySetTargetFromMember(target, member_name)) |property_target| {
-                    target.deinit(self.allocator);
-                    self.allocator.free(member_name.text);
-                    return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .property_set = .{
-                        .object_name = property_target.object_name,
-                        .object_name_span = property_target.object_name_span,
-                        .path = property_target.path,
-                        .value = value,
-                    } } };
-                }
-                const call = if (std.mem.eql(u8, member_name.text, "content")) blk: {
-                    self.allocator.free(member_name.text);
-                    break :blk try self.makeCall2("set_content", target, value);
-                } else try self.makeCall3("set_prop", target, .{ .string = .{ .text = member_name.text } }, value);
-                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .expr_stmt = .{ .call = call } } };
+                const property_target = try self.propertySetTargetFromMember(target, member_name);
+                target.deinit(self.allocator);
+                self.allocator.free(member_name.text);
+                return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .property_set = .{
+                    .target = property_target.target,
+                    .path = property_target.path,
+                    .value = value,
+                } } };
             }
             target = try self.makeMemberExpr(target, member_name, null);
         }
@@ -1857,43 +1848,60 @@ const Parser = struct {
     }
 
     fn makeCall1(self: *Parser, name: []const u8, arg0: Expr) !ast.CallExpr {
+        var callee = try self.makeSyntheticCallableName(name);
+        errdefer callee.deinit(self.allocator);
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, arg0);
-        return .{ .callee = ast.CallableName.bare(name), .args = args };
+        return .{ .callee = callee, .args = args };
     }
 
     fn makeCall2(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr) !ast.CallExpr {
+        var callee = try self.makeSyntheticCallableName(name);
+        errdefer callee.deinit(self.allocator);
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, arg0);
         try args.append(self.allocator, arg1);
-        return .{ .callee = ast.CallableName.bare(name), .args = args };
+        return .{ .callee = callee, .args = args };
     }
 
     fn makeCall3(self: *Parser, name: []const u8, arg0: Expr, arg1: Expr, arg2: Expr) !ast.CallExpr {
+        var callee = try self.makeSyntheticCallableName(name);
+        errdefer callee.deinit(self.allocator);
         var args = std.ArrayList(Expr).empty;
         errdefer args.deinit(self.allocator);
         try args.append(self.allocator, arg0);
         try args.append(self.allocator, arg1);
         try args.append(self.allocator, arg2);
-        return .{ .callee = ast.CallableName.bare(name), .args = args };
+        return .{ .callee = callee, .args = args };
+    }
+
+    fn makeSyntheticCallableName(self: *Parser, name: []const u8) !ast.CallableName {
+        return ast.CallableName.bare(try self.allocator.dupe(u8, name));
     }
 
     fn parseMemberConstraintDecl(self: *Parser) !ConstraintDecl {
-        const target = try self.parseConstraintMemberRef(true);
+        var target = try self.parseConstraintMemberRef(true);
+        errdefer target.anchor_ref.deinit(self.allocator);
         try self.expectEqualityOperator();
         if (target.dimension) |dimension| {
             if (target.anchor_ref.kind == .page) return self.fail(error.PageCannotBeConstraintTarget);
-            const offset = try self.parseExpr();
+            var offset = try self.parseExpr();
+            errdefer offset.deinit(self.allocator);
+            var target_anchor = try target.anchor_ref.cloneWithAnchor(self.allocator, dimension.target_anchor);
+            errdefer target_anchor.deinit(self.allocator);
+            const source_anchor = try target.anchor_ref.cloneWithAnchor(self.allocator, dimension.source_anchor);
+            target.anchor_ref.deinit(self.allocator);
             return .{
-                .target = target.anchor_ref.withAnchor(dimension.target_anchor),
-                .source = target.anchor_ref.withAnchor(dimension.source_anchor),
+                .target = target_anchor,
+                .source = source_anchor,
                 .offset = offset,
             };
         }
         const target_anchor = target.anchor_ref;
-        const source_anchor = try self.parseAnchorMemberRef();
+        var source_anchor = try self.parseAnchorMemberRef();
+        errdefer source_anchor.deinit(self.allocator);
         var offset: ?Expr = null;
         source.skipTriviaFrom(self.source, &self.pos);
         if (!self.eof() and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
@@ -1921,56 +1929,48 @@ const Parser = struct {
     fn parseConstraintMemberRef(self: *Parser, allow_dimension: bool) !ConstraintMemberRef {
         source.skipInlineSpaces(self.source, &self.pos);
         const path_start = self.pos;
-        _ = try self.parseIdentifier();
-        var member_name: []const u8 = "";
+        const first_name = try self.parseIdentifier();
+        defer self.allocator.free(first_name);
+        var member_name: ?[]const u8 = null;
+        defer if (member_name) |name| self.allocator.free(name);
         var path_end: usize = path_start;
         while (true) {
             source.skipInlineSpaces(self.source, &self.pos);
             path_end = self.pos;
             try self.expectChar('.');
-            member_name = try self.parseIdentifier();
+            const parsed_member = try self.parseIdentifier();
+            if (member_name) |name| self.allocator.free(name);
+            member_name = parsed_member;
             source.skipInlineSpaces(self.source, &self.pos);
             if (self.eof() or self.source[self.pos] != '.') break;
         }
+        const final_member_name = member_name.?;
         const object_path = std.mem.trim(u8, self.source[path_start..path_end], " \t\r\n");
         if (allow_dimension) {
-            if (std.mem.eql(u8, member_name, "width")) {
+            if (std.mem.eql(u8, final_member_name, "width")) {
                 return .{
-                    .anchor_ref = makeParsedAnchorRef(object_path, .right),
+                    .anchor_ref = try self.makeParsedAnchorRef(object_path, .right),
                     .dimension = .{ .target_anchor = .right, .source_anchor = .left },
                 };
             }
-            if (std.mem.eql(u8, member_name, "height")) {
+            if (std.mem.eql(u8, final_member_name, "height")) {
                 return .{
-                    .anchor_ref = makeParsedAnchorRef(object_path, .top),
+                    .anchor_ref = try self.makeParsedAnchorRef(object_path, .top),
                     .dimension = .{ .target_anchor = .top, .source_anchor = .bottom },
                 };
             }
         }
-        const anchor = names.parseAnchorName(member_name) orelse return self.fail(error.UnknownAnchor);
-        return .{ .anchor_ref = makeParsedAnchorRef(object_path, anchor) };
+        const anchor = names.parseAnchorName(final_member_name) orelse return self.fail(error.UnknownAnchor);
+        return .{ .anchor_ref = try self.makeParsedAnchorRef(object_path, anchor) };
     }
 
-    fn makeParsedAnchorRef(object_path: []const u8, anchor: core.Anchor) AnchorRef {
-        if (std.mem.eql(u8, object_path, "page")) return .{ .kind = .page, .anchor = anchor };
-        return .{
-            .kind = .node,
-            .anchor = anchor,
-            .node_name = firstPathSegment(object_path),
-            .node_path = object_path,
-        };
-    }
-
-    fn firstPathSegment(path: []const u8) []const u8 {
-        if (std.mem.indexOfScalar(u8, path, '.')) |index| return path[0..index];
-        return path;
+    fn makeParsedAnchorRef(self: *Parser, object_path: []const u8, anchor: core.Anchor) !AnchorRef {
+        if (std.mem.eql(u8, object_path, "page")) return AnchorRef.page(anchor);
+        return AnchorRef.nodePath(self.allocator, object_path, anchor);
     }
 
     fn makeNegCall(self: *Parser, expr: Expr) !Expr {
-        var args = std.ArrayList(Expr).empty;
-        errdefer args.deinit(self.allocator);
-        try args.append(self.allocator, expr);
-        return .{ .call = .{ .callee = ast.CallableName.bare("neg"), .args = args } };
+        return .{ .call = try self.makeCall1("neg", expr) };
     }
 
     fn parseTextArg(self: *Parser) ![]const u8 {
@@ -2191,9 +2191,10 @@ const Parser = struct {
             if (self.recovering and (self.eof() or !source.isIdentifierStart(self.source[self.pos]))) {
                 const line = source.lineAt(self.source, name_start);
                 const hole_id = try self.addHole(.name, .name, pointSpan(name_start), error.ExpectedIdentifier, foundAt(self.source, name_start, line.span.end));
+                const name = try self.allocator.dupe(u8, "");
                 return .{
                     .qualifier = first,
-                    .name = "",
+                    .name = name,
                     .name_hole = hole_id,
                     .qualifier_span = first_span,
                     .name_span = pointSpan(name_start),

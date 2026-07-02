@@ -778,16 +778,15 @@ pub const Analyzer = struct {
             },
             .return_void => {},
             .property_set => |property_set| {
-                try self.addVariableRead(&summary, property_set.object_name);
-                var expr = try self.analyzeExpr(property_set.value);
-                defer expr.deinit();
-                try summary.merge(expr);
-                const maybe_target = self.property_target_bindings.get(property_set.object_name);
-                const target = maybe_target orelse PropertyTarget.any();
+                var target_expr = try self.analyzeExpr(property_set.target);
+                defer target_expr.deinit();
+                try summary.merge(target_expr);
+                var value_expr = try self.analyzeExpr(property_set.value);
+                defer value_expr.deinit();
+                try summary.merge(value_expr);
+                const target = (try self.propertyTargetExpr(property_set.target)) orelse PropertyTarget.any();
                 const property_name = if (property_set.path.items.len == 0)
                     null
-                else if (maybe_target != null)
-                    property_set.path.items[0].name
                 else
                     property_set.path.items[property_set.path.items.len - 1].name;
                 try summary.addWrite(Resource.makeProperty(target.owner, property_name));
@@ -881,6 +880,13 @@ pub const Analyzer = struct {
                 break :blk summary;
             },
             .member => |member| blk: {
+                if (try self.propertyMemberRead(member)) |read| {
+                    var summary = AccessSummary.init(self.allocator);
+                    errdefer summary.deinit();
+                    try self.addVariableRead(&summary, read.root_name);
+                    try summary.addRead(Resource.makeProperty(read.target.owner, read.key));
+                    break :blk summary;
+                }
                 var summary = try self.analyzeExpr(member.target.*);
                 errdefer summary.deinit();
                 if (try self.propertyTargetExpr(member.target.*)) |target| {
@@ -1182,6 +1188,30 @@ pub const Analyzer = struct {
         defer state.restore();
         try self.bindLocalParams(lambda.params.items);
         return try self.analyzeExpr(lambda.body.*);
+    }
+
+    const PropertyMemberRead = struct {
+        root_name: []const u8,
+        target: PropertyTarget,
+        key: []const u8,
+    };
+
+    fn propertyMemberRead(self: *Analyzer, member: ast.MemberExpr) !?PropertyMemberRead {
+        const root_name = memberRootIdent(member.target.*) orelse return null;
+        const target = (try self.propertyTargetExpr(.{ .ident = .{ .name = root_name } })) orelse return null;
+        return .{
+            .root_name = root_name,
+            .target = target,
+            .key = member.name,
+        };
+    }
+
+    fn memberRootIdent(expr: ast.Expr) ?[]const u8 {
+        return switch (expr) {
+            .ident => |ident| ident.name,
+            .member => |member| memberRootIdent(member.target.*),
+            else => null,
+        };
     }
 
     fn bindLocalParams(self: *Analyzer, params: []const ast.ParamDecl) !void {

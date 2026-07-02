@@ -301,6 +301,11 @@ pub const CallableName = struct {
             .span = self.span,
         };
     }
+
+    pub fn deinit(self: *CallableName, allocator: Allocator) void {
+        if (self.qualifier) |qualifier| allocator.free(qualifier);
+        allocator.free(self.name);
+    }
 };
 
 pub const CallExpr = struct {
@@ -309,6 +314,7 @@ pub const CallExpr = struct {
     arg_spans: std.ArrayList(Span) = .empty,
 
     pub fn deinit(self: *CallExpr, allocator: Allocator) void {
+        self.callee.deinit(allocator);
         for (self.args.items) |*arg| arg.deinit(allocator);
         self.args.deinit(allocator);
         self.arg_spans.deinit(allocator);
@@ -742,13 +748,37 @@ pub const AnchorRef = struct {
     node_name: ?[]const u8 = null,
     node_path: ?[]const u8 = null,
 
-    pub fn withAnchor(self: AnchorRef, anchor: core.Anchor) AnchorRef {
+    pub fn page(anchor: core.Anchor) AnchorRef {
+        return .{ .kind = .page, .anchor = anchor };
+    }
+
+    pub fn nodePath(allocator: Allocator, path: []const u8, anchor: core.Anchor) !AnchorRef {
+        const cloned_path = try allocator.dupe(u8, path);
         return .{
-            .kind = self.kind,
+            .kind = .node,
             .anchor = anchor,
-            .node_name = self.node_name,
-            .node_path = self.node_path,
+            .node_name = firstPathSegment(cloned_path),
+            .node_path = cloned_path,
         };
+    }
+
+    pub fn cloneWithAnchor(self: AnchorRef, allocator: Allocator, anchor: core.Anchor) !AnchorRef {
+        if (self.kind == .page) return page(anchor);
+
+        return nodePath(allocator, self.node_path orelse self.node_name.?, anchor);
+    }
+
+    pub fn deinit(self: *AnchorRef, allocator: Allocator) void {
+        if (self.node_path) |path| {
+            allocator.free(path);
+        } else if (self.node_name) |name| {
+            allocator.free(name);
+        }
+    }
+
+    fn firstPathSegment(path: []const u8) []const u8 {
+        if (std.mem.indexOfScalar(u8, path, '.')) |index| return path[0..index];
+        return path;
     }
 };
 
@@ -758,6 +788,8 @@ pub const ConstraintDecl = struct {
     offset: ?Expr = null,
 
     pub fn deinit(self: *ConstraintDecl, allocator: Allocator) void {
+        self.target.deinit(allocator);
+        self.source.deinit(allocator);
         if (self.offset) |*offset| offset.deinit(allocator);
     }
 };
@@ -778,8 +810,7 @@ pub const Statement = struct {
         return_void,
         constrain: ConstraintDecl,
         property_set: struct {
-            object_name: []const u8,
-            object_name_span: ?Span = null,
+            target: Expr,
             path: std.ArrayList(RecordPathSegment),
             value: Expr,
         },
@@ -803,7 +834,7 @@ pub const Statement = struct {
             .return_void => {},
             .constrain => |*decl| decl.deinit(allocator),
             .property_set => |*property_set| {
-                allocator.free(property_set.object_name);
+                property_set.target.deinit(allocator);
                 for (property_set.path.items) |*segment| segment.deinit(allocator);
                 property_set.path.deinit(allocator);
                 property_set.value.deinit(allocator);

@@ -191,7 +191,10 @@ const PageContextRequirement = struct {
             },
             .return_expr => |expr| (try self.exprRequirement(scope, expr)) != null,
             .return_void => false,
-            .property_set => |property_set| (try self.exprRequirement(scope, property_set.value)) != null,
+            .property_set => |property_set| blk: {
+                if ((try self.exprRequirement(scope, property_set.target)) != null) break :blk true;
+                break :blk (try self.exprRequirement(scope, property_set.value)) != null;
+            },
             .constrain => |constraint| if (constraint.offset) |offset| (try self.exprRequirement(scope, offset)) != null else false,
             .expr_stmt => |expr| (try self.exprRequirement(scope, expr)) != null,
             .if_stmt => |if_stmt| blk: {
@@ -412,8 +415,9 @@ fn checkTopLevelStatement(
             return error.ReturnOutsideFunction;
         },
         .property_set => |property_set| {
+            try rejectPageOnlyExpr(ir, context, origin, page_context, scope, property_set.target);
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, property_set.value);
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.path.items, property_set.value, origin);
+            try validatePropertySetStatement(allocator, ir, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
             try rejectPageOnlyExpr(ir, context, origin, page_context, scope, if_stmt.condition);
@@ -588,7 +592,7 @@ fn checkStatement(
             }
         },
         .property_set => |property_set| {
-            try validatePropertySetStatement(allocator, ir, sema, env, property_set.object_name, property_set.path.items, property_set.value, origin);
+            try validatePropertySetStatement(allocator, ir, sema, env, property_set.target, property_set.path.items, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
             const condition = try inferExprInfo(allocator, ir, sema, env, if_stmt.condition, origin);

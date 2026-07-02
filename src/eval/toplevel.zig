@@ -1953,6 +1953,120 @@ fn writeNodeFieldValue(
     };
 }
 
+fn isPropertyTargetValue(value: core.Value) bool {
+    return switch (value) {
+        .document, .page, .object, .selection => true,
+        else => false,
+    };
+}
+
+fn writePropertyPath(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    origin: []const u8,
+    base: core.Value,
+    path: []const ast.RecordPathSegment,
+    value: core.Value,
+) !void {
+    if (path.len == 0) return;
+    var current = try base.clone(ir.allocator);
+    defer current.deinit(ir.allocator);
+
+    var path_index: usize = 0;
+    while (!isPropertyTargetValue(current)) {
+        if (path_index >= path.len) return error.ExpectedObject;
+        const next = try evalMemberValue(ir, mode, functions, current, path[path_index].name);
+        current.deinit(ir.allocator);
+        current = next;
+        path_index += 1;
+    }
+
+    try writePropertyPathToTarget(ir, page_id, context, mode, functions, closures, origin, current, path[path_index..], value);
+}
+
+fn writePropertyPathToTarget(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    origin: []const u8,
+    target: core.Value,
+    path: []const ast.RecordPathSegment,
+    value: core.Value,
+) !void {
+    if (path.len == 0) return error.ExpectedObject;
+    switch (target) {
+        .document => |id| try writePropertyPathToNode(ir, page_id, context, mode, functions, closures, origin, id, path, value),
+        .page => |id| try writePropertyPathToNode(ir, page_id, context, mode, functions, closures, origin, id, path, value),
+        .object => |id| try writePropertyPathToNode(ir, page_id, context, mode, functions, closures, origin, id, path, value),
+        .selection => |selection| {
+            if (selection.item_tag != .object) return error.InvalidSelectionItemType;
+            for (selection.ids.items) |id| {
+                try writePropertyPathToNode(ir, page_id, context, mode, functions, closures, origin, id, path, value);
+            }
+        },
+        else => return error.ExpectedObject,
+    }
+}
+
+fn writePropertyPathToNode(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    context: EvalContext,
+    mode: EvalMode,
+    functions: *const core.FunctionMap,
+    closures: *ClosureStore,
+    origin: []const u8,
+    node_id: core.NodeId,
+    path: []const ast.RecordPathSegment,
+    value: core.Value,
+) !void {
+    if (path.len == 0) return error.ExpectedObject;
+    const property_name = path[0].name;
+    if (path.len == 1) {
+        try writeNodeFieldValue(ir, node_id, property_name, value, origin, false);
+        return;
+    }
+
+    const node = ir.getNode(node_id) orelse return error.UnknownNode;
+    const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
+    const maybe_field = if (core.fields.classNameWithEnv(node, &sema)) |class_name|
+        sema.field(class_name, property_name)
+    else
+        sema.fieldByName(property_name);
+    const field = maybe_field orelse return error.InvalidType;
+    if (field.value_type.kind != .record) return error.InvalidValueTag;
+    var record = try materializePropertyRecord(ir, page_id, context, mode, functions, closures, origin, node, &sema, property_name, field.value_type);
+    defer record.deinit(ir.allocator);
+
+    var value_copy = try value.clone(ir.allocator);
+    var value_moved = false;
+    defer if (!value_moved) value_copy.deinit(ir.allocator);
+    updateRecordFieldPath(ir.allocator, &record, path[1..], value_copy) catch |err| switch (err) {
+        error.InvalidValueTag => {
+            const path_text = try ast.formatRecordPath(ir.allocator, path);
+            defer ir.allocator.free(path_text);
+            try reportRecordUpdateError(ir, origin, "InvalidRecordUpdatePath: '{s}' does not resolve to a nested record", .{path_text});
+            return err;
+        },
+        error.UnknownRecordField => {
+            const path_text = try ast.formatRecordPath(ir.allocator, path);
+            defer ir.allocator.free(path_text);
+            try reportRecordUpdateError(ir, origin, "MissingRecordField: record update path '{s}' is not present at runtime", .{path_text});
+            return err;
+        },
+        else => return err,
+    };
+    value_moved = true;
+    try writeNodeFieldValue(ir, node_id, property_name, .{ .record = record }, origin, true);
+}
+
 fn executeStatement(
     ir: *core.Ir,
     page_id: core.NodeId,
@@ -1987,60 +2101,11 @@ fn executeStatement(
         .return_void => return .{ .returned = .{ .void = {} } },
         .property_set => |property_set| {
             if (property_set.path.items.len == 0) return .none;
-            const property_name = property_set.path.items[0].name;
-            var base = if (env.get(property_set.object_name)) |found|
-                try found.clone(ir.allocator)
-            else
-                try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, .{ .ident = .{ .name = property_set.object_name } });
+            var base = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, property_set.target);
             defer base.deinit(ir.allocator);
             var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, property_set.value);
-            var value_moved = false;
-            defer if (!value_moved) value.deinit(ir.allocator);
-
-            const root_node_id: ?core.NodeId = switch (base) {
-                .document => |id| id,
-                .page => |id| id,
-                .object => |id| id,
-                else => null,
-            };
-            if (root_node_id == null) {
-                if (property_set.path.items.len < 2) return error.ExpectedObject;
-                var target = try evalMemberPathPrefix(ir, mode, functions, base, property_set.path.items[0 .. property_set.path.items.len - 1]);
-                defer target.deinit(ir.allocator);
-                const target_id = try resolveValueObjectId(ir, mode, target);
-                try writeNodeFieldValue(ir, target_id, property_set.path.items[property_set.path.items.len - 1].name, value, origin, false);
-                return .none;
-            }
-            const node_id = root_node_id.?;
-            if (property_set.path.items.len == 1) {
-                try writeNodeFieldValue(ir, node_id, property_name, value, origin, false);
-                return .none;
-            }
-
-            const node = ir.getNode(node_id) orelse return error.UnknownNode;
-            const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
-            const class_name = core.fields.classNameWithEnv(node, &sema) orelse return error.InvalidValueTag;
-            const field = sema.field(class_name, property_name) orelse return error.InvalidType;
-            if (field.value_type.kind != .record) return error.InvalidValueTag;
-            var record = try materializePropertyRecord(ir, page_id, context, mode, functions, closures, origin, node, &sema, property_name, field.value_type);
-            defer record.deinit(ir.allocator);
-            updateRecordFieldPath(ir.allocator, &record, property_set.path.items[1..], value) catch |err| switch (err) {
-                error.InvalidValueTag => {
-                    const path = try ast.formatRecordPath(ir.allocator, property_set.path.items);
-                    defer ir.allocator.free(path);
-                    try reportRecordUpdateError(ir, origin, "InvalidRecordUpdatePath: '{s}' does not resolve to a nested record", .{path});
-                    return err;
-                },
-                error.UnknownRecordField => {
-                    const path = try ast.formatRecordPath(ir.allocator, property_set.path.items);
-                    defer ir.allocator.free(path);
-                    try reportRecordUpdateError(ir, origin, "MissingRecordField: record update path '{s}' is not present at runtime", .{path});
-                    return err;
-                },
-                else => return err,
-            };
-            value_moved = true;
-            try writeNodeFieldValue(ir, node_id, property_name, .{ .record = record }, origin, true);
+            defer value.deinit(ir.allocator);
+            try writePropertyPath(ir, page_id, context, mode, functions, closures, origin, base, property_set.path.items, value);
         },
         .if_stmt => |if_stmt| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, if_stmt.condition);
