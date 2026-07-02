@@ -1,12 +1,12 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
-const source = @import("utils").source;
 
 const declarations = @import("declarations.zig");
 const name_resolution = @import("name_resolution.zig");
 const registry = @import("registry.zig");
 const type_defs = @import("type_defs.zig");
+const type_resolution = @import("type_resolution.zig");
 
 pub const CallDescriptor = union(enum) {
     function: ResolvedFunction,
@@ -81,6 +81,7 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveFunction(self: *const SemanticEnv, callee: ast.CallableName) FunctionResolution {
+        if (callee.name_hole != null) return .unknown;
         return name_resolution.resolve(ResolvedFunction, FunctionResolver{ .env = self }, self.module_id, .{
             .qualifier = callee.qualifier,
             .name = callee.name,
@@ -88,6 +89,7 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveConst(self: *const SemanticEnv, callee: ast.CallableName) ConstResolution {
+        if (callee.name_hole != null) return .unknown;
         return name_resolution.resolve(ResolvedConst, ConstResolver{ .env = self }, self.module_id, .{
             .qualifier = callee.qualifier,
             .name = callee.name,
@@ -258,41 +260,17 @@ pub const SemanticEnv = struct {
     }
 
     pub fn resolveTypeName(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
-        if (builtinType(name)) |ty| return ty;
-        if (self.recordExists(name)) return ast.Type.recordType(name);
-        if (self.classExists(name)) return ast.Type.objectClass(name);
-        if (self.enumDescriptor(module_id, name) != null) return ast.Type.enumType(name);
-        return null;
+        return switch (type_resolution.resolveUnqualified(void, TypeResolver{ .env = self }, module_id, name)) {
+            .found => |binding| binding.ty,
+            else => null,
+        };
     }
 
     pub fn resolveTypeNameInContext(self: *const SemanticEnv, module_id: core.SourceModuleId, name: []const u8) ?ast.Type {
-        const delimiter = std.mem.indexOf(u8, name, "::") orelse return self.resolveTypeName(module_id, name);
-        const alias = name[0..delimiter];
-        const local_name = name[delimiter + 2 ..];
-        const target_module_id = self.resolveAliasInModule(module_id, alias) orelse return null;
-        return self.resolveTypeName(target_module_id, local_name);
-    }
-
-    pub fn resolveTypeText(self: *const SemanticEnv, allocator: std.mem.Allocator, module_id: core.SourceModuleId, text: []const u8) !?ast.Type {
-        const trimmed = std.mem.trim(u8, text, " \t\r\n");
-        if (trimmed.len == 0) return null;
-        if (trimmed[trimmed.len - 1] == '?') {
-            const inner = (try self.resolveTypeText(allocator, module_id, trimmed[0 .. trimmed.len - 1])) orelse return null;
-            const optional_ty = try ast.Type.optional(allocator, inner);
-            var owned_inner = inner;
-            owned_inner.deinit(allocator);
-            return optional_ty;
-        }
-        if (parseTypeConstructorArg(trimmed, "Selection")) |inner_text| {
-            const inner = (try self.resolveTypeText(allocator, module_id, inner_text)) orelse return null;
-            return ast.Type.selectionType(inner);
-        }
-        if (parseTypeConstructorArg(trimmed, "Object")) |inner_text| {
-            const class_name = std.mem.trim(u8, inner_text, " \t\r\n");
-            const resolved = self.resolveTypeNameInContext(module_id, class_name) orelse return null;
-            return if (resolved.kind == .object) resolved else null;
-        }
-        return self.resolveTypeNameInContext(module_id, trimmed);
+        return switch (type_resolution.resolveText(void, TypeResolver{ .env = self }, module_id, name)) {
+            .found => |binding| binding.ty,
+            else => null,
+        };
     }
 
     pub fn callParamName(self: *const SemanticEnv, call_name: []const u8, index: usize) ?[]const u8 {
@@ -480,6 +458,29 @@ const ConstResolver = struct {
     }
 };
 
+const TypeResolver = struct {
+    env: *const SemanticEnv,
+
+    pub fn resolveAlias(self: TypeResolver, module_id: core.SourceModuleId, alias: []const u8) ?core.SourceModuleId {
+        return self.env.resolveAliasInModule(module_id, alias);
+    }
+
+    pub fn findRecord(self: TypeResolver, name: []const u8) ?void {
+        if (self.env.recordExists(name)) return {};
+        return null;
+    }
+
+    pub fn findObject(self: TypeResolver, name: []const u8) ?void {
+        if (self.env.classExists(name)) return {};
+        return null;
+    }
+
+    pub fn findEnum(self: TypeResolver, module_id: core.SourceModuleId, name: []const u8) ?void {
+        if (self.env.enumDescriptor(module_id, name) != null) return {};
+        return null;
+    }
+};
+
 fn resolveTypeInModule(
     index: *const declarations.DeclarationIndex,
     module_id: core.SourceModuleId,
@@ -514,29 +515,6 @@ fn findTypeInModule(ir: *const core.Ir, module_id: core.SourceModuleId, name: []
     return null;
 }
 
-fn builtinType(name: []const u8) ?ast.Type {
-    if (std.mem.eql(u8, name, "Document")) return ast.Type.document;
-    if (std.mem.eql(u8, name, "Page")) return ast.Type.page;
-    if (std.mem.eql(u8, name, "Object")) return ast.Type.object;
-    if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
-    if (std.mem.eql(u8, name, "String")) return ast.Type.string;
-    if (std.mem.eql(u8, name, "Color")) return ast.Type.color;
-    if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
-    if (std.mem.eql(u8, name, "Bool")) return ast.Type.boolean;
-    if (std.mem.eql(u8, name, "Constraints")) return ast.Type.constraints;
-    if (std.mem.eql(u8, name, "Void")) return .{ .kind = .void };
-    if (std.mem.eql(u8, name, "None")) return ast.Type.none;
-    return null;
-}
-
 pub fn isBuiltinTypeName(name: []const u8) bool {
-    return builtinType(name) != null;
-}
-
-fn parseTypeConstructorArg(text: []const u8, constructor: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, text, constructor)) return null;
-    const pos = source.skipWhitespaceUntil(text, constructor.len, text.len);
-    if (pos >= text.len or text[pos] != '<') return null;
-    if (text[text.len - 1] != '>') return null;
-    return text[pos + 1 .. text.len - 1];
+    return type_resolution.isBuiltinTypeName(name);
 }
