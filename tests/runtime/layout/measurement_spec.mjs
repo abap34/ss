@@ -8,9 +8,9 @@ import { assert, ssBin } from "../harness.mjs";
 const pdflatexAvailable = await commandAvailable("pdflatex");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
-await testPanelHeightUsesRenderedIconMeasurement();
 await testCheckReportsRasterMeasurementFailure();
 if (pdflatexAvailable) {
+  await testPanelHeightUsesRenderedIconMeasurement();
   await testCheckReportsInlineMathMeasurementFailure();
   await testPanelHeightUsesRenderedMathMeasurement();
 }

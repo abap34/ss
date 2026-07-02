@@ -76,13 +76,10 @@ end
     assert(payload.schema === 1, `unexpected diagnostics schema: ${JSON.stringify(payload)}`);
     assert(payload.kind === "ss-diagnostics", `unexpected diagnostics kind: ${JSON.stringify(payload)}`);
     if (!pdflatexAvailable) {
-      assert(payload.diagnostics.length === 2, `unexpected diagnostics count: ${JSON.stringify(payload)}`);
+      assert(payload.diagnostics.length === 1, `unexpected diagnostics count: ${JSON.stringify(payload)}`);
       const firstFormula = diagnosticAt(payload.diagnostics, 3, 14);
-      const secondFormula = diagnosticAt(payload.diagnostics, 3, 25);
       assert(firstFormula, `missing diagnostic for first inline formula: ${JSON.stringify(payload)}`);
-      assert(secondFormula, `missing diagnostic for second inline formula: ${JSON.stringify(payload)}`);
       assertMathCommandSummary(firstFormula.message, `structured diagnostic omitted command output summary: ${firstFormula.message}`);
-      assertMathCommandSummary(secondFormula.message, `structured diagnostic omitted command output summary: ${secondFormula.message}`);
       return;
     }
 

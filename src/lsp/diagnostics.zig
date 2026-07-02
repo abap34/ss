@@ -138,6 +138,7 @@ pub const DiagnosticSet = struct {
     }
 
     fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic) !void {
+        if (item.severity == .warning and isLayoutOverflowCode(item.code)) return;
         const span = item.span orelse return;
         const uri = try protocol.uriFromPath(self.allocator, item.path);
         errdefer self.allocator.free(uri);
@@ -154,6 +155,11 @@ pub const DiagnosticSet = struct {
         });
     }
 };
+
+fn isLayoutOverflowCode(code: []const u8) bool {
+    return std.mem.eql(u8, code, "PageOverflow") or
+        std.mem.eql(u8, code, "ContentOverflow");
+}
 
 const LspRelatedInput = struct {
     path: []const u8,
