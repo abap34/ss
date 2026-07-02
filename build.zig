@@ -438,6 +438,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/debug_runtime_spec.mjs",
         "tests/runtime/doctor_runtime_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",
+        "tests/runtime/layout/vflow/policy_spec.mjs",
         "tests/runtime/lsp_completion_runtime_spec.mjs",
         "tests/runtime/lsp_editor_runtime_spec.mjs",
         "tests/runtime/render_cache_runtime_spec.mjs",
