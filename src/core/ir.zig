@@ -541,7 +541,7 @@ pub const Ir = struct {
         for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
     }
 
-    pub fn connectGeneratedReturnObjects(self: *Ir, return_id: NodeId, start_index: usize) !void {
+    pub fn connectGeneratedReturnObjects(self: *Ir, return_id: NodeId, start_index: usize, origin: ?[]const u8) !void {
         const return_node = self.getNode(return_id) orelse return error.UnknownNode;
         if (return_node.kind != .object) return;
 
@@ -567,6 +567,12 @@ pub const Ir = struct {
             try self.appendConnectedCandidates(candidates, &seen, &queue, queue.items[index]);
         }
 
+        if (origin) |value| {
+            for (queue.items) |candidate_id| {
+                try self.setGeneratedNodeOrigin(candidate_id, start_index, value);
+            }
+        }
+
         const page_id = if (return_node.attached) self.parentPageOf(return_id) else null;
         for (queue.items) |candidate_id| {
             if (candidate_id == return_id) continue;
@@ -574,6 +580,15 @@ pub const Ir = struct {
             try self.addContainment(return_id, candidate_id);
         }
         if (page_id) |page| try self.placeObjectOnPage(page, return_id);
+    }
+
+    fn setGeneratedNodeOrigin(self: *Ir, node_id: NodeId, start_index: usize, origin: []const u8) !void {
+        if (node_id == 0) return;
+        const node_index: usize = @intCast(node_id - 1);
+        if (node_index < start_index or node_index >= self.nodes.items.len) return;
+        const node = &self.nodes.items[node_index];
+        if (node.id != node_id) return;
+        node.origin = try self.copyString(origin);
     }
 
     fn appendConnectedCandidates(
@@ -911,13 +926,20 @@ pub const Ir = struct {
     }
 
     fn addLayoutDiagnostic(self: *Ir, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
-        try self.addDiagnostic(.{
+        const origin = if (node_id) |id| blk: {
+            const node = self.getNode(id) orelse break :blk null;
+            break :blk node.origin;
+        } else null;
+        var diagnostic = Diagnostic{
             .phase = .layout,
             .severity = severity,
             .page_id = page_id,
             .node_id = node_id,
+            .origin = if (origin) |value| try self.allocator.dupe(u8, value) else null,
             .data = data,
-        });
+        };
+        errdefer diagnostic.deinit(self.allocator);
+        try self.addDiagnostic(diagnostic);
     }
 
     pub fn addLayoutWarning(self: *Ir, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {

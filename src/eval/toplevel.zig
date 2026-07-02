@@ -381,7 +381,7 @@ fn executeScheduledDocumentStatement(
 ) !void {
     const error_count = diagnosticErrorCount(ir);
     const flow = executeStatement(ir, ir.document_id, .document, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
-        const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+        const origin = statementOrigin(ir, stmt.span) catch null;
         defer if (origin) |text| ir.allocator.free(text);
         if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
         return err;
@@ -406,7 +406,7 @@ fn executeScheduledPageStatement(
 ) !void {
     const error_count = diagnosticErrorCount(ir);
     const flow = executeStatement(ir, page_id, .page, .attached, &state.env, functions, closures, &state.last_code_like, stmt, null) catch |err| {
-        const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+        const origin = statementOrigin(ir, stmt.span) catch null;
         defer if (origin) |text| ir.allocator.free(text);
         if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
         return err;
@@ -586,7 +586,7 @@ fn executeDocumentStatementSlice(
     for (statements) |stmt| {
         const error_count = diagnosticErrorCount(ir);
         const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, closures, &document_last_code_like, stmt, null) catch |err| {
-            const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+            const origin = statementOrigin(ir, stmt.span) catch null;
             defer if (origin) |text| ir.allocator.free(text);
             if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
             return err;
@@ -626,7 +626,7 @@ fn executePageBody(
     for (page.statements.items) |stmt| {
         const error_count = diagnosticErrorCount(ir);
         const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, closures, &last_code_like, stmt, null) catch |err| {
-            const origin = statementOrigin(ir.allocator, stmt.span) catch null;
+            const origin = statementOrigin(ir, stmt.span) catch null;
             defer if (origin) |text| ir.allocator.free(text);
             if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
             return err;
@@ -745,7 +745,7 @@ fn evalConstValue(
     var value_moved = false;
     errdefer if (!value_moved) value.deinit(ir.allocator);
     try value_contracts.ensureValueConformsToType(ir, page_id, value, resolved.decl.value_type, current_origin, .UnmatchedReturnType);
-    try connectValueObjects(ir, value, start_node_count);
+    try connectValueObjects(ir, value, start_node_count, current_origin);
     try ir.const_values.put(resolved.key, value);
     value_moved = true;
     try ir.const_eval_states.put(resolved.key, 2);
@@ -1852,7 +1852,7 @@ fn executeStatement(
     stmt: Statement,
     origin_override: ?[]const u8,
 ) anyerror!ExecFlow {
-    const origin = if (origin_override) |override| override else try statementOrigin(ir.allocator, stmt.span);
+    const origin = if (origin_override) |override| override else try statementOrigin(ir, stmt.span);
     switch (stmt.kind) {
         .hole => return error.HoleStatement,
         .let_binding => |binding| {
@@ -1953,18 +1953,18 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
     }
 }
 
-fn connectReturnedObject(ir: *core.Ir, value: core.Value, start_node_count: usize) !void {
+fn connectReturnedObject(ir: *core.Ir, value: core.Value, start_node_count: usize, origin: []const u8) !void {
     switch (value) {
-        .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count),
+        .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count, origin),
         else => {},
     }
 }
 
-fn connectValueObjects(ir: *core.Ir, value: core.Value, start_node_count: usize) !void {
+fn connectValueObjects(ir: *core.Ir, value: core.Value, start_node_count: usize, origin: []const u8) !void {
     switch (value) {
-        .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count),
+        .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count, origin),
         .record => |record| {
-            for (record.fields.items) |field| try connectValueObjects(ir, field.value, start_node_count);
+            for (record.fields.items) |field| try connectValueObjects(ir, field.value, start_node_count, origin);
         },
         else => {},
     }
@@ -2021,7 +2021,7 @@ fn executeCallStatement(
                     try value_contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
                 } else {
                     try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                    try connectReturnedObject(ir, value, start_node_count);
+                    try connectReturnedObject(ir, value, start_node_count, current_origin);
                     try materializeStatementValue(ir, mode, last_code_like, value);
                 }
                 return;
@@ -2086,7 +2086,7 @@ fn invokeClosureValues(
     }
     const start_node_count = ir.nodeCount();
     const value = try evalExpr(ir, page_id, context, mode, &local_env, functions, closures, current_origin, closure.lambda.body.*);
-    try connectReturnedObject(ir, value, start_node_count);
+    try connectReturnedObject(ir, value, start_node_count, current_origin);
     return value;
 }
 
@@ -2138,7 +2138,7 @@ fn invokeUserFunctionValueInModule(
             .none => {},
             .returned => |value| {
                 try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try connectReturnedObject(ir, value, start_node_count);
+                try connectReturnedObject(ir, value, start_node_count, current_origin);
                 return value;
             },
         }
@@ -2175,7 +2175,7 @@ fn invokeUserFunctionValues(
             .none => {},
             .returned => |value| {
                 try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                try connectReturnedObject(ir, value, start_node_count);
+                try connectReturnedObject(ir, value, start_node_count, current_origin);
                 return value;
             },
         }
@@ -2185,18 +2185,18 @@ fn invokeUserFunctionValues(
     return error.FunctionDidNotReturnValue;
 }
 
-fn statementOrigin(allocator: std.mem.Allocator, span: ast.Span) ![]const u8 {
-    if (diagnostic_path.len != 0) {
-        return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_path, span.start, span.end });
-    }
-    return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
-}
-
-fn originForActiveModuleSpan(ir: *core.Ir, span: ast.Span) ![]const u8 {
+fn statementOrigin(ir: *core.Ir, span: ast.Span) ![]const u8 {
     if (ir.modulePath(active_module_id)) |path| {
         return std.fmt.allocPrint(ir.allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
     }
-    return statementOrigin(ir.allocator, span);
+    if (diagnostic_path.len != 0) {
+        return std.fmt.allocPrint(ir.allocator, "path:{s}:bytes:{d}-{d}", .{ diagnostic_path, span.start, span.end });
+    }
+    return std.fmt.allocPrint(ir.allocator, "bytes:{d}-{d}", .{ span.start, span.end });
+}
+
+fn originForActiveModuleSpan(ir: *core.Ir, span: ast.Span) ![]const u8 {
+    return statementOrigin(ir, span);
 }
 
 fn resolveAnchorRef(
