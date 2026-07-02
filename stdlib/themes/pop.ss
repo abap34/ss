@@ -193,10 +193,10 @@ end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
   let obj = objects::tex_obj(text_value)
-  obj.layout_x = 108
-  obj.layout_right_inset = 108
-  obj.wrap = WrapMode.on
-  obj.math_scale = scale
+  obj.layout.x = 108
+  obj.layout.right_inset = 108
+  obj.layout.wrap = WrapMode.on
+  obj.math.scale = scale
   return obj
 end
 

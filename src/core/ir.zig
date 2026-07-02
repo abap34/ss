@@ -31,7 +31,7 @@ const ConstraintFailureKind = model.ConstraintFailureKind;
 const ConstraintFailureReason = model.ConstraintFailureReason;
 const GroupRole = model.GroupRole;
 const roleEq = model.roleEq;
-const nodeProperty = model.nodeProperty;
+const nodeField = model.nodeField;
 
 pub const SourceModuleId = u32;
 
@@ -649,26 +649,25 @@ pub const Ir = struct {
         return false;
     }
 
-    pub fn setNodeProperty(self: *Ir, node_id: NodeId, key: []const u8, value: []const u8) !void {
+    pub fn setNodeFieldValue(self: *Ir, node_id: NodeId, key: []const u8, value: Value) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
-        for (node.properties.items) |*property| {
-            if (std.mem.eql(u8, property.key, key)) {
+        for (node.fields.items) |field| {
+            if (std.mem.eql(u8, field.key, key)) {
                 return error.DuplicatePropertyDefinition;
             }
         }
-        try node.properties.append(self.allocator, .{
+        try node.fields.append(self.allocator, .{
             .key = try self.allocator.dupe(u8, key),
-            .value = try self.allocator.dupe(u8, value),
+            .value = try value.clone(self.allocator),
         });
     }
 
-    pub fn unsetNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) !void {
+    pub fn unsetNodeField(self: *Ir, node_id: NodeId, key: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
-        for (node.properties.items, 0..) |property, index| {
-            if (std.mem.eql(u8, property.key, key)) {
-                self.allocator.free(property.key);
-                self.allocator.free(property.value);
-                _ = node.properties.orderedRemove(index);
+        for (node.fields.items, 0..) |field, index| {
+            if (std.mem.eql(u8, field.key, key)) {
+                var removed = node.fields.orderedRemove(index);
+                removed.deinit(self.allocator);
                 return;
             }
         }
@@ -691,9 +690,9 @@ pub const Ir = struct {
         });
     }
 
-    pub fn getNodeProperty(self: *Ir, node_id: NodeId, key: []const u8) ?[]const u8 {
+    pub fn getNodeField(self: *Ir, node_id: NodeId, key: []const u8) ?Value {
         const node = self.getNode(node_id) orelse return null;
-        return nodeProperty(node, key);
+        return nodeField(node, key);
     }
 
     fn clearNodeContentProvenance(self: *Ir, node: *Node) void {

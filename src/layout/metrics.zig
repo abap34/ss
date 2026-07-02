@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("model");
-const class_fields = @import("../core/class_fields.zig");
+const fields = @import("../core/fields.zig");
 const font_model = @import("../core/font.zig");
 const markdown = @import("../core/markdown.zig");
 const text_measure = @import("../render/text_measure.zig");
@@ -159,11 +159,11 @@ fn mathScale(ir: anytype, node: *const Node) f32 {
 }
 
 pub fn chromePadX(ir: anytype, node: *const Node) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "chrome_pad_x") orelse 0.0;
+    return nonNegativeRecordFloatProperty(ir, node, "chrome", "pad_x") orelse 0.0;
 }
 
 pub fn chromePadY(ir: anytype, node: *const Node) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "chrome_pad_y") orelse 0.0;
+    return nonNegativeRecordFloatProperty(ir, node, "chrome", "pad_y") orelse 0.0;
 }
 
 pub fn contentFrame(ir: anytype, node: *const Node) model.Frame {
@@ -303,7 +303,7 @@ fn measuredPlainTextHeight(ir: anytype, node: *const Node, cache: ?*MeasurementC
 }
 
 fn markdownBlockGap(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_block_gap") orelse style.line_height * 0.15;
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_block_gap") orelse style.line_height * 0.15;
 }
 
 fn markdownGapBetweenBlocks(ir: anytype, node: *const Node, style: TextStyle, current: *const markdown.Block, next: *const markdown.Block) f32 {
@@ -315,23 +315,23 @@ fn markdownGapBetweenBlocks(ir: anytype, node: *const Node, style: TextStyle, cu
 }
 
 fn markdownListIndent(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_list_indent") orelse style.font_size * 1.3;
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_list_indent") orelse style.font_size * 1.3;
 }
 
 fn markdownListInset(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_list_inset") orelse style.font_size * 0.4;
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_list_inset") orelse style.font_size * 0.4;
 }
 
 fn markdownCodeLineHeight(ir: anytype, node: *const Node) f32 {
-    return positiveNodeFloatProperty(ir, node, "text_markdown_code_line_height") orelse 20.0;
+    return positiveRecordFloatProperty(ir, node, "text", "markdown_code_line_height") orelse 20.0;
 }
 
 fn markdownCodePadY(ir: anytype, node: *const Node) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 10.0;
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_code_pad_y") orelse 10.0;
 }
 
 fn displayMathHeightFactor(ir: anytype, node: *const Node) f32 {
-    return positiveNodeFloatProperty(ir, node, "text_display_math_height_factor") orelse 2.0;
+    return positiveRecordFloatProperty(ir, node, "text", "display_math_height_factor") orelse 2.0;
 }
 
 fn markdownBlocksHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, blocks: []const *markdown.Block, max_width: f32, list_depth: usize) f32 {
@@ -405,15 +405,15 @@ fn markdownListMarkerWidth(ir: anytype, node: *const Node, cache: ?*MeasurementC
 }
 
 fn markdownTableCellPadX(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), style.font_size * 0.55);
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), style.font_size * 0.55);
 }
 
 fn markdownTableCellPadY(ir: anytype, node: *const Node, style: TextStyle) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), style.font_size * 0.32);
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), style.font_size * 0.32);
 }
 
 fn markdownTableLineWidth(ir: anytype, node: *const Node) f32 {
-    return nonNegativeNodeFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8;
+    return nonNegativeRecordFloatProperty(ir, node, "text", "markdown_table_line_width") orelse 0.8;
 }
 
 fn markdownTableHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, block: *const markdown.Block, max_width: f32) f32 {
@@ -633,6 +633,20 @@ fn nonNegativeNodeFloatProperty(ir: anytype, node: *const Node, key: []const u8)
     return if (value >= 0) value else null;
 }
 
+fn recordFloatProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    return fields.read(ir.allocator, ir, node, record_key, &.{field_name}, .number);
+}
+
+fn positiveRecordFloatProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = recordFloatProperty(ir, node, record_key, field_name) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn nonNegativeRecordFloatProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = recordFloatProperty(ir, node, record_key, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
 fn wrappedLineCount(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, text: []const u8, max_width: f32) usize {
     const fonts = font_model.textFacesForNode(ir, node);
     const plain_font = plainTextFaceForNode(ir, node, fonts);
@@ -653,7 +667,7 @@ fn wrappedLineCount(ir: anytype, node: *const Node, cache: ?*MeasurementCache, s
 
 fn plainTextFaceForNode(ir: anytype, node: *const Node, faces: font_model.TextFaces) font_model.Face {
     if ((node.payload_kind orelse .text) == .code) return faces.code;
-    if (class_fields.property(ir, node, "render_kind")) |kind| {
+    if (fields.read(ir.allocator, ir, node, "render_kind", &.{}, .text)) |kind| {
         if (std.mem.eql(u8, kind, "code")) return faces.code;
     }
     return faces.normal;
@@ -793,5 +807,5 @@ fn measuredAtomSpacingAfter(atoms: []const MeasuredAtom, index: usize, emoji_spa
 }
 
 fn textEmojiSpacing(ir: anytype, node: *const Node) f32 {
-    return styleForNode(ir, node).font_size * (nonNegativeNodeFloatProperty(ir, node, "text_emoji_spacing") orelse 0);
+    return styleForNode(ir, node).font_size * (nonNegativeRecordFloatProperty(ir, node, "text", "emoji_spacing") orelse 0);
 }

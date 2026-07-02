@@ -69,7 +69,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sem
     } else {
         try item.nullField("inline_lines");
     }
-    try writeProperties(&item, node.properties.items);
+    try writeFields(allocator, &item, node.fields.items);
     var render_env = try core.render_env.resolveForNode(allocator, ir, &node);
     defer render_env.deinit(allocator);
     try writeRenderEnv(&item, render_env);
@@ -83,12 +83,14 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sem
     try item.end();
 }
 
-fn writeProperties(object: *json.Object, properties: anytype) !void {
-    var props = try object.objectField("properties");
-    for (properties) |property| {
-        try props.stringField(property.key, property.value);
+fn writeFields(allocator: std.mem.Allocator, object: *json.Object, fields: anytype) !void {
+    var out = try object.objectField("fields");
+    for (fields) |field| {
+        const text = try core.value_text.propertyString(allocator, field.value);
+        defer if (core.value_text.propertyStringNeedsFree(field.value)) allocator.free(text);
+        try out.stringField(field.key, text);
     }
-    try props.end();
+    try out.end();
 }
 
 fn writeRenderEnv(object: *json.Object, env: core.render_env.Resolved) !void {

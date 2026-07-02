@@ -5,9 +5,14 @@ pub const NodeId = u32;
 pub const Role = []const u8;
 pub const GroupRole: Role = "group";
 
-pub const Property = struct {
+pub const Field = struct {
     key: []const u8,
-    value: []const u8,
+    value: Value,
+
+    pub fn deinit(self: *Field, allocator: Allocator) void {
+        allocator.free(self.key);
+        self.value.deinit(allocator);
+    }
 };
 
 pub const ContentProvenance = struct {
@@ -211,16 +216,13 @@ pub const Node = struct {
     repr_function: ?FunctionRef = null,
     page_index: ?usize = null,
     origin: ?[]const u8 = null,
-    properties: std.ArrayList(Property) = .empty,
+    fields: std.ArrayList(Field) = .empty,
     render_env: std.ArrayList(RenderEnvEntry) = .empty,
     frame: Frame = .{},
 
     pub fn deinit(self: *Node, allocator: Allocator) void {
-        for (self.properties.items) |property| {
-            allocator.free(property.key);
-            allocator.free(property.value);
-        }
-        self.properties.deinit(allocator);
+        for (self.fields.items) |*field| field.deinit(allocator);
+        self.fields.deinit(allocator);
         for (self.render_env.items) |entry| {
             allocator.free(entry.op);
             allocator.free(entry.key);
@@ -583,9 +585,9 @@ pub fn roleEq(role: ?Role, expected: []const u8) bool {
     return role != null and std.mem.eql(u8, role.?, expected);
 }
 
-pub fn nodeProperty(node: *const Node, key: []const u8) ?[]const u8 {
-    for (node.properties.items) |property| {
-        if (std.mem.eql(u8, property.key, key)) return property.value;
+pub fn nodeField(node: *const Node, key: []const u8) ?Value {
+    for (node.fields.items) |field| {
+        if (std.mem.eql(u8, field.key, key)) return field.value;
     }
     return null;
 }
@@ -598,13 +600,6 @@ pub fn nodeDisplayContent(node: *const Node) []const u8 {
 pub fn nodeDisplayContentProvenance(node: *const Node) []const ContentProvenance {
     if (node.display_content != null) return node.display_content_provenance.items;
     return node.content_provenance.items;
-}
-
-pub fn nodePropertyEq(node: *const Node, key: []const u8, expected: []const u8) bool {
-    return if (nodeProperty(node, key)) |value|
-        std.mem.eql(u8, value, expected)
-    else
-        false;
 }
 
 pub const Query = struct {

@@ -178,6 +178,28 @@ fn expectObjectPropertyMissing(source: []const u8, key: []const u8) !void {
     try compiler_semantics.expectObjectPropertyMissing(testing.io, allocator, path, source, key);
 }
 
+fn expectObjectFieldPath(source: []const u8, root_key: []const u8, field_path: []const []const u8, expected: []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectFieldPath(testing.io, allocator, path, source, root_key, field_path, expected);
+}
+
+fn expectObjectFieldPathNone(source: []const u8, root_key: []const u8, field_path: []const []const u8) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    try compiler_semantics.expectObjectFieldPathNone(testing.io, allocator, path, source, root_key, field_path);
+}
+
 fn expectObjectPropertyWithThemeOverlay(source: []const u8, theme_source: []const u8, key: []const u8, expected: []const u8) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -191,6 +213,27 @@ fn expectObjectPropertyWithThemeOverlay(source: []const u8, theme_source: []cons
         .{ .path = theme_path, .source = theme_source },
     };
     try compiler_semantics.expectObjectPropertyWithOverlays(testing.io, allocator, path, source, &overlays, key, expected);
+}
+
+fn expectObjectFieldPathWithThemeOverlay(
+    source: []const u8,
+    theme_source: []const u8,
+    root_key: []const u8,
+    field_path: []const []const u8,
+    expected: []const u8,
+) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/case.ss", .{tmp.sub_path[0..]});
+    const theme_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/theme.ss", .{tmp.sub_path[0..]});
+    const overlays = [_]compiler_semantics.OverlaySource{
+        .{ .path = theme_path, .source = theme_source },
+    };
+    try compiler_semantics.expectObjectFieldPathWithOverlays(testing.io, allocator, path, source, &overlays, root_key, field_path, expected);
 }
 
 fn expectClassDefaultProperty(source: []const u8, role: []const u8, key: []const u8, expected: ?[]const u8) !void {
@@ -811,7 +854,7 @@ test "compiler semantics: implicit prelude does not propagate through bare-name 
         \\
     ,
         \\fn place!(obj: Object) -> Object
-        \\  obj.text_size = 41
+        \\  obj.text.size = 41
         \\  return place_on!(pagectx(), obj)
         \\end
         \\
@@ -819,7 +862,7 @@ test "compiler semantics: implicit prelude does not propagate through bare-name 
 }
 
 test "compiler semantics: later bare-name import overrides earlier imports" {
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\import std:themes/academic as *
         \\
@@ -827,11 +870,11 @@ test "compiler semantics: later bare-name import overrides earlier imports" {
         \\  h2!("later")
         \\end
         \\
-    , "text_size", "28");
+    , "text", &.{"size"}, "28");
 }
 
 test "compiler semantics: later alias import overrides earlier aliases" {
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as theme
         \\import std:themes/academic as theme
         \\
@@ -839,7 +882,7 @@ test "compiler semantics: later alias import overrides earlier aliases" {
         \\  theme::h2!("later")
         \\end
         \\
-    , "text_size", "28");
+    , "text", &.{"size"}, "28");
 }
 
 test "compiler semantics: imported local definitions override their imports" {
@@ -1140,7 +1183,7 @@ test "compiler semantics: qualified type names resolve in annotations records an
         \\  })
         \\  let align = keep_align(classes::Align.left)
         \\  let body = objects::body_obj("qualified")
-        \\  body.text_size = style.size
+        \\  body.text.size = style.size
         \\  body.math_align = align
         \\  objects::place!(body)
         \\end
@@ -1396,7 +1439,7 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page ok
         \\  let body = body_obj("ok")
-        \\  body.text_color = keep_color(c"0.1,0.2,0.3")
+        \\  body.text.color = keep_color(c"0.1,0.2,0.3")
         \\end
         \\
     );
@@ -1410,50 +1453,50 @@ test "compiler semantics: Color is a static type" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_color = keep_color("0.1,0.2,0.3")
+        \\  body.text.color = keep_color("0.1,0.2,0.3")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got String");
 
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = body_obj("color")
-        \\  body.text_color = c"#334455"
+        \\  body.text.color = c"#334455"
         \\end
         \\
-    , "text_color", "0.2,0.26666668,0.33333334");
+    , "text", &.{"color"}, "0.2,0.26666668,0.33333334");
 
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\page ok
         \\  let body = body_obj("**bold**")
-        \\  body.text_markdown_bold_color = c"#884422"
+        \\  body.text.markdown_bold_color = c"#884422"
         \\end
         \\
-    , "text_markdown_bold_color", "0.53333336,0.26666668,0.13333334");
+    , "text", &.{"markdown_bold_color"}, "0.53333336,0.26666668,0.13333334");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_markdown_code_fill = "red"
+        \\  body.text.markdown_code_fill = "red"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
 
     try expectDiagnostic(
         \\import std:themes/default as *
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_markdown_bold_color = "red"
+        \\  body.text.markdown_bold_color = "red"
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_bold_color' expects Color?, got String");
+    , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
 }
 
 test "compiler semantics: structured style values expand to render properties" {
@@ -1470,10 +1513,10 @@ test "compiler semantics: structured style values expand to render properties" {
         \\end
         \\
     ;
-    try expectObjectProperty(source, "text_size", "33");
-    try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
-    try expectObjectProperty(source, "text_font_family", "Menlo");
-    try expectObjectProperty(source, "text_font_weight", "700");
+    try expectObjectFieldPath(source, "text", &.{"size"}, "33");
+    try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
+    try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Menlo");
+    try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "700");
 }
 
 test "compiler semantics: nested property assignment updates style records" {
@@ -1497,16 +1540,16 @@ test "compiler semantics: nested property assignment updates style records" {
         \\end
         \\
     ;
-    try expectObjectProperty(source, "text_size", "33");
-    try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
-    try expectObjectProperty(source, "text_font_family", "Menlo");
-    try expectObjectProperty(source, "text_font_weight", "650");
-    try expectObjectProperty(source, "text_font_style", "italic");
-    try expectObjectProperty(source, "text_font_stretch", "expanded");
-    try expectObjectProperty(source, "layout_x", "123");
-    try expectObjectProperty(source, "wrap", "off");
-    try expectObjectProperty(source, "math_scale", "2");
-    try expectObjectProperty(source, "math_align", "left");
+    try expectObjectFieldPath(source, "text", &.{"size"}, "33");
+    try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
+    try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Menlo");
+    try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "650");
+    try expectObjectFieldPath(source, "text", &.{ "font", "style" }, "italic");
+    try expectObjectFieldPath(source, "text", &.{ "font", "stretch" }, "expanded");
+    try expectObjectFieldPath(source, "layout", &.{"x"}, "123");
+    try expectObjectFieldPath(source, "layout", &.{"wrap"}, "off");
+    try expectObjectFieldPath(source, "math", &.{"scale"}, "2");
+    try expectObjectFieldPath(source, "math", &.{"align"}, "left");
 }
 
 test "compiler semantics: nested property assignment preserves existing style record leaves" {
@@ -1525,12 +1568,12 @@ test "compiler semantics: nested property assignment preserves existing style re
         \\end
         \\
     ;
-    try expectObjectProperty(source, "text_size", "21");
-    try expectObjectProperty(source, "text_font_family", "Avenir");
-    try expectObjectProperty(source, "text_font_weight", "600");
-    try expectObjectProperty(source, "text_font_style", "italic");
-    try expectObjectProperty(source, "text_markdown_bold_color", "0.26666668,0.33333334,0.4");
-    try expectObjectProperty(source, "text_color", "0.07058824,0.20392157,0.3372549");
+    try expectObjectFieldPath(source, "text", &.{"size"}, "21");
+    try expectObjectFieldPath(source, "text", &.{ "font", "family" }, "Avenir");
+    try expectObjectFieldPath(source, "text", &.{ "font", "weight" }, "600");
+    try expectObjectFieldPath(source, "text", &.{ "font", "style" }, "italic");
+    try expectObjectFieldPath(source, "text", &.{"markdown_bold_color"}, "0.26666668,0.33333334,0.4");
+    try expectObjectFieldPath(source, "text", &.{"color"}, "0.07058824,0.20392157,0.3372549");
 }
 
 test "compiler semantics: nested property assignment can unset optional style leaves" {
@@ -1546,7 +1589,7 @@ test "compiler semantics: nested property assignment can unset optional style le
         \\end
         \\
     ;
-    try expectObjectPropertyMissing(source, "text_markdown_bold_color");
+    try expectObjectFieldPathNone(source, "text", &.{"markdown_bold_color"});
 }
 
 test "compiler semantics: nested property assignment rejects invalid paths and values" {
@@ -1618,10 +1661,10 @@ test "compiler semantics: code theme helpers set code and markdown colors" {
         \\end
         \\
     ;
-    try expectObjectProperty(explicit_source, "code_keyword_color", "0.7764706,0.47058824,0.8666667");
-    try expectObjectProperty(explicit_source, "code_function_color", "0.38039216,0.6862745,0.9372549");
-    try expectObjectProperty(explicit_source, "text_markdown_code_keyword_color", "0.7764706,0.47058824,0.8666667");
-    try expectObjectProperty(explicit_source, "text_markdown_code_function_color", "0.38039216,0.6862745,0.9372549");
+    try expectObjectFieldPath(explicit_source, "code", &.{"keyword_color"}, "0.7764706,0.47058824,0.8666667");
+    try expectObjectFieldPath(explicit_source, "code", &.{"function_color"}, "0.38039216,0.6862745,0.9372549");
+    try expectObjectFieldPath(explicit_source, "text", &.{"markdown_code_keyword_color"}, "0.7764706,0.47058824,0.8666667");
+    try expectObjectFieldPath(explicit_source, "text", &.{"markdown_code_function_color"}, "0.38039216,0.6862745,0.9372549");
 }
 
 test "compiler semantics: default theme applies code theme to code and markdown" {
@@ -1635,11 +1678,11 @@ test "compiler semantics: default theme applies code theme to code and markdown"
         \\
     ;
     try expectResolvedCodePaintIsColorful(source);
-    try expectObjectProperty(source, "code_plain_color", "0.14117648,0.16078432,0.18431373");
-    try expectObjectProperty(source, "code_keyword_color", "0.8117647,0.13333334,0.18039216");
-    try expectObjectProperty(source, "text_markdown_code_plain_color", "0.14117648,0.16078432,0.18431373");
-    try expectObjectProperty(source, "text_markdown_code_keyword_color", "0.8117647,0.13333334,0.18039216");
-    try expectObjectProperty(source, "text_markdown_code_fill", "0.9647059,0.972549,0.98039216");
+    try expectObjectFieldPath(source, "code", &.{"plain_color"}, "0.14117648,0.16078432,0.18431373");
+    try expectObjectFieldPath(source, "code", &.{"keyword_color"}, "0.8117647,0.13333334,0.18039216");
+    try expectObjectFieldPath(source, "text", &.{"markdown_code_plain_color"}, "0.14117648,0.16078432,0.18431373");
+    try expectObjectFieldPath(source, "text", &.{"markdown_code_keyword_color"}, "0.8117647,0.13333334,0.18039216");
+    try expectObjectFieldPath(source, "text", &.{"markdown_code_fill"}, "0.9647059,0.972549,0.98039216");
 }
 
 test "compiler semantics: structured style value members are typed" {
@@ -1649,10 +1692,10 @@ test "compiler semantics: structured style value members are typed" {
         \\page ok
         \\  let body = body_obj("style")
         \\  let style = TextStyle { size = 31 }
-        \\  body.text_size = style.size
+        \\  body.text.size = style.size
         \\end
         \\
-    , "text_size", "31");
+    , "text", &.{"size"}, "31");
 
     try expectDiagnostic(
         \\import std:themes/default as *
@@ -1690,9 +1733,9 @@ test "compiler semantics: record update copies nested fields" {
         \\  }
         \\end
         \\
-    , "text_size", "33");
+    , "text", &.{"size"}, "33");
 
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\record Inner {
@@ -1714,11 +1757,11 @@ test "compiler semantics: record update copies nested fields" {
         \\  }
         \\end
         \\
-    , "text_size", "20");
+    , "text", &.{"size"}, "20");
 }
 
 test "compiler semantics: record update makes updated style leaves explicit" {
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\page ok
@@ -1729,7 +1772,7 @@ test "compiler semantics: record update makes updated style leaves explicit" {
         \\  body.text = style
         \\end
         \\
-    , "text_size", "31");
+    , "text", &.{"size"}, "31");
 }
 
 test "compiler semantics: record update rejects invalid paths and values" {
@@ -1799,25 +1842,25 @@ test "compiler semantics: theme overlay customizes current and local themes" {
         \\
     ;
 
-    try expectObjectPropertyWithThemeOverlay(
+    try expectObjectFieldPathWithThemeOverlay(
         \\import "./theme" as *
         \\
         \\page ok
         \\  text!("body")
         \\end
         \\
-    , theme_source, "text_size", "22");
+    , theme_source, "text", &.{"size"}, "22");
 
-    try expectObjectPropertyWithThemeOverlay(
+    try expectObjectFieldPathWithThemeOverlay(
         \\import "./theme" as *
         \\
         \\page ok
         \\  h1!("title")
         \\end
         \\
-    , theme_source, "text_size", "44");
+    , theme_source, "text", &.{"size"}, "44");
 
-    try expectObjectPropertyWithThemeOverlay(
+    try expectObjectFieldPathWithThemeOverlay(
         \\import "./theme" as *
         \\
         \\page ok
@@ -1827,11 +1870,11 @@ test "compiler semantics: theme overlay customizes current and local themes" {
         \\  text!("small", local)
         \\end
         \\
-    , theme_source, "text_size", "18");
+    , theme_source, "text", &.{"size"}, "18");
 }
 
 test "compiler semantics: user record declarations define typed record values" {
-    try expectObjectProperty(
+    try expectObjectFieldPath(
         \\import std:themes/default as *
         \\
         \\record CaptionStyle {
@@ -1855,7 +1898,7 @@ test "compiler semantics: user record declarations define typed record values" {
         \\  }
         \\end
         \\
-    , "text_size", "24");
+    , "text", &.{"size"}, "24");
 }
 
 test "compiler semantics: optional fields accept none and coalesce" {
@@ -1868,8 +1911,8 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\
         \\page ok
         \\  let body = body_obj("ok")
-        \\  body.text_markdown_code_fill = none
-        \\  body.text_color = fallback(body.text_markdown_code_fill)
+        \\  body.text.markdown_code_fill = none
+        \\  body.text.color = fallback(body.text.markdown_code_fill)
         \\end
         \\
     );
@@ -1892,10 +1935,10 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_color = none
+        \\  body.text.color = none
         \\end
         \\
-    , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
+    , "case.ss:bytes:", "TypeMismatch: expected Color, got None");
 
     try expectObjectContent(
         \\import std:themes/default as *
@@ -1915,7 +1958,7 @@ test "compiler semantics: optional fields accept none and coalesce" {
         \\
         \\page ok
         \\  let body = body_obj("body")
-        \\  if body.text_markdown_code_fill?
+        \\  if body.text.markdown_code_fill?
         \\    body_obj("still-set")
         \\  else
         \\    body_obj("unset")
@@ -1970,7 +2013,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_color = take_color(body.text_markdown_code_fill)
+        \\  body.text.color = take_color(body.text.markdown_code_fill)
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -1984,7 +2027,7 @@ test "compiler semantics: optional values are checked at function boundaries" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_markdown_code_fill = take_maybe("red")
+        \\  body.text.markdown_code_fill = take_maybe("red")
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color?, got String");
@@ -2052,7 +2095,7 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\
         \\fn may_be_none(target: Body, prefer_markup: Bool) -> Color?
         \\  if prefer_markup
-        \\    return target.text_markdown_code_fill
+        \\    return target.text.markdown_code_fill
         \\  else
         \\    if target.link_id?
         \\      return c"0.1,0.2,0.3"
@@ -2068,10 +2111,10 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\
         \\page bad
         \\  let body = text("report")
-        \\  body.text_markdown_code_fill = none
+        \\  body.text.markdown_code_fill = none
         \\  let x = may_be_none(body, true)
         \\  let y = must_call_by_notnone(x)
-        \\  body.text_color = y
+        \\  body.text.color = y
         \\end
         \\
     , "case.ss:bytes:", "TypeMismatch: expected Color, got Color?");
@@ -2108,9 +2151,9 @@ test "compiler semantics: optional values stay checked through multi-step flows"
         \\fn apply_palette(target: Body, primary: Color?, secondary: Color?) -> Void
         \\  let chosen = primary
         \\  if target.link_id?
-        \\    target.text_color = chosen
+        \\    target.text.color = chosen
         \\  else
-        \\    target.text_markdown_code_fill = secondary
+        \\    target.text.markdown_code_fill = secondary
         \\  end
         \\end
         \\
@@ -2201,7 +2244,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\
         \\fn maybe_accent(target: Body, use_saved: Bool, force_number: Bool) -> Color?
         \\  if use_saved
-        \\    return target.text_markdown_code_fill
+        \\    return target.text.markdown_code_fill
         \\  else
         \\    if force_number
         \\      return 1
@@ -2225,7 +2268,7 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\    let chosen = maybe_color
         \\    return chosen
         \\  else
-        \\    let chosen = target.text_color
+        \\    let chosen = target.text.color
         \\    return chosen
         \\  end
         \\end
@@ -2241,9 +2284,9 @@ test "compiler semantics: mismatched if branches are rejected statically" {
         \\
         \\fn paint_target(target: Body, maybe_color: Color?, use_optional: Bool) -> Void
         \\  if use_optional
-        \\    target.text_color = maybe_color
+        \\    target.text.color = maybe_color
         \\  else
-        \\    target.text_color = c"0.1,0.1,0.1"
+        \\    target.text.color = c"0.1,0.1,0.1"
         \\  end
         \\end
         \\
@@ -2357,9 +2400,9 @@ test "compiler semantics: if branch checks do not depend on optional types" {
         \\
         \\fn configure_text(target: Body, compact: Bool) -> Void
         \\  if compact
-        \\    target.text_size = "small"
+        \\    target.text.size = "small"
         \\  else
-        \\    target.text_size = 24
+        \\    target.text.size = 24
         \\  end
         \\end
         \\
@@ -2558,7 +2601,7 @@ test "compiler semantics: properties require known fields" {
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_color = 1
+        \\  body.text.color = 1
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Number");
@@ -2570,7 +2613,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  set_prop(body, "text_color", body.text_markdown_code_fill)
+        \\  set_prop(body, "text_color", body.text.markdown_code_fill)
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got Color?");
@@ -2592,7 +2635,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\
         \\page bad
         \\  text("body")
-        \\  objs_here("body").text_color = none
+        \\  objs_here("body").text.color = none
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_color' expects Color, got None");
@@ -2602,7 +2645,7 @@ test "compiler semantics: typed properties reject optional and wrong static valu
         \\
         \\page bad
         \\  let body = text("bad")
-        \\  body.text_markdown_code_fill = 1
+        \\  body.text.markdown_code_fill = 1
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'text_markdown_code_fill' expects Color?, got Number");
@@ -2762,7 +2805,7 @@ test "compiler semantics: document page and selection properties are typed" {
         \\page ok
         \\  text(prop(docctx(), "math_align", "missing"))
         \\  text("body")
-        \\  objs_here("body").wrap = WrapMode.off
+        \\  objs_here("body").layout.wrap = WrapMode.off
         \\end
         \\
     , "left");
@@ -2784,7 +2827,7 @@ test "compiler semantics: document page and selection properties are typed" {
         \\
         \\page bad
         \\  text("body")
-        \\  objs_here("body").wrap = "off"
+        \\  objs_here("body").layout.wrap = "off"
         \\end
         \\
     , "case.ss:bytes:", "InvalidFieldValue: field 'wrap' expects WrapMode, got String");
@@ -2885,14 +2928,14 @@ test "compiler semantics: chained member assignment writes through record fields
         \\  let parts = make_parts()
         \\  place!(parts.root)
         \\  parts.middle.link_id = "changed"
-        \\  parts.middle.text_color = c"#ff0000"
+        \\  parts.middle.text.color = c"#ff0000"
         \\end
         \\
     ;
 
     try expectObjectContent(source, "middle");
     try expectObjectProperty(source, "link_id", "changed");
-    try expectObjectProperty(source, "text_color", "1,0,0");
+    try expectObjectFieldPath(source, "text", &.{"color"}, "1,0,0");
 }
 
 test "compiler semantics: member reads materialize typed property values" {
@@ -2913,14 +2956,14 @@ test "compiler semantics: member reads materialize typed property values" {
         \\
         \\page ok
         \\  let target = body_obj("typed")
-        \\  target.wrap = WrapMode.off
-        \\  target.text_size = 24
+        \\  target.layout.wrap = WrapMode.off
+        \\  target.text.size = 24
         \\  target.link_id = "custom"
-        \\  target.text_markdown_code_fill = c"0.1,0.2,0.3"
+        \\  target.text.markdown_code_fill = c"0.1,0.2,0.3"
         \\  let panel_obj = panel()
         \\  let other = body_obj("color")
-        \\  other.text_color = target.text_markdown_code_fill ?? c"0,0,0"
-        \\  body_obj(wrap_label(target.wrap ?? WrapMode.on) ++ ":" ++ str(target.text_size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
+        \\  other.text.color = target.text.markdown_code_fill ?? c"0,0,0"
+        \\  body_obj(wrap_label(target.layout.wrap ?? WrapMode.on) ++ ":" ++ str(target.text.size ?? 0) ++ ":" ++ link_label(target.link_id ?? "fallback"))
         \\  body_obj(render_label(panel_obj.render_kind ?? RenderKind.text))
         \\end
         \\
@@ -2946,7 +2989,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\import std:themes/default as *
         \\
         \\fn optional_color_label(target: Body) -> String
-        \\  if !target.text_markdown_code_fill?
+        \\  if !target.text.markdown_code_fill?
         \\    return "none"
         \\  else
         \\    return "some"
@@ -2956,7 +2999,7 @@ test "compiler semantics: logical not inverts optional presence checks" {
         \\page ok
         \\  let unset = body_obj("unset")
         \\  let set = body_obj("set")
-        \\  set.text_markdown_code_fill = c"0.1,0.2,0.3"
+        \\  set.text.markdown_code_fill = c"0.1,0.2,0.3"
         \\  body_obj(optional_color_label(unset) ++ ":" ++ optional_color_label(set))
         \\end
         \\
@@ -3540,14 +3583,14 @@ test "compiler semantics: constants are evaluated once as value bindings" {
         \\
         \\page ok
         \\  parts.middle.link_id = "changed"
-        \\  parts.middle.text_color = c"#ff0000"
+        \\  parts.middle.text.color = c"#ff0000"
         \\  place!(parts.root)
         \\end
         \\
     ;
 
     try expectObjectProperty(source, "link_id", "changed");
-    try expectObjectProperty(source, "text_color", "1,0,0");
+    try expectObjectFieldPath(source, "text", &.{"color"}, "1,0,0");
 }
 
 test "compiler semantics: constants cannot require a page context" {
@@ -3703,7 +3746,7 @@ test "compiler semantics: stdlib numbering waits for wrapped numbered items" {
         \\
         \\fn/! captioned(text_value: String) -> Object
         \\  let item = numbered_item("claim", text_value)
-        \\  item.text_size = 12
+        \\  item.text.size = 12
         \\  return item
         \\end
         \\

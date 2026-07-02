@@ -144,8 +144,8 @@ end
 fn mk_logo!(page_value: Page, path_value: String, scale: Number) -> Page
   let logo = place_on!(page_value, new(path_value, "logo", "image_ref"))
   logo.render_kind = RenderKind.raster_asset
-  logo.asset_scale = scale
-  logo.wrap = WrapMode.off
+  logo.asset.scale = scale
+  logo.layout.wrap = WrapMode.off
   ~ logo.width == 96
   ~ logo.height == 40
   ~ logo.right == page.right - 72

@@ -30,6 +30,141 @@ fn expectColor(expected_r: f32, expected_g: f32, expected_b: f32, actual: core.r
     try expectFloat(expected_b, actual.b);
 }
 
+fn setStringField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, value: []const u8) !void {
+    try ir.setNodeFieldValue(node_id, key, .{ .string = value });
+}
+
+fn setNumberField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, value: f32) !void {
+    try ir.setNodeFieldValue(node_id, key, .{ .number = value });
+}
+
+fn setEnumField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, enum_name: []const u8, case_name: []const u8) !void {
+    try ir.setNodeFieldValue(node_id, key, .{ .enum_case = .{
+        .enum_name = enum_name,
+        .case_name = case_name,
+    } });
+}
+
+fn setRecordStringField(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: []const u8) !void {
+    try setRecordFieldValue(ir, node_id, root_key, field_name, .{ .string = value });
+}
+
+fn setRecordNumberField(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: f32) !void {
+    try setRecordFieldValue(ir, node_id, root_key, field_name, .{ .number = value });
+}
+
+fn setRecordEnumField(
+    ir: *core.Ir,
+    node_id: model.NodeId,
+    root_key: []const u8,
+    field_name: []const u8,
+    enum_name: []const u8,
+    case_name: []const u8,
+) !void {
+    try setRecordFieldValue(ir, node_id, root_key, field_name, .{ .enum_case = .{
+        .enum_name = enum_name,
+        .case_name = case_name,
+    } });
+}
+
+fn setRecordFieldValue(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: core.Value) !void {
+    try setRecordPathValue(ir, node_id, root_key, &.{field_name}, value);
+}
+
+fn setRecordPathValue(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, path: []const []const u8, value: core.Value) !void {
+    const node = ir.getNode(node_id) orelse return error.UnknownNode;
+    for (node.fields.items) |*field| {
+        if (!std.mem.eql(u8, field.key, root_key)) continue;
+        if (field.value != .record) return error.ExpectedRecordField;
+        try putRecordPathValue(ir.allocator, &field.value.record, path, value);
+        return;
+    }
+
+    var record = core.RecordValue.init(recordTypeName(root_key));
+    defer record.deinit(ir.allocator);
+    try putRecordPathValue(ir.allocator, &record, path, value);
+    try ir.setNodeFieldValue(node_id, root_key, .{ .record = record });
+}
+
+fn putRecordPathValue(allocator: std.mem.Allocator, record: *core.RecordValue, path: []const []const u8, value: core.Value) !void {
+    if (path.len == 0) return error.ExpectedRecordField;
+    if (path.len == 1) return putRecordFieldValue(allocator, record, path[0], value);
+
+    for (record.fields.items) |*field| {
+        if (!std.mem.eql(u8, field.name, path[0])) continue;
+        if (field.value != .record) return error.ExpectedRecordField;
+        return putRecordPathValue(allocator, &field.value.record, path[1..], value);
+    }
+
+    var nested = core.RecordValue.init(recordTypeName(path[0]));
+    errdefer nested.deinit(allocator);
+    try putRecordPathValue(allocator, &nested, path[1..], value);
+    try record.fields.append(allocator, .{
+        .name = path[0],
+        .value = .{ .record = nested },
+        .explicit = true,
+    });
+}
+
+fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, field_name: []const u8, value: core.Value) !void {
+    for (record.fields.items) |*field| {
+        if (!std.mem.eql(u8, field.name, field_name)) continue;
+        field.value.deinit(allocator);
+        field.value = try value.clone(allocator);
+        field.explicit = true;
+        return;
+    }
+    try record.fields.append(allocator, .{
+        .name = field_name,
+        .value = try value.clone(allocator),
+        .explicit = true,
+    });
+}
+
+fn recordTypeName(root_key: []const u8) []const u8 {
+    if (std.mem.eql(u8, root_key, "layout")) return "LayoutStyle";
+    if (std.mem.eql(u8, root_key, "text")) return "TextStyle";
+    if (std.mem.eql(u8, root_key, "chrome")) return "ChromeStyle";
+    if (std.mem.eql(u8, root_key, "rule")) return "RuleStyle";
+    if (std.mem.eql(u8, root_key, "shape")) return "ShapeStyle";
+    if (std.mem.eql(u8, root_key, "math")) return "MathStyle";
+    return root_key;
+}
+
+fn setFlatTestField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, value: []const u8) !void {
+    if (std.mem.eql(u8, key, "layout_v")) return setEnumField(ir, node_id, key, "LayoutPolicy", value);
+    if (std.mem.eql(u8, key, "render_kind")) return setEnumField(ir, node_id, key, "RenderKind", value);
+    if (std.mem.eql(u8, key, "math_align")) return setEnumField(ir, node_id, key, "Align", value);
+
+    if (std.mem.eql(u8, key, "wrap")) return setRecordEnumField(ir, node_id, "layout", "wrap", "WrapMode", value);
+    if (std.mem.eql(u8, key, "layout_font_size")) return setRecordStringField(ir, node_id, "layout", "font_size", value);
+    if (std.mem.eql(u8, key, "layout_line_height")) return setRecordStringField(ir, node_id, "layout", "line_height", value);
+    if (std.mem.eql(u8, key, "layout_spacing_after")) return setRecordStringField(ir, node_id, "layout", "spacing_after", value);
+
+    if (std.mem.eql(u8, key, "text_parse")) return setRecordEnumField(ir, node_id, "text", "parse", "TextParseMode", value);
+    if (std.mem.eql(u8, key, "text_size")) return setRecordStringField(ir, node_id, "text", "size", value);
+    if (std.mem.eql(u8, key, "text_line_height")) return setRecordStringField(ir, node_id, "text", "line_height", value);
+    if (std.mem.eql(u8, key, "text_inline_math_height_factor")) return setRecordStringField(ir, node_id, "text", "inline_math_height_factor", value);
+    if (std.mem.eql(u8, key, "text_markdown_bold_color")) return setRecordStringField(ir, node_id, "text", "markdown_bold_color", value);
+    if (std.mem.eql(u8, key, "text_markdown_bold_weight")) return setRecordStringField(ir, node_id, "text", "bold_weight", value);
+    if (std.mem.eql(u8, key, "text_markdown_italic_style")) return setRecordEnumField(ir, node_id, "text", "italic_style", "FontStyle", value);
+    if (std.mem.eql(u8, key, "text_font_family")) return setRecordPathValue(ir, node_id, "text", &.{ "font", "family" }, .{ .string = value });
+    if (std.mem.eql(u8, key, "text_font_weight")) return setRecordPathValue(ir, node_id, "text", &.{ "font", "weight" }, .{ .string = value });
+    if (std.mem.eql(u8, key, "text_font_style")) return setRecordPathValue(ir, node_id, "text", &.{ "font", "style" }, .{ .enum_case = .{ .enum_name = "FontStyle", .case_name = value } });
+    if (std.mem.eql(u8, key, "text_font_stretch")) return setRecordPathValue(ir, node_id, "text", &.{ "font", "stretch" }, .{ .enum_case = .{ .enum_name = "FontStretch", .case_name = value } });
+    if (std.mem.eql(u8, key, "text_code_font_family")) return setRecordPathValue(ir, node_id, "text", &.{ "code_font", "family" }, .{ .string = value });
+    if (std.mem.eql(u8, key, "text_code_font_weight")) return setRecordPathValue(ir, node_id, "text", &.{ "code_font", "weight" }, .{ .string = value });
+
+    if (std.mem.eql(u8, key, "chrome_pad_x")) return setRecordStringField(ir, node_id, "chrome", "pad_x", value);
+    if (std.mem.eql(u8, key, "chrome_pad_y")) return setRecordStringField(ir, node_id, "chrome", "pad_y", value);
+    if (std.mem.eql(u8, key, "chrome_line_width")) return setRecordStringField(ir, node_id, "chrome", "line_width", value);
+    if (std.mem.eql(u8, key, "underline_width")) return setRecordStringField(ir, node_id, "underline", "width", value);
+    if (std.mem.eql(u8, key, "rule_line_width")) return setRecordStringField(ir, node_id, "rule", "line_width", value);
+    if (std.mem.eql(u8, key, "rule_dash")) return setRecordStringField(ir, node_id, "rule", "dash", value);
+
+    return setStringField(ir, node_id, key, value);
+}
+
 fn expectSelfConstraintSize(expected: f32, actual: graph.SelfConstraint) !void {
     switch (actual) {
         .size => |size| try expectFloat(expected, size),
@@ -504,8 +639,8 @@ test "layout solver: page-dependent group children receive local vertical fallba
     const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
     const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
     _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, title }, "head");
-    try ir.setNodeProperty(ruler, "layout_line_height", "4");
-    try ir.setNodeProperty(ruler, "layout_spacing_after", "12");
+    try setFlatTestField(&ir, ruler, "layout_line_height", "4");
+    try setFlatTestField(&ir, ruler, "layout_spacing_after", "12");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
 
     try ir.finalize();
@@ -529,8 +664,8 @@ test "layout solver: page-dependent group children before fixed anchors receive 
     const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
     const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
     _ = try ir.makeGroupWithOrigin(page, true, &.{ title, ruler }, "head");
-    try ir.setNodeProperty(title, "layout_spacing_after", "12");
-    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try setFlatTestField(&ir, title, "layout_spacing_after", "12");
+    try setFlatTestField(&ir, ruler, "layout_line_height", "4");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
 
     try ir.finalize();
@@ -552,8 +687,8 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
     const first = try ir.makeObject(page, "first", null, .text, .text, "A");
     const second = try ir.makeObject(page, "second", null, .text, .text, "B");
     _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, "head");
-    try ir.setNodeProperty(ruler, "layout_line_height", "4");
-    try ir.setNodeProperty(ruler, "layout_spacing_after", "12");
+    try setFlatTestField(&ir, ruler, "layout_line_height", "4");
+    try setFlatTestField(&ir, ruler, "layout_spacing_after", "12");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
     try ir.addAnchorConstraint(first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, "first-cycle");
     try ir.addAnchorConstraint(second, .top, .{ .node = .{ .node_id = first, .anchor = .top } }, 0, "second-cycle");
@@ -579,7 +714,7 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
     const first = try ir.makeObject(page, "first", null, .text, .text, "A");
     const second = try ir.makeObject(page, "second", null, .text, .text, "B");
     _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, first, second }, "head");
-    try ir.setNodeProperty(ruler, "layout_line_height", "4");
+    try setFlatTestField(&ir, ruler, "layout_line_height", "4");
     try ir.addAnchorConstraint(ruler, .left, .{ .page = .left }, 100, "rule-left");
     try ir.addAnchorConstraint(first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, "first-cycle");
     try ir.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "second-cycle");
@@ -598,16 +733,16 @@ test "layout solver: centered page-dependent group children receive local vertic
     var ir = try initEmptyIr();
     defer ir.deinit();
 
-    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+    try setFlatTestField(&ir, ir.document_id, "layout_v", "center");
 
     const page = try ir.addPage("Page");
     const ruler = try ir.makeObject(page, "rule", null, .text, .text, "");
     const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
     const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
     _ = try ir.makeGroupWithOrigin(page, true, &.{ ruler, title }, "head");
-    try ir.setNodeProperty(ruler, "layout_line_height", "4");
-    try ir.setNodeProperty(ruler, "layout_spacing_after", "12");
-    try ir.setNodeProperty(body, "layout_line_height", "500");
+    try setFlatTestField(&ir, ruler, "layout_line_height", "4");
+    try setFlatTestField(&ir, ruler, "layout_spacing_after", "12");
+    try setFlatTestField(&ir, body, "layout_line_height", "500");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
 
     try ir.finalize();
@@ -768,7 +903,7 @@ test "layout solver: constrained group source forms one fallback unit" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 
-    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+    try setFlatTestField(&ir, ir.document_id, "layout_v", "center");
 
     const page = try ir.addPage("Page");
     const left_title = try ir.makeObject(page, "left-title", null, .text, .text, "Left");
@@ -798,7 +933,7 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     var ir = try initEmptyIr();
     defer ir.deinit();
 
-    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+    try setFlatTestField(&ir, ir.document_id, "layout_v", "center");
 
     const page = try ir.addPage("Page");
     const left_title = try ir.makeObject(page, "left-title", null, .text, .text, "Left");
@@ -808,14 +943,14 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     const left_group = try ir.makeGroupWithOrigin(ir.document_id, false, &.{ left_title, left_body }, "left-group");
     const right_group = try ir.makeGroupWithOrigin(ir.document_id, false, &.{ right_title, right_body }, "right-group");
 
-    try ir.setNodeProperty(left_title, "layout_line_height", "40");
-    try ir.setNodeProperty(left_body, "layout_line_height", "200");
-    try ir.setNodeProperty(right_title, "layout_line_height", "40");
-    try ir.setNodeProperty(right_body, "layout_line_height", "200");
-    try ir.setNodeProperty(left_title, "layout_spacing_after", "20");
-    try ir.setNodeProperty(right_title, "layout_spacing_after", "20");
-    try ir.setNodeProperty(left_body, "layout_spacing_after", "0");
-    try ir.setNodeProperty(right_body, "layout_spacing_after", "0");
+    try setFlatTestField(&ir, left_title, "layout_line_height", "40");
+    try setFlatTestField(&ir, left_body, "layout_line_height", "200");
+    try setFlatTestField(&ir, right_title, "layout_line_height", "40");
+    try setFlatTestField(&ir, right_body, "layout_line_height", "200");
+    try setFlatTestField(&ir, left_title, "layout_spacing_after", "20");
+    try setFlatTestField(&ir, right_title, "layout_spacing_after", "20");
+    try setFlatTestField(&ir, left_body, "layout_spacing_after", "0");
+    try setFlatTestField(&ir, right_body, "layout_spacing_after", "0");
 
     try ir.addAnchorConstraint(right_group, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-left-group");
     try ir.addAnchorConstraint(right_group, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-centers");
@@ -837,15 +972,15 @@ test "layout solver: centered vflow clamps below fixed top components only when 
     var ir = try initEmptyIr();
     defer ir.deinit();
 
-    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+    try setFlatTestField(&ir, ir.document_id, "layout_v", "center");
 
     const page = try ir.addPage("Page");
     const header = try ir.makeObject(page, "title", null, .text, .text, "Title");
     const body = try ir.makeObject(page, "body", null, .text, .text, "Body");
 
-    try ir.setNodeProperty(header, "layout_line_height", "44");
-    try ir.setNodeProperty(header, "layout_spacing_after", "40");
-    try ir.setNodeProperty(body, "layout_line_height", "580");
+    try setFlatTestField(&ir, header, "layout_line_height", "44");
+    try setFlatTestField(&ir, header, "layout_spacing_after", "40");
+    try setFlatTestField(&ir, body, "layout_line_height", "580");
     try ir.addAnchorConstraint(header, .top, .{ .page = .top }, -56, "header-top");
 
     try solver.solveLayout(&ir);
@@ -858,11 +993,42 @@ test "layout solver: centered vflow clamps below fixed top components only when 
     try expectFloat(header_bottom - header_spacing, body_top);
 }
 
+test "layout solver: document centered vflow is not shadowed by page default policy" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    try setFlatTestField(&ir, ir.document_id, "layout_v", "center");
+    try setFlatTestField(&ir, ir.document_id, "layout_v_center_offset", "40");
+
+    const page = try ir.addPage("Page");
+    const pageno = try ir.makeObject(page, "pageno", null, .text, .text, "1");
+    const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
+    const subtitle = try ir.makeObject(page, "subtitle", null, .text, .text, "Subtitle");
+
+    try setFlatTestField(&ir, pageno, "layout_line_height", "16");
+    try setFlatTestField(&ir, pageno, "layout_spacing_after", "0");
+    try setFlatTestField(&ir, title, "layout_line_height", "94");
+    try setFlatTestField(&ir, title, "layout_spacing_after", "42");
+    try setFlatTestField(&ir, subtitle, "layout_line_height", "37");
+    try setFlatTestField(&ir, subtitle, "layout_spacing_after", "0");
+    try ir.addAnchorConstraint(pageno, .bottom, .{ .page = .bottom }, 20, "pageno-bottom");
+
+    try solver.solveLayout(&ir);
+
+    const pageno_node = ir.getNode(pageno).?;
+    const title_node = ir.getNode(title).?;
+    const subtitle_node = ir.getNode(subtitle).?;
+    const stack_top = graph.anchorValue(title_node.frame, .top);
+    const stack_bottom = graph.anchorValue(subtitle_node.frame, .bottom);
+    try expectFloat(model.PageLayout.height / 2 - 40, (stack_top + stack_bottom) / 2);
+    try testing.expect(graph.anchorValue(title_node.frame, .bottom) > graph.anchorValue(pageno_node.frame, .top));
+}
+
 test "layout solver: centered vflow preserves page center for side-by-side rows" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 
-    try ir.setNodeProperty(ir.document_id, "layout_v", "center");
+    try setFlatTestField(&ir, ir.document_id, "layout_v", "center");
 
     const page = try ir.addPage("Page");
     const title = try ir.makeObject(page, "title", null, .text, .text, "Title");
@@ -871,11 +1037,11 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     const pipe_child = try ir.makeObject(page, "pipe", null, .text, .text, "Pipe");
     const pipe = try ir.makeGroupWithOrigin(page, true, &.{pipe_child}, "pipe-group");
 
-    try ir.setNodeProperty(title, "layout_line_height", "44");
-    try ir.setNodeProperty(rule, "layout_line_height", "4");
-    try ir.setNodeProperty(rule, "layout_spacing_after", "48");
-    try ir.setNodeProperty(body, "layout_line_height", "360");
-    try ir.setNodeProperty(pipe_child, "layout_line_height", "360");
+    try setFlatTestField(&ir, title, "layout_line_height", "44");
+    try setFlatTestField(&ir, rule, "layout_line_height", "4");
+    try setFlatTestField(&ir, rule, "layout_spacing_after", "48");
+    try setFlatTestField(&ir, body, "layout_line_height", "360");
+    try setFlatTestField(&ir, pipe_child, "layout_line_height", "360");
     try ir.addAnchorConstraint(title, .top, .{ .page = .top }, -56, "title-top");
     try ir.addAnchorConstraint(rule, .top, .{ .node = .{ .node_id = title, .anchor = .bottom } }, -14, "rule-below-title");
     try ir.addAnchorConstraint(pipe, .right, .{ .page = .right }, -100, "pipe-right");
@@ -916,7 +1082,7 @@ test "layout solver: group width propagation must preserve child hard widths" {
 
     const page = try ir.addPage("Page");
     const child = try ir.makeObject(page, "body", null, .text, .text, "this text can be wrapped");
-    try ir.setNodeProperty(child, "wrap", "on");
+    try setFlatTestField(&ir, child, "wrap", "on");
     const group = try ir.makeGroupWithOrigin(page, true, &.{child}, "group");
 
     try ir.addAnchorConstraint(child, .left, .{ .page = .left }, 100, "child-left");
@@ -940,7 +1106,7 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
         "this is intentionally long enough to produce a wide intrinsic text box",
     );
     const follower = try ir.makeObject(page, "follower", null, .text, .text, "B");
-    try ir.setNodeProperty(wrapped, "wrap", "on");
+    try setFlatTestField(&ir, wrapped, "wrap", "on");
 
     try ir.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
     try ir.addAnchorConstraint(follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, "follower-left");
@@ -968,7 +1134,7 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
         .text,
         "this sentence should wrap into multiple lines once the horizontal solver caps its width",
     );
-    try ir.setNodeProperty(wrapped, "wrap", "on");
+    try setFlatTestField(&ir, wrapped, "wrap", "on");
     try ir.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
     try ir.addAnchorConstraint(wrapped, .bottom, .{ .page = .bottom }, 40, "wrapped-bottom");
 
@@ -1039,9 +1205,9 @@ test "layout metrics use measured font width for wrapped text height" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "0123456789012345678901234567");
-    try ir.setNodeProperty(object, "wrap", "on");
-    try ir.setNodeProperty(object, "text_font_family", "Helvetica");
-    try ir.setNodeProperty(object, "text_size", "30");
+    try setFlatTestField(&ir, object, "wrap", "on");
+    try setFlatTestField(&ir, object, "text_font_family", "Helvetica");
+    try setFlatTestField(&ir, object, "text_size", "30");
 
     const node = ir.getNode(object).?;
     node.frame.width = 480;
@@ -1055,12 +1221,12 @@ test "layout metrics use render atom widths for CJK emoji markdown text" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
-    try ir.setNodeProperty(object, "wrap", "on");
-    try ir.setNodeProperty(object, "text_parse", "block");
-    try ir.setNodeProperty(object, "text_font_family", "Helvetica");
-    try ir.setNodeProperty(object, "text_font_weight", "700");
-    try ir.setNodeProperty(object, "text_size", "30");
-    try ir.setNodeProperty(object, "text_line_height", "31");
+    try setFlatTestField(&ir, object, "wrap", "on");
+    try setFlatTestField(&ir, object, "text_parse", "block");
+    try setFlatTestField(&ir, object, "text_font_family", "Helvetica");
+    try setFlatTestField(&ir, object, "text_font_weight", "700");
+    try setFlatTestField(&ir, object, "text_size", "30");
+    try setFlatTestField(&ir, object, "text_line_height", "31");
 
     const node = ir.getNode(object).?;
     const measured_width = metrics.intrinsicWidth(&ir, node);
@@ -1076,12 +1242,12 @@ test "layout solver keeps CJK emoji markdown text on one line when measured atom
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "✅ 最初のエラー報告までの時間が短縮できる");
-    try ir.setNodeProperty(object, "wrap", "on");
-    try ir.setNodeProperty(object, "text_parse", "block");
-    try ir.setNodeProperty(object, "text_font_family", "Helvetica");
-    try ir.setNodeProperty(object, "text_font_weight", "700");
-    try ir.setNodeProperty(object, "text_size", "30");
-    try ir.setNodeProperty(object, "text_line_height", "31");
+    try setFlatTestField(&ir, object, "wrap", "on");
+    try setFlatTestField(&ir, object, "text_parse", "block");
+    try setFlatTestField(&ir, object, "text_font_family", "Helvetica");
+    try setFlatTestField(&ir, object, "text_font_weight", "700");
+    try setFlatTestField(&ir, object, "text_size", "30");
+    try setFlatTestField(&ir, object, "text_line_height", "31");
 
     const expected_width = metrics.intrinsicWidth(&ir, ir.getNode(object).?);
     try testing.expect(expected_width > 1);
@@ -1100,8 +1266,8 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
     const page = try ir.addPage("Page");
     const plain = try ir.makeObject(page, "plain", null, .text, .text, "Hello");
     const padded = try ir.makeObject(page, "padded", null, .text, .text, "Hello");
-    try ir.setNodeProperty(padded, "chrome_pad_x", "12");
-    try ir.setNodeProperty(padded, "chrome_pad_y", "8");
+    try setFlatTestField(&ir, padded, "chrome_pad_x", "12");
+    try setFlatTestField(&ir, padded, "chrome_pad_y", "8");
 
     const plain_node = ir.getNode(plain).?;
     const padded_node = ir.getNode(padded).?;
@@ -1122,8 +1288,8 @@ test "layout metrics: unwrapped text width includes visual glyph bounds" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "コンポーネントの集合と絶対位置");
-    try ir.setNodeProperty(object, "text_size", "24");
-    try ir.setNodeProperty(object, "chrome_pad_x", "20");
+    try setFlatTestField(&ir, object, "text_size", "24");
+    try setFlatTestField(&ir, object, "chrome_pad_x", "20");
 
     const node = ir.getNode(object).?;
     const style = core.layout.style.textMetricsForNode(&ir, node);
@@ -1145,8 +1311,8 @@ test "layout solver: group chrome padding expands tight group bounds" {
     const page = try ir.addPage("Page");
     const child = try ir.makeObject(page, "child", null, .text, .text, "Hello");
     const group = try ir.makeGroupWithOrigin(page, true, &.{child}, "group");
-    try ir.setNodeProperty(group, "chrome_pad_x", "12");
-    try ir.setNodeProperty(group, "chrome_pad_y", "8");
+    try setFlatTestField(&ir, group, "chrome_pad_x", "12");
+    try setFlatTestField(&ir, group, "chrome_pad_y", "8");
 
     try ir.addAnchorConstraint(child, .left, .{ .page = .left }, 100, "child-left");
     try ir.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 200, "child-width");
@@ -1175,9 +1341,9 @@ test "layout solver: target group width leaves room for chrome padding" {
         .text,
         "this sentence is intentionally long enough to wrap when the group width is constrained",
     );
-    try ir.setNodeProperty(child, "wrap", "on");
+    try setFlatTestField(&ir, child, "wrap", "on");
     const group = try ir.makeGroupWithOrigin(page, true, &.{child}, "group");
-    try ir.setNodeProperty(group, "chrome_pad_x", "10");
+    try setFlatTestField(&ir, group, "chrome_pad_x", "10");
 
     try ir.addAnchorConstraint(group, .left, .{ .page = .left }, 100, "group-left");
     try ir.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 220, "group-width");
@@ -1233,11 +1399,11 @@ test "layout diagnostics: one-pixel text reports content overflow" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "toc-marker", null, .text, .text, "hidden section title");
-    try ir.setNodeProperty(object, "layout_font_size", "1");
-    try ir.setNodeProperty(object, "layout_line_height", "1");
-    try ir.setNodeProperty(object, "text_size", "1");
-    try ir.setNodeProperty(object, "text_line_height", "1");
-    try ir.setNodeProperty(object, "wrap", "on");
+    try setFlatTestField(&ir, object, "layout_font_size", "1");
+    try setFlatTestField(&ir, object, "layout_line_height", "1");
+    try setFlatTestField(&ir, object, "text_size", "1");
+    try setFlatTestField(&ir, object, "text_line_height", "1");
+    try setFlatTestField(&ir, object, "wrap", "on");
     try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 20, "left");
     try ir.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 1, "width");
     try ir.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
@@ -1258,9 +1424,9 @@ test "layout metrics use enlarged rendered text size" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
-    try ir.setNodeProperty(object, "layout_font_size", "20");
-    try ir.setNodeProperty(object, "text_size", "30");
-    try ir.setNodeProperty(object, "text_line_height", "45");
+    try setFlatTestField(&ir, object, "layout_font_size", "20");
+    try setFlatTestField(&ir, object, "text_size", "30");
+    try setFlatTestField(&ir, object, "text_line_height", "45");
 
     const node = ir.getNode(object).?;
     try expectFloat(90, metrics.intrinsicHeight(&ir, node));
@@ -1272,7 +1438,7 @@ test "layout metrics derive line height from explicit text size" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
-    try ir.setNodeProperty(object, "text_size", "30");
+    try setFlatTestField(&ir, object, "text_size", "30");
 
     const node = ir.getNode(object).?;
     try expectFloat(87, metrics.intrinsicHeight(&ir, node));
@@ -1288,14 +1454,14 @@ test "layout metrics honor explicit text and layout line heights" {
 
     const page = try ir.addPage("Page");
     const text_only = try ir.makeObject(page, "text-only", null, .text, .text, "one\ntwo");
-    try ir.setNodeProperty(text_only, "text_size", "30");
-    try ir.setNodeProperty(text_only, "text_line_height", "45");
+    try setFlatTestField(&ir, text_only, "text_size", "30");
+    try setFlatTestField(&ir, text_only, "text_line_height", "45");
     try expectFloat(90, metrics.intrinsicHeight(&ir, ir.getNode(text_only).?));
 
     const layout_override = try ir.makeObject(page, "layout-override", null, .text, .text, "one\ntwo");
-    try ir.setNodeProperty(layout_override, "text_size", "30");
-    try ir.setNodeProperty(layout_override, "text_line_height", "45");
-    try ir.setNodeProperty(layout_override, "layout_line_height", "50");
+    try setFlatTestField(&ir, layout_override, "text_size", "30");
+    try setFlatTestField(&ir, layout_override, "text_line_height", "45");
+    try setFlatTestField(&ir, layout_override, "layout_line_height", "50");
     try expectFloat(100, metrics.intrinsicHeight(&ir, ir.getNode(layout_override).?));
 
     const resolved = core.render_policy.resolve(&ir, ir.getNode(layout_override).?);
@@ -1308,9 +1474,9 @@ test "layout metrics treat zero line heights as automatic" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "body", null, .text, .text, "one\ntwo");
-    try ir.setNodeProperty(object, "text_size", "30");
-    try ir.setNodeProperty(object, "text_line_height", "0");
-    try ir.setNodeProperty(object, "layout_line_height", "0");
+    try setFlatTestField(&ir, object, "text_size", "30");
+    try setFlatTestField(&ir, object, "text_line_height", "0");
+    try setFlatTestField(&ir, object, "layout_line_height", "0");
 
     const node = ir.getNode(object).?;
     try expectFloat(87, metrics.intrinsicHeight(&ir, node));
@@ -1325,15 +1491,15 @@ test "render policy: invalid numeric properties fall back before rendering" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "bad-numbers", null, .text, .text, "Hello");
-    try ir.setNodeProperty(object, "text_size", "-1");
-    try ir.setNodeProperty(object, "text_line_height", "nan");
-    try ir.setNodeProperty(object, "text_inline_math_height_factor", "0");
-    try ir.setNodeProperty(object, "chrome_pad_x", "-10");
-    try ir.setNodeProperty(object, "chrome_pad_y", "inf");
-    try ir.setNodeProperty(object, "chrome_line_width", "-2");
-    try ir.setNodeProperty(object, "underline_width", "-1");
-    try ir.setNodeProperty(object, "rule_line_width", "-1");
-    try ir.setNodeProperty(object, "rule_dash", "inf, 4");
+    try setFlatTestField(&ir, object, "text_size", "-1");
+    try setFlatTestField(&ir, object, "text_line_height", "nan");
+    try setFlatTestField(&ir, object, "text_inline_math_height_factor", "0");
+    try setFlatTestField(&ir, object, "chrome_pad_x", "-10");
+    try setFlatTestField(&ir, object, "chrome_pad_y", "inf");
+    try setFlatTestField(&ir, object, "chrome_line_width", "-2");
+    try setFlatTestField(&ir, object, "underline_width", "-1");
+    try setFlatTestField(&ir, object, "rule_line_width", "-1");
+    try setFlatTestField(&ir, object, "rule_dash", "inf, 4");
 
     const resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
     const text = resolved.text.?;
@@ -1354,14 +1520,14 @@ test "render policy: font face properties resolve structurally" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "font", null, .text, .text, "Hello");
-    try ir.setNodeProperty(object, "text_font_family", "Avenir Next");
-    try ir.setNodeProperty(object, "text_font_weight", "650");
-    try ir.setNodeProperty(object, "text_font_style", "oblique");
-    try ir.setNodeProperty(object, "text_font_stretch", "condensed");
-    try ir.setNodeProperty(object, "text_markdown_bold_weight", "720");
-    try ir.setNodeProperty(object, "text_markdown_italic_style", "italic");
-    try ir.setNodeProperty(object, "text_code_font_family", "Menlo");
-    try ir.setNodeProperty(object, "text_code_font_weight", "500");
+    try setFlatTestField(&ir, object, "text_font_family", "Avenir Next");
+    try setFlatTestField(&ir, object, "text_font_weight", "650");
+    try setFlatTestField(&ir, object, "text_font_style", "oblique");
+    try setFlatTestField(&ir, object, "text_font_stretch", "condensed");
+    try setFlatTestField(&ir, object, "text_markdown_bold_weight", "720");
+    try setFlatTestField(&ir, object, "text_markdown_italic_style", "italic");
+    try setFlatTestField(&ir, object, "text_code_font_family", "Menlo");
+    try setFlatTestField(&ir, object, "text_code_font_weight", "500");
 
     const resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
     const text = resolved.text.?;
@@ -1385,7 +1551,7 @@ test "render policy: markdown bold color is optional and resolves as text paint"
     var resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
     try testing.expect(resolved.text.?.markdown_bold_color == null);
 
-    try ir.setNodeProperty(object, "text_markdown_bold_color", "0.2,0.4,0.6");
+    try setFlatTestField(&ir, object, "text_markdown_bold_color", "0.2,0.4,0.6");
     resolved = core.render_policy.resolve(&ir, ir.getNode(object).?);
     try expectColor(0.2, 0.4, 0.6, resolved.text.?.markdown_bold_color.?);
 }
@@ -1396,29 +1562,29 @@ test "render policy: math alignment applies to markdown and vector math" {
 
     const page = try ir.addPage("Page");
     const text_object = try ir.makeObject(page, "body", null, .text, .text, "$$x^2$$");
-    try ir.setNodeProperty(text_object, "math_align", "left");
+    try setFlatTestField(&ir, text_object, "math_align", "left");
 
     const resolved_text = core.render_policy.resolve(&ir, ir.getNode(text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_text.text.?.math_align);
 
     const invalid_text_object = try ir.makeObject(page, "body", null, .text, .text, "$$z^2$$");
-    try ir.setNodeProperty(invalid_text_object, "math_align", "sideways");
+    try setFlatTestField(&ir, invalid_text_object, "math_align", "sideways");
     const resolved_invalid_text = core.render_policy.resolve(&ir, ir.getNode(invalid_text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.center, resolved_invalid_text.text.?.math_align);
 
-    try ir.setNodeProperty(ir.document_id, "math_align", "right");
+    try setFlatTestField(&ir, ir.document_id, "math_align", "right");
     const document_text_object = try ir.makeObject(page, "body", null, .text, .text, "$$a^2$$");
     const resolved_document_text = core.render_policy.resolve(&ir, ir.getNode(document_text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_document_text.text.?.math_align);
 
-    try ir.setNodeProperty(page, "math_align", "left");
+    try setFlatTestField(&ir, page, "math_align", "left");
     const page_text_object = try ir.makeObject(page, "body", null, .text, .text, "$$b^2$$");
     const resolved_page_text = core.render_policy.resolve(&ir, ir.getNode(page_text_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.left, resolved_page_text.text.?.math_align);
 
     const math_object = try ir.makeObject(page, "math_tex", null, .text, .text, "\\int_0^1 x^2 \\, dx");
-    try ir.setNodeProperty(math_object, "render_kind", "vector_math");
-    try ir.setNodeProperty(math_object, "math_align", "right");
+    try setFlatTestField(&ir, math_object, "render_kind", "vector_math");
+    try setFlatTestField(&ir, math_object, "math_align", "right");
 
     const resolved_math = core.render_policy.resolve(&ir, ir.getNode(math_object).?);
     try testing.expectEqual(core.render_policy.HorizontalAlign.right, resolved_math.math.?.horizontal_align);

@@ -744,7 +744,7 @@ fn resolveObjectFieldEnumCasesAndDefaults(
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         try resolveExprEnumCases(allocator, module_id, sema, &env, default_value);
-        try setDefaultPropertyValue(allocator, field, try staticDefaultPropertyValue(allocator, default_value.*));
+        try setDefaultPropertyValue(allocator, field, try staticDefaultPropertyValue(allocator, sema, module_id, default_value.*));
     }
 }
 
@@ -757,8 +757,13 @@ fn setDefaultPropertyValue(
     field.default_property_value = maybe_value;
 }
 
-fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]const u8 {
-    var value = (try staticPropertyValueFromExpr(allocator, expr)) orelse return null;
+fn staticDefaultPropertyValue(
+    allocator: std.mem.Allocator,
+    sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
+    expr: ast.Expr,
+) !?[]const u8 {
+    var value = (try staticPropertyValueFromExpr(allocator, sema, module_id, expr)) orelse return null;
     defer value.deinit(allocator);
     if (value == .none) return try allocator.dupe(u8, "none");
     const text = try core.value_text.propertyString(allocator, value);
@@ -766,7 +771,12 @@ fn staticDefaultPropertyValue(allocator: std.mem.Allocator, expr: ast.Expr) !?[]
     return try allocator.dupe(u8, text);
 }
 
-fn staticPropertyValueFromExpr(allocator: std.mem.Allocator, expr: ast.Expr) anyerror!?core.Value {
+fn staticPropertyValueFromExpr(
+    allocator: std.mem.Allocator,
+    sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
+    expr: ast.Expr,
+) anyerror!?core.Value {
     return switch (expr) {
         .string => |literal| .{ .string = literal.text },
         .color => |text| .{ .string = text },
@@ -777,28 +787,66 @@ fn staticPropertyValueFromExpr(allocator: std.mem.Allocator, expr: ast.Expr) any
             .enum_name = case.enum_name,
             .case_name = case.case_name,
         } },
-        .record => |record| try staticRecordPropertyValue(allocator, record),
+        .record => |record| try staticRecordPropertyValue(allocator, sema, module_id, record),
         .call => |call| staticNumericPropertyValue(call),
         else => null,
     };
 }
 
-fn staticRecordPropertyValue(allocator: std.mem.Allocator, record_expr: ast.RecordExpr) anyerror!?core.Value {
+fn staticRecordPropertyValue(
+    allocator: std.mem.Allocator,
+    sema: *const SemanticEnv,
+    module_id: core.SourceModuleId,
+    record_expr: ast.RecordExpr,
+) anyerror!?core.Value {
     var record = core.RecordValue.init(record_expr.type_name);
     errdefer record.deinit(allocator);
+
+    if (sema.declarations) |index| {
+        for (index.record_fields.items) |field| {
+            if (!std.mem.eql(u8, field.record_name, record_expr.type_name)) continue;
+            const default_value = field.default_value orelse continue;
+            var value = (try staticPropertyValueFromExpr(allocator, sema, field.module_id, default_value.*)) orelse {
+                record.deinit(allocator);
+                return null;
+            };
+            errdefer value.deinit(allocator);
+            try putStaticRecordFieldValue(allocator, &record, field.name, value, false);
+        }
+    }
+
     for (record_expr.fields.items) |field| {
-        var value = (try staticPropertyValueFromExpr(allocator, field.value)) orelse {
+        var value = (try staticPropertyValueFromExpr(allocator, sema, module_id, field.value)) orelse {
             record.deinit(allocator);
             return null;
         };
         errdefer value.deinit(allocator);
-        try record.fields.append(allocator, .{
-            .name = field.name,
-            .value = value,
-            .explicit = true,
-        });
+        try putStaticRecordFieldValue(allocator, &record, field.name, value, true);
     }
     return .{ .record = record };
+}
+
+fn putStaticRecordFieldValue(
+    allocator: std.mem.Allocator,
+    record: *core.RecordValue,
+    name: []const u8,
+    value: core.Value,
+    explicit: bool,
+) !void {
+    var owned = value;
+    errdefer owned.deinit(allocator);
+    for (record.fields.items) |*field| {
+        if (!std.mem.eql(u8, field.name, name)) continue;
+        field.value.deinit(allocator);
+        field.value = owned;
+        field.explicit = explicit;
+        return;
+    }
+    try record.fields.append(allocator, .{
+        .name = name,
+        .value = owned,
+        .explicit = explicit,
+    });
 }
 
 fn staticNumericPropertyValue(call: ast.CallExpr) ?core.Value {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model");
+const fields = @import("../core/fields.zig");
 const graph = @import("graph.zig");
 const groups = @import("groups.zig");
 const solver = @import("solver.zig");
@@ -131,9 +132,9 @@ pub fn buildVerticalConstraints(ir: anytype, workspace: *const graph.AxisWorkspa
 
 fn verticalFallbackPolicy(ir: anytype, page_id: NodeId) VerticalFallbackPolicy {
     const page = ir.getNode(page_id) orelse return .top_flow;
-    const value = model.nodeProperty(page, "layout_v") orelse blk: {
+    const value = fields.readExplicit(page, "layout_v", &.{}, .text) orelse blk: {
         const document = ir.getNode(ir.document_id) orelse return .top_flow;
-        break :blk model.nodeProperty(document, "layout_v") orelse return .top_flow;
+        break :blk fields.read(ir.allocator, ir, document, "layout_v", &.{}, .text) orelse return .top_flow;
     };
     if (std.mem.eql(u8, value, "center") or std.mem.eql(u8, value, "center_stack")) return .center_stack;
     return .top_flow;
@@ -461,7 +462,7 @@ fn findVerticalComponentUnit(units: []const VerticalComponentUnit, component_roo
 
 fn verticalCenterOffset(ir: anytype, page_id: NodeId) f32 {
     const page = ir.getNode(page_id) orelse return 0;
-    if (style_defaults.parseNodeFloatProperty(ir, page, "layout_v_center_offset")) |value| return value;
+    if (fields.readExplicit(page, "layout_v_center_offset", &.{}, .number)) |value| return value;
     const document = ir.getNode(ir.document_id) orelse return 0;
     return style_defaults.parseNodeFloatProperty(ir, document, "layout_v_center_offset") orelse 0;
 }
@@ -485,7 +486,6 @@ fn computeVerticalComponentUnit(
         if (!components.contains(component_root, candidate_index)) continue;
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         if (groups.isGroupNode(node)) continue;
-
         if (try computeVerticalComponentUnitFromRoot(ir, workspace, components, component_root, local_tops, policy, candidate_index)) |unit| {
             return unit;
         }

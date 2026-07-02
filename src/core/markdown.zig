@@ -1,5 +1,5 @@
 const std = @import("std");
-const class_fields = @import("class_fields.zig");
+const fields = @import("fields.zig");
 const source = @import("utils").source;
 
 const c = @cImport({
@@ -248,7 +248,7 @@ const ImageState = struct {
 };
 
 pub fn parseModeForNode(ir: anytype, node: anytype) ParseMode {
-    if (class_fields.property(ir, node, "text_parse")) |mode| {
+    if (fields.read(ir.allocator, ir, node, "text", &.{"parse"}, .text)) |mode| {
         if (std.meta.stringToEnum(ParseMode, mode)) |parsed| return parsed;
     }
     return .@"inline";

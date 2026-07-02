@@ -604,7 +604,7 @@ pub const LayoutMeasurementScope = struct {
             .frame = .{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height },
             .content = if (uses_asset_content) node.content orelse "" else core.nodeDisplayContent(node),
             .content_provenance = if (uses_asset_content) node.content_provenance.items else core.nodeDisplayContentProvenance(node),
-            .link_id = core.nodeProperty(node, "link_id"),
+            .link_id = nodeStringField(node, "link_id"),
             .render = render,
             .parse_mode = core.markdown.parseModeForNode(ir, node),
             .tex_preamble = try cloneTexPreambleEntries(self.allocator, env.tex_preamble.items),
@@ -775,7 +775,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
                     .frame = node.frame,
                     .content = if (uses_asset_content) node.content orelse "" else core.nodeDisplayContent(node),
                     .content_provenance = if (uses_asset_content) node.content_provenance.items else core.nodeDisplayContentProvenance(node),
-                    .link_id = core.nodeProperty(node, "link_id"),
+                    .link_id = nodeStringField(node, "link_id"),
                     .render = core.render_policy.resolveWithEnv(ir, node, sema),
                     .parse_mode = core.markdown.parseModeForNode(ir, node),
                     .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
@@ -4848,6 +4848,14 @@ fn mathKindForNode(node: *const core.Node) MathKind {
         .math_tex => .raw_block,
         .math_text => .block,
         else => .block,
+    };
+}
+
+fn nodeStringField(node: *const core.Node, key: []const u8) ?[]const u8 {
+    const value = core.nodeField(node, key) orelse return null;
+    return switch (value) {
+        .string => |text| text,
+        else => null,
     };
 }
 
