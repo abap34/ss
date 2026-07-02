@@ -2,6 +2,7 @@ const std = @import("std");
 
 const analysis_snapshot = @import("../../analysis/snapshot.zig");
 const protocol = @import("../protocol.zig");
+const query_budget = @import("../query_budget.zig");
 const lsp_state = @import("../state.zig");
 
 pub const Context = struct {
@@ -27,7 +28,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             .source = pos.source,
             .offset = pos.offset,
             .source_version = snapshot.generation,
-        }, .{ .budget_ms = 10 });
+        }, .{ .budget_ms = query_budget.completion_ms });
         defer completion_result.deinit(ctx.allocator);
         for (completion_result.items) |item| try builder.addCandidate(item);
     }
