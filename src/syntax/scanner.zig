@@ -8,7 +8,7 @@ pub const TokenKind = enum {
     string,
     color_string,
     number,
-    qualified_access,
+    operator,
 };
 
 pub const Token = struct {
@@ -58,14 +58,27 @@ pub const TokenIterator = struct {
                 self.cursor += 1;
                 continue;
             }
-            if (source.startsWithAt(self.text, self.cursor, "::")) {
-                return self.advance(line_value, self.cursor + 2, .qualified_access);
+            if (operatorEnd(self.text, self.cursor, line_value.span.end)) |end| {
+                return self.advance(line_value, end, .operator);
+            }
+            if (self.skipChevronBlockString(line_value)) continue;
+            if (source.startsWithAt(self.text, self.cursor, "\"\"\"")) {
+                const end = skipTripleQuotedString(self.text, self.cursor);
+                if (end <= line_value.span.end) return self.advance(line_value, end, .string);
+                self.advanceToAbsolute(end);
+                continue;
             }
             if (source.startsWithAt(self.text, self.cursor, "c\"")) {
-                return self.advance(line_value, source.skipDoubleQuotedString(self.text, self.cursor + 1, line_value.span.end), .color_string);
+                const end = source.skipDoubleQuotedString(self.text, self.cursor + 1, self.text.len);
+                if (end <= line_value.span.end) return self.advance(line_value, end, .color_string);
+                self.advanceToAbsolute(end);
+                continue;
             }
             if (byte == '"') {
-                return self.advance(line_value, source.skipDoubleQuotedString(self.text, self.cursor, line_value.span.end), .string);
+                const end = source.skipDoubleQuotedString(self.text, self.cursor, self.text.len);
+                if (end <= line_value.span.end) return self.advance(line_value, end, .string);
+                self.advanceToAbsolute(end);
+                continue;
             }
             if (std.ascii.isDigit(byte)) {
                 var end = self.cursor + 1;
@@ -101,6 +114,48 @@ pub const TokenIterator = struct {
             .kind = kind,
         };
     }
+
+    fn advanceToAbsolute(self: *TokenIterator, target: usize) void {
+        const limit = @min(target, self.text.len);
+        if (self.current_line) |line_value| {
+            if (limit <= line_value.span.end) {
+                self.cursor = limit;
+                return;
+            }
+            if (limit <= line_value.raw_end) {
+                self.current_line = null;
+                return;
+            }
+        }
+        while (self.lines.next()) |line_value| {
+            if (limit <= line_value.span.end) {
+                self.current_line = line_value;
+                self.cursor = limit;
+                return;
+            }
+            if (limit <= line_value.raw_end) {
+                self.current_line = null;
+                return;
+            }
+        }
+        self.current_line = null;
+        self.cursor = self.text.len;
+    }
+
+    fn skipChevronBlockString(self: *TokenIterator, line_value: source.Line) bool {
+        if (!source.startsWithAt(self.text, self.cursor, "<<")) return false;
+        const after_marker = source.skipInlineSpacesUntil(self.text, self.cursor + 2, line_value.span.end);
+        if (after_marker != line_value.span.end) return false;
+
+        self.current_line = null;
+        while (self.lines.next()) |block_line| {
+            if (!isChevronTerminatorLine(self.text, block_line)) continue;
+            self.cursor = if (block_line.raw_end < self.text.len) block_line.raw_end + 1 else block_line.raw_end;
+            return true;
+        }
+        self.cursor = self.text.len;
+        return true;
+    }
 };
 
 pub fn tokens(text: []const u8) TokenIterator {
@@ -127,7 +182,7 @@ pub fn semanticTokens(allocator: std.mem.Allocator, text: []const u8) ![]Semanti
     var previous_word: ?[]const u8 = null;
     while (iter.next()) |token| {
         const kind = switch (token.kind) {
-            .qualified_access => blk: {
+            .operator => blk: {
                 previous_word = null;
                 break :blk SemanticKind.operator;
             },
@@ -197,6 +252,39 @@ pub fn previousNonSpaceByte(text: []const u8, start: usize, lower_bound: usize) 
 
 pub fn isCallableIdentifierContinue(byte: u8) bool {
     return source.isIdentifierContinue(byte) or byte == '!';
+}
+
+fn operatorEnd(text: []const u8, start: usize, line_end: usize) ?usize {
+    const end = @min(line_end, text.len);
+    const operators = [_][]const u8{
+        "|->",
+        "->",
+        "??",
+        "++",
+        "::",
+        "==",
+    };
+    for (operators) |operator| {
+        if (start + operator.len <= end and source.startsWithAt(text, start, operator)) return start + operator.len;
+    }
+    return null;
+}
+
+fn skipTripleQuotedString(text: []const u8, start: usize) usize {
+    var index = @min(start + 3, text.len);
+    while (index + 3 <= text.len) : (index += 1) {
+        if (std.mem.eql(u8, text[index .. index + 3], "\"\"\"")) return index + 3;
+    }
+    return text.len;
+}
+
+fn isChevronTerminatorLine(text: []const u8, line_value: source.Line) bool {
+    var probe = source.skipInlineSpacesUntil(text, line_value.span.start, line_value.span.end);
+    if (probe + 2 > line_value.span.end) return false;
+    if (!std.mem.eql(u8, text[probe .. probe + 2], ">>")) return false;
+    probe = source.skipInlineSpacesUntil(text, probe + 2, line_value.span.end);
+    if (probe == line_value.span.end) return true;
+    return source.lineCommentMarkerLength(text, probe) != null;
 }
 
 fn semanticKindForIdentifier(word: []const u8, previous_word: ?[]const u8, next: ?u8, previous: ?u8) ?SemanticKind {
