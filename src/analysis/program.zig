@@ -635,7 +635,10 @@ fn resolveStatementTypeReferences(
         .constrain => |*constraint| {
             if (constraint.offset) |*offset| try resolveExprTypeReferences(allocator, offset, module_id, sema);
         },
-        .property_set => |*property_set| try resolveExprTypeReferences(allocator, &property_set.value, module_id, sema),
+        .property_set => |*property_set| {
+            try resolveExprTypeReferences(allocator, &property_set.target, module_id, sema);
+            try resolveExprTypeReferences(allocator, &property_set.value, module_id, sema);
+        },
         .if_stmt => |*if_stmt| {
             try resolveExprTypeReferences(allocator, &if_stmt.condition, module_id, sema);
             for (if_stmt.then_statements.items) |*nested| try resolveStatementTypeReferences(allocator, nested, module_id, sema);
@@ -916,7 +919,10 @@ fn resolveStatementEnumCases(
         .constrain => |*constraint| {
             if (constraint.offset) |*offset| try resolveExprEnumCases(allocator, module_id, sema, env, offset);
         },
-        .property_set => |*property_set| try resolveExprEnumCases(allocator, module_id, sema, env, &property_set.value),
+        .property_set => |*property_set| {
+            try resolveExprEnumCases(allocator, module_id, sema, env, &property_set.target);
+            try resolveExprEnumCases(allocator, module_id, sema, env, &property_set.value);
+        },
         .if_stmt => |*if_stmt| {
             try resolveExprEnumCases(allocator, module_id, sema, env, &if_stmt.condition);
             var then_env = try env.clone();
@@ -1102,7 +1108,10 @@ fn checkStatementTypeAnnotations(
         },
         .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
         .return_void => {},
-        .property_set => |property_set| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.value),
+        .property_set => |property_set| {
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.target);
+            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.value);
+        },
         .if_stmt => |if_stmt| {
             try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, if_stmt.condition);
             var had_diagnostics = false;
@@ -1653,6 +1662,7 @@ fn collectVariableTypesFromStatement(
         },
         .return_void => {},
         .property_set => |property_set| {
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.target, origin);
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
@@ -1707,6 +1717,7 @@ fn collectScopedVariableTypesFromStatement(
         },
         .return_void => {},
         .property_set => |property_set| {
+            _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.target, origin);
             _ = try inferExprInfo(allocator, diagnostic_ir, sema, env, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {

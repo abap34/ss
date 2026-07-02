@@ -171,6 +171,7 @@ type PageContext = object {
 type Flow = object {
   render_kind: RenderKind = RenderKind.text
   layout: LayoutStyle = LayoutStyle {}
+  chrome: ChromeStyle = ChromeStyle {}
   link_id: String = ""
   numbered_item_source: String? = none
   numbered_item_number: String? = none
@@ -399,7 +400,6 @@ type Panel = object {
   base = Flow
   roles = ["panel"]
 
-  chrome: ChromeStyle = ChromeStyle {}
   render_kind: RenderKind = RenderKind.chrome_only
   layout: LayoutStyle = LayoutStyle {
     font_size = 4
@@ -434,7 +434,6 @@ type Shape = object {
 
   shape: ShapeStyle = ShapeStyle {}
   render_kind: RenderKind = RenderKind.shape
-  chrome: ChromeStyle = ChromeStyle {}
   layout: LayoutStyle = LayoutStyle {
     font_size = 1
     line_height = 1

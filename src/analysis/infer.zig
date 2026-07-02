@@ -325,6 +325,13 @@ fn inferMemberInfoFromTargetInfo(
     member_name: []const u8,
     origin: []const u8,
 ) !TypeInfo {
+    if (target_info.ty.kind == .optional) {
+        const child = target_info.ty.optional_child orelse {
+            try addUserReport(ir, origin, "InvalidOptionalType: optional type has no child", .{});
+            return error.InvalidType;
+        };
+        if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, ir, sema, child.*, member_name, origin);
+    }
     if (target_info.ty.kind == .record) {
         const record_name = target_info.ty.class_name orelse {
             try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
@@ -346,6 +353,28 @@ fn inferMemberInfoFromTargetInfo(
     if (std.mem.eql(u8, member_name, "content")) return infoFromType(Type.string);
     const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
         try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member_name});
+        return error.InvalidType;
+    };
+    const field_type = field.value_type;
+    var result_type = if (field_type.kind == .optional) try field_type.clone(allocator) else try Type.optional(allocator, field_type);
+    errdefer result_type.deinit(allocator);
+    return infoFromType(result_type);
+}
+
+fn inferOptionalRecordMemberInfo(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    record_type: Type,
+    member_name: []const u8,
+    origin: []const u8,
+) !TypeInfo {
+    const record_name = record_type.class_name orelse {
+        try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
+        return error.InvalidType;
+    };
+    const field = sema.recordField(record_name, member_name) orelse {
+        try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -767,7 +796,7 @@ fn inferReturnInfoFromStatements(
             },
             .return_void => {},
             .property_set => |property_set| {
-                try validatePropertySetStatementWithOptions(allocator, ir, sema, env, property_set.object_name, property_set.path.items, property_set.value, origin, options);
+                try validatePropertySetStatementWithOptions(allocator, ir, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
             },
             .if_stmt => |if_stmt| {
                 _ = try exprInfoWithOptions(allocator, ir, sema, env, if_stmt.condition, origin, options);
@@ -1144,7 +1173,16 @@ fn validateFieldValue(
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    const expected = field.value_type;
+    return validateExpectedFieldValue(ir, field.value_type, key, value_info, origin);
+}
+
+fn validateExpectedFieldValue(
+    ir: *core.Ir,
+    expected: Type,
+    key: []const u8,
+    value_info: TypeInfo,
+    origin: []const u8,
+) !void {
     switch (semantic_types.assignability(value_info, expected)) {
         .assignable => return,
         .blocked_by_hole => return,
@@ -1170,12 +1208,12 @@ pub fn validatePropertySetStatement(
     ir: ?*core.Ir,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
-    object_name: []const u8,
+    target: ast.Expr,
     path: []const ast.RecordPathSegment,
     value: ast.Expr,
     origin: []const u8,
 ) !void {
-    return validatePropertySetStatementWithOptions(allocator, ir, sema, env, object_name, path, value, origin, .{});
+    return validatePropertySetStatementWithOptions(allocator, ir, sema, env, target, path, value, origin, .{});
 }
 
 fn validatePropertySetStatementWithOptions(
@@ -1183,36 +1221,41 @@ fn validatePropertySetStatementWithOptions(
     ir: ?*core.Ir,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
-    object_name: []const u8,
+    target: ast.Expr,
     path: []const ast.RecordPathSegment,
     value: ast.Expr,
     origin: []const u8,
     options: InferenceOptions,
 ) !void {
     if (path.len == 0) return;
-    const object_info = env.get(object_name) orelse try exprInfoWithOptions(allocator, ir, sema, env, .{ .ident = .{ .name = object_name } }, origin, options);
+    const object_info = try exprInfoWithOptions(allocator, ir, sema, env, target, origin, options);
     if (object_info.hole != null) return;
-    if (!isPropertyTarget(object_info)) {
-        const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
-        if (!options.validate_contracts) return;
-        if (path.len > 1) {
-            try validateMemberTargetPropertySetPath(allocator, ir, sema, object_info, path, value_info, origin);
-            return;
-        }
-        const actual_label = try typeInfoLabelAlloc(allocator, object_info);
-        defer allocator.free(actual_label);
-        try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
-        return error.InvalidType;
-    }
     const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
     if (!options.validate_contracts) return;
+    if (!isPropertyTarget(object_info)) {
+        try validateMemberTargetPropertySetPath(allocator, ir, sema, object_info, path, value_info, origin);
+        return;
+    }
+    try validatePropertySetPath(allocator, ir, sema, object_info, path, value_info, origin);
+}
+
+fn validatePropertySetPath(
+    allocator: std.mem.Allocator,
+    ir: ?*core.Ir,
+    sema: *const SemanticEnv,
+    target_info: TypeInfo,
+    path: []const ast.RecordPathSegment,
+    value_info: TypeInfo,
+    origin: []const u8,
+) !void {
+    if (path.len == 0) return;
     if (ir) |sink| {
         const first = path[0];
         if (path.len == 1 and std.mem.eql(u8, first.name, "content")) {
             try ensureType(sink, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
             return;
         }
-        if (lookupFieldForTarget(sema, object_info, first.name)) |field| {
+        if (lookupFieldForTarget(sema, target_info, first.name)) |field| {
             if (path.len == 1) {
                 try validateFieldValue(sink, field, first.name, value_info, origin);
                 return;
@@ -1251,24 +1294,21 @@ fn validateMemberTargetPropertySetPath(
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    const target_info = try memberPathPrefixInfo(allocator, ir, sema, object_info, path[0 .. path.len - 1], origin);
-    if (target_info.hole != null) return;
-    if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeInfoLabelAlloc(allocator, target_info);
-        defer allocator.free(actual_label);
-        try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
-        return error.InvalidType;
+    var current_info = object_info;
+    for (path, 0..) |segment, index| {
+        if (current_info.hole != null) return;
+        if (isPropertyTarget(current_info)) {
+            try validatePropertySetPath(allocator, ir, sema, current_info, path[index..], value_info, origin);
+            return;
+        }
+        if (segment.name_hole != null) return;
+        current_info = try inferMemberInfoFromTargetInfo(allocator, ir, sema, current_info, segment.name, origin);
     }
-    const last = path[path.len - 1];
-    if (std.mem.eql(u8, last.name, "content")) {
-        try ensureType(ir, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
-        return;
-    }
-    const field = lookupFieldForTarget(sema, target_info, last.name) orelse {
-        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{last.name});
-        return error.InvalidType;
-    };
-    if (ir) |sink| try validateFieldValue(sink, field, last.name, value_info, origin);
+    if (current_info.hole != null) return;
+    const actual_label = try typeInfoLabelAlloc(allocator, current_info);
+    defer allocator.free(actual_label);
+    try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+    return error.InvalidType;
 }
 
 fn validateNestedPropertySetPath(
@@ -1299,7 +1339,9 @@ fn validateNestedPropertySetPath(
             return error.InvalidType;
         };
         if (index + 1 == path.len) {
-            try ensureType(ir, allocator, value_info, field.value_type, origin, .UnmatchedArgumentType);
+            const path_text = try ast.formatRecordPath(allocator, path[0 .. index + 1]);
+            defer allocator.free(path_text);
+            try validateExpectedFieldValue(ir, field.value_type, path_text, value_info, origin);
             return;
         }
         if (field.value_type.kind != .record) {

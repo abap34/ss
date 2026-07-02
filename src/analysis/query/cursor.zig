@@ -367,7 +367,10 @@ fn callableInStatement(stmt: ast.Statement, offset: usize) ?CallableTarget {
         .return_expr => |expr| callableInExpr(expr, offset),
         .return_void => null,
         .constrain => |constraint| if (constraint.offset) |expr| callableInExpr(expr, offset) else null,
-        .property_set => |property_set| callableInExpr(property_set.value, offset),
+        .property_set => |property_set| blk: {
+            if (callableInExpr(property_set.target, offset)) |target| break :blk target;
+            break :blk callableInExpr(property_set.value, offset);
+        },
         .if_stmt => |if_stmt| blk: {
             if (callableInExpr(if_stmt.condition, offset)) |target| break :blk target;
             if (callableInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
@@ -394,14 +397,10 @@ fn sourceNameInStatement(stmt: ast.Statement, offset: usize) ?SourceNameTarget {
         .return_void => null,
         .constrain => |constraint| if (constraint.offset) |expr| sourceNameInExpr(expr, offset) else null,
         .property_set => |property_set| blk: {
-            if (spanContainsOptional(property_set.object_name_span, offset)) break :blk .{
-                .text = property_set.object_name,
-                .kind = .identifier,
-            };
+            if (sourceNameInExpr(property_set.target, offset)) |target| break :blk target;
             if (pathSegmentAt(property_set.path.items, offset)) |target| break :blk .{
                 .text = target.segment.name,
                 .kind = .member_name,
-                .qualifier = property_set.object_name,
             };
             break :blk sourceNameInExpr(property_set.value, offset);
         },
@@ -420,7 +419,10 @@ fn recordUpdatePathInStatement(stmt: ast.Statement, offset: usize) ?RecordUpdate
         .let_binding => |binding| recordUpdatePathInExpr(binding.expr, offset),
         .return_expr => |expr| recordUpdatePathInExpr(expr, offset),
         .constrain => |constraint| if (constraint.offset) |expr| recordUpdatePathInExpr(expr, offset) else null,
-        .property_set => |property_set| recordUpdatePathInExpr(property_set.value, offset),
+        .property_set => |property_set| blk: {
+            if (recordUpdatePathInExpr(property_set.target, offset)) |target| break :blk target;
+            break :blk recordUpdatePathInExpr(property_set.value, offset);
+        },
         .if_stmt => |if_stmt| blk: {
             if (recordUpdatePathInExpr(if_stmt.condition, offset)) |target| break :blk target;
             if (recordUpdatePathInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
@@ -436,7 +438,10 @@ fn recordUpdateCompletionInStatement(stmt: ast.Statement, offset: usize) ?Record
         .let_binding => |binding| recordUpdateCompletionInExpr(binding.expr, offset),
         .return_expr => |expr| recordUpdateCompletionInExpr(expr, offset),
         .constrain => |constraint| if (constraint.offset) |expr| recordUpdateCompletionInExpr(expr, offset) else null,
-        .property_set => |property_set| recordUpdateCompletionInExpr(property_set.value, offset),
+        .property_set => |property_set| blk: {
+            if (recordUpdateCompletionInExpr(property_set.target, offset)) |target| break :blk target;
+            break :blk recordUpdateCompletionInExpr(property_set.value, offset);
+        },
         .if_stmt => |if_stmt| blk: {
             if (recordUpdateCompletionInExpr(if_stmt.condition, offset)) |target| break :blk target;
             if (recordUpdateCompletionInStatements(if_stmt.then_statements.items, offset)) |target| break :blk target;
@@ -453,9 +458,10 @@ fn memberInStatement(stmt: ast.Statement, offset: usize) ?MemberTarget {
         .return_expr => |expr| memberInExpr(expr, offset),
         .constrain => |constraint| if (constraint.offset) |expr| memberInExpr(expr, offset) else null,
         .property_set => |property_set| blk: {
+            if (memberInExpr(property_set.target, offset)) |target| break :blk target;
             const target = pathSegmentAt(property_set.path.items, offset) orelse break :blk memberInExpr(property_set.value, offset);
             if (target.index == 0) break :blk .{
-                .target = .{ .ident = .{ .name = property_set.object_name, .name_span = property_set.object_name_span } },
+                .target = property_set.target,
                 .name = target.segment.name,
             };
             break :blk memberInExpr(property_set.value, offset);

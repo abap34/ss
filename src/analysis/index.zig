@@ -189,7 +189,10 @@ fn collectStatementHints(
     switch (stmt.kind) {
         .let_binding => |binding| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
         .return_expr => |expr| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, expr),
-        .property_set => |property_set| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, property_set.value),
+        .property_set => |property_set| {
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, property_set.target);
+            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, property_set.value);
+        },
         .if_stmt => |if_stmt| {
             try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
             for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, nested);

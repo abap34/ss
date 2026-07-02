@@ -64,7 +64,10 @@ fn statementExpectedTypes(
             if (function_result) |expected| try expectExpr(allocator, holes, expr, expected);
             try exprExpectedTypes(allocator, sema, expr, holes);
         },
-        .property_set => |property_set| try exprExpectedTypes(allocator, sema, property_set.value, holes),
+        .property_set => |property_set| {
+            try exprExpectedTypes(allocator, sema, property_set.target, holes);
+            try exprExpectedTypes(allocator, sema, property_set.value, holes);
+        },
         .constrain => |constraint| {
             if (constraint.offset) |offset| try exprExpectedTypes(allocator, sema, offset, holes);
         },
