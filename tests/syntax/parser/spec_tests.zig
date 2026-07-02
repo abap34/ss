@@ -1180,13 +1180,10 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     const neg = try expectCall(right.offset.?, "neg", 1);
     try expectNumber(neg.args.items[0], 20);
 
-    const property = try expectCall(statements[4].kind.expr_stmt, "set_prop", 3);
-    switch (property.args.items[0]) {
-        .ident => |ident| try testing.expectEqualStrings("box", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-    try expectString(property.args.items[1], "left");
-    try expectString(property.args.items[2], "red");
+    const property = statements[4].kind.property_set;
+    try testing.expectEqualStrings("box", property.object_name);
+    try testing.expectEqualStrings("left", property.property_name);
+    try expectString(property.value, "red");
 
     try expectParseError(error.ExpectedConstraintMarker,
         \\page Bad
@@ -1230,12 +1227,10 @@ test "syntax spec: member expressions stay in the AST" {
     defer parsed.deinit();
 
     const statements = parsed.program.pages.items[0].statements.items;
-    const content_set = try expectCall(statements[1].kind.expr_stmt, "set_content", 2);
-    switch (content_set.args.items[0]) {
-        .ident => |ident| try testing.expectEqualStrings("target", ident.name),
-        else => return error.ExpectedIdentifier,
-    }
-    const concat = try expectCall(content_set.args.items[1], "concat", 2);
+    const content_set = statements[1].kind.property_set;
+    try testing.expectEqualStrings("target", content_set.object_name);
+    try testing.expectEqualStrings("content", content_set.property_name);
+    const concat = try expectCall(content_set.value, "concat", 2);
     _ = try expectMember(concat.args.items[0], "content");
     try expectString(concat.args.items[1], "!");
 
@@ -1402,8 +1397,11 @@ test "syntax spec: recovering parse keeps statement holes and continues" {
 
     const statements = parsed.result.program.pages.items[0].statements.items;
     switch (statements[0].kind) {
-        .hole => |id| try testing.expectEqual(@as(ast.HoleId, 0), id),
-        else => return error.ExpectedHoleStatement,
+        .expr_stmt => |expr| switch (expr) {
+            .member => |member| try testing.expectEqual(@as(ast.HoleId, 0), member.name_hole orelse return error.ExpectedMemberNameHole),
+            else => return error.ExpectedMemberExpr,
+        },
+        else => return error.ExpectedExprStatement,
     }
     try testing.expectEqualStrings("ok", statements[1].kind.let_binding.name);
 }

@@ -3,11 +3,11 @@ const ast = @import("ast");
 const core = @import("core");
 
 const context_query = @import("context.zig");
+const cursor = @import("cursor.zig");
 const import_query = @import("imports.zig");
 const resolve_query = @import("resolve.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
-const editor = @import("../editor.zig");
 
 pub fn at(
     allocator: std.mem.Allocator,
@@ -81,7 +81,7 @@ fn appendStructuredTarget(
             if (try appendEnumCaseTarget(allocator, out, snapshot, current_module_id, receiver, context.target, request_path)) return true;
         }
         const parsed = context.program() orelse return false;
-        const member = editor.memberAt(parsed, context.offset) orelse return false;
+        const member = cursor.memberAt(parsed, context.offset) orelse return false;
         if (try appendRecordMemberTarget(allocator, out, snapshot, current_module_id, context.offset, member, request_path)) return true;
         return false;
     }
@@ -91,7 +91,7 @@ fn appendStructuredTarget(
     }
     if (context.targetKindIs(.record_update_path_segment)) {
         const parsed = context.program() orelse return false;
-        const path_target = editor.recordUpdatePathAt(parsed, context.offset) orelse return false;
+        const path_target = cursor.recordUpdatePathAt(parsed, context.offset) orelse return false;
         return appendRecordUpdatePathTarget(allocator, out, snapshot, current_module_id, context.offset, path_target, request_path);
     }
     return false;
@@ -197,7 +197,7 @@ fn appendRecordUpdatePathTarget(
     snapshot: anytype,
     current_module_id: core.SourceModuleId,
     offset: usize,
-    target: editor.RecordUpdatePathTarget,
+    target: cursor.RecordUpdatePathTarget,
     request_path: []const u8,
 ) !bool {
     const base_record_name = resolve_query.recordNameForExpr(snapshot, current_module_id, offset, target.target) orelse return false;
@@ -213,7 +213,7 @@ fn appendRecordMemberTarget(
     snapshot: anytype,
     current_module_id: core.SourceModuleId,
     offset: usize,
-    member: editor.MemberTarget,
+    member: cursor.MemberTarget,
     request_path: []const u8,
 ) !bool {
     const record_name = resolve_query.recordNameForExpr(snapshot, current_module_id, offset, member.target) orelse return false;

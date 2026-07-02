@@ -4,7 +4,6 @@ const core = @import("core");
 const project = @import("../project.zig");
 
 const diagnostics = @import("diagnostics.zig");
-const editor = @import("editor.zig");
 const hole_facts = @import("hole_facts.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
@@ -15,6 +14,7 @@ const query_definition = @import("query/definition.zig");
 const query_folding = @import("query/folding.zig");
 const query_hover = @import("query/hover.zig");
 const query_inlay = @import("query/inlay.zig");
+const query_signature = @import("query/signature.zig");
 const query_symbols = @import("query/symbols.zig");
 const query_types = @import("query/types.zig");
 const semantic_types = @import("types.zig");
@@ -829,7 +829,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBind
     }
     for (registry.primitiveDescriptors()) |descriptor| {
         if (valueNameExists(ir, descriptor.name)) continue;
-        const signature: []u8 = @constCast(try editor.formatPrimitiveSignature(allocator, descriptor));
+        const signature: []u8 = @constCast(try query_signature.formatPrimitiveSignature(allocator, descriptor));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(if (registry.primitiveResultType(descriptor)) |ty|
             try ty.formatAlloc(allocator)
@@ -849,7 +849,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBind
     var function_iterator = ir.functions.iterator();
     while (function_iterator.next()) |entry| {
         const func = entry.value_ptr.*;
-        const signature: []u8 = @constCast(try editor.formatUserSignature(allocator, func.name, func));
+        const signature: []u8 = @constCast(try query_signature.formatUserSignature(allocator, func.name, func));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(try func.result_type.formatAlloc(allocator));
         errdefer allocator.free(type_label);
@@ -865,7 +865,7 @@ fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBind
     var constant_iterator = ir.constants.iterator();
     while (constant_iterator.next()) |entry| {
         const constant_decl = entry.value_ptr.*;
-        const signature: []u8 = @constCast(try editor.formatConstSignature(allocator, constant_decl.name, constant_decl));
+        const signature: []u8 = @constCast(try query_signature.formatConstSignature(allocator, constant_decl.name, constant_decl));
         errdefer allocator.free(signature);
         const type_label: []u8 = @constCast(try constant_decl.value_type.formatAlloc(allocator));
         errdefer allocator.free(type_label);

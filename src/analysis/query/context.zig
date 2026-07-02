@@ -2,14 +2,14 @@ const std = @import("std");
 const ast = @import("ast");
 
 const language_names = @import("../../language/names.zig");
-const editor = @import("../editor.zig");
+const cursor = @import("cursor.zig");
 const syntax = @import("../../syntax.zig");
 const types = @import("types.zig");
 const utils = @import("utils");
 
 pub const Context = struct {
     target: []u8,
-    target_kind: ?editor.SourceNameKind = null,
+    target_kind: ?cursor.SourceNameKind = null,
     qualifier: ?[]u8 = null,
     parsed: ?syntax.ParseResult = null,
     offset: usize,
@@ -41,53 +41,53 @@ pub const Context = struct {
     pub fn qualifiedCallableAlias(self: *const Context) ?[]const u8 {
         if (self.kindIs(.callable_name)) return self.qualifier;
         const parsed = self.program() orelse return null;
-        return editor.qualifiedCallableQualifierForName(parsed, self.offset);
+        return cursor.qualifiedCallableQualifierForName(parsed, self.offset);
     }
 
     pub fn isQualifiedCallableQualifier(self: *const Context) bool {
         if (self.kindIs(.callable_qualifier)) return true;
         const parsed = self.program() orelse return false;
-        return editor.isQualifiedCallableQualifierAt(parsed, self.offset);
+        return cursor.isQualifiedCallableQualifierAt(parsed, self.offset);
     }
 
     pub fn isImportAlias(self: *const Context) bool {
         if (self.kindIs(.import_alias)) return true;
         const parsed = self.program() orelse return false;
-        return editor.isImportAliasAt(parsed, self.offset);
+        return cursor.isImportAliasAt(parsed, self.offset);
     }
 
     pub fn importSpecAtOffset(self: *const Context) bool {
         if (self.kindIs(.import_spec)) return true;
         const parsed = self.program() orelse return false;
-        return editor.importSpecAt(parsed, self.offset) != null;
+        return cursor.importSpecAt(parsed, self.offset) != null;
     }
 
-    pub fn targetKindIs(self: *const Context, kind: editor.SourceNameKind) bool {
+    pub fn targetKindIs(self: *const Context, kind: cursor.SourceNameKind) bool {
         return self.kindIs(kind);
     }
 
     pub fn callableRoleIsName(self: *const Context) bool {
         const parsed = self.program() orelse return false;
-        if (editor.callableAt(parsed, self.offset)) |target| {
+        if (cursor.callableAt(parsed, self.offset)) |target| {
             return target.role == .name;
         }
         return false;
     }
 
-    fn kindIs(self: *const Context, kind: editor.SourceNameKind) bool {
+    fn kindIs(self: *const Context, kind: cursor.SourceNameKind) bool {
         return if (self.target_kind) |target_kind| target_kind == kind else false;
     }
 };
 
 const TargetAtOffset = struct {
     text: []u8,
-    kind: ?editor.SourceNameKind = null,
+    kind: ?cursor.SourceNameKind = null,
     qualifier: ?[]u8 = null,
 };
 
 fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Program) !?TargetAtOffset {
     if (program) |parsed| {
-        if (editor.sourceNameAt(parsed, offset)) |target| return .{
+        if (cursor.sourceNameAt(parsed, offset)) |target| return .{
             .text = try allocator.dupe(u8, target.text),
             .kind = target.kind,
             .qualifier = if (target.qualifier) |qualifier| try allocator.dupe(u8, qualifier) else null,

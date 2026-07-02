@@ -8,9 +8,9 @@ const module_loader = @import("../modules/loader.zig");
 const calls = @import("calls.zig");
 const checker = @import("check.zig");
 const dependencies = @import("dependencies.zig");
-const editor = @import("editor.zig");
 const fields = @import("fields.zig");
 const infer = @import("infer.zig");
+const analysis_index = @import("index.zig");
 const registry = @import("../language/registry.zig");
 const schedule = @import("schedule.zig");
 const analysis_scope = @import("scope.zig");
@@ -1472,7 +1472,7 @@ pub fn buildIrWithOptions(
         break :blk null;
     };
     if (variable_infos) |*infos| infos.deinit();
-    try editor.populateIrAnalysis(allocator, &ir);
+    try analysis_index.populateIrAnalysis(allocator, &ir);
     return ir;
 }
 
