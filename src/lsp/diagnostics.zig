@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const module_loader = @import("../modules/loader.zig");
+const analysis_diagnostics = @import("../analysis/diagnostics.zig");
 const protocol = @import("protocol.zig");
 const utils = @import("utils");
 
@@ -18,11 +18,6 @@ pub const DiagnosticSet = struct {
     pub fn deinit(self: *DiagnosticSet) void {
         for (self.items.items) |*item| item.deinit(self.allocator);
         self.items.deinit(self.allocator);
-    }
-
-    pub fn hasErrors(self: *const DiagnosticSet) bool {
-        for (self.items.items) |item| if (item.severity == .@"error") return true;
-        return false;
     }
 
     pub fn add(
@@ -87,36 +82,9 @@ pub const DiagnosticSet = struct {
         try self.items.append(self.allocator, diagnostic);
     }
 
-    pub fn addLoadDiagnostics(self: *DiagnosticSet, load_diagnostics: *const module_loader.LoadDiagnostics) !void {
-        for (load_diagnostics.items.items) |item| {
-            try self.add(item.path, item.source, item.severity, item.code, item.message, item.span);
-        }
-    }
-
-    pub fn addIr(self: *DiagnosticSet, ir: *core.Ir) !void {
-        for (ir.diagnostics.items) |diagnostic| {
-            const message = try utils.err.formatIrDiagnostic(ir.allocator, diagnostic);
-            defer ir.allocator.free(message);
-            var report_path = ir.projectPath();
-            var report_source = ir.projectSource();
-            const located = if (diagnostic.origin) |origin|
-                utils.err.parseLocatedOrigin(origin)
-            else if (diagnostic.node_id) |node_id| blk: {
-                const node = ir.getNode(node_id) orelse break :blk null;
-                break :blk if (node.origin) |origin| utils.err.parseLocatedOrigin(origin) else null;
-            } else null;
-            const span = if (located) |origin| blk: {
-                if (origin.path) |origin_path| {
-                    if (ir.moduleByPathOrSpec(origin_path)) |module| {
-                        report_path = module.path orelse module.spec;
-                        report_source = module.source;
-                    } else {
-                        report_path = origin_path;
-                    }
-                }
-                break :blk origin.span;
-            } else null;
-            try self.add(report_path, report_source, diagnostic.severity, diagnosticCode(diagnostic), message, span);
+    pub fn addAnalysisBag(self: *DiagnosticSet, bag: *const analysis_diagnostics.DiagnosticBag) !void {
+        for (bag.items.items) |item| {
+            try self.addAnalysisDiagnostic(item);
         }
     }
 
@@ -168,6 +136,23 @@ pub const DiagnosticSet = struct {
 
         try self.addWithRelated(primary.path, primary.source, .@"error", constraintFailureCode(failure), message, primary.span, related.items);
     }
+
+    fn addAnalysisDiagnostic(self: *DiagnosticSet, item: analysis_diagnostics.Diagnostic) !void {
+        const span = item.span orelse return;
+        const uri = try protocol.uriFromPath(self.allocator, item.path);
+        errdefer self.allocator.free(uri);
+        const code = try self.allocator.dupe(u8, item.code);
+        errdefer self.allocator.free(code);
+        const message = try self.allocator.dupe(u8, item.message);
+        errdefer self.allocator.free(message);
+        try self.items.append(self.allocator, .{
+            .uri = uri,
+            .range = protocol.rangeFromSpan(item.source, span),
+            .severity = item.severity,
+            .code = code,
+            .message = message,
+        });
+    }
 };
 
 const LspRelatedInput = struct {
@@ -176,19 +161,6 @@ const LspRelatedInput = struct {
     span: ?source.ByteSpan,
     message: []const u8,
 };
-
-fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
-    return switch (diagnostic.data) {
-        .user_report => |data| utils.err.userReportDiagnosticCode(data.message),
-        .asset_not_found => "AssetNotFound",
-        .asset_invalid => "InvalidAsset",
-        .render_failed => "RenderFailed",
-        .type_mismatch => |data| @tagName(data.code),
-        .recursive_function => "RecursiveFunction",
-        .page_overflow => "PageOverflow",
-        .content_overflow => "ContentOverflow",
-    };
-}
 
 fn constraintFailureCode(failure: core.ConstraintFailure) []const u8 {
     return switch (failure.kind) {
