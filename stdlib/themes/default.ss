@@ -438,7 +438,7 @@ fn/! head(title_text: String, theme: Theme = current_theme()) -> Object
   title.layout = theme.head.layout
   title.underline = theme.head.underline
   rule.rule = theme.cover.accent.rule
-  rule.layout_spacing_after = 48
+  rule.layout.spacing_after = 48
   ~ title.left == page.left + 72
   ~ title.top == page.top - 56
   ~ rule.left == page.left + 72
@@ -477,10 +477,10 @@ end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
   let obj = objects::tex_obj(text_value)
-  obj.layout_x = 96
-  obj.layout_right_inset = 96
-  obj.wrap = WrapMode.on
-  obj.math_scale = scale
+  obj.layout.x = 96
+  obj.layout.right_inset = 96
+  obj.layout.wrap = WrapMode.on
+  obj.math.scale = scale
   return obj
 end
 
@@ -491,7 +491,7 @@ fn/! figure(text_value: String, theme: Theme = current_theme()) -> Object
   render::code_theme(obj, theme.code.highlight)
   let chrome = components::panel()
   chrome.chrome = theme.figure.chrome
-  chrome.layout_spacing_after = theme.figure.layout.spacing_after
+  chrome.layout.spacing_after = theme.figure.layout.spacing_after
   layout::surround(chrome, obj, theme.figure.chrome.pad_x, theme.figure.chrome.pad_y)
   return obj
 end
@@ -516,7 +516,7 @@ fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme())
   obj.asset = pdf_style.asset
   let chrome = components::panel()
   chrome.chrome = theme.pdf.chrome
-  chrome.layout_spacing_after = theme.pdf.layout.spacing_after
+  chrome.layout.spacing_after = theme.pdf.layout.spacing_after
   layout::surround(chrome, obj, theme.pdf.chrome.pad_x, theme.pdf.chrome.pad_y)
   require_asset_exists(obj)
   return obj
@@ -530,7 +530,7 @@ fn/! code(text_value: String, language_name: String = "python", theme: Theme = c
   render::code_theme(code, theme.code.highlight)
   let chrome = components::panel()
   chrome.chrome = theme.code.chrome
-  chrome.layout_spacing_after = theme.code.layout.spacing_after
+  chrome.layout.spacing_after = theme.code.layout.spacing_after
   layout::surround(chrome, code, theme.code.chrome.pad_x, theme.code.chrome.pad_y)
   return code
 end

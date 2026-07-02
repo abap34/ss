@@ -791,11 +791,10 @@ fn evalMemberValue(
         else => return error.InvalidValueTag,
     };
     const node = ir.getNode(node_id) orelse return error.UnknownNode;
-    const value = core.nodeProperty(node, name) orelse return .{ .none = {} };
-    const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
-    const class_name = core.class_fields.classNameForNodeWithEnv(node, &sema) orelse return .{ .string = value };
-    const field = sema.field(class_name, name) orelse return .{ .string = value };
-    return core.value_text.typedPropertyValue(ir.allocator, value, field.value_type);
+    _ = functions;
+    var value = (try core.fields.get(ir.allocator, ir, node, name)) orelse return .{ .none = {} };
+    defer value.deinit(ir.allocator);
+    return try value.value.clone(ir.allocator);
 }
 
 fn evalMemberPathPrefix(
@@ -950,26 +949,6 @@ fn updateRecordFieldPath(
     return error.UnknownRecordField;
 }
 
-const StyleExpansionContext = struct {
-    ir: *core.Ir,
-    origin: []const u8,
-
-    pub fn setNodeProperty(self: *StyleExpansionContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
-        try self.ir.unsetNodeProperty(object_id, key);
-        self.ir.setNodeProperty(object_id, key, value) catch |err| switch (err) {
-            error.DuplicatePropertyDefinition => {
-                try reportDuplicatePropertyDefinition(self.ir, self.origin, key);
-                return err;
-            },
-            else => return err,
-        };
-    }
-
-    pub fn unsetNodeProperty(self: *StyleExpansionContext, object_id: core.NodeId, key: []const u8) !void {
-        try self.ir.unsetNodeProperty(object_id, key);
-    }
-};
-
 const ResolvedRecordDecl = struct {
     decl: *const ast.RecordDecl,
     module_id: core.SourceModuleId,
@@ -1019,13 +998,6 @@ fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, 
     });
 }
 
-fn parseRecordPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: ast.Type) !core.RecordValue {
-    var value = try core.value_text.typedPropertyValue(allocator, text, ty);
-    errdefer value.deinit(allocator);
-    if (value != .record) return error.InvalidValueTag;
-    return value.record;
-}
-
 fn materializePropertyRecord(
     ir: *core.Ir,
     page_id: core.NodeId,
@@ -1039,8 +1011,12 @@ fn materializePropertyRecord(
     key: []const u8,
     ty: ast.Type,
 ) !core.RecordValue {
-    if (core.nodeProperty(node, key)) |text| return parseRecordPropertyValue(ir.allocator, text, ty);
-    if (core.class_fields.defaultPropertyWithEnv(node, key, sema)) |text| return parseRecordPropertyValue(ir.allocator, text, ty);
+    if (try core.fields.getWithEnv(ir.allocator, node, key, sema)) |slot_value| {
+        var slot = slot_value;
+        defer slot.deinit(ir.allocator);
+        if (slot.value != .record) return error.InvalidValueTag;
+        return try slot.value.record.clone(ir.allocator);
+    }
     const record_name = ty.class_name orelse {
         try reportRecordUpdateError(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
         return error.InvalidType;
@@ -1328,8 +1304,8 @@ const BuiltinContext = struct {
         try self.ir.placeObjectOnPage(page_id, object_id);
     }
 
-    pub fn setNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: []const u8) !void {
-        self.ir.setNodeProperty(object_id, key, value) catch |err| switch (err) {
+    pub fn setNodeFieldValue(self: *BuiltinContext, object_id: core.NodeId, key: []const u8, value: core.Value) !void {
+        self.ir.setNodeFieldValue(object_id, key, value) catch |err| switch (err) {
             error.DuplicatePropertyDefinition => {
                 try reportDuplicatePropertyDefinition(self.ir, self.current_origin, key);
                 return err;
@@ -1348,8 +1324,8 @@ const BuiltinContext = struct {
         };
     }
 
-    pub fn unsetNodeProperty(self: *BuiltinContext, object_id: core.NodeId, key: []const u8) !void {
-        try self.ir.unsetNodeProperty(object_id, key);
+    pub fn unsetNodeField(self: *BuiltinContext, object_id: core.NodeId, key: []const u8) !void {
+        try self.ir.unsetNodeField(object_id, key);
     }
 
     pub fn extendRenderEnv(self: *BuiltinContext, node_id: core.NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
@@ -1401,7 +1377,7 @@ const BuiltinContext = struct {
         return try evalNodeRepr(self.ir, self.page_id, self.eval_context, self.mode, self.env, self.functions, self.closures, self.current_origin, object_id);
     }
 
-    pub fn nodeProperty(self: *BuiltinContext, target: core.Value, key: []const u8) ?[]const u8 {
+    pub fn nodeField(self: *BuiltinContext, target: core.Value, key: []const u8) ?core.Value {
         const node_id = switch (target) {
             .document => |id| id,
             .page => |id| id,
@@ -1409,7 +1385,7 @@ const BuiltinContext = struct {
             else => return null,
         };
         const node = self.ir.getNode(node_id) orelse return null;
-        return core.nodeProperty(node, key);
+        return core.nodeField(node, key);
     }
 
     pub fn setNodeContent(self: *BuiltinContext, object_id: core.NodeId, text: []const u8) !void {
@@ -1571,12 +1547,8 @@ fn attachIntrinsicAssetSize(ir: *core.Ir, object_id: core.NodeId, dimensions: fs
         core.PageLayout.default_asset_width,
         core.PageLayout.max_figure_height,
     );
-    var width_buf: [32]u8 = undefined;
-    var height_buf: [32]u8 = undefined;
-    const width_text = try std.fmt.bufPrint(&width_buf, "{d}", .{fitted.width});
-    const height_text = try std.fmt.bufPrint(&height_buf, "{d}", .{fitted.height});
-    try ir.setNodeProperty(object_id, "asset_width", width_text);
-    try ir.setNodeProperty(object_id, "asset_height", height_text);
+    try ir.setNodeFieldValue(object_id, "asset_width", .{ .number = fitted.width });
+    try ir.setNodeFieldValue(object_id, "asset_height", .{ .number = fitted.height });
 }
 
 fn fitSize(width: f32, height: f32, max_width: f32, max_height: f32) struct { width: f32, height: f32 } {
@@ -1947,21 +1919,21 @@ const ResolvedTarget = struct {
     anchor: core.Anchor,
 };
 
-fn writeNodePropertyValue(
+fn writeNodeFieldValue(
     ir: *core.Ir,
     node_id: core.NodeId,
-    property_name: []const u8,
+    field_name: []const u8,
     value: core.Value,
     origin: []const u8,
     replace_existing: bool,
 ) !void {
     if (value == .none) {
-        try ir.unsetNodeProperty(node_id, property_name);
+        try ir.unsetNodeField(node_id, field_name);
         return;
     }
-    const text = try resolveValuePropertyString(ir.allocator, value);
-    defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
-    if (std.mem.eql(u8, property_name, "content")) {
+    if (std.mem.eql(u8, field_name, "content")) {
+        const text = try resolveValuePropertyString(ir.allocator, value);
+        defer if (eval_value.propertyStringNeedsFree(value)) ir.allocator.free(text);
         ir.setNodeContent(node_id, text) catch |err| switch (err) {
             error.DuplicateContentDefinition => {
                 try reportDuplicateContentDefinition(ir, origin);
@@ -1971,16 +1943,14 @@ fn writeNodePropertyValue(
         };
         return;
     }
-    if (replace_existing) try ir.unsetNodeProperty(node_id, property_name);
-    ir.setNodeProperty(node_id, property_name, text) catch |err| switch (err) {
+    if (replace_existing) try ir.unsetNodeField(node_id, field_name);
+    ir.setNodeFieldValue(node_id, field_name, value) catch |err| switch (err) {
         error.DuplicatePropertyDefinition => {
-            try reportDuplicatePropertyDefinition(ir, origin, property_name);
+            try reportDuplicatePropertyDefinition(ir, origin, field_name);
             return err;
         },
         else => return err,
     };
-    var style_context = StyleExpansionContext{ .ir = ir, .origin = origin };
-    try builtin.expandStyleRecordProperty(&style_context, node_id, property_name, value);
 }
 
 fn executeStatement(
@@ -2038,18 +2008,18 @@ fn executeStatement(
                 var target = try evalMemberPathPrefix(ir, mode, functions, base, property_set.path.items[0 .. property_set.path.items.len - 1]);
                 defer target.deinit(ir.allocator);
                 const target_id = try resolveValueObjectId(ir, mode, target);
-                try writeNodePropertyValue(ir, target_id, property_set.path.items[property_set.path.items.len - 1].name, value, origin, false);
+                try writeNodeFieldValue(ir, target_id, property_set.path.items[property_set.path.items.len - 1].name, value, origin, false);
                 return .none;
             }
             const node_id = root_node_id.?;
             if (property_set.path.items.len == 1) {
-                try writeNodePropertyValue(ir, node_id, property_name, value, origin, false);
+                try writeNodeFieldValue(ir, node_id, property_name, value, origin, false);
                 return .none;
             }
 
             const node = ir.getNode(node_id) orelse return error.UnknownNode;
             const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
-            const class_name = core.class_fields.classNameForNodeWithEnv(node, &sema) orelse return error.InvalidValueTag;
+            const class_name = core.fields.classNameWithEnv(node, &sema) orelse return error.InvalidValueTag;
             const field = sema.field(class_name, property_name) orelse return error.InvalidType;
             if (field.value_type.kind != .record) return error.InvalidValueTag;
             var record = try materializePropertyRecord(ir, page_id, context, mode, functions, closures, origin, node, &sema, property_name, field.value_type);
@@ -2070,7 +2040,7 @@ fn executeStatement(
                 else => return err,
             };
             value_moved = true;
-            try writeNodePropertyValue(ir, node_id, property_name, .{ .record = record }, origin, true);
+            try writeNodeFieldValue(ir, node_id, property_name, .{ .record = record }, origin, true);
         },
         .if_stmt => |if_stmt| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, if_stmt.condition);

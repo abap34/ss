@@ -309,21 +309,28 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             defer target.deinit(ctx.ir.allocator);
             const key = try ctx.evalStringArg(call, 1);
             const default_value = try ctx.evalStringArg(call, 2);
-            break :blk .{ .string = ctx.nodeProperty(target, key) orelse default_value };
+            const field = ctx.nodeField(target, key) orelse break :blk .{ .string = default_value };
+            const text = try eval_value.propertyString(ctx.ir.allocator, field);
+            if (eval_value.propertyStringNeedsFree(field)) {
+                break :blk .{ .string = try ctx.ownString(@constCast(text)) };
+            }
+            break :blk .{ .string = text };
         },
         .has_prop => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             defer target.deinit(ctx.ir.allocator);
             const key = try ctx.evalStringArg(call, 1);
-            break :blk .{ .boolean = ctx.nodeProperty(target, key) != null };
+            break :blk .{ .boolean = ctx.nodeField(target, key) != null };
         },
         .prop_eq => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
             defer target.deinit(ctx.ir.allocator);
             const key = try ctx.evalStringArg(call, 1);
             const expected = try ctx.evalStringArg(call, 2);
-            const actual = ctx.nodeProperty(target, key);
-            break :blk .{ .boolean = if (actual) |value| std.mem.eql(u8, value, expected) else false };
+            const actual = ctx.nodeField(target, key) orelse break :blk .{ .boolean = false };
+            const text = try eval_value.propertyString(ctx.ir.allocator, actual);
+            defer if (eval_value.propertyStringNeedsFree(actual)) ctx.ir.allocator.free(text);
+            break :blk .{ .boolean = std.mem.eql(u8, text, expected) };
         },
         .selection_empty, .selection_count => blk: {
             var target = try ctx.materializeForUse(try ctx.evalExprValue(call.args.items[0]));
@@ -386,15 +393,15 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
             switch (value_arg) {
                 .none => break :blk switch (target) {
                     .document => |id| blk2: {
-                        try ctx.unsetNodeProperty(id, key);
+                        try ctx.unsetNodeField(id, key);
                         break :blk2 .{ .document = id };
                     },
                     .page => |id| blk2: {
-                        try ctx.unsetNodeProperty(id, key);
+                        try ctx.unsetNodeField(id, key);
                         break :blk2 .{ .page = id };
                     },
                     .object => |id| blk2: {
-                        try ctx.unsetNodeProperty(id, key);
+                        try ctx.unsetNodeField(id, key);
                         break :blk2 .{ .object = id };
                     },
                     .selection => |sel| blk2: {
@@ -402,7 +409,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                             target.deinit(ctx.ir.allocator);
                             return error.InvalidSelectionItemType;
                         }
-                        for (sel.ids.items) |id| try ctx.unsetNodeProperty(id, key);
+                        for (sel.ids.items) |id| try ctx.unsetNodeField(id, key);
                         break :blk2 target;
                     },
                     else => {
@@ -412,22 +419,17 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                 },
                 else => {},
             }
-            const value = try eval_value.propertyString(ctx.ir.allocator, value_arg);
-            defer if (eval_value.propertyStringNeedsFree(value_arg)) ctx.ir.allocator.free(value);
             break :blk switch (target) {
                 .document => |id| blk2: {
-                    try ctx.setNodeProperty(id, key, value);
-                    try expandStyleRecordProperty(ctx, id, key, value_arg);
+                    try ctx.setNodeFieldValue(id, key, value_arg);
                     break :blk2 .{ .document = id };
                 },
                 .page => |id| blk2: {
-                    try ctx.setNodeProperty(id, key, value);
-                    try expandStyleRecordProperty(ctx, id, key, value_arg);
+                    try ctx.setNodeFieldValue(id, key, value_arg);
                     break :blk2 .{ .page = id };
                 },
                 .object => |id| blk2: {
-                    try ctx.setNodeProperty(id, key, value);
-                    try expandStyleRecordProperty(ctx, id, key, value_arg);
+                    try ctx.setNodeFieldValue(id, key, value_arg);
                     break :blk2 .{ .object = id };
                 },
                 .selection => |sel| blk2: {
@@ -436,8 +438,7 @@ pub fn evalCall(ctx: anytype, call: ast.CallExpr, descriptor: registry.Primitive
                         return error.InvalidSelectionItemType;
                     }
                     for (sel.ids.items) |id| {
-                        try ctx.setNodeProperty(id, key, value);
-                        try expandStyleRecordProperty(ctx, id, key, value_arg);
+                        try ctx.setNodeFieldValue(id, key, value_arg);
                     }
                     break :blk2 target;
                 },
@@ -559,176 +560,6 @@ fn itemValue(tag: core.SelectionItemTag, id: core.NodeId) core.Value {
         .page => .{ .page = id },
         .object => .{ .object = id },
     };
-}
-
-const RecordFieldMapping = struct {
-    field: []const u8,
-    property: []const u8,
-};
-
-pub fn expandStyleRecordProperty(ctx: anytype, node_id: core.NodeId, key: []const u8, value: core.Value) !void {
-    if (value != .record) return;
-    const record = value.record;
-    if (std.mem.eql(u8, key, "layout")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "font_size", .property = "layout_font_size" },
-            .{ .field = "line_height", .property = "layout_line_height" },
-            .{ .field = "spacing_after", .property = "layout_spacing_after" },
-            .{ .field = "x", .property = "layout_x" },
-            .{ .field = "right_inset", .property = "layout_right_inset" },
-            .{ .field = "wrap", .property = "wrap" },
-            .{ .field = "fit", .property = "fit" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "text")) {
-        if (record.field("font")) |font| try expandFontFace(ctx, node_id, font, "text_font_family", "text_font_weight", "text_font_style", "text_font_stretch");
-        if (record.field("code_font")) |font| try expandFontFace(ctx, node_id, font, "text_code_font_family", "text_code_font_weight", "text_code_font_style", "text_code_font_stretch");
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "parse", .property = "text_parse" },
-            .{ .field = "bold_weight", .property = "text_markdown_bold_weight" },
-            .{ .field = "italic_style", .property = "text_markdown_italic_style" },
-            .{ .field = "size", .property = "text_size" },
-            .{ .field = "line_height", .property = "text_line_height" },
-            .{ .field = "color", .property = "text_color" },
-            .{ .field = "link_color", .property = "text_link_color" },
-            .{ .field = "markdown_bold_color", .property = "text_markdown_bold_color" },
-            .{ .field = "link_underline_width", .property = "text_link_underline_width" },
-            .{ .field = "link_underline_offset", .property = "text_link_underline_offset" },
-            .{ .field = "inline_math_height_factor", .property = "text_inline_math_height_factor" },
-            .{ .field = "inline_math_spacing", .property = "text_inline_math_spacing" },
-            .{ .field = "display_math_height_factor", .property = "text_display_math_height_factor" },
-            .{ .field = "math_align", .property = "math_align" },
-            .{ .field = "emoji_spacing", .property = "text_emoji_spacing" },
-            .{ .field = "markdown_block_gap", .property = "text_markdown_block_gap" },
-            .{ .field = "markdown_list_inset", .property = "text_markdown_list_inset" },
-            .{ .field = "markdown_list_indent", .property = "text_markdown_list_indent" },
-            .{ .field = "markdown_code_font_size", .property = "text_markdown_code_font_size" },
-            .{ .field = "markdown_code_line_height", .property = "text_markdown_code_line_height" },
-            .{ .field = "markdown_code_pad_x", .property = "text_markdown_code_pad_x" },
-            .{ .field = "markdown_code_pad_y", .property = "text_markdown_code_pad_y" },
-            .{ .field = "markdown_code_fill", .property = "text_markdown_code_fill" },
-            .{ .field = "markdown_code_stroke", .property = "text_markdown_code_stroke" },
-            .{ .field = "markdown_code_line_width", .property = "text_markdown_code_line_width" },
-            .{ .field = "markdown_code_radius", .property = "text_markdown_code_radius" },
-            .{ .field = "markdown_code_plain_color", .property = "text_markdown_code_plain_color" },
-            .{ .field = "markdown_code_keyword_color", .property = "text_markdown_code_keyword_color" },
-            .{ .field = "markdown_code_function_color", .property = "text_markdown_code_function_color" },
-            .{ .field = "markdown_code_type_color", .property = "text_markdown_code_type_color" },
-            .{ .field = "markdown_code_constant_color", .property = "text_markdown_code_constant_color" },
-            .{ .field = "markdown_code_number_color", .property = "text_markdown_code_number_color" },
-            .{ .field = "markdown_code_variable_color", .property = "text_markdown_code_variable_color" },
-            .{ .field = "markdown_code_operator_color", .property = "text_markdown_code_operator_color" },
-            .{ .field = "markdown_code_comment_color", .property = "text_markdown_code_comment_color" },
-            .{ .field = "markdown_code_string_color", .property = "text_markdown_code_string_color" },
-            .{ .field = "markdown_table_cell_pad_x", .property = "text_markdown_table_cell_pad_x" },
-            .{ .field = "markdown_table_cell_pad_y", .property = "text_markdown_table_cell_pad_y" },
-            .{ .field = "markdown_table_border", .property = "text_markdown_table_border" },
-            .{ .field = "markdown_table_line_width", .property = "text_markdown_table_line_width" },
-            .{ .field = "markdown_table_header_fill", .property = "text_markdown_table_header_fill" },
-            .{ .field = "markdown_table_alt_row_fill", .property = "text_markdown_table_alt_row_fill" },
-            .{ .field = "cjk_bold_passes", .property = "text_cjk_bold_passes" },
-            .{ .field = "cjk_bold_dx", .property = "text_cjk_bold_dx" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "math")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "scale", .property = "math_scale" },
-            .{ .field = "block_line_height", .property = "math_block_line_height" },
-            .{ .field = "block_min_height", .property = "math_block_min_height" },
-            .{ .field = "block_vertical_padding", .property = "math_block_vertical_padding" },
-            .{ .field = "align", .property = "math_align" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "code")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "plain_color", .property = "code_plain_color" },
-            .{ .field = "keyword_color", .property = "code_keyword_color" },
-            .{ .field = "function_color", .property = "code_function_color" },
-            .{ .field = "type_color", .property = "code_type_color" },
-            .{ .field = "constant_color", .property = "code_constant_color" },
-            .{ .field = "number_color", .property = "code_number_color" },
-            .{ .field = "variable_color", .property = "code_variable_color" },
-            .{ .field = "operator_color", .property = "code_operator_color" },
-            .{ .field = "comment_color", .property = "code_comment_color" },
-            .{ .field = "string_color", .property = "code_string_color" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "chrome")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "fill", .property = "chrome_fill" },
-            .{ .field = "stroke", .property = "chrome_stroke" },
-            .{ .field = "line_width", .property = "chrome_line_width" },
-            .{ .field = "radius", .property = "chrome_radius" },
-            .{ .field = "pad_x", .property = "chrome_pad_x" },
-            .{ .field = "pad_y", .property = "chrome_pad_y" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "underline")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "color", .property = "underline_color" },
-            .{ .field = "width", .property = "underline_width" },
-            .{ .field = "offset", .property = "underline_offset" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "rule")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "stroke", .property = "rule_stroke" },
-            .{ .field = "line_width", .property = "rule_line_width" },
-            .{ .field = "dash", .property = "rule_dash" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-        return;
-    }
-    if (std.mem.eql(u8, key, "asset")) {
-        const mappings = [_]RecordFieldMapping{
-            .{ .field = "scale", .property = "asset_scale" },
-            .{ .field = "width", .property = "asset_width" },
-        };
-        try expandMappedFields(ctx, node_id, record, &mappings);
-    }
-}
-
-fn expandMappedFields(ctx: anytype, node_id: core.NodeId, record: core.RecordValue, mappings: []const RecordFieldMapping) !void {
-    for (mappings) |mapping| {
-        for (record.fields.items) |field| {
-            if (!field.explicit or !std.mem.eql(u8, field.name, mapping.field)) continue;
-            try setNodePropertyValue(ctx, node_id, mapping.property, field.value);
-        }
-    }
-}
-
-fn expandFontFace(ctx: anytype, node_id: core.NodeId, value: core.Value, family: []const u8, weight: []const u8, style: []const u8, stretch: []const u8) !void {
-    if (value != .record) return;
-    const record = value.record;
-    for (record.fields.items) |field| {
-        if (!field.explicit) continue;
-        if (std.mem.eql(u8, field.name, "family")) try setNodePropertyValue(ctx, node_id, family, field.value);
-        if (std.mem.eql(u8, field.name, "weight")) try setNodePropertyValue(ctx, node_id, weight, field.value);
-        if (std.mem.eql(u8, field.name, "style")) try setNodePropertyValue(ctx, node_id, style, field.value);
-        if (std.mem.eql(u8, field.name, "stretch")) try setNodePropertyValue(ctx, node_id, stretch, field.value);
-    }
-}
-
-fn setNodePropertyValue(ctx: anytype, node_id: core.NodeId, key: []const u8, value: core.Value) !void {
-    if (value == .none) {
-        try ctx.unsetNodeProperty(node_id, key);
-        return;
-    }
-    const text = try eval_value.propertyString(ctx.ir.allocator, value);
-    defer if (eval_value.propertyStringNeedsFree(value)) ctx.ir.allocator.free(text);
-    try ctx.setNodeProperty(node_id, key, text);
 }
 
 fn evalFunctionArg(ctx: anytype, call: ast.CallExpr, index: usize) !core.FunctionRef {

@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("model");
-const class_fields = @import("class_fields.zig");
+const fields = @import("fields.zig");
 
 const Node = model.Node;
 
@@ -42,13 +42,11 @@ pub const default_weight: u16 = 400;
 pub const default_bold_weight: u16 = 700;
 
 pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
-    const normal = faceFromProperties(
+    const normal = faceFromRecord(
+        ir.allocator,
         ir,
         node,
-        "text_font_family",
-        "text_font_weight",
-        "text_font_style",
-        "text_font_stretch",
+        "font",
         .{
             .family = default_family,
             .weight = default_weight,
@@ -56,8 +54,8 @@ pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
             .stretch = .normal,
         },
     );
-    const markdown_bold_weight = fontWeightProperty(ir, node, "text_markdown_bold_weight") orelse default_bold_weight;
-    const markdown_italic_style = fontStyleProperty(ir, node, "text_markdown_italic_style") orelse .italic;
+    const markdown_bold_weight = fontWeightNumber(fields.read(ir.allocator, ir, node, "text", &.{"bold_weight"}, .number)) orelse default_bold_weight;
+    const markdown_italic_style = parseStyle(fields.read(ir.allocator, ir, node, "text", &.{"italic_style"}, .text) orelse "") orelse .italic;
     return .{
         .normal = normal,
         .bold = .{
@@ -72,13 +70,11 @@ pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
             .style = markdown_italic_style,
             .stretch = normal.stretch,
         },
-        .code = faceFromProperties(
+        .code = faceFromRecord(
+            ir.allocator,
             ir,
             node,
-            "text_code_font_family",
-            "text_code_font_weight",
-            "text_code_font_style",
-            "text_code_font_stretch",
+            "code_font",
             .{
                 .family = default_code_family,
                 .weight = default_weight,
@@ -89,14 +85,12 @@ pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
     };
 }
 
-pub fn textFacesForNodeWithEnv(node: *const Node, sema: anytype) TextFaces {
-    const normal = faceFromPropertiesWithEnv(
+pub fn textFacesForNodeWithEnv(allocator: std.mem.Allocator, node: *const Node, sema: anytype) TextFaces {
+    const normal = faceFromRecordWithEnv(
+        allocator,
         node,
         sema,
-        "text_font_family",
-        "text_font_weight",
-        "text_font_style",
-        "text_font_stretch",
+        "font",
         .{
             .family = default_family,
             .weight = default_weight,
@@ -104,8 +98,8 @@ pub fn textFacesForNodeWithEnv(node: *const Node, sema: anytype) TextFaces {
             .stretch = .normal,
         },
     );
-    const markdown_bold_weight = fontWeightPropertyWithEnv(node, sema, "text_markdown_bold_weight") orelse default_bold_weight;
-    const markdown_italic_style = fontStylePropertyWithEnv(node, sema, "text_markdown_italic_style") orelse .italic;
+    const markdown_bold_weight = fontWeightNumber(fields.readWithEnv(allocator, node, "text", &.{"bold_weight"}, sema, .number)) orelse default_bold_weight;
+    const markdown_italic_style = parseStyle(fields.readWithEnv(allocator, node, "text", &.{"italic_style"}, sema, .text) orelse "") orelse .italic;
     return .{
         .normal = normal,
         .bold = .{
@@ -120,13 +114,11 @@ pub fn textFacesForNodeWithEnv(node: *const Node, sema: anytype) TextFaces {
             .style = markdown_italic_style,
             .stretch = normal.stretch,
         },
-        .code = faceFromPropertiesWithEnv(
+        .code = faceFromRecordWithEnv(
+            allocator,
             node,
             sema,
-            "text_code_font_family",
-            "text_code_font_weight",
-            "text_code_font_style",
-            "text_code_font_stretch",
+            "code_font",
             .{
                 .family = default_code_family,
                 .weight = default_weight,
@@ -167,37 +159,33 @@ pub fn stretchCode(stretch: Stretch) c_int {
     };
 }
 
-fn faceFromProperties(
+fn faceFromRecord(
+    allocator: std.mem.Allocator,
     ir: anytype,
     node: *const Node,
-    family_key: []const u8,
-    weight_key: []const u8,
-    style_key: []const u8,
-    stretch_key: []const u8,
+    font_field: []const u8,
     fallback: Face,
 ) Face {
     return .{
-        .family = cleanFamily(class_fields.property(ir, node, family_key) orelse fallback.family),
-        .weight = fontWeightProperty(ir, node, weight_key) orelse fallback.weight,
-        .style = fontStyleProperty(ir, node, style_key) orelse fallback.style,
-        .stretch = fontStretchProperty(ir, node, stretch_key) orelse fallback.stretch,
+        .family = cleanFamily(fields.read(allocator, ir, node, "text", &.{ font_field, "family" }, .text) orelse fallback.family),
+        .weight = fontWeightNumber(fields.read(allocator, ir, node, "text", &.{ font_field, "weight" }, .number)) orelse fallback.weight,
+        .style = parseStyle(fields.read(allocator, ir, node, "text", &.{ font_field, "style" }, .text) orelse "") orelse fallback.style,
+        .stretch = parseStretch(fields.read(allocator, ir, node, "text", &.{ font_field, "stretch" }, .text) orelse "") orelse fallback.stretch,
     };
 }
 
-fn faceFromPropertiesWithEnv(
+fn faceFromRecordWithEnv(
+    allocator: std.mem.Allocator,
     node: *const Node,
     sema: anytype,
-    family_key: []const u8,
-    weight_key: []const u8,
-    style_key: []const u8,
-    stretch_key: []const u8,
+    font_field: []const u8,
     fallback: Face,
 ) Face {
     return .{
-        .family = cleanFamily(class_fields.propertyWithEnv(node, family_key, sema) orelse fallback.family),
-        .weight = fontWeightPropertyWithEnv(node, sema, weight_key) orelse fallback.weight,
-        .style = fontStylePropertyWithEnv(node, sema, style_key) orelse fallback.style,
-        .stretch = fontStretchPropertyWithEnv(node, sema, stretch_key) orelse fallback.stretch,
+        .family = cleanFamily(fields.readWithEnv(allocator, node, "text", &.{ font_field, "family" }, sema, .text) orelse fallback.family),
+        .weight = fontWeightNumber(fields.readWithEnv(allocator, node, "text", &.{ font_field, "weight" }, sema, .number)) orelse fallback.weight,
+        .style = parseStyle(fields.readWithEnv(allocator, node, "text", &.{ font_field, "style" }, sema, .text) orelse "") orelse fallback.style,
+        .stretch = parseStretch(fields.readWithEnv(allocator, node, "text", &.{ font_field, "stretch" }, sema, .text) orelse "") orelse fallback.stretch,
     };
 }
 
@@ -206,46 +194,16 @@ fn cleanFamily(value: []const u8) []const u8 {
     return if (trimmed.len == 0) "sans-serif" else trimmed;
 }
 
-fn fontWeightProperty(ir: anytype, node: *const Node, key: []const u8) ?u16 {
-    const raw = class_fields.property(ir, node, key) orelse return null;
-    return parseWeight(raw);
-}
-
-fn fontWeightPropertyWithEnv(node: *const Node, sema: anytype, key: []const u8) ?u16 {
-    const raw = class_fields.propertyWithEnv(node, key, sema) orelse return null;
-    return parseWeight(raw);
-}
-
-fn parseWeight(raw: []const u8) ?u16 {
-    const parsed = std.fmt.parseFloat(f32, raw) catch return null;
+fn fontWeightNumber(maybe_number: ?f32) ?u16 {
+    const parsed = maybe_number orelse return null;
     if (!std.math.isFinite(parsed)) return null;
     const rounded = @round(parsed);
     if (rounded < 1 or rounded > 1000) return null;
     return @intFromFloat(rounded);
 }
 
-fn fontStyleProperty(ir: anytype, node: *const Node, key: []const u8) ?Style {
-    const raw = class_fields.property(ir, node, key) orelse return null;
-    return parseStyle(raw);
-}
-
-fn fontStylePropertyWithEnv(node: *const Node, sema: anytype, key: []const u8) ?Style {
-    const raw = class_fields.propertyWithEnv(node, key, sema) orelse return null;
-    return parseStyle(raw);
-}
-
 fn parseStyle(raw: []const u8) ?Style {
     return std.meta.stringToEnum(Style, raw);
-}
-
-fn fontStretchProperty(ir: anytype, node: *const Node, key: []const u8) ?Stretch {
-    const raw = class_fields.property(ir, node, key) orelse return null;
-    return parseStretch(raw);
-}
-
-fn fontStretchPropertyWithEnv(node: *const Node, sema: anytype, key: []const u8) ?Stretch {
-    const raw = class_fields.propertyWithEnv(node, key, sema) orelse return null;
-    return parseStretch(raw);
 }
 
 fn parseStretch(raw: []const u8) ?Stretch {

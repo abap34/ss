@@ -1,7 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 const color_utils = @import("utils").color;
-const class_fields = @import("class_fields.zig");
+const fields = @import("fields.zig");
 const font_model = @import("font.zig");
 const layout = @import("layout.zig");
 
@@ -175,17 +175,8 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
 }
 
 pub fn resolveWithEnv(ir: anytype, node: *const Node, sema: anytype) ResolvedRender {
-    const kind = resolveKindWithEnv(node, sema);
-    return .{
-        .kind = kind,
-        .text = resolveTextWithEnv(ir, node, kind, sema),
-        .math = resolveMathWithEnv(ir, node, kind, sema),
-        .code = resolveCodeWithEnv(ir, node, kind, sema),
-        .shape = resolveShapeWithEnv(node, kind, sema),
-        .chrome = resolveChromeWithEnv(node, sema),
-        .underline = resolveUnderlineWithEnv(node, sema),
-        .rule = resolveRuleWithEnv(node, sema),
-    };
+    _ = sema;
+    return resolve(ir, node);
 }
 
 pub fn resolvePageBackground(ir: anytype, page: *const Node) ?Color {
@@ -195,18 +186,12 @@ pub fn resolvePageBackground(ir: anytype, page: *const Node) ?Color {
 }
 
 pub fn resolvePageBackgroundWithEnv(ir: anytype, page: *const Node, sema: anytype) ?Color {
-    if (parseColorPropertyWithEnv(page, "background_fill", sema)) |color| return color;
-    const document = ir.getNode(ir.document_id) orelse return null;
-    return parseColorPropertyWithEnv(document, "background_fill", sema);
+    _ = sema;
+    return resolvePageBackground(ir, page);
 }
 
 pub fn resolveKind(ir: anytype, node: *const Node) RenderKind {
     if (parseRenderKindProperty(ir, node)) |kind| return kind;
-    return .text;
-}
-
-pub fn resolveKindWithEnv(node: *const Node, sema: anytype) RenderKind {
-    if (parseRenderKindPropertyWithEnv(node, sema)) |kind| return kind;
     return .text;
 }
 
@@ -226,45 +211,45 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
         .code_font = fonts.code,
         .font_size = text_metrics.font_size,
         .line_height = text_metrics.line_height,
-        .color = parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR,
-        .link_color = parseColorProperty(ir, node, "text_link_color") orelse FALLBACK_LINK_COLOR,
-        .markdown_bold_color = parseColorProperty(ir, node, "text_markdown_bold_color"),
-        .link_underline_width = nonNegativeFloatProperty(ir, node, "text_link_underline_width") orelse 0,
-        .link_underline_offset = parseFloatProperty(ir, node, "text_link_underline_offset") orelse 0,
-        .inline_math_height_factor = positiveFloatProperty(ir, node, "text_inline_math_height_factor") orelse 1,
-        .inline_math_spacing = nonNegativeFloatProperty(ir, node, "text_inline_math_spacing") orelse 0,
-        .display_math_height_factor = positiveFloatProperty(ir, node, "text_display_math_height_factor") orelse 2,
-        .math_align = inheritedHorizontalAlignProperty(ir, node, "math_align") orelse .center,
-        .emoji_spacing = nonNegativeFloatProperty(ir, node, "text_emoji_spacing") orelse 0,
-        .markdown_block_gap = nonNegativeFloatProperty(ir, node, "text_markdown_block_gap") orelse 0,
-        .markdown_list_inset = nonNegativeFloatProperty(ir, node, "text_markdown_list_inset") orelse 0,
-        .markdown_list_indent = nonNegativeFloatProperty(ir, node, "text_markdown_list_indent") orelse 0,
-        .markdown_code_font_size = positiveFloatProperty(ir, node, "text_markdown_code_font_size") orelse layout_style.font_size,
-        .markdown_code_line_height = positiveFloatProperty(ir, node, "text_markdown_code_line_height") orelse layout_style.line_height,
-        .markdown_code_pad_x = nonNegativeFloatProperty(ir, node, "text_markdown_code_pad_x") orelse 0,
-        .markdown_code_pad_y = nonNegativeFloatProperty(ir, node, "text_markdown_code_pad_y") orelse 0,
-        .markdown_code_fill = themedColorProperty(ir, node, "text_markdown_code_fill", "code_theme_fill"),
-        .markdown_code_stroke = themedColorProperty(ir, node, "text_markdown_code_stroke", "code_theme_stroke"),
-        .markdown_code_line_width = nonNegativeFloatProperty(ir, node, "text_markdown_code_line_width") orelse 0,
-        .markdown_code_radius = nonNegativeFloatProperty(ir, node, "text_markdown_code_radius") orelse 0,
-        .markdown_code_plain_color = themedColorProperty(ir, node, "text_markdown_code_plain_color", "code_theme_plain_color"),
-        .markdown_code_keyword_color = themedColorProperty(ir, node, "text_markdown_code_keyword_color", "code_theme_keyword_color"),
-        .markdown_code_function_color = themedColorProperty(ir, node, "text_markdown_code_function_color", "code_theme_function_color"),
-        .markdown_code_type_color = themedColorProperty(ir, node, "text_markdown_code_type_color", "code_theme_type_color"),
-        .markdown_code_constant_color = themedColorProperty(ir, node, "text_markdown_code_constant_color", "code_theme_constant_color"),
-        .markdown_code_number_color = themedColorProperty(ir, node, "text_markdown_code_number_color", "code_theme_number_color"),
-        .markdown_code_variable_color = themedColorProperty(ir, node, "text_markdown_code_variable_color", "code_theme_variable_color"),
-        .markdown_code_operator_color = themedColorProperty(ir, node, "text_markdown_code_operator_color", "code_theme_operator_color"),
-        .markdown_code_comment_color = themedColorProperty(ir, node, "text_markdown_code_comment_color", "code_theme_comment_color"),
-        .markdown_code_string_color = themedColorProperty(ir, node, "text_markdown_code_string_color", "code_theme_string_color"),
-        .markdown_table_cell_pad_x = nonNegativeFloatProperty(ir, node, "text_markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
-        .markdown_table_cell_pad_y = nonNegativeFloatProperty(ir, node, "text_markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
-        .markdown_table_border = parseColorProperty(ir, node, "text_markdown_table_border"),
-        .markdown_table_line_width = nonNegativeFloatProperty(ir, node, "text_markdown_table_line_width") orelse 0.8,
-        .markdown_table_header_fill = parseColorProperty(ir, node, "text_markdown_table_header_fill"),
-        .markdown_table_alt_row_fill = parseColorProperty(ir, node, "text_markdown_table_alt_row_fill"),
-        .cjk_bold_passes = parseIntProperty(ir, node, "text_cjk_bold_passes") orelse 1,
-        .cjk_bold_dx = parseFloatProperty(ir, node, "text_cjk_bold_dx") orelse 0,
+        .color = parseRecordColorProperty(ir, node, "text", "color") orelse FALLBACK_TEXT_COLOR,
+        .link_color = parseRecordColorProperty(ir, node, "text", "link_color") orelse FALLBACK_LINK_COLOR,
+        .markdown_bold_color = parseRecordColorProperty(ir, node, "text", "markdown_bold_color"),
+        .link_underline_width = nonNegativeRecordFloatProperty(ir, node, "text", "link_underline_width") orelse 0,
+        .link_underline_offset = recordFloatProperty(ir, node, "text", "link_underline_offset") orelse 0,
+        .inline_math_height_factor = positiveRecordFloatProperty(ir, node, "text", "inline_math_height_factor") orelse 1,
+        .inline_math_spacing = nonNegativeRecordFloatProperty(ir, node, "text", "inline_math_spacing") orelse 0,
+        .display_math_height_factor = positiveRecordFloatProperty(ir, node, "text", "display_math_height_factor") orelse 2,
+        .math_align = inheritedTextHorizontalAlign(ir, node) orelse .center,
+        .emoji_spacing = nonNegativeRecordFloatProperty(ir, node, "text", "emoji_spacing") orelse 0,
+        .markdown_block_gap = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_block_gap") orelse 0,
+        .markdown_list_inset = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_list_inset") orelse 0,
+        .markdown_list_indent = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_list_indent") orelse 0,
+        .markdown_code_font_size = positiveRecordFloatProperty(ir, node, "text", "markdown_code_font_size") orelse layout_style.font_size,
+        .markdown_code_line_height = positiveRecordFloatProperty(ir, node, "text", "markdown_code_line_height") orelse layout_style.line_height,
+        .markdown_code_pad_x = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_code_pad_x") orelse 0,
+        .markdown_code_pad_y = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_code_pad_y") orelse 0,
+        .markdown_code_fill = themedRecordColorProperty(ir, node, "text", "markdown_code_fill", "code_theme_fill"),
+        .markdown_code_stroke = themedRecordColorProperty(ir, node, "text", "markdown_code_stroke", "code_theme_stroke"),
+        .markdown_code_line_width = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_code_line_width") orelse 0,
+        .markdown_code_radius = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_code_radius") orelse 0,
+        .markdown_code_plain_color = themedRecordColorProperty(ir, node, "text", "markdown_code_plain_color", "code_theme_plain_color"),
+        .markdown_code_keyword_color = themedRecordColorProperty(ir, node, "text", "markdown_code_keyword_color", "code_theme_keyword_color"),
+        .markdown_code_function_color = themedRecordColorProperty(ir, node, "text", "markdown_code_function_color", "code_theme_function_color"),
+        .markdown_code_type_color = themedRecordColorProperty(ir, node, "text", "markdown_code_type_color", "code_theme_type_color"),
+        .markdown_code_constant_color = themedRecordColorProperty(ir, node, "text", "markdown_code_constant_color", "code_theme_constant_color"),
+        .markdown_code_number_color = themedRecordColorProperty(ir, node, "text", "markdown_code_number_color", "code_theme_number_color"),
+        .markdown_code_variable_color = themedRecordColorProperty(ir, node, "text", "markdown_code_variable_color", "code_theme_variable_color"),
+        .markdown_code_operator_color = themedRecordColorProperty(ir, node, "text", "markdown_code_operator_color", "code_theme_operator_color"),
+        .markdown_code_comment_color = themedRecordColorProperty(ir, node, "text", "markdown_code_comment_color", "code_theme_comment_color"),
+        .markdown_code_string_color = themedRecordColorProperty(ir, node, "text", "markdown_code_string_color", "code_theme_string_color"),
+        .markdown_table_cell_pad_x = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_table_cell_pad_x") orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
+        .markdown_table_cell_pad_y = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_table_cell_pad_y") orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
+        .markdown_table_border = parseRecordColorProperty(ir, node, "text", "markdown_table_border"),
+        .markdown_table_line_width = nonNegativeRecordFloatProperty(ir, node, "text", "markdown_table_line_width") orelse 0.8,
+        .markdown_table_header_fill = parseRecordColorProperty(ir, node, "text", "markdown_table_header_fill"),
+        .markdown_table_alt_row_fill = parseRecordColorProperty(ir, node, "text", "markdown_table_alt_row_fill"),
+        .cjk_bold_passes = recordIntProperty(ir, node, "text", "cjk_bold_passes") orelse 1,
+        .cjk_bold_dx = recordFloatProperty(ir, node, "text", "cjk_bold_dx") orelse 0,
         .wrap = layout.shouldWrapNode(ir, node),
     };
 }
@@ -272,213 +257,170 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
 fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
-        .block_line_height = positiveFloatProperty(ir, node, "math_block_line_height") orelse 22,
-        .block_min_height = positiveFloatProperty(ir, node, "math_block_min_height") orelse 30,
-        .block_vertical_padding = nonNegativeFloatProperty(ir, node, "math_block_vertical_padding") orelse 2,
-        .scale = positiveFloatProperty(ir, node, "math_scale") orelse 1,
-        .horizontal_align = inheritedHorizontalAlignProperty(ir, node, "math_align") orelse .center,
+        .block_line_height = positiveRecordFloatProperty(ir, node, "math", "block_line_height") orelse 22,
+        .block_min_height = positiveRecordFloatProperty(ir, node, "math", "block_min_height") orelse 30,
+        .block_vertical_padding = nonNegativeRecordFloatProperty(ir, node, "math", "block_vertical_padding") orelse 2,
+        .scale = positiveRecordFloatProperty(ir, node, "math", "scale") orelse 1,
+        .horizontal_align = inheritedMathHorizontalAlign(ir, node) orelse .center,
     };
 }
 
 fn resolveCode(ir: anytype, node: *const Node, kind: RenderKind) ?CodePaint {
     if (kind != .code) return null;
-    const plain = themedColorProperty(ir, node, "code_plain_color", "code_theme_plain_color") orelse parseColorProperty(ir, node, "text_color") orelse FALLBACK_TEXT_COLOR;
+    const plain = themedRecordColorProperty(ir, node, "code", "plain_color", "code_theme_plain_color") orelse parseRecordColorProperty(ir, node, "text", "color") orelse FALLBACK_TEXT_COLOR;
     return .{
-        .language = class_fields.property(ir, node, "language"),
+        .language = fields.read(ir.allocator, ir, node, "language", &.{}, .text),
         .plain = plain,
-        .keyword = themedColorProperty(ir, node, "code_keyword_color", "code_theme_keyword_color") orelse plain,
-        .function = themedColorProperty(ir, node, "code_function_color", "code_theme_function_color") orelse plain,
-        .type = themedColorProperty(ir, node, "code_type_color", "code_theme_type_color") orelse plain,
-        .constant = themedColorProperty(ir, node, "code_constant_color", "code_theme_constant_color") orelse plain,
-        .number = themedColorProperty(ir, node, "code_number_color", "code_theme_number_color") orelse plain,
-        .variable = themedColorProperty(ir, node, "code_variable_color", "code_theme_variable_color") orelse plain,
-        .operator = themedColorProperty(ir, node, "code_operator_color", "code_theme_operator_color") orelse plain,
-        .comment = themedColorProperty(ir, node, "code_comment_color", "code_theme_comment_color") orelse plain,
-        .string = themedColorProperty(ir, node, "code_string_color", "code_theme_string_color") orelse plain,
+        .keyword = themedRecordColorProperty(ir, node, "code", "keyword_color", "code_theme_keyword_color") orelse plain,
+        .function = themedRecordColorProperty(ir, node, "code", "function_color", "code_theme_function_color") orelse plain,
+        .type = themedRecordColorProperty(ir, node, "code", "type_color", "code_theme_type_color") orelse plain,
+        .constant = themedRecordColorProperty(ir, node, "code", "constant_color", "code_theme_constant_color") orelse plain,
+        .number = themedRecordColorProperty(ir, node, "code", "number_color", "code_theme_number_color") orelse plain,
+        .variable = themedRecordColorProperty(ir, node, "code", "variable_color", "code_theme_variable_color") orelse plain,
+        .operator = themedRecordColorProperty(ir, node, "code", "operator_color", "code_theme_operator_color") orelse plain,
+        .comment = themedRecordColorProperty(ir, node, "code", "comment_color", "code_theme_comment_color") orelse plain,
+        .string = themedRecordColorProperty(ir, node, "code", "string_color", "code_theme_string_color") orelse plain,
     };
 }
 
 fn resolveShape(ir: anytype, node: *const Node, kind: RenderKind) ?ShapePaint {
     if (kind != .shape) return null;
     return .{
-        .stroke = parseColorProperty(ir, node, "shape_stroke"),
-        .line_width = nonNegativeFloatProperty(ir, node, "shape_line_width") orelse 0,
-        .dash = parseDashProperty(ir, node, "shape_dash"),
-        .start_x = parseFloatProperty(ir, node, "shape_start_x") orelse 0,
-        .start_y = parseFloatProperty(ir, node, "shape_start_y") orelse 0,
-        .end_x = parseFloatProperty(ir, node, "shape_end_x") orelse 1,
-        .end_y = parseFloatProperty(ir, node, "shape_end_y") orelse 1,
-        .marker_start = parseShapeMarkerProperty(ir, node, "shape_marker_start") orelse .plain,
-        .marker_end = parseShapeMarkerProperty(ir, node, "shape_marker_end") orelse .plain,
-        .marker_size = nonNegativeFloatProperty(ir, node, "shape_marker_size") orelse 0,
-    };
-}
-
-fn resolveTextWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?TextPaint {
-    switch (kind) {
-        .text, .code => {},
-        else => return null,
-    }
-
-    const layout_style = layout.styleForNode(ir, node);
-    const text_metrics = layout.style.textMetricsForNode(ir, node);
-    const fonts = font_model.textFacesForNodeWithEnv(node, sema);
-    return .{
-        .font = fonts.normal,
-        .bold_font = fonts.bold,
-        .italic_font = fonts.italic,
-        .code_font = fonts.code,
-        .font_size = text_metrics.font_size,
-        .line_height = text_metrics.line_height,
-        .color = parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR,
-        .link_color = parseColorPropertyWithEnv(node, "text_link_color", sema) orelse FALLBACK_LINK_COLOR,
-        .markdown_bold_color = parseColorPropertyWithEnv(node, "text_markdown_bold_color", sema),
-        .link_underline_width = nonNegativeFloatPropertyWithEnv(node, "text_link_underline_width", sema) orelse 0,
-        .link_underline_offset = parseFloatPropertyWithEnv(node, "text_link_underline_offset", sema) orelse 0,
-        .inline_math_height_factor = positiveFloatPropertyWithEnv(node, "text_inline_math_height_factor", sema) orelse 1,
-        .inline_math_spacing = nonNegativeFloatPropertyWithEnv(node, "text_inline_math_spacing", sema) orelse 0,
-        .display_math_height_factor = positiveFloatPropertyWithEnv(node, "text_display_math_height_factor", sema) orelse 2,
-        .math_align = inheritedHorizontalAlignPropertyWithEnv(ir, node, "math_align", sema) orelse .center,
-        .emoji_spacing = nonNegativeFloatPropertyWithEnv(node, "text_emoji_spacing", sema) orelse 0,
-        .markdown_block_gap = nonNegativeFloatPropertyWithEnv(node, "text_markdown_block_gap", sema) orelse 0,
-        .markdown_list_inset = nonNegativeFloatPropertyWithEnv(node, "text_markdown_list_inset", sema) orelse 0,
-        .markdown_list_indent = nonNegativeFloatPropertyWithEnv(node, "text_markdown_list_indent", sema) orelse 0,
-        .markdown_code_font_size = positiveFloatPropertyWithEnv(node, "text_markdown_code_font_size", sema) orelse layout_style.font_size,
-        .markdown_code_line_height = positiveFloatPropertyWithEnv(node, "text_markdown_code_line_height", sema) orelse layout_style.line_height,
-        .markdown_code_pad_x = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_pad_x", sema) orelse 0,
-        .markdown_code_pad_y = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_pad_y", sema) orelse 0,
-        .markdown_code_fill = themedColorPropertyWithEnv(ir, node, "text_markdown_code_fill", "code_theme_fill", sema),
-        .markdown_code_stroke = themedColorPropertyWithEnv(ir, node, "text_markdown_code_stroke", "code_theme_stroke", sema),
-        .markdown_code_line_width = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_line_width", sema) orelse 0,
-        .markdown_code_radius = nonNegativeFloatPropertyWithEnv(node, "text_markdown_code_radius", sema) orelse 0,
-        .markdown_code_plain_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_plain_color", "code_theme_plain_color", sema),
-        .markdown_code_keyword_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_keyword_color", "code_theme_keyword_color", sema),
-        .markdown_code_function_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_function_color", "code_theme_function_color", sema),
-        .markdown_code_type_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_type_color", "code_theme_type_color", sema),
-        .markdown_code_constant_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_constant_color", "code_theme_constant_color", sema),
-        .markdown_code_number_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_number_color", "code_theme_number_color", sema),
-        .markdown_code_variable_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_variable_color", "code_theme_variable_color", sema),
-        .markdown_code_operator_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_operator_color", "code_theme_operator_color", sema),
-        .markdown_code_comment_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_comment_color", "code_theme_comment_color", sema),
-        .markdown_code_string_color = themedColorPropertyWithEnv(ir, node, "text_markdown_code_string_color", "code_theme_string_color", sema),
-        .markdown_table_cell_pad_x = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_x", sema) orelse @max(@as(f32, 6.0), layout_style.font_size * 0.55),
-        .markdown_table_cell_pad_y = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_cell_pad_y", sema) orelse @max(@as(f32, 4.0), layout_style.font_size * 0.32),
-        .markdown_table_border = parseColorPropertyWithEnv(node, "text_markdown_table_border", sema),
-        .markdown_table_line_width = nonNegativeFloatPropertyWithEnv(node, "text_markdown_table_line_width", sema) orelse 0.8,
-        .markdown_table_header_fill = parseColorPropertyWithEnv(node, "text_markdown_table_header_fill", sema),
-        .markdown_table_alt_row_fill = parseColorPropertyWithEnv(node, "text_markdown_table_alt_row_fill", sema),
-        .cjk_bold_passes = parseIntPropertyWithEnv(node, "text_cjk_bold_passes", sema) orelse 1,
-        .cjk_bold_dx = parseFloatPropertyWithEnv(node, "text_cjk_bold_dx", sema) orelse 0,
-        .wrap = layout.shouldWrapNode(ir, node),
-    };
-}
-
-fn resolveMathWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?MathPaint {
-    if (kind != .vector_math) return null;
-    return .{
-        .block_line_height = positiveFloatPropertyWithEnv(node, "math_block_line_height", sema) orelse 22,
-        .block_min_height = positiveFloatPropertyWithEnv(node, "math_block_min_height", sema) orelse 30,
-        .block_vertical_padding = nonNegativeFloatPropertyWithEnv(node, "math_block_vertical_padding", sema) orelse 2,
-        .scale = positiveFloatPropertyWithEnv(node, "math_scale", sema) orelse 1,
-        .horizontal_align = inheritedHorizontalAlignPropertyWithEnv(ir, node, "math_align", sema) orelse .center,
-    };
-}
-
-fn resolveCodeWithEnv(ir: anytype, node: *const Node, kind: RenderKind, sema: anytype) ?CodePaint {
-    if (kind != .code) return null;
-    const plain = themedColorPropertyWithEnv(ir, node, "code_plain_color", "code_theme_plain_color", sema) orelse parseColorPropertyWithEnv(node, "text_color", sema) orelse FALLBACK_TEXT_COLOR;
-    return .{
-        .language = class_fields.propertyWithEnv(node, "language", sema),
-        .plain = plain,
-        .keyword = themedColorPropertyWithEnv(ir, node, "code_keyword_color", "code_theme_keyword_color", sema) orelse plain,
-        .function = themedColorPropertyWithEnv(ir, node, "code_function_color", "code_theme_function_color", sema) orelse plain,
-        .type = themedColorPropertyWithEnv(ir, node, "code_type_color", "code_theme_type_color", sema) orelse plain,
-        .constant = themedColorPropertyWithEnv(ir, node, "code_constant_color", "code_theme_constant_color", sema) orelse plain,
-        .number = themedColorPropertyWithEnv(ir, node, "code_number_color", "code_theme_number_color", sema) orelse plain,
-        .variable = themedColorPropertyWithEnv(ir, node, "code_variable_color", "code_theme_variable_color", sema) orelse plain,
-        .operator = themedColorPropertyWithEnv(ir, node, "code_operator_color", "code_theme_operator_color", sema) orelse plain,
-        .comment = themedColorPropertyWithEnv(ir, node, "code_comment_color", "code_theme_comment_color", sema) orelse plain,
-        .string = themedColorPropertyWithEnv(ir, node, "code_string_color", "code_theme_string_color", sema) orelse plain,
-    };
-}
-
-fn resolveShapeWithEnv(node: *const Node, kind: RenderKind, sema: anytype) ?ShapePaint {
-    if (kind != .shape) return null;
-    return .{
-        .stroke = parseColorPropertyWithEnv(node, "shape_stroke", sema),
-        .line_width = nonNegativeFloatPropertyWithEnv(node, "shape_line_width", sema) orelse 0,
-        .dash = parseDashPropertyWithEnv(node, "shape_dash", sema),
-        .start_x = parseFloatPropertyWithEnv(node, "shape_start_x", sema) orelse 0,
-        .start_y = parseFloatPropertyWithEnv(node, "shape_start_y", sema) orelse 0,
-        .end_x = parseFloatPropertyWithEnv(node, "shape_end_x", sema) orelse 1,
-        .end_y = parseFloatPropertyWithEnv(node, "shape_end_y", sema) orelse 1,
-        .marker_start = parseShapeMarkerPropertyWithEnv(node, "shape_marker_start", sema) orelse .plain,
-        .marker_end = parseShapeMarkerPropertyWithEnv(node, "shape_marker_end", sema) orelse .plain,
-        .marker_size = nonNegativeFloatPropertyWithEnv(node, "shape_marker_size", sema) orelse 0,
-    };
-}
-
-fn resolveChromeWithEnv(node: *const Node, sema: anytype) ChromePaint {
-    return .{
-        .fill = parseColorPropertyWithEnv(node, "chrome_fill", sema),
-        .stroke = parseColorPropertyWithEnv(node, "chrome_stroke", sema),
-        .line_width = nonNegativeFloatPropertyWithEnv(node, "chrome_line_width", sema) orelse 0,
-        .radius = nonNegativeFloatPropertyWithEnv(node, "chrome_radius", sema) orelse 0,
-        .pad_x = nonNegativeFloatPropertyWithEnv(node, "chrome_pad_x", sema) orelse 0,
-        .pad_y = nonNegativeFloatPropertyWithEnv(node, "chrome_pad_y", sema) orelse 0,
-    };
-}
-
-fn resolveUnderlineWithEnv(node: *const Node, sema: anytype) UnderlinePaint {
-    return .{
-        .color = parseColorPropertyWithEnv(node, "underline_color", sema),
-        .width = nonNegativeFloatPropertyWithEnv(node, "underline_width", sema) orelse 0,
-        .offset = parseFloatPropertyWithEnv(node, "underline_offset", sema) orelse 0,
-    };
-}
-
-fn resolveRuleWithEnv(node: *const Node, sema: anytype) RulePaint {
-    return .{
-        .stroke = parseColorPropertyWithEnv(node, "rule_stroke", sema),
-        .line_width = nonNegativeFloatPropertyWithEnv(node, "rule_line_width", sema) orelse 0,
-        .dash = parseDashPropertyWithEnv(node, "rule_dash", sema),
+        .stroke = parseRecordColorProperty(ir, node, "shape", "stroke"),
+        .line_width = nonNegativeRecordFloatProperty(ir, node, "shape", "line_width") orelse 0,
+        .dash = parseRecordDashProperty(ir, node, "shape", "dash"),
+        .start_x = recordFloatProperty(ir, node, "shape", "start_x") orelse 0,
+        .start_y = recordFloatProperty(ir, node, "shape", "start_y") orelse 0,
+        .end_x = recordFloatProperty(ir, node, "shape", "end_x") orelse 1,
+        .end_y = recordFloatProperty(ir, node, "shape", "end_y") orelse 1,
+        .marker_start = parseRecordShapeMarkerProperty(ir, node, "shape", "marker_start") orelse .plain,
+        .marker_end = parseRecordShapeMarkerProperty(ir, node, "shape", "marker_end") orelse .plain,
+        .marker_size = nonNegativeRecordFloatProperty(ir, node, "shape", "marker_size") orelse 0,
     };
 }
 
 fn resolveChrome(ir: anytype, node: *const Node) ChromePaint {
     return .{
-        .fill = parseColorProperty(ir, node, "chrome_fill"),
-        .stroke = parseColorProperty(ir, node, "chrome_stroke"),
-        .line_width = nonNegativeFloatProperty(ir, node, "chrome_line_width") orelse 0,
-        .radius = nonNegativeFloatProperty(ir, node, "chrome_radius") orelse 0,
-        .pad_x = nonNegativeFloatProperty(ir, node, "chrome_pad_x") orelse 0,
-        .pad_y = nonNegativeFloatProperty(ir, node, "chrome_pad_y") orelse 0,
+        .fill = parseRecordColorProperty(ir, node, "chrome", "fill"),
+        .stroke = parseRecordColorProperty(ir, node, "chrome", "stroke"),
+        .line_width = nonNegativeRecordFloatProperty(ir, node, "chrome", "line_width") orelse 0,
+        .radius = nonNegativeRecordFloatProperty(ir, node, "chrome", "radius") orelse 0,
+        .pad_x = nonNegativeRecordFloatProperty(ir, node, "chrome", "pad_x") orelse 0,
+        .pad_y = nonNegativeRecordFloatProperty(ir, node, "chrome", "pad_y") orelse 0,
     };
 }
 
 fn resolveUnderline(ir: anytype, node: *const Node) UnderlinePaint {
     return .{
-        .color = parseColorProperty(ir, node, "underline_color"),
-        .width = nonNegativeFloatProperty(ir, node, "underline_width") orelse 0,
-        .offset = parseFloatProperty(ir, node, "underline_offset") orelse 0,
+        .color = parseRecordColorProperty(ir, node, "underline", "color"),
+        .width = nonNegativeRecordFloatProperty(ir, node, "underline", "width") orelse 0,
+        .offset = recordFloatProperty(ir, node, "underline", "offset") orelse 0,
     };
 }
 
 fn resolveRule(ir: anytype, node: *const Node) RulePaint {
     return .{
-        .stroke = parseColorProperty(ir, node, "rule_stroke"),
-        .line_width = nonNegativeFloatProperty(ir, node, "rule_line_width") orelse 0,
-        .dash = parseDashProperty(ir, node, "rule_dash"),
+        .stroke = parseRecordColorProperty(ir, node, "rule", "stroke"),
+        .line_width = nonNegativeRecordFloatProperty(ir, node, "rule", "line_width") orelse 0,
+        .dash = parseRecordDashProperty(ir, node, "rule", "dash"),
     };
 }
 
-fn parseRenderKindProperty(ir: anytype, node: *const Node) ?RenderKind {
-    const value = class_fields.property(ir, node, "render_kind") orelse return null;
-    return parseRenderKind(value);
+fn recordFloatProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    return fields.read(ir.allocator, ir, node, record_key, &.{field_name}, .number);
 }
 
-fn parseRenderKindPropertyWithEnv(node: *const Node, sema: anytype) ?RenderKind {
-    const value = class_fields.propertyWithEnv(node, "render_kind", sema) orelse return null;
+fn positiveRecordFloatProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = recordFloatProperty(ir, node, record_key, field_name) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn nonNegativeRecordFloatProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = recordFloatProperty(ir, node, record_key, field_name) orelse return null;
+    return if (value >= 0) value else null;
+}
+
+fn recordIntProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?u32 {
+    const value = recordFloatProperty(ir, node, record_key, field_name) orelse return null;
+    if (!std.math.isFinite(value) or value < 0) return null;
+    return @intFromFloat(@round(value));
+}
+
+fn parseRecordColorProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?Color {
+    const value = fields.read(ir.allocator, ir, node, record_key, &.{field_name}, .text) orelse return null;
+    return parseColor(value);
+}
+
+fn parseRecordDashProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?Dash {
+    const value = fields.read(ir.allocator, ir, node, record_key, &.{field_name}, .text) orelse return null;
+    return parseDash(value);
+}
+
+fn parseRecordShapeMarkerProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8) ?ShapeMarker {
+    const value = fields.read(ir.allocator, ir, node, record_key, &.{field_name}, .text) orelse return null;
+    return parseShapeMarker(value);
+}
+
+fn inheritedTextHorizontalAlign(ir: anytype, node: *const Node) ?HorizontalAlign {
+    if (explicitRecordHorizontalAlign(node, "text", "math_align")) |value| return value;
+    if (inheritedHorizontalAlignProperty(ir, node, "math_align")) |value| return value;
+    const value = fields.read(ir.allocator, ir, node, "text", &.{"math_align"}, .text) orelse return null;
+    return parseHorizontalAlign(value);
+}
+
+fn inheritedMathHorizontalAlign(ir: anytype, node: *const Node) ?HorizontalAlign {
+    if (explicitRecordHorizontalAlign(node, "math", "align")) |value| return value;
+    if (inheritedHorizontalAlignProperty(ir, node, "math_align")) |value| return value;
+    const value = fields.read(ir.allocator, ir, node, "math", &.{"align"}, .text) orelse return null;
+    return parseHorizontalAlign(value);
+}
+
+fn explicitRecordHorizontalAlign(node: *const Node, record_key: []const u8, field_name: []const u8) ?HorizontalAlign {
+    const record_value = model.nodeField(node, record_key) orelse return null;
+    if (record_value != .record) return null;
+    for (record_value.record.fields.items) |field| {
+        if (!field.explicit or !std.mem.eql(u8, field.name, field_name)) continue;
+        return switch (field.value) {
+            .enum_case => |case| parseHorizontalAlign(case.case_name),
+            .string => |text| parseHorizontalAlign(text),
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn themedRecordColorProperty(ir: anytype, node: *const Node, record_key: []const u8, field_name: []const u8, theme_key: []const u8) ?Color {
+    if (explicitRecordColorProperty(node, record_key, field_name)) |color| return color;
+    if (node.kind == .object) {
+        if (ir.parentPageOf(node.id)) |page_id| {
+            if (ir.getNode(page_id)) |page| {
+                if (explicitColorProperty(page, theme_key)) |color| return color;
+            }
+        }
+    }
+    if (node.kind == .object or node.kind == .page) {
+        if (ir.getNode(ir.document_id)) |document| {
+            if (explicitColorProperty(document, theme_key)) |color| return color;
+        }
+    }
+    return parseRecordColorProperty(ir, node, record_key, field_name);
+}
+
+fn explicitRecordColorProperty(node: *const Node, record_key: []const u8, field_name: []const u8) ?Color {
+    const record_value = model.nodeField(node, record_key) orelse return null;
+    if (record_value != .record) return null;
+    for (record_value.record.fields.items) |field| {
+        if (!field.explicit or !std.mem.eql(u8, field.name, field_name)) continue;
+        return switch (field.value) {
+            .string => |text| parseColor(text),
+            else => null,
+        };
+    }
+    return null;
+}
+
+fn parseRenderKindProperty(ir: anytype, node: *const Node) ?RenderKind {
+    const value = fields.read(ir.allocator, ir, node, "render_kind", &.{}, .text) orelse return null;
     return parseRenderKind(value);
 }
 
@@ -487,12 +429,7 @@ fn parseRenderKind(value: []const u8) ?RenderKind {
 }
 
 fn parseShapeMarkerProperty(ir: anytype, node: *const Node, key: []const u8) ?ShapeMarker {
-    const value = class_fields.property(ir, node, key) orelse return null;
-    return parseShapeMarker(value);
-}
-
-fn parseShapeMarkerPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?ShapeMarker {
-    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    const value = fields.read(ir.allocator, ir, node, key, &.{}, .text) orelse return null;
     return parseShapeMarker(value);
 }
 
@@ -501,12 +438,7 @@ fn parseShapeMarker(value: []const u8) ?ShapeMarker {
 }
 
 fn parseHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const u8) ?HorizontalAlign {
-    const value = class_fields.property(ir, node, key) orelse return null;
-    return parseHorizontalAlign(value);
-}
-
-fn parseHorizontalAlignPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?HorizontalAlign {
-    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    const value = fields.read(ir.allocator, ir, node, key, &.{}, .text) orelse return null;
     return parseHorizontalAlign(value);
 }
 
@@ -527,26 +459,13 @@ fn inheritedHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const
     return parseHorizontalAlignProperty(ir, node, key);
 }
 
-fn inheritedHorizontalAlignPropertyWithEnv(ir: anytype, node: *const Node, key: []const u8, sema: anytype) ?HorizontalAlign {
-    if (explicitHorizontalAlignProperty(node, key)) |value| return value;
-    if (node.kind == .object) {
-        if (ir.parentPageOf(node.id)) |page_id| {
-            if (ir.getNode(page_id)) |page| {
-                if (explicitHorizontalAlignProperty(page, key)) |value| return value;
-            }
-        }
-    }
-    if (node.kind == .object or node.kind == .page) {
-        if (ir.getNode(ir.document_id)) |document| {
-            if (explicitHorizontalAlignProperty(document, key)) |value| return value;
-        }
-    }
-    return parseHorizontalAlignPropertyWithEnv(node, key, sema);
-}
-
 fn explicitHorizontalAlignProperty(node: *const Node, key: []const u8) ?HorizontalAlign {
-    const value = model.nodeProperty(node, key) orelse return null;
-    return parseHorizontalAlign(value);
+    const value = model.nodeField(node, key) orelse return null;
+    return switch (value) {
+        .enum_case => |case| parseHorizontalAlign(case.case_name),
+        .string => |text| parseHorizontalAlign(text),
+        else => null,
+    };
 }
 
 fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {
@@ -554,24 +473,11 @@ fn parseHorizontalAlign(value: []const u8) ?HorizontalAlign {
 }
 
 fn parseFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
-    const value = class_fields.property(ir, node, key) orelse return null;
-    const parsed = std.fmt.parseFloat(f32, value) catch return null;
-    return if (std.math.isFinite(parsed)) parsed else null;
-}
-
-fn parseFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
-    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
-    const parsed = std.fmt.parseFloat(f32, value) catch return null;
-    return if (std.math.isFinite(parsed)) parsed else null;
+    return fields.read(ir.allocator, ir, node, key, &.{}, .number);
 }
 
 fn positiveFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
     const value = parseFloatProperty(ir, node, key) orelse return null;
-    return if (value > 0) value else null;
-}
-
-fn positiveFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
-    const value = parseFloatPropertyWithEnv(node, key, sema) orelse return null;
     return if (value > 0) value else null;
 }
 
@@ -580,28 +486,14 @@ fn nonNegativeFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f3
     return if (value >= 0) value else null;
 }
 
-fn nonNegativeFloatPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?f32 {
-    const value = parseFloatPropertyWithEnv(node, key, sema) orelse return null;
-    return if (value >= 0) value else null;
-}
-
 fn parseIntProperty(ir: anytype, node: *const Node, key: []const u8) ?u32 {
-    const raw = class_fields.property(ir, node, key) orelse return null;
-    return std.fmt.parseInt(u32, raw, 10) catch null;
-}
-
-fn parseIntPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?u32 {
-    const raw = class_fields.propertyWithEnv(node, key, sema) orelse return null;
-    return std.fmt.parseInt(u32, raw, 10) catch null;
+    const raw = fields.read(ir.allocator, ir, node, key, &.{}, .number) orelse return null;
+    if (!std.math.isFinite(raw) or raw < 0) return null;
+    return @intFromFloat(@round(raw));
 }
 
 fn parseColorProperty(ir: anytype, node: *const Node, key: []const u8) ?Color {
-    const value = class_fields.property(ir, node, key) orelse return null;
-    return parseColor(value);
-}
-
-fn parseColorPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?Color {
-    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    const value = fields.read(ir.allocator, ir, node, key, &.{}, .text) orelse return null;
     return parseColor(value);
 }
 
@@ -622,26 +514,12 @@ fn themedColorProperty(ir: anytype, node: *const Node, key: []const u8, theme_ke
     return parseColorProperty(ir, node, key);
 }
 
-fn themedColorPropertyWithEnv(ir: anytype, node: *const Node, key: []const u8, theme_key: []const u8, sema: anytype) ?Color {
-    if (explicitColorProperty(node, key)) |color| return color;
-    if (node.kind == .object) {
-        if (ir.parentPageOf(node.id)) |page_id| {
-            if (ir.getNode(page_id)) |page| {
-                if (explicitColorProperty(page, theme_key)) |color| return color;
-            }
-        }
-    }
-    if (node.kind == .object or node.kind == .page) {
-        if (ir.getNode(ir.document_id)) |document| {
-            if (explicitColorProperty(document, theme_key)) |color| return color;
-        }
-    }
-    return parseColorPropertyWithEnv(node, key, sema);
-}
-
 fn explicitColorProperty(node: *const Node, key: []const u8) ?Color {
-    const value = model.nodeProperty(node, key) orelse return null;
-    return parseColor(value);
+    const value = model.nodeField(node, key) orelse return null;
+    return switch (value) {
+        .string => |text| parseColor(text),
+        else => null,
+    };
 }
 
 fn parseColor(value: []const u8) ?Color {
@@ -650,12 +528,7 @@ fn parseColor(value: []const u8) ?Color {
 }
 
 fn parseDashProperty(ir: anytype, node: *const Node, key: []const u8) ?Dash {
-    const value = class_fields.property(ir, node, key) orelse return null;
-    return parseDash(value);
-}
-
-fn parseDashPropertyWithEnv(node: *const Node, key: []const u8, sema: anytype) ?Dash {
-    const value = class_fields.propertyWithEnv(node, key, sema) orelse return null;
+    const value = fields.read(ir.allocator, ir, node, key, &.{}, .text) orelse return null;
     return parseDash(value);
 }
 

@@ -16,7 +16,7 @@ end
 
 fn/! math(text_value: String, scale: Number = 1) -> Object
   let obj = objects::math_obj(text_value)
-  obj.math_scale = scale
+  obj.math.scale = scale
   return obj
 end
 
@@ -98,19 +98,19 @@ fn/! line() -> Object
 end
 
 fn line_s(obj: Object, style: LineStyle) -> Object
-  obj.shape_stroke = style.stroke
-  obj.shape_line_width = style.line_width
-  obj.shape_dash = style.dash
-  obj.shape_marker_start = style.marker_start
-  obj.shape_marker_end = style.marker_end
-  obj.shape_marker_size = style.marker_size
+  obj.shape.stroke = style.stroke
+  obj.shape.line_width = style.line_width
+  obj.shape.dash = style.dash
+  obj.shape.marker_start = style.marker_start
+  obj.shape.marker_end = style.marker_end
+  obj.shape.marker_size = style.marker_size
   return obj
 end
 
 fn/! line_up(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
   let obj = line_s(line(), style)
-  obj.shape_start_y = 0
-  obj.shape_end_y = 1
+  obj.shape.start_y = 0
+  obj.shape.end_y = 1
   ~ obj.left == from.right
   ~ obj.bottom == from.center_y
   ~ obj.right == to.left
@@ -120,8 +120,8 @@ end
 
 fn/! line_down(from: Object, to: Object, style: LineStyle = LineStyle {}) -> Object
   let obj = line_s(line(), style)
-  obj.shape_start_y = 1
-  obj.shape_end_y = 0
+  obj.shape.start_y = 1
+  obj.shape.end_y = 0
   ~ obj.left == from.right
   ~ obj.top == from.center_y
   ~ obj.right == to.left
@@ -162,8 +162,8 @@ end
 fn/! callout_bar(color_name: Color?, thickness: Number) -> Object
   let obj = panel()
   render::box(obj, color_name, none, 0, div(thickness, 2))
-  obj.layout_font_size = 1
-  obj.layout_line_height = 1
+  obj.layout.font_size = 1
+  obj.layout.line_height = 1
   return obj
 end
 
@@ -217,15 +217,15 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
   if style.left_bracket
     let bracket = callout_left_bracket(chrome, style)
     if style.rises
-      connector.shape_start_y = 0
-      connector.shape_end_y = 1
+      connector.shape.start_y = 0
+      connector.shape.end_y = 1
       ~ connector.left == target.right
       ~ connector.bottom == target.center_y
       ~ connector.right == bracket.left
       ~ connector.top == bracket.center_y
     else
-      connector.shape_start_y = 1
-      connector.shape_end_y = 0
+      connector.shape.start_y = 1
+      connector.shape.end_y = 0
       ~ connector.left == target.right
       ~ connector.top == target.center_y
       ~ connector.right == bracket.left
@@ -234,15 +234,15 @@ fn/! bracket_callout(target: Object, text_value: String, x: Number, top_y: Numbe
     return group(note, chrome, bracket, connector)
   else
     if style.rises
-      connector.shape_start_y = 0
-      connector.shape_end_y = 1
+      connector.shape.start_y = 0
+      connector.shape.end_y = 1
       ~ connector.left == target.right
       ~ connector.bottom == target.center_y
       ~ connector.right == chrome.left
       ~ connector.top == chrome.center_y
     else
-      connector.shape_start_y = 1
-      connector.shape_end_y = 0
+      connector.shape.start_y = 1
+      connector.shape.end_y = 0
       ~ connector.left == target.right
       ~ connector.top == target.center_y
       ~ connector.right == chrome.left
@@ -322,12 +322,12 @@ end
 
 fn/! frame(text_value: String, role_name: String, payload_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width_name: Number, radius_name: Number) -> Object
   let inner = objects::raw_obj(text_value, role_name, payload_name)
-  inner.layout_x = left
-  inner.layout_right_inset = right
-  inner.wrap = WrapMode.on
+  inner.layout.x = left
+  inner.layout.right_inset = right
+  inner.layout.wrap = WrapMode.on
   let chrome = panel()
   render::box(chrome, fill_name, stroke_name, line_width_name, radius_name)
-  chrome.layout_spacing_after = 34
+  chrome.layout.spacing_after = 34
   layout::surround(chrome, inner, pad_x, pad_y)
   return inner
 end
@@ -340,8 +340,8 @@ end
 
 fn border_p(inner: Object, pad_x: Number, pad_y: Number, fill_name: Color?, stroke_name: Color?, line_width: Number, radius: Number) -> Object
   render::box(inner, fill_name, stroke_name, line_width, radius)
-  inner.chrome_pad_x = pad_x
-  inner.chrome_pad_y = pad_y
+  inner.chrome.pad_x = pad_x
+  inner.chrome.pad_y = pad_y
   return inner
 end
 
@@ -361,16 +361,16 @@ end
 
 fn code_in(text_value: String, language_name: String, left: Number, right: Number) -> Object
   let code = code_l(text_value, language_name)
-  code.layout_x = left
-  code.layout_right_inset = right
-  code.wrap = WrapMode.on
+  code.layout.x = left
+  code.layout.right_inset = right
+  code.layout.wrap = WrapMode.on
   return code
 end
 
 fn code_panel(text_value: String, language_name: String, left: Number, right: Number, pad_x: Number, pad_y: Number) -> Object
   let code = code_in(text_value, language_name, left, right)
   let chrome = panel()
-  chrome.layout_spacing_after = 34
+  chrome.layout.spacing_after = 34
   layout::surround(chrome, code, pad_x, pad_y)
   return code
 end
@@ -379,7 +379,7 @@ fn code_box(text_value: String, language_name: String, left: Number, right: Numb
   let code = code_in(text_value, language_name, left, right)
   let chrome = panel()
   render::box(chrome, fill_name, stroke_name, line_width_name, radius_name)
-  chrome.layout_spacing_after = 34
+  chrome.layout.spacing_after = 34
   layout::surround(chrome, code, pad_x, pad_y)
   return code
 end
@@ -390,44 +390,44 @@ end
 
 fn/! tex(text_value: String, scale: Number = 1) -> Object
   let obj = objects::tex_obj(text_value)
-  obj.layout_x = 102
-  obj.layout_right_inset = 102
-  obj.wrap = WrapMode.on
-  obj.math_scale = scale
+  obj.layout.x = 102
+  obj.layout.right_inset = 102
+  obj.layout.wrap = WrapMode.on
+  obj.math.scale = scale
   return obj
 end
 
 fn/! figure(text_value: String) -> Object
   let obj = objects::fig_obj(text_value)
-  obj.layout_x = 102
-  obj.layout_right_inset = 102
-  obj.wrap = WrapMode.on
+  obj.layout.x = 102
+  obj.layout.right_inset = 102
+  obj.layout.wrap = WrapMode.on
   return obj
 end
 
 fn/! image(path_value: String, factor: Number = 1) -> Object
   let obj = render::scale(objects::img_obj(path_value), factor)
-  obj.layout_x = 102
-  obj.layout_right_inset = 102
-  obj.wrap = WrapMode.on
+  obj.layout.x = 102
+  obj.layout.right_inset = 102
+  obj.layout.wrap = WrapMode.on
   require_asset_exists(obj)
   return obj
 end
 
 fn/! pdf(path_value: String, factor: Number = 1) -> Object
   let obj = render::scale(objects::pdf_obj(path_value), factor)
-  obj.layout_x = 102
-  obj.layout_right_inset = 102
-  obj.wrap = WrapMode.on
+  obj.layout.x = 102
+  obj.layout.right_inset = 102
+  obj.layout.wrap = WrapMode.on
   require_asset_exists(obj)
   return obj
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
   let code = code_l(text_value, language_name)
-  code.layout_x = 102
-  code.layout_right_inset = 102
-  code.wrap = WrapMode.on
+  code.layout.x = 102
+  code.layout.right_inset = 102
+  code.layout.wrap = WrapMode.on
   return code
 end
 
@@ -437,9 +437,9 @@ end
 
 fn/! note(text_value: String) -> Object
   let obj = objects::note_obj(text_value)
-  obj.layout_x = 120
-  obj.layout_right_inset = 120
-  obj.wrap = WrapMode.on
+  obj.layout.x = 120
+  obj.layout.right_inset = 120
+  obj.layout.wrap = WrapMode.on
   return obj
 end
 
@@ -449,9 +449,9 @@ fn/! citation(target: Object, number: Number, reference_text: String) -> Object
   let id = "citation:" ++ str(page_index(pagectx())) ++ ":" ++ number_text
 
   let ref = render::link(objects::cite_obj(marker ++ " " ++ reference_text), id)
-  ref.layout_x = 120
-  ref.layout_right_inset = 90
-  ref.wrap = WrapMode.on
+  ref.layout.x = 120
+  ref.layout.right_inset = 90
+  ref.layout.wrap = WrapMode.on
   ~ ref.top == page.top - add(632, mul(sub(number, 1), 20))
   return ref
 end

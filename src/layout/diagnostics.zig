@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model");
+const fields = @import("../core/fields.zig");
 const graph = @import("graph.zig");
 const metrics = @import("metrics.zig");
 
@@ -42,7 +43,7 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
         const overflow_top = @max(@as(f32, 0.0), node.frame.y + node.frame.height - PageLayout.height);
 
         if (overflow_left > graph.ConstraintTolerance or overflow_right > graph.ConstraintTolerance or overflow_bottom > graph.ConstraintTolerance or overflow_top > graph.ConstraintTolerance) {
-            const policy = overflowPolicy(node);
+            const policy = overflowPolicy(ir, node);
             switch (policy) {
                 .ignore => {},
                 .warn, .@"error" => try appendOverflowDiagnostic(ir.allocator, &overflows, .{
@@ -64,7 +65,7 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
                 metrics.intrinsicHeight(ir, node);
             const overflow_height = @max(@as(f32, 0.0), required_height - node.frame.height);
             if (overflow_height > graph.ConstraintTolerance) {
-                switch (overflowPolicy(node)) {
+                switch (overflowPolicy(ir, node)) {
                     .ignore => {},
                     .warn => try ir.addLayoutWarning(page_id, child_id, .{ .content_overflow = .{
                         .required_height = required_height,
@@ -108,8 +109,8 @@ fn shouldCheckContentOverflow(ir: anytype, node: *const Node) bool {
     return true;
 }
 
-fn overflowPolicy(node: *const Node) OverflowPolicy {
-    const fit = model.nodeProperty(node, "fit");
+fn overflowPolicy(ir: anytype, node: *const Node) OverflowPolicy {
+    const fit = fields.read(ir.allocator, ir, node, "layout", &.{"fit"}, .text);
     if (fit) |value| {
         if (std.meta.stringToEnum(OverflowPolicy, value)) |parsed| return parsed;
     }
