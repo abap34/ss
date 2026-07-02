@@ -3,6 +3,7 @@ const compiler = @import("compiler");
 const query_types = compiler.analysis.query.types;
 const resolve_query = compiler.analysis.query.resolve;
 const snapshot_api = compiler.analysis.snapshot;
+const type_resolution = compiler.language.type_resolution;
 
 const testing = std.testing;
 
@@ -180,9 +181,8 @@ test "analysis completion: normal positions include builtin and source type name
     var result = try case.completeSourceAfter(request_source, "value: ");
     defer result.deinit(case.allocator);
     try expectUnique(result);
-    try expectHas(result, "String");
-    try expectHas(result, "Object");
-    try expectHas(result, "Selection");
+    for (type_resolution.builtinTypes()) |builtin| try expectHas(result, builtin.name);
+    try testing.expect(type_resolution.isBuiltinTypeName("Selection"));
     try expectHas(result, "SourceOnly");
     try expectHas(result, "SourceCard");
     try expectMissing(result, "text_size");

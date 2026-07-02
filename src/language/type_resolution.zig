@@ -14,6 +14,26 @@ pub const BindingKind = enum {
     enum_type,
 };
 
+pub const BuiltinType = struct {
+    name: []const u8,
+    ty: ast.Type,
+};
+
+const builtin_types = [_]BuiltinType{
+    .{ .name = "Document", .ty = ast.Type.document },
+    .{ .name = "Page", .ty = ast.Type.page },
+    .{ .name = "Object", .ty = ast.Type.object },
+    .{ .name = "Anchor", .ty = ast.Type.anchor },
+    .{ .name = "String", .ty = ast.Type.string },
+    .{ .name = "Color", .ty = ast.Type.color },
+    .{ .name = "Number", .ty = ast.Type.number },
+    .{ .name = "Bool", .ty = ast.Type.boolean },
+    .{ .name = "Constraints", .ty = ast.Type.constraints },
+    .{ .name = "Void", .ty = .{ .kind = .void } },
+    .{ .name = "None", .ty = ast.Type.none },
+    .{ .name = "Selection", .ty = ast.Type.selection(.any) },
+};
+
 pub fn Binding(comptime Target: type) type {
     return struct {
         kind: BindingKind,
@@ -93,17 +113,13 @@ pub fn isBuiltinTypeName(name: []const u8) bool {
     return builtinType(name) != null;
 }
 
+pub fn builtinTypes() []const BuiltinType {
+    return builtin_types[0..];
+}
+
 fn builtinType(name: []const u8) ?ast.Type {
-    if (std.mem.eql(u8, name, "Document")) return ast.Type.document;
-    if (std.mem.eql(u8, name, "Page")) return ast.Type.page;
-    if (std.mem.eql(u8, name, "Object")) return ast.Type.object;
-    if (std.mem.eql(u8, name, "Anchor")) return ast.Type.anchor;
-    if (std.mem.eql(u8, name, "String")) return ast.Type.string;
-    if (std.mem.eql(u8, name, "Color")) return ast.Type.color;
-    if (std.mem.eql(u8, name, "Number")) return ast.Type.number;
-    if (std.mem.eql(u8, name, "Bool")) return ast.Type.boolean;
-    if (std.mem.eql(u8, name, "Constraints")) return ast.Type.constraints;
-    if (std.mem.eql(u8, name, "Void")) return .{ .kind = .void };
-    if (std.mem.eql(u8, name, "None")) return ast.Type.none;
+    for (builtinTypes()) |builtin| {
+        if (std.mem.eql(u8, name, builtin.name)) return builtin.ty;
+    }
     return null;
 }

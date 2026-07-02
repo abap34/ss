@@ -3,6 +3,7 @@ const ast = @import("ast");
 const core = @import("core");
 
 const language_names = @import("../../language/names.zig");
+const type_resolution = @import("../../language/type_resolution.zig");
 const resolve_query = @import("resolve.zig");
 const editor = @import("../editor.zig");
 const syntax = @import("../../syntax.zig");
@@ -11,21 +12,6 @@ const utils = @import("utils");
 
 const Candidate = types.CompletionCandidate;
 const Result = types.CompletionResult;
-
-const builtin_type_names = [_][]const u8{
-    "Document",
-    "Page",
-    "Object",
-    "Anchor",
-    "String",
-    "Color",
-    "Number",
-    "Bool",
-    "Constraints",
-    "Void",
-    "None",
-    "Selection",
-};
 
 const PropertyTarget = union(enum) {
     class: []const u8,
@@ -221,7 +207,9 @@ fn appendVisibleVariables(builder: *CandidateBuilder, snapshot: anytype, module_
 }
 
 fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, program: ?*const ast.Program, source: []const u8) !void {
-    for (builtin_type_names) |name| try builder.add(.{ .label = name, .kind = .type_decl, .detail = "builtin type" });
+    for (type_resolution.builtinTypes()) |builtin| {
+        try builder.add(.{ .label = builtin.name, .kind = .type_decl, .detail = "builtin type" });
+    }
     try appendParsedTypeNameCompletions(builder, program, source);
     for (snapshot.type_definitions) |definition| {
         try builder.add(.{

@@ -1,4 +1,5 @@
 pub const syntax = @import("syntax.zig");
+pub const language = @import("language.zig");
 pub const lowering = @import("lowering.zig");
 pub const analysis = @import("analysis.zig");
 pub const analysis_env = @import("analysis/env.zig");
