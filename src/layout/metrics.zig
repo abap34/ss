@@ -155,7 +155,7 @@ fn assetScale(ir: anytype, node: *const Node) f32 {
 }
 
 fn mathScale(ir: anytype, node: *const Node) f32 {
-    return positiveNodeFloatProperty(ir, node, "math_scale") orelse 1.0;
+    return positiveRecordFloatProperty(ir, node, "math", "scale") orelse 1.0;
 }
 
 pub fn chromePadX(ir: anytype, node: *const Node) f32 {
