@@ -25,6 +25,24 @@ test "core markdown spec: table blocks preserve columns rows and inline runs" {
     try testing.expectEqual(markdown.RunKind.bold, block.table.?.rows.items[1].cells.items[1].lines.items[0].runs.items[0].kind);
 }
 
+test "core markdown spec: table column count expands to widest row" {
+    const allocator = testing.allocator;
+    var table = markdown.TableData{ .columns = 2 };
+    defer table.rows.deinit(allocator);
+    var row = markdown.TableRow{};
+    defer row.cells.deinit(allocator);
+    var cells = [_]markdown.TableCell{ .{}, .{}, .{} };
+
+    try row.cells.append(allocator, &cells[0]);
+    try row.cells.append(allocator, &cells[1]);
+    try row.cells.append(allocator, &cells[2]);
+    try table.rows.append(allocator, &row);
+
+    try testing.expectEqual(@as(usize, 2), table.columns);
+    try testing.expectEqual(@as(usize, 3), table.rows.items[0].cells.items.len);
+    try testing.expectEqual(@as(usize, 3), markdown.tableColumnCount(table));
+}
+
 test "core markdown spec: links preserve target URLs on link runs" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

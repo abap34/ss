@@ -3048,7 +3048,7 @@ fn markdownCodeBlockContent(allocator: Allocator, block: *const Block) ![]u8 {
 
 fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
     const table = block.table orelse return baseline_bl;
-    const columns = @max(table.columns, 1);
+    const columns = core.markdown.tableColumnCount(table);
     const column_width = width / @as(f32, @floatFromInt(columns));
     var cursor_top_bl = baseline_bl + text.font_size - text.markdown_table_line_width * 0.5;
     var body_row_index: usize = 0;
