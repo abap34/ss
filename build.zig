@@ -317,6 +317,11 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/core/markdown/spec_tests.zig", &.{
         import("core", modules.core),
     }, true);
+    addModuleTest(ctx, test_step, "tests/core/value_text/spec_tests.zig", &.{
+        import("core", modules.core),
+        import("ast", modules.ast),
+        import("language_type", modules.language_type),
+    }, true);
     addModuleTest(ctx, test_step, "tests/layout/graph/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
