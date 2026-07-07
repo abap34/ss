@@ -442,7 +442,7 @@ fn markdownTableHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache
     const table = block.table.?;
     if (table.rows.items.len == 0) return style.line_height;
 
-    const columns = markdownTableColumnCount(table);
+    const columns = markdown.tableColumnCount(table);
     const pad_x = markdownTableCellPadX(ir, node, style);
     const pad_y = markdownTableCellPadY(ir, node, style);
     const line_width = markdownTableLineWidth(ir, node);
@@ -458,14 +458,6 @@ fn markdownTableHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache
         total += row_content_height + 2.0 * pad_y + line_width;
     }
     return total;
-}
-
-fn markdownTableColumnCount(table: markdown.TableData) usize {
-    var columns = table.columns;
-    for (table.rows.items) |row| {
-        columns = @max(columns, row.cells.items.len);
-    }
-    return @max(@as(usize, 1), columns);
 }
 
 fn markdownLinesHeight(ir: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, lines: []const markdown.Line, max_width: f32) f32 {

@@ -101,6 +101,14 @@ pub const TableData = struct {
     rows: std.ArrayList(*TableRow) = .empty,
 };
 
+pub fn tableColumnCount(table: TableData) usize {
+    var columns = table.columns;
+    for (table.rows.items) |row| {
+        columns = @max(columns, row.cells.items.len);
+    }
+    return @max(@as(usize, 1), columns);
+}
+
 pub const Block = struct {
     kind: BlockKind,
     paragraph: ?Paragraph = null,
