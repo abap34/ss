@@ -799,7 +799,10 @@ fn runDebugCommand(
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         var progress = utils.progress.Progress.init(6);
-        try app.writeScheduleTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+        try app.writeScheduleTraceJson(io, allocator, .{
+            .input_path = resolved.entry_path,
+            .asset_base_dir = resolved.asset_base_dir,
+        }, output_path, &progress);
         return;
     }
 
@@ -814,12 +817,18 @@ fn runDebugCommand(
 
         if (std.mem.eql(u8, layout_topic, "trace")) {
             var progress = utils.progress.Progress.init(6);
-            try app.writeLayoutTraceJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+            try app.writeLayoutTraceJson(io, allocator, .{
+                .input_path = resolved.entry_path,
+                .asset_base_dir = resolved.asset_base_dir,
+            }, output_path, &progress);
             return;
         }
         if (std.mem.eql(u8, layout_topic, "conflicts")) {
             var progress = utils.progress.Progress.init(8);
-            try app.writeLayoutConflictReportFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+            try app.writeLayoutConflictReportFile(io, allocator, .{
+                .input_path = resolved.entry_path,
+                .asset_base_dir = resolved.asset_base_dir,
+            }, output_path, &progress);
             return;
         }
         return failUsage("unknown debug layout topic: {s}", .{layout_topic});
@@ -942,7 +951,10 @@ fn run(init: std.process.Init) !void {
         const options = try parseCommandOptions(args[2..]);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
-        try app.checkFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir);
+        try app.checkFile(io, allocator, .{
+            .input_path = resolved.entry_path,
+            .asset_base_dir = resolved.asset_base_dir,
+        });
         return;
     }
 
@@ -953,10 +965,16 @@ fn run(init: std.process.Init) !void {
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
             var progress = utils.progress.Progress.init(8);
-            try app.writeIrJsonFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, &progress);
+            try app.writeIrJson(io, allocator, .{
+                .input_path = resolved.entry_path,
+                .asset_base_dir = resolved.asset_base_dir,
+            }, output_path, &progress);
         } else {
             var progress = utils.progress.Progress.init(8);
-            try app.printIrJsonForFileWithAssetBase(io, allocator, resolved.entry_path, resolved.asset_base_dir, &progress);
+            try app.printIrJson(io, allocator, .{
+                .input_path = resolved.entry_path,
+                .asset_base_dir = resolved.asset_base_dir,
+            }, &progress);
         }
         return;
     }
@@ -974,9 +992,16 @@ fn run(init: std.process.Init) !void {
             .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
-        try app.writePdfForFileWithAssetBaseAndWriteOptions(io, allocator, resolved.entry_path, resolved.asset_base_dir, output_path, .{
-            .render = render_options,
-            .diagnostics_json_path = options.diagnostics_json_path,
+        try app.writePdf(io, allocator, .{
+            .source = .{
+                .input_path = resolved.entry_path,
+                .asset_base_dir = resolved.asset_base_dir,
+            },
+            .output_path = output_path,
+            .options = .{
+                .render = render_options,
+                .diagnostics_json_path = options.diagnostics_json_path,
+            },
         }, &progress);
         return;
     }

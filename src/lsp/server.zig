@@ -1,8 +1,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const core = @import("core");
-const pdf = @import("../render/pdf.zig");
-const lowering = @import("../lowering.zig");
+const render_layout = @import("../render/layout.zig");
 const analysis = @import("../analysis.zig");
 const project = @import("../project.zig");
 const utils = @import("utils");
@@ -201,11 +200,8 @@ const Server = struct {
         return analysis_snapshot;
     }
 
-    fn lowerToIrWithRenderMeasurements(self: *Server, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
-        try lowering.evaluateDocumentWithSchedule(ir, graph);
-        var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, self.io, ir);
-        defer measurement_scope.deinit();
-        try lowering.solveLayoutWithOptions(ir, .{ .measurement_provider = measurement_scope.provider() });
+    fn evaluateAndSolveLayoutWithRenderMeasurements(self: *Server, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
+        try render_layout.evaluateAndSolveWithPdfMeasurements(self.io, ir, graph);
     }
 
     fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {
@@ -309,7 +305,7 @@ const LayoutHookContext = struct {
 
 fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
     const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
-    try hook.server.lowerToIrWithRenderMeasurements(ir, graph);
+    try hook.server.evaluateAndSolveLayoutWithRenderMeasurements(ir, graph);
 }
 
 fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Ir, err: anyerror) !void {

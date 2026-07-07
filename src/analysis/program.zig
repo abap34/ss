@@ -63,6 +63,24 @@ pub const BuildIrOptions = struct {
     parse_holes: ?syntax_hole.Result = null,
 };
 
+pub const AnalysisMode = enum {
+    diagnostics_only,
+    evaluation_schedule,
+};
+
+pub const ProgramAnalysis = struct {
+    schedule_graph: ?schedule.ScheduleGraph = null,
+
+    pub fn deinit(self: *ProgramAnalysis) void {
+        if (self.schedule_graph) |*graph| graph.deinit();
+        self.* = undefined;
+    }
+
+    pub fn scheduleGraph(self: *const ProgramAnalysis) *const schedule.ScheduleGraph {
+        return &self.schedule_graph.?;
+    }
+};
+
 pub fn collectFunctionsFromPrograms(
     allocator: std.mem.Allocator,
     programs: []const *const ast.Program,
@@ -153,17 +171,27 @@ fn continueAfterDiagnostic(ir: *const core.Ir, diagnostic_count_before: usize, e
 pub fn analyzeProgram(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-) !void {
+) !ProgramAnalysis {
     try analyzeProgramWithoutSchedule(allocator, ir);
-    try schedule.analyzeDependencies(allocator, ir);
+    try schedule.validateDependencies(allocator, ir);
+    return .{};
 }
 
-pub fn analyzeProgramForEvaluation(
+pub fn analyzeProgramWithMode(
     allocator: std.mem.Allocator,
     ir: *core.Ir,
-) !schedule.ScheduleGraph {
+    mode: AnalysisMode,
+) !ProgramAnalysis {
     try analyzeProgramWithoutSchedule(allocator, ir);
-    return schedule.ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .create });
+    return switch (mode) {
+        .diagnostics_only => blk: {
+            try schedule.validateDependencies(allocator, ir);
+            break :blk .{};
+        },
+        .evaluation_schedule => .{
+            .schedule_graph = try schedule.ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .create }),
+        },
+    };
 }
 
 fn analyzeProgramWithoutSchedule(

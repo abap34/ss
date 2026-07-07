@@ -62,14 +62,11 @@ pub fn conflictsJson(
     project: *const ProjectFacts,
     overlay: *module_loader.SourceOverlay,
 ) ![]const u8 {
-    return try app.layoutConflictReportJsonWithAssetBaseAndOverlay(
-        io,
-        allocator,
-        project.entry_path,
-        project.asset_base_dir,
-        overlay,
-        null,
-    );
+    return try app.layoutConflictReportJson(io, allocator, .{
+        .input_path = project.entry_path,
+        .asset_base_dir = project.asset_base_dir,
+        .overlay = overlay,
+    }, null);
 }
 
 pub fn conflictsJsonFromFacts(allocator: std.mem.Allocator, layout: *const LayoutFacts) ![]const u8 {
