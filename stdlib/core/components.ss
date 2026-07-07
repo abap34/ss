@@ -21,7 +21,7 @@ fn/! math(text_value: String, scale: Number = 1) -> Object
 end
 
 fn/! mathtex(text_value: String) -> Object
-  return objects::math_obj(text_value)
+  return objects::tex_obj(text_value)
 end
 
 fn/! panel() -> Object
