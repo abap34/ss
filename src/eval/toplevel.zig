@@ -798,6 +798,7 @@ fn materializePropertyRecord(
         var slot = slot_value;
         defer slot.deinit(ir.allocator);
         if (slot.value != .record) return error.InvalidValueTag;
+        if (slot.owns_tagged_text) return try cloneTaggedRecordForRuntime(ir, slot.value.record);
         return try slot.value.record.clone(ir.allocator);
     }
     const record_name = ty.class_name orelse {
@@ -805,6 +806,34 @@ fn materializePropertyRecord(
         return error.InvalidType;
     };
     return evalRecordDefaults(ir, page_id, context, mode, functions, closures, origin, record_name);
+}
+
+fn cloneTaggedRecordForRuntime(ir: *core.Ir, record: core.RecordValue) anyerror!core.RecordValue {
+    var cloned = core.RecordValue.init(try ir.copyString(record.type_name));
+    errdefer cloned.deinit(ir.allocator);
+    for (record.fields.items) |field| {
+        try cloned.fields.append(ir.allocator, .{
+            .name = try ir.copyString(field.name),
+            .value = try cloneTaggedValueForRuntime(ir, field.value),
+            .explicit = field.explicit,
+        });
+    }
+    return cloned;
+}
+
+fn cloneTaggedValueForRuntime(ir: *core.Ir, value: core.Value) anyerror!core.Value {
+    return switch (value) {
+        .string => |text| .{ .string = try ir.copyString(text) },
+        .enum_case => |case| .{ .enum_case = .{
+            .enum_name = try ir.copyString(case.enum_name),
+            .case_name = try ir.copyString(case.case_name),
+        } },
+        .record => |record| .{ .record = try cloneTaggedRecordForRuntime(ir, record) },
+        .none => .{ .none = {} },
+        .number => |number| .{ .number = number },
+        .boolean => |boolean| .{ .boolean = boolean },
+        else => try value.clone(ir.allocator),
+    };
 }
 
 fn evalCall(

@@ -31,6 +31,26 @@ pub fn parsePropertyValue(allocator: std.mem.Allocator, text: []const u8) !model
     return try parseTaggedValue(allocator, parsed.value);
 }
 
+pub fn typedPropertyValueOwnsTaggedText(ty: ast.Type) bool {
+    if (ty.kind == .optional) {
+        const child = ty.optional_child orelse return false;
+        return typedPropertyValueOwnsTaggedText(child.*);
+    }
+    return ty.kind == .record;
+}
+
+pub fn deinitParsedPropertyValue(allocator: std.mem.Allocator, value: *model.Value) void {
+    switch (value.*) {
+        .string => |text| allocator.free(text),
+        .enum_case => |case| {
+            allocator.free(case.enum_name);
+            allocator.free(case.case_name);
+        },
+        .record => |*record| deinitParsedRecordValue(allocator, record),
+        else => value.deinit(allocator),
+    }
+}
+
 pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: ast.Type) !model.Value {
     if (ty.kind == .optional) {
         const child = ty.optional_child orelse return .{ .string = text };
@@ -46,13 +66,12 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
         } },
         .record => blk: {
             var parsed = try parsePropertyValue(allocator, text);
+            errdefer deinitParsedPropertyValue(allocator, &parsed);
             if (parsed != .record) {
-                parsed.deinit(allocator);
                 return error.InvalidValueTag;
             }
             if (ty.class_name) |expected| {
                 if (!std.mem.eql(u8, parsed.record.type_name, expected)) {
-                    parsed.deinit(allocator);
                     return error.InvalidValueTag;
                 }
             }
@@ -66,6 +85,15 @@ pub fn typedPropertyValue(allocator: std.mem.Allocator, text: []const u8, ty: as
         },
         else => .{ .string = text },
     };
+}
+
+fn deinitParsedRecordValue(allocator: std.mem.Allocator, record: *model.RecordValue) void {
+    allocator.free(record.type_name);
+    for (record.fields.items) |*field| {
+        allocator.free(field.name);
+        deinitParsedPropertyValue(allocator, &field.value);
+    }
+    record.fields.deinit(allocator);
 }
 
 fn recordPropertyString(allocator: std.mem.Allocator, record: model.RecordValue) ![]const u8 {
@@ -143,7 +171,7 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
         const type_value = json.stringField(object, "type") orelse return error.InvalidValueTag;
         const fields = json.arrayFieldObject(object, "fields") orelse return error.InvalidValueTag;
         var record = model.RecordValue.init(try allocator.dupe(u8, type_value));
-        errdefer record.deinit(allocator);
+        errdefer deinitParsedRecordValue(allocator, &record);
         for (fields.items) |field_item| {
             if (field_item != .object) return error.InvalidValueTag;
             const field_object = &field_item.object;
@@ -153,11 +181,19 @@ fn parseTaggedValue(allocator: std.mem.Allocator, value: json.Value) !model.Valu
                 if (explicit_value.* != .bool) return error.InvalidValueTag;
                 break :blk explicit_value.bool;
             } else true;
+            const field_name = try allocator.dupe(u8, name_value);
+            var field_name_moved = false;
+            errdefer if (!field_name_moved) allocator.free(field_name);
+            var field_value = try parseTaggedValue(allocator, nested_value.*);
+            var field_value_moved = false;
+            errdefer if (!field_value_moved) deinitParsedPropertyValue(allocator, &field_value);
             try record.fields.append(allocator, .{
-                .name = try allocator.dupe(u8, name_value),
-                .value = try parseTaggedValue(allocator, nested_value.*),
+                .name = field_name,
+                .value = field_value,
                 .explicit = explicit,
             });
+            field_name_moved = true;
+            field_value_moved = true;
         }
         return .{ .record = record };
     }

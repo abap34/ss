@@ -9,9 +9,15 @@ const Value = model.Value;
 pub const ValueSlot = struct {
     value: Value,
     owned: bool = false,
+    owns_tagged_text: bool = false,
 
     pub fn deinit(self: *ValueSlot, allocator: std.mem.Allocator) void {
-        if (self.owned) self.value.deinit(allocator);
+        if (!self.owned) return;
+        if (self.owns_tagged_text) {
+            value_text.deinitParsedPropertyValue(allocator, &self.value);
+        } else {
+            self.value.deinit(allocator);
+        }
     }
 };
 
@@ -123,7 +129,11 @@ fn parseDefault(allocator: std.mem.Allocator, maybe_text: ?[]const u8, ty: ast.T
         Value{ .none = {} }
     else
         try value_text.typedPropertyValue(allocator, text, ty);
-    return .{ .value = parsed, .owned = true };
+    return .{
+        .value = parsed,
+        .owned = true,
+        .owns_tagged_text = !isNoneDefault(text) and value_text.typedPropertyValueOwnsTaggedText(ty),
+    };
 }
 
 const FieldDescriptor = struct {
