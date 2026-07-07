@@ -80,3 +80,21 @@ record Theme {
 extend Doc {
   theme: Theme? = none
 }
+
+fn set_theme!(theme_value: Theme) -> Void
+  docctx().theme = theme_value
+end
+
+fn current_theme_or(default_value: Theme) -> Theme
+  return docctx().theme ?? default_value
+end
+
+fn annotate_with_style!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle) -> Object
+  return components::marked_callout!(source_text, target_text, note_text, style)
+end
+
+fn annotate_down_with_style!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle) -> Object
+  return components::marked_callout!(source_text, target_text, note_text, style with {
+    rises = false
+  })
+end

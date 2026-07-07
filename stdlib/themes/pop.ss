@@ -1,4 +1,5 @@
 import std:themes/default as base
+import std:themes/base as theme_base
 import std:core/classes as classes
 import std:core/components as components
 import std:core/layout as layout
@@ -123,21 +124,19 @@ fn default_theme() -> Theme
 end
 
 fn theme!(theme_value: Theme) -> Void
-  docctx().theme = theme_value
+  theme_base::set_theme!(theme_value)
 end
 
 fn current_theme() -> Theme
-  return docctx().theme ?? default_theme()
+  return theme_base::current_theme_or(default_theme())
 end
 
 fn annotate!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return components::marked_callout!(source_text, target_text, note_text, style)
+  return theme_base::annotate_with_style!(source_text, target_text, note_text, style)
 end
 
 fn annotate_down!(source_text: String, target_text: String, note_text: String, style: MarkedCalloutStyle = current_theme().callout) -> Object
-  return components::marked_callout!(source_text, target_text, note_text, style with {
-    rises = false
-  })
+  return theme_base::annotate_down_with_style!(source_text, target_text, note_text, style)
 end
 
 fn/! h1(title_text: String, theme: Theme = current_theme()) -> Object
