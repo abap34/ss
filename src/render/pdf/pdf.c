@@ -540,13 +540,6 @@ static PangoFontDescription *ss_font_description(const char *family, int weight,
     return desc;
 }
 
-static int ss_pdf_apply_text_clip(cairo_t *cr, double x, double y, double width, double height) {
-    if (width <= 0 || height <= 0) return 0;
-    cairo_rectangle(cr, x, y, width, height);
-    cairo_clip(cr);
-    return 1;
-}
-
 int ss_pdf_draw_text(
     SsPdf *pdf,
     double x,
@@ -565,6 +558,7 @@ int ss_pdf_draw_text(
     int wrap
 ) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
+    (void)height;
 
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
@@ -592,11 +586,6 @@ int ss_pdf_draw_text(
     }
 
     cairo_save(pdf->cr);
-    if (!ss_pdf_apply_text_clip(pdf->cr, x, y, width, height)) {
-        cairo_restore(pdf->cr);
-        g_object_unref(layout);
-        return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-    }
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, y);
     pango_cairo_layout_path(pdf->cr, layout);
@@ -626,6 +615,8 @@ int ss_pdf_draw_text_baseline(
     int wrap
 ) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
+    (void)clip_y;
+    (void)height;
 
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
@@ -654,11 +645,6 @@ int ss_pdf_draw_text_baseline(
 
     double layout_y = baseline_y - ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
     cairo_save(pdf->cr);
-    if (!ss_pdf_apply_text_clip(pdf->cr, x, clip_y, width, height)) {
-        cairo_restore(pdf->cr);
-        g_object_unref(layout);
-        return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-    }
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, layout_y);
     pango_cairo_layout_path(pdf->cr, layout);
@@ -688,6 +674,8 @@ int ss_pdf_draw_color_text_baseline(
     int wrap
 ) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
+    (void)clip_y;
+    (void)height;
 
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
@@ -716,11 +704,6 @@ int ss_pdf_draw_color_text_baseline(
 
     double layout_y = baseline_y - ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
     cairo_save(pdf->cr);
-    if (!ss_pdf_apply_text_clip(pdf->cr, x, clip_y, width, height)) {
-        cairo_restore(pdf->cr);
-        g_object_unref(layout);
-        return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-    }
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, layout_y);
     pango_cairo_show_layout(pdf->cr, layout);
