@@ -2165,10 +2165,20 @@ fn drawRenderPage(ctx: *DrawContext, page: *const RenderPage) !void {
     for (page.ops) |*op| {
         if (op.render.kind != .chrome_only) try drawRenderOp(ctx, op);
     }
-    var fit: c.SsPdfRecordingFit = undefined;
-    if (c.ss_pdf_recording_fit(ctx.pdf, PageLayout.width, PageLayout.height, 1.0, &fit) != 0) return NativePdfError.CairoFailed;
+    const fit = try identityRecordingFit(ctx);
     if (c.ss_pdf_paint_recording_with_fit(ctx.pdf, &fit) != 0) return NativePdfError.CairoFailed;
     try emitPageAnnotations(ctx, fit, destinations.items, links.items);
+}
+
+fn identityRecordingFit(ctx: *DrawContext) !c.SsPdfRecordingFit {
+    var bounds: c.SsPdfRecordingExtents = undefined;
+    if (c.ss_pdf_recording_ink_extents(ctx.pdf, &bounds) != 0) return NativePdfError.CairoFailed;
+    return .{
+        .bounds = bounds,
+        .scale = 1.0,
+        .tx = 0.0,
+        .ty = 0.0,
+    };
 }
 
 fn deinitLinkAnnotations(allocator: Allocator, links: []const LinkAnnotation) void {
