@@ -6,6 +6,8 @@ import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 await testPreludeMathtexUsesRawTexPayload();
+await testThemeStoredThemeOverride("academic");
+await testThemeStoredThemeOverride("pop");
 
 async function testPreludeMathtexUsesRawTexPayload() {
   const project = await mkdtempProject("ss-stdlib-wrappers-");
@@ -34,6 +36,45 @@ end
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+async function testThemeStoredThemeOverride(themeName) {
+  const project = await mkdtempProject(`ss-theme-${themeName}-`);
+  try {
+    const content = `${themeName} override`;
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/${themeName} as *
+
+document
+theme!(default_theme() with {
+  body.text.size = 31
+})
+end
+
+page styled
+text!("${content}")
+end
+`,
+      "utf8",
+    );
+    const dumpPath = path.join(project, "dump.json");
+    await runSs(["dump", "slide.ss", dumpPath], project);
+
+    const dump = JSON.parse(await readFile(dumpPath, "utf8"));
+    const node = dump.nodes.find((candidate) => candidate.content === content);
+    assert(node, `theme text node was not found: ${JSON.stringify(dump.nodes)}`);
+    const textStyle = JSON.parse(node.fields.text);
+    const size = taggedRecordField(textStyle, "size");
+    assert(size?.kind === "number" && size.value === 31, `${themeName} theme override did not reach text!: ${JSON.stringify(textStyle)}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+function taggedRecordField(record, name) {
+  assert(record.kind === "record", `expected tagged record: ${JSON.stringify(record)}`);
+  return record.fields.find((field) => field.name === name)?.value;
 }
 
 async function mkdtempProject(prefix) {
