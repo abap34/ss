@@ -54,6 +54,11 @@ const MeasurementKeyContext = struct {
 
 const MeasurementMap = std.HashMap(MeasurementKey, f32, MeasurementKeyContext, std.hash_map.default_max_load_percentage);
 
+const AssetIntrinsicSize = struct {
+    width: f32,
+    height: f32,
+};
+
 pub const MeasurementCache = struct {
     allocator: std.mem.Allocator,
     values: MeasurementMap,
@@ -191,6 +196,9 @@ fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementC
     const style = styleForNode(ir, node);
     const content = model.nodeDisplayContent(node);
     const chrome_width = 2.0 * chromePadX(ir, node);
+    if (intrinsicAssetSize(ir, node)) |asset| {
+        return asset.width * assetScale(ir, node) + chrome_width;
+    }
     if (cache) |measurements| {
         const available_width = maxWidthForStyle(style) + chrome_width;
         if (try measurements.renderedMeasurement(ir, node, available_width, .natural)) |measured| {
@@ -251,6 +259,9 @@ pub fn intrinsicHeightCached(ir: anytype, node: *const Node, cache: *Measurement
 fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
     const style = styleForNode(ir, node);
     const chrome_height = 2.0 * chromePadY(ir, node);
+    if (intrinsicAssetSize(ir, node)) |asset| {
+        return asset.height * assetScale(ir, node) + chrome_height;
+    }
     const measured_outer_width = if (node.frame.width > 0)
         @max(@as(f32, 1.0), node.frame.width)
     else
@@ -291,6 +302,17 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
                 source.lineCount(content);
             break :blk @as(f32, @floatFromInt(lines)) * style.line_height + chrome_height;
         },
+    };
+}
+
+fn intrinsicAssetSize(ir: anytype, node: *const Node) ?AssetIntrinsicSize {
+    switch (node.payload_kind orelse .text) {
+        .image_ref, .pdf_ref => {},
+        else => return null,
+    }
+    return .{
+        .width = positiveNodeFloatProperty(ir, node, "asset_width") orelse return null,
+        .height = positiveNodeFloatProperty(ir, node, "asset_height") orelse return null,
     };
 }
 
