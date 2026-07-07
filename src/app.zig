@@ -212,14 +212,6 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
     return .{ .ir = ir, .schedule_graph = schedule_graph };
 }
 
-fn evaluateDocumentOrReport(ir: *core.Ir, progress: ?*Progress) !void {
-    lowering.evaluateDocument(ir) catch |err| {
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-        return err;
-    };
-    if (progress) |p| p.step("Evaluate document");
-}
-
 fn evaluateDocumentOrReportWithSchedule(ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph, progress: ?*Progress) !void {
     lowering.evaluateDocumentWithSchedule(ir, graph) catch |err| {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);

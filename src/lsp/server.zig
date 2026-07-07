@@ -201,8 +201,8 @@ const Server = struct {
         return analysis_snapshot;
     }
 
-    fn lowerToIrWithRenderMeasurements(self: *Server, ir: *core.Ir) !void {
-        try lowering.evaluateDocument(ir);
+    fn lowerToIrWithRenderMeasurements(self: *Server, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
+        try lowering.evaluateDocumentWithSchedule(ir, graph);
         var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, self.io, ir);
         defer measurement_scope.deinit();
         try lowering.solveLayoutWithOptions(ir, .{ .measurement_provider = measurement_scope.provider() });
@@ -307,9 +307,9 @@ const LayoutHookContext = struct {
     diagnostics: *DiagnosticSet,
 };
 
-fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir) !void {
+fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
     const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
-    try hook.server.lowerToIrWithRenderMeasurements(ir);
+    try hook.server.lowerToIrWithRenderMeasurements(ir, graph);
 }
 
 fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Ir, err: anyerror) !void {

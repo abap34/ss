@@ -39,6 +39,16 @@ pub const VariableObjectClassExpectation = struct {
     object_class: ?[]const u8,
 };
 
+fn analyzeAndLowerIr(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+    var graph = try analysis.analyzeProgramForEvaluation(allocator, ir);
+    defer graph.deinit();
+    if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    try lowering.evaluateDocumentWithSchedule(ir, &graph);
+    if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    try lowering.solveLayout(ir);
+    if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
+}
+
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
@@ -51,10 +61,7 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
     });
     defer ir.deinit();
 
-    try analysis.analyzeProgram(allocator, &ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try lowering.lowerToIr(&ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    try analyzeAndLowerIr(allocator, &ir);
 }
 
 pub fn buildSourceWithOverlay(
@@ -93,10 +100,7 @@ pub fn buildSourceWithOverlays(
     });
     defer ir.deinit();
 
-    try analysis.analyzeProgram(allocator, &ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try lowering.lowerToIr(&ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    try analyzeAndLowerIr(allocator, &ir);
 }
 
 pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, expected: []const u8) !void {
@@ -514,10 +518,7 @@ fn buildLoweredIr(io: std.Io, allocator: std.mem.Allocator, path: []const u8, so
     });
     errdefer ir.deinit();
 
-    try analysis.analyzeProgram(allocator, &ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try lowering.lowerToIr(&ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    try analyzeAndLowerIr(allocator, &ir);
     return ir;
 }
 
@@ -545,10 +546,7 @@ fn buildLoweredIrWithOverlays(
     });
     errdefer ir.deinit();
 
-    try analysis.analyzeProgram(allocator, &ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
-    try lowering.lowerToIr(&ir);
-    if (utils.err.hasIrErrors(&ir)) return error.DiagnosticsFailed;
+    try analyzeAndLowerIr(allocator, &ir);
     return ir;
 }
 
@@ -601,9 +599,15 @@ pub fn expectLoweringErrorDiagnostic(
     });
     defer ir.deinit();
 
-    analysis.analyzeProgram(allocator, &ir) catch {};
+    var graph: ?analysis.schedule.ScheduleGraph = analysis.analyzeProgramForEvaluation(allocator, &ir) catch null;
+    defer if (graph) |*value| value.deinit();
     if (!utils.err.hasIrErrors(&ir)) {
-        lowering.lowerToIr(&ir) catch {};
+        if (graph) |*value| {
+            lowering.evaluateDocumentWithSchedule(&ir, value) catch {};
+            if (!utils.err.hasIrErrors(&ir)) {
+                lowering.solveLayout(&ir) catch {};
+            }
+        }
     }
 
     for (ir.diagnostics.items) |diagnostic| {

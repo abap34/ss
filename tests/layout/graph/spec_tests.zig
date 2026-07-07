@@ -1176,6 +1176,26 @@ fn fakeLayoutMeasurement(
     };
 }
 
+const FakeAllMeasurementContext = struct {
+    calls: usize = 0,
+};
+
+fn fakeAllLayoutMeasurement(
+    context: *anyopaque,
+    ir_ptr: *anyopaque,
+    node: *const model.Node,
+    width: f32,
+    mode: model.LayoutMeasurementMode,
+) anyerror!?model.LayoutMeasurement {
+    _ = ir_ptr;
+    _ = node;
+    _ = width;
+    _ = mode;
+    const ctx: *FakeAllMeasurementContext = @ptrCast(@alignCast(context));
+    ctx.calls += 1;
+    return .{ .width = 1000, .height = 700 };
+}
+
 test "layout solver uses render measurement provider for intrinsic object size" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -1197,6 +1217,35 @@ test "layout solver uses render measurement provider for intrinsic object size" 
     try expectFloat(321, measurement.last_constrained_width);
     try testing.expect(measurement.natural_calls > 0);
     try testing.expect(measurement.constrained_calls > 0);
+}
+
+test "layout metrics keep asset intrinsic size ahead of render measurement provider" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const pdf = try ir.makeObject(page, "pdf", null, .asset, .pdf_ref, "chart.pdf");
+    try setNumberField(&ir, pdf, "asset_width", 220);
+    try setNumberField(&ir, pdf, "asset_height", 70);
+    const image = try ir.makeObject(page, "image", null, .asset, .image_ref, "chart.png");
+    try setNumberField(&ir, image, "asset_width", 180);
+    try setNumberField(&ir, image, "asset_height", 90);
+
+    var measurement = FakeAllMeasurementContext{};
+    try solver.solveLayoutWithTracePathAndOptions(&ir, null, .{
+        .measurement_provider = .{
+            .context = &measurement,
+            .measure = fakeAllLayoutMeasurement,
+        },
+    });
+
+    const pdf_node = ir.getNode(pdf).?;
+    try expectFloat(220, pdf_node.frame.width);
+    try expectFloat(70, pdf_node.frame.height);
+    const image_node = ir.getNode(image).?;
+    try expectFloat(180, image_node.frame.width);
+    try expectFloat(90, image_node.frame.height);
+    try testing.expectEqual(@as(usize, 0), measurement.calls);
 }
 
 test "layout metrics use measured font width for wrapped text height" {

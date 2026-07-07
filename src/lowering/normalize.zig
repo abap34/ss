@@ -4,11 +4,6 @@ const eval_toplevel = @import("../eval/toplevel.zig");
 const analysis_index = @import("../analysis/index.zig");
 const schedule = @import("../analysis/schedule.zig");
 
-pub fn evaluateDocument(ir: *core.Ir) !void {
-    try eval_toplevel.evalIr(ir.allocator, ir);
-    try ir.addUnplacedObjectWarnings();
-}
-
 pub fn evaluateDocumentWithSchedule(ir: *core.Ir, graph: *const schedule.ScheduleGraph) !void {
     try eval_toplevel.evalIrWithSchedule(ir.allocator, ir, graph);
     try ir.addUnplacedObjectWarnings();
@@ -32,15 +27,6 @@ pub fn solveLayoutWithTracePath(ir: *core.Ir, trace_path: []const u8) !void {
 pub fn solveLayoutWithTracePathAndOptions(ir: *core.Ir, trace_path: []const u8, options: core.layout.graph.SolveOptions) !void {
     try ir.finalizeWithLayoutTracePathAndOptions(trace_path, options);
     try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
-}
-
-pub fn lowerToIr(ir: *core.Ir) !void {
-    try evaluateDocument(ir);
-    try solveLayout(ir);
-}
-
-pub fn scheduleTraceJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
-    return schedule.scheduleTraceJson(allocator, ir);
 }
 
 pub fn scheduleTraceJsonFromGraph(allocator: std.mem.Allocator, ir: *const core.Ir, graph: *const schedule.ScheduleGraph) ![]u8 {
