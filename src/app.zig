@@ -4,6 +4,7 @@ const ast = @import("ast");
 const parser = @import("syntax.zig");
 const lowering = @import("lowering.zig");
 const pdf = @import("render/pdf.zig");
+const render_layout = @import("render/layout.zig");
 const dump = @import("dump.zig");
 const analysis = @import("analysis.zig");
 const module_loader = @import("modules/loader.zig");
@@ -18,29 +19,36 @@ pub const PdfWriteOptions = struct {
     diagnostics_json_path: ?[]const u8 = null,
 };
 
-const AnalysisMode = enum {
-    diagnostics_only,
-    evaluation_schedule,
+pub const SourceRequest = struct {
+    input_path: []const u8,
+    asset_base_dir: []const u8,
+    overlay: ?*const module_loader.SourceOverlay = null,
+};
+
+pub const PdfWriteRequest = struct {
+    source: SourceRequest,
+    output_path: []const u8,
+    options: PdfWriteOptions = .{},
 };
 
 const AnalyzedFile = struct {
     ir: core.Ir,
-    schedule_graph: ?analysis.schedule.ScheduleGraph = null,
+    program_analysis: analysis.ProgramAnalysis = .{},
 
     fn deinit(self: *AnalyzedFile) void {
-        if (self.schedule_graph) |*graph| graph.deinit();
+        self.program_analysis.deinit();
         self.ir.deinit();
     }
 
     fn takeIr(self: *AnalyzedFile) core.Ir {
-        if (self.schedule_graph) |*graph| graph.deinit();
+        self.program_analysis.deinit();
         const ir = self.ir;
         self.* = undefined;
         return ir;
     }
 
     fn scheduleGraph(self: *const AnalyzedFile) *const analysis.schedule.ScheduleGraph {
-        return &self.schedule_graph.?;
+        return self.program_analysis.scheduleGraph();
     }
 };
 
@@ -59,88 +67,57 @@ const ParsedSource = struct {
     }
 };
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: ?*Progress) !core.Ir {
-    const asset_base_dir = std.fs.path.dirname(path) orelse ".";
-    return buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
-}
-
-pub fn buildFileWithAssetBase(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    asset_base_dir: []const u8,
-    progress: ?*Progress,
-) !core.Ir {
-    return buildFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, null);
-}
-
-pub fn buildFileWithAssetBaseAndOverlay(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    asset_base_dir: []const u8,
-    progress: ?*Progress,
-    overlay: ?*const module_loader.SourceOverlay,
-) !core.Ir {
-    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay, .evaluation_schedule);
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.Ir {
+    var analyzed = try buildAnalyzedFile(io, allocator, request, progress, .evaluation_schedule);
     errdefer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
     try solveLayoutOrReport(io, &analyzed.ir, progress);
     return analyzed.takeIr();
 }
 
-pub fn buildTypedFileWithAssetBaseAndOverlay(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    asset_base_dir: []const u8,
-    progress: ?*Progress,
-    overlay: ?*const module_loader.SourceOverlay,
-) !core.Ir {
-    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, path, asset_base_dir, progress, overlay, .diagnostics_only);
+pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.Ir {
+    var analyzed = try buildAnalyzedFile(io, allocator, request, progress, .diagnostics_only);
     errdefer analyzed.deinit();
     return analyzed.takeIr();
 }
 
-fn buildAnalyzedFileWithAssetBaseAndOverlay(
+fn buildAnalyzedFile(
     io: std.Io,
     allocator: std.mem.Allocator,
-    path: []const u8,
-    asset_base_dir: []const u8,
+    request: SourceRequest,
     progress: ?*Progress,
-    overlay: ?*const module_loader.SourceOverlay,
-    mode: AnalysisMode,
+    mode: analysis.AnalysisMode,
 ) !AnalyzedFile {
-    var source = if (overlay) |source_overlay|
-        if (source_overlay.get(path)) |text|
+    var source = if (request.overlay) |source_overlay|
+        if (source_overlay.get(request.input_path)) |text|
             try allocator.dupe(u8, text)
         else
-            try utils.fs.readFileAlloc(io, allocator, path)
+            try utils.fs.readFileAlloc(io, allocator, request.input_path)
     else
-        try utils.fs.readFileAlloc(io, allocator, path);
+        try utils.fs.readFileAlloc(io, allocator, request.input_path);
     errdefer allocator.free(source);
     if (progress) |p| p.step("Read inputs");
 
-    var parsed = try parseSource(allocator, source, path);
+    var parsed = try parseSource(allocator, source, request.input_path);
     errdefer parsed.deinit(allocator);
     if (progress) |p| p.step("Parse source");
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = analysis.loadProgramIndexWithOptions(allocator, io, asset_base_dir, parsed.program, .{
-        .overlay = overlay,
+    var index = analysis.loadProgramIndexWithOptions(allocator, io, request.asset_base_dir, parsed.program, .{
+        .overlay = request.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
     }) catch |err| {
         if (load_diagnostics.items.items.len != 0) {
             printLoadDiagnostics(&load_diagnostics);
-            printImportFailureDiagnostic(allocator, io, path, source, asset_base_dir, &parsed.program, overlay, &load_diagnostics);
+            printImportFailureDiagnostic(allocator, io, request.input_path, source, request.asset_base_dir, &parsed.program, request.overlay, &load_diagnostics);
             return error.DiagnosticsFailed;
         } else if (err == error.UnknownImport) {
-            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, parsed.program, overlay) orelse return err;
+            var report = try module_loader.findUnknownImportReport(allocator, io, request.asset_base_dir, parsed.program, request.overlay) orelse return err;
             defer report.deinit(allocator);
             error_report.print(.{
-                .path = path,
+                .path = request.input_path,
                 .source = source,
                 .severity = .@"error",
                 .message = report.message,
@@ -155,14 +132,14 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
     };
     if (progress) |p| p.step("Load modules");
 
-    var ir = analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source, &parsed.program, &index, .{
+    var ir = analysis.buildIrWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.program, &index, .{
         .parse_holes = parsed.holes,
     }) catch |err| {
         if (err == error.UnknownImport) {
-            var report = try module_loader.findUnknownImportReport(allocator, io, asset_base_dir, parsed.program, overlay) orelse return err;
+            var report = try module_loader.findUnknownImportReport(allocator, io, request.asset_base_dir, parsed.program, request.overlay) orelse return err;
             defer report.deinit(allocator);
             error_report.print(.{
-                .path = path,
+                .path = request.input_path,
                 .source = source,
                 .severity = .@"error",
                 .message = report.message,
@@ -175,7 +152,7 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
             const message = try std.fmt.allocPrint(allocator, "BuildFailed: {s}", .{@errorName(err)});
             defer allocator.free(message);
             error_report.print(.{
-                .path = path,
+                .path = request.input_path,
                 .source = source,
                 .severity = .@"error",
                 .message = message,
@@ -188,28 +165,18 @@ fn buildAnalyzedFileWithAssetBaseAndOverlay(
     defer index.deinit();
     errdefer ir.deinit();
 
-    var schedule_graph: ?analysis.schedule.ScheduleGraph = null;
-    errdefer if (schedule_graph) |*graph| graph.deinit();
-
-    switch (mode) {
-        .diagnostics_only => analysis.analyzeProgram(allocator, &ir) catch |err| {
-            error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
-            return err;
-        },
-        .evaluation_schedule => {
-            schedule_graph = analysis.analyzeProgramForEvaluation(allocator, &ir) catch |err| {
-                error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
-                return err;
-            };
-        },
-    }
+    var program_analysis = analysis.analyzeProgramWithMode(allocator, &ir, mode) catch |err| {
+        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        return err;
+    };
+    errdefer program_analysis.deinit();
     if (progress) |p| p.step("Analyze");
 
     if (error_report.hasIrErrors(&ir)) {
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
         return error.DiagnosticsFailed;
     }
-    return .{ .ir = ir, .schedule_graph = schedule_graph };
+    return .{ .ir = ir, .program_analysis = program_analysis };
 }
 
 fn evaluateDocumentOrReportWithSchedule(ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph, progress: ?*Progress) !void {
@@ -221,9 +188,7 @@ fn evaluateDocumentOrReportWithSchedule(ir: *core.Ir, graph: *const analysis.sch
 }
 
 fn solveLayoutOrReport(io: std.Io, ir: *core.Ir, progress: ?*Progress) !void {
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir);
-    defer measurement_scope.deinit();
-    lowering.solveLayoutWithOptions(ir, .{ .measurement_provider = measurement_scope.provider() }) catch |err| {
+    render_layout.solveWithPdfMeasurements(io, ir) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
             else => {
@@ -239,9 +204,7 @@ fn solveLayoutOrReport(io: std.Io, ir: *core.Ir, progress: ?*Progress) !void {
 }
 
 fn solveLayoutWithTracePathOrReport(io: std.Io, ir: *core.Ir, trace_path: []const u8, progress: ?*Progress) !void {
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir);
-    defer measurement_scope.deinit();
-    lowering.solveLayoutWithTracePathAndOptions(ir, trace_path, .{ .measurement_provider = measurement_scope.provider() }) catch |err| {
+    render_layout.solveWithPdfMeasurementsAndTracePath(io, ir, trace_path) catch |err| {
         switch (err) {
             error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
             else => {
@@ -256,20 +219,14 @@ fn solveLayoutWithTracePathOrReport(io: std.Io, ir: *core.Ir, trace_path: []cons
     if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
 }
 
-pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !void {
-    var ir = try buildFile(io, allocator, path, null);
+pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest) !void {
+    var ir = try buildFile(io, allocator, request, null);
     defer ir.deinit();
-    std.debug.print("ok {s}\n", .{path});
+    std.debug.print("ok {s}\n", .{request.input_path});
 }
 
-pub fn checkFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []const u8, asset_base_dir: []const u8) !void {
-    var ir = try buildFileWithAssetBase(io, allocator, path, asset_base_dir, null);
-    defer ir.deinit();
-    std.debug.print("ok {s}\n", .{path});
-}
-
-pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, progress: *Progress) !void {
-    var ir = try buildFile(io, allocator, path, progress);
+pub fn printIrJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: *Progress) !void {
+    var ir = try buildFile(io, allocator, request, progress);
     defer ir.deinit();
     const text = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(text);
@@ -278,18 +235,8 @@ pub fn printIrJsonForFile(io: std.Io, allocator: std.mem.Allocator, path: []cons
     progress.step("Print dump");
 }
 
-pub fn printIrJsonForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, path: []const u8, asset_base_dir: []const u8, progress: *Progress) !void {
-    var ir = try buildFileWithAssetBase(io, allocator, path, asset_base_dir, progress);
-    defer ir.deinit();
-    const text = try dump.toOwnedString(allocator, &ir);
-    defer allocator.free(text);
-    progress.step("Serialize JSON");
-    try utils.io.writeStdoutAll(text);
-    progress.step("Print dump");
-}
-
-pub fn writeIrJsonFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var ir = try buildFile(io, allocator, input_path, progress);
+pub fn writeIrJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, output_path: []const u8, progress: *Progress) !void {
+    var ir = try buildFile(io, allocator, request, progress);
     defer ir.deinit();
     const json = try dump.toOwnedString(allocator, &ir);
     defer allocator.free(json);
@@ -298,18 +245,8 @@ pub fn writeIrJsonFile(io: std.Io, allocator: std.mem.Allocator, input_path: []c
     progress.step("Write JSON");
 }
 
-pub fn writeIrJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var ir = try buildFileWithAssetBase(io, allocator, input_path, asset_base_dir, progress);
-    defer ir.deinit();
-    const json = try dump.toOwnedString(allocator, &ir);
-    defer allocator.free(json);
-    progress.step("Serialize JSON");
-    try utils.fs.writeFile(io, output_path, json);
-    progress.step("Write JSON");
-}
-
-pub fn writeScheduleTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
+pub fn writeScheduleTraceJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, output_path: []const u8, progress: *Progress) !void {
+    var analyzed = try buildAnalyzedFile(io, allocator, request, progress, .evaluation_schedule);
     defer analyzed.deinit();
     const json = lowering.scheduleTraceJsonFromGraph(allocator, &analyzed.ir, analyzed.scheduleGraph()) catch |err| {
         error_report.printIrDiagnostics(analyzed.ir.projectPath(), analyzed.ir.projectSource(), &analyzed.ir);
@@ -321,27 +258,23 @@ pub fn writeScheduleTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Al
     progress.step("Write JSON");
 }
 
-pub fn writeLayoutTraceJsonFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
+pub fn writeLayoutTraceJson(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, output_path: []const u8, progress: *Progress) !void {
+    var analyzed = try buildAnalyzedFile(io, allocator, request, progress, .evaluation_schedule);
     defer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
     try solveLayoutWithTracePathOrReport(io, &analyzed.ir, output_path, progress);
 }
 
-pub fn layoutConflictReportJsonWithAssetBaseAndOverlay(
+pub fn layoutConflictReportJson(
     io: std.Io,
     allocator: std.mem.Allocator,
-    input_path: []const u8,
-    asset_base_dir: []const u8,
-    overlay: ?*const module_loader.SourceOverlay,
+    request: SourceRequest,
     progress: ?*Progress,
 ) ![]u8 {
-    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, overlay, .evaluation_schedule);
+    var analyzed = try buildAnalyzedFile(io, allocator, request, progress, .evaluation_schedule);
     defer analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(analyzed.ir.allocator, io, &analyzed.ir);
-    defer measurement_scope.deinit();
-    lowering.solveLayoutWithOptions(&analyzed.ir, .{ .measurement_provider = measurement_scope.provider() }) catch |err| switch (err) {
+    render_layout.solveWithPdfMeasurements(io, &analyzed.ir) catch |err| switch (err) {
         error.ConstraintConflict,
         error.NegativeFrameSize,
         => {},
@@ -356,57 +289,37 @@ pub fn layoutConflictReportJsonWithAssetBaseAndOverlay(
     return data;
 }
 
-pub fn writeLayoutConflictReportFileWithAssetBase(
+pub fn writeLayoutConflictReportFile(
     io: std.Io,
     allocator: std.mem.Allocator,
-    input_path: []const u8,
-    asset_base_dir: []const u8,
+    request: SourceRequest,
     output_path: []const u8,
     progress: *Progress,
 ) !void {
-    const data = try layoutConflictReportJsonWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, null, progress);
+    const data = try layoutConflictReportJson(io, allocator, request, progress);
     defer allocator.free(data);
     try utils.fs.writeFile(io, output_path, data);
     progress.step("Write report");
 }
 
-pub fn writePdfForFile(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, progress: *Progress) !void {
-    return writePdfForFileWithOptions(io, allocator, input_path, output_path, .{}, progress);
-}
-
-pub fn writePdfForFileWithOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
-    return writePdfForFileWithWriteOptions(io, allocator, input_path, output_path, .{ .render = options }, progress);
-}
-
-pub fn writePdfForFileWithWriteOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, output_path: []const u8, options: PdfWriteOptions, progress: *Progress) !void {
-    const asset_base_dir = std.fs.path.dirname(input_path) orelse ".";
-    return writePdfForFileWithAssetBaseAndWriteOptions(io, allocator, input_path, asset_base_dir, output_path, options, progress);
-}
-
-pub fn writePdfForFileWithAssetBase(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, progress: *Progress) !void {
-    return writePdfForFileWithAssetBaseAndOptions(io, allocator, input_path, asset_base_dir, output_path, .{}, progress);
-}
-
-pub fn writePdfForFileWithAssetBaseAndOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: RenderOptions, progress: *Progress) !void {
-    return writePdfForFileWithAssetBaseAndWriteOptions(io, allocator, input_path, asset_base_dir, output_path, .{ .render = options }, progress);
-}
-
-pub fn writePdfForFileWithAssetBaseAndWriteOptions(io: std.Io, allocator: std.mem.Allocator, input_path: []const u8, asset_base_dir: []const u8, output_path: []const u8, options: PdfWriteOptions, progress: *Progress) !void {
-    var analyzed = try buildAnalyzedFileWithAssetBaseAndOverlay(io, allocator, input_path, asset_base_dir, progress, null, .evaluation_schedule);
-    errdefer analyzed.deinit();
+pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: PdfWriteRequest, progress: *Progress) !void {
+    var analyzed = try buildAnalyzedFile(io, allocator, request.source, progress, .evaluation_schedule);
+    var analyzed_active = true;
+    errdefer if (analyzed_active) analyzed.deinit();
     try evaluateDocumentOrReportWithSchedule(&analyzed.ir, analyzed.scheduleGraph(), progress);
     solveLayoutOrReport(io, &analyzed.ir, progress) catch |err| {
-        try writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.ir, options.diagnostics_json_path);
+        try writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.ir, request.options.diagnostics_json_path);
         return err;
     };
     var ir = analyzed.takeIr();
+    analyzed_active = false;
     defer ir.deinit();
-    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, options.render, progress, options.diagnostics_json_path);
+    const pdf_data = try renderPdfOrPrintDiagnostics(allocator, io, &ir, request.options.render, progress, request.options.diagnostics_json_path);
     defer allocator.free(pdf_data);
-    try writeDiagnosticsJsonIfRequested(io, allocator, &ir, options.diagnostics_json_path);
+    try writeDiagnosticsJsonIfRequested(io, allocator, &ir, request.options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
     progress.step("Render pages");
-    try utils.fs.writeFile(io, output_path, pdf_data);
+    try utils.fs.writeFile(io, request.output_path, pdf_data);
     progress.step("Write PDF");
 }
 

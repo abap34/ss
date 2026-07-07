@@ -105,7 +105,7 @@ pub const ScheduleGraph = struct {
     }
 };
 
-pub fn analyzeDependencies(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+pub fn validateDependencies(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     var graph = try ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .synthetic });
     defer graph.deinit();
 }

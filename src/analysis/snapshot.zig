@@ -451,14 +451,14 @@ pub fn buildSnapshot(
     defer parse_holes.deinit(allocator);
     defer ir.deinit();
 
-    var schedule_graph: ?schedule.ScheduleGraph = program_analysis.analyzeProgramForEvaluation(allocator, &ir) catch null;
-    defer if (schedule_graph) |*graph| graph.deinit();
+    var analyzed_program: ?program_analysis.ProgramAnalysis = program_analysis.analyzeProgramWithMode(allocator, &ir, .evaluation_schedule) catch null;
+    defer if (analyzed_program) |*analysis_result| analysis_result.deinit();
     try hole_facts.populateExpectedTypes(allocator, &ir, &parse_holes);
     try diagnostic_bag.addIr(&ir);
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout) |hook| {
-            if (schedule_graph) |*graph| {
-                if (hook.run(hook.context, &ir, graph)) {
+            if (analyzed_program) |*analysis_result| {
+                if (hook.run(hook.context, &ir, analysis_result.scheduleGraph())) {
                     try diagnostic_bag.addIr(&ir);
                     layout_facts = try LayoutFacts.fromIr(allocator, &ir);
                 } else |err| switch (err) {

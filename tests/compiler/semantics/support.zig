@@ -40,10 +40,10 @@ pub const VariableObjectClassExpectation = struct {
 };
 
 fn analyzeAndLowerIr(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    var graph = try analysis.analyzeProgramForEvaluation(allocator, ir);
-    defer graph.deinit();
+    var analyzed = try analysis.analyzeProgramWithMode(allocator, ir, .evaluation_schedule);
+    defer analyzed.deinit();
     if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
-    try lowering.evaluateDocumentWithSchedule(ir, &graph);
+    try lowering.evaluateDocumentWithSchedule(ir, analyzed.scheduleGraph());
     if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
     try lowering.solveLayout(ir);
     if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
@@ -456,7 +456,8 @@ pub fn expectOverlayDiagnostic(
     });
     defer ir.deinit();
 
-    analysis.analyzeProgram(allocator, &ir) catch {};
+    var analyzed = analysis.analyzeProgram(allocator, &ir) catch null;
+    defer if (analyzed) |*value| value.deinit();
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
@@ -494,7 +495,8 @@ pub fn expectDiagnosticWithOverlays(
     });
     defer ir.deinit();
 
-    analysis.analyzeProgram(allocator, &ir) catch {};
+    var analyzed = analysis.analyzeProgram(allocator, &ir) catch null;
+    defer if (analyzed) |*value| value.deinit();
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
@@ -569,7 +571,8 @@ pub fn expectDiagnostic(
     });
     defer ir.deinit();
 
-    analysis.analyzeProgram(allocator, &ir) catch {};
+    var analyzed = analysis.analyzeProgram(allocator, &ir) catch null;
+    defer if (analyzed) |*value| value.deinit();
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
@@ -599,11 +602,11 @@ pub fn expectLoweringErrorDiagnostic(
     });
     defer ir.deinit();
 
-    var graph: ?analysis.schedule.ScheduleGraph = analysis.analyzeProgramForEvaluation(allocator, &ir) catch null;
-    defer if (graph) |*value| value.deinit();
+    var analyzed: ?analysis.ProgramAnalysis = analysis.analyzeProgramWithMode(allocator, &ir, .evaluation_schedule) catch null;
+    defer if (analyzed) |*value| value.deinit();
     if (!utils.err.hasIrErrors(&ir)) {
-        if (graph) |*value| {
-            lowering.evaluateDocumentWithSchedule(&ir, value) catch {};
+        if (analyzed) |*value| {
+            lowering.evaluateDocumentWithSchedule(&ir, value.scheduleGraph()) catch {};
             if (!utils.err.hasIrErrors(&ir)) {
                 lowering.solveLayout(&ir) catch {};
             }

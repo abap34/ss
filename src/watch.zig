@@ -44,7 +44,10 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
 fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options) bool {
     switch (mode) {
         .check => {
-            app.checkFileWithAssetBase(io, allocator, options.input_path, options.asset_base_dir) catch |err| {
+            app.checkFile(io, allocator, .{
+                .input_path = options.input_path,
+                .asset_base_dir = options.asset_base_dir,
+            }) catch |err| {
                 reportRunError("check", err);
                 return false;
             };
@@ -60,15 +63,14 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 .cache_id = options.cache_id,
                 .highlight_languages = options.highlight_languages,
             };
-            app.writePdfForFileWithAssetBaseAndOptions(
-                io,
-                allocator,
-                options.input_path,
-                options.asset_base_dir,
-                output_path,
-                render_options,
-                &progress,
-            ) catch |err| {
+            app.writePdf(io, allocator, .{
+                .source = .{
+                    .input_path = options.input_path,
+                    .asset_base_dir = options.asset_base_dir,
+                },
+                .output_path = output_path,
+                .options = .{ .render = render_options },
+            }, &progress) catch |err| {
                 reportRunError("render", err);
                 return false;
             };

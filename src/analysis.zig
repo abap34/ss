@@ -17,6 +17,8 @@ pub const VariableInfo = program.VariableInfo;
 pub const ScopedVariableInfo = program.ScopedVariableInfo;
 pub const ProgramIndex = program.ProgramIndex;
 pub const BuildIrOptions = program.BuildIrOptions;
+pub const AnalysisMode = program.AnalysisMode;
+pub const ProgramAnalysis = program.ProgramAnalysis;
 pub const LoadProgramIndexOptions = program.LoadProgramIndexOptions;
 pub const expectedPrimitiveArgType = program.expectedPrimitiveArgType;
 
@@ -24,7 +26,7 @@ pub const collectFunctionsFromPrograms = program.collectFunctionsFromPrograms;
 pub const collectConstantsFromPrograms = program.collectConstantsFromPrograms;
 pub const checkFunctionDefinitions = program.checkFunctionDefinitions;
 pub const analyzeProgram = program.analyzeProgram;
-pub const analyzeProgramForEvaluation = program.analyzeProgramForEvaluation;
+pub const analyzeProgramWithMode = program.analyzeProgramWithMode;
 pub const collectVariableInfoFromProgram = program.collectVariableInfoFromProgram;
 pub const collectScopedVariableInfoFromProgram = program.collectScopedVariableInfoFromProgram;
 pub const buildIr = program.buildIr;

@@ -1,8 +1,8 @@
-pub const normalize = @import("lowering/normalize.zig");
+pub const document = @import("lowering/document.zig");
 
-pub const evaluateDocumentWithSchedule = normalize.evaluateDocumentWithSchedule;
-pub const solveLayout = normalize.solveLayout;
-pub const solveLayoutWithOptions = normalize.solveLayoutWithOptions;
-pub const solveLayoutWithTracePath = normalize.solveLayoutWithTracePath;
-pub const solveLayoutWithTracePathAndOptions = normalize.solveLayoutWithTracePathAndOptions;
-pub const scheduleTraceJsonFromGraph = normalize.scheduleTraceJsonFromGraph;
+pub const evaluateDocumentWithSchedule = document.evaluateDocumentWithSchedule;
+pub const solveLayout = document.solveLayout;
+pub const solveLayoutWithOptions = document.solveLayoutWithOptions;
+pub const solveLayoutWithTracePath = document.solveLayoutWithTracePath;
+pub const solveLayoutWithTracePathAndOptions = document.solveLayoutWithTracePathAndOptions;
+pub const scheduleTraceJsonFromGraph = document.scheduleTraceJsonFromGraph;
