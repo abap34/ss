@@ -140,3 +140,77 @@ test "render PDF spec: Cairo recording fit keeps oversized text inside the page"
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
 }
+
+test "render PDF spec: Cairo shim clips baseline text to the provided frame" {
+    try expectBaselineTextClip(false);
+    try expectBaselineTextClip(true);
+}
+
+fn expectBaselineTextClip(preserve_color_glyphs: bool) !void {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/text-clip.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(pdf_path);
+    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
+    defer allocator.free(pdf_path_z);
+
+    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
+    defer c.ss_pdf_destroy(pdf);
+    c.ss_pdf_begin_page(pdf, 320, 180);
+
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_recording(pdf));
+    const result = if (preserve_color_glyphs)
+        c.ss_pdf_draw_color_text_baseline(
+            pdf,
+            20,
+            58,
+            20,
+            260,
+            18,
+            "Ag Ag Ag Ag Ag Ag Ag Ag Ag",
+            "sans-serif",
+            400,
+            0,
+            4,
+            48,
+            0,
+            0,
+            0,
+            1,
+        )
+    else
+        c.ss_pdf_draw_text_baseline(
+            pdf,
+            20,
+            58,
+            20,
+            260,
+            18,
+            "Ag Ag Ag Ag Ag Ag Ag Ag Ag",
+            "sans-serif",
+            400,
+            0,
+            4,
+            48,
+            0,
+            0,
+            0,
+            1,
+        );
+    try testing.expectEqual(@as(c_int, 0), result);
+    var ink: c.SsPdfRecordingExtents = undefined;
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_recording_ink_extents(pdf, &ink));
+    try expectInkInsideVerticalClip(ink, 20, 18);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_paint_recording_fit(pdf, 320, 180, 1));
+
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+}
+
+fn expectInkInsideVerticalClip(ink: c.SsPdfRecordingExtents, clip_y: f64, height: f64) !void {
+    const eps = 1.0;
+    try testing.expect(ink.height > 0);
+    try testing.expect(ink.y >= clip_y - eps);
+    try testing.expect(ink.y + ink.height <= clip_y + height + eps);
+}
