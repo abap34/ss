@@ -110,12 +110,6 @@ pub fn analyzeDependencies(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     defer graph.deinit();
 }
 
-pub fn scheduleTraceJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
-    var graph = try ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .create });
-    defer graph.deinit();
-    return scheduleGraphJson(allocator, ir, &graph);
-}
-
 const BuildContext = struct {
     allocator: std.mem.Allocator,
     core_ir: *const core.Ir,

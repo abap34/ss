@@ -11,11 +11,8 @@ const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
 const schedule = @import("../analysis/schedule.zig");
 const value_contracts = @import("value_contracts.zig");
-const analysis = @import("../analysis.zig");
 
-const Program = ast.Program;
 const FunctionDecl = ast.FunctionDecl;
-const PageDecl = ast.PageDecl;
 const Statement = ast.Statement;
 const Expr = ast.Expr;
 const CallExpr = ast.CallExpr;
@@ -279,12 +276,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
     };
 }
 
-pub fn evalIr(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    var graph = try schedule.ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .create });
-    defer graph.deinit();
-    try evalIrWithSchedule(allocator, ir, &graph);
-}
-
 pub fn evalIrWithSchedule(allocator: std.mem.Allocator, ir: *core.Ir, graph: *const schedule.ScheduleGraph) !void {
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
@@ -429,217 +420,9 @@ fn diagnosticErrorCount(ir: *const core.Ir) usize {
     return count;
 }
 
-fn executeModuleProgramInSourceOrder(
-    core_ir: *const core.Ir,
-    module: *const core.SourceModule,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    executed_modules: *std.AutoHashMap(core.SourceModuleId, void),
-) !void {
-    var closures = ClosureStore.init(ir.allocator);
-    defer closures.deinit();
-    try executeModuleProgramInSourceOrderWithClosures(core_ir, module, ir, functions, executed_modules, &closures);
-}
-
-fn executeModuleProgramInSourceOrderWithClosures(
-    core_ir: *const core.Ir,
-    module: *const core.SourceModule,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    executed_modules: *std.AutoHashMap(core.SourceModuleId, void),
-    closures: *ClosureStore,
-) !void {
-    const previous_module_id = active_module_id;
-    active_module_id = module.id;
-    defer active_module_id = previous_module_id;
-
-    if (module.kind == .library) {
-        if (executed_modules.contains(module.id)) return;
-        try executed_modules.put(module.id, {});
-    }
-
-    var document_state = DocumentExecutionState.init(ir.allocator);
-    defer document_state.deinit(ir.allocator);
-
-    if (module.program.top_level_items.items.len == 0) {
-        setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
-        try executeDocumentStatementsWithState(module.program, ir, functions, closures, &document_state);
-        for (module.program.pages.items) |page| {
-            setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
-            try executePage(page, ir, functions, closures);
-        }
-        return;
-    }
-
-    for (module.program.top_level_items.items) |item| {
-        switch (item) {
-            .import => |import_index| {
-                if (import_index >= module.resolved_import_ids.items.len) continue;
-                const import_id = module.resolved_import_ids.items[import_index];
-                const imported = core_ir.moduleById(import_id) orelse continue;
-                try executeModuleProgramInSourceOrderWithClosures(core_ir, imported, ir, functions, executed_modules, closures);
-            },
-            .document => |document_index| {
-                if (document_index >= module.program.document_blocks.items.len) continue;
-                setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
-                try executeDocumentBlockWithState(module.program, module.program.document_blocks.items[document_index], ir, functions, closures, &document_state);
-            },
-            .page => |page_index| {
-                if (page_index >= module.program.pages.items.len) continue;
-                setLowerDiagnosticOrigin(module.source, module.path orelse module.spec);
-                try executePage(module.program.pages.items[page_index], ir, functions, closures);
-            },
-        }
-    }
-}
-
-pub fn executeProgramWithLegacyIndex(program: Program, source: []const u8, ir: *core.Ir, io: std.Io) !void {
-    return executeProgramWithPath(program, source, "", ir, io);
-}
-
-pub fn executeProgramWithPath(program: Program, source: []const u8, path: []const u8, ir: *core.Ir, io: std.Io) !void {
-    var index = try analysis.loadProgramIndex(ir.allocator, io, ir.asset_base_dir, program);
-    defer index.deinit();
-    return executeProgramWithIndex(program, source, path, ir, &index);
-}
-
-pub fn executeProgramWithIndex(
-    program: Program,
-    source: []const u8,
-    path: []const u8,
-    ir: *core.Ir,
-    index: *const analysis.ProgramIndex,
-) !void {
-    return executeProgram(program, source, path, ir, &index.functions);
-}
-
-pub fn executeProgram(
-    program: Program,
-    source: []const u8,
-    path: []const u8,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-) !void {
-    setLowerDiagnosticOrigin(source, path);
-
-    var closures = ClosureStore.init(ir.allocator);
-    defer closures.deinit();
-    try executeDocumentStatements(program, ir, functions, &closures);
-    for (program.pages.items) |page| try executePage(page, ir, functions, &closures);
-}
-
 fn setLowerDiagnosticOrigin(source: []const u8, path: []const u8) void {
     _ = source;
     diagnostic_path = path;
-}
-
-fn executeDocumentStatements(
-    program: Program,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-) !void {
-    try executeDocumentStatementSlice(ir, functions, closures, program.document_statements.items);
-}
-
-fn executeDocumentStatementsWithState(
-    program: Program,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-    state: *DocumentExecutionState,
-) !void {
-    try executeDocumentStatementSliceWithState(ir, functions, closures, state, program.document_statements.items);
-}
-
-fn executeDocumentBlockWithState(
-    program: Program,
-    block: ast.DocumentBlockDecl,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-    state: *DocumentExecutionState,
-) !void {
-    const statement_end = @min(block.statement_start + block.statement_count, program.document_statements.items.len);
-    try executeDocumentStatementSliceWithState(ir, functions, closures, state, program.document_statements.items[block.statement_start..statement_end]);
-}
-
-fn executeDocumentStatementSliceWithState(
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-    state: *DocumentExecutionState,
-    statements: []const Statement,
-) !void {
-    for (statements) |stmt| try executeScheduledDocumentStatement(ir, functions, closures, state, stmt);
-}
-
-fn executeDocumentStatementSlice(
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-    statements: []const Statement,
-) !void {
-    var document_env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer deinitValueEnv(ir.allocator, &document_env);
-    var document_last_code_like: ?core.NodeId = null;
-    for (statements) |stmt| {
-        const error_count = diagnosticErrorCount(ir);
-        const flow = executeStatement(ir, ir.document_id, .document, .attached, &document_env, functions, closures, &document_last_code_like, stmt, null) catch |err| {
-            const origin = statementOrigin(ir, stmt.span) catch null;
-            defer if (origin) |text| ir.allocator.free(text);
-            if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
-            return err;
-        };
-        switch (flow) {
-            .none => {},
-            .returned => |value| {
-                var owned = value;
-                owned.deinit(ir.allocator);
-                return error.ReturnOutsideFunction;
-            },
-        }
-    }
-}
-
-fn executePage(
-    page: PageDecl,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-) !void {
-    const page_id = try ir.addPage(page.name);
-    try executePageBody(page, page_id, ir, functions, closures);
-}
-
-fn executePageBody(
-    page: PageDecl,
-    page_id: core.NodeId,
-    ir: *core.Ir,
-    functions: *const core.FunctionMap,
-    closures: *ClosureStore,
-) !void {
-    var last_code_like: ?core.NodeId = null;
-    var env = std.StringHashMap(core.Value).init(ir.allocator);
-    defer deinitValueEnv(ir.allocator, &env);
-
-    for (page.statements.items) |stmt| {
-        const error_count = diagnosticErrorCount(ir);
-        const flow = executeStatement(ir, page_id, .page, .attached, &env, functions, closures, &last_code_like, stmt, null) catch |err| {
-            const origin = statementOrigin(ir, stmt.span) catch null;
-            defer if (origin) |text| ir.allocator.free(text);
-            if (diagnosticErrorCount(ir) == error_count) try reportLowerError(ir, err, origin);
-            return err;
-        };
-        switch (flow) {
-            .none => {},
-            .returned => |value| {
-                var owned = value;
-                owned.deinit(ir.allocator);
-                return error.ReturnOutsideFunction;
-            },
-        }
-    }
 }
 
 fn evalExpr(

@@ -9,6 +9,7 @@ const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
 const program_analysis = @import("program.zig");
+const schedule = @import("schedule.zig");
 const query_completion = @import("query/completion.zig");
 const query_definition = @import("query/definition.zig");
 const query_folding = @import("query/folding.zig");
@@ -59,7 +60,7 @@ pub const SourceSet = struct {
 
 pub const LayoutHook = struct {
     context: *anyopaque,
-    run: *const fn (context: *anyopaque, ir: *core.Ir) anyerror!void,
+    run: *const fn (context: *anyopaque, ir: *core.Ir, graph: *const schedule.ScheduleGraph) anyerror!void,
     on_error: ?*const fn (context: *anyopaque, ir: *core.Ir, err: anyerror) anyerror!void = null,
 };
 
@@ -450,31 +451,36 @@ pub fn buildSnapshot(
     defer parse_holes.deinit(allocator);
     defer ir.deinit();
 
-    program_analysis.analyzeProgram(allocator, &ir) catch {};
+    var schedule_graph: ?schedule.ScheduleGraph = program_analysis.analyzeProgramForEvaluation(allocator, &ir) catch null;
+    defer if (schedule_graph) |*graph| graph.deinit();
     try hole_facts.populateExpectedTypes(allocator, &ir, &parse_holes);
     try diagnostic_bag.addIr(&ir);
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout) |hook| {
-            if (hook.run(hook.context, &ir)) {
-                try diagnostic_bag.addIr(&ir);
-                layout_facts = try LayoutFacts.fromIr(allocator, &ir);
-            } else |err| switch (err) {
-                error.ConstraintConflict,
-                error.NegativeFrameSize,
-                => {
-                    if (hook.on_error) |on_error| {
-                        try on_error(hook.context, &ir, err);
-                        layout_facts = try LayoutFacts.fromIr(allocator, &ir);
-                    } else {
-                        try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
-                    }
-                },
-                else => {
+            if (schedule_graph) |*graph| {
+                if (hook.run(hook.context, &ir, graph)) {
                     try diagnostic_bag.addIr(&ir);
-                    if (!diagnostic_bag.hasErrors()) {
-                        try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
-                    }
-                },
+                    layout_facts = try LayoutFacts.fromIr(allocator, &ir);
+                } else |err| switch (err) {
+                    error.ConstraintConflict,
+                    error.NegativeFrameSize,
+                    => {
+                        if (hook.on_error) |on_error| {
+                            try on_error(hook.context, &ir, err);
+                            layout_facts = try LayoutFacts.fromIr(allocator, &ir);
+                        } else {
+                            try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                        }
+                    },
+                    else => {
+                        try diagnostic_bag.addIr(&ir);
+                        if (!diagnostic_bag.hasErrors()) {
+                            try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
+                        }
+                    },
+                }
+            } else {
+                try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", "ScheduleBuildFailed", "ScheduleBuildFailed: evaluation schedule was not available", .{}, null);
             }
         }
     }
