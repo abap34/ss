@@ -7,7 +7,8 @@ const text_measure = @import("../render/text_measure.zig");
 const text_tokenize = @import("../core/text_tokenize.zig");
 const wrap_layout = @import("../render/wrap.zig");
 const style_defaults = @import("style.zig");
-const source = @import("utils").source;
+const utils = @import("utils");
+const source = utils.source;
 
 const Node = model.Node;
 const PageLayout = model.PageLayout;
@@ -63,6 +64,7 @@ pub const MeasurementCache = struct {
     allocator: std.mem.Allocator,
     values: MeasurementMap,
     render_provider: ?model.LayoutMeasurementProvider = null,
+    used_keys: std.ArrayList(u64) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) MeasurementCache {
         return .{
@@ -86,6 +88,20 @@ pub const MeasurementCache = struct {
             self.allocator.free(key.family);
         }
         self.values.deinit();
+        self.used_keys.deinit(self.allocator);
+    }
+
+    pub fn usedKeyCount(self: *const MeasurementCache) usize {
+        return self.used_keys.items.len;
+    }
+
+    pub fn appendUsedKeysSince(self: *const MeasurementCache, allocator: std.mem.Allocator, start: usize, out: *std.ArrayList(u64)) !void {
+        if (start >= self.used_keys.items.len) return;
+        try out.appendSlice(allocator, self.used_keys.items[start..]);
+    }
+
+    fn recordUsedKey(self: *MeasurementCache, key: u64) void {
+        self.used_keys.append(self.allocator, key) catch {};
     }
 
     fn advanceWidth(self: *MeasurementCache, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
@@ -98,8 +114,16 @@ pub const MeasurementCache = struct {
 
     fn measure(self: *MeasurementCache, kind: MeasurementKind, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
         if (text.len == 0) return 0;
+        const profile_start = utils.measure_profile.start();
+        var profile_hit = false;
+        defer utils.measure_profile.recordText(profileTextKind(kind), profile_hit, profile_start);
+
         const lookup = measurementKey(kind, text, font, font_size);
-        if (self.values.get(lookup)) |cached| return cached;
+        self.recordUsedKey(MeasurementKeyContext.hash(.{}, lookup));
+        if (self.values.get(lookup)) |cached| {
+            profile_hit = true;
+            return cached;
+        }
 
         const measured = switch (kind) {
             .advance => try text_measure.advanceWidth(self.allocator, text, font, font_size),
@@ -131,9 +155,20 @@ pub const MeasurementCache = struct {
     fn renderedMeasurement(self: *MeasurementCache, ir: anytype, node: *const Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
         const provider = self.render_provider orelse return null;
         const ir_ptr: *anyopaque = @ptrCast(@alignCast(ir));
-        return try provider.measure(provider.context, ir_ptr, node, width, mode);
+        const measured = try provider.measure(provider.context, ir_ptr, node, width, mode);
+        if (measured) |value| {
+            if (value.cache_key) |key| self.recordUsedKey(key);
+        }
+        return measured;
     }
 };
+
+fn profileTextKind(kind: MeasurementKind) utils.measure_profile.TextKind {
+    return switch (kind) {
+        .advance => .advance,
+        .visual => .visual,
+    };
+}
 
 fn measurementKey(kind: MeasurementKind, text: []const u8, font: font_model.Face, font_size: f32) MeasurementKey {
     return .{
@@ -202,7 +237,12 @@ fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementC
     if (cache) |measurements| {
         const available_width = maxWidthForStyle(style) + chrome_width;
         if (try measurements.renderedMeasurement(ir, node, available_width, .natural)) |measured| {
-            if (measured.width > 0) return @min(available_width, measured.width);
+            if (measured.width > 0) {
+                return switch (node.payload_kind orelse .text) {
+                    .image_ref, .pdf_ref => measured.width,
+                    else => @min(available_width, measured.width),
+                };
+            }
         }
     }
     switch (node.payload_kind orelse .text) {

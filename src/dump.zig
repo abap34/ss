@@ -95,6 +95,9 @@ fn writeDiagnostic(diagnostics: *json.Array, diagnostic: core.Diagnostic) !void 
         },
         .content_overflow => |data| {
             try item.stringField("code", "ContentOverflow");
+            try item.floatField("required_width", data.required_width, "{d:.1}");
+            try item.floatField("frame_width", data.frame_width, "{d:.1}");
+            try item.floatField("overflow_width", data.overflow_width, "{d:.1}");
             try item.floatField("required_height", data.required_height, "{d:.1}");
             try item.floatField("frame_height", data.frame_height, "{d:.1}");
             try item.floatField("overflow_height", data.overflow_height, "{d:.1}");

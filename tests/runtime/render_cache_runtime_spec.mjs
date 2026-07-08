@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
+await testMeasurementCacheIsReused();
 await testCacheStatsCommands();
 await testCacheClearRejectsActiveRender();
 
@@ -24,6 +25,7 @@ async function testRenderCacheGenerations() {
     await assertPathMissing(path.join(cacheRoot, "chunks"), "top-level chunk cache directory should not be created");
 
     const firstGeneration = await singleGeneration(cacheRoot);
+    const firstManifest = await readManifest(firstGeneration.path);
     const firstPages = await pdfFiles(path.join(firstGeneration.path, "pages"));
     assert(firstPages.length === firstPagesSource.length, `expected ${firstPagesSource.length} cached page PDFs, got ${firstPages.length}`);
     await assertPdfFile(path.join(firstGeneration.path, "document.pdf"), "generation should cache assembled PDF");
@@ -34,15 +36,47 @@ async function testRenderCacheGenerations() {
     secondPagesSource[7] = "Changed page 8";
     const secondSource = deckSource(secondPagesSource);
     await writeFile(slide, secondSource, "utf8");
-    await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "stable-deck"], project);
+    const secondRun = await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "stable-deck"], project);
+    assert(secondRun.stderr.includes("pages 17/18"), `rerender did not report mixed page cache hits and misses:\n${secondRun.stderr}`);
 
     const secondGeneration = await singleGeneration(cacheRoot);
     assert(secondGeneration.name !== firstGeneration.name, "second render should publish a fresh generation");
+    const secondManifest = await readManifest(secondGeneration.path);
+    assertExactlyOnePageHashChanged(firstManifest.pageHashes, secondManifest.pageHashes, 7);
     const secondPages = await pdfFiles(path.join(secondGeneration.path, "pages"));
     assert(secondPages.length === secondPagesSource.length, `expected ${secondPagesSource.length} cached page PDFs after rerender, got ${secondPages.length}`);
     await assertPdfFile(path.join(secondGeneration.path, "document.pdf"), "rerender should cache assembled PDF");
     const secondChunks = await pdfFiles(path.join(secondGeneration.path, "chunks"));
     assert(secondChunks.length >= 2, `expected chunk PDFs after rerender, got ${secondChunks.length}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testMeasurementCacheIsReused() {
+  const project = await mkdtempProject("ss-measure-cache-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page measure
+text!("A moderately long line that goes through native text measurement.")
+end
+`,
+      "utf8",
+    );
+
+    await runSs(["dump", "slide.ss", "dump-1.json"], project);
+    const measurementDir = path.join(project, ".ss-cache", "render", "artifacts", "native", "measurements");
+    const measurementCachePath = path.join(measurementDir, "measurements.tsv");
+    const firstStats = await fileStatSignature(measurementCachePath);
+    assert(firstStats.size > 0, "first dump should create a measurement cache index");
+    await delay(50);
+    await runSs(["dump", "slide.ss", "dump-2.json"], project);
+    const secondStats = await fileStatSignature(measurementCachePath);
+    assertFileStatUnchanged(firstStats, secondStats, "second dump should reuse the existing measurement cache index");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -141,6 +175,39 @@ async function singleGeneration(cacheRoot) {
 async function pdfFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".pdf"));
+}
+
+async function readManifest(generationPath) {
+  return JSON.parse(await readFile(path.join(generationPath, "manifest.json"), "utf8"));
+}
+
+function assertExactlyOnePageHashChanged(first, second, changedIndex) {
+  assert(first.length === second.length, `page hash count changed from ${first.length} to ${second.length}`);
+  const changed = [];
+  for (let index = 0; index < first.length; index += 1) {
+    if (first[index] !== second[index]) changed.push(index);
+  }
+  assert(
+    changed.length === 1 && changed[0] === changedIndex,
+    `expected only page ${changedIndex + 1} hash to change, got ${changed.map((index) => index + 1).join(", ")}`,
+  );
+}
+
+async function fileStatSignature(filePath) {
+  const info = await stat(filePath);
+  return {
+    size: info.size,
+    mtime: info.mtimeNs ?? BigInt(Math.round(info.mtimeMs * 1_000_000)),
+  };
+}
+
+function assertFileStatUnchanged(first, second, message) {
+  assert(first.size === second.size, `${message}; size changed from ${first.size} to ${second.size}`);
+  assert(first.mtime === second.mtime, `${message}; mtime changed from ${first.mtime} to ${second.mtime}`);
+}
+
+async function delay(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function assertPdfFile(target, message) {
