@@ -777,10 +777,11 @@ fn runDebugCommand(
         try validateOutputParentOrCliError(io, output_path);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
-        var progress = utils.progress.Progress.init(6);
+        var progress = utils.progress.Progress.init(5);
         try app.writeScheduleTraceJson(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
+            .layout_jobs = options.jobs,
         }, output_path, &progress);
         return;
     }
@@ -799,6 +800,7 @@ fn runDebugCommand(
             try app.writeLayoutTraceJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .layout_jobs = options.jobs,
             }, output_path, &progress);
             return;
         }
@@ -807,6 +809,7 @@ fn runDebugCommand(
             try app.writeLayoutConflictReportFile(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .layout_jobs = options.jobs,
             }, output_path, &progress);
             return;
         }
@@ -959,10 +962,12 @@ fn run(init: std.process.Init) !void {
         const options = try parseCommandOptions(args[2..]);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
+        var progress = utils.progress.Progress.init(6);
         try app.checkFile(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
-        });
+            .layout_jobs = options.jobs,
+        }, &progress);
         return;
     }
 
@@ -976,16 +981,18 @@ fn run(init: std.process.Init) !void {
         defer resolved.deinit(allocator);
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
-            var progress = utils.progress.Progress.init(8);
+            var progress = utils.progress.Progress.init(7);
             try app.writeIrJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .layout_jobs = options.jobs,
             }, output_path, &progress);
         } else {
-            var progress = utils.progress.Progress.init(8);
+            var progress = utils.progress.Progress.init(7);
             try app.printIrJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .layout_jobs = options.jobs,
             }, &progress);
         }
         return;
@@ -1012,6 +1019,7 @@ fn run(init: std.process.Init) !void {
             .source = .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
+                .layout_jobs = options.jobs,
             },
             .output_path = output_path,
             .options = .{
@@ -1097,6 +1105,8 @@ fn run(init: std.process.Init) !void {
 pub fn main(init: std.process.Init) void {
     run(init) catch |err| {
         if (!error_report.isExpectedCliError(err)) std.debug.print("error: {s}\n", .{@errorName(err)});
+        utils.measure_profile.printIfEnabled();
         std.process.exit(1);
     };
+    utils.measure_profile.printIfEnabled();
 }

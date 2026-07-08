@@ -5,7 +5,8 @@ pub const Progress = struct {
     current: usize = 0,
     started_at_ns: i128,
     last_step_at_ns: i128,
-    detail_active: bool = false,
+    status_active: bool = false,
+    active_label: ?[]const u8 = null,
 
     pub fn init(total: usize) Progress {
         const now = monotonicNowNs();
@@ -22,9 +23,10 @@ pub const Progress = struct {
         const total_elapsed_ns = now - self.started_at_ns;
         self.current += 1;
         self.last_step_at_ns = now;
-        const replace_detail = self.detail_active;
-        if (replace_detail) {
-            self.detail_active = false;
+        const replace_status = self.status_active;
+        if (replace_status) {
+            self.status_active = false;
+            self.active_label = null;
             std.debug.print("\r", .{});
         }
         printProgress(
@@ -33,7 +35,26 @@ pub const Progress = struct {
             label,
             @intCast(@divTrunc(stage_elapsed_ns, std.time.ns_per_ms)),
             @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms)),
-            replace_detail,
+            replace_status,
+        );
+    }
+
+    pub fn begin(self: *Progress, label: []const u8) void {
+        const now = monotonicNowNs();
+        const stage_elapsed_ns = now - self.last_step_at_ns;
+        const total_elapsed_ns = now - self.started_at_ns;
+        self.status_active = true;
+        self.active_label = label;
+        std.debug.print("\r", .{});
+        printProgressStatus(
+            @min(self.current + 1, self.total),
+            self.total,
+            label,
+            null,
+            0,
+            0,
+            @intCast(@divTrunc(stage_elapsed_ns, std.time.ns_per_ms)),
+            @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms)),
         );
     }
 
@@ -41,17 +62,25 @@ pub const Progress = struct {
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
         const total_elapsed_ns = now - self.started_at_ns;
-        self.detail_active = true;
+        self.status_active = true;
         std.debug.print("\r", .{});
-        printProgressDetail(
+        printProgressStatus(
             @min(self.current + 1, self.total),
             self.total,
+            self.active_label orelse label,
             label,
             detail_current,
             detail_total,
             @intCast(@divTrunc(stage_elapsed_ns, std.time.ns_per_ms)),
             @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms)),
         );
+    }
+
+    pub fn endStatusLine(self: *Progress) void {
+        if (!self.status_active) return;
+        self.status_active = false;
+        self.active_label = null;
+        std.debug.print("\n", .{});
     }
 };
 
@@ -92,7 +121,16 @@ fn printProgress(current: usize, total: usize, label: []const u8, stage_elapsed_
     std.debug.print("\n", .{});
 }
 
-fn printProgressDetail(current: usize, total: usize, label: []const u8, detail_current: usize, detail_total: usize, stage_elapsed_ms: i64, total_elapsed_ms: i64) void {
+fn printProgressStatus(
+    current: usize,
+    total: usize,
+    label: []const u8,
+    detail_label: ?[]const u8,
+    detail_current: usize,
+    detail_total: usize,
+    stage_elapsed_ms: i64,
+    total_elapsed_ms: i64,
+) void {
     const width: usize = 18;
     const filled = if (total == 0) width else @min(width, (current * width) / total);
     var stage_buf: [32]u8 = undefined;
@@ -112,15 +150,21 @@ fn printProgressDetail(current: usize, total: usize, label: []const u8, detail_c
             std.debug.print(" ", .{});
         }
     }
-    std.debug.print("] {d}/{d} {s:<11} {d}/{d:<5}  ({s:>8}, total {s:>8})\x1b[K", .{
-        current,
-        total,
-        label,
-        detail_current,
-        detail_total,
-        stage_text,
-        total_text,
-    });
+    std.debug.print("] {d}/{d} {s:<19}", .{ current, total, label });
+    if (detail_label) |name| {
+        std.debug.print("  ({s} {d}/{d}, {s:>8}, total {s:>8})\x1b[K", .{
+            name,
+            detail_current,
+            detail_total,
+            stage_text,
+            total_text,
+        });
+    } else {
+        std.debug.print("  ({s:>8}, total {s:>8})\x1b[K", .{
+            stage_text,
+            total_text,
+        });
+    }
 }
 
 fn formatDurationMsText(value: i64, buf: []u8) ![]const u8 {

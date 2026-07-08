@@ -47,7 +47,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
             app.checkFile(io, allocator, .{
                 .input_path = options.input_path,
                 .asset_base_dir = options.asset_base_dir,
-            }) catch |err| {
+            }, null) catch |err| {
                 reportRunError("check", err);
                 return false;
             };
@@ -67,6 +67,7 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 .source = .{
                     .input_path = options.input_path,
                     .asset_base_dir = options.asset_base_dir,
+                    .layout_jobs = options.jobs,
                 },
                 .output_path = output_path,
                 .options = .{ .render = render_options },

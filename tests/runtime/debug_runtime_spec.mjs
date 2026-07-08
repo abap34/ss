@@ -120,9 +120,9 @@ async function writeDeck(project) {
 page one
 text!("hello")
 text!("world")
-let item = new("old", "note", "text")
+let item = text!("old")
 item.link_id = "one"
-let observed = new(content(item), "label", "text")
+text!(content(item))
 end
 `,
     "utf8",
