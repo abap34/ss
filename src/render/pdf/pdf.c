@@ -588,8 +588,7 @@ int ss_pdf_draw_text(
     cairo_save(pdf->cr);
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, y);
-    pango_cairo_layout_path(pdf->cr, layout);
-    cairo_fill(pdf->cr);
+    pango_cairo_show_layout(pdf->cr, layout);
     cairo_restore(pdf->cr);
 
     g_object_unref(layout);
@@ -647,8 +646,7 @@ int ss_pdf_draw_text_baseline(
     cairo_save(pdf->cr);
     ss_pdf_set_rgb(r, g, b, pdf->cr);
     cairo_move_to(pdf->cr, x, layout_y);
-    pango_cairo_layout_path(pdf->cr, layout);
-    cairo_fill(pdf->cr);
+    pango_cairo_show_layout(pdf->cr, layout);
     cairo_restore(pdf->cr);
 
     g_object_unref(layout);
