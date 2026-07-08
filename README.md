@@ -304,7 +304,7 @@ to PDFs with the same Docker image:
 | Command                                   | Purpose                                                          |
 | ----------------------------------------- | ---------------------------------------------------------------- |
 | `ss help`                                 | Show help.                                                       |
-| `ss check [input.ss]`                     | Parse, load modules, and type-check a deck.                      |
+| `ss check [input.ss]`                     | Analyze a deck and report diagnostics.                           |
 | `ss dump [input.ss] [output.json]`        | Write compiler/IR metadata for tooling and debugging.            |
 | `ss render [input.ss] [output.pdf]`       | Render a PDF.                                                    |
 | `ss init [dir]`                           | Create an `ss.toml` and starter slide deck.                      |
