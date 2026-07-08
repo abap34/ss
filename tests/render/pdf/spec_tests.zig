@@ -72,10 +72,10 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     c.ss_pdf_begin_page(pdf, 320, 180);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_add_destination(pdf, "target", 20, 20));
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 24, "https://example.com"));
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 20, 120, 24, "external", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 20, 120, "external", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
     c.ss_pdf_end_link(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_dest_link(pdf, 20, 60, 120, 24, "target"));
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 60, 120, 24, "internal", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 60, 120, "internal", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
     c.ss_pdf_end_link(pdf);
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
@@ -107,7 +107,6 @@ test "render PDF spec: Cairo recording fit keeps oversized text inside the page"
         -40,
         -24,
         900,
-        80,
         "Oversized recording text reaches past both page edges",
         "sans-serif",
         700,
@@ -141,12 +140,12 @@ test "render PDF spec: Cairo recording fit keeps oversized text inside the page"
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
 }
 
-test "render PDF spec: Cairo shim does not hard clip baseline text" {
-    try expectBaselineTextNotHardClipped(false);
-    try expectBaselineTextNotHardClipped(true);
+test "render PDF spec: Cairo shim draws baseline text without a clipping frame" {
+    try expectBaselineTextDrawn(false);
+    try expectBaselineTextDrawn(true);
 }
 
-fn expectBaselineTextNotHardClipped(preserve_color_glyphs: bool) !void {
+fn expectBaselineTextDrawn(preserve_color_glyphs: bool) !void {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
@@ -160,16 +159,13 @@ fn expectBaselineTextNotHardClipped(preserve_color_glyphs: bool) !void {
     c.ss_pdf_begin_page(pdf, 320, 180);
 
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_recording(pdf));
-    const clip_y: f64 = 20;
-    const frame_height: f64 = 4;
+    const baseline_y: f64 = 58;
     const result = if (preserve_color_glyphs)
         c.ss_pdf_draw_color_text_baseline(
             pdf,
             20,
-            58,
-            clip_y,
+            baseline_y,
             260,
-            frame_height,
             "Ag Ag Ag Ag Ag Ag Ag Ag Ag",
             "sans-serif",
             400,
@@ -185,10 +181,8 @@ fn expectBaselineTextNotHardClipped(preserve_color_glyphs: bool) !void {
         c.ss_pdf_draw_text_baseline(
             pdf,
             20,
-            58,
-            clip_y,
+            baseline_y,
             260,
-            frame_height,
             "Ag Ag Ag Ag Ag Ag Ag Ag Ag",
             "sans-serif",
             400,
@@ -203,15 +197,16 @@ fn expectBaselineTextNotHardClipped(preserve_color_glyphs: bool) !void {
     try testing.expectEqual(@as(c_int, 0), result);
     var ink: c.SsPdfRecordingExtents = undefined;
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_recording_ink_extents(pdf, &ink));
-    try expectInkExtendsBelowFrame(ink, clip_y, frame_height);
+    try expectInkCrossesBaseline(ink, baseline_y);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_paint_recording_fit(pdf, 320, 180, 1));
 
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
 }
 
-fn expectInkExtendsBelowFrame(ink: c.SsPdfRecordingExtents, clip_y: f64, height: f64) !void {
+fn expectInkCrossesBaseline(ink: c.SsPdfRecordingExtents, baseline_y: f64) !void {
     const eps = 1.0;
     try testing.expect(ink.height > 0);
-    try testing.expect(ink.y + ink.height > clip_y + height + eps);
+    try testing.expect(ink.y < baseline_y - eps);
+    try testing.expect(ink.y + ink.height > baseline_y + eps);
 }

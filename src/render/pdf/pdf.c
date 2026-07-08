@@ -545,7 +545,6 @@ int ss_pdf_draw_text(
     double x,
     double y,
     double width,
-    double height,
     const char *text,
     const char *font_family,
     int font_weight,
@@ -558,7 +557,6 @@ int ss_pdf_draw_text(
     int wrap
 ) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
-    (void)height;
 
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
@@ -600,9 +598,7 @@ int ss_pdf_draw_text_baseline(
     SsPdf *pdf,
     double x,
     double baseline_y,
-    double clip_y,
     double width,
-    double height,
     const char *text,
     const char *font_family,
     int font_weight,
@@ -615,8 +611,6 @@ int ss_pdf_draw_text_baseline(
     int wrap
 ) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
-    (void)clip_y;
-    (void)height;
 
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
@@ -659,9 +653,7 @@ int ss_pdf_draw_color_text_baseline(
     SsPdf *pdf,
     double x,
     double baseline_y,
-    double clip_y,
     double width,
-    double height,
     const char *text,
     const char *font_family,
     int font_weight,
@@ -674,8 +666,6 @@ int ss_pdf_draw_color_text_baseline(
     int wrap
 ) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
-    (void)clip_y;
-    (void)height;
 
     PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
     if (layout == NULL) return 1;
