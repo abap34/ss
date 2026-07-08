@@ -921,7 +921,7 @@ fn printExcerpt(text: []const u8, span: source.ByteSpan, severity: Severity, lab
         printSpaces(width - decimalWidth(line));
         std.debug.print("{d} | ", .{line});
         printReset();
-        printHighlightedSlice(current.text(text));
+        printHighlightedLine(text, current);
         std.debug.print("\n", .{});
         if (line == target.number) {
             printDim();
@@ -965,9 +965,111 @@ fn printRule(count: usize) void {
     while (i < count) : (i += 1) std.debug.print("▔", .{});
 }
 
-fn printHighlightedSlice(slice: []const u8) void {
+const HighlightState = enum {
+    normal,
+    triple_string,
+    chevron_block,
+};
+
+fn printHighlightedLine(text: []const u8, line: source.Line) void {
+    printHighlightedSlice(line.text(text), highlightStateBeforeLine(text, line.span.start));
+}
+
+fn highlightStateBeforeLine(text: []const u8, line_start: usize) HighlightState {
+    var state: HighlightState = .normal;
+    var lines = source.lineIterator(text);
+    while (lines.next()) |line| {
+        if (line.span.start >= line_start) break;
+        state = scanHighlightState(line.text(text), state);
+    }
+    return state;
+}
+
+fn scanHighlightState(slice: []const u8, initial: HighlightState) HighlightState {
+    var state = initial;
     var index: usize = 0;
     while (index < slice.len) {
+        switch (state) {
+            .triple_string => {
+                if (std.mem.indexOfPos(u8, slice, index, "\"\"\"")) |end| {
+                    index = end + "\"\"\"".len;
+                    state = .normal;
+                    continue;
+                }
+                return .triple_string;
+            },
+            .chevron_block => {
+                return if (isChevronTerminatorLine(slice)) .normal else .chevron_block;
+            },
+            .normal => {},
+        }
+
+        if (slice[index] == '\t') {
+            index += 1;
+            continue;
+        }
+
+        if (source.lineCommentMarkerLength(slice, index) != null) return .normal;
+        if (startsChevronBlock(slice, index)) return .chevron_block;
+
+        if (std.mem.startsWith(u8, slice[index..], "\"\"\"")) {
+            index += "\"\"\"".len;
+            state = .triple_string;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, slice[index..], "c\"")) {
+            index = source.skipDoubleQuotedString(slice, index + 1, slice.len);
+            continue;
+        }
+        if (slice[index] == '"') {
+            index = source.skipDoubleQuotedString(slice, index, slice.len);
+            continue;
+        }
+        if (std.ascii.isDigit(slice[index]) or (slice[index] == '-' and index + 1 < slice.len and std.ascii.isDigit(slice[index + 1]))) {
+            index = numberEnd(slice, index);
+            continue;
+        }
+        if (operatorEnd(slice, index)) |end| {
+            index = end;
+            continue;
+        }
+        if (source.isIdentifierStart(slice[index])) {
+            index = identifierEnd(slice, index);
+            continue;
+        }
+
+        index += std.unicode.utf8ByteSequenceLength(slice[index]) catch 1;
+    }
+    return state;
+}
+
+fn printHighlightedSlice(slice: []const u8, initial: HighlightState) void {
+    var state = initial;
+    var index: usize = 0;
+    while (index < slice.len) {
+        switch (state) {
+            .triple_string => {
+                const end = if (std.mem.indexOfPos(u8, slice, index, "\"\"\"")) |close|
+                    close + "\"\"\"".len
+                else
+                    slice.len;
+                printAnsi("32");
+                printDisplayRaw(slice[index..end]);
+                printReset();
+                index = end;
+                state = if (end < slice.len) .normal else .triple_string;
+                continue;
+            },
+            .chevron_block => {
+                printAnsi("32");
+                printDisplayRaw(slice[index..]);
+                printReset();
+                return;
+            },
+            .normal => {},
+        }
+
         if (slice[index] == '\t') {
             printSpaces(4);
             index += 1;
@@ -979,6 +1081,35 @@ fn printHighlightedSlice(slice: []const u8) void {
             printDisplayRaw(slice[index..]);
             printReset();
             return;
+        }
+
+        if (startsChevronBlock(slice, index)) {
+            printAnsi("32");
+            printDisplayRaw(slice[index..]);
+            printReset();
+            return;
+        }
+
+        if (std.mem.startsWith(u8, slice[index..], "\"\"\"")) {
+            const end = if (std.mem.indexOfPos(u8, slice, index + "\"\"\"".len, "\"\"\"")) |close|
+                close + "\"\"\"".len
+            else
+                slice.len;
+            printAnsi("32");
+            printDisplayRaw(slice[index..end]);
+            printReset();
+            index = end;
+            state = if (end < slice.len) .normal else .triple_string;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, slice[index..], "c\"")) {
+            const end = source.skipDoubleQuotedString(slice, index + 1, slice.len);
+            printAnsi("32");
+            printDisplayRaw(slice[index..end]);
+            printReset();
+            index = end;
+            continue;
         }
 
         if (slice[index] == '"') {
@@ -999,8 +1130,16 @@ fn printHighlightedSlice(slice: []const u8) void {
             continue;
         }
 
+        if (operatorEnd(slice, index)) |end| {
+            printAnsi("33");
+            std.debug.print("{s}", .{slice[index..end]});
+            printReset();
+            index = end;
+            continue;
+        }
+
         if (source.isIdentifierStart(slice[index])) {
-            const end = source.wordSpanAt(slice, index, source.isIdentifierContinue).?.end;
+            const end = identifierEnd(slice, index);
             const token = slice[index..end];
             if (isKeyword(token)) {
                 printAnsi("34;1");
@@ -1051,8 +1190,73 @@ fn numberEnd(slice: []const u8, start: usize) usize {
     return index;
 }
 
+fn identifierEnd(slice: []const u8, start: usize) usize {
+    var end = start + 1;
+    while (end < slice.len and isCallableIdentifierContinue(slice[end])) end += 1;
+    return end;
+}
+
+fn isCallableIdentifierContinue(byte: u8) bool {
+    return source.isIdentifierContinue(byte) or byte == '!';
+}
+
+fn operatorEnd(slice: []const u8, start: usize) ?usize {
+    const operators = [_][]const u8{
+        "|->",
+        "->",
+        "??",
+        "++",
+        "::",
+        "==",
+    };
+    for (operators) |operator| {
+        if (std.mem.startsWith(u8, slice[start..], operator)) return start + operator.len;
+    }
+    return null;
+}
+
+fn startsChevronBlock(slice: []const u8, index: usize) bool {
+    if (!std.mem.startsWith(u8, slice[index..], "<<")) return false;
+    const after_marker = source.skipInlineSpacesUntil(slice, index + 2, slice.len);
+    return after_marker == slice.len;
+}
+
+fn isChevronTerminatorLine(slice: []const u8) bool {
+    var probe = source.skipInlineSpacesUntil(slice, 0, slice.len);
+    if (probe + 2 > slice.len) return false;
+    if (!std.mem.eql(u8, slice[probe .. probe + 2], ">>")) return false;
+    probe = source.skipInlineSpacesUntil(slice, probe + 2, slice.len);
+    if (probe == slice.len) return true;
+    return source.lineCommentMarkerLength(slice, probe) != null;
+}
+
 fn isKeyword(token: []const u8) bool {
-    const keywords = [_][]const u8{ "import", "as", "const", "page", "fn", "let", "return", "end" };
+    const keywords = [_][]const u8{
+        "import",
+        "as",
+        "with",
+        "const",
+        "document",
+        "page",
+        "fn",
+        "let",
+        "bind",
+        "return",
+        "end",
+        "type",
+        "record",
+        "protocol",
+        "extend",
+        "base",
+        "implements",
+        "roles",
+        "if",
+        "then",
+        "else",
+        "for",
+        "in",
+        "property",
+    };
     for (keywords) |keyword| {
         if (std.mem.eql(u8, token, keyword)) return true;
     }
