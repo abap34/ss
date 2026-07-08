@@ -2889,7 +2889,7 @@ fn drawList(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block: *const Blo
     for (list.items.items, 0..) |item, item_index| {
         const marker = try listMarker(ctx.allocator, block.kind, list_depth, list.start + item_index);
         defer ctx.allocator.free(marker);
-        try drawRawText(ctx, item_x, baselineTop(cursor_bl, text.font_size), item_width, text.font_size * 2, marker, text.font, text.font_size, text.color, false);
+        try drawRawText(ctx, item_x, baselineTop(cursor_bl, text.font_size), item_width, marker, text.font, text.font_size, text.color, false);
         const marker_width = try measureText(ctx, marker, text.font, text.font_size);
         const content_x = item_x + marker_width + @max(@as(f32, 8.0), text.font_size * 0.35);
         const content_frame = Frame{
@@ -3412,7 +3412,7 @@ fn drawAtomsWithOptions(
                 if (atom.link_url) |url| {
                     try drawLinkedRawText(ctx, cursor_x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
                 } else {
-                    try drawAtomRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), paint.line_height, atom, paint, false);
+                    try drawAtomRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
                 }
                 if (atom.strikethrough) {
                     drawStrikethrough(ctx, cursor_x, y_top, atom, paint);
@@ -4367,14 +4367,13 @@ fn drawRawText(
     x: f32,
     y_top: f32,
     width: f32,
-    height: f32,
     content: []const u8,
     font: FontFace,
     font_size: f32,
     color: Color,
     wrap: bool,
 ) !void {
-    return drawRawTextWithMode(ctx, x, y_top, width, height, content, font, font_size, color, wrap, false);
+    return drawRawTextWithMode(ctx, x, y_top, width, content, font, font_size, color, wrap, false);
 }
 
 fn drawColorRawText(
@@ -4382,21 +4381,20 @@ fn drawColorRawText(
     x: f32,
     y_top: f32,
     width: f32,
-    height: f32,
     content: []const u8,
     font: FontFace,
     font_size: f32,
     color: Color,
     wrap: bool,
 ) !void {
-    return drawRawTextWithMode(ctx, x, y_top, width, height, content, font, font_size, color, wrap, true);
+    return drawRawTextWithMode(ctx, x, y_top, width, content, font, font_size, color, wrap, true);
 }
 
-fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, height: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
+fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
     if (atom.is_emoji) {
-        try drawColorRawText(ctx, x, y_top, width, height, atom.text, atom.font, paint.font_size, atom.color, wrap);
+        try drawColorRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap);
     } else {
-        try drawRawText(ctx, x, y_top, width, height, atom.text, atom.font, paint.font_size, atom.color, wrap);
+        try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap);
     }
 }
 
@@ -4405,7 +4403,6 @@ fn drawRawTextWithMode(
     x: f32,
     y_top: f32,
     width: f32,
-    height: f32,
     content: []const u8,
     font: FontFace,
     font_size: f32,
@@ -4423,9 +4420,7 @@ fn drawRawTextWithMode(
             ctx.pdf,
             x,
             baseline_y,
-            y_top,
             width,
-            height,
             content_z.ptr,
             family_z.ptr,
             @intCast(font.weight),
@@ -4442,9 +4437,7 @@ fn drawRawTextWithMode(
             ctx.pdf,
             x,
             baseline_y,
-            y_top,
             width,
-            height,
             content_z.ptr,
             family_z.ptr,
             @intCast(font.weight),
@@ -4471,7 +4464,7 @@ fn drawLinkedRawText(
 ) !void {
     const target = if (isInternalLink(url)) url[1..] else url;
     if (target.len == 0) {
-        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom, paint, false);
+        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
         return;
     }
 
@@ -4488,13 +4481,13 @@ fn drawLinkedRawText(
             .width = resolved_width,
             .height = height,
         });
-        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom, paint, false);
+        try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
         return;
     }
 
     try beginLinkAnnotation(ctx, kind, target, @floatCast(x), @floatCast(y_top), @floatCast(resolved_width), @floatCast(height));
     defer c.ss_pdf_end_link(ctx.pdf);
-    try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), height, atom, paint, false);
+    try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
 }
 
 fn isInternalLink(url: []const u8) bool {
