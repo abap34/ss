@@ -37,10 +37,30 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
             continue;
         }
 
+        const check_content_overflow = shouldCheckContentOverflow(ir, node);
+        const required_width: ?f32 = if (check_content_overflow)
+            if (measurement_cache) |cache|
+                try metrics.intrinsicWidthCached(ir, node, cache)
+            else
+                metrics.intrinsicWidth(ir, node)
+        else
+            null;
+        const required_height: ?f32 = if (check_content_overflow)
+            if (measurement_cache) |cache|
+                try metrics.intrinsicHeightCached(ir, node, cache)
+            else
+                metrics.intrinsicHeight(ir, node)
+        else
+            null;
+        const visual_width = if (required_width) |width| @max(node.frame.width, width) else node.frame.width;
+        const visual_height = if (required_height) |height| @max(node.frame.height, height) else node.frame.height;
+        const visual_top = node.frame.y + node.frame.height;
+        const visual_bottom = visual_top - visual_height;
+
         const overflow_left = @max(@as(f32, 0.0), -node.frame.x);
-        const overflow_right = @max(@as(f32, 0.0), node.frame.x + node.frame.width - PageLayout.width);
-        const overflow_bottom = @max(@as(f32, 0.0), -node.frame.y);
-        const overflow_top = @max(@as(f32, 0.0), node.frame.y + node.frame.height - PageLayout.height);
+        const overflow_right = @max(@as(f32, 0.0), node.frame.x + visual_width - PageLayout.width);
+        const overflow_bottom = @max(@as(f32, 0.0), -visual_bottom);
+        const overflow_top = @max(@as(f32, 0.0), visual_top - PageLayout.height);
 
         if (overflow_left > graph.ConstraintTolerance or overflow_right > graph.ConstraintTolerance or overflow_bottom > graph.ConstraintTolerance or overflow_top > graph.ConstraintTolerance) {
             const policy = overflowPolicy(ir, node);
@@ -58,22 +78,25 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
             }
         }
 
-        if (shouldCheckContentOverflow(ir, node)) {
-            const required_height = if (measurement_cache) |cache|
-                try metrics.intrinsicHeightCached(ir, node, cache)
-            else
-                metrics.intrinsicHeight(ir, node);
-            const overflow_height = @max(@as(f32, 0.0), required_height - node.frame.height);
-            if (overflow_height > graph.ConstraintTolerance) {
+        if (required_width != null and required_height != null) {
+            const overflow_width = @max(@as(f32, 0.0), required_width.? - node.frame.width);
+            const overflow_height = @max(@as(f32, 0.0), required_height.? - node.frame.height);
+            if (overflow_width > graph.ConstraintTolerance or overflow_height > graph.ConstraintTolerance) {
                 switch (overflowPolicy(ir, node)) {
                     .ignore => {},
                     .warn => try ir.addLayoutWarning(page_id, child_id, .{ .content_overflow = .{
-                        .required_height = required_height,
+                        .required_width = required_width.?,
+                        .frame_width = node.frame.width,
+                        .overflow_width = overflow_width,
+                        .required_height = required_height.?,
                         .frame_height = node.frame.height,
                         .overflow_height = overflow_height,
                     } }),
                     .@"error" => try ir.addLayoutError(page_id, child_id, .{ .content_overflow = .{
-                        .required_height = required_height,
+                        .required_width = required_width.?,
+                        .frame_width = node.frame.width,
+                        .overflow_width = overflow_width,
+                        .required_height = required_height.?,
                         .frame_height = node.frame.height,
                         .overflow_height = overflow_height,
                     } }),

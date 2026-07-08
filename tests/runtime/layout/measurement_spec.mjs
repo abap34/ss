@@ -6,6 +6,9 @@ import path from "node:path";
 import { assert, ssBin } from "../harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
+const pdftocairoAvailable = await commandAvailable("pdftocairo");
+const pdftoppmAvailable = await commandAvailable("pdftoppm");
+const magickAvailable = await commandAvailable("magick");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
 await testCheckReportsRasterMeasurementFailure();
@@ -14,11 +17,18 @@ if (pdflatexAvailable) {
   await testCheckReportsInlineMathMeasurementFailure();
   await testPanelHeightUsesRenderedMathMeasurement();
 }
-if (pdflatexAvailable && await commandAvailable("pdftoppm") && await commandAvailable("magick")) {
+if (pdflatexAvailable && pdftoppmAvailable && magickAvailable) {
   await testVectorMathKeepsAspectRatio();
 }
-if (await commandAvailable("pdftocairo")) {
+if (pdflatexAvailable && pdftocairoAvailable && pdftoppmAvailable && magickAvailable) {
+  await testTexBlockExpandsToConfiguredLineHeight();
+}
+if (pdftocairoAvailable) {
   await testPdfFactorScalesMeasuredAssetFrame();
+  if (pdftoppmAvailable && magickAvailable) {
+    await testPdfFactorControlsRenderedAssetSizeInsideFixedFrame();
+    await testPdfAssetDoesNotShrinkToFixedFrame();
+  }
 }
 
 async function testNaturalTitleWidthDoesNotSelfWrap() {
@@ -224,6 +234,44 @@ end
   }
 }
 
+async function testTexBlockExpandsToConfiguredLineHeight() {
+  const project = await mkdtempProject("ss-layout-measure-tex-block-height-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const dumpPath = path.join(project, "dump.json");
+    const outputPath = path.join(project, "out.pdf");
+    await writeFile(
+      slide,
+      `import std:themes/default as *
+
+page tex_block_height
+let formula = tex!(<<
+\\begin{tabular}{l}one\\\\two\\\\three\\\\four\\end{tabular}
+>>)
+formula.math.block_line_height = 48
+formula.math.block_vertical_padding = 0
+formula.math.block_min_height = 1
+~ formula.left == page.left + 100
+~ formula.right == page.right - 100
+~ formula.top == page.top - 160
+end
+`,
+      "utf8",
+    );
+
+    const dump = await dumpSlide(project, dumpPath);
+    const formula = dump.nodes.find((candidate) => typeof candidate.content === "string" && candidate.content.includes("\\begin{tabular}"));
+    assert(formula, "tex formula node was not found in dump");
+    assert(formula.height > 170, `tex block height should follow configured visual lines, got ${frameSummary(formula)}`);
+
+    await runSs(["render", "slide.ss", outputPath, "--cache-id", "tex-block-height"], project);
+    const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "tex");
+    assert(rendered.height > 120, `rendered tex block should expand with configured line height, got ${geometrySummary(rendered)}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testPdfFactorScalesMeasuredAssetFrame() {
   const project = await mkdtempProject("ss-layout-measure-pdf-scale-");
   try {
@@ -240,7 +288,7 @@ page pdf_scale
   small.link_id = "small"
   place!(small)
 
-  let large = pdf("asset.pdf", 100)
+  let large = pdf("asset.pdf", 2)
   large.link_id = "large"
   place!(large)
 end
@@ -256,10 +304,84 @@ end
     const [small, large] = assets;
     assert(small.height < 40, `small pdf factor should keep the asset near scaled natural height, got ${frameSummary(small)}`);
     assert(small.width < 80, `small pdf factor should keep the asset near scaled natural width, got ${frameSummary(small)}`);
-    assert(large.height > small.height * 10, `pdf factor should affect measured height, small ${frameSummary(small)}, large ${frameSummary(large)}`);
-    assert(large.width > small.width * 10, `pdf factor should affect measured width, small ${frameSummary(small)}, large ${frameSummary(large)}`);
+    assert(large.height > small.height * 5, `pdf factor should affect measured height, small ${frameSummary(small)}, large ${frameSummary(large)}`);
+    assert(large.width > small.width * 5, `pdf factor should affect measured width, small ${frameSummary(small)}, large ${frameSummary(large)}`);
 
     await runSs(["render", "slide.ss", path.join(project, "out.pdf"), "--cache-id", "pdf-scale"], project);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testPdfFactorControlsRenderedAssetSizeInsideFixedFrame() {
+  const project = await mkdtempProject("ss-layout-measure-pdf-rendered-scale-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const pdfPath = path.join(project, "asset.pdf");
+    const outputPath = path.join(project, "out.pdf");
+    await writeMinimalPdf(pdfPath, 200, 100);
+    await writeFile(
+      slide,
+      `import std:core/prelude as *
+
+page small
+  let asset = pdf!("asset.pdf", 0.3)
+  ~ asset.left == page.left + 100
+  ~ asset.right == page.right - 480
+  ~ asset.top == page.top - 120
+  ~ asset.bottom == page.top - 420
+end
+
+page large
+  let asset = pdf!("asset.pdf", 0.8)
+  ~ asset.left == page.left + 100
+  ~ asset.right == page.right - 480
+  ~ asset.top == page.top - 120
+  ~ asset.bottom == page.top - 420
+end
+`,
+      "utf8",
+    );
+
+    await runSs(["render", "slide.ss", outputPath, "--cache-id", "pdf-rendered-scale"], project);
+    const small = await trimmedRenderedPageGeometry(project, outputPath, 1, "small");
+    const large = await trimmedRenderedPageGeometry(project, outputPath, 2, "large");
+    assert(large.width > small.width * 2, `pdf factor should change rendered width inside a fixed frame, small ${geometrySummary(small)}, large ${geometrySummary(large)}`);
+    assert(large.height > small.height * 2, `pdf factor should change rendered height inside a fixed frame, small ${geometrySummary(small)}, large ${geometrySummary(large)}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testPdfAssetDoesNotShrinkToFixedFrame() {
+  const project = await mkdtempProject("ss-layout-measure-pdf-no-shrink-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    const pdfPath = path.join(project, "asset.pdf");
+    const outputPath = path.join(project, "out.pdf");
+    await writeMinimalPdf(pdfPath, 200, 100);
+    await writeFile(
+      slide,
+      `import std:core/prelude as *
+
+page fixed_frame
+  let asset = pdf!("asset.pdf", 1)
+  ~ asset.left == page.left + 100
+  ~ asset.right == asset.left + 80
+  ~ asset.top == page.top - 120
+  ~ asset.bottom == page.top - 160
+end
+`,
+      "utf8",
+    );
+
+    const result = await spawnCollect(ssBin, ["render", "slide.ss", outputPath, "--cache-id", "pdf-no-shrink"], project);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert(result.code === 0, `ss render slide.ss ${outputPath} failed with ${result.code}\n${output}`);
+    assert(output.includes("ContentOverflow"), `fixed asset frame should warn instead of shrinking content:\n${output}`);
+    const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "rendered");
+    assert(rendered.width > 150, `fixed frame should not shrink rendered pdf width, got ${geometrySummary(rendered)}`);
+    assert(rendered.height > 75, `fixed frame should not shrink rendered pdf height, got ${geometrySummary(rendered)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -319,6 +441,28 @@ function assertPanelContainsBody(dump, body) {
 
 function frameSummary(node) {
   return `x=${node.x}, y=${node.y}, width=${node.width}, height=${node.height}`;
+}
+
+async function trimmedRenderedPageGeometry(project, pdfPath, pageNumber, prefix) {
+  await runCommand("pdftoppm", ["-png", "-r", "72", "-f", String(pageNumber), "-l", String(pageNumber), "-singlefile", pdfPath, prefix], project);
+  const geometry = await runCommand("magick", [
+    `${prefix}.png`,
+    "-alpha",
+    "off",
+    "-fuzz",
+    "8%",
+    "-trim",
+    "-format",
+    "%wx%h",
+    "info:",
+  ], project);
+  const match = /^(\d+)x(\d+)/.exec(geometry.stdout.trim());
+  assert(match, `could not parse trimmed rendered geometry: ${geometry.stdout}`);
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+function geometrySummary(geometry) {
+  return `${geometry.width}x${geometry.height}`;
 }
 
 function close(left, right) {

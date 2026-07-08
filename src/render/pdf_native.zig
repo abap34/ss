@@ -113,9 +113,12 @@ const NativePdfError = error{
 };
 
 const raster_cache_scale: f32 = 3.0;
-pub const page_pdf_cache_version = "ss-native-page-pdf-v25";
+pub const page_pdf_cache_version = "ss-native-page-pdf-v29";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
 pub const native_artifact_cache_version = "ss-native-artifacts-v2";
+const layout_measurement_cache_version = "ss-native-layout-measure-v4";
+const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
+const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
     .raw = std.Io.Duration.fromSeconds(120),
     .clock = .awake,
@@ -235,8 +238,6 @@ const MathPreload = struct {
 
 const RasterPreload = struct {
     source: []const u8,
-    target_width: f32,
-    target_height: f32,
     target: RenderDiagnosticTarget = .{},
 };
 
@@ -360,6 +361,9 @@ const RenderOp = struct {
     link_id: ?[]const u8 = null,
     render: ResolvedRender,
     parse_mode: core.markdown.ParseMode,
+    markdown_doc: ?*const MarkdownDocument = null,
+    text_layout: ?*const core.markdown.TextLayout = null,
+    asset_deps: []const core.page_unit.AssetDependency = &.{},
     tex_preamble: []const TexPreambleEntry,
     math_kind: MathKind = .block,
     origin: ?[]const u8 = null,
@@ -410,11 +414,13 @@ const RenderPlan = struct {
     previous_document_path: ?[]const u8,
     current_path: []const u8,
     lease_path: []const u8,
+    prepared_pages: ?core.page_unit.PreparedPages = null,
     generation_published: bool = false,
 
     fn deinit(self: *RenderPlan) void {
         for (self.pages) |*page| page.deinit(self.allocator);
         self.allocator.free(self.pages);
+        if (self.prepared_pages) |*pages| pages.deinit(self.allocator);
         freePreloadTasks(self.allocator, self.artifact_tasks);
         self.allocator.free(self.artifact_tasks);
         self.allocator.free(self.artifact_cached);
@@ -437,6 +443,47 @@ const RenderPlan = struct {
 const PreloadCacheState = struct {
     cached: []bool,
     miss_count: usize,
+};
+
+const PreloadWork = struct {
+    plan: []const PreloadTask,
+    cached: []const bool,
+    next: std.atomic.Value(usize) = .init(0),
+    completed: std.atomic.Value(usize),
+    failed: std.atomic.Value(bool) = .init(false),
+    io: std.Io,
+    asset_base_dir: []const u8,
+    cache_dir: []const u8,
+};
+
+const MathBatchEntry = struct {
+    task_index: usize,
+    source: []const u8,
+    preamble: []const TexPreambleEntry,
+    kind: MathKind,
+    out: []u8,
+};
+
+const MathBatchGroup = struct {
+    key: []u8,
+    entries: std.ArrayList(MathBatchEntry) = .empty,
+
+    fn deinit(self: *MathBatchGroup, allocator: Allocator) void {
+        allocator.free(self.key);
+        for (self.entries.items) |entry| allocator.free(entry.out);
+        self.entries.deinit(allocator);
+    }
+};
+
+const MathBatchExtractWork = struct {
+    entries: []const MathBatchEntry,
+    pdf_path: []const u8,
+    next: std.atomic.Value(usize) = .init(0),
+    completed: std.atomic.Value(usize) = .init(0),
+    failed: std.atomic.Value(bool) = .init(false),
+    io: std.Io,
+    asset_base_dir: []const u8,
+    cache_dir: []const u8,
 };
 
 const FileFingerprint = struct {
@@ -511,16 +558,46 @@ pub const LayoutMeasurementScope = struct {
     allocator: Allocator,
     io: std.Io,
     asset_cache_dir: []const u8,
+    measurement_cache_dir: []const u8,
+    measurement_cache_path: []const u8,
     pdf_path: []const u8,
     ctx: DrawContext,
+    prepared_pages: ?*const core.page_unit.PreparedPages = null,
+    measure_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
+    run_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
+    measurement_cache_dirty: bool = false,
 
     pub fn init(allocator: Allocator, io: std.Io, ir: *core.Ir) !LayoutMeasurementScope {
+        return try initInternal(allocator, io, ir, null);
+    }
+
+    pub fn initWithPreparedPages(
+        allocator: Allocator,
+        io: std.Io,
+        ir: *core.Ir,
+        pages: *const core.page_unit.PreparedPages,
+    ) !LayoutMeasurementScope {
+        return try initInternal(allocator, io, ir, pages);
+    }
+
+    fn initInternal(
+        allocator: Allocator,
+        io: std.Io,
+        ir: *core.Ir,
+        pages: ?*const core.page_unit.PreparedPages,
+    ) !LayoutMeasurementScope {
         const default_options: RenderOptions = .{};
         const cache_dir = default_options.cache_dir;
         try std.Io.Dir.cwd().createDirPath(io, cache_dir);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
         errdefer allocator.free(asset_cache_dir);
         try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
+        const measurement_cache_dir = try std.fs.path.join(allocator, &.{ asset_cache_dir, "measurements" });
+        errdefer allocator.free(measurement_cache_dir);
+        try std.Io.Dir.cwd().createDirPath(io, measurement_cache_dir);
+        const measurement_cache_path = try std.fs.path.join(allocator, &.{ measurement_cache_dir, "measurements.tsv" });
+        errdefer allocator.free(measurement_cache_path);
 
         const serial = @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic);
         const pdf_path = try std.fmt.allocPrint(allocator, "{s}/layout-measure-{d}-{d}.pdf", .{ asset_cache_dir, std.c.getpid(), serial });
@@ -531,10 +608,16 @@ pub const LayoutMeasurementScope = struct {
         errdefer c.ss_pdf_destroy(pdf);
         c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
 
+        var persistent_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator);
+        errdefer persistent_measurements.deinit();
+        try readPersistedMeasurements(allocator, io, measurement_cache_path, &persistent_measurements);
+
         return .{
             .allocator = allocator,
             .io = io,
             .asset_cache_dir = asset_cache_dir,
+            .measurement_cache_dir = measurement_cache_dir,
+            .measurement_cache_path = measurement_cache_path,
             .pdf_path = pdf_path,
             .ctx = .{
                 .allocator = allocator,
@@ -544,13 +627,21 @@ pub const LayoutMeasurementScope = struct {
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
             },
+            .prepared_pages = pages,
+            .persistent_measurements = persistent_measurements,
+            .run_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator),
         };
     }
 
     pub fn deinit(self: *LayoutMeasurementScope) void {
+        self.flushMeasurementCache() catch {};
+        self.persistent_measurements.deinit();
+        self.run_measurements.deinit();
         c.ss_pdf_destroy(self.ctx.pdf);
         std.Io.Dir.cwd().deleteFile(self.io, self.pdf_path) catch {};
         self.allocator.free(self.pdf_path);
+        self.allocator.free(self.measurement_cache_path);
+        self.allocator.free(self.measurement_cache_dir);
         self.allocator.free(self.asset_cache_dir);
     }
 
@@ -574,27 +665,98 @@ pub const LayoutMeasurementScope = struct {
     }
 
     fn measureNode(self: *LayoutMeasurementScope, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+        const profile_total = utils.measure_profile.start();
+        defer utils.measure_profile.recordLayoutMeasurementTotal(profile_total);
+
+        const profile_lock = utils.measure_profile.start();
+        self.measure_mutex.lockUncancelable(self.io);
+        utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
+        defer self.measure_mutex.unlock(self.io);
+
         if (node.kind != .object) return null;
+
+        const profile_render_op = utils.measure_profile.start();
         var op = try self.renderOpForNode(ir, node, width, mode);
+        utils.measure_profile.recordLayoutMeasurementRenderOp(profile_render_op);
         defer op.deinit(self.allocator);
+
+        const profile_cache_key = utils.measure_profile.start();
+        const cache_key = try layoutMeasurementCacheKey(&self.ctx, &op, width, mode);
+        utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
+
+        const profile_memory_cache = utils.measure_profile.start();
+        if (self.run_measurements.get(cache_key)) |cached| {
+            utils.measure_profile.recordLayoutMeasurementCache(.memory_hit, profile_memory_cache);
+            return cached;
+        }
+
+        const profile_persistent_cache = utils.measure_profile.start();
+        if (self.persistent_measurements.get(cache_key)) |cached| {
+            utils.measure_profile.recordLayoutMeasurementCache(.file_hit, profile_persistent_cache);
+            try self.run_measurements.put(cache_key, cached);
+            return cached;
+        }
+        utils.measure_profile.recordLayoutMeasurementCache(.file_miss, profile_persistent_cache);
+
         var sink = CommandFailureSink{ .allocator = ir.allocator };
         defer sink.deinit();
         var measurement_ctx = self.ctx;
         measurement_ctx.command_failure = &sink;
-        return measureRenderOpIntrinsic(&measurement_ctx, &op, width, mode) catch |err| {
+        const profile_intrinsic = utils.measure_profile.start();
+        defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(op.render.kind), profile_intrinsic);
+        var measured = measureRenderOpIntrinsic(&measurement_ctx, &op, width, mode) catch |err| {
             try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &op, err, sink.message);
             return err;
         };
+        if (measured) |*value| {
+            value.cache_key = cache_key;
+            try self.run_measurements.put(cache_key, value.*);
+            self.measurement_cache_dirty = true;
+        }
+        return measured;
+    }
+
+    fn flushMeasurementCache(self: *LayoutMeasurementScope) !void {
+        if (!self.measurement_cache_dirty or self.run_measurements.count() == 0) return;
+        const profile_write = utils.measure_profile.start();
+        defer utils.measure_profile.recordLayoutMeasurementCache(.write, profile_write);
+
+        const tmp = try tempCachePath(&self.ctx, self.measurement_cache_path, "tsv");
+        defer self.allocator.free(tmp);
+        errdefer deleteFileIfExists(&self.ctx, tmp);
+
+        var out = std.ArrayList(u8).empty;
+        defer out.deinit(self.allocator);
+        try out.print(self.allocator, "{s}\t{s}\n", .{ layout_measurement_cache_file_format, layout_measurement_cache_version });
+        var iterator = self.run_measurements.iterator();
+        while (iterator.next()) |entry| {
+            const measurement = entry.value_ptr.*;
+            if (!(measurement.width > 0) or !(measurement.height > 0)) continue;
+            try out.print(self.allocator, "{x}\t{d:.6}\t{d:.6}\n", .{ entry.key_ptr.*, measurement.width, measurement.height });
+        }
+        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = tmp, .data = out.items, .flags = .{ .truncate = true } });
+        try renameReplacing(&self.ctx, tmp, self.measurement_cache_path);
+        self.measurement_cache_dirty = false;
     }
 
     fn renderOpForNode(self: *LayoutMeasurementScope, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
-        var env = try core.render_env.resolveForNode(self.allocator, ir, node);
-        defer env.deinit(self.allocator);
-        const uses_asset_content = switch (node.payload_kind orelse .text) {
-            .image_ref, .pdf_ref => true,
-            else => false,
-        };
-        var render = core.render_policy.resolve(ir, node);
+        if (self.preparedObject(node.id)) |object| {
+            return try self.renderOpForPreparedObject(node, object, width, mode, true);
+        }
+        var owned_object = try core.page_unit.prepareObject(self.allocator, ir, node);
+        defer owned_object.deinit(self.allocator);
+        return try self.renderOpForPreparedObject(node, &owned_object, width, mode, false);
+    }
+
+    fn renderOpForPreparedObject(
+        self: *LayoutMeasurementScope,
+        node: *const core.Node,
+        object: *const core.page_unit.ObjectUnit,
+        width: f32,
+        mode: core.LayoutMeasurementMode,
+        use_prepared_parse: bool,
+    ) !RenderOp {
+        var render = object.render;
         if (mode == .natural) {
             if (render.text) |*text| text.wrap = false;
         }
@@ -602,18 +764,71 @@ pub const LayoutMeasurementScope = struct {
             .page_id = 0,
             .node_id = node.id,
             .frame = .{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height },
-            .content = if (uses_asset_content) node.content orelse "" else core.nodeDisplayContent(node),
-            .content_provenance = if (uses_asset_content) node.content_provenance.items else core.nodeDisplayContentProvenance(node),
-            .link_id = nodeStringField(node, "link_id"),
+            .content = object.content,
+            .content_provenance = object.content_provenance,
+            .link_id = object.link_id,
             .render = render,
-            .parse_mode = core.markdown.parseModeForNode(ir, node),
-            .tex_preamble = try cloneTexPreambleEntries(self.allocator, env.tex_preamble.items),
+            .parse_mode = object.parse_mode,
+            .markdown_doc = if (use_prepared_parse) object.markdownDocument() else null,
+            .text_layout = if (use_prepared_parse) object.textLayout() else null,
+            .asset_deps = if (use_prepared_parse) object.asset_deps else &.{},
+            .tex_preamble = try cloneTexPreambleEntries(self.allocator, object.tex_preamble),
             .math_kind = mathKindForNode(node),
-            .origin = node.origin,
-            .payload_kind = node.payload_kind,
+            .origin = object.origin,
+            .payload_kind = object.payload_kind,
         };
     }
+
+    fn preparedObject(self: *const LayoutMeasurementScope, node_id: core.NodeId) ?*const core.page_unit.ObjectUnit {
+        const pages = self.prepared_pages orelse return null;
+        for (pages.pages) |*page| {
+            for (page.objects) |*object| {
+                if (object.node_id == node_id) return object;
+            }
+        }
+        return null;
+    }
 };
+
+fn readPersistedMeasurements(
+    allocator: Allocator,
+    io: std.Io,
+    path: []const u8,
+    target: *std.AutoHashMap(u64, core.LayoutMeasurement),
+) !void {
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(layout_measurement_cache_read_limit)) catch return;
+    defer allocator.free(text);
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    const header = std.mem.trim(u8, lines.next() orelse return, " \t\r\n");
+    if (!measurementCacheHeaderMatches(header)) return;
+
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r\n");
+        if (line.len == 0) continue;
+        var fields = std.mem.tokenizeAny(u8, line, " \t");
+        const key_text = fields.next() orelse continue;
+        const width_text = fields.next() orelse continue;
+        const height_text = fields.next() orelse continue;
+        const key = std.fmt.parseUnsigned(u64, key_text, 16) catch continue;
+        const width = std.fmt.parseFloat(f32, width_text) catch continue;
+        const height = std.fmt.parseFloat(f32, height_text) catch continue;
+        if (!(width > 0) or !(height > 0)) continue;
+        try target.put(key, .{
+            .width = width,
+            .height = height,
+            .cache_key = key,
+        });
+    }
+}
+
+fn measurementCacheHeaderMatches(header: []const u8) bool {
+    var fields = std.mem.tokenizeAny(u8, header, " \t");
+    const format = fields.next() orelse return false;
+    const version = fields.next() orelse return false;
+    return std.mem.eql(u8, format, layout_measurement_cache_file_format) and
+        std.mem.eql(u8, version, layout_measurement_cache_version);
+}
 
 pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, ir: *core.Ir) ![]const u8 {
     return renderDocumentToPdfWithOptions(allocator, io, ir, .{}, null);
@@ -624,6 +839,91 @@ pub fn renderDocumentToPdfWithProgress(allocator: Allocator, io: std.Io, ir: *co
 }
 
 pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *core.Ir, options: RenderOptions, progress: ?RenderProgress) ![]const u8 {
+    return try renderDocumentToPdfInternal(allocator, io, ir, null, null, options, progress);
+}
+
+pub fn renderDocumentToPdfWithPreparedPagesAndOptions(
+    allocator: Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) ![]const u8 {
+    return try renderDocumentToPdfInternal(allocator, io, ir, pages, null, options, progress);
+}
+
+pub fn renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(
+    allocator: Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    layouts: *const core.LayoutResults,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) ![]const u8 {
+    return try renderDocumentToPdfInternal(allocator, io, ir, pages, layouts, options, progress);
+}
+
+pub fn preloadPreparedPageArtifactsWithOptions(
+    allocator: Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) !void {
+    try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
+    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
+    defer allocator.free(asset_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
+
+    var ctx = DrawContext{
+        .allocator = allocator,
+        .io = io,
+        .pdf = undefined,
+        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+        .cache_dir = asset_cache_dir,
+        .highlight_languages = options.highlight_languages,
+    };
+
+    const tasks = try collectPreparedPagePreloadTasks(&ctx, pages);
+    defer {
+        freePreloadTasks(allocator, tasks);
+        allocator.free(tasks);
+    }
+    const cached = try allocator.alloc(bool, tasks.len);
+    defer allocator.free(cached);
+
+    var miss_count: usize = 0;
+    for (tasks, 0..) |task, index| {
+        const profile_scan = utils.measure_profile.start();
+        cached[index] = try preloadTaskPresent(&ctx, task);
+        utils.measure_profile.recordArtifactScan(profilePreloadKind(task), cached[index], profile_scan);
+        if (!cached[index]) miss_count += 1;
+    }
+
+    const initial_done = tasks.len - miss_count;
+    if (progress) |p| p.artifactCompleted(p.context, initial_done, tasks.len);
+    if (miss_count == 0) return;
+
+    const profile_build_wall = utils.measure_profile.start();
+    defer utils.measure_profile.recordArtifactBuildWall(miss_count, profile_build_wall);
+    executePreloadTaskList(&ctx, tasks, cached, miss_count, options, progress) catch |err| {
+        try collectPreloadTaskDiagnostics(&ctx, ir, tasks, cached);
+        return err;
+    };
+}
+
+fn renderDocumentToPdfInternal(
+    allocator: Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    prepared_pages: ?*const core.page_unit.PreparedPages,
+    layout_results: ?*const core.LayoutResults,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) ![]const u8 {
     try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
     const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
     defer allocator.free(asset_cache_dir);
@@ -642,7 +942,7 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
     defer declaration_index.deinit();
     const sema = semantic_env.SemanticEnv.init(ir, &declaration_index, &ir.functions);
 
-    var plan = try buildRenderPlan(&ctx, ir, &sema, options);
+    var plan = try buildRenderPlan(&ctx, ir, &sema, prepared_pages, layout_results, options);
     defer {
         if (!options.keep_temps) std.Io.Dir.cwd().deleteTree(io, plan.run_dir) catch {};
         if (!plan.generation_published and !options.keep_temps) std.Io.Dir.cwd().deleteTree(io, plan.building_dir) catch {};
@@ -675,7 +975,14 @@ pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *cor
     return try std.Io.Dir.cwd().readFileAlloc(io, plan.final_pdf_path, allocator, .unlimited);
 }
 
-fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: RenderOptions) !RenderPlan {
+fn buildRenderPlan(
+    ctx: *DrawContext,
+    ir: *core.Ir,
+    sema: anytype,
+    prepared_pages: ?*const core.page_unit.PreparedPages,
+    layout_results: ?*const core.LayoutResults,
+    options: RenderOptions,
+) !RenderPlan {
     const nonce = std.hash.Wyhash.hash(0, ir.projectSource());
     const pid = std.c.getpid();
     const serial = @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic);
@@ -749,8 +1056,17 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         asset_fingerprints.deinit();
     }
 
-    for (ir.page_order.items, 0..) |page_id, page_index| {
-        const page = ir.getNode(page_id) orelse continue;
+    var owned_prepared_pages: ?core.page_unit.PreparedPages = null;
+    var owned_prepared_pages_transferred = false;
+    errdefer if (!owned_prepared_pages_transferred) {
+        if (owned_prepared_pages) |*pages_value| pages_value.deinit(ctx.allocator);
+    };
+    const pages_source = prepared_pages orelse blk: {
+        owned_prepared_pages = try core.page_unit.prepareWithEnv(ctx.allocator, ir, sema);
+        break :blk &owned_prepared_pages.?;
+    };
+
+    for (pages_source.pages) |*page_unit| {
         var ops = std.ArrayList(RenderOp).empty;
         errdefer {
             for (ops.items) |*op| op.deinit(ctx.allocator);
@@ -759,37 +1075,32 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         var deps = std.ArrayList(usize).empty;
         errdefer deps.deinit(ctx.allocator);
 
-        if (ir.contains.get(page.id)) |children| {
-            for (children.items) |child_id| {
-                const node = ir.getNode(child_id) orelse continue;
-                if (node.kind != .object or !node.attached) continue;
-                var env = try core.render_env.resolveForNode(ctx.allocator, ir, node);
-                defer env.deinit(ctx.allocator);
-                const uses_asset_content = switch (node.payload_kind orelse .text) {
-                    .image_ref, .pdf_ref => true,
-                    else => false,
-                };
-                var op = RenderOp{
-                    .page_id = page.id,
-                    .node_id = node.id,
-                    .frame = node.frame,
-                    .content = if (uses_asset_content) node.content orelse "" else core.nodeDisplayContent(node),
-                    .content_provenance = if (uses_asset_content) node.content_provenance.items else core.nodeDisplayContentProvenance(node),
-                    .link_id = nodeStringField(node, "link_id"),
-                    .render = core.render_policy.resolveWithEnv(ir, node, sema),
-                    .parse_mode = core.markdown.parseModeForNode(ir, node),
-                    .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, env.tex_preamble.items),
-                    .math_kind = mathKindForNode(node),
-                    .origin = node.origin,
-                    .payload_kind = node.payload_kind,
-                };
-                errdefer op.deinit(ctx.allocator);
-                try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
-                try ops.append(ctx.allocator, op);
-            }
+        for (page_unit.objects) |*object| {
+            const node = ir.getNode(object.node_id) orelse continue;
+            if (node.kind != .object or !object.attached) continue;
+            if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
+            var op = RenderOp{
+                .page_id = page_unit.page_id,
+                .node_id = node.id,
+                .frame = layoutFrameForObject(layout_results, page_unit.page_id, node.id) orelse node.frame,
+                .content = object.content,
+                .content_provenance = object.content_provenance,
+                .link_id = object.link_id,
+                .render = object.render,
+                .parse_mode = object.parse_mode,
+                .markdown_doc = object.markdownDocument(),
+                .text_layout = object.textLayout(),
+                .asset_deps = object.asset_deps,
+                .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                .math_kind = mathKindForNode(node),
+                .origin = object.origin,
+                .payload_kind = object.payload_kind,
+            };
+            errdefer op.deinit(ctx.allocator);
+            try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
+            try ops.append(ctx.allocator, op);
         }
 
-        const page_background = core.render_policy.resolvePageBackgroundWithEnv(ir, page, sema);
         const op_slice = try ops.toOwnedSlice(ctx.allocator);
         var op_slice_transferred = false;
         errdefer {
@@ -801,18 +1112,18 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         const dep_slice = try deps.toOwnedSlice(ctx.allocator);
         var dep_slice_transferred = false;
         errdefer if (!dep_slice_transferred) ctx.allocator.free(dep_slice);
-        const page_hash = try renderPageHash(ctx, &asset_fingerprints, page_background, op_slice);
-        const cache_path = try pagePath(ctx.allocator, pages_dir, page_index);
+        const page_hash = try renderPageHash(ctx, &asset_fingerprints, page_unit.background, op_slice);
+        const cache_path = try pagePath(ctx.allocator, pages_dir, page_unit.index);
         var cache_path_transferred = false;
         errdefer if (!cache_path_transferred) ctx.allocator.free(cache_path);
         const render_path = try tempCachePath(ctx, cache_path, "pdf");
         var render_path_transferred = false;
         errdefer if (!render_path_transferred) ctx.allocator.free(render_path);
-        const cache_hit = try reusePreviousPage(ctx, if (previous_generation) |*previous| previous else null, page_index, page_hash, cache_path);
+        const cache_hit = try reusePreviousPage(ctx, if (previous_generation) |*previous| previous else null, page_unit.index, page_hash, cache_path);
         try pages.append(ctx.allocator, .{
-            .page_id = page.id,
-            .index = page_index,
-            .background = page_background,
+            .page_id = page_unit.page_id,
+            .index = page_unit.index,
+            .background = page_unit.background,
             .ops = op_slice,
             .artifact_deps = dep_slice,
             .page_hash = page_hash,
@@ -841,7 +1152,7 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
     const previous_document_path = try reusablePreviousDocumentPdf(ctx, if (previous_generation) |*previous| previous else null, page_slice);
     errdefer if (previous_document_path) |path| ctx.allocator.free(path);
 
-    return .{
+    const plan = RenderPlan{
         .allocator = ctx.allocator,
         .pages = page_slice,
         .artifact_tasks = artifact_slice,
@@ -861,7 +1172,15 @@ fn buildRenderPlan(ctx: *DrawContext, ir: *core.Ir, sema: anytype, options: Rend
         .previous_document_path = previous_document_path,
         .current_path = current_path,
         .lease_path = lease_path,
+        .prepared_pages = if (prepared_pages == null) owned_prepared_pages else null,
     };
+    owned_prepared_pages_transferred = true;
+    return plan;
+}
+
+fn layoutFrameForObject(layout_results: ?*const core.LayoutResults, page_id: core.NodeId, node_id: core.NodeId) ?core.Frame {
+    const results = layout_results orelse return null;
+    return results.frameOf(page_id, node_id);
 }
 
 fn countPageCacheHits(pages: []const RenderPage) usize {
@@ -1176,6 +1495,27 @@ fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(File
     hashOptionalColor(&hasher, background);
     hashUsize(&hasher, ops.len);
     for (ops) |*op| try hashRenderOp(ctx, asset_fingerprints, &hasher, op);
+    return hasher.final();
+}
+
+fn layoutMeasurementCacheKey(ctx: *DrawContext, op: *const RenderOp, width: f32, mode: core.LayoutMeasurementMode) !u64 {
+    var asset_fingerprints = std.StringHashMap(FileFingerprint).init(ctx.allocator);
+    defer {
+        var key_it = asset_fingerprints.keyIterator();
+        while (key_it.next()) |key| ctx.allocator.free(key.*);
+        asset_fingerprints.deinit();
+    }
+
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, layout_measurement_cache_version);
+    hashString(&hasher, native_artifact_cache_version);
+    hashNativePdfRuntime(&hasher);
+    hashF32(&hasher, PageLayout.width);
+    hashF32(&hasher, PageLayout.height);
+    hashF32(&hasher, raster_cache_scale);
+    hashString(&hasher, @tagName(mode));
+    hashF32(&hasher, width);
+    try hashRenderOp(ctx, &asset_fingerprints, &hasher, op);
     return hasher.final();
 }
 
@@ -1503,6 +1843,98 @@ fn hashF32(hasher: *std.hash.Wyhash, value: f32) void {
     hasher.update(std.mem.asBytes(&value));
 }
 
+fn collectPreparedPagePreloadTasks(ctx: *DrawContext, pages: *const core.page_unit.PreparedPages) ![]PreloadTask {
+    var tasks = std.ArrayList(PreloadTask).empty;
+    errdefer {
+        freePreloadTasks(ctx.allocator, tasks.items);
+        tasks.deinit(ctx.allocator);
+    }
+
+    var seen = std.StringHashMap(usize).init(ctx.allocator);
+    defer {
+        var key_it = seen.keyIterator();
+        while (key_it.next()) |key| ctx.allocator.free(key.*);
+        seen.deinit();
+    }
+
+    var deps = std.ArrayList(usize).empty;
+    defer deps.deinit(ctx.allocator);
+
+    for (pages.pages) |*page| {
+        for (page.objects) |*object| {
+            if (!object.attached or object.asset_deps.len == 0) continue;
+            deps.clearRetainingCapacity();
+            const target = preparedObjectDiagnosticTarget(page.page_id, object);
+            try collectPreparedObjectPreloads(ctx, object, target, &tasks, &seen, &deps);
+        }
+    }
+
+    return try tasks.toOwnedSlice(ctx.allocator);
+}
+
+fn collectPreparedObjectPreloads(
+    ctx: *DrawContext,
+    object: *const core.page_unit.ObjectUnit,
+    target: RenderDiagnosticTarget,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(usize),
+    deps: *std.ArrayList(usize),
+) !void {
+    for (object.asset_deps) |dep| {
+        const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
+        switch (dep.kind) {
+            .inline_math => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                .kind = .inline_math,
+                .target = dep_target,
+            } }),
+            .display_math => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                .kind = .display,
+                .target = dep_target,
+            } }),
+            .block_math => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                .kind = mathKindForPreparedObject(object),
+                .target = dep_target,
+            } }),
+            .icon => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .icon = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .target = dep_target,
+            } }),
+            .vector_pdf => {
+                const source = try resolveAssetPath(ctx, dep.source);
+                try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .vector_pdf = .{
+                    .source = source,
+                    .target = dep_target,
+                } });
+            },
+            .raster_asset => {},
+        }
+    }
+}
+
+fn preparedObjectDiagnosticTarget(page_id: core.NodeId, object: *const core.page_unit.ObjectUnit) RenderDiagnosticTarget {
+    return .{
+        .page_id = page_id,
+        .node_id = object.node_id,
+        .origin = object.origin,
+        .payload_kind = object.payload_kind,
+        .content_provenance = object.content_provenance,
+    };
+}
+
+fn mathKindForPreparedObject(object: *const core.page_unit.ObjectUnit) MathKind {
+    return switch (object.payload_kind orelse .text) {
+        .math_tex => .raw_block,
+        .math_text => .block,
+        else => .block,
+    };
+}
+
 fn collectOpPreloads(
     ctx: *DrawContext,
     op: *const RenderOp,
@@ -1511,8 +1943,14 @@ fn collectOpPreloads(
     page_deps: *std.ArrayList(usize),
 ) !void {
     const target = opDiagnosticTarget(op);
+    if (op.asset_deps.len != 0) {
+        try collectAssetDepsForPlan(ctx, op, target, tasks, seen, page_deps);
+        if (op.render.kind == .text or op.render.kind == .vector_math or op.render.kind == .vector_asset) return;
+    } else if (op.render.kind == .text) {
+        return;
+    }
     switch (op.render.kind) {
-        .text => if (op.render.text != null) try collectTextOpPreloads(ctx, op, target, tasks, seen, page_deps),
+        .text => {},
         .vector_math => {
             try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, op.content),
@@ -1537,16 +1975,58 @@ fn collectOpPreloads(
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
                 ctx.allocator.free(source);
             } else {
-                const content_frame = contentFrameForRender(op.frame, op.render);
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .raster = .{
                     .source = source,
-                    .target_width = content_frame.width * raster_cache_scale,
-                    .target_height = content_frame.height * raster_cache_scale,
                     .target = targetWithContentSpan(target, 0, op.content.len),
                 } });
             }
         },
         .code, .shape, .chrome_only => {},
+    }
+}
+
+fn collectAssetDepsForPlan(
+    ctx: *DrawContext,
+    op: *const RenderOp,
+    target: RenderDiagnosticTarget,
+    tasks: *std.ArrayList(PreloadTask),
+    seen: *std.StringHashMap(usize),
+    page_deps: *std.ArrayList(usize),
+) !void {
+    for (op.asset_deps) |dep| {
+        const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
+        switch (dep.kind) {
+            .inline_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
+                .kind = .inline_math,
+                .target = dep_target,
+            } }),
+            .display_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
+                .kind = .display,
+                .target = dep_target,
+            } }),
+            .block_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
+                .kind = op.math_kind,
+                .target = dep_target,
+            } }),
+            .icon => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .icon = .{
+                .source = try ctx.allocator.dupe(u8, dep.source),
+                .target = dep_target,
+            } }),
+            .vector_pdf => {
+                const source = try resolveAssetPath(ctx, dep.source);
+                try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .vector_pdf = .{
+                    .source = source,
+                    .target = dep_target,
+                } });
+            },
+            .raster_asset => {},
+        }
     }
 }
 
@@ -1565,119 +2045,6 @@ fn targetWithContentSpan(target: RenderDiagnosticTarget, start: usize, end: usiz
     refined.content_start = start;
     refined.content_end = end;
     return refined;
-}
-
-fn targetWithRunSpan(target: RenderDiagnosticTarget, runs: []const Run) RenderDiagnosticTarget {
-    if (runs.len == 0) return target;
-    var start = runs[0].source_start;
-    var end = runs[0].source_end;
-    for (runs[1..]) |run| {
-        start = @min(start, run.source_start);
-        end = @max(end, run.source_end);
-    }
-    return targetWithContentSpan(target, start, end);
-}
-
-fn collectTextOpPreloads(
-    ctx: *DrawContext,
-    op: *const RenderOp,
-    target: RenderDiagnosticTarget,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(usize),
-    page_deps: *std.ArrayList(usize),
-) !void {
-    switch (op.parse_mode) {
-        .none => return,
-        .block => {
-            var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
-            defer doc.deinit();
-            try collectMarkdownBlockPreloadsForPlan(ctx, doc.blocks.items, op.tex_preamble, target, tasks, seen, page_deps);
-        },
-        .@"inline" => {
-            var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
-            defer layout.deinit(ctx.allocator);
-            try collectLinePreloadsForPlan(ctx, layout.lines.items, op.tex_preamble, target, tasks, seen, page_deps);
-        },
-    }
-}
-
-fn collectMarkdownBlockPreloadsForPlan(
-    ctx: *DrawContext,
-    blocks: []const *Block,
-    preamble: []const TexPreambleEntry,
-    target: RenderDiagnosticTarget,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(usize),
-    page_deps: *std.ArrayList(usize),
-) !void {
-    for (blocks) |block| {
-        switch (block.kind) {
-            .paragraph, .code_block => if (block.paragraph) |paragraph| {
-                try collectLinePreloadsForPlan(ctx, paragraph.lines.items, preamble, target, tasks, seen, page_deps);
-            },
-            .bullet_list, .ordered_list => if (block.list) |list| {
-                for (list.items.items) |item| {
-                    try collectMarkdownBlockPreloadsForPlan(ctx, item.blocks.items, preamble, target, tasks, seen, page_deps);
-                }
-            },
-            .table => if (block.table) |table| {
-                for (table.rows.items) |row| {
-                    for (row.cells.items) |cell| {
-                        try collectLinePreloadsForPlan(ctx, cell.lines.items, preamble, target, tasks, seen, page_deps);
-                    }
-                }
-            },
-        }
-    }
-}
-
-fn collectLinePreloadsForPlan(
-    ctx: *DrawContext,
-    lines: []const Line,
-    preamble: []const TexPreambleEntry,
-    target: RenderDiagnosticTarget,
-    tasks: *std.ArrayList(PreloadTask),
-    seen: *std.StringHashMap(usize),
-    page_deps: *std.ArrayList(usize),
-) !void {
-    for (lines) |line| {
-        const runs = line.runs.items;
-        var index: usize = 0;
-        while (index < runs.len) {
-            const run = runs[index];
-            switch (run.kind) {
-                .display_math => {
-                    const start = index;
-                    while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
-                    const source = try displayMathSource(ctx.allocator, runs[start..index]);
-                    defer ctx.allocator.free(source);
-                    if (source.len > 0) {
-                        try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                            .source = try ctx.allocator.dupe(u8, source),
-                            .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
-                            .kind = .display,
-                            .target = targetWithRunSpan(target, runs[start..index]),
-                        } });
-                    }
-                    continue;
-                },
-                .math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                    .source = try ctx.allocator.dupe(u8, run.text),
-                    .preamble = try cloneTexPreambleEntries(ctx.allocator, preamble),
-                    .kind = .inline_math,
-                    .target = targetWithContentSpan(target, run.source_start, run.source_end),
-                } }),
-                .icon => if (run.icon) |source| try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{
-                    .icon = .{
-                        .source = try ctx.allocator.dupe(u8, source),
-                        .target = targetWithContentSpan(target, run.source_start, run.source_end),
-                    },
-                }),
-                else => {},
-            }
-            index += 1;
-        }
-    }
 }
 
 fn registerPlanPreloadTask(
@@ -1928,6 +2295,18 @@ fn renderOpLabel(op: *const RenderOp) []const u8 {
     };
 }
 
+fn profileRenderMeasureKind(kind: RenderKind) utils.measure_profile.RenderMeasureKind {
+    return switch (kind) {
+        .text => .text,
+        .code => .code,
+        .vector_math => .vector_math,
+        .vector_asset => .vector_asset,
+        .raster_asset => .raster_asset,
+        .shape => .shape,
+        .chrome_only => .chrome_only,
+    };
+}
+
 fn preloadTaskTarget(task: PreloadTask) RenderDiagnosticTarget {
     return switch (task) {
         .math => |math| math.target,
@@ -1944,6 +2323,371 @@ fn preloadTaskLabel(task: PreloadTask) []const u8 {
         .vector_pdf => "PDF asset",
         .raster => "raster asset",
     };
+}
+
+fn profilePreloadKind(task: PreloadTask) utils.measure_profile.ArtifactKind {
+    return switch (task) {
+        .math => .math,
+        .icon => .icon,
+        .vector_pdf => .vector_pdf,
+        .raster => .raster,
+    };
+}
+
+fn countCachedPreloadTasks(cached: []const bool) usize {
+    var count: usize = 0;
+    for (cached) |value| {
+        if (value) count += 1;
+    }
+    return count;
+}
+
+fn preloadMathTaskBatches(
+    ctx: *DrawContext,
+    tasks: []const PreloadTask,
+    cached: []bool,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+    completed: *usize,
+) !void {
+    var groups = std.ArrayList(MathBatchGroup).empty;
+    defer {
+        for (groups.items) |*group| group.deinit(ctx.allocator);
+        groups.deinit(ctx.allocator);
+    }
+
+    for (tasks, 0..) |task, index| {
+        if (cached[index]) continue;
+        const math = switch (task) {
+            .math => |value| value,
+            else => continue,
+        };
+        if (math.kind == .raw_block) continue;
+
+        const out = try cachedMathPath(ctx, math.source, math.preamble, math.kind, "svg");
+        var out_owned = true;
+        errdefer if (out_owned) ctx.allocator.free(out);
+        const key = try mathBatchGroupKey(ctx, math.preamble);
+        var key_owned = true;
+        errdefer if (key_owned) ctx.allocator.free(key);
+
+        var group_index: ?usize = null;
+        for (groups.items, 0..) |group, candidate_index| {
+            if (std.mem.eql(u8, group.key, key)) {
+                group_index = candidate_index;
+                break;
+            }
+        }
+        if (group_index) |candidate_index| {
+            ctx.allocator.free(key);
+            key_owned = false;
+            try groups.items[candidate_index].entries.append(ctx.allocator, .{
+                .task_index = index,
+                .source = math.source,
+                .preamble = math.preamble,
+                .kind = math.kind,
+                .out = out,
+            });
+            out_owned = false;
+        } else {
+            try groups.append(ctx.allocator, .{ .key = key });
+            key_owned = false;
+            try groups.items[groups.items.len - 1].entries.append(ctx.allocator, .{
+                .task_index = index,
+                .source = math.source,
+                .preamble = math.preamble,
+                .kind = math.kind,
+                .out = out,
+            });
+            out_owned = false;
+        }
+    }
+
+    for (groups.items) |group| {
+        if (group.entries.items.len == 0) continue;
+        const profile_build = utils.measure_profile.start();
+        try preloadMathBatchGroup(ctx, group.entries.items, options, progress, completed, tasks.len);
+        utils.measure_profile.recordArtifactBuildMany(.math, group.entries.items.len, profile_build);
+        for (group.entries.items) |entry| cached[entry.task_index] = true;
+    }
+}
+
+fn mathBatchGroupKey(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]u8 {
+    var hasher = std.hash.Wyhash.init(0);
+    hashString(&hasher, native_artifact_cache_version);
+    hashString(&hasher, "math-batch");
+    for (preamble) |entry| {
+        hashString(&hasher, @tagName(entry.source));
+        hashString(&hasher, entry.value);
+    }
+    return std.fmt.allocPrint(ctx.allocator, "{x}", .{hasher.final()});
+}
+
+fn preloadMathBatchGroup(
+    ctx: *DrawContext,
+    entries: []const MathBatchEntry,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+    completed: *usize,
+    total: usize,
+) !void {
+    if (entries.len == 0) return;
+    const dir = try tempCachePath(ctx, entries[0].out, "math-batch-dir");
+    defer ctx.allocator.free(dir);
+    defer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
+    errdefer std.Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(ctx.io, dir);
+
+    const tex_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.tex" });
+    defer ctx.allocator.free(tex_path);
+    const pdf_path = try std.fs.path.join(ctx.allocator, &.{ dir, "main.pdf" });
+    defer ctx.allocator.free(pdf_path);
+
+    const tex = try mathBatchDocumentSource(ctx, entries);
+    defer ctx.allocator.free(tex);
+    try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
+    try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
+    try extractMathBatchPages(ctx, entries, pdf_path, options, progress, completed, total);
+}
+
+fn extractMathBatchPages(
+    ctx: *DrawContext,
+    entries: []const MathBatchEntry,
+    pdf_path: []const u8,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+    completed: *usize,
+    total: usize,
+) !void {
+    if (entries.len == 0) return;
+    const worker_count = preloadWorkerCount(entries.len, entries.len, options);
+    const initial_completed = completed.*;
+
+    if (worker_count <= 1) {
+        for (entries, 0..) |entry, index| {
+            try extractMathBatchPage(ctx, pdf_path, index + 1, entry.out);
+            completed.* += 1;
+            if (progress) |p| p.artifactCompleted(p.context, completed.*, total);
+        }
+        return;
+    }
+
+    var work = MathBatchExtractWork{
+        .entries = entries,
+        .pdf_path = pdf_path,
+        .io = ctx.io,
+        .asset_base_dir = ctx.asset_base_dir,
+        .cache_dir = ctx.cache_dir,
+    };
+
+    var threads = try ctx.allocator.alloc(std.Thread, worker_count);
+    defer ctx.allocator.free(threads);
+
+    var started: usize = 0;
+    var joined = false;
+    errdefer {
+        if (!joined) {
+            work.failed.store(true, .seq_cst);
+            for (threads[0..started]) |thread| thread.join();
+        }
+    }
+
+    while (started < worker_count) : (started += 1) {
+        threads[started] = try std.Thread.spawn(.{}, mathBatchExtractWorker, .{&work});
+    }
+
+    var last_done: usize = 0;
+    while (!work.failed.load(.seq_cst) and work.completed.load(.acquire) < entries.len) {
+        const done = work.completed.load(.acquire);
+        if (progress) |p| {
+            if (done != last_done) {
+                p.artifactCompleted(p.context, initial_completed + done, total);
+                last_done = done;
+            }
+        }
+        std.Io.sleep(ctx.io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+    }
+
+    for (threads[0..started]) |thread| thread.join();
+    joined = true;
+
+    const done = work.completed.load(.acquire);
+    if (progress) |p| {
+        if (done != last_done) p.artifactCompleted(p.context, initial_completed + done, total);
+    }
+    if (work.failed.load(.seq_cst)) return NativePdfError.AssetConversionFailed;
+    completed.* = initial_completed + entries.len;
+}
+
+fn mathBatchExtractWorker(work: *MathBatchExtractWork) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+
+    while (!work.failed.load(.monotonic)) {
+        const index = work.next.fetchAdd(1, .monotonic);
+        if (index >= work.entries.len) break;
+        var ctx = DrawContext{
+            .allocator = arena.allocator(),
+            .io = work.io,
+            .pdf = undefined,
+            .asset_base_dir = work.asset_base_dir,
+            .cache_dir = work.cache_dir,
+            .highlight_languages = &.{},
+        };
+        extractMathBatchPage(&ctx, work.pdf_path, index + 1, work.entries[index].out) catch {
+            work.failed.store(true, .seq_cst);
+            break;
+        };
+        _ = work.completed.fetchAdd(1, .release);
+        _ = arena.reset(.retain_capacity);
+    }
+}
+
+fn extractMathBatchPage(ctx: *DrawContext, pdf_path: []const u8, page_number: usize, out: []const u8) !void {
+    if (try cachedSvgAsset(ctx, out) != null) return;
+    const tmp = try tempCachePath(ctx, out, "svg");
+    defer ctx.allocator.free(tmp);
+    errdefer deleteFileIfExists(ctx, tmp);
+    const page = try std.fmt.allocPrint(ctx.allocator, "{d}", .{page_number});
+    defer ctx.allocator.free(page);
+    try runChecked(ctx, &.{ "pdftocairo", "-svg", "-f", page, "-l", page, pdf_path, tmp }, .inherit);
+    _ = try svgAsset(ctx, tmp);
+    try publishCacheFile(ctx, tmp, out);
+}
+
+fn executePreloadTaskList(
+    ctx: *DrawContext,
+    tasks: []const PreloadTask,
+    cached: []bool,
+    miss_count: usize,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) !void {
+    if (tasks.len == 0 or miss_count == 0) return;
+    var completed = tasks.len - miss_count;
+    try preloadMathTaskBatches(ctx, tasks, cached, options, progress, &completed);
+
+    const remaining_miss_count = tasks.len - countCachedPreloadTasks(cached);
+    if (remaining_miss_count == 0) return;
+
+    const initial_done = tasks.len - remaining_miss_count;
+    const worker_count = preloadWorkerCount(tasks.len, remaining_miss_count, options);
+    if (worker_count <= 1) return executePreloadTaskListSequential(ctx, tasks, cached, initial_done, progress);
+
+    var work = PreloadWork{
+        .plan = tasks,
+        .cached = cached,
+        .completed = .init(initial_done),
+        .io = ctx.io,
+        .asset_base_dir = ctx.asset_base_dir,
+        .cache_dir = ctx.cache_dir,
+    };
+
+    var threads = try ctx.allocator.alloc(std.Thread, worker_count);
+    defer ctx.allocator.free(threads);
+
+    var started: usize = 0;
+    var joined = false;
+    errdefer {
+        if (!joined) {
+            work.failed.store(true, .seq_cst);
+            for (threads[0..started]) |thread| thread.join();
+        }
+    }
+
+    while (started < worker_count) : (started += 1) {
+        threads[started] = try std.Thread.spawn(.{}, preloadTaskWorker, .{&work});
+    }
+
+    var last_done: usize = initial_done;
+    while (!work.failed.load(.seq_cst) and work.completed.load(.acquire) < tasks.len) {
+        const done = work.completed.load(.acquire);
+        if (progress) |p| {
+            if (done != last_done) {
+                p.artifactCompleted(p.context, done, tasks.len);
+                last_done = done;
+            }
+        }
+        std.Io.sleep(ctx.io, std.Io.Duration.fromMilliseconds(50), .awake) catch {};
+    }
+
+    for (threads[0..started]) |thread| thread.join();
+    joined = true;
+
+    if (progress) |p| {
+        const done = work.completed.load(.acquire);
+        if (done != last_done) p.artifactCompleted(p.context, done, tasks.len);
+    }
+
+    if (work.failed.load(.seq_cst)) return NativePdfError.AssetConversionFailed;
+}
+
+fn executePreloadTaskListSequential(
+    ctx: *DrawContext,
+    tasks: []const PreloadTask,
+    cached: []const bool,
+    initial_done: usize,
+    progress: ?RenderProgress,
+) !void {
+    var done = initial_done;
+    for (tasks, 0..) |task, index| {
+        if (cached[index]) continue;
+        const profile_build = utils.measure_profile.start();
+        preloadOne(ctx, task) catch |err| {
+            utils.measure_profile.recordArtifactBuild(profilePreloadKind(task), profile_build);
+            return err;
+        };
+        utils.measure_profile.recordArtifactBuild(profilePreloadKind(task), profile_build);
+        done += 1;
+        if (progress) |p| p.artifactCompleted(p.context, done, tasks.len);
+    }
+}
+
+fn preloadTaskWorker(work: *PreloadWork) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+
+    while (!work.failed.load(.monotonic)) {
+        const index = work.next.fetchAdd(1, .monotonic);
+        if (index >= work.plan.len) break;
+        if (work.cached[index]) continue;
+        var ctx = DrawContext{
+            .allocator = arena.allocator(),
+            .io = work.io,
+            .pdf = undefined,
+            .asset_base_dir = work.asset_base_dir,
+            .cache_dir = work.cache_dir,
+            .highlight_languages = &.{},
+        };
+        const profile_build = utils.measure_profile.start();
+        preloadOne(&ctx, work.plan[index]) catch {
+            utils.measure_profile.recordArtifactBuild(profilePreloadKind(work.plan[index]), profile_build);
+            work.failed.store(true, .seq_cst);
+            break;
+        };
+        utils.measure_profile.recordArtifactBuild(profilePreloadKind(work.plan[index]), profile_build);
+        _ = work.completed.fetchAdd(1, .release);
+        _ = arena.reset(.retain_capacity);
+    }
+}
+
+fn collectPreloadTaskDiagnostics(
+    ctx: *DrawContext,
+    ir: *core.Ir,
+    tasks: []const PreloadTask,
+    cached: []const bool,
+) !void {
+    for (tasks, 0..) |task, index| {
+        if (cached[index]) continue;
+        if (preloadTaskCached(ctx, task) catch false) continue;
+        var sink = CommandFailureSink{ .allocator = ir.allocator };
+        defer sink.deinit();
+        var diagnostic_ctx = ctx.*;
+        diagnostic_ctx.command_failure = &sink;
+        preloadOne(&diagnostic_ctx, task) catch |err| {
+            try addPreloadRenderDiagnostic(ir, task, err, sink.message);
+        };
+    }
 }
 
 fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
@@ -2425,8 +3169,12 @@ fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
     return switch (op.parse_mode) {
         .none => .{ .width = 1, .height = 1 },
         .block => blk: {
-            var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
-            defer doc.deinit();
+            var owned_doc: ?MarkdownDocument = null;
+            defer if (owned_doc) |*doc| doc.deinit();
+            const doc = op.markdown_doc orelse blk2: {
+                owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
+                break :blk2 &owned_doc.?;
+            };
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
@@ -2441,8 +3189,12 @@ fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
             break :blk measured;
         },
         .@"inline" => blk: {
-            var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
-            defer layout.deinit(ctx.allocator);
+            var owned_layout: ?core.markdown.TextLayout = null;
+            defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
+            const layout = op.text_layout orelse blk2: {
+                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
+                break :blk2 &owned_layout.?;
+            };
             var inline_text = text;
             if (mode == .natural) inline_text.wrap = false;
             var measurement = MeasurementScope.init(ctx);
@@ -2475,7 +3227,7 @@ fn measureCodeIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
 fn measureVectorMathIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !core.LayoutMeasurement {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, @max(width, 1), PageLayout.height, op.render.math);
+    const fitted = fitMathBlockSize(svg.width, svg.height, @max(width, 1), PageLayout.height, op.content, op.render.math);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
@@ -2493,13 +3245,13 @@ fn measureAssetIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !co
         const svg = try svgAsset(ctx, source);
         natural = .{ .width = svg.width, .height = svg.height };
     } else {
-        const png_path = try rasterToSizedPng(ctx, source, @max(width, 1) * raster_cache_scale, PageLayout.height * raster_cache_scale);
+        _ = width;
+        const png_path = try rasterToPng(ctx, source);
         defer ctx.allocator.free(png_path);
         natural = try pngAssetSize(ctx, png_path);
     }
     const scaled = scaledAssetSize(natural, op.render.asset);
-    const fitted = fitSize(scaled.width, scaled.height, @max(width, 1), PageLayout.height);
-    return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
+    return .{ .width = @max(scaled.width, 1), .height = @max(scaled.height, 1) };
 }
 
 fn measurementFromInk(measurement: *MeasurementScope, baseline_bl: f32, next_bl: f32, font_size: f32, line_height: f32) !core.LayoutMeasurement {
@@ -2547,7 +3299,7 @@ fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
         .math => |math| cachedMathPath(ctx, math.source, math.preamble, math.kind, "svg"),
         .icon => |icon| cachedIconPath(ctx, icon.source, "svg"),
         .vector_pdf => |asset| cachedAssetPath(ctx, "pdf", asset.source, "svg"),
-        .raster => |raster| cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png"),
+        .raster => |raster| cachedAssetPath(ctx, "raster", raster.source, "png"),
     };
 }
 
@@ -2595,8 +3347,8 @@ fn preloadTaskPresent(ctx: *DrawContext, task: PreloadTask) !bool {
             return fileExists(out);
         },
         .raster => |raster| {
-            if (try rasterSourceFitsTarget(ctx, raster.source, raster.target_width, raster.target_height)) return true;
-            const out = try cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png");
+            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(raster.source), ".png")) return true;
+            const out = try cachedAssetPath(ctx, "raster", raster.source, "png");
             defer ctx.allocator.free(out);
             return fileExists(out);
         },
@@ -2621,23 +3373,12 @@ fn preloadTaskCached(ctx: *DrawContext, task: PreloadTask) !bool {
             return (try cachedSvgAsset(ctx, out)) != null;
         },
         .raster => |raster| {
-            if (try rasterSourceFitsTarget(ctx, raster.source, raster.target_width, raster.target_height)) return true;
-            const out = try cachedSizedAssetPath(ctx, "raster-fit", raster.source, raster.target_width, raster.target_height, "png");
+            if (std.ascii.eqlIgnoreCase(std.fs.path.extension(raster.source), ".png")) return true;
+            const out = try cachedAssetPath(ctx, "raster", raster.source, "png");
             defer ctx.allocator.free(out);
             return cachedPngAvailable(ctx, out);
         },
     }
-}
-
-fn rasterSourceFitsTarget(ctx: *DrawContext, source: []const u8, target_width: f32, target_height: f32) !bool {
-    if (!std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".png")) return false;
-    var source_width: f64 = 0;
-    var source_height: f64 = 0;
-    const source_z = try ctx.allocator.dupeZ(u8, source);
-    defer ctx.allocator.free(source_z);
-    return c.ss_png_size(source_z.ptr, &source_width, &source_height) == 0 and
-        source_width <= @as(f64, @floatCast(target_width)) and
-        source_height <= @as(f64, @floatCast(target_height));
 }
 
 fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
@@ -2655,7 +3396,7 @@ fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
             ctx.allocator.free(svg_path);
         },
         .raster => |raster| {
-            const png_path = try rasterToSizedPng(ctx, raster.source, raster.target_width, raster.target_height);
+            const png_path = try rasterToPng(ctx, raster.source);
             ctx.allocator.free(png_path);
         },
     }
@@ -2845,13 +3586,21 @@ fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPa
     switch (op.parse_mode) {
         .none => return,
         .block => {
-            var doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
-            defer doc.deinit();
+            var owned_doc: ?MarkdownDocument = null;
+            defer if (owned_doc) |*doc| doc.deinit();
+            const doc = op.markdown_doc orelse blk: {
+                owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
+                break :blk &owned_doc.?;
+            };
             _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, op.tex_preamble);
         },
         .@"inline" => {
-            var layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
-            defer layout.deinit(ctx.allocator);
+            var owned_layout: ?core.markdown.TextLayout = null;
+            defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
+            const layout = op.text_layout orelse blk: {
+                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
+                break :blk &owned_layout.?;
+            };
             const baseline = baselineBlForBox(frame, text.font_size);
             _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, op.tex_preamble);
         },
@@ -4118,7 +4867,7 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, math);
+    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
         .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
@@ -4134,13 +4883,13 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
     if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
-        try drawSvgFit(ctx, frame, source, asset);
+        try drawSvgNatural(ctx, frame, source, asset);
         return;
     }
     if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
         const svg_path = try pdfToSvg(ctx, source);
         defer ctx.allocator.free(svg_path);
-        try drawSvgFit(ctx, frame, svg_path, asset);
+        try drawSvgNatural(ctx, frame, svg_path, asset);
         return;
     }
     return NativePdfError.UnsupportedAssetType;
@@ -4150,12 +4899,12 @@ fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
     const source = try resolveAssetPath(ctx, content);
     defer ctx.allocator.free(source);
     if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
-        try drawSvgFit(ctx, frame, source, asset);
+        try drawSvgNatural(ctx, frame, source, asset);
         return;
     }
-    const png_path = try rasterToSizedPng(ctx, source, frame.width * raster_cache_scale, frame.height * raster_cache_scale);
+    const png_path = try rasterToPng(ctx, source);
     defer ctx.allocator.free(png_path);
-    try drawPngFit(ctx, frame, png_path, asset);
+    try drawPngNatural(ctx, frame, png_path, asset);
 }
 
 const direct_merge_page_limit: usize = 16;
@@ -4556,9 +5305,9 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
     return allocator.dupe(u8, if (depth == 0) "•" else "◦");
 }
 
-fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
+fn drawPngNatural(ctx: *DrawContext, frame: Frame, png_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const size = try pngAssetSize(ctx, png_path);
-    const fitted = fittedFrameForSize(frame, scaledAssetSize(size, asset));
+    const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
     const png_z = try ctx.allocator.dupeZ(u8, png_path);
     defer ctx.allocator.free(png_z);
     const draw_x = fitted.x;
@@ -4566,9 +5315,9 @@ fn drawPngFit(ctx: *DrawContext, frame: Frame, png_path: []const u8, asset: ?cor
     if (c.ss_pdf_draw_png(ctx.pdf, png_z.ptr, draw_x, draw_y, fitted.width, fitted.height) != 0) return NativePdfError.ImageDecodeFailed;
 }
 
-fn drawSvgFit(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
+fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const svg = try svgAsset(ctx, svg_path);
-    const fitted = fittedFrameForSize(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
+    const fitted = naturalAssetFrame(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
     const svg_z = try ctx.allocator.dupeZ(u8, svg_path);
     defer ctx.allocator.free(svg_z);
     const draw_x = fitted.x;
@@ -4599,20 +5348,13 @@ fn pngAssetSize(ctx: *DrawContext, png_path: []const u8) !Size {
     return .{ .width = @floatCast(source_width), .height = @floatCast(source_height) };
 }
 
-fn fittedFrameForSize(frame: Frame, size: Size) Frame {
-    const fitted = fitSize(size.width, size.height, frame.width, frame.height);
+fn naturalAssetFrame(frame: Frame, size: Size) Frame {
     return .{
         .x = frame.x,
-        .y = frame.y + @max((frame.height - fitted.height) / 2, 0),
-        .width = fitted.width,
-        .height = fitted.height,
+        .y = frame.y + frame.height - @max(size.height, 1),
+        .width = @max(size.width, 1),
+        .height = @max(size.height, 1),
     };
-}
-
-fn fitSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32) Size {
-    if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
-    const scale = @min(max_width / source_width, max_height / source_height);
-    return .{ .width = source_width * scale, .height = source_height * scale };
 }
 
 fn assetScale(asset: ?core.render_policy.AssetPaint) f32 {
@@ -4628,7 +5370,7 @@ fn scaledAssetSize(size: Size, asset: ?core.render_policy.AssetPaint) Size {
     };
 }
 
-fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, math: ?MathPaint) Size {
+fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, source_text: []const u8, math: ?MathPaint) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
     const paint = math orelse MathPaint{
         .block_line_height = 22,
@@ -4637,13 +5379,27 @@ fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_h
         .scale = 1,
         .horizontal_align = .center,
     };
-    _ = paint.block_line_height;
-    _ = paint.block_vertical_padding;
-    const styled_height = @max(source_height * paint.scale, paint.block_min_height * paint.scale);
-    const style_scale = styled_height / source_height;
-    const styled_width = source_width * style_scale;
-    const fit_scale = @min(@as(f32, 1.0), @min(max_width / styled_width, max_height / styled_height));
-    return .{ .width = styled_width * fit_scale, .height = styled_height * fit_scale };
+    const target_height = @max(
+        paint.block_min_height,
+        @as(f32, @floatFromInt(mathVisualLineCount(source_text))) * paint.block_line_height + paint.block_vertical_padding,
+    ) * paint.scale;
+    const scale = @min(@min(max_width / source_width, max_height / source_height), target_height / source_height);
+    return .{ .width = source_width * scale, .height = source_height * scale };
+}
+
+fn mathVisualLineCount(source_text: []const u8) usize {
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, source_text, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.trim(u8, line, " \t\r\n").len == 0) continue;
+        count += 1;
+        var cursor: usize = 0;
+        while (std.mem.indexOfPos(u8, line, cursor, "\\\\")) |break_index| {
+            count += 1;
+            cursor = break_index + 2;
+        }
+    }
+    return @max(count, 1);
 }
 
 fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: HorizontalAlign) f32 {
@@ -4679,18 +5435,10 @@ fn hashLogicalAssetPath(ctx: *DrawContext, hasher: *std.hash.Wyhash, source: []c
     hashString(hasher, source);
 }
 
-fn rasterToSizedPng(ctx: *DrawContext, source: []const u8, target_width: f32, target_height: f32) ![]const u8 {
-    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".png")) {
-        const source_size = pngAssetSize(ctx, source) catch |err| switch (err) {
-            error.ImageDecodeFailed => null,
-            else => return err,
-        };
-        if (source_size) |size|
-            if (size.width <= target_width and size.height <= target_height)
-                return ctx.allocator.dupe(u8, source);
-    }
+fn rasterToPng(ctx: *DrawContext, source: []const u8) ![]const u8 {
+    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".png")) return ctx.allocator.dupe(u8, source);
 
-    const out = try cachedSizedAssetPath(ctx, "raster-fit", source, target_width, target_height, "png");
+    const out = try cachedAssetPath(ctx, "raster", source, "png");
     errdefer ctx.allocator.free(out);
     if (try cachedPngAvailable(ctx, out)) return out;
 
@@ -4698,12 +5446,7 @@ fn rasterToSizedPng(ctx: *DrawContext, source: []const u8, target_width: f32, ta
     defer ctx.allocator.free(tmp);
     errdefer deleteFileIfExists(ctx, tmp);
 
-    var geometry_buf: [64]u8 = undefined;
-    const geometry = try std.fmt.bufPrint(&geometry_buf, "{d}x{d}>", .{
-        rasterTargetPixels(target_width),
-        rasterTargetPixels(target_height),
-    });
-    try runChecked(ctx, &.{ "magick", source, "-auto-orient", "-resize", geometry, "-strip", tmp }, .inherit);
+    try runChecked(ctx, &.{ "magick", source, "-auto-orient", "-strip", tmp }, .inherit);
     try validatePng(tmp);
     try publishCacheFile(ctx, tmp, out);
     return out;
@@ -4839,6 +5582,48 @@ fn mathDocumentSource(ctx: *DrawContext, source: []const u8, preamble: []const T
         \\ \end{{document}}
         \\
     , .{ preamble_lines, fragment });
+}
+
+fn mathBatchDocumentSource(ctx: *DrawContext, entries: []const MathBatchEntry) ![]const u8 {
+    const preamble_lines = try mathPreambleLines(ctx, entries[0].preamble);
+    defer ctx.allocator.free(preamble_lines);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(ctx.allocator);
+    try out.appendSlice(ctx.allocator,
+        \\ \documentclass{article}
+        \\ \usepackage[active,tightpage]{preview}
+        \\ \PreviewBorder=0pt
+        \\ \usepackage{amsmath,amssymb}
+        \\ \usepackage{graphicx}
+        \\ \usepackage{xcolor}
+        \\
+    );
+    try out.appendSlice(ctx.allocator, preamble_lines);
+    try out.appendSlice(ctx.allocator,
+        \\ \pagestyle{empty}
+        \\ \begin{document}
+        \\
+    );
+    for (entries) |entry| {
+        const fragment = try mathTexFragment(ctx.allocator, entry.source, entry.kind);
+        defer ctx.allocator.free(fragment);
+        try out.appendSlice(ctx.allocator,
+            \\ \begin{preview}
+            \\
+        );
+        try out.appendSlice(ctx.allocator, fragment);
+        if (fragment.len == 0 or fragment[fragment.len - 1] != '\n') try out.append(ctx.allocator, '\n');
+        try out.appendSlice(ctx.allocator,
+            \\ \end{preview}
+            \\
+        );
+    }
+    try out.appendSlice(ctx.allocator,
+        \\ \end{document}
+        \\
+    );
+    return try out.toOwnedSlice(ctx.allocator);
 }
 
 fn mathTexFragment(allocator: Allocator, source: []const u8, kind: MathKind) ![]const u8 {
@@ -5090,6 +5875,7 @@ fn runCheckedAllowQpdfWarnings(ctx: *DrawContext, argv: []const []const u8, cwd:
 }
 
 fn runCheckedWithOptions(ctx: *DrawContext, argv: []const []const u8, cwd: std.process.Child.Cwd, allow_qpdf_warning_exit: bool) !void {
+    const profile_command = utils.measure_profile.start();
     const result = std.process.run(ctx.allocator, ctx.io, .{
         .argv = argv,
         .cwd = cwd,
@@ -5097,6 +5883,7 @@ fn runCheckedWithOptions(ctx: *DrawContext, argv: []const []const u8, cwd: std.p
         .stderr_limit = .limited(128 * 1024),
         .timeout = .{ .duration = external_command_timeout },
     }) catch |err| {
+        if (argv.len > 0) utils.measure_profile.recordCommand(argv[0], true, profile_command);
         const message = try commandSpawnFailureMessage(ctx.allocator, argv, err);
         defer ctx.allocator.free(message);
         if (ctx.command_failure) |sink| try sink.record(message);
@@ -5104,10 +5891,12 @@ fn runCheckedWithOptions(ctx: *DrawContext, argv: []const []const u8, cwd: std.p
     };
     defer ctx.allocator.free(result.stdout);
     defer ctx.allocator.free(result.stderr);
-    switch (result.term) {
-        .exited => |code| if (code == 0 or (allow_qpdf_warning_exit and code == 3)) return,
-        else => {},
-    }
+    const failed = switch (result.term) {
+        .exited => |code| !(code == 0 or (allow_qpdf_warning_exit and code == 3)),
+        else => true,
+    };
+    if (argv.len > 0) utils.measure_profile.recordCommand(argv[0], failed, profile_command);
+    if (!failed) return;
     const message = try commandTermFailureMessage(ctx.allocator, argv, result.term, result.stdout, result.stderr);
     defer ctx.allocator.free(message);
     if (ctx.command_failure) |sink| try sink.record(message);

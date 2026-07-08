@@ -510,6 +510,7 @@ fn printContentOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void
     printDiagnosticNodeField(ir, diagnostic.node_id);
     printDiagnosticContentField(ir, diagnostic.node_id);
     printDiagnosticFrameField(ir, diagnostic.node_id);
+    printFloatTripleField("width", data.required_width, data.frame_width, data.overflow_width);
     printFloatTripleField("height", data.required_height, data.frame_height, data.overflow_height);
 
     printDim();
@@ -901,8 +902,8 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
         .page_overflow => |data| formatPageOverflowDiagnostic(allocator, data),
         .content_overflow => |data| std.fmt.allocPrint(
             allocator,
-            "ContentOverflow: content requires height={d:.1}, frame height={d:.1}, overflow={d:.1}",
-            .{ data.required_height, data.frame_height, data.overflow_height },
+            "ContentOverflow: content requires width={d:.1}, height={d:.1}; frame width={d:.1}, height={d:.1}; overflow width={d:.1}, height={d:.1}",
+            .{ data.required_width, data.required_height, data.frame_width, data.frame_height, data.overflow_width, data.overflow_height },
         ),
     };
 }
