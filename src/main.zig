@@ -6,105 +6,12 @@ const watcher = @import("watch.zig");
 const project = @import("project.zig");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
+const cli_help = @import("cli/help.zig");
 const error_report = utils.err;
-
-fn usage() void {
-    std.debug.print(
-        \\Usage:
-        \\ss <command> [arguments] [--asset-base-dir DIR] [--project FILE_OR_DIR] [--output FILE] [--jobs N] [--cache-id ID]
-        \\
-        \\Commands:
-        \\  help
-        \\    Show this help message
-        \\  version
-        \\    Show build, source, and native render backend versions
-        \\  check [input.ss]
-        \\    Parse and type-check; print diagnostics when needed
-        \\  dump [input.ss] [output.json]
-        \\    Print IR JSON, or write it when output path is given
-        \\  render [input.ss] [output.pdf]
-        \\    Render PDF to the specified path
-        \\  init [dir]
-        \\    Create a new ss.toml and starter slide deck
-        \\  doctor
-        \\    Check project discovery, render tools, and tree-sitter health
-        \\  debug schedule [input.ss]
-        \\    Write the inferred dependency graph and execution order as JSON
-        \\  debug layout conflicts [input.ss]
-        \\    Write the layout conflict report as JSON
-        \\  debug layout trace [input.ss]
-        \\    Write the layout solver trace as JSON
-        \\  lsp
-        \\    Run the ss language server over stdio
-        \\  watch check [input.ss]
-        \\    Re-run check when the project changes
-        \\  watch render [input.ss] [output.pdf]
-        \\    Re-render PDF when the project changes
-        \\  cache project clear
-        \\    Clear the managed project render cache under .ss-cache/render
-        \\  cache project stats
-        \\    Print project render cache file, directory, and size totals
-        \\  cache tree-sitter clear
-        \\    Clear the shared tree-sitter build cache
-        \\  cache tree-sitter prune
-        \\    Remove stale tree-sitter bundles and unfinished build dirs
-        \\  cache tree-sitter stats
-        \\    Print shared tree-sitter cache file, directory, and size totals
-        \\
-        \\Flags:
-        \\  --version, -V
-        \\    Show build, source, and native render backend versions
-        \\  --asset-base-dir DIR
-        \\    Resolve relative assets/themes from DIR instead of the input file directory
-        \\  --project FILE_OR_DIR
-        \\    Resolve the entrypoint and asset base from ss.toml
-        \\  --output FILE
-        \\    Write dump/render output to FILE when the input comes from ss.toml
-        \\  --jobs N
-        \\    Number of parallel render jobs; render also reads SS_RENDER_JOBS
-        \\  --cache-id ID
-        \\    Stable render cache identity for temporary render input paths
-        \\  --diagnostics-json FILE
-        \\    Write machine-readable diagnostics JSON for render
-        \\  --color auto|always|never
-        \\    Control color in human-readable diagnostics
-        \\  --interval-ms N
-        \\    Poll interval for watch commands
-        \\  --entry FILE
-        \\    Entry file to create with ss init
-        \\  --force
-        \\    Allow ss init to overwrite generated files
-        \\  --strict
-        \\    Make ss doctor exit non-zero when it finds issues
-        \\
-        \\Examples:
-        \\  ss help
-        \\  ss check slide.ss
-        \\  ss dump slide.ss
-        \\  ss dump slide.ss out.json
-        \\  ss dump --project . --output .ss-cache/dump.json
-        \\  ss render slide.ss out.pdf
-        \\  ss render --project . --output .ss-cache/render.pdf
-        \\  ss debug schedule --project . --output .ss-cache/schedule.json
-        \\  ss debug layout conflicts --project . --output .ss-cache/layout-conflicts.json
-        \\  ss debug layout trace --project . --output .ss-cache/layout-trace.json
-        \\  ss init slides
-        \\  ss doctor --project slides
-        \\  ss watch check slide.ss
-        \\  ss watch render slide.ss out.pdf
-        \\  ss cache project clear
-        \\  ss cache project stats
-        \\  ss cache tree-sitter stats
-        \\  ss cache tree-sitter prune
-        \\  zig build run -- check slide.ss
-        \\  zig build run -- render slide.ss out.pdf
-        \\
-    , .{});
-}
 
 fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
     std.debug.print(fmt ++ "\n\n", args);
-    usage();
+    cli_help.general(.stderr);
     return error.InvalidUsage;
 }
 
@@ -263,7 +170,7 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             if (!std.mem.eql(u8, value, "auto") and !std.mem.eql(u8, value, "always") and !std.mem.eql(u8, value, "never")) {
                 return failUsage("invalid --color value: {s}", .{value});
             }
-            error_report.setColorMode(parseColorMode(value));
+            setColorMode(parseColorMode(value));
             i += 1;
             continue;
         }
@@ -292,6 +199,66 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
 
 fn parseColorMode(value: []const u8) error_report.ColorMode {
     return std.meta.stringToEnum(error_report.ColorMode, value) orelse unreachable;
+}
+
+fn setColorMode(mode: error_report.ColorMode) void {
+    error_report.setColorMode(mode);
+    cli_help.setColorMode(mode);
+}
+
+fn applyColorArgs(args: []const []const u8) !void {
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (!std.mem.eql(u8, args[i], "--color")) continue;
+        if (i + 1 >= args.len) return failUsage("missing value for --color", .{});
+        const value = args[i + 1];
+        if (!std.mem.eql(u8, value, "auto") and !std.mem.eql(u8, value, "always") and !std.mem.eql(u8, value, "never")) {
+            return failUsage("invalid --color value: {s}", .{value});
+        }
+        setColorMode(parseColorMode(value));
+        i += 1;
+    }
+}
+
+fn isHelpArg(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "help") or std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h");
+}
+
+fn wantsCommandHelp(args: []const []const u8) bool {
+    var saw_help = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (isHelpArg(arg)) {
+            if (saw_help) return false;
+            saw_help = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--color")) {
+            if (i + 1 >= args.len) return false;
+            i += 1;
+            continue;
+        }
+        return false;
+    }
+    return saw_help;
+}
+
+fn helpTopic(args: []const []const u8) ?[]const u8 {
+    var topic: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (isHelpArg(arg)) continue;
+        if (std.mem.eql(u8, arg, "--color")) {
+            if (i + 1 >= args.len) return null;
+            i += 1;
+            continue;
+        }
+        if (topic != null) return null;
+        topic = arg;
+    }
+    return topic;
 }
 
 fn parseInitOptions(args: []const []const u8) !InitOptions {
@@ -789,6 +756,18 @@ fn runDebugCommand(
     allocator: std.mem.Allocator,
     args: []const []const u8,
 ) !void {
+    if (wantsCommandHelp(args) or (args.len == 2 and std.mem.eql(u8, args[0], "layout") and isHelpArg(args[1]))) {
+        _ = cli_help.command(.stdout, "debug");
+        return;
+    }
+    if (args.len == 2 and std.mem.eql(u8, args[0], "schedule") and isHelpArg(args[1])) {
+        _ = cli_help.command(.stdout, "debug");
+        return;
+    }
+    if (args.len == 3 and std.mem.eql(u8, args[0], "layout") and (std.mem.eql(u8, args[1], "conflicts") or std.mem.eql(u8, args[1], "trace")) and isHelpArg(args[2])) {
+        _ = cli_help.command(.stdout, "debug");
+        return;
+    }
     if (args.len == 0) return failUsage("missing debug topic", .{});
     const topic = args[0];
 
@@ -852,6 +831,10 @@ fn validateOutputParentOrCliError(io: std.Io, output_path: []const u8) !void {
 }
 
 fn runCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (wantsCommandHelp(args)) {
+        _ = cli_help.command(.stdout, "cache");
+        return;
+    }
     if (args.len < 1) return failUsage("missing cache target", .{});
     if (std.mem.eql(u8, args[0], "project")) return runProjectCacheCommand(io, allocator, args[1..]);
     if (std.mem.eql(u8, args[0], "tree-sitter")) return runTreeSitterCacheCommand(io, allocator, args[1..]);
@@ -859,6 +842,10 @@ fn runCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []con
 }
 
 fn runProjectCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (wantsCommandHelp(args)) {
+        _ = cli_help.command(.stdout, "cache");
+        return;
+    }
     if (args.len < 1) return failUsage("missing project cache command", .{});
     if (args.len == 1 and std.mem.eql(u8, args[0], "clear")) {
         utils.render_cache.clear(io, allocator) catch |err| switch (err) {
@@ -877,6 +864,10 @@ fn runProjectCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []cons
 }
 
 fn runTreeSitterCacheCommand(io: std.Io, allocator: std.mem.Allocator, args: []const []const u8) !void {
+    if (wantsCommandHelp(args)) {
+        _ = cli_help.command(.stdout, "cache");
+        return;
+    }
     if (args.len < 1) return failUsage("missing tree-sitter cache command", .{});
     if (args.len == 1 and std.mem.eql(u8, args[0], "stats")) {
         try printTreeSitterCacheStats(io, allocator);
@@ -931,23 +922,40 @@ fn run(init: std.process.Init) !void {
     const io = init.io;
     const environ = init.minimal.environ;
     const args = try init.minimal.args.toSlice(allocator);
+    try applyColorArgs(args);
 
     if (args.len < 2) {
-        usage();
+        cli_help.general(.stdout);
         return;
     }
 
     const cmd = args[1];
     if (std.mem.eql(u8, cmd, "help")) {
-        usage();
+        if (helpTopic(args[2..])) |topic| {
+            if (!cli_help.command(.stdout, topic)) return failUsage("unknown help topic: {s}", .{topic});
+        } else {
+            cli_help.general(.stdout);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h")) {
+        cli_help.general(.stdout);
         return;
     }
     if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V") or std.mem.eql(u8, cmd, "version")) {
+        if (std.mem.eql(u8, cmd, "version") and wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "version");
+            return;
+        }
         version();
         return;
     }
 
     if (std.mem.eql(u8, cmd, "check")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "check");
+            return;
+        }
         const options = try parseCommandOptions(args[2..]);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
@@ -959,6 +967,10 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "dump")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "dump");
+            return;
+        }
         const options = try parseCommandOptions(args[2..]);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
@@ -980,6 +992,10 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "render")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "render");
+            return;
+        }
         const options = try parseCommandOptions(args[2..]);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
@@ -1007,12 +1023,20 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "init")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "init");
+            return;
+        }
         const options = try parseInitOptions(args[2..]);
         try initProject(io, allocator, options);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "doctor")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "doctor");
+            return;
+        }
         const options = try parseDoctorOptions(args[2..]);
         try runDoctor(io, allocator, environ, options);
         return;
@@ -1024,11 +1048,19 @@ fn run(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, cmd, "lsp")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "lsp");
+            return;
+        }
         try lsp.run(io, std.heap.smp_allocator);
         return;
     }
 
     if (std.mem.eql(u8, cmd, "watch")) {
+        if (wantsCommandHelp(args[2..]) or (args.len == 4 and (std.mem.eql(u8, args[2], "check") or std.mem.eql(u8, args[2], "render")) and isHelpArg(args[3]))) {
+            _ = cli_help.command(.stdout, "watch");
+            return;
+        }
         if (args.len < 3) {
             return failUsage("missing watch mode", .{});
         }
@@ -1046,6 +1078,16 @@ fn run(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "cache")) {
         try runCacheCommand(io, allocator, args[2..]);
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "completion")) {
+        if (wantsCommandHelp(args[2..])) {
+            _ = cli_help.command(.stdout, "completion");
+            return;
+        }
+        if (args.len != 3) return failUsage("usage: ss completion bash|zsh|fish", .{});
+        if (!cli_help.completion(args[2])) return failUsage("unknown completion shell: {s}", .{args[2]});
         return;
     }
 
