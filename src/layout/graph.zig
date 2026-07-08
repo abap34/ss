@@ -40,6 +40,14 @@ pub const SolveOptions = struct {
     record_diagnostics: bool = true,
     record_propagation: bool = false,
     measurement_provider: ?model.LayoutMeasurementProvider = null,
+    progress: ?LayoutProgress = null,
+    jobs: ?usize = null,
+};
+
+pub const LayoutProgress = struct {
+    context: *anyopaque,
+    pageStarted: *const fn (context: *anyopaque, completed: usize, total: usize) void,
+    pageCompleted: *const fn (context: *anyopaque, completed: usize, total: usize) void,
 };
 
 pub const PropagationSlot = enum {
@@ -487,8 +495,8 @@ fn appendLayoutObjectCandidate(allocator: std.mem.Allocator, ir: anytype, page_i
 }
 
 fn layoutObjectCanJoinPage(ir: anytype, page_id: NodeId, node_id: NodeId, node: *const Node) bool {
-    if (!node.attached) return true;
-    return (ir.parentPageOf(node_id) orelse return false) == page_id;
+    _ = node;
+    return (ir.layoutPageOf(node_id) orelse return false) == page_id;
 }
 
 fn appendImplicitConstraintGroups(allocator: std.mem.Allocator, ir: anytype, child_ids: *std.ArrayList(NodeId)) !void {

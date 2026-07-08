@@ -26,45 +26,303 @@ pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
 }
 
 pub fn solveLayoutWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !void {
+    var results = try solveLayoutResultsWithTracePathAndOptions(ir, trace_path, options);
+    defer results.deinit(ir.allocator);
+    try applyLayoutResults(ir, &results);
+}
+
+pub fn solveLayoutResultsWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !model.LayoutResults {
     layout_trace.beginSolve(ir.allocator, trace_path);
     defer layout_trace.endSolve(ir.allocator);
 
-    var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(ir.allocator, options.measurement_provider);
-    defer measurement_cache.deinit();
-
-    for (ir.nodes.items) |*node| {
-        switch (node.kind) {
-            .document => {},
-            .page => {
-                node.frame = .{
-                    .x = 0,
-                    .y = 0,
-                    .width = PageLayout.width,
-                    .height = PageLayout.height,
-                    .x_set = true,
-                    .y_set = true,
-                };
-            },
-            .object => {
-                node.frame.x = 0;
-                node.frame.y = 0;
-                node.frame.x_set = false;
-                node.frame.y_set = false;
-                node.frame.width = try metrics.intrinsicWidthCached(ir, node, &measurement_cache);
-                node.frame.height = try metrics.intrinsicHeightCached(ir, node, &measurement_cache);
-            },
-        }
+    for (ir.page_order.items) |page_id| {
+        const page = ir.getNode(page_id) orelse return error.UnknownNode;
+        page.frame = .{
+            .x = 0,
+            .y = 0,
+            .width = PageLayout.width,
+            .height = PageLayout.height,
+            .x_set = true,
+            .y_set = true,
+        };
     }
 
-    for (ir.page_order.items) |page_id| {
-        try solvePageLayout(ir, page_id, &measurement_cache, options);
+    const page_count = ir.page_order.items.len;
+    if (page_count > 0) {
+        if (options.progress) |progress| progress.pageStarted(progress.context, 0, page_count);
+    }
+
+    const page_jobs = try ir.allocator.alloc(PageLayoutJob, page_count);
+    defer ir.allocator.free(page_jobs);
+    for (ir.page_order.items, 0..) |page_id, page_index| {
+        page_jobs[page_index] = .{
+            .page_id = page_id,
+            .page_index = page_index,
+        };
+    }
+
+    var page_results = std.ArrayList(model.PageLayoutResult).empty;
+    errdefer {
+        for (page_results.items) |*result| result.deinit(ir.allocator);
+        page_results.deinit(ir.allocator);
+    }
+    try runPageLayoutJobs(ir, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
+    return .{ .pages = try page_results.toOwnedSlice(ir.allocator) };
+}
+
+const PageLayoutJob = struct {
+    page_id: NodeId,
+    page_index: usize,
+
+    fn run(self: PageLayoutJob, ir: anytype, options: SolveOptions) !model.PageLayoutResult {
+        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(ir.allocator, options.measurement_provider);
+        defer measurement_cache.deinit();
+        return try solvePageLayout(ir, self.page_id, self.page_index, &measurement_cache, options);
+    }
+
+    fn runIsolated(self: PageLayoutJob, ir: anytype, allocator: std.mem.Allocator, options: SolveOptions) !model.PageLayoutResult {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var local_ir = ir.*;
+        local_ir.allocator = arena.allocator();
+        local_ir.diagnostics = .empty;
+        local_ir.constraint_failures = .empty;
+        local_ir.last_constraint_failure = null;
+        defer {
+            for (local_ir.diagnostics.items) |*diagnostic| diagnostic.deinit(local_ir.allocator);
+            local_ir.diagnostics.deinit(local_ir.allocator);
+            for (local_ir.constraint_failures.items) |*failure| failure.deinit(local_ir.allocator);
+            local_ir.constraint_failures.deinit(local_ir.allocator);
+        }
+        var local_options = options;
+        local_options.progress = null;
+        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_ir.allocator, local_options.measurement_provider);
+        defer measurement_cache.deinit();
+        var result = try solvePageLayout(&local_ir, self.page_id, self.page_index, &measurement_cache, local_options);
+        defer result.deinit(local_ir.allocator);
+        return try clonePageLayoutResult(allocator, &result);
+    }
+};
+
+const PageLayoutJobOutput = struct {
+    result: ?model.PageLayoutResult = null,
+    err: ?anyerror = null,
+};
+
+fn PageLayoutWork(comptime IrPtr: type) type {
+    return struct {
+        ir: IrPtr,
+        jobs: []const PageLayoutJob,
+        options: SolveOptions,
+        outputs: []PageLayoutJobOutput,
+        next_job: std.atomic.Value(usize) = .init(0),
+        completed: std.atomic.Value(usize) = .init(0),
+        failed: std.atomic.Value(bool) = .init(false),
+        progress_lock: std.atomic.Value(bool) = .init(false),
+    };
+}
+
+fn runPageLayoutJobs(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, parallel_allowed: bool, out: *std.ArrayList(model.PageLayoutResult)) !void {
+    const worker_count = layoutWorkerCount(jobs.len, options, parallel_allowed);
+    if (worker_count <= 1) return try runPageLayoutJobsSequential(ir, jobs, options, out);
+    return try runPageLayoutJobsParallel(ir, jobs, options, worker_count, out);
+}
+
+fn runPageLayoutJobsSequential(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, out: *std.ArrayList(model.PageLayoutResult)) !void {
+    for (jobs, 0..) |job, completed_index| {
+        var result = try job.run(ir, options);
+        var result_transferred = false;
+        errdefer if (!result_transferred) result.deinit(ir.allocator);
+        try out.append(ir.allocator, result);
+        result_transferred = true;
+        if (options.progress) |progress| progress.pageCompleted(progress.context, completed_index + 1, jobs.len);
     }
 }
 
-fn solvePageLayout(ir: anytype, page_id: NodeId, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !void {
+fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(model.PageLayoutResult)) !void {
+    const IrPtr = @TypeOf(ir);
+    const outputs = try ir.allocator.alloc(PageLayoutJobOutput, jobs.len);
+    defer ir.allocator.free(outputs);
+    for (outputs) |*output| output.* = .{};
+    defer {
+        for (outputs) |*output| {
+            if (output.result) |*result| result.deinit(std.heap.smp_allocator);
+        }
+    }
+
+    var work = PageLayoutWork(IrPtr){
+        .ir = ir,
+        .jobs = jobs,
+        .options = options,
+        .outputs = outputs,
+    };
+
+    var threads = try ir.allocator.alloc(std.Thread, worker_count);
+    defer ir.allocator.free(threads);
+
+    var started: usize = 0;
+    var joined = false;
+    errdefer {
+        if (!joined) {
+            work.failed.store(true, .seq_cst);
+            for (threads[0..started]) |thread| thread.join();
+        }
+    }
+
+    while (started < worker_count) : (started += 1) {
+        threads[started] = try std.Thread.spawn(.{}, layoutJobWorker, .{ IrPtr, &work });
+    }
+
+    for (threads[0..started]) |thread| thread.join();
+    joined = true;
+
+    if (work.failed.load(.seq_cst)) {
+        for (outputs) |output| {
+            if (output.err) |err| return err;
+        }
+        return error.LayoutJobFailed;
+    }
+
+    for (outputs) |*output| {
+        const result = if (output.result) |*value| value else return error.LayoutJobFailed;
+        var cloned = try clonePageLayoutResult(ir.allocator, result);
+        var cloned_transferred = false;
+        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
+        try mergePageLayoutIssues(ir, &cloned);
+        try out.append(ir.allocator, cloned);
+        cloned_transferred = true;
+    }
+}
+
+fn layoutJobWorker(comptime IrPtr: type, work: *PageLayoutWork(IrPtr)) void {
+    while (!work.failed.load(.monotonic)) {
+        const index = work.next_job.fetchAdd(1, .monotonic);
+        if (index >= work.jobs.len) break;
+        const result = work.jobs[index].runIsolated(work.ir, std.heap.smp_allocator, work.options) catch |err| {
+            work.outputs[index].err = err;
+            work.failed.store(true, .seq_cst);
+            break;
+        };
+        work.outputs[index].result = result;
+        const completed = work.completed.fetchAdd(1, .release) + 1;
+        notifyLayoutProgress(IrPtr, work, completed);
+    }
+}
+
+fn notifyLayoutProgress(comptime IrPtr: type, work: *PageLayoutWork(IrPtr), completed: usize) void {
+    const progress = work.options.progress orelse return;
+    lockProgress(&work.progress_lock);
+    defer unlockProgress(&work.progress_lock);
+    progress.pageCompleted(progress.context, completed, work.jobs.len);
+}
+
+fn lockProgress(lock: *std.atomic.Value(bool)) void {
+    while (lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn unlockProgress(lock: *std.atomic.Value(bool)) void {
+    lock.store(false, .release);
+}
+
+fn layoutWorkerCount(job_count: usize, options: SolveOptions, parallel_allowed: bool) usize {
+    if (!parallel_allowed or job_count <= 1) return 1;
+    const requested = options.jobs orelse (std.Thread.getCpuCount() catch 1);
+    if (requested <= 1) return 1;
+    return @min(requested, job_count);
+}
+
+fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.PageLayoutResult) !model.PageLayoutResult {
+    const object_frames = try allocator.dupe(model.ObjectLayoutFrame, result.object_frames);
+    var object_frames_transferred = false;
+    errdefer if (!object_frames_transferred) allocator.free(object_frames);
+
+    const diagnostics_slice = try allocator.alloc(model.Diagnostic, result.diagnostics.len);
+    var diagnostics_transferred = false;
+    var copied_diagnostics: usize = 0;
+    errdefer {
+        if (!diagnostics_transferred) {
+            for (diagnostics_slice[0..copied_diagnostics]) |*diagnostic| diagnostic.deinit(allocator);
+            allocator.free(diagnostics_slice);
+        }
+    }
+    for (result.diagnostics, 0..) |diagnostic, index| {
+        diagnostics_slice[index] = try diagnostic.clone(allocator);
+        copied_diagnostics += 1;
+    }
+
+    const failure_slice = try allocator.alloc(model.ConstraintFailure, result.constraint_failures.len);
+    var failures_transferred = false;
+    var copied_failures: usize = 0;
+    errdefer {
+        if (!failures_transferred) {
+            for (failure_slice[0..copied_failures]) |*failure| failure.deinit(allocator);
+            allocator.free(failure_slice);
+        }
+    }
+    for (result.constraint_failures, 0..) |failure, index| {
+        failure_slice[index] = try failure.clone(allocator);
+        copied_failures += 1;
+    }
+
+    const asset_keys = try allocator.dupe(u64, result.asset_keys);
+    var asset_keys_transferred = false;
+    errdefer if (!asset_keys_transferred) allocator.free(asset_keys);
+    const measurement_keys = try allocator.dupe(u64, result.measurement_keys);
+    var measurement_keys_transferred = false;
+    errdefer if (!measurement_keys_transferred) allocator.free(measurement_keys);
+
+    object_frames_transferred = true;
+    diagnostics_transferred = true;
+    failures_transferred = true;
+    asset_keys_transferred = true;
+    measurement_keys_transferred = true;
+    return .{
+        .page_id = result.page_id,
+        .index = result.index,
+        .object_frames = object_frames,
+        .diagnostics = diagnostics_slice,
+        .constraint_failures = failure_slice,
+        .asset_keys = asset_keys,
+        .measurement_keys = measurement_keys,
+    };
+}
+
+fn mergePageLayoutIssues(ir: anytype, result: *const model.PageLayoutResult) !void {
+    for (result.diagnostics) |diagnostic| {
+        var cloned = try diagnostic.clone(ir.allocator);
+        errdefer cloned.deinit(ir.allocator);
+        try ir.addDiagnostic(cloned);
+    }
+    for (result.constraint_failures) |failure| {
+        var cloned = try failure.clone(ir.allocator);
+        var cloned_transferred = false;
+        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
+        try ir.constraint_failures.append(ir.allocator, cloned);
+        cloned_transferred = true;
+        ir.last_constraint_failure = ir.constraint_failures.items[ir.constraint_failures.items.len - 1];
+    }
+}
+
+pub fn applyLayoutResults(ir: anytype, results: *const model.LayoutResults) !void {
+    for (results.pages) |page| {
+        for (page.object_frames) |entry| {
+            const node = ir.getNode(entry.node_id) orelse return error.UnknownNode;
+            node.frame = entry.frame;
+        }
+    }
+}
+
+fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !model.PageLayoutResult {
+    const diagnostic_start = ir.diagnostics.items.len;
+    const constraint_failure_start = ir.constraint_failures.items.len;
+    const measurement_key_start = measurement_cache.usedKeyCount();
     var page_graph = try graph.PageLayoutGraph.init(ir.allocator, ir, page_id);
     defer page_graph.deinit();
-    if (page_graph.len() == 0) return;
+    if (page_graph.len() == 0) return try collectPageLayoutResult(ir, page_id, page_index, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+    try initializePageObjectMeasurements(ir, &page_graph, measurement_cache);
 
     var horizontal = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .horizontal);
     defer horizontal.deinit();
@@ -114,6 +372,103 @@ fn solvePageLayout(ir: anytype, page_id: NodeId, measurement_cache: *metrics.Mea
 
     try validatePageConstraints(ir, page_id, &page_graph, options);
     try diagnostics.collectPageDiagnosticsCached(ir, page_id, page_graph.child_ids, measurement_cache);
+    return try collectPageLayoutResult(ir, page_id, page_index, page_graph.child_ids, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+}
+
+fn collectPageLayoutResult(
+    ir: anytype,
+    page_id: NodeId,
+    page_index: usize,
+    child_ids: []const NodeId,
+    diagnostic_start: usize,
+    constraint_failure_start: usize,
+    measurement_cache: *const metrics.MeasurementCache,
+    measurement_key_start: usize,
+) !model.PageLayoutResult {
+    var frames = std.ArrayList(model.ObjectLayoutFrame).empty;
+    var diagnostics_out = std.ArrayList(model.Diagnostic).empty;
+    var failures_out = std.ArrayList(model.ConstraintFailure).empty;
+    var measurement_keys = std.ArrayList(u64).empty;
+    errdefer {
+        frames.deinit(ir.allocator);
+        for (diagnostics_out.items) |*diagnostic| diagnostic.deinit(ir.allocator);
+        diagnostics_out.deinit(ir.allocator);
+        for (failures_out.items) |*failure| failure.deinit(ir.allocator);
+        failures_out.deinit(ir.allocator);
+        measurement_keys.deinit(ir.allocator);
+    }
+    for (child_ids) |child_id| {
+        const node = ir.getNode(child_id) orelse return error.UnknownNode;
+        if (node.kind != .object) continue;
+        try frames.append(ir.allocator, .{
+            .node_id = child_id,
+            .frame = node.frame,
+        });
+    }
+    for (ir.diagnostics.items[diagnostic_start..]) |diagnostic| {
+        if (diagnostic.page_id != null and diagnostic.page_id.? != page_id) continue;
+        var cloned = try diagnostic.clone(ir.allocator);
+        var cloned_transferred = false;
+        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
+        try diagnostics_out.append(ir.allocator, cloned);
+        cloned_transferred = true;
+    }
+    for (ir.constraint_failures.items[constraint_failure_start..]) |failure| {
+        if (failure.page_id != page_id) continue;
+        var cloned = try failure.clone(ir.allocator);
+        var cloned_transferred = false;
+        errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
+        try failures_out.append(ir.allocator, cloned);
+        cloned_transferred = true;
+    }
+    try measurement_cache.appendUsedKeysSince(ir.allocator, measurement_key_start, &measurement_keys);
+    const frame_slice = try frames.toOwnedSlice(ir.allocator);
+    var frame_slice_transferred = false;
+    errdefer if (!frame_slice_transferred) ir.allocator.free(frame_slice);
+    const diagnostic_slice = try diagnostics_out.toOwnedSlice(ir.allocator);
+    var diagnostic_slice_transferred = false;
+    errdefer {
+        if (!diagnostic_slice_transferred) {
+            for (diagnostic_slice) |*diagnostic| diagnostic.deinit(ir.allocator);
+            ir.allocator.free(diagnostic_slice);
+        }
+    }
+    const failure_slice = try failures_out.toOwnedSlice(ir.allocator);
+    var failure_slice_transferred = false;
+    errdefer {
+        if (!failure_slice_transferred) {
+            for (failure_slice) |*failure| failure.deinit(ir.allocator);
+            ir.allocator.free(failure_slice);
+        }
+    }
+    const measurement_key_slice = try measurement_keys.toOwnedSlice(ir.allocator);
+    var measurement_key_slice_transferred = false;
+    errdefer if (!measurement_key_slice_transferred) ir.allocator.free(measurement_key_slice);
+    frame_slice_transferred = true;
+    diagnostic_slice_transferred = true;
+    failure_slice_transferred = true;
+    measurement_key_slice_transferred = true;
+    return .{
+        .page_id = page_id,
+        .index = page_index,
+        .object_frames = frame_slice,
+        .diagnostics = diagnostic_slice,
+        .constraint_failures = failure_slice,
+        .measurement_keys = measurement_key_slice,
+    };
+}
+
+fn initializePageObjectMeasurements(ir: anytype, page_graph: *const graph.PageLayoutGraph, measurement_cache: *metrics.MeasurementCache) !void {
+    for (page_graph.child_ids) |node_id| {
+        const node = ir.getNode(node_id) orelse return error.UnknownNode;
+        if (node.kind != .object) continue;
+        node.frame.x = 0;
+        node.frame.y = 0;
+        node.frame.x_set = false;
+        node.frame.y_set = false;
+        node.frame.width = try metrics.intrinsicWidthCached(ir, node, measurement_cache);
+        node.frame.height = try metrics.intrinsicHeightCached(ir, node, measurement_cache);
+    }
 }
 
 fn applySolvedHorizontalFrames(ir: anytype, workspace: *const graph.AxisWorkspace, measurement_cache: *metrics.MeasurementCache) !void {

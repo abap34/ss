@@ -32,6 +32,40 @@ pub fn renderDocumentToPdfWithOptions(allocator: std.mem.Allocator, io: std.Io, 
     return native.renderDocumentToPdfWithOptions(allocator, io, ir, options, progress);
 }
 
+pub fn renderDocumentToPdfWithPreparedPagesAndOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) ![]const u8 {
+    return native.renderDocumentToPdfWithPreparedPagesAndOptions(allocator, io, ir, pages, options, progress);
+}
+
+pub fn renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    layouts: *const core.LayoutResults,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) ![]const u8 {
+    return native.renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(allocator, io, ir, pages, layouts, options, progress);
+}
+
+pub fn preloadPreparedPageArtifactsWithOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    options: RenderOptions,
+    progress: ?RenderProgress,
+) !void {
+    return native.preloadPreparedPageArtifactsWithOptions(allocator, io, ir, pages, options, progress);
+}
+
 pub fn treeSitterHealthReport(
     allocator: std.mem.Allocator,
     io: std.Io,

@@ -799,17 +799,22 @@ pub const Ir = struct {
         offset: f32,
         origin: ?[]const u8,
     ) !void {
-        try self.constraints.append(self.allocator, .{
+        const constraint = Constraint{
             .target_node = target_node,
             .target_anchor = target_anchor,
             .source = source,
             .offset = offset,
             .origin = origin,
-        });
+        };
+        try self.constraints.append(self.allocator, constraint);
+        try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
     }
 
     pub fn addConstraintSet(self: *Ir, constraints: ConstraintSet) !void {
         try self.constraints.appendSlice(self.allocator, constraints.items.items);
+        for (constraints.items.items) |constraint| {
+            try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
+        }
     }
 
     pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
@@ -989,17 +994,181 @@ pub const Ir = struct {
         try self.addDiagnostic(diagnostic);
     }
 
+    pub fn validatePageLocalLayout(self: *Ir) !void {
+        try self.addPageOwnershipDiagnostics();
+        try self.addUnplacedObjectDiagnostics(.warning);
+        for (self.constraints.items) |constraint| {
+            try self.addConstraintEndpointOwnershipDiagnostics(constraint);
+            try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
+        }
+    }
+
+    fn addPageOwnershipDiagnostics(self: *Ir) !void {
+        for (self.nodes.items) |node| {
+            if (node.kind != .object or node.discarded) continue;
+            const ownership = self.directPageOwnershipInfo(node.id);
+            if (ownership.count > 1) {
+                const role = node.role orelse node.name;
+                const message = try std.fmt.allocPrint(self.allocator, "PageOwnershipConflict: object '{s}' belongs to multiple pages", .{role});
+                try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
+                    .user_report = .{ .message = message },
+                });
+            } else if (node.attached and ownership.count == 0) {
+                const role = node.role orelse node.name;
+                const message = try std.fmt.allocPrint(self.allocator, "PageOwnershipConflict: attached object '{s}' is not contained by a page", .{role});
+                try self.addValidationDiagnostic(.@"error", null, node.id, node.origin, .{
+                    .user_report = .{ .message = message },
+                });
+            }
+        }
+    }
+
     pub fn addUnplacedObjectWarnings(self: *Ir) !void {
+        try self.addUnplacedObjectDiagnostics(.warning);
+    }
+
+    fn addUnplacedObjectDiagnostics(self: *Ir, severity: DiagnosticSeverity) !void {
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.attached or node.discarded) continue;
             if (try self.hasUnplacedObjectParent(node.id)) continue;
             if (self.isConstraintReferencedGroupWithAttachedDescendant(node.id)) continue;
             const role = node.role orelse node.name;
             const message = try std.fmt.allocPrint(self.allocator, "UnplacedObject: object '{s}' was generated but not placed", .{role});
-            try self.addValidationDiagnostic(.warning, null, node.id, node.origin, .{
+            try self.addValidationDiagnostic(severity, null, node.id, node.origin, .{
                 .user_report = .{ .message = message },
             });
         }
+    }
+
+    const PageOwnershipInfo = struct {
+        first: ?NodeId = null,
+        count: usize = 0,
+    };
+
+    fn directPageOwnershipInfo(self: *Ir, child_id: NodeId) PageOwnershipInfo {
+        var result = PageOwnershipInfo{};
+        var it = self.contains.iterator();
+        while (it.next()) |entry| {
+            const parent_id = entry.key_ptr.*;
+            const parent = self.getNode(parent_id) orelse continue;
+            if (parent.kind != .page) continue;
+            for (entry.value_ptr.items) |candidate| {
+                if (candidate != child_id) continue;
+                if (result.first == null) result.first = parent_id;
+                result.count += 1;
+            }
+        }
+        return result;
+    }
+
+    pub fn layoutPageOf(self: *Ir, node_id: NodeId) ?NodeId {
+        const direct = self.directPageOwnershipInfo(node_id);
+        if (direct.count == 1) return direct.first;
+        if (direct.count > 1) return null;
+        if (!self.isConstraintReferencedGroupWithAttachedDescendant(node_id)) return null;
+        return self.uniqueAttachedDescendantPage(node_id);
+    }
+
+    fn uniqueAttachedDescendantPage(self: *Ir, node_id: NodeId) ?NodeId {
+        var result: ?NodeId = null;
+        const children = self.childrenOf(node_id) orelse return null;
+        for (children) |child_id| {
+            const child = self.getNode(child_id) orelse continue;
+            if (child.kind != .object or child.discarded) continue;
+            const direct = self.directPageOwnershipInfo(child_id);
+            const candidate = if (direct.count == 1)
+                direct.first
+            else if (direct.count == 0)
+                self.uniqueAttachedDescendantPage(child_id)
+            else
+                null;
+            const page_id = candidate orelse continue;
+            if (result) |existing| {
+                if (existing != page_id) return null;
+            } else {
+                result = page_id;
+            }
+        }
+        return result;
+    }
+
+    fn addCrossPageConstraintDiagnosticIfKnown(self: *Ir, constraint: Constraint) !void {
+        const target_page = self.layoutPageOf(constraint.target_node) orelse return;
+        const source_page = switch (constraint.source) {
+            .page => target_page,
+            .node => |source| self.layoutPageOf(source.node_id) orelse return,
+        };
+        if (target_page == source_page) return;
+        if (self.hasCrossPageConstraintDiagnostic(constraint)) return;
+
+        const target_node = self.getNode(constraint.target_node);
+        const target_role = if (target_node) |node| node.role orelse node.name else "unknown";
+        const message = try std.fmt.allocPrint(
+            self.allocator,
+            "CrossPageConstraint: constraint target object '{s}' belongs to page {d}, but source object belongs to page {d}",
+            .{ target_role, self.pageIndexOf(target_page), self.pageIndexOf(source_page) },
+        );
+        try self.addValidationDiagnostic(.@"error", target_page, constraint.target_node, constraint.origin, .{
+            .user_report = .{ .message = message },
+        });
+    }
+
+    fn addConstraintEndpointOwnershipDiagnostics(self: *Ir, constraint: Constraint) !void {
+        try self.addConstraintEndpointOwnershipDiagnostic(constraint.target_node, "target", constraint.origin);
+        switch (constraint.source) {
+            .page => {},
+            .node => |source| try self.addConstraintEndpointOwnershipDiagnostic(source.node_id, "source", constraint.origin),
+        }
+    }
+
+    fn addConstraintEndpointOwnershipDiagnostic(self: *Ir, node_id: NodeId, role: []const u8, origin: ?[]const u8) !void {
+        if (self.layoutPageOf(node_id) != null) return;
+        const ownership = self.directPageOwnershipInfo(node_id);
+        if (ownership.count > 1) return;
+        const node = self.getNode(node_id) orelse return;
+        if (node.kind != .object or node.discarded) return;
+        if (self.hasUnownedLayoutObjectDiagnostic(node_id, origin)) return;
+        const node_role = node.role orelse node.name;
+        const message = try std.fmt.allocPrint(
+            self.allocator,
+            "UnownedLayoutObject: constraint {s} object '{s}' does not belong to a page",
+            .{ role, node_role },
+        );
+        try self.addValidationDiagnostic(.@"error", null, node_id, origin orelse node.origin, .{
+            .user_report = .{ .message = message },
+        });
+    }
+
+    fn hasUnownedLayoutObjectDiagnostic(self: *Ir, node_id: NodeId, origin: ?[]const u8) bool {
+        for (self.diagnostics.items) |diagnostic| {
+            if (diagnostic.phase != .validation or diagnostic.node_id != node_id) continue;
+            switch (diagnostic.data) {
+                .user_report => |data| {
+                    if (!std.mem.startsWith(u8, data.message, "UnownedLayoutObject:")) continue;
+                    if (origin == null) return true;
+                    if (diagnostic.origin == null) continue;
+                    if (std.mem.eql(u8, origin.?, diagnostic.origin.?)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    fn hasCrossPageConstraintDiagnostic(self: *Ir, constraint: Constraint) bool {
+        for (self.diagnostics.items) |diagnostic| {
+            if (diagnostic.phase != .validation or diagnostic.node_id != constraint.target_node) continue;
+            switch (diagnostic.data) {
+                .user_report => |data| {
+                    if (!std.mem.startsWith(u8, data.message, "CrossPageConstraint:")) continue;
+                    if (constraint.origin == null and diagnostic.origin == null) return true;
+                    if (constraint.origin == null or diagnostic.origin == null) continue;
+                    if (std.mem.eql(u8, constraint.origin.?, diagnostic.origin.?)) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
     }
 
     fn hasUnplacedObjectParent(self: *Ir, child_id: NodeId) !bool {
@@ -1240,27 +1409,38 @@ pub const Ir = struct {
     }
 
     pub fn finalizeWithLayoutTracePathAndOptions(self: *Ir, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !void {
+        var results = try self.finalizeWithLayoutResultsAndOptions(trace_path, options);
+        defer results.deinit(self.allocator);
+    }
+
+    pub fn finalizeWithLayoutResultsAndOptions(self: *Ir, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !model.LayoutResults {
         self.clearDiagnosticsForPhase(.layout);
         self.clearConstraintFailures();
-        try layout.solveLayoutWithTracePathAndOptions(self, trace_path, options);
+        var results = try layout.solveLayoutResultsWithTracePathAndOptions(self, trace_path, options);
         if (self.constraint_failures.items.len > 0) {
             const first_kind = self.constraint_failures.items[0].kind;
+            results.deinit(self.allocator);
             self.clearDiagnosticsForPhase(.layout);
             self.clearConstraintFailures();
             var propagation_options = options;
             propagation_options.record_propagation = true;
-            try layout.solveLayoutWithTracePathAndOptions(self, trace_path, propagation_options);
+            results = try layout.solveLayoutResultsWithTracePathAndOptions(self, trace_path, propagation_options);
             if (self.constraint_failures.items.len == 0) {
+                results.deinit(self.allocator);
                 switch (first_kind) {
                     .conflict => return error.ConstraintConflict,
                     .negative_frame_size => return error.NegativeFrameSize,
                 }
             }
-            switch (self.constraint_failures.items[0].kind) {
+            const kind = self.constraint_failures.items[0].kind;
+            results.deinit(self.allocator);
+            switch (kind) {
                 .conflict => return error.ConstraintConflict,
                 .negative_frame_size => return error.NegativeFrameSize,
             }
         }
+        try layout.applyLayoutResults(self, &results);
+        return results;
     }
 
     pub fn styleForNode(self: *Ir, node: *const Node) model.TextStyle {

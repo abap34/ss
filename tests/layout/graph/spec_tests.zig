@@ -477,7 +477,7 @@ test "layout graph spec: implicit constraint objects stay page local" {
     var first_graph = try graph.PageLayoutGraph.init(testing.allocator, &ir, first_page);
     defer first_graph.deinit();
     try testing.expect(first_graph.indexOf(placed) != null);
-    try testing.expect(first_graph.indexOf(helper) != null);
+    try testing.expect(first_graph.indexOf(helper) == null);
     try testing.expect(first_graph.indexOf(foreign) == null);
 
     var second_graph = try graph.PageLayoutGraph.init(testing.allocator, &ir, second_page);
@@ -672,7 +672,7 @@ test "layout solver: constraint-referenced objects participate in fallback place
 
     const page = try ir.addPage("Page");
     const placed = try ir.makeObject(page, "placed", null, .text, .text, "placed");
-    const referenced = try ir.createObjectWithOrigin("referenced", null, .text, .text, "referenced", null);
+    const referenced = try ir.makeObject(page, "referenced", null, .text, .text, "referenced");
     try ir.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, "placed-top");
 
     try ir.finalize();
@@ -1293,6 +1293,57 @@ test "layout solver uses render measurement provider for intrinsic object size" 
     try testing.expect(measurement.constrained_calls > 0);
 }
 
+const LayoutProgressCounter = struct {
+    started_total: usize = 0,
+    completed: usize = 0,
+    completed_total: usize = 0,
+};
+
+fn recordLayoutPageStarted(context: *anyopaque, completed: usize, total: usize) void {
+    const counter: *LayoutProgressCounter = @ptrCast(@alignCast(context));
+    counter.completed = completed;
+    counter.started_total = total;
+}
+
+fn recordLayoutPageCompleted(context: *anyopaque, completed: usize, total: usize) void {
+    const counter: *LayoutProgressCounter = @ptrCast(@alignCast(context));
+    counter.completed = completed;
+    counter.completed_total = total;
+}
+
+test "layout solver runs page jobs with configured job count" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const first_page = try ir.addPage("First");
+    const first = try ir.makeObject(first_page, "first", null, .text, .text, "First");
+    try ir.addAnchorConstraint(first, .left, .{ .page = .left }, 40, "first-left");
+    try ir.addAnchorConstraint(first, .top, .{ .page = .top }, -80, "first-top");
+
+    const second_page = try ir.addPage("Second");
+    const second = try ir.makeObject(second_page, "second", null, .text, .text, "Second");
+    try ir.addAnchorConstraint(second, .left, .{ .page = .left }, 80, "second-left");
+    try ir.addAnchorConstraint(second, .top, .{ .page = .top }, -120, "second-top");
+
+    var counter = LayoutProgressCounter{};
+    var results = try solver.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{
+        .jobs = 2,
+        .progress = .{
+            .context = &counter,
+            .pageStarted = recordLayoutPageStarted,
+            .pageCompleted = recordLayoutPageCompleted,
+        },
+    });
+    defer results.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), results.pages.len);
+    try testing.expectEqual(@as(usize, 2), counter.started_total);
+    try testing.expectEqual(@as(usize, 2), counter.completed);
+    try testing.expectEqual(@as(usize, 2), counter.completed_total);
+    try testing.expect(results.frameOf(first_page, first) != null);
+    try testing.expect(results.frameOf(second_page, second) != null);
+}
+
 test "layout metrics keep asset intrinsic size ahead of render measurement provider" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -1506,6 +1557,9 @@ test "layout diagnostics: fixed-height object reports content overflow" {
             .content_overflow => |data| {
                 found = true;
                 try testing.expectEqual(core.DiagnosticSeverity.warning, diagnostic.severity);
+                try expectFloat(metrics.intrinsicWidth(&ir, node), data.required_width);
+                try expectFloat(node.frame.width, data.frame_width);
+                try expectFloat(0, data.overflow_width);
                 try expectFloat(required_height, data.required_height);
                 try expectFloat(node.frame.height, data.frame_height);
                 try expectFloat(required_height - node.frame.height, data.overflow_height);
