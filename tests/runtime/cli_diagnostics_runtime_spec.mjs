@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
+await testColoredDiagnosticsHighlightProgramBody();
 await testImportedModuleImportFailureReportsBothFiles();
 await testFunctionBodyUnknownIdentifierReportsFunctionSource();
 await testProjectConfigFailureReportsConfigLocation();
@@ -17,6 +18,38 @@ await testHoleBoundCalleeSuppressesUnknownFunction();
 await testHoleCallbackSuppressesInvalidCallback();
 await testMemberNameHoleSuppressesEnumCaseDiagnostic();
 await testRecordUpdatePathHoleSuppressesFieldDiagnostic();
+
+async function testColoredDiagnosticsHighlightProgramBody() {
+  const project = await mkdtempProject("ss-cli-colored-diagnostics-");
+  try {
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `page broken
+let title = text!("hello", color = c"#ff0033")
+let call = box!(title) ?? text!("fallback")
+let multiline = """hello
+world"""
+let raw = <<
+plain text
+>>
+let missing =
+end
+`,
+      "utf8",
+    );
+
+    const result = await runSs(["check", "slide.ss", "--color", "always"], project);
+    const output = combinedOutput(result);
+    assert(result.code !== 0, "check should fail for a missing expression");
+    assert(output.includes("\u001b[36mtext!\u001b[0m"), `callable identifier should include the bang in one highlighted token:\n${output}`);
+    assert(output.includes('\u001b[32mc"#ff0033"\u001b[0m'), `color string should be highlighted as one string token:\n${output}`);
+    assert(output.includes('\u001b[32m"""hello\u001b[0m'), `triple-quoted string start should be highlighted as one string token:\n${output}`);
+    assert(output.includes("\u001b[33m??\u001b[0m"), `operator should be highlighted:\n${output}`);
+    assert(output.includes("\u001b[32mplain text\u001b[0m"), `chevron block body should be highlighted as string content:\n${output}`);
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
 
 async function testImportedModuleImportFailureReportsBothFiles() {
   const project = await mkdtempProject("ss-cli-import-diagnostics-");
