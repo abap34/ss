@@ -123,6 +123,24 @@ pub const ConstraintFailure = struct {
         if (self.propagation) |*propagation| propagation.deinit(allocator);
         self.propagation = null;
     }
+
+    pub fn clone(self: ConstraintFailure, allocator: Allocator) !ConstraintFailure {
+        var cloned = ConstraintFailure{
+            .kind = self.kind,
+            .reason = self.reason,
+            .page_id = self.page_id,
+            .axis = self.axis,
+            .constraint = self.constraint,
+            .existing_constraint = self.existing_constraint,
+            .actual = self.actual,
+            .expected = self.expected,
+            .propagation = null,
+        };
+        if (self.propagation) |propagation| {
+            cloned.propagation = try propagation.clone(allocator);
+        }
+        return cloned;
+    }
 };
 
 pub const ConstraintPropagation = struct {
@@ -137,6 +155,34 @@ pub const ConstraintPropagation = struct {
         for (self.result) |line| allocator.free(line);
         allocator.free(self.result);
         self.* = .{};
+    }
+
+    pub fn clone(self: ConstraintPropagation, allocator: Allocator) !ConstraintPropagation {
+        var cloned = ConstraintPropagation{};
+        cloned.target = if (self.target) |target| try allocator.dupe(u8, target) else null;
+        errdefer if (cloned.target) |target| allocator.free(target);
+        cloned.paths = try allocator.alloc(PropagationPath, self.paths.len);
+        var copied_paths: usize = 0;
+        errdefer {
+            for (cloned.paths[0..copied_paths]) |*path| path.deinit(allocator);
+            allocator.free(cloned.paths);
+        }
+        for (self.paths, 0..) |path, index| {
+            cloned.paths[index] = try path.clone(allocator);
+            copied_paths += 1;
+        }
+        const result_lines = try allocator.alloc([]const u8, self.result.len);
+        var copied_result: usize = 0;
+        errdefer {
+            for (result_lines[0..copied_result]) |line| allocator.free(line);
+            allocator.free(result_lines);
+        }
+        for (self.result, 0..) |line, index| {
+            result_lines[index] = try allocator.dupe(u8, line);
+            copied_result += 1;
+        }
+        cloned.result = result_lines;
+        return cloned;
     }
 };
 
@@ -154,6 +200,40 @@ pub const PropagationPath = struct {
         }
         allocator.free(self.line_sources);
         self.* = .{ .title = "", .lines = &.{}, .line_sources = &.{} };
+    }
+
+    pub fn clone(self: PropagationPath, allocator: Allocator) !PropagationPath {
+        var cloned = PropagationPath{
+            .title = try allocator.dupe(u8, self.title),
+            .lines = &.{},
+            .line_sources = &.{},
+        };
+        errdefer allocator.free(cloned.title);
+        const lines = try allocator.alloc([]const u8, self.lines.len);
+        var copied_lines: usize = 0;
+        errdefer {
+            for (lines[0..copied_lines]) |line| allocator.free(line);
+            allocator.free(lines);
+        }
+        for (self.lines, 0..) |line, index| {
+            lines[index] = try allocator.dupe(u8, line);
+            copied_lines += 1;
+        }
+        const line_sources = try allocator.alloc(?[]const u8, self.line_sources.len);
+        var copied_sources: usize = 0;
+        errdefer {
+            for (line_sources[0..copied_sources]) |source| {
+                if (source) |text| allocator.free(text);
+            }
+            allocator.free(line_sources);
+        }
+        for (self.line_sources, 0..) |source, index| {
+            line_sources[index] = if (source) |text| try allocator.dupe(u8, text) else null;
+            copied_sources += 1;
+        }
+        cloned.lines = lines;
+        cloned.line_sources = line_sources;
+        return cloned;
     }
 };
 
@@ -179,6 +259,65 @@ pub const Frame = struct {
     height: f32 = 0,
     x_set: bool = false,
     y_set: bool = false,
+};
+
+pub const ObjectLayoutFrame = struct {
+    node_id: NodeId,
+    frame: Frame,
+};
+
+pub const PageLayoutResult = struct {
+    page_id: NodeId,
+    index: usize,
+    object_frames: []ObjectLayoutFrame,
+    diagnostics: []Diagnostic = &.{},
+    constraint_failures: []ConstraintFailure = &.{},
+    asset_keys: []u64 = &.{},
+    measurement_keys: []u64 = &.{},
+
+    pub fn deinit(self: *PageLayoutResult, allocator: Allocator) void {
+        allocator.free(self.object_frames);
+        for (self.diagnostics) |*diagnostic| diagnostic.deinit(allocator);
+        allocator.free(self.diagnostics);
+        for (self.constraint_failures) |*failure| failure.deinit(allocator);
+        allocator.free(self.constraint_failures);
+        allocator.free(self.asset_keys);
+        allocator.free(self.measurement_keys);
+        self.* = .{
+            .page_id = 0,
+            .index = 0,
+            .object_frames = &.{},
+        };
+    }
+
+    pub fn frameOf(self: *const PageLayoutResult, node_id: NodeId) ?Frame {
+        for (self.object_frames) |entry| {
+            if (entry.node_id == node_id) return entry.frame;
+        }
+        return null;
+    }
+};
+
+pub const LayoutResults = struct {
+    pages: []PageLayoutResult = &.{},
+
+    pub fn deinit(self: *LayoutResults, allocator: Allocator) void {
+        for (self.pages) |*page| page.deinit(allocator);
+        allocator.free(self.pages);
+        self.* = .{};
+    }
+
+    pub fn pageById(self: *const LayoutResults, page_id: NodeId) ?*const PageLayoutResult {
+        for (self.pages) |*page| {
+            if (page.page_id == page_id) return page;
+        }
+        return null;
+    }
+
+    pub fn frameOf(self: *const LayoutResults, page_id: NodeId, node_id: NodeId) ?Frame {
+        const page = self.pageById(page_id) orelse return null;
+        return page.frameOf(node_id);
+    }
 };
 
 pub const Axis = enum {
@@ -251,6 +390,7 @@ pub const LayoutMeasurementMode = enum {
 pub const LayoutMeasurement = struct {
     width: f32,
     height: f32,
+    cache_key: ?u64 = null,
 };
 
 pub const LayoutMeasurementProvider = struct {
@@ -554,6 +694,9 @@ pub const Diagnostic = struct {
             overflow_bottom: f32,
         },
         content_overflow: struct {
+            required_width: f32,
+            frame_width: f32,
+            overflow_width: f32,
             required_height: f32,
             frame_height: f32,
             overflow_height: f32,
@@ -573,7 +716,57 @@ pub const Diagnostic = struct {
             else => {},
         }
     }
+
+    pub fn clone(self: Diagnostic, allocator: Allocator) !Diagnostic {
+        var cloned = Diagnostic{
+            .phase = self.phase,
+            .severity = self.severity,
+            .page_id = self.page_id,
+            .node_id = self.node_id,
+            .origin = if (self.origin) |origin| try allocator.dupe(u8, origin) else null,
+            .data = undefined,
+        };
+        errdefer if (cloned.origin) |origin| allocator.free(origin);
+        cloned.data = try cloneDiagnosticData(allocator, self.data);
+        return cloned;
+    }
 };
+
+fn cloneDiagnosticData(allocator: Allocator, data: Diagnostic.Data) !Diagnostic.Data {
+    return switch (data) {
+        .user_report => |value| .{
+            .user_report = .{ .message = try allocator.dupe(u8, value.message) },
+        },
+        .asset_not_found => |value| blk: {
+            const requested_path = try allocator.dupe(u8, value.requested_path);
+            errdefer allocator.free(requested_path);
+            const resolved_path = try allocator.dupe(u8, value.resolved_path);
+            break :blk .{
+                .asset_not_found = .{
+                    .requested_path = requested_path,
+                    .resolved_path = resolved_path,
+                    .payload_kind = value.payload_kind,
+                },
+            };
+        },
+        .asset_invalid => |value| .{
+            .asset_invalid = .{
+                .reason = try allocator.dupe(u8, value.reason),
+                .payload_kind = value.payload_kind,
+            },
+        },
+        .render_failed => |value| .{
+            .render_failed = .{
+                .reason = try allocator.dupe(u8, value.reason),
+                .payload_kind = value.payload_kind,
+            },
+        },
+        .type_mismatch => |value| .{ .type_mismatch = value },
+        .recursive_function => |value| .{ .recursive_function = value },
+        .page_overflow => |value| .{ .page_overflow = value },
+        .content_overflow => |value| .{ .content_overflow = value },
+    };
+}
 
 pub const TypeMismatchCode = enum {
     UnmatchedArgumentType,

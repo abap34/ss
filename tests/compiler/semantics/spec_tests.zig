@@ -4457,7 +4457,7 @@ test "compiler semantics: returned object placement follows constraints and grou
     try expectObjectState(grouped_source, .{ .content = "right", .attached = true, .discarded = false });
 }
 
-test "compiler semantics: connected return objects still warn when the result is not placed" {
+test "compiler semantics: connected return objects error when the result is not placed" {
     const source =
         \\import std:themes/default as *
         \\
@@ -4474,9 +4474,7 @@ test "compiler semantics: connected return objects still warn when the result is
         \\
     ;
 
-    try expectLoweredDiagnosticCount(source, "UnplacedObject", 1);
-    try expectObjectState(source, .{ .content = "main", .attached = false, .discarded = false });
-    try expectObjectState(source, .{ .content = "helper", .attached = false, .discarded = false });
+    try expectLoweringErrorDiagnostic(source, "UnownedLayoutObject");
 }
 
 test "compiler semantics: disconnected generated objects are not hidden by placing the return value" {

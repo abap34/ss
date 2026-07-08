@@ -48,6 +48,131 @@ test "core IR spec: containment is idempotent for the same parent-child pair" {
     try testing.expectEqual(object, children[0]);
 }
 
+test "core IR spec: page-local validation reports duplicate page ownership" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const first = try ir.addPage("First");
+    const second = try ir.addPage("Second");
+    const object = try ir.makeObject(first, "title", null, .text, .text, "Hello");
+    try ir.addContainment(second, object);
+
+    try ir.validatePageLocalLayout();
+
+    try expectDiagnosticCode(&ir, "PageOwnershipConflict:");
+}
+
+test "core IR spec: page-local validation reports cross-page constraints" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const first = try ir.addPage("First");
+    const second = try ir.addPage("Second");
+    const target = try ir.makeObject(first, "target", null, .text, .text, "Target");
+    const source = try ir.makeObject(second, "source", null, .text, .text, "Source");
+
+    try ir.addAnchorConstraint(target, .top, .{ .node = .{ .node_id = source, .anchor = .top } }, 0, "cross-page");
+    try ir.validatePageLocalLayout();
+
+    try expectDiagnosticCode(&ir, "CrossPageConstraint:");
+}
+
+test "core IR spec: page-local validation reports unowned layout objects" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const placed = try ir.makeObject(page, "placed", null, .text, .text, "Placed");
+    const helper = try ir.createObjectWithOrigin("helper", null, .text, .text, "Helper", null);
+
+    try ir.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = helper, .anchor = .top } }, 0, "unowned");
+    try ir.validatePageLocalLayout();
+
+    try expectDiagnosticCode(&ir, "UnownedLayoutObject:");
+}
+
+test "core IR spec: page unit collects inline math asset dependencies" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    _ = try ir.makeObject(page, "body", null, .text, .text, "value $x+y$");
+
+    var pages = try core.page_unit.prepare(testing.allocator, &ir);
+    defer pages.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), pages.pages.len);
+    try testing.expectEqual(@as(usize, 1), pages.pages[0].objects.len);
+    const object = pages.pages[0].objects[0];
+    try testing.expectEqual(@as(usize, 1), object.asset_deps.len);
+    try testing.expectEqual(core.page_unit.AssetDependency.Kind.inline_math, object.asset_deps[0].kind);
+    try testing.expectEqualStrings("x+y", object.asset_deps[0].source);
+    try testing.expectEqual(@as(usize, 1), object.asset_keys.len);
+    try testing.expectEqual(@as(usize, 1), pages.pages[0].asset_keys.len);
+    try testing.expectEqual(object.asset_keys[0], pages.pages[0].asset_keys[0]);
+    try testing.expectEqual(core.page_unit.assetDependencyKey(object.asset_deps[0], object.tex_preamble), object.asset_keys[0]);
+}
+
+test "core IR spec: prepared page asset keys attach to layout results" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "value $x+y$");
+    try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 40, "body-left");
+    try ir.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
+
+    var pages = try core.page_unit.prepare(testing.allocator, &ir);
+    defer pages.deinit(testing.allocator);
+    var results = try core.layout.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{});
+    defer results.deinit(testing.allocator);
+    try core.page_unit.attachAssetKeysToLayoutResults(testing.allocator, &results, &pages);
+
+    try testing.expectEqual(@as(usize, 1), results.pages.len);
+    try testing.expectEqual(@as(usize, 1), results.pages[0].asset_keys.len);
+    try testing.expectEqual(pages.pages[0].asset_keys[0], results.pages[0].asset_keys[0]);
+}
+
+test "core IR spec: layout results collect solved page frames" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "Hello");
+    try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 40, "body-left");
+    try ir.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
+
+    var results = try core.layout.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{});
+    defer results.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), results.pages.len);
+    try testing.expectEqual(page, results.pages[0].page_id);
+    const result_frame = results.frameOf(page, object) orelse return error.MissingLayoutFrame;
+    const node_frame = ir.getNode(object).?.frame;
+    try testing.expect(result_frame.x_set);
+    try testing.expect(result_frame.y_set);
+    try testing.expectEqual(node_frame, result_frame);
+    try testing.expect(results.pages[0].measurement_keys.len > 0);
+}
+
+test "core IR spec: layout results own page diagnostics" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "body", null, .text, .text, "Hello");
+    try ir.addAnchorConstraint(object, .left, .{ .page = .left }, -40, "body-left");
+    try ir.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
+
+    var results = try core.layout.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{});
+    defer results.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), results.pages.len);
+    try testing.expect(results.pages[0].diagnostics.len > 0);
+    try testing.expect(ir.diagnostics.items.len > 0);
+    try testing.expectEqual(core.DiagnosticPhase.layout, results.pages[0].diagnostics[0].phase);
+}
+
 test "core IR spec: node fields reject duplicate keys" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -63,6 +188,18 @@ test "core IR spec: node fields reject duplicate keys" {
     try testing.expectEqual(@as(usize, 2), node.fields.items.len);
     try testing.expectEqualStrings("red", ir.getNodeField(object, "fill").?.string);
     try testing.expectEqualStrings("black", ir.getNodeField(object, "stroke").?.string);
+}
+
+fn expectDiagnosticCode(ir: *core.Ir, code: []const u8) !void {
+    for (ir.diagnostics.items) |diagnostic| {
+        switch (diagnostic.data) {
+            .user_report => |data| {
+                if (std.mem.startsWith(u8, data.message, code)) return;
+            },
+            else => {},
+        }
+    }
+    return error.ExpectedDiagnosticMissing;
 }
 
 test "core IR spec: explicit field reads ignore inherited class defaults" {

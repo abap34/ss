@@ -1353,20 +1353,8 @@ fn attachIntrinsicPdfSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: [
 }
 
 fn attachIntrinsicAssetSize(ir: *core.Ir, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
-    const fitted = fitSize(
-        dimensions.width,
-        dimensions.height,
-        core.PageLayout.default_asset_width,
-        core.PageLayout.max_figure_height,
-    );
-    try ir.setNodeFieldValue(object_id, "asset_width", .{ .number = fitted.width });
-    try ir.setNodeFieldValue(object_id, "asset_height", .{ .number = fitted.height });
-}
-
-fn fitSize(width: f32, height: f32, max_width: f32, max_height: f32) struct { width: f32, height: f32 } {
-    if (width <= 0 or height <= 0) return .{ .width = max_width, .height = max_height };
-    const scale = @min(max_width / width, max_height / height);
-    return .{ .width = width * scale, .height = height * scale };
+    try ir.setNodeFieldValue(object_id, "asset_width", .{ .number = dimensions.width });
+    try ir.setNodeFieldValue(object_id, "asset_height", .{ .number = dimensions.height });
 }
 
 fn resolveAssetPath(allocator: std.mem.Allocator, base_dir: []const u8, requested: []const u8) ![]const u8 {

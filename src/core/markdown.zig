@@ -41,10 +41,21 @@ pub const Run = struct {
     underline: bool = false,
     url: ?[]const u8 = null,
     icon: ?[]const u8 = null,
+
+    pub fn deinit(self: *Run, allocator: Allocator) void {
+        allocator.free(self.text);
+        if (self.url) |url| allocator.free(url);
+        if (self.icon) |icon| allocator.free(icon);
+    }
 };
 
 pub const Line = struct {
     runs: std.ArrayList(Run) = .empty,
+
+    pub fn deinit(self: *Line, allocator: Allocator) void {
+        for (self.runs.items) |*run| run.deinit(allocator);
+        self.runs.deinit(allocator);
+    }
 };
 
 pub const TextLayout = struct {
@@ -52,7 +63,7 @@ pub const TextLayout = struct {
 
     pub fn deinit(self: *TextLayout, allocator: Allocator) void {
         for (self.lines.items) |*line| {
-            line.runs.deinit(allocator);
+            line.deinit(allocator);
         }
         self.lines.deinit(allocator);
     }
@@ -382,8 +393,11 @@ fn parsePlainLines(allocator: Allocator, layout: *TextLayout, content: []const u
     var saw_any = false;
     while (it.next()) |line_view| {
         saw_any = true;
-        const line = try parseInlineLineAt(allocator, line_view.text(content), line_view.span.start);
+        var line = try parseInlineLineAt(allocator, line_view.text(content), line_view.span.start);
+        var line_transferred = false;
+        errdefer if (!line_transferred) line.deinit(allocator);
         try layout.lines.append(allocator, line);
+        line_transferred = true;
     }
     if (!saw_any) {
         try layout.lines.append(allocator, .{});
@@ -396,7 +410,7 @@ fn parseInlineLine(allocator: Allocator, line_text: []const u8) !Line {
 
 fn parseInlineLineAt(allocator: Allocator, line_text: []const u8, source_offset: usize) !Line {
     var line = Line{};
-    errdefer line.runs.deinit(allocator);
+    errdefer line.deinit(allocator);
     if (line_text.len == 0) return line;
 
     var state = InlineParserState{
