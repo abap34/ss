@@ -2,6 +2,7 @@ const std = @import("std");
 const utils = @import("utils");
 const highlight = utils.highlight;
 const source = utils.source;
+const error_report = utils.err;
 
 pub const Config = struct {
     path: []u8,
@@ -12,6 +13,7 @@ pub const Config = struct {
     preview: PreviewConfig = .{},
     page_guide: PageGuideConfig = .{},
     highlight: highlight.Config = .{},
+    cli: CliConfig = .{},
 
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
@@ -62,12 +64,17 @@ pub const PageGuideConfig = struct {
     overview_ruler: bool = true,
 };
 
+pub const CliConfig = struct {
+    diagnostic_level: ?error_report.DiagnosticLevel = null,
+};
+
 pub const Resolved = struct {
     entry_path: []u8,
     asset_base_dir: []u8,
     project_file: ?[]u8 = null,
     project_dir: ?[]u8 = null,
     highlight: highlight.Config = .{},
+    cli: CliConfig = .{},
 
     pub fn deinit(self: *Resolved, allocator: std.mem.Allocator) void {
         allocator.free(self.entry_path);
@@ -120,6 +127,7 @@ pub fn resolve(
         .project_file = if (config) |cfg| try allocator.dupe(u8, cfg.path) else null,
         .project_dir = if (config) |cfg| try allocator.dupe(u8, cfg.dir) else null,
         .highlight = if (config) |cfg| try cfg.highlight.clone(allocator) else try highlight.defaultConfig(allocator),
+        .cli = if (config) |cfg| cfg.cli else .{},
     };
 }
 
@@ -164,6 +172,7 @@ pub fn isConfigError(err: anyerror) bool {
         error.MissingHighlightQuery,
         error.UnknownHighlightParser,
         error.DuplicateHighlightLanguage,
+        error.InvalidDiagnosticLevel,
         => true,
         else => false,
     };
@@ -204,6 +213,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
     defer parsed_highlight.deinit(allocator);
     var highlight_config = try highlight.configWithDefaults(allocator, parsed_highlight.languages);
     errdefer highlight_config.deinit(allocator);
+    const cli_config = try parseCliConfig(text);
 
     return .{
         .path = try allocator.dupe(u8, path),
@@ -214,6 +224,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
         .preview = parsePreviewConfig(text),
         .page_guide = parsePageGuideConfig(text),
         .highlight = highlight_config,
+        .cli = cli_config,
     };
 }
 
@@ -227,6 +238,7 @@ pub fn configErrorSpan(text: []const u8, err: anyerror) ?source.ByteSpan {
         error.UnknownHighlightParser,
         error.DuplicateHighlightLanguage,
         => highlightConfigErrorSpan(text, err),
+        error.InvalidDiagnosticLevel => tomlKeySpan(text, "cli", "diagnostic_level") orelse tomlSectionSpan(text, "cli"),
         else => null,
     };
 }
@@ -279,6 +291,12 @@ fn parsePageGuideConfig(text: []const u8) PageGuideConfig {
         .gutter_icon = parseBool(text, "editor.page_guide", "gutter_icon", true),
         .overview_ruler = parseBool(text, "editor.page_guide", "overview_ruler", true),
     };
+}
+
+fn parseCliConfig(text: []const u8) !CliConfig {
+    const value = parseString(text, "cli", "diagnostic_level") orelse return .{};
+    const level = error_report.parseDiagnosticLevel(value) orelse return error.InvalidDiagnosticLevel;
+    return .{ .diagnostic_level = level };
 }
 
 fn parsePreviewOpenMode(text: []const u8, section: []const u8, key: []const u8, default: PreviewOpenMode) PreviewOpenMode {

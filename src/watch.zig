@@ -18,6 +18,7 @@ pub const Options = struct {
     jobs: ?usize = null,
     cache_id: ?[]const u8 = null,
     interval_ms: u64 = 500,
+    quiet: bool = false,
 };
 
 pub fn run(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Options) !void {
@@ -57,7 +58,10 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 std.debug.print("watch: render requires an output path\n", .{});
                 return false;
             };
-            var progress = utils.progress.Progress.init(8);
+            var progress = if (options.quiet)
+                utils.progress.Progress.disabled(8)
+            else
+                utils.progress.Progress.init(8);
             const render_options = app.RenderOptions{
                 .jobs = options.jobs,
                 .cache_id = options.cache_id,

@@ -82,6 +82,33 @@ test "project spec: editor settings parse from ss.toml" {
     try testing.expect(!cfg.page_guide.gutter_icon);
 }
 
+test "project spec: cli diagnostic level parses from ss.toml" {
+    var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cli]
+        \\diagnostic_level = "error"
+        \\
+    );
+    defer cfg.deinit(testing.allocator);
+
+    try testing.expectEqual(utils.err.DiagnosticLevel.@"error", cfg.cli.diagnostic_level.?);
+}
+
+test "project spec: cli diagnostic level rejects unknown values" {
+    const source =
+        \\[project]
+        \\entry = "slides/main.ss"
+        \\
+        \\[cli]
+        \\diagnostic_level = "verbose"
+        \\
+    ;
+    try testing.expectError(error.InvalidDiagnosticLevel, project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml", source));
+    try expectConfigSpanText(source, error.InvalidDiagnosticLevel, "diagnostic_level = \"verbose\"");
+}
+
 test "project spec: highlight languages parse from ss.toml" {
     var cfg = try project.parseSource(testing.allocator, "/tmp/ss-project-spec/deck/ss.toml",
         \\[project]

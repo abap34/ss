@@ -102,6 +102,8 @@ const CommandOptions = struct {
     jobs: ?usize = null,
     cache_id: ?[]const u8 = null,
     diagnostics_json_path: ?[]const u8 = null,
+    diagnostic_level: ?error_report.DiagnosticLevel = null,
+    quiet: bool = false,
     interval_ms: u64 = 500,
 };
 
@@ -164,6 +166,27 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--diagnostic-level")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --diagnostic-level", .{});
+            const value = args[i + 1];
+            options.diagnostic_level = error_report.parseDiagnosticLevel(value) orelse {
+                return failUsage("invalid --diagnostic-level value: {s}", .{value});
+            };
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--warnings")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --warnings", .{});
+            const value = args[i + 1];
+            if (!std.mem.eql(u8, value, "off")) return failUsage("invalid --warnings value: {s}", .{value});
+            options.diagnostic_level = .@"error";
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--quiet")) {
+            options.quiet = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--color")) {
             if (i + 1 >= args.len) return failUsage("missing value for --color", .{});
             const value = args[i + 1];
@@ -204,6 +227,26 @@ fn parseColorMode(value: []const u8) error_report.ColorMode {
 fn setColorMode(mode: error_report.ColorMode) void {
     error_report.setColorMode(mode);
     cli_help.setColorMode(mode);
+}
+
+fn applyDiagnosticOptions(options: CommandOptions, resolved: ?*const project.Resolved) void {
+    error_report.setDiagnosticLevel(effectiveDiagnosticLevel(options, resolved));
+}
+
+fn effectiveDiagnosticLevel(options: CommandOptions, resolved: ?*const project.Resolved) error_report.DiagnosticLevel {
+    if (options.quiet) return .@"error";
+    if (options.diagnostic_level) |level| return level;
+    if (resolved) |project_resolved| {
+        if (project_resolved.cli.diagnostic_level) |level| return level;
+    }
+    return .warning;
+}
+
+fn commandProgress(total: usize, options: CommandOptions) utils.progress.Progress {
+    return if (options.quiet)
+        utils.progress.Progress.disabled(total)
+    else
+        utils.progress.Progress.init(total);
 }
 
 fn applyColorArgs(args: []const []const u8) !void {
@@ -686,6 +729,7 @@ fn runWatchCommand(
         return err;
     };
     defer resolved.deinit(allocator);
+    applyDiagnosticOptions(options, &resolved);
     try runResolvedWatch(io, allocator, mode, options, &resolved);
 }
 
@@ -716,6 +760,7 @@ fn waitForWatchProject(
         };
         defer resolved.deinit(allocator);
         std.debug.print("watch: ss.toml is valid\n", .{});
+        applyDiagnosticOptions(options, &resolved);
         try runResolvedWatch(io, allocator, mode, options, &resolved);
         return;
     }
@@ -748,6 +793,7 @@ fn runResolvedWatch(
         .jobs = options.jobs,
         .cache_id = options.cache_id,
         .interval_ms = options.interval_ms,
+        .quiet = options.quiet,
     });
 }
 
@@ -773,11 +819,13 @@ fn runDebugCommand(
 
     if (std.mem.eql(u8, topic, "schedule")) {
         const options = try parseCommandOptions(args[1..]);
+        applyDiagnosticOptions(options, null);
         const output_path = options.output_path orelse return failUsage("missing --output for ss debug schedule", .{});
         try validateOutputParentOrCliError(io, output_path);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
-        var progress = utils.progress.Progress.init(5);
+        applyDiagnosticOptions(options, &resolved);
+        var progress = commandProgress(5, options);
         try app.writeScheduleTraceJson(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
@@ -790,13 +838,15 @@ fn runDebugCommand(
         if (args.len < 2) return failUsage("missing debug layout topic", .{});
         const layout_topic = args[1];
         const options = try parseCommandOptions(args[2..]);
+        applyDiagnosticOptions(options, null);
         const output_path = options.output_path orelse return failUsage("missing --output for ss debug layout {s}", .{layout_topic});
         try validateOutputParentOrCliError(io, output_path);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
+        applyDiagnosticOptions(options, &resolved);
 
         if (std.mem.eql(u8, layout_topic, "trace")) {
-            var progress = utils.progress.Progress.init(6);
+            var progress = commandProgress(6, options);
             try app.writeLayoutTraceJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
@@ -805,7 +855,7 @@ fn runDebugCommand(
             return;
         }
         if (std.mem.eql(u8, layout_topic, "conflicts")) {
-            var progress = utils.progress.Progress.init(8);
+            var progress = commandProgress(8, options);
             try app.writeLayoutConflictReportFile(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
@@ -960,9 +1010,11 @@ fn run(init: std.process.Init) !void {
             return;
         }
         const options = try parseCommandOptions(args[2..]);
+        applyDiagnosticOptions(options, null);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
-        var progress = utils.progress.Progress.init(6);
+        applyDiagnosticOptions(options, &resolved);
+        var progress = commandProgress(6, options);
         try app.checkFile(io, allocator, .{
             .input_path = resolved.entry_path,
             .asset_base_dir = resolved.asset_base_dir,
@@ -977,18 +1029,20 @@ fn run(init: std.process.Init) !void {
             return;
         }
         const options = try parseCommandOptions(args[2..]);
+        applyDiagnosticOptions(options, null);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
+        applyDiagnosticOptions(options, &resolved);
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
-            var progress = utils.progress.Progress.init(7);
+            var progress = commandProgress(7, options);
             try app.writeIrJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,
             }, output_path, &progress);
         } else {
-            var progress = utils.progress.Progress.init(7);
+            var progress = commandProgress(7, options);
             try app.printIrJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
@@ -1004,12 +1058,14 @@ fn run(init: std.process.Init) !void {
             return;
         }
         const options = try parseCommandOptions(args[2..]);
+        applyDiagnosticOptions(options, null);
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
+        applyDiagnosticOptions(options, &resolved);
         const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
         try validateOutputParentOrCliError(io, output_path);
         if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
-        var progress = utils.progress.Progress.init(8);
+        var progress = commandProgress(8, options);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
             .cache_id = options.cache_id,
@@ -1080,6 +1136,7 @@ fn run(init: std.process.Init) !void {
             return failUsage("unknown watch mode: {s}", .{args[2]});
         };
         const options = try parseCommandOptions(args[3..]);
+        applyDiagnosticOptions(options, null);
         try runWatchCommand(io, allocator, mode, options);
         return;
     }

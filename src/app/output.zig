@@ -35,7 +35,7 @@ pub fn writeDiagnosticsJsonIfRequested(
     diagnostics_json_path: ?[]const u8,
 ) !void {
     const path = diagnostics_json_path orelse return;
-    const data = try error_report.irRenderDiagnosticsJson(allocator, ir.projectPath(), ir.projectSource(), ir);
+    const data = try error_report.irDiagnosticsJson(allocator, ir.projectPath(), ir.projectSource(), ir, .{});
     defer allocator.free(data);
     try utils.fs.writeFile(io, path, data);
 }
