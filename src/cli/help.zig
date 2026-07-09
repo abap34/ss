@@ -51,7 +51,7 @@ pub fn general(output: Output) void {
         \\  {s}ss cache <target>{s}       Manage caches
         \\  {s}ss lsp{s}                  Run language server
         \\  {s}ss version{s}              Show version details
-        \\  {s}ss completion <shell>{s}   Write shell completion script
+        \\  {s}ss completion <shell>{s}   Install shell completion
         \\
     , .{
         s.heading, s.reset,
@@ -136,20 +136,23 @@ pub fn command(output: Output, name: []const u8) bool {
     return false;
 }
 
-pub fn completion(shell: []const u8) bool {
+pub fn completionScript(shell: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, shell, "bash")) {
-        writeAll(.stdout, bash_completion);
-        return true;
+        return bash_completion;
     }
     if (std.mem.eql(u8, shell, "zsh")) {
-        writeAll(.stdout, zsh_completion);
-        return true;
+        return zsh_completion;
     }
     if (std.mem.eql(u8, shell, "fish")) {
-        writeAll(.stdout, fish_completion);
-        return true;
+        return fish_completion;
     }
-    return false;
+    return null;
+}
+
+pub fn completion(shell: []const u8) bool {
+    const script = completionScript(shell) orelse return false;
+    writeAll(.stdout, script);
+    return true;
 }
 
 fn help(output: Output) void {
@@ -503,14 +506,18 @@ fn completionHelp(output: Output) void {
     outputPrint(output,
         \\{s}Usage:{s}
         \\  {s}ss completion bash|zsh|fish{s}
+        \\  {s}ss completion bash|zsh|fish --yes{s}
+        \\  {s}ss completion bash|zsh|fish --print{s}
         \\
         \\{s}Examples:{s}
-        \\  {s}ss completion bash > ss.bash{s}
-        \\  {s}ss completion zsh > _ss{s}
-        \\  {s}ss completion fish > ss.fish{s}
+        \\  {s}ss completion zsh{s}
+        \\  {s}ss completion fish --yes{s}
+        \\  {s}ss completion bash --print{s}
         \\
     , .{
         s.heading, s.reset,
+        s.command, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
         s.command, s.reset,
@@ -652,7 +659,7 @@ const bash_completion =
     \\      fi
     \\      ;;
     \\    completion)
-    \\      COMPREPLY=( $(compgen -W "bash zsh fish help --help -h" -- "$cur") )
+    \\      COMPREPLY=( $(compgen -W "bash zsh fish help --yes --print --help -h" -- "$cur") )
     \\      ;;
     \\    help)
     \\      COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -679,7 +686,7 @@ const zsh_completion =
     \\    'cache:Manage caches'
     \\    'lsp:Run language server'
     \\    'version:Show version details'
-    \\    'completion:Write shell completion script'
+    \\    'completion:Install shell completion'
     \\    'help:Show help'
     \\  )
     \\
@@ -716,7 +723,7 @@ const zsh_completion =
     \\      _arguments '2:target:(project tree-sitter help)' '3:command:(clear prune stats help)' $common_opts
     \\      ;;
     \\    completion)
-    \\      _arguments '2:shell:(bash zsh fish help)' $common_opts
+    \\      _arguments '2:shell:(bash zsh fish help)' '--yes[install without prompting]' '--print[write script to stdout]' $common_opts
     \\      ;;
     \\    help)
     \\      _describe 'command' commands
@@ -741,7 +748,7 @@ const fish_completion =
     \\complete -c ss -n '__fish_use_subcommand' -a cache -d 'Manage caches'
     \\complete -c ss -n '__fish_use_subcommand' -a lsp -d 'Run language server'
     \\complete -c ss -n '__fish_use_subcommand' -a version -d 'Show version details'
-    \\complete -c ss -n '__fish_use_subcommand' -a completion -d 'Write shell completion script'
+    \\complete -c ss -n '__fish_use_subcommand' -a completion -d 'Install shell completion'
     \\complete -c ss -n '__fish_use_subcommand' -a help -d 'Show help'
     \\
     \\complete -c ss -s h -l help -d 'Show help'
@@ -762,6 +769,8 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from render' -l diagnostics-json -r -d 'Diagnostics JSON path'
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -l interval-ms -r -d 'Poll interval'
     \\complete -c ss -n '__fish_seen_subcommand_from doctor' -l strict -d 'Fail on issues'
+    \\complete -c ss -n '__fish_seen_subcommand_from completion' -l yes -d 'Install without prompting'
+    \\complete -c ss -n '__fish_seen_subcommand_from completion' -l print -d 'Write script to stdout'
     \\
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -a 'check render help' -d 'Watch mode'
     \\complete -c ss -n '__fish_seen_subcommand_from debug' -a 'schedule layout help' -d 'Debug topic'
