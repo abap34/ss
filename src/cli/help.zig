@@ -242,6 +242,9 @@ fn check(output: Output) void {
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
         \\  {s}--color auto|always|never{s}
+        \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
+        \\  {s}--warnings off{s}          Hide warning diagnostics
+        \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
         \\{s}Examples:{s}
         \\  {s}ss check slide.ss{s}
@@ -252,6 +255,9 @@ fn check(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -274,13 +280,11 @@ fn render(output: Output) void {
         \\  {s}--output FILE{s}           PDF output path
         \\  {s}--jobs N{s}                Parallel render jobs
         \\  {s}--cache-id ID{s}           Stable cache identity for temporary inputs
-        \\  {s}--diagnostics-json FILE{s} Write render diagnostics JSON
+        \\  {s}--diagnostics-json FILE{s} Write diagnostics JSON
         \\  {s}--color auto|always|never{s}
-        \\
-        \\{s}Examples:{s}
-        \\  {s}ss render slide.ss{s}
-        \\  {s}ss render slide.ss deck.pdf{s}
-        \\  {s}ss render --project slides --output deck.pdf{s}
+        \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
+        \\  {s}--warnings off{s}          Hide warning diagnostics
+        \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
     , .{
         s.heading, s.reset,
@@ -294,6 +298,17 @@ fn render(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+    });
+    outputPrint(output,
+        \\{s}Examples:{s}
+        \\  {s}ss render slide.ss{s}
+        \\  {s}ss render slide.ss deck.pdf{s}
+        \\  {s}ss render --project slides --output deck.pdf{s}
+        \\
+    , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -313,6 +328,9 @@ fn dump(output: Output) void {
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
         \\  {s}--output FILE{s}           JSON output path
         \\  {s}--color auto|always|never{s}
+        \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
+        \\  {s}--warnings off{s}          Hide warning diagnostics
+        \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
         \\{s}Examples:{s}
         \\  {s}ss dump slide.ss{s}
@@ -324,6 +342,9 @@ fn dump(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -349,11 +370,9 @@ fn watch(output: Output) void {
         \\  {s}--interval-ms N{s}         Poll interval
         \\  {s}--jobs N{s}                Parallel render jobs
         \\  {s}--color auto|always|never{s}
-        \\
-        \\{s}Examples:{s}
-        \\  {s}ss watch check slide.ss{s}
-        \\  {s}ss watch render slide.ss deck.pdf{s}
-        \\  {s}ss watch render --project slides --output deck.pdf{s}
+        \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
+        \\  {s}--warnings off{s}          Hide warning diagnostics
+        \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
     , .{
         s.heading, s.reset,
@@ -366,6 +385,17 @@ fn watch(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+    });
+    outputPrint(output,
+        \\{s}Examples:{s}
+        \\  {s}ss watch check slide.ss{s}
+        \\  {s}ss watch render slide.ss deck.pdf{s}
+        \\  {s}ss watch render --project slides --output deck.pdf{s}
+        \\
+    , .{
         s.heading, s.reset,
         s.command, s.reset,
         s.command, s.reset,
@@ -386,6 +416,9 @@ fn debug(output: Output) void {
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
         \\  {s}--output FILE{s}           Required JSON output path
         \\  {s}--color auto|always|never{s}
+        \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
+        \\  {s}--warnings off{s}          Hide warning diagnostics
+        \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
         \\{s}Examples:{s}
         \\  {s}ss debug schedule slide.ss --output schedule.json{s}
@@ -397,6 +430,9 @@ fn debug(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
+        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -545,8 +581,9 @@ const bash_completion =
     \\
     \\  local commands="init doctor check render dump watch debug cache lsp version completion help"
     \\  local common_opts="help --help -h"
-    \\  local project_opts="--project --asset-base-dir --color"
-    \\  local render_opts="--project --asset-base-dir --output --jobs --cache-id --diagnostics-json --color"
+    \\  local diagnostic_opts="--diagnostic-level --warnings --quiet"
+    \\  local project_opts="--project --asset-base-dir --color $diagnostic_opts"
+    \\  local render_opts="--project --asset-base-dir --output --jobs --cache-id --diagnostics-json --color $diagnostic_opts"
     \\
     \\  case "$prev" in
     \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry)
@@ -559,6 +596,14 @@ const bash_completion =
     \\      ;;
     \\    --color)
     \\      COMPREPLY=( $(compgen -W "auto always never" -- "$cur") )
+    \\      return 0
+    \\      ;;
+    \\    --diagnostic-level)
+    \\      COMPREPLY=( $(compgen -W "note warning error off" -- "$cur") )
+    \\      return 0
+    \\      ;;
+    \\    --warnings)
+    \\      COMPREPLY=( $(compgen -W "off" -- "$cur") )
     \\      return 0
     \\      ;;
     \\  esac
@@ -640,7 +685,7 @@ const zsh_completion =
     \\
     \\  local -a common_opts project_opts render_opts
     \\  common_opts=('help[show command help]' '--help[show command help]' '-h[show command help]')
-    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--color[color mode]:(auto always never)')
+    \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]')
     \\  render_opts=($project_opts '--output[output path]:file:_files' '--jobs[parallel render jobs]:jobs:' '--cache-id[stable cache identity]:id:' '--diagnostics-json[diagnostics JSON path]:file:_files')
     \\
     \\  if (( CURRENT == 2 )); then
@@ -708,6 +753,9 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render doctor watch debug' -l project -r -d 'Load entry and asset base from ss.toml'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render doctor watch debug' -l asset-base-dir -r -d 'Resolve relative assets from DIR'
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render doctor watch debug' -l color -r -a 'auto always never' -d 'Color mode'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l diagnostic-level -r -a 'note warning error off' -d 'Diagnostic display level'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l warnings -r -a 'off' -d 'Warning display'
+    \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l quiet -d 'Hide progress and warning diagnostics'
     \\complete -c ss -n '__fish_seen_subcommand_from dump render watch debug' -l output -r -d 'Output path'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l jobs -r -d 'Parallel render jobs'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l cache-id -r -d 'Stable cache identity'

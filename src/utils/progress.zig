@@ -5,6 +5,7 @@ pub const Progress = struct {
     current: usize = 0,
     started_at_ns: i128,
     last_step_at_ns: i128,
+    enabled: bool = true,
     status_active: bool = false,
     active_label: ?[]const u8 = null,
 
@@ -17,7 +18,14 @@ pub const Progress = struct {
         };
     }
 
+    pub fn disabled(total: usize) Progress {
+        var progress = init(total);
+        progress.enabled = false;
+        return progress;
+    }
+
     pub fn step(self: *Progress, label: []const u8) void {
+        if (!self.enabled) return;
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
         const total_elapsed_ns = now - self.started_at_ns;
@@ -40,6 +48,7 @@ pub const Progress = struct {
     }
 
     pub fn begin(self: *Progress, label: []const u8) void {
+        if (!self.enabled) return;
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
         const total_elapsed_ns = now - self.started_at_ns;
@@ -59,6 +68,7 @@ pub const Progress = struct {
     }
 
     pub fn detail(self: *Progress, label: []const u8, detail_current: usize, detail_total: usize) void {
+        if (!self.enabled) return;
         const now = monotonicNowNs();
         const stage_elapsed_ns = now - self.last_step_at_ns;
         const total_elapsed_ns = now - self.started_at_ns;
@@ -77,6 +87,7 @@ pub const Progress = struct {
     }
 
     pub fn endStatusLine(self: *Progress) void {
+        if (!self.enabled) return;
         if (!self.status_active) return;
         self.status_active = false;
         self.active_label = null;

@@ -8,13 +8,43 @@ pub const Severity = enum {
     @"error",
 };
 
+pub const DiagnosticLevel = enum {
+    note,
+    warning,
+    @"error",
+    off,
+};
+
 pub const ColorMode = enum {
     auto,
     always,
     never,
 };
 
+var diagnostic_level: DiagnosticLevel = .warning;
 var color_mode: ColorMode = .auto;
+
+pub fn parseDiagnosticLevel(value: []const u8) ?DiagnosticLevel {
+    return std.meta.stringToEnum(DiagnosticLevel, value);
+}
+
+pub fn setDiagnosticLevel(level: DiagnosticLevel) void {
+    diagnostic_level = level;
+}
+
+pub fn diagnosticLevel() DiagnosticLevel {
+    return diagnostic_level;
+}
+
+pub fn shouldPrint(severity: Severity) bool {
+    const threshold = switch (diagnostic_level) {
+        .note => severityRank(.note),
+        .warning => severityRank(.warning),
+        .@"error" => severityRank(.@"error"),
+        .off => return false,
+    };
+    return severityRank(severity) >= threshold;
+}
 
 pub fn setColorMode(mode: ColorMode) void {
     color_mode = mode;
@@ -64,6 +94,7 @@ pub fn spanFromOrigin(origin: ?[]const u8) ?source.ByteSpan {
 }
 
 pub fn print(report: SourceReport) void {
+    if (!shouldPrint(report.severity)) return;
     printSeverityPrefix(report.severity);
     const span = report.span;
     if (span) |s| {
@@ -91,10 +122,12 @@ pub fn print(report: SourceReport) void {
 }
 
 pub fn printNote(message: []const u8) void {
+    if (!shouldPrint(.note)) return;
     std.debug.print("  note: {s}\n", .{message});
 }
 
 pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?[]const u8) void {
+    if (!shouldPrint(.note)) return;
     const span = spanFromOrigin(origin) orelse return;
     const loc = source.locationAt(text, span.start);
     printDim();
@@ -148,6 +181,7 @@ fn printLabeledLocatedOrigin(
     label: []const u8,
     origin: ?[]const u8,
 ) void {
+    if (!shouldPrint(.note)) return;
     const origin_text = origin orelse return;
     const located = parseLocatedOrigin(origin_text) orelse return;
     const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
@@ -196,6 +230,7 @@ pub fn printIrDiagnostics(path: []const u8, text: []const u8, ir: anytype) void 
             continue;
         };
         defer resolved.deinit(ir.allocator);
+        if (!shouldPrint(resolved.report_severity)) continue;
         print(.{
             .path = resolved.path,
             .source = resolved.source,
@@ -387,6 +422,7 @@ pub fn printConstraintFailure(
     ir: anytype,
     err: anyerror,
 ) void {
+    if (!shouldPrint(.@"error")) return;
     if (ir.constraint_failures.items.len == 0 and ir.last_constraint_failure == null) {
         var message_buf: [128]u8 = undefined;
         print(.{
@@ -1377,6 +1413,14 @@ fn printColor(severity: Severity) void {
 fn printReset() void {
     if (!useColor()) return;
     std.debug.print("\x1b[0m", .{});
+}
+
+fn severityRank(severity: Severity) u8 {
+    return switch (severity) {
+        .note => 0,
+        .warning => 1,
+        .@"error" => 2,
+    };
 }
 
 fn useColor() bool {
