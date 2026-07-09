@@ -7,6 +7,7 @@ const project = @import("project.zig");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
 const cli_help = @import("cli/help.zig");
+const cli_completion = @import("cli/completion.zig");
 const error_report = utils.err;
 
 fn failUsage(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
@@ -119,6 +120,28 @@ const DoctorOptions = struct {
     project_path: ?[]const u8 = null,
     strict: bool = false,
 };
+
+fn parseCompletionOptions(args: []const []const u8) !cli_completion.Options {
+    var shell: ?cli_completion.Shell = null;
+    var options = cli_completion.Options{ .shell = .bash };
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--print")) {
+            options.print = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--yes") or std.mem.eql(u8, arg, "-y")) {
+            options.yes = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-")) return failUsage("unknown completion option: {s}", .{arg});
+        if (shell != null) return failUsage("unexpected completion argument: {s}", .{arg});
+        shell = cli_completion.Shell.parse(arg) orelse return failUsage("unknown completion shell: {s}", .{arg});
+    }
+    options.shell = shell orelse return failUsage("usage: ss completion bash|zsh|fish [--yes|--print]", .{});
+    return options;
+}
 
 fn parseCommandOptions(args: []const []const u8) !CommandOptions {
     var options = CommandOptions{};
@@ -1151,8 +1174,8 @@ fn run(init: std.process.Init) !void {
             _ = cli_help.command(.stdout, "completion");
             return;
         }
-        if (args.len != 3) return failUsage("usage: ss completion bash|zsh|fish", .{});
-        if (!cli_help.completion(args[2])) return failUsage("unknown completion shell: {s}", .{args[2]});
+        const options = try parseCompletionOptions(args[2..]);
+        try cli_completion.run(io, allocator, options);
         return;
     }
 
