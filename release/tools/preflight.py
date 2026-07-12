@@ -2,19 +2,14 @@
 import json
 import os
 import pathlib
-import re
 import sys
+
+from release_versions import normalize_tag, parse_release_tag, supported_version_hint
 
 
 def read_json(path: pathlib.Path):
     with path.open(encoding="utf-8") as f:
         return json.load(f)
-
-
-def normalize_tag(value: str) -> str:
-    if value.startswith("refs/tags/"):
-        value = value.removeprefix("refs/tags/")
-    return value
 
 
 def main() -> int:
@@ -25,8 +20,12 @@ def main() -> int:
         return 1
 
     tag = normalize_tag(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("GITHUB_REF_NAME", ""))
-    if re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-        tag_version = tag.removeprefix("v")
+    if tag.startswith("v"):
+        try:
+            tag_version = parse_release_tag(tag).version
+        except ValueError:
+            print(f"release tag must look like {supported_version_hint()}, got {tag}", file=sys.stderr)
+            return 1
         if tag_version != version:
             print(f"tag {tag} does not match release/VERSION {version}", file=sys.stderr)
             return 1
@@ -40,7 +39,7 @@ def main() -> int:
     ]
 
     changelog = (root / "release" / "CHANGELOG.md").read_text(encoding="utf-8")
-    if not re.search(rf"^## \[{re.escape(version)}\](?:\s|-)", changelog, re.MULTILINE):
+    if f"## [{version}]" not in changelog:
         checks.append(("release/CHANGELOG.md", "missing"))
 
     failed = False

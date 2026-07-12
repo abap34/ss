@@ -39,11 +39,8 @@ jobs:
         run: |
           set -euo pipefail
           release_tag="$RELEASE_TAG"
-          if [[ "$release_tag" != v*.*.* ]]; then
-            echo "release tag must look like v0.1.0, got $release_tag" >&2
-            exit 1
-          fi
-          version="${release_tag#v}"
+          release/tools/release_versions.py validate-tag "$release_tag"
+          version="$(release/tools/release_versions.py version "$release_tag")"
           archive="ss-${version}.tar.gz"
           commit="$(git rev-parse HEAD)"
           git archive --format=tar --prefix="ss-${version}/" "$commit" | gzip -n > "$archive"
@@ -62,19 +59,27 @@ jobs:
           echo "source_sha256=$sha256" >> "$GITHUB_OUTPUT"
 
       - name: Render Homebrew formula
+        id: formula
         run: |
+          set -euo pipefail
+          version="${{ steps.source.outputs.version }}"
+          formula_name="$(release/tools/release_versions.py homebrew-formula-name "$version")"
+          formula_path=".ss-cache/homebrew/${formula_name}.rb"
           release/tools/render-homebrew-formula.py \
-            --version "${{ steps.source.outputs.version }}" \
+            --version "$version" \
             --source-url "${{ steps.source.outputs.source_url }}" \
             --source-sha256 "${{ steps.source.outputs.source_sha256 }}" \
-            --output .ss-cache/homebrew/ss.rb
-          ruby -c .ss-cache/homebrew/ss.rb
+            --formula-name "$formula_name" \
+            --output "$formula_path"
+          ruby -c "$formula_path"
+          echo "formula_name=$formula_name" >> "$GITHUB_OUTPUT"
+          echo "formula_path=$formula_path" >> "$GITHUB_OUTPUT"
 
       - name: Upload formula artifact
         uses: actions/upload-artifact@v4
         with:
           name: homebrew-formula
-          path: .ss-cache/homebrew/ss.rb
+          path: .ss-cache/homebrew/*.rb
 
       - name: Update tap repository
         env:
@@ -91,12 +96,12 @@ jobs:
 
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" tap
           mkdir -p tap/Formula
-          cp .ss-cache/homebrew/ss.rb tap/Formula/ss.rb
+          cp "${{ steps.formula.outputs.formula_path }}" "tap/Formula/${{ steps.formula.outputs.formula_name }}.rb"
 
           cd tap
-          git add Formula/ss.rb
-          if git diff --cached --quiet -- Formula/ss.rb; then
-            echo "Formula/ss.rb is already up to date."
+          git add "Formula/${{ steps.formula.outputs.formula_name }}.rb"
+          if git diff --cached --quiet -- "Formula/${{ steps.formula.outputs.formula_name }}.rb"; then
+            echo "Formula/${{ steps.formula.outputs.formula_name }}.rb is already up to date."
             exit 0
           fi
           git commit -m "ss ${RELEASE_TAG}"
