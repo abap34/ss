@@ -19,6 +19,19 @@ release/tools/preflight.py vX.Y.Z
 release/tools/changelog-section.py vX.Y.Z
 ```
 
+Patch releases for users staying on an older release use a SemVer pre-release
+tag based on the release they stay on:
+
+```text
+vX.Y.Z-patch.N
+```
+
+For example, a patch release based on `v0.7.1` is tagged as
+`v0.7.1-patch.1`. The SemVer version stored in metadata is
+`0.7.1-patch.1`; the leading `v` is only part of the Git tag name. SemVer
+orders a pre-release below the corresponding normal release, so distribution
+uses exact tags and exact Homebrew formula names for patch releases.
+
 ## Release Checklist
 
 Before tagging, update the changelog section that becomes the GitHub Release
@@ -96,6 +109,49 @@ gh release view vX.Y.Z --repo abap34/ss
 
 Verify the GitHub Release assets, VS Code Marketplace publish, render image,
 and Homebrew tap update before considering the release complete.
+
+## Releasing a Patch From an Older Tag
+
+When a fix should be shipped to users of an older release without including the
+later release train, prepare the release from that tag and cherry-pick only the
+selected implementation commits:
+
+```sh
+release/tools/prepare-release.py \
+  --from-tag v0.7.1 \
+  --cherry-pick 1b52cb25ef9e9eee5e5b73268a12a39920dabfee \
+  v0.7.1-patch.1
+cd .ss-cache/release-worktrees/v0.7.1-patch.1
+git log --oneline v0.7.1..HEAD
+release/tools/pre-release-check.sh --release-metadata-only --base "$(git rev-parse HEAD^)" v0.7.1-patch.1
+git tag -a v0.7.1-patch.1 -m "ss v0.7.1-patch.1"
+```
+
+The expected history from the source tag to the release tag is:
+
+```text
+v0.7.1 -> selected cherry-pick commit(s) -> chore: prepare v0.7.1-patch.1 release
+```
+
+Patch releases update a versioned Homebrew formula named after the exact patch
+version. Users can install that release with:
+
+```sh
+brew tap abap34/ss
+brew install abap34/ss/ss@0.7.1-patch.1
+ss --version
+```
+
+The render image workflow publishes the exact image tag for patch releases, for
+example:
+
+```text
+ghcr.io/abap34/ss-render:v0.7.1-patch.1
+```
+
+It does not update broad image tags such as `v0` or `v0.7` for patch releases.
+The VS Code Marketplace workflow is limited to normal releases, so patch
+releases do not publish a Marketplace extension version automatically.
 
 ## CLI Distribution
 

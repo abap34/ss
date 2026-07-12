@@ -1,7 +1,8 @@
-class Ss < Formula
+class @FORMULA_CLASS@ < Formula
   desc "Slide description language and CLI"
   homepage "https://github.com/abap34/ss"
   url "@SOURCE_URL@"
+  version "@VERSION@"
   sha256 "@SOURCE_SHA256@"
   license "Apache-2.0"
 
