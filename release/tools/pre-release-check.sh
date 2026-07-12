@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 usage: release/tools/pre-release-check.sh [options] vX.Y.Z
+       release/tools/pre-release-check.sh [options] vX.Y.Z-patch.N
 
 Run the local checks that should pass before creating and pushing a release tag.
 
@@ -20,6 +21,9 @@ Environment:
   PRE_RELEASE_DOCKER_PLATFORM  Docker platform to build and run. Defaults to linux/amd64.
   PRE_RELEASE_IMAGE            Local Docker image tag. Defaults to ss-render:<tag>-local.
   PRE_RELEASE_DOCKER_TIMEOUT   Seconds to wait for Docker daemon readiness. Defaults to 180.
+
+Patch releases skip VS Code extension packaging because the Marketplace
+publication workflow is limited to normal releases.
 EOF
 }
 
@@ -183,18 +187,24 @@ cd "$root"
 if [[ -z "$tag" ]]; then
   tag="v$(tr -d '[:space:]' < release/VERSION)"
 fi
-[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "release tag must look like v0.1.0, got $tag"
+[[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-patch\.[1-9][0-9]*)?$ ]] || fail "release tag must look like v0.1.0 or v0.1.1-patch.1, got $tag"
 if [[ -n "$release_base" && "$release_metadata_only" != true ]]; then
   fail "--base requires --release-metadata-only"
 fi
 
 version="${tag#v}"
+formula_name="ss"
+patch_release=false
+if [[ "$version" =~ -patch\.[1-9][0-9]*$ ]]; then
+  formula_name="ss@$version"
+  patch_release=true
+fi
 commit="$(git rev-parse HEAD)"
 short_commit="$(git rev-parse --short HEAD)"
 cache_dir="$root/.ss-cache/pre-release-check/$tag"
 notes_path="$cache_dir/release-notes.md"
 archive_path="$cache_dir/ss-$version.tar.gz"
-formula_path="$cache_dir/ss.rb"
+formula_path="$cache_dir/${formula_name}.rb"
 vsix_path="$cache_dir/ss-language-support-$tag.vsix"
 docker_platform="${PRE_RELEASE_DOCKER_PLATFORM:-linux/amd64}"
 docker_image="${PRE_RELEASE_IMAGE:-ss-render:${tag}-local}"
@@ -283,14 +293,19 @@ step "tree-sitter grammar"
   npm test
 )
 
-step "VS Code extension"
-(
-  cd editor/vscode
-  npm ci
-  npm run compile
-  npm run package -- --out "$vsix_path" --allow-missing-repository --skip-license
-)
-test -s "$vsix_path"
+if [[ "$patch_release" == true ]]; then
+  echo
+  echo "pre-release-check: patch release; skipped VS Code extension packaging"
+else
+  step "VS Code extension"
+  (
+    cd editor/vscode
+    npm ci
+    npm run compile
+    npm run package -- --out "$vsix_path" --allow-missing-repository --skip-license
+  )
+  test -s "$vsix_path"
+fi
 
 step "source archive and Homebrew formula"
 git archive --format=tar --prefix="ss-$version/" "$commit" | gzip -n > "$archive_path"
@@ -299,6 +314,7 @@ release/tools/render-homebrew-formula.py \
   --version "$version" \
   --source-url "https://github.com/abap34/ss/releases/download/$tag/ss-$version.tar.gz" \
   --source-sha256 "$source_sha256" \
+  --formula-name "$formula_name" \
   --output "$formula_path"
 ruby -c "$formula_path"
 

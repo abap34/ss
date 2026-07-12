@@ -4,6 +4,8 @@ import pathlib
 import re
 import sys
 
+from release_versions import homebrew_formula_class, homebrew_formula_name, parse_version
+
 
 MD4C_SHA256 = "ecbd85292465df929839897e314d809b5c8b267e20c4e5e24d51a1602d16d99a"
 
@@ -21,12 +23,25 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--source-url", required=True)
     parser.add_argument("--source-sha256", required=True)
+    parser.add_argument("--formula-name", help="Homebrew formula name. Defaults to ss, or ss@<version> for patch releases.")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+
+    try:
+        parsed_version = parse_version(args.version)
+    except ValueError as err:
+        raise SystemExit(str(err))
+    formula_name = args.formula_name or homebrew_formula_name(parsed_version.version)
+    try:
+        formula_class = homebrew_formula_class(formula_name)
+    except ValueError as err:
+        raise SystemExit(str(err))
 
     root = pathlib.Path(__file__).resolve().parents[2]
     template = (root / "release" / "homebrew" / "ss.rb.in").read_text(encoding="utf-8")
     replacements = {
+        "@FORMULA_CLASS@": formula_class,
+        "@VERSION@": parsed_version.version,
         "@SOURCE_URL@": args.source_url,
         "@SOURCE_SHA256@": args.source_sha256,
         "@MD4C_COMMIT@": read_md4c_commit(root),
