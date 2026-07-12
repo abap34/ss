@@ -4,11 +4,13 @@ const json = @import("json.zig");
 pub const path = ".ss-cache/render";
 const artifacts_path = path ++ "/artifacts";
 const leases_path = path ++ "/leases";
+const prune_stamp_path = artifacts_path ++ "/.prune-stamp";
 
 const cache_size_kib: u64 = 1024;
 const cache_size_mib: u64 = cache_size_kib * 1024;
 const cache_size_gib: u64 = cache_size_mib * 1024;
 const default_cache_budget: u64 = 512 * cache_size_mib;
+const default_prune_interval_ns: i128 = 5 * 60 * std.time.ns_per_s;
 
 pub const Stats = struct {
     files: usize = 0,
@@ -60,7 +62,9 @@ pub fn stats(io: std.Io, allocator: std.mem.Allocator) !Stats {
 
 pub fn pruneFromEnv(io: std.Io, allocator: std.mem.Allocator) !void {
     const max_bytes = configuredMaxBytes() orelse return;
+    if (!try pruneDue(io)) return;
     try prune(io, allocator, artifacts_path, max_bytes);
+    try touchPruneStamp(io);
 }
 
 fn configuredMaxBytes() ?u64 {
@@ -85,6 +89,38 @@ fn parseByteBudget(text: []const u8) !u64 {
     if (trimmed.len == 0) return error.InvalidCacheBudget;
     const value = try std.fmt.parseUnsigned(u64, trimmed, 10);
     return std.math.mul(u64, value, multiplier) catch error.InvalidCacheBudget;
+}
+
+fn configuredPruneIntervalNs() i128 {
+    const raw = std.c.getenv("SS_CACHE_PRUNE_INTERVAL_SECONDS") orelse return default_prune_interval_ns;
+    const text = std.mem.trim(u8, std.mem.span(raw), " \t\r\n");
+    if (text.len == 0) return default_prune_interval_ns;
+    if (std.ascii.eqlIgnoreCase(text, "always")) return 0;
+    const seconds = std.fmt.parseUnsigned(u64, text, 10) catch return default_prune_interval_ns;
+    return @as(i128, @intCast(seconds)) * std.time.ns_per_s;
+}
+
+fn pruneDue(io: std.Io) !bool {
+    const interval_ns = configuredPruneIntervalNs();
+    if (interval_ns <= 0) return true;
+    const stat = std.Io.Dir.cwd().statFile(io, prune_stamp_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return true,
+        else => return err,
+    };
+    if (stat.kind != .file) return true;
+    const now: i128 = @intCast(std.Io.Timestamp.now(io, .real).nanoseconds);
+    const mtime_ns: i128 = @intCast(stat.mtime.nanoseconds);
+    if (mtime_ns > now) return false;
+    return now - mtime_ns >= interval_ns;
+}
+
+fn touchPruneStamp(io: std.Io) !void {
+    try std.Io.Dir.cwd().createDirPath(io, artifacts_path);
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = prune_stamp_path,
+        .data = "",
+        .flags = .{ .truncate = true },
+    });
 }
 
 fn prune(io: std.Io, allocator: std.mem.Allocator, root_path: []const u8, max_bytes: u64) !void {

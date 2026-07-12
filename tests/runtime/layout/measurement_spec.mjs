@@ -378,7 +378,7 @@ end
     const result = await spawnCollect(ssBin, ["render", "slide.ss", outputPath, "--cache-id", "pdf-no-shrink"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code === 0, `ss render slide.ss ${outputPath} failed with ${result.code}\n${output}`);
-    assert(output.includes("ContentOverflow"), `fixed asset frame should warn instead of shrinking content:\n${output}`);
+    assert(output.includes("FrameTooSmall"), `fixed asset frame should warn instead of shrinking content:\n${output}`);
     const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "rendered");
     assert(rendered.width > 150, `fixed frame should not shrink rendered pdf width, got ${geometrySummary(rendered)}`);
     assert(rendered.height > 75, `fixed frame should not shrink rendered pdf height, got ${geometrySummary(rendered)}`);

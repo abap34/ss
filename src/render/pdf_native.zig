@@ -115,8 +115,8 @@ const NativePdfError = error{
 const raster_cache_scale: f32 = 3.0;
 pub const page_pdf_cache_version = "ss-native-page-pdf-v29";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
-pub const native_artifact_cache_version = "ss-native-artifacts-v2";
-const layout_measurement_cache_version = "ss-native-layout-measure-v4";
+pub const native_artifact_cache_version = "ss-native-artifacts-v3";
+const layout_measurement_cache_version = "ss-native-layout-measure-v7";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -207,6 +207,17 @@ const AtomPaint = struct {
     line_height: f32,
     emoji_spacing: f32,
     inline_math_spacing: f32,
+};
+
+const AtomPosition = struct {
+    index: usize,
+    offset: f32,
+};
+
+const AtomVisualLine = struct {
+    start: usize,
+    end: usize,
+    width: f32,
 };
 
 const MathKind = enum { inline_math, display, block, raw_block };
@@ -562,7 +573,8 @@ pub const LayoutMeasurementScope = struct {
     measurement_cache_path: []const u8,
     pdf_path: []const u8,
     ctx: DrawContext,
-    prepared_pages: ?*const core.page_unit.PreparedPages = null,
+    prepared_objects: std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit),
+    cache_mutex: std.Io.Mutex = std.Io.Mutex.init,
     measure_mutex: std.Io.Mutex = std.Io.Mutex.init,
     persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
     run_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
@@ -612,6 +624,9 @@ pub const LayoutMeasurementScope = struct {
         errdefer persistent_measurements.deinit();
         try readPersistedMeasurements(allocator, io, measurement_cache_path, &persistent_measurements);
 
+        var prepared_objects = try buildPreparedObjectLookup(allocator, pages);
+        errdefer prepared_objects.deinit();
+
         return .{
             .allocator = allocator,
             .io = io,
@@ -627,7 +642,7 @@ pub const LayoutMeasurementScope = struct {
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
             },
-            .prepared_pages = pages,
+            .prepared_objects = prepared_objects,
             .persistent_measurements = persistent_measurements,
             .run_measurements = std.AutoHashMap(u64, core.LayoutMeasurement).init(allocator),
         };
@@ -635,6 +650,7 @@ pub const LayoutMeasurementScope = struct {
 
     pub fn deinit(self: *LayoutMeasurementScope) void {
         self.flushMeasurementCache() catch {};
+        self.prepared_objects.deinit();
         self.persistent_measurements.deinit();
         self.run_measurements.deinit();
         c.ss_pdf_destroy(self.ctx.pdf);
@@ -668,21 +684,51 @@ pub const LayoutMeasurementScope = struct {
         const profile_total = utils.measure_profile.start();
         defer utils.measure_profile.recordLayoutMeasurementTotal(profile_total);
 
+        if (node.kind != .object) return null;
+
+        const profile_render_op = utils.measure_profile.start();
+        var op = try self.renderOpForNode(ir.allocator, ir, node, width, mode);
+        utils.measure_profile.recordLayoutMeasurementRenderOp(profile_render_op);
+        defer op.deinit(ir.allocator);
+
+        const profile_cache_key = utils.measure_profile.start();
+        var key_ctx = self.ctx;
+        key_ctx.allocator = ir.allocator;
+        const cache_key = try layoutMeasurementCacheKey(&key_ctx, &op, width, mode);
+        utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
+
+        if (try self.cachedMeasurement(cache_key, true)) |cached| return cached;
+
         const profile_lock = utils.measure_profile.start();
         self.measure_mutex.lockUncancelable(self.io);
         utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
         defer self.measure_mutex.unlock(self.io);
 
-        if (node.kind != .object) return null;
+        if (try self.cachedMeasurement(cache_key, false)) |cached| return cached;
 
-        const profile_render_op = utils.measure_profile.start();
-        var op = try self.renderOpForNode(ir, node, width, mode);
-        utils.measure_profile.recordLayoutMeasurementRenderOp(profile_render_op);
-        defer op.deinit(self.allocator);
+        var sink = CommandFailureSink{ .allocator = ir.allocator };
+        defer sink.deinit();
+        var measurement_ctx = self.ctx;
+        measurement_ctx.allocator = ir.allocator;
+        measurement_ctx.command_failure = &sink;
+        const profile_intrinsic = utils.measure_profile.start();
+        defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(op.render.kind), profile_intrinsic);
+        var measured = measureRenderOpIntrinsic(&measurement_ctx, &op, width, mode) catch |err| {
+            try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &op, err, sink.message);
+            return err;
+        };
+        if (measured) |*value| {
+            value.cache_key = cache_key;
+            try self.storeMeasurement(cache_key, value.*);
+        }
+        return measured;
+    }
 
-        const profile_cache_key = utils.measure_profile.start();
-        const cache_key = try layoutMeasurementCacheKey(&self.ctx, &op, width, mode);
-        utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
+    fn cachedMeasurement(self: *LayoutMeasurementScope, cache_key: u64, record_miss: bool) !?core.LayoutMeasurement {
+        const profile_lock = utils.measure_profile.start();
+        self.cache_mutex.lockUncancelable(self.io);
+        utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
+        defer self.cache_mutex.unlock(self.io);
 
         const profile_memory_cache = utils.measure_profile.start();
         if (self.run_measurements.get(cache_key)) |cached| {
@@ -696,24 +742,20 @@ pub const LayoutMeasurementScope = struct {
             try self.run_measurements.put(cache_key, cached);
             return cached;
         }
-        utils.measure_profile.recordLayoutMeasurementCache(.file_miss, profile_persistent_cache);
-
-        var sink = CommandFailureSink{ .allocator = ir.allocator };
-        defer sink.deinit();
-        var measurement_ctx = self.ctx;
-        measurement_ctx.command_failure = &sink;
-        const profile_intrinsic = utils.measure_profile.start();
-        defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(op.render.kind), profile_intrinsic);
-        var measured = measureRenderOpIntrinsic(&measurement_ctx, &op, width, mode) catch |err| {
-            try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &op, err, sink.message);
-            return err;
-        };
-        if (measured) |*value| {
-            value.cache_key = cache_key;
-            try self.run_measurements.put(cache_key, value.*);
-            self.measurement_cache_dirty = true;
+        if (record_miss) {
+            utils.measure_profile.recordLayoutMeasurementCache(.file_miss, profile_persistent_cache);
         }
-        return measured;
+        return null;
+    }
+
+    fn storeMeasurement(self: *LayoutMeasurementScope, cache_key: u64, measurement: core.LayoutMeasurement) !void {
+        const profile_lock = utils.measure_profile.start();
+        self.cache_mutex.lockUncancelable(self.io);
+        utils.measure_profile.recordLayoutMeasurementLockWait(profile_lock);
+        defer self.cache_mutex.unlock(self.io);
+
+        try self.run_measurements.put(cache_key, measurement);
+        self.measurement_cache_dirty = true;
     }
 
     fn flushMeasurementCache(self: *LayoutMeasurementScope) !void {
@@ -739,17 +781,17 @@ pub const LayoutMeasurementScope = struct {
         self.measurement_cache_dirty = false;
     }
 
-    fn renderOpForNode(self: *LayoutMeasurementScope, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
+    fn renderOpForNode(self: *LayoutMeasurementScope, allocator: Allocator, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
         if (self.preparedObject(node.id)) |object| {
-            return try self.renderOpForPreparedObject(node, object, width, mode, true);
+            return try renderOpForPreparedObject(allocator, node, object, width, mode, true);
         }
-        var owned_object = try core.page_unit.prepareObject(self.allocator, ir, node);
-        defer owned_object.deinit(self.allocator);
-        return try self.renderOpForPreparedObject(node, &owned_object, width, mode, false);
+        var owned_object = try core.page_unit.prepareObject(allocator, ir, node);
+        defer owned_object.deinit(allocator);
+        return try renderOpForPreparedObject(allocator, node, &owned_object, width, mode, false);
     }
 
     fn renderOpForPreparedObject(
-        self: *LayoutMeasurementScope,
+        allocator: Allocator,
         node: *const core.Node,
         object: *const core.page_unit.ObjectUnit,
         width: f32,
@@ -763,7 +805,12 @@ pub const LayoutMeasurementScope = struct {
         return .{
             .page_id = 0,
             .node_id = node.id,
-            .frame = .{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height },
+            .frame = .{
+                .x = 0,
+                .y = 0,
+                .width = @max(width, 1),
+                .height = measurementFrameHeight(node, mode),
+            },
             .content = object.content,
             .content_provenance = object.content_provenance,
             .link_id = object.link_id,
@@ -772,7 +819,7 @@ pub const LayoutMeasurementScope = struct {
             .markdown_doc = if (use_prepared_parse) object.markdownDocument() else null,
             .text_layout = if (use_prepared_parse) object.textLayout() else null,
             .asset_deps = if (use_prepared_parse) object.asset_deps else &.{},
-            .tex_preamble = try cloneTexPreambleEntries(self.allocator, object.tex_preamble),
+            .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
             .math_kind = mathKindForNode(node),
             .origin = object.origin,
             .payload_kind = object.payload_kind,
@@ -780,15 +827,32 @@ pub const LayoutMeasurementScope = struct {
     }
 
     fn preparedObject(self: *const LayoutMeasurementScope, node_id: core.NodeId) ?*const core.page_unit.ObjectUnit {
-        const pages = self.prepared_pages orelse return null;
-        for (pages.pages) |*page| {
-            for (page.objects) |*object| {
-                if (object.node_id == node_id) return object;
-            }
-        }
-        return null;
+        return self.prepared_objects.get(node_id);
     }
 };
+
+fn measurementFrameHeight(node: *const core.Node, mode: core.LayoutMeasurementMode) f32 {
+    if (mode == .width_constrained and node.frame.height > 0) {
+        return @max(node.frame.height, 1);
+    }
+    return PageLayout.height;
+}
+
+fn buildPreparedObjectLookup(
+    allocator: Allocator,
+    maybe_pages: ?*const core.page_unit.PreparedPages,
+) !std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit) {
+    var lookup = std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit).init(allocator);
+    errdefer lookup.deinit();
+
+    const pages = maybe_pages orelse return lookup;
+    for (pages.pages) |*page| {
+        for (page.objects) |*object| {
+            try lookup.put(object.node_id, object);
+        }
+    }
+    return lookup;
+}
 
 fn readPersistedMeasurements(
     allocator: Allocator,
@@ -3120,7 +3184,7 @@ fn measureRenderOpIntrinsic(ctx: *DrawContext, op: *const RenderOp, outer_width:
         const frame_width: f32 = if (mode == .natural) 1 else @max(outer_width, 1);
         return try measureFrameIntrinsic(ctx, op, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
     }
-    const frame = Frame{ .x = 0, .y = 0, .width = @max(outer_width, 1), .height = PageLayout.height };
+    const frame = Frame{ .x = 0, .y = 0, .width = @max(outer_width, 1), .height = @max(op.frame.height, 1) };
     const content_frame = contentFrameForRender(frame, render);
     const content_measure = switch (render.kind) {
         .text => if (render.text) |text|
@@ -3132,7 +3196,7 @@ fn measureRenderOpIntrinsic(ctx: *DrawContext, op: *const RenderOp, outer_width:
             code_text.font = text.code_font;
             break :blk try measureCodeIntrinsic(ctx, op, content_frame.width, code_text);
         } else return null,
-        .vector_math => try measureVectorMathIntrinsic(ctx, op, content_frame.width),
+        .vector_math => try measureVectorMathIntrinsic(ctx, op, content_frame.width, content_frame.height),
         .vector_asset, .raster_asset => try measureAssetIntrinsic(ctx, op, content_frame.width),
         .shape, .chrome_only => unreachable,
     };
@@ -3185,6 +3249,8 @@ fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
                 if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0, op.tex_preamble)) |natural_width| {
                     measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
                 }
+            } else {
+                measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width, op.tex_preamble), 1);
             }
             break :blk measured;
         },
@@ -3206,6 +3272,8 @@ fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
                 if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text, op.tex_preamble)) |natural_width| {
                     measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
                 }
+            } else {
+                measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap, op.tex_preamble), 1);
             }
             break :blk measured;
         },
@@ -3224,10 +3292,10 @@ fn measureCodeIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
     return .{ .width = 1, .height = text.line_height };
 }
 
-fn measureVectorMathIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !core.LayoutMeasurement {
+fn measureVectorMathIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, height: f32) !core.LayoutMeasurement {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, @max(width, 1), PageLayout.height, op.content, op.render.math);
+    const fitted = fitMathBlockSize(svg.width, svg.height, @max(width, 1), @max(height, 1), op.math_kind, op.render.math);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
@@ -3557,29 +3625,52 @@ fn drawObjectChrome(pdf: *c.SsPdf, frame: Frame, render: ResolvedRender) void {
     if (render.chrome.fill != null or render.chrome.stroke != null) {
         const fill = render.chrome.fill;
         const stroke = render.chrome.stroke;
-        c.ss_pdf_fill_stroke_rounded_rect(
-            pdf,
-            frame.x,
-            topOf(frame),
-            frame.width,
-            frame.height,
-            render.chrome.radius,
-            if (fill != null) 1 else 0,
-            if (fill) |value| value.r else 0,
-            if (fill) |value| value.g else 0,
-            if (fill) |value| value.b else 0,
-            if (stroke != null) 1 else 0,
-            if (stroke) |value| value.r else 0,
-            if (stroke) |value| value.g else 0,
-            if (stroke) |value| value.b else 0,
-            render.chrome.line_width,
-        );
+        if (fill) |value| {
+            drawRoundedRect(pdf, frame, render.chrome.radius, value, null, 0);
+        }
+        if (stroke) |value| {
+            if (render.chrome.line_width > 0) {
+                const stroke_frame = insetUniformFrame(frame, render.chrome.line_width / 2.0);
+                const stroke_radius = @max(render.chrome.radius - render.chrome.line_width / 2.0, 0);
+                drawRoundedRect(pdf, stroke_frame, stroke_radius, null, value, render.chrome.line_width);
+            }
+        }
     }
 
     if (render.underline.color) |color| {
         const y = toTopY(frame.y + render.underline.offset);
         c.ss_pdf_stroke_line(pdf, frame.x, y, frame.x + frame.width, y, render.underline.width, color.r, color.g, color.b, 0, 0);
     }
+}
+
+fn drawRoundedRect(pdf: *c.SsPdf, frame: Frame, radius: f32, fill: ?Color, stroke: ?Color, line_width: f32) void {
+    c.ss_pdf_fill_stroke_rounded_rect(
+        pdf,
+        frame.x,
+        topOf(frame),
+        frame.width,
+        frame.height,
+        radius,
+        if (fill != null) 1 else 0,
+        if (fill) |value| value.r else 0,
+        if (fill) |value| value.g else 0,
+        if (fill) |value| value.b else 0,
+        if (stroke != null) 1 else 0,
+        if (stroke) |value| value.r else 0,
+        if (stroke) |value| value.g else 0,
+        if (stroke) |value| value.b else 0,
+        line_width,
+    );
+}
+
+fn insetUniformFrame(frame: Frame, inset: f32) Frame {
+    const clamped = @min(inset, @min(frame.width, frame.height) / 2.0);
+    return .{
+        .x = frame.x + clamped,
+        .y = frame.y + clamped,
+        .width = @max(frame.width - clamped * 2.0, 0),
+        .height = @max(frame.height - clamped * 2.0, 0),
+    };
 }
 
 fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPaint) !void {
@@ -3798,8 +3889,12 @@ fn markdownCodeBlockContent(allocator: Allocator, block: *const Block) ![]u8 {
 fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *const Block, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
     const table = block.table orelse return baseline_bl;
     const columns = core.markdown.tableColumnCount(table);
-    const column_width = width / @as(f32, @floatFromInt(columns));
-    var cursor_top_bl = baseline_bl + text.font_size - text.markdown_table_line_width * 0.5;
+    const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
+    const stroke_inset = border_width * 0.5;
+    const table_x = x + stroke_inset;
+    const table_width = @max(width - border_width, 1);
+    const column_width = table_width / @as(f32, @floatFromInt(columns));
+    var cursor_top_bl = baseline_bl + text.font_size - stroke_inset;
     var body_row_index: usize = 0;
 
     for (table.rows.items) |row| {
@@ -3824,7 +3919,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         if (!row.header) body_row_index += 1;
 
         for (0..columns) |column_index| {
-            const cell_x = x + @as(f32, @floatFromInt(column_index)) * column_width;
+            const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * column_width;
             const cell_frame = Frame{ .x = cell_x, .y = row_bottom, .width = column_width, .height = row_height };
             c.ss_pdf_fill_stroke_rounded_rect(
                 ctx.pdf,
@@ -3851,13 +3946,31 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
                 var line_bl = cursor_top_bl - text.markdown_table_cell_pad_y - row_top_overhang - text.font_size;
                 for (cell.lines.items) |line| {
                     const one_line = [_]Line{line};
-                    line_bl = try drawInlineLines(ctx, cell_x + text.markdown_table_cell_pad_x, line_bl, content_width, one_line[0..], cell_text, true, preamble);
+                    line_bl = try drawInlineLinesAligned(
+                        ctx,
+                        cell_x + text.markdown_table_cell_pad_x,
+                        line_bl,
+                        content_width,
+                        one_line[0..],
+                        cell_text,
+                        true,
+                        preamble,
+                        tableCellHorizontalAlign(cell.alignment),
+                    );
                 }
             }
         }
         cursor_top_bl = row_bottom;
     }
     return cursor_top_bl - text.font_size;
+}
+
+fn tableCellHorizontalAlign(alignment: core.markdown.Align) HorizontalAlign {
+    return switch (alignment) {
+        .default, .left => .left,
+        .center => .center,
+        .right => .right,
+    };
 }
 
 fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
@@ -3872,6 +3985,23 @@ fn drawInlineLines(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line
         defer freeAtoms(ctx.allocator, atoms.items);
         try layoutAtoms(ctx, line, text, preamble, &atoms);
         cursor_bl = try drawAtoms(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap);
+    }
+    if (lines.len == 0) cursor_bl -= text.line_height;
+    return cursor_bl;
+}
+
+fn drawInlineLinesAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, lines: []const Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
+    var cursor_bl = baseline_bl;
+    for (lines) |line| {
+        if (lineContainsDisplayMath(line)) {
+            cursor_bl = try drawLineWithDisplayMathAligned(ctx, x, cursor_bl, width, line, text, wrap, preamble, horizontal_align);
+            continue;
+        }
+        var atoms = std.ArrayList(Atom).empty;
+        defer atoms.deinit(ctx.allocator);
+        defer freeAtoms(ctx.allocator, atoms.items);
+        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        cursor_bl = try drawAtomsAligned(ctx, x, cursor_bl, width, atoms.items, atomPaint(text), wrap, horizontal_align);
     }
     if (lines.len == 0) cursor_bl -= text.line_height;
     return cursor_bl;
@@ -3930,6 +4060,148 @@ fn inlineLinesNaturalAdvance(ctx: *DrawContext, lines: []const Line, text: TextP
     return max_width;
 }
 
+fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Block, text: TextPaint, list_depth: usize, width: f32, preamble: []const TexPreambleEntry) anyerror!f32 {
+    var max_width: f32 = 0;
+    for (blocks) |block| {
+        const block_width = switch (block.kind) {
+            .paragraph => blk: {
+                const paragraph = block.paragraph orelse break :blk 0;
+                break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, text, width, text.wrap, preamble);
+            },
+            .code_block => try markdownCodeBlockConstrainedLogicalWidth(ctx, block, text, width),
+            .bullet_list, .ordered_list => try markdownListConstrainedLogicalWidth(ctx, block, text, list_depth, width, preamble),
+            .table => try markdownTableConstrainedLogicalWidth(ctx, block, text, width, preamble),
+        };
+        max_width = @max(max_width, block_width);
+    }
+    return max_width;
+}
+
+fn markdownListConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, list_depth: usize, width: f32, preamble: []const TexPreambleEntry) anyerror!f32 {
+    const list = block.list orelse return 0;
+    const list_inset: f32 = if (list_depth == 0) @max(text.markdown_list_inset, 0) else @max(text.markdown_list_indent, 0);
+    const item_width = @max(width - list_inset, 1);
+    var max_width: f32 = 0;
+    for (list.items.items, 0..) |item, item_index| {
+        const marker = try listMarker(ctx.allocator, block.kind, list_depth, list.start + item_index);
+        defer ctx.allocator.free(marker);
+        const marker_width = try measureText(ctx, marker, text.font, text.font_size);
+        const marker_gap = @max(@as(f32, 8.0), text.font_size * 0.35);
+        const content_width = @max(item_width - marker_width - marker_gap, 1);
+        const item_content_width = try markdownBlocksConstrainedLogicalWidth(ctx, item.blocks.items, text, list_depth + 1, content_width, preamble);
+        max_width = @max(max_width, list_inset + marker_width + marker_gap + item_content_width);
+    }
+    return max_width;
+}
+
+fn markdownCodeBlockConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, width: f32) !f32 {
+    const source_text = try markdownCodeBlockContent(ctx.allocator, block);
+    defer ctx.allocator.free(source_text);
+    const code_paint = markdownCodeBlockPaint(block, text);
+    const content_width = @max(width - text.markdown_code_pad_x * 2, 1);
+    const measured = try measureMarkdownCodeBlockContent(ctx, source_text, content_width, text, code_paint);
+    const placement = markdownCodeBlockPlacement(0, PageLayout.height * 0.5, width, measured, text);
+    return placement.frame.width;
+}
+
+fn markdownTableConstrainedLogicalWidth(ctx: *DrawContext, block: *const Block, text: TextPaint, width: f32, preamble: []const TexPreambleEntry) !f32 {
+    const table = block.table orelse return 0;
+    const columns = core.markdown.tableColumnCount(table);
+    const border_width = if (text.markdown_table_border != null and text.markdown_table_line_width > 0) text.markdown_table_line_width else 0;
+    const table_width = @max(width - border_width, 1);
+    const column_width = table_width / @as(f32, @floatFromInt(columns));
+    const content_width = @max(column_width - text.markdown_table_cell_pad_x * 2, 1);
+    var required_column_width = column_width;
+    for (table.rows.items) |row| {
+        for (row.cells.items) |cell| {
+            var cell_text = text;
+            cell_text.font = if (row.header) text.bold_font else text.font;
+            const cell_content_width = try inlineLinesConstrainedLogicalWidth(ctx, cell.lines.items, cell_text, content_width, true, preamble);
+            required_column_width = @max(required_column_width, cell_content_width + text.markdown_table_cell_pad_x * 2);
+        }
+    }
+    return required_column_width * @as(f32, @floatFromInt(columns)) + border_width;
+}
+
+fn inlineLinesConstrainedLogicalWidth(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+    var max_width: f32 = 0;
+    for (lines) |line| {
+        max_width = @max(max_width, try inlineLineConstrainedLogicalWidth(ctx, line, text, width, wrap, preamble));
+    }
+    return max_width;
+}
+
+fn inlineLineConstrainedLogicalWidth(ctx: *DrawContext, line: Line, text: TextPaint, width: f32, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+    if (!lineContainsDisplayMath(line)) {
+        var atoms = std.ArrayList(Atom).empty;
+        defer atoms.deinit(ctx.allocator);
+        defer freeAtoms(ctx.allocator, atoms.items);
+        try layoutAtoms(ctx, line, text, preamble, &atoms);
+        return atomLinesLogicalWidth(atoms.items, atomPaint(text), width, wrap, false);
+    }
+
+    const runs = line.runs.items;
+    var max_width: f32 = 0;
+    var segment_start: usize = 0;
+    var index: usize = 0;
+    while (index < runs.len) {
+        if (runs[index].kind != .display_math) {
+            index += 1;
+            continue;
+        }
+
+        if (segment_start < index) {
+            max_width = @max(max_width, try inlineRunSliceConstrainedLogicalWidth(ctx, runs[segment_start..index], text, width, wrap, preamble));
+        }
+
+        const display_start = index;
+        while (index < runs.len and runs[index].kind == .display_math) : (index += 1) {}
+        const source_text = try displayMathSource(ctx.allocator, runs[display_start..index]);
+        defer ctx.allocator.free(source_text);
+        if (source_text.len > 0) {
+            const svg = try renderMathToSvg(ctx, source_text, preamble, .display);
+            defer ctx.allocator.free(svg.path);
+            const fitted = fitDisplayMathBlockSize(svg.width, svg.height, width, text);
+            max_width = @max(max_width, fitted.width);
+        }
+        segment_start = index;
+    }
+
+    if (segment_start < runs.len) {
+        max_width = @max(max_width, try inlineRunSliceConstrainedLogicalWidth(ctx, runs[segment_start..], text, width, wrap, preamble));
+    }
+    return max_width;
+}
+
+fn inlineRunSliceConstrainedLogicalWidth(ctx: *DrawContext, runs: []const Run, text: TextPaint, width: f32, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+    var atoms = std.ArrayList(Atom).empty;
+    defer atoms.deinit(ctx.allocator);
+    defer freeAtoms(ctx.allocator, atoms.items);
+    try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
+    return atomLinesLogicalWidth(atoms.items, atomPaint(text), width, wrap, false);
+}
+
+fn atomLinesLogicalWidth(atoms: []const Atom, paint: AtomPaint, width: f32, wrap: bool, preserve_leading_space: bool) f32 {
+    var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
+    var max_width: f32 = 0;
+    var line_width: f32 = 0;
+    for (atoms, 0..) |_, index| {
+        const measured_atom = measuredWrapAtom(atoms, index, paint);
+        switch (cursor.next(measured_atom, width, wrap)) {
+            .skip => continue,
+            .break_then_draw => {
+                max_width = @max(max_width, line_width);
+                line_width = 0;
+            },
+            .draw => {},
+        }
+        const atom_right = cursor.offset + measured_atom.width;
+        cursor.advance(measured_atom.advance);
+        line_width = @max(line_width, atom_right);
+    }
+    return @max(max_width, line_width);
+}
+
 const InlineInkBlock = struct {
     top_overhang: f32,
     bottom_depth: f32,
@@ -3983,6 +4255,25 @@ fn lineContainsDisplayMath(line: Line) bool {
 }
 
 fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, preamble, .left, text.math_align);
+}
+
+fn drawLineWithDisplayMathAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, line: Line, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
+    return drawLineWithDisplayMathWithAlign(ctx, x, baseline_bl, width, line, text, wrap, preamble, horizontal_align, horizontal_align);
+}
+
+fn drawLineWithDisplayMathWithAlign(
+    ctx: *DrawContext,
+    x: f32,
+    baseline_bl: f32,
+    width: f32,
+    line: Line,
+    text: TextPaint,
+    wrap: bool,
+    preamble: []const TexPreambleEntry,
+    inline_align: HorizontalAlign,
+    display_math_align: HorizontalAlign,
+) !f32 {
     const runs = line.runs.items;
     var cursor_bl = baseline_bl;
     var segment_start: usize = 0;
@@ -3994,7 +4285,7 @@ fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f
         }
 
         if (segment_start < index) {
-            cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, preamble);
+            cursor_bl = try drawInlineRunSliceAligned(ctx, x, cursor_bl, width, runs[segment_start..index], text, wrap, preamble, inline_align);
         }
 
         const display_start = index;
@@ -4002,27 +4293,35 @@ fn drawLineWithDisplayMath(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f
         const source = try displayMathSource(ctx.allocator, runs[display_start..index]);
         defer ctx.allocator.free(source);
         if (source.len > 0) {
-            cursor_bl = try drawDisplayMathBlock(ctx, x, cursor_bl, width, source, text, preamble);
+            cursor_bl = try drawDisplayMathBlockAligned(ctx, x, cursor_bl, width, source, text, preamble, display_math_align);
         }
         segment_start = index;
     }
 
     if (segment_start < runs.len) {
-        cursor_bl = try drawInlineRunSlice(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, preamble);
+        cursor_bl = try drawInlineRunSliceAligned(ctx, x, cursor_bl, width, runs[segment_start..], text, wrap, preamble, inline_align);
     }
     return cursor_bl;
 }
 
 fn drawInlineRunSlice(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry) !f32 {
+    return drawInlineRunSliceAligned(ctx, x, baseline_bl, width, runs, text, wrap, preamble, .left);
+}
+
+fn drawInlineRunSliceAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, runs: []const Run, text: TextPaint, wrap: bool, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
     var atoms = std.ArrayList(Atom).empty;
     defer atoms.deinit(ctx.allocator);
     defer freeAtoms(ctx.allocator, atoms.items);
     try layoutRunAtoms(ctx, runs, text, preamble, &atoms);
     if (atoms.items.len == 0) return baseline_bl;
-    return try drawAtoms(ctx, x, baseline_bl, width, atoms.items, atomPaint(text), wrap);
+    return try drawAtomsAligned(ctx, x, baseline_bl, width, atoms.items, atomPaint(text), wrap, horizontal_align);
 }
 
 fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, preamble: []const TexPreambleEntry) !f32 {
+    return drawDisplayMathBlockAligned(ctx, x, baseline_bl, width, source, text, preamble, text.math_align);
+}
+
+fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, source: []const u8, text: TextPaint, preamble: []const TexPreambleEntry, horizontal_align: HorizontalAlign) !f32 {
     const svg = try renderMathToSvg(ctx, source, preamble, .display);
     defer ctx.allocator.free(svg.path);
 
@@ -4032,7 +4331,7 @@ fn drawDisplayMathBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32,
     const block_top = baseline_bl + text.font_size;
     const block_bottom = block_top - block_height;
     const draw_frame = Frame{
-        .x = alignedX(x, width, fitted.width, text.math_align),
+        .x = alignedX(x, width, fitted.width, horizontal_align),
         .y = block_bottom + vertical_pad,
         .width = fitted.width,
         .height = fitted.height,
@@ -4132,7 +4431,11 @@ fn atomPaint(text: TextPaint) AtomPaint {
 }
 
 fn drawAtoms(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, paint: AtomPaint, wrap: bool) !f32 {
-    return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false);
+    return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false, .left);
+}
+
+fn drawAtomsAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, atoms: []const Atom, paint: AtomPaint, wrap: bool, horizontal_align: HorizontalAlign) !f32 {
+    return drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms, paint, wrap, false, horizontal_align);
 }
 
 fn drawAtomsWithOptions(
@@ -4144,48 +4447,81 @@ fn drawAtomsWithOptions(
     paint: AtomPaint,
     wrap: bool,
     preserve_leading_space: bool,
+    horizontal_align: HorizontalAlign,
 ) !f32 {
-    var cursor_bl = baseline_bl;
+    var positions = std.ArrayList(AtomPosition).empty;
+    defer positions.deinit(ctx.allocator);
+    var lines = std.ArrayList(AtomVisualLine).empty;
+    defer lines.deinit(ctx.allocator);
+
     var cursor = wrap_layout.Cursor{ .preserve_leading_space = preserve_leading_space };
-    for (atoms, 0..) |atom, index| {
+    var line_start: usize = 0;
+    var line_width: f32 = 0;
+    for (atoms, 0..) |_, index| {
         const measured_atom = measuredWrapAtom(atoms, index, paint);
         switch (cursor.next(measured_atom, width, wrap)) {
             .skip => continue,
-            .break_then_draw => cursor_bl -= paint.line_height,
+            .break_then_draw => {
+                try appendAtomVisualLine(ctx.allocator, &lines, line_start, positions.items.len, line_width);
+                line_start = positions.items.len;
+                line_width = 0;
+            },
             .draw => {},
         }
-        const cursor_x = x + cursor.offset;
-        switch (atom.kind) {
-            .text => {
-                const y_top = baselineTop(cursor_bl, paint.font_size);
-                if (atom.link_url) |url| {
-                    try drawLinkedRawText(ctx, cursor_x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
-                } else {
-                    try drawAtomRawText(ctx, cursor_x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
-                }
-                if (atom.strikethrough) {
-                    drawStrikethrough(ctx, cursor_x, y_top, atom, paint);
-                }
-                if (atom.underline) {
-                    drawUnderline(ctx, cursor_x, y_top, atom, paint);
-                }
-                cursor.advance(measured_atom.advance);
-            },
-            .math => {
-                const path = atom.svg_path orelse continue;
-                const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
-                try drawSvgFrame(ctx, frame, path);
-                cursor.advance(measured_atom.advance);
-            },
-            .icon => {
-                const path = atom.svg_path orelse continue;
-                const frame = Frame{ .x = cursor_x, .y = cursor_bl - atom.height * 0.2, .width = atom.width, .height = atom.height };
-                try drawSvgFrameTinted(ctx, frame, path, atom.color);
-                cursor.advance(measured_atom.advance);
-            },
+        const atom_right = cursor.offset + measured_atom.width;
+        try positions.append(ctx.allocator, .{ .index = index, .offset = cursor.offset });
+        cursor.advance(measured_atom.advance);
+        line_width = @max(line_width, atom_right);
+    }
+    try appendAtomVisualLine(ctx.allocator, &lines, line_start, positions.items.len, line_width);
+
+    if (lines.items.len == 0) return baseline_bl - paint.line_height;
+    for (lines.items, 0..) |line, line_index| {
+        const line_x = alignedX(x, width, line.width, horizontal_align);
+        const line_bl = baseline_bl - @as(f32, @floatFromInt(line_index)) * paint.line_height;
+        for (positions.items[line.start..line.end]) |position| {
+            try drawPositionedAtom(ctx, atoms[position.index], line_x + position.offset, line_bl, paint);
         }
     }
-    return cursor_bl - paint.line_height;
+    return baseline_bl - @as(f32, @floatFromInt(lines.items.len)) * paint.line_height;
+}
+
+fn appendAtomVisualLine(allocator: Allocator, lines: *std.ArrayList(AtomVisualLine), start: usize, end: usize, width: f32) !void {
+    if (start == end) return;
+    try lines.append(allocator, .{
+        .start = start,
+        .end = end,
+        .width = width,
+    });
+}
+
+fn drawPositionedAtom(ctx: *DrawContext, atom: Atom, x: f32, baseline_bl: f32, paint: AtomPaint) !void {
+    switch (atom.kind) {
+        .text => {
+            const y_top = baselineTop(baseline_bl, paint.font_size);
+            if (atom.link_url) |url| {
+                try drawLinkedRawText(ctx, x, y_top, @max(atom.width, 1), paint.line_height, atom, paint, url);
+            } else {
+                try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
+            }
+            if (atom.strikethrough) {
+                drawStrikethrough(ctx, x, y_top, atom, paint);
+            }
+            if (atom.underline) {
+                drawUnderline(ctx, x, y_top, atom, paint);
+            }
+        },
+        .math => {
+            const path = atom.svg_path orelse return;
+            const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
+            try drawSvgFrame(ctx, frame, path);
+        },
+        .icon => {
+            const path = atom.svg_path orelse return;
+            const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.2, .width = atom.width, .height = atom.height };
+            try drawSvgFrameTinted(ctx, frame, path, atom.color);
+        },
+    }
 }
 
 fn measuredWrapAtom(atoms: []const Atom, index: usize, paint: AtomPaint) wrap_layout.Atom {
@@ -4274,7 +4610,7 @@ fn drawPlainTextAtTopWithOptions(
         .inline_math_spacing = 0,
     };
     const baseline_bl = PageLayout.height - (y_top + font_size);
-    _ = try drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms.items, paint, wrap, preserve_leading_space);
+    _ = try drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms.items, paint, wrap, preserve_leading_space, .left);
     return atomLineAdvance(atoms.items, paint);
 }
 
@@ -4867,7 +5203,7 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.content, math);
+    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.math_kind, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
         .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
@@ -5370,7 +5706,7 @@ fn scaledAssetSize(size: Size, asset: ?core.render_policy.AssetPaint) Size {
     };
 }
 
-fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, source_text: []const u8, math: ?MathPaint) Size {
+fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, kind: MathKind, math: ?MathPaint) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
     const paint = math orelse MathPaint{
         .block_line_height = 22,
@@ -5379,27 +5715,18 @@ fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_h
         .scale = 1,
         .horizontal_align = .center,
     };
-    const target_height = @max(
-        paint.block_min_height,
-        @as(f32, @floatFromInt(mathVisualLineCount(source_text))) * paint.block_line_height + paint.block_vertical_padding,
-    ) * paint.scale;
-    const scale = @min(@min(max_width / source_width, max_height / source_height), target_height / source_height);
-    return .{ .width = source_width * scale, .height = source_height * scale };
-}
-
-fn mathVisualLineCount(source_text: []const u8) usize {
-    var count: usize = 0;
-    var lines = std.mem.splitScalar(u8, source_text, '\n');
-    while (lines.next()) |line| {
-        if (std.mem.trim(u8, line, " \t\r\n").len == 0) continue;
-        count += 1;
-        var cursor: usize = 0;
-        while (std.mem.indexOfPos(u8, line, cursor, "\\\\")) |break_index| {
-            count += 1;
-            cursor = break_index + 2;
-        }
+    if (kind == .raw_block) {
+        const target_width = @max(max_width * paint.scale, 1);
+        const scale = @min(target_width / source_width, max_height / source_height);
+        return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
     }
-    return @max(count, 1);
+    _ = paint.block_line_height;
+    _ = paint.block_vertical_padding;
+    const styled_height = @max(source_height * paint.scale, paint.block_min_height * paint.scale);
+    const style_scale = styled_height / source_height;
+    const styled_width = source_width * style_scale;
+    const fit_scale = @min(@as(f32, 1.0), @min(max_width / styled_width, max_height / styled_height));
+    return .{ .width = styled_width * fit_scale, .height = styled_height * fit_scale };
 }
 
 fn alignedX(x: f32, width: f32, content_width: f32, horizontal_align: HorizontalAlign) f32 {
