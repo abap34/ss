@@ -116,7 +116,7 @@ const raster_cache_scale: f32 = 3.0;
 pub const page_pdf_cache_version = "ss-native-page-pdf-v29";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
 pub const native_artifact_cache_version = "ss-native-artifacts-v3";
-const layout_measurement_cache_version = "ss-native-layout-measure-v8";
+const layout_measurement_cache_version = "ss-native-layout-measure-v10";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -1743,6 +1743,7 @@ fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
     hashBool(hasher, maybe != null);
     if (maybe) |math| {
         hashF32(hasher, math.min_height);
+        hashF32(hasher, math.raw_tex_width_ratio);
         hashF32(hasher, math.scale);
         hashHorizontalAlign(hasher, math.horizontal_align);
     }
@@ -5716,14 +5717,15 @@ fn fitVectorMathSize(source_width: f32, source_height: f32, max_width: f32, max_
 fn defaultMathPaint() MathPaint {
     return .{
         .min_height = 30,
+        .raw_tex_width_ratio = 0.96,
         .scale = 1,
         .horizontal_align = .center,
     };
 }
 
 fn fitRawTexObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: MathPaint) Size {
-    // Raw TeX is commonly used as a slide-level diagram or algorithm box, so it fills the available content width.
-    const target_width = @max(max_width * paint.scale, 1);
+    // Raw TeX is commonly used as a slide-level diagram or algorithm box, so it uses most of the available content width.
+    const target_width = @max(max_width * paint.raw_tex_width_ratio * paint.scale, 1);
     const scale = @min(target_width / source_width, max_height / source_height);
     return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
 }

@@ -92,6 +92,7 @@ pub const TextPaint = struct {
 
 pub const MathPaint = struct {
     min_height: f32,
+    raw_tex_width_ratio: f32,
     scale: f32,
     horizontal_align: HorizontalAlign,
 };
@@ -262,6 +263,7 @@ fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
         .min_height = positiveRecordFloatProperty(ir, node, "math", "min_height") orelse 30,
+        .raw_tex_width_ratio = inheritedMathRawTexWidthRatio(ir, node) orelse 0.96,
         .scale = positiveRecordFloatProperty(ir, node, "math", "scale") orelse 1,
         .horizontal_align = inheritedMathHorizontalAlign(ir, node) orelse .center,
     };
@@ -386,6 +388,29 @@ fn inheritedMathHorizontalAlign(ir: anytype, node: *const Node) ?HorizontalAlign
     return parseHorizontalAlign(value);
 }
 
+fn inheritedMathRawTexWidthRatio(ir: anytype, node: *const Node) ?f32 {
+    if (explicitPositiveRecordFloatProperty(node, "math", "raw_tex_width_ratio")) |value| return value;
+    return inheritedPositiveFloatProperty(ir, node, "raw_tex_width_ratio");
+}
+
+fn explicitPositiveRecordFloatProperty(node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const value = explicitRecordFloatProperty(node, record_key, field_name) orelse return null;
+    return if (value > 0) value else null;
+}
+
+fn explicitRecordFloatProperty(node: *const Node, record_key: []const u8, field_name: []const u8) ?f32 {
+    const record_value = model.nodeField(node, record_key) orelse return null;
+    if (record_value != .record) return null;
+    for (record_value.record.fields.items) |field| {
+        if (!field.explicit or !std.mem.eql(u8, field.name, field_name)) continue;
+        return switch (field.value) {
+            .number => |value| @floatCast(value),
+            else => null,
+        };
+    }
+    return null;
+}
+
 fn explicitRecordHorizontalAlign(node: *const Node, record_key: []const u8, field_name: []const u8) ?HorizontalAlign {
     const record_value = model.nodeField(node, record_key) orelse return null;
     if (record_value != .record) return null;
@@ -468,6 +493,31 @@ fn inheritedHorizontalAlignProperty(ir: anytype, node: *const Node, key: []const
         }
     }
     return parseHorizontalAlignProperty(ir, node, key);
+}
+
+fn inheritedPositiveFloatProperty(ir: anytype, node: *const Node, key: []const u8) ?f32 {
+    if (explicitPositiveFloatProperty(node, key)) |value| return value;
+    if (node.kind == .object) {
+        if (ir.parentPageOf(node.id)) |page_id| {
+            if (ir.getNode(page_id)) |page| {
+                if (explicitPositiveFloatProperty(page, key)) |value| return value;
+            }
+        }
+    }
+    if (node.kind == .object or node.kind == .page) {
+        if (ir.getNode(ir.document_id)) |document| {
+            if (explicitPositiveFloatProperty(document, key)) |value| return value;
+        }
+    }
+    return positiveFloatProperty(ir, node, key);
+}
+
+fn explicitPositiveFloatProperty(node: *const Node, key: []const u8) ?f32 {
+    const value = model.nodeField(node, key) orelse return null;
+    return switch (value) {
+        .number => |number| if (number > 0) @floatCast(number) else null,
+        else => null,
+    };
 }
 
 fn explicitHorizontalAlignProperty(node: *const Node, key: []const u8) ?HorizontalAlign {

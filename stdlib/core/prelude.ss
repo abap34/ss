@@ -291,6 +291,10 @@ fn math_align_all(align_name: Align) -> Void
   utils::math_align_all(align_name)
 end
 
+fn raw_tex_width_ratio_all(ratio: Number) -> Void
+  utils::raw_tex_width_ratio_all(ratio)
+end
+
 fn left_math_all() -> Void
   utils::left_math_all()
 end

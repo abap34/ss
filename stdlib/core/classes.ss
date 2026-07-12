@@ -77,6 +77,7 @@ record TextStyle {
 record MathStyle {
   scale: Number = 1
   min_height: Number = 30
+  raw_tex_width_ratio: Number = 0.96
   align: Align = Align.center
 }
 
@@ -148,6 +149,7 @@ type Doc = object {
   logo_scale: Number = 1
   watermark: String? = none
   math_align: Align = Align.center
+  raw_tex_width_ratio: Number = 0.96
   code_theme_plain_color: Color? = none
   code_theme_keyword_color: Color? = none
   code_theme_function_color: Color? = none
