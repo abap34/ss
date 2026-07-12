@@ -158,7 +158,7 @@ pub const DiagnosticSet = struct {
 
 fn isLayoutOverflowCode(code: []const u8) bool {
     return std.mem.eql(u8, code, "PageOverflow") or
-        std.mem.eql(u8, code, "ContentOverflow");
+        std.mem.eql(u8, code, "FrameTooSmall");
 }
 
 const LspRelatedInput = struct {

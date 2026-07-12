@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
 await testRenderCacheGenerations();
 await testMeasurementCacheIsReused();
+await testRenderCachePruneIntervalSkipsFreshStamp();
 await testCacheStatsCommands();
 await testCacheClearRejectsActiveRender();
 
@@ -82,6 +83,34 @@ end
   }
 }
 
+async function testRenderCachePruneIntervalSkipsFreshStamp() {
+  const project = await mkdtempProject("ss-render-cache-prune-");
+  try {
+    const slide = path.join(project, "slide.ss");
+    await writeFile(slide, deckSource(["Prune interval"]), "utf8");
+
+    const artifacts = path.join(project, ".ss-cache", "render", "artifacts");
+    await mkdir(artifacts, { recursive: true });
+    const oldArtifact = path.join(artifacts, "old.bin");
+    await writeFile(oldArtifact, "x".repeat(1024), "utf8");
+    await writeFile(path.join(artifacts, ".prune-stamp"), "", "utf8");
+    const oldDate = new Date(Date.now() - 60_000);
+    await utimes(oldArtifact, oldDate, oldDate);
+
+    await runSs(["render", "slide.ss", "out-1.pdf", "--cache-id", "prune-interval"], project, {
+      env: { SS_CACHE_MAX_BYTES: "1b" },
+    });
+    await stat(oldArtifact);
+
+    await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "prune-interval"], project, {
+      env: { SS_CACHE_MAX_BYTES: "1b", SS_CACHE_PRUNE_INTERVAL_SECONDS: "always" },
+    });
+    await assertPathMissing(oldArtifact, "forced prune should remove the stale artifact");
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
 async function testCacheStatsCommands() {
   const project = await mkdtempProject("ss-cache-stats-");
   try {
@@ -132,16 +161,16 @@ async function mkdtempProject(prefix) {
 }
 
 async function runSs(args, cwd, options = {}) {
-  const result = await spawnCollect(ssBin, args, cwd);
+  const result = await spawnCollect(ssBin, args, cwd, options);
   if (!options.allowFailure && result.code !== 0) {
     throw new Error(`ss ${args.join(" ")} failed with ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
   return result;
 }
 
-async function spawnCollect(command, args, cwd) {
+async function spawnCollect(command, args, cwd, options = {}) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd, env: { ...process.env, ...options.env }, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");

@@ -296,6 +296,11 @@ pub fn intrinsicHeightCached(ir: anytype, node: *const Node, cache: *Measurement
     return try intrinsicHeightWithCache(ir, node, cache);
 }
 
+pub fn frameConstrainedMeasurementCached(ir: anytype, node: *const Node, cache: *MeasurementCache) !?model.LayoutMeasurement {
+    const measured_outer_width = if (node.frame.width > 0) @max(@as(f32, 1.0), node.frame.width) else 1;
+    return try cache.renderedMeasurement(ir, node, measured_outer_width, .width_constrained);
+}
+
 fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementCache) !f32 {
     const style = styleForNode(ir, node);
     const chrome_height = 2.0 * chromePadY(ir, node);

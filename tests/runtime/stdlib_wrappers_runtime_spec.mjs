@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
 
-await testPreludeMathtexUsesRawTexPayload();
+const pdflatexAvailable = await commandAvailable("pdflatex");
+
+if (pdflatexAvailable) {
+  await testPreludeMathtexUsesRawTexPayload();
+}
 await testThemeStoredThemeOverride("academic");
 await testThemeStoredThemeOverride("pop");
 
@@ -104,5 +108,19 @@ async function spawnCollect(command, args, cwd) {
     });
     child.on("error", reject);
     child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+  });
+}
+
+async function commandAvailable(command) {
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (available) => {
+      if (settled) return;
+      settled = true;
+      resolve(available);
+    };
+    const child = spawn(command, ["--version"], { stdio: "ignore" });
+    child.on("error", () => finish(false));
+    child.on("close", (code) => finish(code === 0));
   });
 }

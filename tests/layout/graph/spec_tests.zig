@@ -1532,7 +1532,7 @@ test "layout solver: target group width leaves room for chrome padding" {
     try expectFloat(200, child_node.frame.width);
 }
 
-test "layout diagnostics: fixed-height object reports content overflow" {
+test "layout diagnostics: fixed-height object reports frame too small" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 
@@ -1570,7 +1570,7 @@ test "layout diagnostics: fixed-height object reports content overflow" {
     try testing.expect(found);
 }
 
-test "layout diagnostics: one-pixel text reports content overflow" {
+test "layout diagnostics: one-pixel text reports frame too small" {
     var ir = try initEmptyIr();
     defer ir.deinit();
 

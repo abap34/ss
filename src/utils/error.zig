@@ -238,14 +238,18 @@ pub fn printIrDiagnostics(path: []const u8, text: []const u8, ir: anytype) void 
             .message = resolved.message,
             .span = resolved.span,
         });
-        printIrDiagnosticDetails(ir, diagnostic);
+        printIrDiagnosticDetailsWithSource(path, text, ir, diagnostic);
     }
 }
 
 fn printIrDiagnosticDetails(ir: anytype, diagnostic: anytype) void {
+    printIrDiagnosticDetailsWithSource("", "", ir, diagnostic);
+}
+
+fn printIrDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, ir: anytype, diagnostic: anytype) void {
     switch (diagnostic.data) {
         .page_overflow => |data| printPageOverflowBox(ir, diagnostic, data),
-        .content_overflow => |data| printContentOverflowBox(ir, diagnostic, data),
+        .content_overflow => |data| printContentOverflowBox(default_path, default_source, ir, diagnostic, data),
         else => {},
     }
 }
@@ -387,7 +391,7 @@ fn irDiagnosticCode(diagnostic: anytype) []const u8 {
         .type_mismatch => |data| @tagName(data.code),
         .recursive_function => "RecursiveFunction",
         .page_overflow => "PageOverflow",
-        .content_overflow => "ContentOverflow",
+        .content_overflow => "FrameTooSmall",
     };
 }
 
@@ -537,17 +541,17 @@ fn printPageOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
     printReset();
 }
 
-fn printContentOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
+fn printContentOverflowBox(default_path: []const u8, default_source: []const u8, ir: anytype, diagnostic: anytype, data: anytype) void {
     printDim();
-    std.debug.print("╭─ content overflow\n", .{});
+    std.debug.print("╭─ frame too small\n", .{});
     printReset();
 
     printDiagnosticPageField(ir, diagnostic.page_id);
     printDiagnosticNodeField(ir, diagnostic.node_id);
-    printDiagnosticContentField(ir, diagnostic.node_id);
     printDiagnosticFrameField(ir, diagnostic.node_id);
     printFloatTripleField("width", data.required_width, data.frame_width, data.overflow_width);
     printFloatTripleField("height", data.required_height, data.frame_height, data.overflow_height);
+    printFrameTooSmallConstraints(default_path, default_source, ir, diagnostic.node_id, data);
 
     printDim();
     std.debug.print("╰─\n", .{});
@@ -575,15 +579,6 @@ fn printDiagnosticNodeField(ir: anytype, node_id: anytype) void {
     printBoxField("object", label);
 }
 
-fn printDiagnosticContentField(ir: anytype, node_id: anytype) void {
-    const id = node_id orelse return;
-    const node = ir.getNode(id) orelse return;
-    const content = node.content orelse return;
-    const preview = diagnosticContentPreview(ir.allocator, content, 96) catch return;
-    defer ir.allocator.free(preview);
-    printBoxField("content", preview);
-}
-
 fn printDiagnosticFrameField(ir: anytype, node_id: anytype) void {
     const id = node_id orelse return;
     const node = ir.getNode(id) orelse return;
@@ -594,8 +589,92 @@ fn printDiagnosticFrameField(ir: anytype, node_id: anytype) void {
 
 fn printFloatTripleField(name: []const u8, required: f32, actual: f32, overflow: f32) void {
     var buffer: [160]u8 = undefined;
-    const label = std.fmt.bufPrint(&buffer, "required={d:.1} frame={d:.1} overflow={d:.1}", .{ required, actual, overflow }) catch return;
+    const label = std.fmt.bufPrint(&buffer, "required={d:.1} frame={d:.1} short_by={d:.1}", .{ required, actual, overflow }) catch return;
     printBoxField(name, label);
+}
+
+fn printFrameTooSmallConstraints(default_path: []const u8, default_source: []const u8, ir: anytype, node_id: anytype, data: anytype) void {
+    const id = node_id orelse return;
+    if (data.overflow_width > page_overflow_display_epsilon) {
+        printAxisFrameConstraints(default_path, default_source, ir, id, true, "horizontal frame fixed by");
+    }
+    if (data.overflow_height > page_overflow_display_epsilon) {
+        printAxisFrameConstraints(default_path, default_source, ir, id, false, "vertical frame fixed by");
+    }
+}
+
+fn printAxisFrameConstraints(
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    node_id: anytype,
+    horizontal: bool,
+    heading: []const u8,
+) void {
+    var printed_heading = false;
+    for (ir.constraints.items) |constraint| {
+        if (constraint.target_node != node_id) continue;
+        if (anchorIsHorizontal(constraint.target_anchor) != horizontal) continue;
+        if (!printed_heading) {
+            printBoxBlankLine();
+            printBoxHeading(heading);
+            printed_heading = true;
+        }
+        const line = formatConstraintLine(ir.allocator, ir, constraint) catch continue;
+        defer ir.allocator.free(line);
+        const origin = constraintOriginSnippet(ir.allocator, default_path, default_source, ir, constraint.origin) catch null;
+        defer if (origin) |text| ir.allocator.free(text);
+        printBoxIndentedLineWithSource(line, origin);
+    }
+}
+
+fn anchorIsHorizontal(anchor: anytype) bool {
+    return switch (anchor) {
+        .left, .right, .center_x => true,
+        .top, .bottom, .center_y => false,
+    };
+}
+
+fn formatConstraintLine(allocator: std.mem.Allocator, ir: anytype, constraint: anytype) ![]const u8 {
+    const target = try constraintTargetLabel(allocator, ir, constraint);
+    defer allocator.free(target);
+    const source_label = try constraintSourceLabel(allocator, ir, constraint.source);
+    defer allocator.free(source_label);
+    if (@abs(constraint.offset) <= page_overflow_display_epsilon) {
+        return std.fmt.allocPrint(allocator, "{s} = {s}", .{ target, source_label });
+    }
+    return std.fmt.allocPrint(
+        allocator,
+        "{s} = {s} {s} {d:.1}",
+        .{ target, source_label, if (constraint.offset < 0) "-" else "+", @abs(constraint.offset) },
+    );
+}
+
+fn constraintSourceLabel(allocator: std.mem.Allocator, ir: anytype, constraint_source: anytype) ![]const u8 {
+    return switch (constraint_source) {
+        .page => |anchor| std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
+        .node => |node_source| std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(ir, node_source.node_id), @tagName(node_source.anchor) }),
+    };
+}
+
+fn constraintOriginSnippet(
+    allocator: std.mem.Allocator,
+    default_path: []const u8,
+    default_source: []const u8,
+    ir: anytype,
+    maybe_origin: ?[]const u8,
+) !?[]const u8 {
+    const origin = maybe_origin orelse return null;
+    const located = parseLocatedOrigin(origin) orelse return null;
+    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    if (resolved.source.len == 0) return null;
+    const line = source.lineAt(resolved.source, located.span.start);
+    const code = std.mem.trim(u8, line.text(resolved.source), " \t\r\n");
+    const loc = source.locationAt(resolved.source, located.span.start);
+    if (resolved.path.len == 0) {
+        return try std.fmt.allocPrint(allocator, "line {d}:{d}: {s}", .{ loc.line, loc.column, code });
+    }
+    return try std.fmt.allocPrint(allocator, "{s}:{d}:{d}: {s}", .{ resolved.path, loc.line, loc.column, code });
 }
 
 const PageOverflowDirection = struct {
@@ -648,50 +727,6 @@ fn appendPageOverflowDirection(
         .amount = amount,
     };
     len.* += 1;
-}
-
-fn diagnosticContentPreview(allocator: std.mem.Allocator, text: []const u8, max_chars: usize) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    var iter = std.unicode.Utf8View.init(text) catch {
-        return diagnosticBytePreview(allocator, text, max_chars);
-    };
-    var codepoints = iter.iterator();
-    var count: usize = 0;
-    while (codepoints.nextCodepointSlice()) |slice| {
-        if (count >= max_chars) {
-            try out.appendSlice(allocator, "...");
-            break;
-        }
-        if (std.mem.eql(u8, slice, "\n")) {
-            try out.appendSlice(allocator, "\\n");
-        } else if (std.mem.eql(u8, slice, "\t")) {
-            try out.appendSlice(allocator, "\\t");
-        } else {
-            try out.appendSlice(allocator, slice);
-        }
-        count += 1;
-    }
-    return out.toOwnedSlice(allocator);
-}
-
-fn diagnosticBytePreview(allocator: std.mem.Allocator, text: []const u8, max_bytes: usize) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    var count: usize = 0;
-    for (text) |byte| {
-        if (count >= max_bytes) {
-            try out.appendSlice(allocator, "...");
-            break;
-        }
-        switch (byte) {
-            '\n' => try out.appendSlice(allocator, "\\n"),
-            '\t' => try out.appendSlice(allocator, "\\t"),
-            else => try out.append(allocator, byte),
-        }
-        count += 1;
-    }
-    return out.toOwnedSlice(allocator);
 }
 
 fn printConstraintPropagationBox(failure: anytype, propagation: anytype) void {
@@ -938,7 +973,7 @@ pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]
         .page_overflow => |data| formatPageOverflowDiagnostic(allocator, data),
         .content_overflow => |data| std.fmt.allocPrint(
             allocator,
-            "ContentOverflow: content requires width={d:.1}, height={d:.1}; frame width={d:.1}, height={d:.1}; overflow width={d:.1}, height={d:.1}",
+            "FrameTooSmall: frame is fixed by constraints but needs width={d:.1}, height={d:.1}; frame width={d:.1}, height={d:.1}; short by width={d:.1}, height={d:.1}",
             .{ data.required_width, data.required_height, data.frame_width, data.frame_height, data.overflow_width, data.overflow_height },
         ),
     };

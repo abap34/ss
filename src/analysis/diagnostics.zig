@@ -171,6 +171,6 @@ fn diagnosticCode(diagnostic: core.Diagnostic) []const u8 {
         .type_mismatch => |data| @tagName(data.code),
         .recursive_function => "RecursiveFunction",
         .page_overflow => "PageOverflow",
-        .content_overflow => "ContentOverflow",
+        .content_overflow => "FrameTooSmall",
     };
 }
