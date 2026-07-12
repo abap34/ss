@@ -4,6 +4,16 @@ All notable changes to `ss` are recorded here.
 
 ## [Unreleased]
 
+## [0.7.1-patch.1] - 2026-07-12
+
+### Changed
+
+- Added patch release publication support for exact Homebrew formula and render image tags.
+
+### Fixed
+
+- Backported Make PDF text selectable. (1b52cb2)
+
 ## [0.7.1] - 2026-06-29
 
 ### Fixed
