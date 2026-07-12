@@ -11,11 +11,12 @@ const canInspectRenderedMath =
   await commandAvailable("magick");
 
 if (canInspectRenderedMath) {
-  await testTexFillsAvailableWidthAndMathScaleStillApplies();
+  await testTexUsesMostAvailableWidthAndMathScaleStillApplies();
+  await testGlobalRawTexWidthRatioApplies();
   await testTexRespectsFixedFrameHeight();
 }
 
-async function testTexFillsAvailableWidthAndMathScaleStillApplies() {
+async function testTexUsesMostAvailableWidthAndMathScaleStillApplies() {
   const project = await mkdtempProject("ss-math-scaling-");
   try {
     await writeFile(
@@ -42,6 +43,14 @@ let formula = math!("x + y = z", 2)
 ~ formula.right == page.right - 96
 ~ formula.top == page.top - 240
 end
+
+page tex_width_ratio
+let formula = tex!("x + y = z", 1)
+formula.math.raw_tex_width_ratio = 0.82
+~ formula.left == page.left + 96
+~ formula.right == page.right - 96
+~ formula.top == page.top - 240
+end
 `,
       "utf8",
     );
@@ -53,12 +62,61 @@ end
     const tex = await renderedGeometry(project, "page-1.png");
     const mathOne = await renderedGeometry(project, "page-2.png");
     const mathTwo = await renderedGeometry(project, "page-3.png");
+    const texNarrow = await renderedGeometry(project, "page-4.png");
 
-    assert(tex.width > 1200, `tex should expand across the available frame width, got ${geometrySummary(tex)}`);
+    const availableWidth = (1280 - 96 * 2) * 2;
+    assert(tex.width > availableWidth * 0.85, `tex should expand across most of the available frame width, got ${geometrySummary(tex)}`);
+    assert(tex.width < availableWidth * 0.99, `tex should leave default breathing room inside the frame, got ${geometrySummary(tex)}`);
+    assert(texNarrow.width < tex.width * 0.9, `raw tex width ratio should reduce rendered width, got default=${geometrySummary(tex)}, narrow=${geometrySummary(texNarrow)}`);
     assert(mathOne.width < tex.width * 0.25, `plain math should keep its natural scaled width, got tex=${geometrySummary(tex)}, math=${geometrySummary(mathOne)}`);
     assert(
       mathTwo.width > mathOne.width * 1.85 && mathTwo.width < mathOne.width * 2.15,
       `math scale should roughly double rendered width, got scale1=${geometrySummary(mathOne)}, scale2=${geometrySummary(mathTwo)}`,
+    );
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+}
+
+async function testGlobalRawTexWidthRatioApplies() {
+  const project = await mkdtempProject("ss-global-raw-tex-width-");
+  try {
+    await writeFile(
+      path.join(project, "slide.ss"),
+      `import std:themes/default as *
+
+document
+  raw_tex_width_ratio_all(0.82)
+end
+
+page global_ratio
+let formula = tex!("x + y = z", 1)
+~ formula.left == page.left + 96
+~ formula.right == page.right - 96
+~ formula.top == page.top - 240
+end
+
+page local_override
+let formula = tex!("x + y = z", 1)
+formula.math.raw_tex_width_ratio = 1
+~ formula.left == page.left + 96
+~ formula.right == page.right - 96
+~ formula.top == page.top - 240
+end
+`,
+      "utf8",
+    );
+
+    const render = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "global-raw-tex-width"], project);
+    assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
+
+    await runCommand("pdftoppm", ["-png", "-r", "144", "out.pdf", "page"], project);
+    const globalRatio = await renderedGeometry(project, "page-1.png");
+    const localOverride = await renderedGeometry(project, "page-2.png");
+
+    assert(
+      globalRatio.width < localOverride.width * 0.9,
+      `global raw tex width ratio should affect tex width and local override should win, got global=${geometrySummary(globalRatio)}, override=${geometrySummary(localOverride)}`,
     );
   } finally {
     await rm(project, { recursive: true, force: true });

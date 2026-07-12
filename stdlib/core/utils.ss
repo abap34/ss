@@ -21,6 +21,10 @@ fn math_align_all(align_name: Align) -> Void
   docctx().math_align = align_name
 end
 
+fn raw_tex_width_ratio_all(ratio: Number) -> Void
+  docctx().raw_tex_width_ratio = ratio
+end
+
 fn left_math_all() -> Void
   math_align_all(Align.left)
 end
