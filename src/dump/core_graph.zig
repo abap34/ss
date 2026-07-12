@@ -265,9 +265,7 @@ fn writeOptionalMathPaint(object: *json.Object, maybe_math: ?core.render_policy.
     };
 
     var math = try object.objectField("math");
-    try math.floatField("block_line_height", math_spec.block_line_height, "{d:.1}");
-    try math.floatField("block_min_height", math_spec.block_min_height, "{d:.1}");
-    try math.floatField("block_vertical_padding", math_spec.block_vertical_padding, "{d:.1}");
+    try math.floatField("min_height", math_spec.min_height, "{d:.1}");
     try math.floatField("scale", math_spec.scale, "{d:.4}");
     try math.enumTagField("align", math_spec.horizontal_align);
     try math.end();

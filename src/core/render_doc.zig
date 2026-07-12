@@ -250,9 +250,7 @@ fn appendMath(allocator: std.mem.Allocator, doc: *RenderDoc, ir: anytype, node: 
     try op.put(allocator, "math_tex_preamble", preamble);
     try op.putFloat(allocator, "scale", math.scale);
     try op.put(allocator, "align", @tagName(math.horizontal_align));
-    try op.putFloat(allocator, "block_line_height", math.block_line_height);
-    try op.putFloat(allocator, "block_min_height", math.block_min_height);
-    try op.putFloat(allocator, "block_vertical_padding", math.block_vertical_padding);
+    try op.putFloat(allocator, "min_height", math.min_height);
     try doc.ops.append(allocator, op);
 }
 
