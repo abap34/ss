@@ -116,7 +116,7 @@ const raster_cache_scale: f32 = 3.0;
 pub const page_pdf_cache_version = "ss-native-page-pdf-v29";
 pub const qpdf_cache_version = "ss-native-qpdf-v1";
 pub const native_artifact_cache_version = "ss-native-artifacts-v3";
-const layout_measurement_cache_version = "ss-native-layout-measure-v7";
+const layout_measurement_cache_version = "ss-native-layout-measure-v8";
 const layout_measurement_cache_file_format = "ss-layout-measurements-v1";
 const layout_measurement_cache_read_limit = 16 * 1024 * 1024;
 const external_command_timeout = std.Io.Clock.Duration{
@@ -1742,9 +1742,7 @@ fn hashOptionalTextPaint(hasher: *std.hash.Wyhash, maybe: ?TextPaint) void {
 fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
     hashBool(hasher, maybe != null);
     if (maybe) |math| {
-        hashF32(hasher, math.block_line_height);
-        hashF32(hasher, math.block_min_height);
-        hashF32(hasher, math.block_vertical_padding);
+        hashF32(hasher, math.min_height);
         hashF32(hasher, math.scale);
         hashHorizontalAlign(hasher, math.horizontal_align);
     }
@@ -3295,7 +3293,7 @@ fn measureCodeIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
 fn measureVectorMathIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, height: f32) !core.LayoutMeasurement {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, @max(width, 1), @max(height, 1), op.math_kind, op.render.math);
+    const fitted = fitVectorMathSize(svg.width, svg.height, @max(width, 1), @max(height, 1), op.math_kind, op.render.math);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
@@ -5203,7 +5201,7 @@ fn isPythonKeyword(segment: []const u8) bool {
 fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
     const svg = try renderMathToSvg(ctx, op.content, op.tex_preamble, op.math_kind);
     defer ctx.allocator.free(svg.path);
-    const fitted = fitMathBlockSize(svg.width, svg.height, frame.width, frame.height, op.math_kind, math);
+    const fitted = fitVectorMathSize(svg.width, svg.height, frame.width, frame.height, op.math_kind, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
         .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
@@ -5706,23 +5704,33 @@ fn scaledAssetSize(size: Size, asset: ?core.render_policy.AssetPaint) Size {
     };
 }
 
-fn fitMathBlockSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, kind: MathKind, math: ?MathPaint) Size {
+fn fitVectorMathSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, kind: MathKind, math: ?MathPaint) Size {
     if (source_width <= 0 or source_height <= 0) return .{ .width = max_width, .height = max_height };
-    const paint = math orelse MathPaint{
-        .block_line_height = 22,
-        .block_min_height = 30,
-        .block_vertical_padding = 2,
+    const paint = math orelse defaultMathPaint();
+    return switch (kind) {
+        .raw_block => fitRawTexObjectSize(source_width, source_height, max_width, max_height, paint),
+        .inline_math, .display, .block => fitFormulaObjectSize(source_width, source_height, max_width, max_height, paint),
+    };
+}
+
+fn defaultMathPaint() MathPaint {
+    return .{
+        .min_height = 30,
         .scale = 1,
         .horizontal_align = .center,
     };
-    if (kind == .raw_block) {
-        const target_width = @max(max_width * paint.scale, 1);
-        const scale = @min(target_width / source_width, max_height / source_height);
-        return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
-    }
-    _ = paint.block_line_height;
-    _ = paint.block_vertical_padding;
-    const styled_height = @max(source_height * paint.scale, paint.block_min_height * paint.scale);
+}
+
+fn fitRawTexObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: MathPaint) Size {
+    // Raw TeX is commonly used as a slide-level diagram or algorithm box, so it fills the available content width.
+    const target_width = @max(max_width * paint.scale, 1);
+    const scale = @min(target_width / source_width, max_height / source_height);
+    return .{ .width = @max(source_width * scale, 1), .height = @max(source_height * scale, 1) };
+}
+
+fn fitFormulaObjectSize(source_width: f32, source_height: f32, max_width: f32, max_height: f32, paint: MathPaint) Size {
+    // Formula objects keep their natural TeX size, with scale acting like an authored size change.
+    const styled_height = @max(source_height * paint.scale, paint.min_height * paint.scale);
     const style_scale = styled_height / source_height;
     const styled_width = source_width * style_scale;
     const fit_scale = @min(@as(f32, 1.0), @min(max_width / styled_width, max_height / styled_height));

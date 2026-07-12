@@ -21,7 +21,7 @@ if (pdflatexAvailable && pdftoppmAvailable && magickAvailable) {
   await testVectorMathKeepsAspectRatio();
 }
 if (pdflatexAvailable && pdftocairoAvailable && pdftoppmAvailable && magickAvailable) {
-  await testTexBlockExpandsToConfiguredLineHeight();
+  await testRawTexBlockFillsAvailableWidth();
 }
 if (pdftocairoAvailable) {
   await testPdfFactorScalesMeasuredAssetFrame();
@@ -234,8 +234,8 @@ end
   }
 }
 
-async function testTexBlockExpandsToConfiguredLineHeight() {
-  const project = await mkdtempProject("ss-layout-measure-tex-block-height-");
+async function testRawTexBlockFillsAvailableWidth() {
+  const project = await mkdtempProject("ss-layout-measure-raw-tex-width-");
   try {
     const slide = path.join(project, "slide.ss");
     const dumpPath = path.join(project, "dump.json");
@@ -244,13 +244,10 @@ async function testTexBlockExpandsToConfiguredLineHeight() {
       slide,
       `import std:themes/default as *
 
-page tex_block_height
+page raw_tex_width
 let formula = tex!(<<
 \\begin{tabular}{l}one\\\\two\\\\three\\\\four\\end{tabular}
 >>)
-formula.math.block_line_height = 48
-formula.math.block_vertical_padding = 0
-formula.math.block_min_height = 1
 ~ formula.left == page.left + 100
 ~ formula.right == page.right - 100
 ~ formula.top == page.top - 160
@@ -262,11 +259,11 @@ end
     const dump = await dumpSlide(project, dumpPath);
     const formula = dump.nodes.find((candidate) => typeof candidate.content === "string" && candidate.content.includes("\\begin{tabular}"));
     assert(formula, "tex formula node was not found in dump");
-    assert(formula.height > 170, `tex block height should follow configured visual lines, got ${frameSummary(formula)}`);
+    assert(formula.width > 1000, `raw tex block should fill the available frame width, got ${frameSummary(formula)}`);
 
-    await runSs(["render", "slide.ss", outputPath, "--cache-id", "tex-block-height"], project);
+    await runSs(["render", "slide.ss", outputPath, "--cache-id", "raw-tex-width"], project);
     const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "tex");
-    assert(rendered.height > 120, `rendered tex block should expand with configured line height, got ${geometrySummary(rendered)}`);
+    assert(rendered.width > 1000, `rendered raw tex block should fill the available frame width, got ${geometrySummary(rendered)}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }

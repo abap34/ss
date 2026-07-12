@@ -91,9 +91,7 @@ pub const TextPaint = struct {
 };
 
 pub const MathPaint = struct {
-    block_line_height: f32,
-    block_min_height: f32,
-    block_vertical_padding: f32,
+    min_height: f32,
     scale: f32,
     horizontal_align: HorizontalAlign,
 };
@@ -263,9 +261,7 @@ fn resolveText(ir: anytype, node: *const Node, kind: RenderKind) ?TextPaint {
 fn resolveMath(ir: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
     if (kind != .vector_math) return null;
     return .{
-        .block_line_height = positiveRecordFloatProperty(ir, node, "math", "block_line_height") orelse 22,
-        .block_min_height = positiveRecordFloatProperty(ir, node, "math", "block_min_height") orelse 30,
-        .block_vertical_padding = nonNegativeRecordFloatProperty(ir, node, "math", "block_vertical_padding") orelse 2,
+        .min_height = positiveRecordFloatProperty(ir, node, "math", "min_height") orelse 30,
         .scale = positiveRecordFloatProperty(ir, node, "math", "scale") orelse 1,
         .horizontal_align = inheritedMathHorizontalAlign(ir, node) orelse .center,
     };

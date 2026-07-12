@@ -76,9 +76,7 @@ record TextStyle {
 
 record MathStyle {
   scale: Number = 1
-  block_line_height: Number = 22
-  block_min_height: Number = 30
-  block_vertical_padding: Number = 2
+  min_height: Number = 30
   align: Align = Align.center
 }
 
