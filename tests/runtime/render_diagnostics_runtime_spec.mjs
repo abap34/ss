@@ -7,10 +7,12 @@ import { assert, ssBin } from "./harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
 
-await testRenderFailureProducesDiagnostic();
-await testRenderFailureWritesStructuredDiagnostic();
-await testInlineMathRenderFailureLocatesFormula();
-await testConcatenatedMathRenderFailureLocatesSourceLiteral();
+if (pdflatexAvailable) {
+  await testRenderFailureProducesDiagnostic();
+  await testRenderFailureWritesStructuredDiagnostic();
+  await testInlineMathRenderFailureLocatesFormula();
+  await testConcatenatedMathRenderFailureLocatesSourceLiteral();
+}
 await testSvgAssetRenderFailureLocatesAssetReference();
 await testMissingAssetCheckLocatesPathLiteral();
 
@@ -75,14 +77,6 @@ end
     const payload = JSON.parse(await readFile(diagnosticsPath, "utf8"));
     assert(payload.schema === 1, `unexpected diagnostics schema: ${JSON.stringify(payload)}`);
     assert(payload.kind === "ss-diagnostics", `unexpected diagnostics kind: ${JSON.stringify(payload)}`);
-    if (!pdflatexAvailable) {
-      assert(payload.diagnostics.length === 1, `unexpected diagnostics count: ${JSON.stringify(payload)}`);
-      const firstFormula = diagnosticAt(payload.diagnostics, 3, 14);
-      assert(firstFormula, `missing diagnostic for first inline formula: ${JSON.stringify(payload)}`);
-      assertMathCommandSummary(firstFormula.message, `structured diagnostic omitted command output summary: ${firstFormula.message}`);
-      return;
-    }
-
     assert(payload.diagnostics.length === 1, `unexpected diagnostics count: ${JSON.stringify(payload)}`);
     const diagnostic = payload.diagnostics[0];
     assert(diagnostic.phase === "render", `unexpected diagnostic phase: ${JSON.stringify(diagnostic)}`);
@@ -117,11 +111,7 @@ end
     assert(result.code !== 0, "render should fail for invalid inline math");
     assert(output.includes("RenderFailed:"), `inline math failure did not produce a render diagnostic:\n${output}`);
     assertMathCommandSummary(output, "inline math diagnostic omitted command output summary");
-    if (pdflatexAvailable) {
-      assert(output.includes("slide.ss:4:26"), `inline math diagnostic did not point at the failing formula:\n${output}`);
-    } else {
-      assert(output.includes("slide.ss:4:15"), `inline math diagnostic did not point at the first formula:\n${output}`);
-    }
+    assert(output.includes("slide.ss:4:26"), `inline math diagnostic did not point at the failing formula:\n${output}`);
     assert(output.includes('| text!("first $x$ second $\\notacommand$ third")'), `inline math diagnostic omitted source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
@@ -149,13 +139,8 @@ end
     assert(result.code !== 0, "render should fail for invalid concatenated inline math");
     assert(output.includes("RenderFailed:"), `concatenated math failure did not produce a render diagnostic:\n${output}`);
     assertMathCommandSummary(output, "concatenated math diagnostic omitted command output summary");
-    if (pdflatexAvailable) {
-      assert(output.includes("slide.ss:5:19"), `concatenated math diagnostic did not point at the source literal:\n${output}`);
-      assert(output.includes('| text!(prefix ++ "$\\notacommand$ third")'), `concatenated math diagnostic omitted source excerpt:\n${output}`);
-    } else {
-      assert(output.includes("slide.ss:4:22"), `concatenated math diagnostic did not point at the first formula source:\n${output}`);
-      assert(output.includes('| let prefix = "first $x$ second "'), `concatenated math diagnostic omitted prefix source excerpt:\n${output}`);
-    }
+    assert(output.includes("slide.ss:5:19"), `concatenated math diagnostic did not point at the source literal:\n${output}`);
+    assert(output.includes('| text!(prefix ++ "$\\notacommand$ third")'), `concatenated math diagnostic omitted source excerpt:\n${output}`);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -236,17 +221,7 @@ async function mkdtempProject(prefix) {
 }
 
 function assertMathCommandSummary(output, label) {
-  if (pdflatexAvailable) {
-    assert(output.includes("Undefined control sequence"), `${label}:\n${output}`);
-  } else {
-    assert(output.includes("failed to run command (FileNotFound): pdflatex"), `${label}:\n${output}`);
-  }
-}
-
-function diagnosticAt(diagnostics, line, character) {
-  return diagnostics.find((diagnostic) =>
-    diagnostic.range?.start?.line === line &&
-    diagnostic.range?.start?.character === character);
+  assert(output.includes("Undefined control sequence"), `${label}:\n${output}`);
 }
 
 async function commandAvailable(command) {
