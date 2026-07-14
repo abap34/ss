@@ -26,8 +26,6 @@ struct SsPdf {
     cairo_surface_t *surface;
     cairo_t *pdf_cr;
     cairo_t *cr;
-    cairo_surface_t *recording_surface;
-    cairo_t *recording_cr;
     SsPdfMeasurementFrame *measurement;
 };
 
@@ -43,20 +41,7 @@ static void ss_pdf_destroy_measurements(SsPdf *pdf) {
     }
 }
 
-static void ss_pdf_destroy_recording(SsPdf *pdf) {
-    if (pdf == NULL) return;
-    if (pdf->recording_cr != NULL) {
-        cairo_destroy(pdf->recording_cr);
-        pdf->recording_cr = NULL;
-    }
-    if (pdf->recording_surface != NULL) {
-        cairo_surface_destroy(pdf->recording_surface);
-        pdf->recording_surface = NULL;
-    }
-    pdf->cr = pdf->pdf_cr;
-}
-
-static int ss_pdf_recording_surface_ink_extents(cairo_surface_t *surface, SsPdfRecordingExtents *extents) {
+static int ss_pdf_surface_ink_extents(cairo_surface_t *surface, SsPdfInkExtents *extents) {
     if (surface == NULL || extents == NULL) return 1;
     cairo_recording_surface_ink_extents(
         surface,
@@ -215,10 +200,29 @@ SsPdf *ss_pdf_create(const char *path, double width, double height) {
     return pdf;
 }
 
+SsPdf *ss_pdf_create_scratch(void) {
+    SsPdf *pdf = (SsPdf *)calloc(1, sizeof(SsPdf));
+    if (pdf == NULL) return NULL;
+
+    pdf->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    if (pdf->surface == NULL || cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) {
+        ss_pdf_destroy(pdf);
+        return NULL;
+    }
+
+    pdf->pdf_cr = cairo_create(pdf->surface);
+    pdf->cr = pdf->pdf_cr;
+    if (pdf->pdf_cr == NULL || cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) {
+        ss_pdf_destroy(pdf);
+        return NULL;
+    }
+
+    return pdf;
+}
+
 void ss_pdf_destroy(SsPdf *pdf) {
     if (pdf == NULL) return;
     ss_pdf_destroy_measurements(pdf);
-    ss_pdf_destroy_recording(pdf);
     if (pdf->pdf_cr != NULL) cairo_destroy(pdf->pdf_cr);
     if (pdf->surface != NULL) cairo_surface_destroy(pdf->surface);
     free(pdf);
@@ -240,128 +244,11 @@ void ss_pdf_end_page(SsPdf *pdf) {
 }
 
 int ss_pdf_finish(SsPdf *pdf) {
-    if (pdf == NULL || pdf->surface == NULL || pdf->pdf_cr == NULL || pdf->recording_surface != NULL || pdf->measurement != NULL) return 1;
+    if (pdf == NULL || pdf->surface == NULL || pdf->pdf_cr == NULL || pdf->measurement != NULL) return 1;
     cairo_surface_finish(pdf->surface);
     if (cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) return 1;
     if (cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) return 1;
     return 0;
-}
-
-int ss_pdf_begin_recording(SsPdf *pdf) {
-    if (pdf == NULL || pdf->pdf_cr == NULL || pdf->recording_surface != NULL) return 1;
-    pdf->recording_surface = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
-    if (pdf->recording_surface == NULL || cairo_surface_status(pdf->recording_surface) != CAIRO_STATUS_SUCCESS) {
-        ss_pdf_destroy_recording(pdf);
-        return 1;
-    }
-    pdf->recording_cr = cairo_create(pdf->recording_surface);
-    if (pdf->recording_cr == NULL || cairo_status(pdf->recording_cr) != CAIRO_STATUS_SUCCESS) {
-        ss_pdf_destroy_recording(pdf);
-        return 1;
-    }
-    pdf->cr = pdf->recording_cr;
-    return 0;
-}
-
-void ss_pdf_discard_recording(SsPdf *pdf) {
-    ss_pdf_destroy_recording(pdf);
-}
-
-int ss_pdf_recording_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents) {
-    if (pdf == NULL || pdf->recording_surface == NULL || extents == NULL) return 1;
-    return ss_pdf_recording_surface_ink_extents(pdf->recording_surface, extents);
-}
-
-int ss_pdf_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin, SsPdfRecordingFit *fit) {
-    if (pdf == NULL || pdf->recording_surface == NULL || fit == NULL) return 1;
-    if (margin < 0) margin = 0;
-
-    SsPdfRecordingExtents extents = {0};
-    if (ss_pdf_recording_ink_extents(pdf, &extents) != 0) return 1;
-
-    if (extents.width <= 0 || extents.height <= 0) {
-        fit->bounds = extents;
-        fit->scale = 1.0;
-        fit->tx = 0.0;
-        fit->ty = 0.0;
-        return 0;
-    }
-
-    const double pad = 1.0;
-    double x = extents.x - pad;
-    double y = extents.y - pad;
-    double width = extents.width + pad * 2.0;
-    double height = extents.height + pad * 2.0;
-
-    const double available_width = page_width - margin * 2.0;
-    const double available_height = page_height - margin * 2.0;
-    if (available_width <= 0 || available_height <= 0) return 1;
-
-    double scale = 1.0;
-    if (width > available_width || height > available_height) {
-        const double scale_x = available_width / width;
-        const double scale_y = available_height / height;
-        scale = scale_x < scale_y ? scale_x : scale_y;
-        if (scale <= 0) return 1;
-    }
-
-    double tx = 0.0;
-    double ty = 0.0;
-    if (scale < 1.0) {
-        tx = margin + (available_width - width * scale) / 2.0 - x * scale;
-        ty = margin + (available_height - height * scale) / 2.0 - y * scale;
-    } else {
-        const double min_tx = margin - x;
-        const double max_tx = page_width - margin - (x + width);
-        const double min_ty = margin - y;
-        const double max_ty = page_height - margin - (y + height);
-        if (min_tx > 0.0) tx = min_tx;
-        if (max_tx < 0.0 && (tx == 0.0 || max_tx > tx)) tx = max_tx;
-        if (min_ty > 0.0) ty = min_ty;
-        if (max_ty < 0.0 && (ty == 0.0 || max_ty > ty)) ty = max_ty;
-    }
-
-    fit->bounds.x = x;
-    fit->bounds.y = y;
-    fit->bounds.width = width;
-    fit->bounds.height = height;
-    fit->scale = scale;
-    fit->tx = tx;
-    fit->ty = ty;
-    return 0;
-}
-
-int ss_pdf_paint_recording_with_fit(SsPdf *pdf, const SsPdfRecordingFit *fit) {
-    if (pdf == NULL || pdf->pdf_cr == NULL || pdf->recording_surface == NULL || fit == NULL) return 1;
-
-    cairo_t *recording_cr = pdf->recording_cr;
-    pdf->recording_cr = NULL;
-    if (recording_cr != NULL) cairo_destroy(recording_cr);
-    pdf->cr = pdf->pdf_cr;
-
-    if (fit->bounds.width <= 0 || fit->bounds.height <= 0) {
-        ss_pdf_destroy_recording(pdf);
-        return 0;
-    }
-
-    cairo_save(pdf->pdf_cr);
-    cairo_translate(pdf->pdf_cr, fit->tx, fit->ty);
-    cairo_scale(pdf->pdf_cr, fit->scale, fit->scale);
-    cairo_set_source_surface(pdf->pdf_cr, pdf->recording_surface, 0, 0);
-    cairo_paint(pdf->pdf_cr);
-    cairo_restore(pdf->pdf_cr);
-
-    const int ok = cairo_status(pdf->pdf_cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-    ss_pdf_destroy_recording(pdf);
-    return ok;
-}
-
-int ss_pdf_paint_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin) {
-    if (pdf == NULL || pdf->pdf_cr == NULL || pdf->recording_surface == NULL) return 1;
-
-    SsPdfRecordingFit fit = {0};
-    if (ss_pdf_recording_fit(pdf, page_width, page_height, margin, &fit) != 0) return 1;
-    return ss_pdf_paint_recording_with_fit(pdf, &fit);
 }
 
 int ss_pdf_begin_measurement(SsPdf *pdf) {
@@ -392,9 +279,9 @@ int ss_pdf_begin_measurement(SsPdf *pdf) {
     return 0;
 }
 
-int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents) {
+int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfInkExtents *extents) {
     if (pdf == NULL || pdf->measurement == NULL || extents == NULL) return 1;
-    return ss_pdf_recording_surface_ink_extents(pdf->measurement->surface, extents);
+    return ss_pdf_surface_ink_extents(pdf->measurement->surface, extents);
 }
 
 int ss_pdf_end_measurement(SsPdf *pdf) {
