@@ -14,8 +14,10 @@ RUN apt-get update \
         curl \
         git \
         libcairo2-dev \
+        libgdk-pixbuf-2.0-dev \
         librsvg2-dev \
         libpango1.0-dev \
+        libqpdf-dev \
         pkg-config \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -41,6 +43,7 @@ COPY release/VERSION ./release/VERSION
 COPY editor/tree-sitter-ss/src ./editor/tree-sitter-ss/src
 COPY editor/tree-sitter-ss/queries/highlights.scm ./editor/tree-sitter-ss/queries/highlights.scm
 COPY third_party/tree-sitter-languages ./third_party/tree-sitter-languages
+COPY third_party/fontawesome-free ./third_party/fontawesome-free
 COPY src ./src
 COPY stdlib ./stdlib
 COPY scripts/setup-md4c.sh ./scripts/setup-md4c.sh
@@ -63,18 +66,18 @@ RUN set -eu; \
         fontconfig \
         fonts-noto-cjk \
         fonts-noto-color-emoji \
-        imagemagick \
         libcairo2 \
+        libgdk-pixbuf-2.0-0 \
         libpango-1.0-0 \
         libpangocairo-1.0-0 \
+        libqpdf29 \
         librsvg2-2 \
-        poppler-utils \
-        qpdf \
         texlive-full; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/zig-out/bin/ss /usr/local/bin/ss
+COPY --from=builder /src/third_party/fontawesome-free/LICENSE.txt /usr/local/share/licenses/ss/fontawesome-free/LICENSE.txt
 COPY release/docker/render/docker-entrypoint.sh /usr/local/bin/ss-docker-entrypoint
 
 RUN chmod +x /usr/local/bin/ss-docker-entrypoint

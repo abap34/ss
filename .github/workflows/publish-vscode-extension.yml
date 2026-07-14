@@ -29,10 +29,11 @@ jobs:
             curl \
             git \
             libcairo2-dev \
+            libgdk-pixbuf-2.0-dev \
             librsvg2-dev \
             libpango1.0-dev \
+            libqpdf-dev \
             pkg-config \
-            qpdf \
             xz-utils
 
       - name: Restore Zig compiler cache
