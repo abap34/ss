@@ -80,22 +80,6 @@ int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double h
 int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest);
 void ss_pdf_end_link(SsPdf *pdf);
 int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y);
-int ss_pdf_draw_text(
-    SsPdf *pdf,
-    double x,
-    double y,
-    double width,
-    const char *text,
-    const char *font_family,
-    int font_weight,
-    int font_style,
-    int font_stretch,
-    double font_size,
-    double r,
-    double g,
-    double b,
-    int wrap
-);
 int ss_pdf_draw_text_baseline(
     SsPdf *pdf,
     double x,

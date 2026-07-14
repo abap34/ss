@@ -75,10 +75,10 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     c.ss_pdf_begin_page(pdf, 320, 180);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_add_destination(pdf, "target", 20, 20));
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 120, 24, "https://example.com"));
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 20, 120, "external", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text_baseline(pdf, 20, 32, 120, "external", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
     c.ss_pdf_end_link(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_dest_link(pdf, 20, 60, 120, 24, "target"));
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 60, 120, "internal", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text_baseline(pdf, 20, 72, 120, "internal", "sans-serif", 400, 0, 4, 12, 0, 0, 0, 0));
     c.ss_pdf_end_link(pdf);
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
@@ -303,7 +303,7 @@ fn writeQpdfTestLayer(path: [:0]const u8, text: [*:0]const u8, uri: ?[*:0]const 
     if (uri) |target| {
         try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_uri_link(pdf, 20, 20, 220, 30, target));
     }
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(pdf, 20, 20, 260, text, "sans-serif", 400, 0, 4, 18, 0, 0, 0, 0));
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text_baseline(pdf, 20, 38, 260, text, "sans-serif", 400, 0, 4, 18, 0, 0, 0, 0));
     if (uri != null) c.ss_pdf_end_link(pdf);
     c.ss_pdf_end_page(pdf);
     try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));

@@ -5,10 +5,6 @@ const c = @cImport({
     @cInclude("pdf.h");
 });
 
-pub fn width(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
-    return advanceWidth(allocator, text, font, font_size);
-}
-
 pub fn advanceWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32) !f32 {
     if (text.len == 0) return 0;
     const family_z = try allocator.dupeZ(u8, font.family);
