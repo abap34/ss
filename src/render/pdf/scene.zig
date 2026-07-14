@@ -1,8 +1,8 @@
 const std = @import("std");
 const core = @import("core");
-const draw_sink = @import("draw_sink.zig");
-const c = @import("pdf_ffi.zig").c;
-const render_scene = @import("scene.zig");
+const draw_sink = @import("render_sink");
+const c = @import("pdf_ffi").c;
+const render_scene = @import("render_scene");
 
 const Allocator = std.mem.Allocator;
 

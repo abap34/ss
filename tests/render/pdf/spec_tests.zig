@@ -1,8 +1,8 @@
 const std = @import("std");
-const scene_pdf = @import("scene_pdf");
+const pdf_scene = @import("pdf_scene");
 
 const c = @cImport({
-    @cInclude("pdf.h");
+    @cInclude("backend.h");
 });
 
 const testing = std.testing;
@@ -101,7 +101,7 @@ test "render PDF spec: scene renderer replays and composes ordered resources" {
     const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/scene-composed.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
 
-    var source = scene_pdf.Page{
+    var source = pdf_scene.Page{
         .page_id = 1,
         .index = 0,
         .width = 320,
@@ -123,9 +123,9 @@ test "render PDF spec: scene renderer replays and composes ordered resources" {
         false,
     );
     try source.appendLink(allocator, .uri, "https://example.com/scene", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
-    try scene_pdf.render(allocator, testing.io, &source, source_path);
+    try pdf_scene.render(allocator, testing.io, &source, source_path);
 
-    var composed = scene_pdf.Page{
+    var composed = pdf_scene.Page{
         .page_id = 2,
         .index = 0,
         .width = 320,
@@ -152,7 +152,7 @@ test "render PDF spec: scene renderer replays and composes ordered resources" {
         0,
         0,
     );
-    try scene_pdf.render(allocator, testing.io, &composed, output_path);
+    try pdf_scene.render(allocator, testing.io, &composed, output_path);
 
     const json = try qpdfJson(allocator, testing.io, output_path);
     defer allocator.free(json);

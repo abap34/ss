@@ -7,10 +7,10 @@ const fontawesome_assets = @import("fontawesome_assets");
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
 const json = utils.json;
-const draw_sink = @import("draw_sink.zig");
-const c = @import("pdf_ffi.zig").c;
-const render_scene = @import("scene.zig");
-const scene_pdf = @import("scene_pdf.zig");
+const draw_sink = @import("render_sink");
+const c = @import("pdf_ffi").c;
+const render_scene = @import("render_scene");
+const scene_renderer = @import("pdf_scene");
 
 const TSLanguage = opaque {};
 const TSParser = opaque {};
@@ -2800,7 +2800,7 @@ fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
     if (page.cache_hit) return;
     var scene = try compileRenderPageScene(parent_ctx, page);
     defer scene.deinit(parent_ctx.allocator);
-    scene_pdf.render(parent_ctx.allocator, parent_ctx.io, &scene, page.render_path) catch |err| {
+    scene_renderer.render(parent_ctx.allocator, parent_ctx.io, &scene, page.render_path) catch |err| {
         if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose scene PDF layers");
         return err;
     };

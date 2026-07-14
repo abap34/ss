@@ -1,4 +1,4 @@
-const native = @import("pdf_native.zig");
+const native = @import("pdf/native.zig");
 
 pub const RenderProgress = native.RenderProgress;
 pub const RenderOptions = native.RenderOptions;

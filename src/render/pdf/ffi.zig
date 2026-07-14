@@ -1,3 +1,3 @@
 pub const c = @cImport({
-    @cInclude("pdf.h");
+    @cInclude("backend.h");
 });
