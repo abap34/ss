@@ -437,59 +437,6 @@ static PangoFontDescription *ss_font_description(const char *family, int weight,
     return desc;
 }
 
-int ss_pdf_draw_text(
-    SsPdf *pdf,
-    double x,
-    double y,
-    double width,
-    const char *text,
-    const char *font_family,
-    int font_weight,
-    int font_style,
-    int font_stretch,
-    double font_size,
-    double r,
-    double g,
-    double b,
-    int wrap
-) {
-    if (pdf == NULL || pdf->cr == NULL) return 1;
-
-    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
-    if (layout == NULL) return 1;
-
-    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
-    if (desc == NULL) {
-        g_object_unref(layout);
-        return 1;
-    }
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-
-    char *valid_text = g_utf8_make_valid(text, -1);
-    if (valid_text == NULL) {
-        g_object_unref(layout);
-        return 1;
-    }
-    pango_layout_set_text(layout, valid_text, -1);
-    g_free(valid_text);
-    if (wrap && width > 0) {
-        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
-        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
-    } else {
-        pango_layout_set_width(layout, -1);
-    }
-
-    cairo_save(pdf->cr);
-    ss_pdf_set_rgb(r, g, b, pdf->cr);
-    cairo_move_to(pdf->cr, x, y);
-    pango_cairo_show_layout(pdf->cr, layout);
-    cairo_restore(pdf->cr);
-
-    g_object_unref(layout);
-    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-}
-
 int ss_pdf_draw_text_baseline(
     SsPdf *pdf,
     double x,
