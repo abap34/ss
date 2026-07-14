@@ -1,5 +1,5 @@
-#ifndef SS_PDF_H
-#define SS_PDF_H
+#ifndef SS_RENDER_PDF_BACKEND_H
+#define SS_RENDER_PDF_BACKEND_H
 
 #include <stddef.h>
 

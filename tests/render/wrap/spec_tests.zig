@@ -3,7 +3,7 @@ const wrap = @import("render_wrap");
 
 const testing = std.testing;
 
-test "render PDF native wrap spec: overflowing trailing spaces do not add a phantom line" {
+test "render wrap spec: overflowing trailing spaces do not add a phantom line" {
     const atoms = [_]wrap.Atom{
         .{ .width = 100, .advance = 100, .is_space = false },
         .{ .width = 8, .advance = 8, .is_space = true },
@@ -12,7 +12,7 @@ test "render PDF native wrap spec: overflowing trailing spaces do not add a phan
     try testing.expectEqual(@as(usize, 1), wrap.visualLineCount(&atoms, 100, false));
 }
 
-test "render PDF native wrap spec: overflowing separator wraps the following non-space token" {
+test "render wrap spec: overflowing separator wraps the following non-space token" {
     const atoms = [_]wrap.Atom{
         .{ .width = 50, .advance = 50, .is_space = false },
         .{ .width = 15, .advance = 15, .is_space = true },

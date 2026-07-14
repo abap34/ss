@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
-const c = @import("pdf_ffi.zig").c;
-const render_scene = @import("scene.zig");
+const c = @import("pdf_ffi").c;
+const render_scene = @import("render_scene");
 
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;

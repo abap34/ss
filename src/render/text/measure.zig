@@ -1,8 +1,8 @@
 const std = @import("std");
-const font_model = @import("../core/font.zig");
+const font_model = @import("../../core/font.zig");
 
 const c = @cImport({
-    @cInclude("pdf.h");
+    @cInclude("backend.h");
 });
 
 pub fn advanceWidth(allocator: std.mem.Allocator, text: []const u8, font: font_model.Face, font_size: f32) !f32 {

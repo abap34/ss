@@ -73,5 +73,5 @@ pub const markdown = @import("core/markdown.zig");
 pub const page_unit = @import("core/page_unit.zig");
 pub const value_text = @import("core/value_text.zig");
 pub const text_tokenize = @import("core/text_tokenize.zig");
-pub const render_text_measure = @import("render/text_measure.zig");
-pub const render_wrap = @import("render/wrap.zig");
+pub const render_text_measure = @import("render/text/measure.zig");
+pub const render_wrap = @import("render/text/wrap.zig");

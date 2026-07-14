@@ -21,6 +21,10 @@ const ProjectModules = struct {
     fontawesome_assets: *Module,
     project: *Module,
     core: *Module,
+    render_scene: *Module,
+    pdf_ffi: *Module,
+    render_sink: *Module,
+    pdf_scene: *Module,
 };
 
 const BundledHighlightQuery = struct {
@@ -239,6 +243,23 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     });
     addNativePdfBackend(ctx, core_mod, tree_sitter);
 
+    const render_scene_mod = createModule(ctx, "src/render/scene.zig", &.{
+        import("core", core_mod),
+    }, null);
+    const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
+    addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod, tree_sitter);
+    const render_sink_mod = createModule(ctx, "src/render/sink.zig", &.{
+        import("core", core_mod),
+        import("pdf_ffi", pdf_ffi_mod),
+        import("render_scene", render_scene_mod),
+    }, true);
+    const pdf_scene_mod = createModule(ctx, "src/render/pdf/scene.zig", &.{
+        import("core", core_mod),
+        import("pdf_ffi", pdf_ffi_mod),
+        import("render_scene", render_scene_mod),
+        import("render_sink", render_sink_mod),
+    }, true);
+
     return .{
         .utils = utils_mod,
         .model = model_mod,
@@ -248,6 +269,10 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .fontawesome_assets = fontawesome_assets_mod,
         .project = project_mod,
         .core = core_mod,
+        .render_scene = render_scene_mod,
+        .pdf_ffi = pdf_ffi_mod,
+        .render_sink = render_sink_mod,
+        .pdf_scene = pdf_scene_mod,
     };
 }
 
@@ -358,12 +383,8 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
-    const scene_pdf_mod = createModule(ctx, "src/render/scene_pdf.zig", &.{
-        import("core", modules.core),
-    }, true);
-    addNativePdfHeadersAndLibraries(b, scene_pdf_mod, tree_sitter);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
-        import("scene_pdf", scene_pdf_mod),
+        import("pdf_scene", modules.pdf_scene),
     }, true);
     addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
     const render_pdf_spec_tests = b.addTest(.{ .root_module = render_pdf_spec_mod });
@@ -371,19 +392,16 @@ fn addTestStep(
     test_step.dependOn(&run_render_pdf_spec_tests.step);
     const render_pdf_test_step = b.step("test-render-pdf", "Run focused native PDF renderer tests");
     render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
-    const render_scene_mod = createModule(ctx, "src/render/scene.zig", &.{
-        import("core", modules.core),
-    }, null);
     const render_scene_spec_mod = createModule(ctx, "tests/render/scene/spec_tests.zig", &.{
-        import("render_scene", render_scene_mod),
+        import("render_scene", modules.render_scene),
     }, null);
     const render_scene_spec_tests = b.addTest(.{ .root_module = render_scene_spec_mod });
     const run_render_scene_spec_tests = b.addRunArtifact(render_scene_spec_tests);
     test_step.dependOn(&run_render_scene_spec_tests.step);
     const render_scene_test_step = b.step("test-render-scene", "Run focused render scene tests");
     render_scene_test_step.dependOn(&run_render_scene_spec_tests.step);
-    const render_wrap_mod = createModule(ctx, "src/render/wrap.zig", &.{}, null);
-    addModuleTest(ctx, test_step, "tests/render/pdf/native_wrap_spec_tests.zig", &.{
+    const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
+    addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
     }, null);
 
@@ -423,6 +441,10 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("language_type", modules.language_type),
         import("stdlib_assets", modules.stdlib_assets),
         import("fontawesome_assets", modules.fontawesome_assets),
+        import("render_scene", modules.render_scene),
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render_sink", modules.render_sink),
+        import("pdf_scene", modules.pdf_scene),
     }, link_libc);
 }
 
@@ -537,10 +559,10 @@ fn addNativePdfBackend(ctx: BuildContext, module: *Module, tree_sitter: TreeSitt
     addNativePdfHeadersAndLibraries(b, module, tree_sitter);
     addTreeSitterRuntimeSource(ctx, module, tree_sitter);
     module.addCSourceFile(.{
-        .file = b.path("src/render/pdf/pdf.c"),
+        .file = b.path("src/render/pdf/cairo.c"),
     });
     module.addCSourceFile(.{
-        .file = b.path("src/render/pdf/pdf_qpdf.cpp"),
+        .file = b.path("src/render/pdf/qpdf.cpp"),
         .flags = &.{"-std=c++20"},
     });
     addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/parser.c"));
@@ -920,7 +942,7 @@ fn addTreeSitterAbiCheck(ctx: BuildContext, tree_sitter: TreeSitterBundle) TreeS
     addTreeSitterIncludePaths(b, check_mod, tree_sitter);
     addTreeSitterRuntimeSource(ctx, check_mod, tree_sitter);
     check_mod.addCSourceFile(.{
-        .file = b.path("src/render/pdf/tree_sitter_abi_check.c"),
+        .file = b.path("src/tree_sitter/abi_check.c"),
     });
     for (generated_tree_sitter_sources) |source| {
         addTreeSitterCSourceFile(ctx, check_mod, cwdPath(b, b.fmt("{s}/{s}", .{ tree_sitter.generated_root, source })));
