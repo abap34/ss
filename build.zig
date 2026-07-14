@@ -358,8 +358,14 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
-    const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{}, true);
-    addNativePdfBackend(ctx, render_pdf_spec_mod, tree_sitter);
+    const scene_pdf_mod = createModule(ctx, "src/render/scene_pdf.zig", &.{
+        import("core", modules.core),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, scene_pdf_mod, tree_sitter);
+    const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
+        import("scene_pdf", scene_pdf_mod),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
     const render_pdf_spec_tests = b.addTest(.{ .root_module = render_pdf_spec_mod });
     const run_render_pdf_spec_tests = b.addRunArtifact(render_pdf_spec_tests);
     test_step.dependOn(&run_render_pdf_spec_tests.step);
