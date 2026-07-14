@@ -207,8 +207,8 @@ fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme(
   return base::image(path_value, factor, theme)
 end
 
-fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
-  return base::pdf(path_value, factor, theme)
+fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop, theme: Theme = current_theme()) -> Object
+  return base::pdf(path_value, factor, page_number, page_box, theme)
 end
 
 fn/! code(text_value: String, language_name: String = "python", theme: Theme = current_theme()) -> Object

@@ -414,8 +414,10 @@ fn/! image(path_value: String, factor: Number = 1) -> Object
   return obj
 end
 
-fn/! pdf(path_value: String, factor: Number = 1) -> Object
+fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop) -> Object
   let obj = render::scale(objects::pdf_obj(path_value), factor)
+  obj.asset.pdf_page = page_number
+  obj.asset.pdf_box = page_box
   obj.layout.x = 102
   obj.layout.right_inset = 102
   obj.layout.wrap = WrapMode.on

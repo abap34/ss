@@ -99,6 +99,16 @@ pub const MathPaint = struct {
 
 pub const AssetPaint = struct {
     scale: f32,
+    pdf_page: usize,
+    pdf_box: PdfPageBox,
+};
+
+pub const PdfPageBox = enum {
+    media,
+    crop,
+    bleed,
+    trim,
+    art,
 };
 
 pub const CodePaint = struct {
@@ -273,9 +283,21 @@ fn resolveAsset(ir: anytype, node: *const Node, kind: RenderKind) ?AssetPaint {
     return switch (kind) {
         .vector_asset, .raster_asset => .{
             .scale = positiveRecordFloatProperty(ir, node, "asset", "scale") orelse 1,
+            .pdf_page = resolvedPdfPage(ir, node),
+            .pdf_box = resolvedPdfPageBox(ir, node),
         },
         else => null,
     };
+}
+
+fn resolvedPdfPage(ir: anytype, node: *const Node) usize {
+    const number = positiveRecordFloatProperty(ir, node, "asset", "pdf_page") orelse 1;
+    return @max(@as(usize, 1), @as(usize, @intFromFloat(@floor(number))));
+}
+
+fn resolvedPdfPageBox(ir: anytype, node: *const Node) PdfPageBox {
+    const name = fields.read(ir.allocator, ir, node, "asset", &.{"pdf_box"}, .text) orelse return .crop;
+    return std.meta.stringToEnum(PdfPageBox, name) orelse .crop;
 }
 
 fn resolveCode(ir: anytype, node: *const Node, kind: RenderKind) ?CodePaint {

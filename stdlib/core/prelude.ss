@@ -595,8 +595,8 @@ fn/! image(path_value: String, factor: Number = 1) -> Object
   return components::image(path_value, factor)
 end
 
-fn/! pdf(path_value: String, factor: Number = 1) -> Object
-  return components::pdf(path_value, factor)
+fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop) -> Object
+  return components::pdf(path_value, factor, page_number, page_box)
 end
 
 fn/! code(text_value: String, language_name: String = "python") -> Object
