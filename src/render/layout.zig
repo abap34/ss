@@ -8,18 +8,8 @@ pub fn evaluateAndSolveWithPdfMeasurements(io: std.Io, ir: *core.Ir, graph: *con
     try lowering.evaluateDocumentWithSchedule(ir, graph);
     var pages = try core.page_unit.prepare(ir.allocator, ir);
     defer pages.deinit(ir.allocator);
-    var results = try solveWithPdfMeasurementsAndPreparedPages(io, ir, &pages);
+    var results = try solvePreparedPages(io, ir, &pages, null, null);
     defer results.deinit(ir.allocator);
-}
-
-pub fn solveWithPdfMeasurements(io: std.Io, ir: *core.Ir) !core.LayoutResults {
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir);
-    defer measurement_scope.deinit();
-    return try lowering.solveLayoutResultsWithOptions(ir, .{ .measurement_provider = measurement_scope.provider() });
-}
-
-pub fn solveWithPdfMeasurementsAndPreparedPages(io: std.Io, ir: *core.Ir, pages: *const core.page_unit.PreparedPages) !core.LayoutResults {
-    return try solveWithPdfMeasurementsAndPreparedPagesProgress(io, ir, pages, null, null);
 }
 
 pub fn preloadPreparedPageArtifacts(
@@ -29,19 +19,19 @@ pub fn preloadPreparedPageArtifacts(
     progress: ?pdf.RenderProgress,
     jobs: ?usize,
 ) !void {
-    try pdf.preloadPreparedPageArtifactsWithOptions(ir.allocator, io, ir, pages, .{
+    try pdf.preloadPreparedPageArtifacts(ir.allocator, io, ir, pages, .{
         .jobs = jobs,
     }, progress);
 }
 
-pub fn solveWithPdfMeasurementsAndPreparedPagesProgress(
+pub fn solvePreparedPages(
     io: std.Io,
     ir: *core.Ir,
     pages: *const core.page_unit.PreparedPages,
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
 ) !core.LayoutResults {
-    var measurement_scope = try pdf.LayoutMeasurementScope.initWithPreparedPages(ir.allocator, io, ir, pages);
+    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir, pages);
     defer measurement_scope.deinit();
     var results = try lowering.solveLayoutResultsWithOptions(ir, .{
         .measurement_provider = measurement_scope.provider(),
@@ -53,17 +43,7 @@ pub fn solveWithPdfMeasurementsAndPreparedPagesProgress(
     return results;
 }
 
-pub fn solveWithPdfMeasurementsAndTracePath(io: std.Io, ir: *core.Ir, trace_path: []const u8) !core.LayoutResults {
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir);
-    defer measurement_scope.deinit();
-    return try lowering.solveLayoutResultsWithTracePathAndOptions(ir, trace_path, .{ .measurement_provider = measurement_scope.provider() });
-}
-
-pub fn solveWithPdfMeasurementsPreparedAndTracePath(io: std.Io, ir: *core.Ir, pages: *const core.page_unit.PreparedPages, trace_path: []const u8) !core.LayoutResults {
-    return try solveWithPdfMeasurementsPreparedAndTracePathProgress(io, ir, pages, trace_path, null, null);
-}
-
-pub fn solveWithPdfMeasurementsPreparedAndTracePathProgress(
+pub fn solvePreparedPagesWithTrace(
     io: std.Io,
     ir: *core.Ir,
     pages: *const core.page_unit.PreparedPages,
@@ -71,7 +51,7 @@ pub fn solveWithPdfMeasurementsPreparedAndTracePathProgress(
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
 ) !core.LayoutResults {
-    var measurement_scope = try pdf.LayoutMeasurementScope.initWithPreparedPages(ir.allocator, io, ir, pages);
+    var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir, pages);
     defer measurement_scope.deinit();
     var results = try lowering.solveLayoutResultsWithTracePathAndOptions(ir, trace_path, .{
         .measurement_provider = measurement_scope.provider(),

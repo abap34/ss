@@ -4,8 +4,6 @@ const utils = @import("utils");
 const build_options = @import("build_options");
 const fontawesome_assets = @import("fontawesome_assets");
 
-const declarations = @import("../language/declarations.zig");
-const semantic_env = @import("../language/env.zig");
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
 const json = utils.json;
@@ -305,7 +303,6 @@ const CommandFailureSink = struct {
 
 pub const RenderOptions = struct {
     jobs: ?usize = null,
-    keep_temps: bool = false,
     cache_dir: []const u8 = ".ss-cache/render",
     cache_id: ?[]const u8 = null,
     highlight_languages: []const utils.highlight.Language = &.{},
@@ -442,13 +439,11 @@ const RenderPlan = struct {
     previous_document_path: ?[]const u8,
     current_path: []const u8,
     lease_path: []const u8,
-    prepared_pages: ?core.page_unit.PreparedPages = null,
     generation_published: bool = false,
 
     fn deinit(self: *RenderPlan) void {
         for (self.pages) |*page| page.deinit(self.allocator);
         self.allocator.free(self.pages);
-        if (self.prepared_pages) |*pages| pages.deinit(self.allocator);
         freePreloadTasks(self.allocator, self.artifact_tasks);
         self.allocator.free(self.artifact_tasks);
         self.allocator.free(self.artifact_cached);
@@ -585,24 +580,11 @@ pub const LayoutMeasurementScope = struct {
     run_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
     measurement_cache_dirty: bool = false,
 
-    pub fn init(allocator: Allocator, io: std.Io, ir: *core.Ir) !LayoutMeasurementScope {
-        return try initInternal(allocator, io, ir, null);
-    }
-
-    pub fn initWithPreparedPages(
+    pub fn init(
         allocator: Allocator,
         io: std.Io,
         ir: *core.Ir,
         pages: *const core.page_unit.PreparedPages,
-    ) !LayoutMeasurementScope {
-        return try initInternal(allocator, io, ir, pages);
-    }
-
-    fn initInternal(
-        allocator: Allocator,
-        io: std.Io,
-        ir: *core.Ir,
-        pages: ?*const core.page_unit.PreparedPages,
     ) !LayoutMeasurementScope {
         const default_options: RenderOptions = .{};
         const cache_dir = default_options.cache_dir;
@@ -684,7 +666,7 @@ pub const LayoutMeasurementScope = struct {
         if (node.kind != .object) return null;
 
         const profile_render_op = utils.measure_profile.start();
-        var op = try self.renderOpForNode(ir.allocator, ir, node, width, mode);
+        var op = try self.renderOpForNode(ir.allocator, node, width, mode);
         utils.measure_profile.recordLayoutMeasurementRenderOp(profile_render_op);
         defer op.deinit(ir.allocator);
 
@@ -778,22 +760,17 @@ pub const LayoutMeasurementScope = struct {
         self.measurement_cache_dirty = false;
     }
 
-    fn renderOpForNode(self: *LayoutMeasurementScope, allocator: Allocator, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
-        if (self.preparedObject(node.id)) |object| {
-            return try renderOpForPreparedObject(allocator, node, object, width, mode, true);
-        }
-        var owned_object = try core.page_unit.prepareObject(allocator, ir, node);
-        defer owned_object.deinit(allocator);
-        return try renderOpForPreparedObject(allocator, node, &owned_object, width, mode, false);
+    fn renderOpForNode(self: *LayoutMeasurementScope, allocator: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
+        const object = self.preparedObject(node.id) orelse return error.MissingPreparedObject;
+        return try renderOpForObject(allocator, node, object, width, mode);
     }
 
-    fn renderOpForPreparedObject(
+    fn renderOpForObject(
         allocator: Allocator,
         node: *const core.Node,
         object: *const core.page_unit.ObjectUnit,
         width: f32,
         mode: core.LayoutMeasurementMode,
-        use_prepared_parse: bool,
     ) !RenderOp {
         var render = object.render;
         if (mode == .natural) {
@@ -813,9 +790,9 @@ pub const LayoutMeasurementScope = struct {
             .link_id = object.link_id,
             .render = render,
             .parse_mode = object.parse_mode,
-            .markdown_doc = if (use_prepared_parse) object.markdownDocument() else null,
-            .text_layout = if (use_prepared_parse) object.textLayout() else null,
-            .asset_deps = if (use_prepared_parse) object.asset_deps else &.{},
+            .markdown_doc = object.markdownDocument(),
+            .text_layout = object.textLayout(),
+            .asset_deps = object.asset_deps,
             .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
             .math_kind = mathKindForNode(node),
             .origin = object.origin,
@@ -837,12 +814,11 @@ fn measurementFrameHeight(node: *const core.Node, mode: core.LayoutMeasurementMo
 
 fn buildPreparedObjectLookup(
     allocator: Allocator,
-    maybe_pages: ?*const core.page_unit.PreparedPages,
+    pages: *const core.page_unit.PreparedPages,
 ) !std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit) {
     var lookup = std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit).init(allocator);
     errdefer lookup.deinit();
 
-    const pages = maybe_pages orelse return lookup;
     for (pages.pages) |*page| {
         for (page.objects) |*object| {
             try lookup.put(object.node_id, object);
@@ -891,30 +867,7 @@ fn measurementCacheHeaderMatches(header: []const u8) bool {
         std.mem.eql(u8, version, layout_measurement_cache_version);
 }
 
-pub fn renderDocumentToPdf(allocator: Allocator, io: std.Io, ir: *core.Ir) ![]const u8 {
-    return renderDocumentToPdfWithOptions(allocator, io, ir, .{}, null);
-}
-
-pub fn renderDocumentToPdfWithProgress(allocator: Allocator, io: std.Io, ir: *core.Ir, progress: ?RenderProgress) ![]const u8 {
-    return renderDocumentToPdfWithOptions(allocator, io, ir, .{}, progress);
-}
-
-pub fn renderDocumentToPdfWithOptions(allocator: Allocator, io: std.Io, ir: *core.Ir, options: RenderOptions, progress: ?RenderProgress) ![]const u8 {
-    return try renderDocumentToPdfInternal(allocator, io, ir, null, null, options, progress);
-}
-
-pub fn renderDocumentToPdfWithPreparedPagesAndOptions(
-    allocator: Allocator,
-    io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
-    options: RenderOptions,
-    progress: ?RenderProgress,
-) ![]const u8 {
-    return try renderDocumentToPdfInternal(allocator, io, ir, pages, null, options, progress);
-}
-
-pub fn renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(
+pub fn renderDocumentToPdf(
     allocator: Allocator,
     io: std.Io,
     ir: *core.Ir,
@@ -923,10 +876,54 @@ pub fn renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(
     options: RenderOptions,
     progress: ?RenderProgress,
 ) ![]const u8 {
-    return try renderDocumentToPdfInternal(allocator, io, ir, pages, layouts, options, progress);
+    try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
+    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
+    defer allocator.free(asset_cache_dir);
+    try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
+
+    var ctx = DrawContext{
+        .allocator = allocator,
+        .io = io,
+        .pdf = undefined,
+        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+        .cache_dir = asset_cache_dir,
+        .highlight_languages = options.highlight_languages,
+    };
+
+    var plan = try buildRenderPlan(&ctx, ir, pages, layouts, options);
+    defer {
+        std.Io.Dir.cwd().deleteTree(io, plan.run_dir) catch {};
+        if (!plan.generation_published) std.Io.Dir.cwd().deleteTree(io, plan.building_dir) catch {};
+        std.Io.Dir.cwd().deleteFile(io, plan.lease_path) catch {};
+        plan.deinit();
+    }
+
+    executeRenderDag(&ctx, &plan, options, progress) catch |err| {
+        try collectPlanRenderDiagnostics(&ctx, ir, &plan, err);
+        return error.DiagnosticsFailed;
+    };
+    try writeRenderManifest(&ctx, &plan);
+    var assembly_failure = CommandFailureSink{ .allocator = ir.allocator };
+    defer assembly_failure.deinit();
+    var assembly_ctx = ctx;
+    assembly_ctx.command_failure = &assembly_failure;
+    const reused_document = try reusePreviousDocumentPdf(&assembly_ctx, &plan, progress);
+    if (!reused_document) {
+        assembleRenderPlan(&assembly_ctx, &plan, options, progress) catch |err| {
+            try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
+            return error.DiagnosticsFailed;
+        };
+    }
+    storeRenderPlanDocumentPdf(&assembly_ctx, &plan) catch |err| {
+        try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
+        return error.DiagnosticsFailed;
+    };
+    try publishRenderGeneration(&ctx, &plan);
+
+    return try std.Io.Dir.cwd().readFileAlloc(io, plan.final_pdf_path, allocator, .unlimited);
 }
 
-pub fn preloadPreparedPageArtifactsWithOptions(
+pub fn preloadPreparedPageArtifacts(
     allocator: Allocator,
     io: std.Io,
     ir: *core.Ir,
@@ -976,72 +973,11 @@ pub fn preloadPreparedPageArtifactsWithOptions(
     };
 }
 
-fn renderDocumentToPdfInternal(
-    allocator: Allocator,
-    io: std.Io,
-    ir: *core.Ir,
-    prepared_pages: ?*const core.page_unit.PreparedPages,
-    layout_results: ?*const core.LayoutResults,
-    options: RenderOptions,
-    progress: ?RenderProgress,
-) ![]const u8 {
-    try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
-    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
-    defer allocator.free(asset_cache_dir);
-    try std.Io.Dir.cwd().createDirPath(io, asset_cache_dir);
-
-    var ctx = DrawContext{
-        .allocator = allocator,
-        .io = io,
-        .pdf = undefined,
-        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
-        .cache_dir = asset_cache_dir,
-        .highlight_languages = options.highlight_languages,
-    };
-
-    var declaration_index = try declarations.build(allocator, ir);
-    defer declaration_index.deinit();
-    const sema = semantic_env.SemanticEnv.init(ir, &declaration_index, &ir.functions);
-
-    var plan = try buildRenderPlan(&ctx, ir, &sema, prepared_pages, layout_results, options);
-    defer {
-        if (!options.keep_temps) std.Io.Dir.cwd().deleteTree(io, plan.run_dir) catch {};
-        if (!plan.generation_published and !options.keep_temps) std.Io.Dir.cwd().deleteTree(io, plan.building_dir) catch {};
-        std.Io.Dir.cwd().deleteFile(io, plan.lease_path) catch {};
-        plan.deinit();
-    }
-
-    executeRenderDag(&ctx, &plan, options, progress) catch |err| {
-        try collectPlanRenderDiagnostics(&ctx, ir, &plan, err);
-        return error.DiagnosticsFailed;
-    };
-    try writeRenderManifest(&ctx, &plan);
-    var assembly_failure = CommandFailureSink{ .allocator = ir.allocator };
-    defer assembly_failure.deinit();
-    var assembly_ctx = ctx;
-    assembly_ctx.command_failure = &assembly_failure;
-    const reused_document = try reusePreviousDocumentPdf(&assembly_ctx, &plan, progress);
-    if (!reused_document) {
-        assembleRenderPlan(&assembly_ctx, &plan, options, progress) catch |err| {
-            try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
-            return error.DiagnosticsFailed;
-        };
-    }
-    storeRenderPlanDocumentPdf(&assembly_ctx, &plan) catch |err| {
-        try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
-        return error.DiagnosticsFailed;
-    };
-    try publishRenderGeneration(&ctx, &plan);
-
-    return try std.Io.Dir.cwd().readFileAlloc(io, plan.final_pdf_path, allocator, .unlimited);
-}
-
 fn buildRenderPlan(
     ctx: *DrawContext,
     ir: *core.Ir,
-    sema: anytype,
-    prepared_pages: ?*const core.page_unit.PreparedPages,
-    layout_results: ?*const core.LayoutResults,
+    prepared_pages: *const core.page_unit.PreparedPages,
+    layout_results: *const core.LayoutResults,
     options: RenderOptions,
 ) !RenderPlan {
     const nonce = std.hash.Wyhash.hash(0, ir.projectSource());
@@ -1117,17 +1053,7 @@ fn buildRenderPlan(
         asset_fingerprints.deinit();
     }
 
-    var owned_prepared_pages: ?core.page_unit.PreparedPages = null;
-    var owned_prepared_pages_transferred = false;
-    errdefer if (!owned_prepared_pages_transferred) {
-        if (owned_prepared_pages) |*pages_value| pages_value.deinit(ctx.allocator);
-    };
-    const pages_source = prepared_pages orelse blk: {
-        owned_prepared_pages = try core.page_unit.prepareWithEnv(ctx.allocator, ir, sema);
-        break :blk &owned_prepared_pages.?;
-    };
-
-    for (pages_source.pages) |*page_unit| {
+    for (prepared_pages.pages) |*page_unit| {
         var ops = std.ArrayList(RenderOp).empty;
         errdefer {
             for (ops.items) |*op| op.deinit(ctx.allocator);
@@ -1143,7 +1069,7 @@ fn buildRenderPlan(
             var op = RenderOp{
                 .page_id = page_unit.page_id,
                 .node_id = node.id,
-                .frame = layoutFrameForObject(layout_results, page_unit.page_id, node.id) orelse node.frame,
+                .frame = layout_results.frameOf(page_unit.page_id, node.id) orelse return error.MissingLayoutFrame,
                 .content = object.content,
                 .content_provenance = object.content_provenance,
                 .link_id = object.link_id,
@@ -1233,15 +1159,8 @@ fn buildRenderPlan(
         .previous_document_path = previous_document_path,
         .current_path = current_path,
         .lease_path = lease_path,
-        .prepared_pages = if (prepared_pages == null) owned_prepared_pages else null,
     };
-    owned_prepared_pages_transferred = true;
     return plan;
-}
-
-fn layoutFrameForObject(layout_results: ?*const core.LayoutResults, page_id: core.NodeId, node_id: core.NodeId) ?core.Frame {
-    const results = layout_results orelse return null;
-    return results.frameOf(page_id, node_id);
 }
 
 fn countPageCacheHits(pages: []const RenderPage) usize {

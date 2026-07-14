@@ -1,7 +1,4 @@
-const std = @import("std");
-const core = @import("core");
 const native = @import("pdf_native.zig");
-const utils = @import("utils");
 
 pub const RenderProgress = native.RenderProgress;
 pub const RenderOptions = native.RenderOptions;
@@ -15,61 +12,7 @@ pub const LayoutMeasurementScope = native.LayoutMeasurementScope;
 pub const page_pdf_cache_version = native.page_pdf_cache_version;
 pub const qpdf_cache_version = native.qpdf_cache_version;
 pub const native_artifact_cache_version = native.native_artifact_cache_version;
-
-pub fn nativeRuntimeVersions() NativeRuntimeVersions {
-    return native.nativeRuntimeVersions();
-}
-
-pub fn renderDocumentToPdf(allocator: std.mem.Allocator, io: std.Io, ir: *core.Ir) ![]const u8 {
-    return native.renderDocumentToPdfWithOptions(allocator, io, ir, .{}, null);
-}
-
-pub fn renderDocumentToPdfWithProgress(allocator: std.mem.Allocator, io: std.Io, ir: *core.Ir, progress: ?RenderProgress) ![]const u8 {
-    return native.renderDocumentToPdfWithOptions(allocator, io, ir, .{}, progress);
-}
-
-pub fn renderDocumentToPdfWithOptions(allocator: std.mem.Allocator, io: std.Io, ir: *core.Ir, options: RenderOptions, progress: ?RenderProgress) ![]const u8 {
-    return native.renderDocumentToPdfWithOptions(allocator, io, ir, options, progress);
-}
-
-pub fn renderDocumentToPdfWithPreparedPagesAndOptions(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
-    options: RenderOptions,
-    progress: ?RenderProgress,
-) ![]const u8 {
-    return native.renderDocumentToPdfWithPreparedPagesAndOptions(allocator, io, ir, pages, options, progress);
-}
-
-pub fn renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
-    layouts: *const core.LayoutResults,
-    options: RenderOptions,
-    progress: ?RenderProgress,
-) ![]const u8 {
-    return native.renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(allocator, io, ir, pages, layouts, options, progress);
-}
-
-pub fn preloadPreparedPageArtifactsWithOptions(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    ir: *core.Ir,
-    pages: *const core.page_unit.PreparedPages,
-    options: RenderOptions,
-    progress: ?RenderProgress,
-) !void {
-    return native.preloadPreparedPageArtifactsWithOptions(allocator, io, ir, pages, options, progress);
-}
-
-pub fn treeSitterHealthReport(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    languages: []const utils.highlight.Language,
-) !TreeSitterHealthReport {
-    return native.treeSitterHealthReport(allocator, io, languages);
-}
+pub const nativeRuntimeVersions = native.nativeRuntimeVersions;
+pub const renderDocumentToPdf = native.renderDocumentToPdf;
+pub const preloadPreparedPageArtifacts = native.preloadPreparedPageArtifacts;
+pub const treeSitterHealthReport = native.treeSitterHealthReport;

@@ -5,7 +5,6 @@ const dump_core_graph = @import("dump/core_graph.zig");
 const dump_declarations = @import("dump/declarations.zig");
 const dump_editor = @import("dump/editor.zig");
 const dump_layout = @import("dump/layout.zig");
-const dump_render_doc = @import("dump/render_doc.zig");
 const dump_source = @import("dump/source.zig");
 const utils = @import("utils");
 const json = utils.json;
@@ -33,7 +32,6 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try root.intField("document_id", ir.document_id);
     try dump_layout.writePageOrderField(&root, ir.page_order.items);
     try dump_core_graph.writeNodesField(allocator, &root, ir);
-    try dump_render_doc.writeField(allocator, &root, ir);
     try dump_layout.writeContainsField(&root, &ir.contains);
     try dump_layout.writeConstraintsField(&root, ir.constraints.items);
     try writeDiagnosticsField(&root, ir.diagnostics.items);

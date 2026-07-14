@@ -90,14 +90,6 @@ pub const PreparedPages = struct {
 };
 
 pub fn prepare(allocator: std.mem.Allocator, ir: *Ir) !PreparedPages {
-    return try prepareInternal(allocator, ir, false, {});
-}
-
-pub fn prepareWithEnv(allocator: std.mem.Allocator, ir: *Ir, sema: anytype) !PreparedPages {
-    return try prepareInternal(allocator, ir, true, sema);
-}
-
-fn prepareInternal(allocator: std.mem.Allocator, ir: *Ir, comptime use_sema: bool, sema: anytype) !PreparedPages {
     var pages = std.ArrayList(PageUnit).empty;
     errdefer {
         for (pages.items) |*page| page.deinit(allocator);
@@ -122,10 +114,7 @@ fn prepareInternal(allocator: std.mem.Allocator, ir: *Ir, comptime use_sema: boo
         for (object_ids.items) |node_id| {
             const node = ir.getNode(node_id) orelse continue;
             if (node.kind != .object) continue;
-            var unit = if (use_sema)
-                try prepareObjectWithEnv(allocator, ir, node, sema)
-            else
-                try prepareObject(allocator, ir, node);
+            var unit = try prepareObject(allocator, ir, node);
             var unit_transferred = false;
             errdefer if (!unit_transferred) unit.deinit(allocator);
             try objects.append(allocator, unit);
@@ -153,10 +142,7 @@ fn prepareInternal(allocator: std.mem.Allocator, ir: *Ir, comptime use_sema: boo
         try pages.append(allocator, .{
             .page_id = page_id,
             .index = page_index,
-            .background = if (use_sema)
-                render_policy.resolvePageBackgroundWithEnv(ir, page, sema)
-            else
-                render_policy.resolvePageBackground(ir, page),
+            .background = render_policy.resolvePageBackground(ir, page),
             .object_ids = ids_slice,
             .constraints = constraint_slice,
             .objects = object_slice,
@@ -173,10 +159,6 @@ fn prepareInternal(allocator: std.mem.Allocator, ir: *Ir, comptime use_sema: boo
 
 pub fn prepareObject(allocator: std.mem.Allocator, ir: *Ir, node: *const model.Node) !ObjectUnit {
     return try prepareObjectWithRender(allocator, ir, node, render_policy.resolve(ir, node));
-}
-
-pub fn prepareObjectWithEnv(allocator: std.mem.Allocator, ir: *Ir, node: *const model.Node, sema: anytype) !ObjectUnit {
-    return try prepareObjectWithRender(allocator, ir, node, render_policy.resolveWithEnv(ir, node, sema));
 }
 
 pub fn prepareObjectWithRender(

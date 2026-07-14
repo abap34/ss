@@ -312,15 +312,11 @@ pub fn expectBodyTextDefaults(
     var ir = try buildLoweredIr(io, allocator, path, source);
     defer ir.deinit();
 
-    var declaration_index = try declarations.build(allocator, &ir);
-    defer declaration_index.deinit();
-    const sema = semantic_env.SemanticEnv.init(&ir, &declaration_index, &ir.functions);
-
     for (ir.nodes.items) |node| {
         if (node.kind != .object) continue;
         const role = node.role orelse continue;
         if (!std.mem.eql(u8, role, "body")) continue;
-        const render = core.render_policy.resolveWithEnv(&ir, &node, &sema);
+        const render = core.render_policy.resolve(&ir, &node);
         const text = render.text orelse continue;
         try std.testing.expectApproxEqAbs(expected.link_underline_width, text.link_underline_width, 0.0001);
         try std.testing.expectApproxEqAbs(expected.link_underline_offset, text.link_underline_offset, 0.0001);
@@ -337,15 +333,11 @@ pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocato
     var ir = try buildLoweredIr(io, allocator, path, source);
     defer ir.deinit();
 
-    var declaration_index = try declarations.build(allocator, &ir);
-    defer declaration_index.deinit();
-    const sema = semantic_env.SemanticEnv.init(&ir, &declaration_index, &ir.functions);
-
     for (ir.nodes.items) |node| {
         if (node.kind != .object) continue;
         const role = node.role orelse continue;
         if (!std.mem.eql(u8, role, "code")) continue;
-        const render = core.render_policy.resolveWithEnv(&ir, &node, &sema);
+        const render = core.render_policy.resolve(&ir, &node);
         const code = render.code orelse continue;
         try expectColorDiffers(code.keyword, code.plain);
         try expectColorDiffers(code.function, code.plain);

@@ -69,7 +69,6 @@ pub const fields = @import("core/fields.zig");
 pub const font = @import("core/font.zig");
 pub const render_policy = @import("core/render_policy.zig");
 pub const render_env = @import("core/render_env.zig");
-pub const render_doc = @import("core/render_doc.zig");
 pub const markdown = @import("core/markdown.zig");
 pub const page_unit = @import("core/page_unit.zig");
 pub const value_text = @import("core/value_text.zig");

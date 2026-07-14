@@ -168,7 +168,7 @@ pub fn solveLayouts(
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     try preloadLayoutArtifacts(io, ir, pages, progress, jobs);
-    var layouts = render_layout.solveWithPdfMeasurementsAndPreparedPagesProgress(io, ir, pages, layout_progress, jobs) catch |err| {
+    var layouts = render_layout.solvePreparedPages(io, ir, pages, layout_progress, jobs) catch |err| {
         if (progress) |p| p.endStatusLine();
         try reportLayoutFailure(ir, err);
         return err;
@@ -191,7 +191,7 @@ pub fn solveLayoutsWithTracePath(
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     try preloadLayoutArtifacts(io, ir, pages, progress, jobs);
-    var layouts = render_layout.solveWithPdfMeasurementsPreparedAndTracePathProgress(io, ir, pages, trace_path, layout_progress, jobs) catch |err| {
+    var layouts = render_layout.solvePreparedPagesWithTrace(io, ir, pages, trace_path, layout_progress, jobs) catch |err| {
         if (progress) |p| p.endStatusLine();
         try reportLayoutFailure(ir, err);
         return err;
