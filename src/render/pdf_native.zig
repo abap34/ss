@@ -155,7 +155,7 @@ pub fn nativeRuntimeVersions() NativeRuntimeVersions {
 const DrawContext = struct {
     allocator: Allocator,
     io: std.Io,
-    pdf: *c.SsPdf,
+    measurement_pdf: ?*c.SsPdf = null,
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
@@ -167,6 +167,14 @@ const DrawContext = struct {
 
 fn activeSink(ctx: *DrawContext) *draw_sink.Sink {
     return if (ctx.sink) |*sink| sink else unreachable;
+}
+
+fn activePdf(ctx: *DrawContext) *c.SsPdf {
+    if (ctx.measurement_pdf) |pdf| return pdf;
+    return switch (activeSink(ctx).*) {
+        .pdf => |pdf| pdf,
+        .scene => unreachable,
+    };
 }
 
 const LinkAnnotation = struct {
@@ -569,6 +577,7 @@ var temp_cache_counter: usize = 0;
 pub const LayoutMeasurementScope = struct {
     allocator: Allocator,
     io: std.Io,
+    pdf: *c.SsPdf,
     asset_cache_dir: []const u8,
     measurement_cache_dir: []const u8,
     measurement_cache_path: []const u8,
@@ -611,13 +620,13 @@ pub const LayoutMeasurementScope = struct {
         return .{
             .allocator = allocator,
             .io = io,
+            .pdf = pdf,
             .asset_cache_dir = asset_cache_dir,
             .measurement_cache_dir = measurement_cache_dir,
             .measurement_cache_path = measurement_cache_path,
             .ctx = .{
                 .allocator = allocator,
                 .io = io,
-                .pdf = pdf,
                 .sink = .{ .pdf = pdf },
                 .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
                 .cache_dir = asset_cache_dir,
@@ -634,7 +643,7 @@ pub const LayoutMeasurementScope = struct {
         self.prepared_objects.deinit();
         self.persistent_measurements.deinit();
         self.run_measurements.deinit();
-        c.ss_pdf_destroy(self.ctx.pdf);
+        c.ss_pdf_destroy(self.pdf);
         self.allocator.free(self.measurement_cache_path);
         self.allocator.free(self.measurement_cache_dir);
         self.allocator.free(self.asset_cache_dir);
@@ -884,7 +893,6 @@ pub fn renderDocumentToPdf(
     var ctx = DrawContext{
         .allocator = allocator,
         .io = io,
-        .pdf = undefined,
         .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
         .cache_dir = asset_cache_dir,
         .highlight_languages = options.highlight_languages,
@@ -939,7 +947,6 @@ pub fn preloadPreparedPageArtifacts(
     var ctx = DrawContext{
         .allocator = allocator,
         .io = io,
-        .pdf = undefined,
         .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
         .cache_dir = asset_cache_dir,
         .highlight_languages = options.highlight_languages,
@@ -2179,7 +2186,6 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, page: *const Ren
     c.ss_pdf_set_creator(pdf, "ss native Cairo/Pango backend");
 
     var diagnostic_ctx = ctx.*;
-    diagnostic_ctx.pdf = pdf;
     diagnostic_ctx.sink = .{ .pdf = pdf };
 
     c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
@@ -2190,7 +2196,7 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, page: *const Ren
 
 fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Ir, page: *const RenderPage) !bool {
     if (page.background) |fill| {
-        c.ss_pdf_fill_rect(ctx.pdf, 0, 0, PageLayout.width, PageLayout.height, fill.r, fill.g, fill.b);
+        try activeSink(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = PageLayout.width, .height = PageLayout.height }, fill);
     }
     for (page.ops) |*op| {
         if (op.render.kind == .chrome_only) {
@@ -2587,7 +2593,6 @@ fn preloadTaskWorker(work: *PreloadWork) void {
         var ctx = DrawContext{
             .allocator = arena.allocator(),
             .io = work.io,
-            .pdf = undefined,
             .asset_base_dir = work.asset_base_dir,
             .cache_dir = work.cache_dir,
             .highlight_languages = &.{},
@@ -2734,7 +2739,6 @@ fn renderDagWorker(work: *RenderDag) void {
             var ctx = DrawContext{
                 .allocator = arena.allocator(),
                 .io = work.io,
-                .pdf = undefined,
                 .asset_base_dir = work.asset_base_dir,
                 .cache_dir = work.cache_dir,
                 .highlight_languages = work.highlight_languages,
@@ -2755,7 +2759,6 @@ fn renderDagWorker(work: *RenderDag) void {
             var ctx = DrawContext{
                 .allocator = arena.allocator(),
                 .io = work.io,
-                .pdf = undefined,
                 .asset_base_dir = work.asset_base_dir,
                 .cache_dir = work.cache_dir,
                 .highlight_languages = &.{},
@@ -2820,7 +2823,7 @@ fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !re
     var ctx = DrawContext{
         .allocator = parent_ctx.allocator,
         .io = parent_ctx.io,
-        .pdf = pdf,
+        .measurement_pdf = pdf,
         .asset_base_dir = parent_ctx.asset_base_dir,
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
@@ -2979,16 +2982,17 @@ const MeasurementScope = struct {
     }
 
     fn begin(self: *MeasurementScope) !void {
-        if (c.ss_pdf_begin_measurement(self.ctx.pdf) != 0) return NativePdfError.CairoCreateFailed;
+        const pdf = activePdf(self.ctx);
+        if (c.ss_pdf_begin_measurement(pdf) != 0) return NativePdfError.CairoCreateFailed;
         self.active = true;
-        self.ctx.sink = .{ .pdf = self.ctx.pdf };
+        self.ctx.sink = .{ .pdf = pdf };
         self.ctx.link_annotations = &self.links;
         self.ctx.destinations = &self.destinations;
     }
 
     fn inkFrame(self: *MeasurementScope) !?Frame {
         var extents: c.SsPdfInkExtents = undefined;
-        if (c.ss_pdf_measurement_ink_extents(self.ctx.pdf, &extents) != 0) return NativePdfError.CairoFailed;
+        if (c.ss_pdf_measurement_ink_extents(activePdf(self.ctx), &extents) != 0) return NativePdfError.CairoFailed;
         return inkExtentsToFrame(extents);
     }
 
@@ -3001,7 +3005,7 @@ const MeasurementScope = struct {
         deinitDestinationAnnotations(self.ctx.allocator, self.destinations.items);
         self.destinations.deinit(self.ctx.allocator);
         if (self.active) {
-            _ = c.ss_pdf_end_measurement(self.ctx.pdf);
+            _ = c.ss_pdf_end_measurement(activePdf(self.ctx));
             self.active = false;
         }
     }
@@ -3374,7 +3378,7 @@ fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !
 fn emitDestination(ctx: *DrawContext, name: []const u8, x: f64, y: f64) !void {
     const name_z = try ctx.allocator.dupeZ(u8, name);
     defer ctx.allocator.free(name_z);
-    if (c.ss_pdf_add_destination(ctx.pdf, name_z.ptr, x, y) != 0) return NativePdfError.CairoFailed;
+    if (c.ss_pdf_add_destination(activePdf(ctx), name_z.ptr, x, y) != 0) return NativePdfError.CairoFailed;
 }
 
 fn contentFrameForRender(frame: Frame, render: ResolvedRender) Frame {
@@ -5213,7 +5217,6 @@ fn mergeWorker(work: *MergeWork) void {
         var ctx = DrawContext{
             .allocator = arena.allocator(),
             .io = work.io,
-            .pdf = undefined,
             .asset_base_dir = ".",
             .cache_dir = work.cache_dir,
             .highlight_languages = &.{},
@@ -5365,7 +5368,7 @@ fn drawLinkedRawText(
     }
 
     try beginLinkAnnotation(ctx, kind, target, @floatCast(x), @floatCast(y_top), @floatCast(resolved_width), @floatCast(height));
-    defer c.ss_pdf_end_link(ctx.pdf);
+    defer c.ss_pdf_end_link(activePdf(ctx));
     try drawAtomRawText(ctx, x, y_top, @max(atom.width + paint.font_size, 1), atom, paint, false);
 }
 
@@ -5376,9 +5379,10 @@ fn isInternalLink(url: []const u8) bool {
 fn beginLinkAnnotation(ctx: *DrawContext, kind: LinkAnnotation.Kind, target: []const u8, x: f64, y: f64, width: f64, height: f64) !void {
     const target_z = try ctx.allocator.dupeZ(u8, target);
     defer ctx.allocator.free(target_z);
+    const pdf = activePdf(ctx);
     const result = switch (kind) {
-        .dest => c.ss_pdf_begin_dest_link(ctx.pdf, x, y, width, height, target_z.ptr),
-        .uri => c.ss_pdf_begin_uri_link(ctx.pdf, x, y, width, height, target_z.ptr),
+        .dest => c.ss_pdf_begin_dest_link(pdf, x, y, width, height, target_z.ptr),
+        .uri => c.ss_pdf_begin_uri_link(pdf, x, y, width, height, target_z.ptr),
     };
     if (result != 0) return NativePdfError.CairoFailed;
 }
@@ -5390,7 +5394,7 @@ fn measureText(ctx: *DrawContext, content: []const u8, font: FontFace, font_size
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
     return @floatCast(c.ss_pdf_measure_text(
-        ctx.pdf,
+        activePdf(ctx),
         content_z.ptr,
         family_z.ptr,
         @intCast(font.weight),
@@ -5407,7 +5411,7 @@ fn measureTextVisualWidth(ctx: *DrawContext, content: []const u8, font: FontFace
     const content_z = try ctx.allocator.dupeZ(u8, content);
     defer ctx.allocator.free(content_z);
     return @floatCast(c.ss_pdf_measure_text_visual_width(
-        ctx.pdf,
+        activePdf(ctx),
         content_z.ptr,
         family_z.ptr,
         @intCast(font.weight),
