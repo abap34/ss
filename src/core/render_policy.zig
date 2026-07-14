@@ -189,20 +189,10 @@ pub fn resolve(ir: anytype, node: *const Node) ResolvedRender {
     };
 }
 
-pub fn resolveWithEnv(ir: anytype, node: *const Node, sema: anytype) ResolvedRender {
-    _ = sema;
-    return resolve(ir, node);
-}
-
 pub fn resolvePageBackground(ir: anytype, page: *const Node) ?Color {
     if (parseColorProperty(ir, page, "background_fill")) |color| return color;
     const document = ir.getNode(ir.document_id) orelse return null;
     return parseColorProperty(ir, document, "background_fill");
-}
-
-pub fn resolvePageBackgroundWithEnv(ir: anytype, page: *const Node, sema: anytype) ?Color {
-    _ = sema;
-    return resolvePageBackground(ir, page);
 }
 
 pub fn resolveKind(ir: anytype, node: *const Node) RenderKind {

@@ -19,7 +19,7 @@ pub fn renderPdfOrPrintDiagnostics(
     progress: *Progress,
     diagnostics_json_path: ?[]const u8,
 ) ![]const u8 {
-    return pdf.renderDocumentToPdfWithPreparedPagesAndLayoutsAndOptions(allocator, io, ir, pages, layouts, options, app_progress.render(progress)) catch |err| {
+    return pdf.renderDocumentToPdf(allocator, io, ir, pages, layouts, options, app_progress.render(progress)) catch |err| {
         progress.endStatusLine();
         error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         try writeDiagnosticsJsonIfRequested(io, allocator, ir, diagnostics_json_path);

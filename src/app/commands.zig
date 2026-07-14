@@ -88,7 +88,7 @@ pub fn layoutConflictReportJson(
         if (error_report.hasIrErrors(&analyzed.ir)) return error.DiagnosticsFailed;
         return err;
     };
-    var maybe_layouts: ?core.LayoutResults = render_layout.solveWithPdfMeasurementsAndPreparedPagesProgress(io, &analyzed.ir, &pages, layout_progress, request.layout_jobs) catch |err| switch (err) {
+    var maybe_layouts: ?core.LayoutResults = render_layout.solvePreparedPages(io, &analyzed.ir, &pages, layout_progress, request.layout_jobs) catch |err| switch (err) {
         error.ConstraintConflict,
         error.NegativeFrameSize,
         => null,

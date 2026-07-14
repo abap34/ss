@@ -1,27 +1,19 @@
 const std = @import("std");
 const core = @import("core");
 
-const declarations = @import("../language/declarations.zig");
-const semantic_env = @import("../language/env.zig");
 const json = @import("utils").json;
 
-const SemanticEnv = semantic_env.SemanticEnv;
-
 pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
-    var declaration_index = try declarations.build(allocator, ir);
-    defer declaration_index.deinit();
-    const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
-
     var nodes = try root.arrayField("nodes");
     for (ir.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
-        try writeNode(allocator, &nodes, ir, &sema, node);
+        try writeNode(allocator, &nodes, ir, node);
     }
     try nodes.end();
 }
 
-fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, sema: anytype, node: core.Node) !void {
-    const render = core.render_policy.resolveWithEnv(ir, &node, sema);
+fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
+    const render = core.render_policy.resolve(ir, &node);
     const display_content = core.nodeDisplayContent(&node);
     const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;
     const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and has_display_content;
