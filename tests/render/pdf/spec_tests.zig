@@ -51,6 +51,32 @@ fn qpdfJson(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) ![]c
     return error.QpdfJsonFailed;
 }
 
+fn pdfTextIfAvailable(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) !?[]const u8 {
+    const result = std.process.run(allocator, io, .{
+        .argv = &.{ "pdftotext", pdf_path, "-" },
+        .stdout_limit = .limited(512 * 1024),
+        .stderr_limit = .limited(128 * 1024),
+    }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer allocator.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code == 0) return result.stdout,
+        else => {},
+    }
+    allocator.free(result.stdout);
+    return error.PdfTextExtractionFailed;
+}
+
+fn expectFileMissing(io: std.Io, file_path: []const u8) !void {
+    std.Io.Dir.cwd().access(io, file_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    return error.ExpectedTemporaryFileCleanup;
+}
+
 test "render PDF spec: Cairo shim exposes rendering dependency versions" {
     try expectCString(c.ss_pdf_cairo_version_string());
     try expectCString(c.ss_pdf_pango_version_string());
@@ -158,6 +184,16 @@ test "render PDF spec: scene renderer replays and composes ordered resources" {
     defer allocator.free(json);
     try expectContains(json, "\"/Subtype\": \"/Form\"");
     try expectContains(json, "https://example.com/scene");
+    if (try pdfTextIfAvailable(allocator, testing.io, output_path)) |text| {
+        defer allocator.free(text);
+        try expectContains(text, "selectable scene text");
+    }
+    const first_layer_path = try std.fmt.allocPrint(allocator, "{s}.layer-0.pdf", .{output_path});
+    defer allocator.free(first_layer_path);
+    const second_layer_path = try std.fmt.allocPrint(allocator, "{s}.layer-1.pdf", .{output_path});
+    defer allocator.free(second_layer_path);
+    try expectFileMissing(testing.io, first_layer_path);
+    try expectFileMissing(testing.io, second_layer_path);
 }
 
 test "render PDF spec: Cairo shim draws baseline text without a clipping frame" {
@@ -294,6 +330,44 @@ test "render PDF spec: libqpdf composes a selectable page form and copies links"
     defer allocator.free(json);
     try expectContains(json, "\"/Subtype\": \"/Form\"");
     try expectContains(json, "https://example.com/form");
+    if (try pdfTextIfAvailable(allocator, testing.io, output_path)) |text| {
+        defer allocator.free(text);
+        try expectContains(text, "selectable form text");
+    }
+}
+
+test "render PDF spec: libqpdf omits source links when annotation copying is disabled" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const base_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/base.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(base_path);
+    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/source.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(source_path);
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+    const base_path_z = try allocator.dupeZ(u8, base_path);
+    defer allocator.free(base_path_z);
+    const source_path_z = try allocator.dupeZ(u8, source_path);
+    defer allocator.free(source_path_z);
+    const output_path_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(output_path_z);
+
+    try writeQpdfTestLayer(base_path_z, "base", null);
+    try writeQpdfTestLayer(source_path_z, "text without copied link", "https://example.com/omitted");
+    const layers = [_]c.SsQpdfLayer{
+        .{ .path = base_path_z.ptr, .page_index = 0, .box = 1, .x = 0, .y = 0, .width = 320, .height = 180, .copy_annotations = 0 },
+        .{ .path = source_path_z.ptr, .page_index = 0, .box = 1, .x = 40, .y = 30, .width = 160, .height = 90, .copy_annotations = 0 },
+    };
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_compose(output_path_z.ptr, &layers, layers.len));
+
+    const json = try qpdfJson(allocator, testing.io, output_path);
+    defer allocator.free(json);
+    try testing.expect(!contains(json, "https://example.com/omitted"));
+    if (try pdfTextIfAvailable(allocator, testing.io, output_path)) |text| {
+        defer allocator.free(text);
+        try expectContains(text, "text without copied link");
+    }
 }
 
 fn writeQpdfTestLayer(path: [:0]const u8, text: [*:0]const u8, uri: ?[*:0]const u8) !void {
