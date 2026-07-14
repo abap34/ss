@@ -1,4 +1,5 @@
 const std = @import("std");
+const scene_pdf = @import("scene_pdf");
 
 const c = @cImport({
     @cInclude("pdf.h");
@@ -89,6 +90,74 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     try expectContains(json, "\"/S\": \"/URI\"");
     try expectContains(json, "https://example.com");
     try expectInternalDestination(json);
+}
+
+test "render PDF spec: scene renderer replays and composes ordered resources" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/scene-source.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(source_path);
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/scene-composed.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+
+    var source = scene_pdf.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    };
+    defer source.deinit(allocator);
+    try source.appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
+    try source.appendText(
+        allocator,
+        10,
+        20,
+        60,
+        260,
+        "selectable scene text",
+        .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
+        24,
+        .{ .r = 0, .g = 0, .b = 0 },
+        false,
+        false,
+    );
+    try source.appendLink(allocator, .uri, "https://example.com/scene", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
+    try scene_pdf.render(allocator, testing.io, &source, source_path);
+
+    var composed = scene_pdf.Page{
+        .page_id = 2,
+        .index = 0,
+        .width = 320,
+        .height = 180,
+    };
+    defer composed.deinit(allocator);
+    try composed.appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
+    try composed.appendPdfPage(
+        allocator,
+        11,
+        .{ .x = 20, .y = 20, .width = 280, .height = 140 },
+        source_path,
+        0,
+        .crop,
+        true,
+    );
+    try composed.appendStrokeLine(
+        allocator,
+        12,
+        .{ .x = 20, .y = 20 },
+        .{ .x = 300, .y = 160 },
+        2,
+        .{ .r = 1, .g = 0, .b = 0 },
+        0,
+        0,
+    );
+    try scene_pdf.render(allocator, testing.io, &composed, output_path);
+
+    const json = try qpdfJson(allocator, testing.io, output_path);
+    defer allocator.free(json);
+    try expectContains(json, "\"/Subtype\": \"/Form\"");
+    try expectContains(json, "https://example.com/scene");
 }
 
 test "render PDF spec: Cairo shim draws baseline text without a clipping frame" {

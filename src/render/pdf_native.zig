@@ -9,11 +9,10 @@ const semantic_env = @import("../language/env.zig");
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
 const json = utils.json;
+const draw_sink = @import("draw_sink.zig");
+const c = @import("pdf_ffi.zig").c;
 const render_scene = @import("scene.zig");
-
-const c = @cImport({
-    @cInclude("pdf.h");
-});
+const scene_pdf = @import("scene_pdf.zig");
 
 const TSLanguage = opaque {};
 const TSParser = opaque {};
@@ -165,10 +164,12 @@ const DrawContext = struct {
     command_failure: ?*CommandFailureSink = null,
     link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
-    measurement_depth: usize = 0,
-    scene: ?*render_scene.Page = null,
-    scene_node_id: ?core.NodeId = null,
+    sink: ?draw_sink.Sink = null,
 };
+
+fn activeSink(ctx: *DrawContext) *draw_sink.Sink {
+    return if (ctx.sink) |*sink| sink else unreachable;
+}
 
 const LinkAnnotation = struct {
     kind: Kind,
@@ -635,6 +636,7 @@ pub const LayoutMeasurementScope = struct {
                 .allocator = allocator,
                 .io = io,
                 .pdf = pdf,
+                .sink = .{ .pdf = pdf },
                 .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
@@ -2259,6 +2261,7 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, page: *const Ren
 
     var diagnostic_ctx = ctx.*;
     diagnostic_ctx.pdf = pdf;
+    diagnostic_ctx.sink = .{ .pdf = pdf };
 
     c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
     const added = try drawRenderPageDiagnostics(&diagnostic_ctx, ir, page);
@@ -2875,11 +2878,12 @@ fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
     if (page.cache_hit) return;
     var scene = try compileRenderPageScene(parent_ctx, page);
     defer scene.deinit(parent_ctx.allocator);
-    if (scene.hasPdfPages()) {
-        try renderScenePageWithPdfComposition(parent_ctx, page, &scene);
-    } else {
-        try renderScenePageWithCairo(parent_ctx, page, &scene);
-    }
+    scene_pdf.render(parent_ctx.allocator, parent_ctx.io, &scene, page.render_path) catch |err| {
+        if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose scene PDF layers");
+        return err;
+    };
+    try validatePdfFile(parent_ctx, page.render_path);
+    try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
 }
 
 fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !render_scene.Page {
@@ -2902,11 +2906,11 @@ fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !re
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
         .command_failure = parent_ctx.command_failure,
-        .scene = &scene,
+        .sink = .{ .scene = .{ .page = &scene } },
     };
 
     const page_fill = page.background orelse Color{ .r = 1, .g = 1, .b = 1 };
-    try emitFillRect(&ctx, 0, 0, PageLayout.width, PageLayout.height, page_fill);
+    try activeSink(&ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = PageLayout.width, .height = PageLayout.height }, page_fill);
 
     var links = std.ArrayList(LinkAnnotation).empty;
     defer links.deinit(ctx.allocator);
@@ -2940,269 +2944,14 @@ fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !re
 }
 
 fn drawRenderOpIntoScene(ctx: *DrawContext, op: *const RenderOp) !void {
-    const previous_node_id = ctx.scene_node_id;
-    ctx.scene_node_id = op.node_id;
-    defer ctx.scene_node_id = previous_node_id;
+    const sink = activeSink(ctx);
+    const previous_node_id = sink.replaceNodeId(op.node_id);
+    defer _ = sink.replaceNodeId(previous_node_id);
     try drawRenderOp(ctx, op);
-}
-
-fn renderScenePageWithCairo(parent_ctx: *DrawContext, page: *const RenderPage, scene: *const render_scene.Page) !void {
-    const pdf_path_z = try parent_ctx.allocator.dupeZ(u8, page.render_path);
-    defer parent_ctx.allocator.free(pdf_path_z);
-    const pdf = c.ss_pdf_create(pdf_path_z.ptr, scene.width, scene.height) orelse return NativePdfError.CairoCreateFailed;
-    defer c.ss_pdf_destroy(pdf);
-    c.ss_pdf_set_creator(pdf, "ss scene Cairo/Pango backend");
-    c.ss_pdf_begin_page(pdf, scene.width, scene.height);
-    try replaySceneItems(pdf, scene.items.items);
-    try emitSceneAnnotations(pdf, scene);
-    c.ss_pdf_end_page(pdf);
-    if (c.ss_pdf_finish(pdf) != 0) return NativePdfError.CairoFailed;
-    try validatePdfFile(parent_ctx, page.render_path);
-    try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
-}
-
-fn renderScenePageWithPdfComposition(parent_ctx: *DrawContext, page: *const RenderPage, scene: *const render_scene.Page) !void {
-    var layers = std.ArrayList(c.SsQpdfLayer).empty;
-    defer layers.deinit(parent_ctx.allocator);
-    var owned_paths = std.ArrayList([:0]u8).empty;
-    defer {
-        for (owned_paths.items) |path| parent_ctx.allocator.free(path);
-        owned_paths.deinit(parent_ctx.allocator);
-    }
-    var native_paths = std.ArrayList([]u8).empty;
-    defer {
-        for (native_paths.items) |path| {
-            deleteFileIfExists(parent_ctx, path);
-            parent_ctx.allocator.free(path);
-        }
-        native_paths.deinit(parent_ctx.allocator);
-    }
-
-    var segment_start: usize = 0;
-    var layer_index: usize = 0;
-    var first_native_layer = true;
-    for (scene.items.items, 0..) |item, item_index| {
-        if (item != .pdf_page) continue;
-        if (segment_start < item_index or first_native_layer) {
-            try appendNativeSceneLayer(
-                parent_ctx,
-                scene,
-                page.render_path,
-                &layers,
-                &owned_paths,
-                &native_paths,
-                &layer_index,
-                segment_start,
-                item_index,
-                first_native_layer,
-            );
-            first_native_layer = false;
-        }
-        try appendScenePdfLayer(parent_ctx, scene, &layers, item.pdf_page);
-        segment_start = item_index + 1;
-    }
-    if (segment_start < scene.items.items.len) {
-        try appendNativeSceneLayer(
-            parent_ctx,
-            scene,
-            page.render_path,
-            &layers,
-            &owned_paths,
-            &native_paths,
-            &layer_index,
-            segment_start,
-            scene.items.items.len,
-            first_native_layer,
-        );
-    }
-
-    const output_z = try parent_ctx.allocator.dupeZ(u8, page.render_path);
-    defer parent_ctx.allocator.free(output_z);
-    if (c.ss_qpdf_compose(output_z.ptr, layers.items.ptr, layers.items.len) != 0) {
-        try recordQpdfFailure(parent_ctx, "compose scene PDF layers");
-        return NativePdfError.AssetConversionFailed;
-    }
-    try validatePdfFile(parent_ctx, page.render_path);
-    try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
-}
-
-fn appendNativeSceneLayer(
-    ctx: *DrawContext,
-    scene: *const render_scene.Page,
-    output: []const u8,
-    layers: *std.ArrayList(c.SsQpdfLayer),
-    owned_paths: *std.ArrayList([:0]u8),
-    native_paths: *std.ArrayList([]u8),
-    layer_index: *usize,
-    start: usize,
-    end: usize,
-    first_layer: bool,
-) !void {
-    const native_path = try pdfLayerPath(ctx.allocator, output, layer_index.*);
-    errdefer ctx.allocator.free(native_path);
-    errdefer deleteFileIfExists(ctx, native_path);
-    try renderNativeSceneLayer(ctx, scene, native_path, start, end, first_layer);
-    const native_path_z = try ctx.allocator.dupeZ(u8, native_path);
-    owned_paths.append(ctx.allocator, native_path_z) catch |err| {
-        ctx.allocator.free(native_path_z);
-        return err;
-    };
-    try layers.append(ctx.allocator, .{
-        .path = native_path_z.ptr,
-        .page_index = 0,
-        .box = @intFromEnum(core.render_policy.PdfPageBox.crop),
-        .x = 0,
-        .y = 0,
-        .width = scene.width,
-        .height = scene.height,
-        .copy_annotations = 0,
-    });
-    try native_paths.append(ctx.allocator, native_path);
-    layer_index.* += 1;
-}
-
-fn appendScenePdfLayer(ctx: *DrawContext, scene: *const render_scene.Page, layers: *std.ArrayList(c.SsQpdfLayer), item: render_scene.PdfPage) !void {
-    try layers.append(ctx.allocator, .{
-        .path = item.path.ptr,
-        .page_index = item.page_index,
-        .box = @intFromEnum(item.box),
-        .x = item.rect.x,
-        .y = scene.height - item.rect.y - item.rect.height,
-        .width = item.rect.width,
-        .height = item.rect.height,
-        .copy_annotations = if (item.copy_annotations) 1 else 0,
-    });
-}
-
-fn renderNativeSceneLayer(
-    parent_ctx: *DrawContext,
-    scene: *const render_scene.Page,
-    path: []const u8,
-    start: usize,
-    end: usize,
-    first_layer: bool,
-) !void {
-    const path_z = try parent_ctx.allocator.dupeZ(u8, path);
-    defer parent_ctx.allocator.free(path_z);
-    const pdf = c.ss_pdf_create(path_z.ptr, scene.width, scene.height) orelse return NativePdfError.CairoCreateFailed;
-    defer c.ss_pdf_destroy(pdf);
-    c.ss_pdf_set_creator(pdf, "ss scene Cairo/Pango/libqpdf backend");
-    c.ss_pdf_begin_page(pdf, scene.width, scene.height);
-    if (first_layer) try emitSceneAnnotations(pdf, scene);
-    try replaySceneItems(pdf, scene.items.items[start..end]);
-    c.ss_pdf_end_page(pdf);
-    if (c.ss_pdf_finish(pdf) != 0) return NativePdfError.CairoFailed;
-    try validatePdfFile(parent_ctx, path);
-}
-
-fn replaySceneItems(pdf: *c.SsPdf, items: []const render_scene.Item) !void {
-    for (items) |item| {
-        switch (item) {
-            .fill_rect => |fill| c.ss_pdf_fill_rect(pdf, fill.rect.x, fill.rect.y, fill.rect.width, fill.rect.height, fill.color.r, fill.color.g, fill.color.b),
-            .stroke_line => |line| c.ss_pdf_stroke_line(
-                pdf,
-                line.start.x,
-                line.start.y,
-                line.end.x,
-                line.end.y,
-                line.line_width,
-                line.color.r,
-                line.color.g,
-                line.color.b,
-                line.dash_on,
-                line.dash_off,
-            ),
-            .rounded_rect => |rect| c.ss_pdf_fill_stroke_rounded_rect(
-                pdf,
-                rect.rect.x,
-                rect.rect.y,
-                rect.rect.width,
-                rect.rect.height,
-                rect.radius,
-                if (rect.fill != null) 1 else 0,
-                if (rect.fill) |color| color.r else 0,
-                if (rect.fill) |color| color.g else 0,
-                if (rect.fill) |color| color.b else 0,
-                if (rect.stroke != null) 1 else 0,
-                if (rect.stroke) |color| color.r else 0,
-                if (rect.stroke) |color| color.g else 0,
-                if (rect.stroke) |color| color.b else 0,
-                rect.line_width,
-            ),
-            .text => |text| {
-                const result = if (text.preserve_color_glyphs)
-                    c.ss_pdf_draw_color_text_baseline(
-                        pdf,
-                        text.x,
-                        text.baseline_y,
-                        text.width,
-                        text.text.ptr,
-                        text.font_family.ptr,
-                        @intCast(text.font_weight),
-                        core.font.styleCode(text.font_style),
-                        core.font.stretchCode(text.font_stretch),
-                        text.font_size,
-                        text.color.r,
-                        text.color.g,
-                        text.color.b,
-                        if (text.wrap) 1 else 0,
-                    )
-                else
-                    c.ss_pdf_draw_text_baseline(
-                        pdf,
-                        text.x,
-                        text.baseline_y,
-                        text.width,
-                        text.text.ptr,
-                        text.font_family.ptr,
-                        @intCast(text.font_weight),
-                        core.font.styleCode(text.font_style),
-                        core.font.stretchCode(text.font_stretch),
-                        text.font_size,
-                        text.color.r,
-                        text.color.g,
-                        text.color.b,
-                        if (text.wrap) 1 else 0,
-                    );
-                if (result != 0) return NativePdfError.PangoCreateFailed;
-            },
-            .raster => |raster| {
-                if (c.ss_pdf_draw_raster(pdf, raster.path.ptr, raster.rect.x, raster.rect.y, raster.rect.width, raster.rect.height) != 0) {
-                    return NativePdfError.ImageDecodeFailed;
-                }
-            },
-            .svg => |svg| {
-                const result = if (svg.tint) |color|
-                    c.ss_pdf_draw_svg_tinted(pdf, svg.path.ptr, svg.rect.x, svg.rect.y, svg.rect.width, svg.rect.height, color.r, color.g, color.b)
-                else
-                    c.ss_pdf_draw_svg(pdf, svg.path.ptr, svg.rect.x, svg.rect.y, svg.rect.width, svg.rect.height);
-                if (result != 0) return NativePdfError.ImageDecodeFailed;
-            },
-            .pdf_page => unreachable,
-        }
-    }
-}
-
-fn emitSceneAnnotations(pdf: *c.SsPdf, scene: *const render_scene.Page) !void {
-    for (scene.destinations.items) |destination| {
-        if (c.ss_pdf_add_destination(pdf, destination.name.ptr, destination.point.x, destination.point.y) != 0) return NativePdfError.CairoFailed;
-    }
-    for (scene.links.items) |link| {
-        const result = switch (link.kind) {
-            .destination => c.ss_pdf_begin_dest_link(pdf, link.rect.x, link.rect.y, link.rect.width, link.rect.height, link.target.ptr),
-            .uri => c.ss_pdf_begin_uri_link(pdf, link.rect.x, link.rect.y, link.rect.width, link.rect.height, link.target.ptr),
-        };
-        if (result != 0) return NativePdfError.CairoFailed;
-        c.ss_pdf_end_link(pdf);
-    }
 }
 
 fn isPdfAssetOp(op: *const RenderOp) bool {
     return op.render.kind == .vector_asset and std.ascii.eqlIgnoreCase(std.fs.path.extension(op.content), ".pdf");
-}
-
-fn pdfLayerPath(allocator: Allocator, output: []const u8, index: usize) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}.layer-{d}.pdf", .{ output, index });
 }
 
 fn pdfAssetPlacement(ctx: *DrawContext, op: *const RenderOp, source_z: [:0]const u8) !Frame {
@@ -3296,6 +3045,7 @@ const MeasurementScope = struct {
     ctx: *DrawContext,
     previous_links: ?*std.ArrayList(LinkAnnotation),
     previous_destinations: ?*std.ArrayList(DestinationAnnotation),
+    previous_sink: ?draw_sink.Sink,
     links: std.ArrayList(LinkAnnotation) = .empty,
     destinations: std.ArrayList(DestinationAnnotation) = .empty,
     active: bool = false,
@@ -3305,13 +3055,14 @@ const MeasurementScope = struct {
             .ctx = ctx,
             .previous_links = ctx.link_annotations,
             .previous_destinations = ctx.destinations,
+            .previous_sink = ctx.sink,
         };
     }
 
     fn begin(self: *MeasurementScope) !void {
         if (c.ss_pdf_begin_measurement(self.ctx.pdf) != 0) return NativePdfError.CairoCreateFailed;
         self.active = true;
-        self.ctx.measurement_depth += 1;
+        self.ctx.sink = .{ .pdf = self.ctx.pdf };
         self.ctx.link_annotations = &self.links;
         self.ctx.destinations = &self.destinations;
     }
@@ -3325,12 +3076,12 @@ const MeasurementScope = struct {
     fn deinit(self: *MeasurementScope) void {
         self.ctx.link_annotations = self.previous_links;
         self.ctx.destinations = self.previous_destinations;
+        self.ctx.sink = self.previous_sink;
         deinitLinkAnnotations(self.ctx.allocator, self.links.items);
         self.links.deinit(self.ctx.allocator);
         deinitDestinationAnnotations(self.ctx.allocator, self.destinations.items);
         self.destinations.deinit(self.ctx.allocator);
         if (self.active) {
-            self.ctx.measurement_depth -= 1;
             _ = c.ss_pdf_end_measurement(self.ctx.pdf);
             self.active = false;
         }
@@ -3683,193 +3434,6 @@ fn clampWorkerCount(value: usize, task_count: usize) usize {
     return @min(@max(@as(usize, 1), value), task_count);
 }
 
-fn recordsScene(ctx: *const DrawContext) bool {
-    return ctx.scene != null and ctx.measurement_depth == 0;
-}
-
-fn emitFillRect(ctx: *DrawContext, x: f32, y: f32, width: f32, height: f32, color: Color) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendFillRect(ctx.allocator, ctx.scene_node_id, .{ .x = x, .y = y, .width = width, .height = height }, color);
-        return;
-    }
-    c.ss_pdf_fill_rect(ctx.pdf, x, y, width, height, color.r, color.g, color.b);
-}
-
-fn emitStrokeLine(
-    ctx: *DrawContext,
-    x1: f32,
-    y1: f32,
-    x2: f32,
-    y2: f32,
-    line_width: f32,
-    color: Color,
-    dash_on: f32,
-    dash_off: f32,
-) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendStrokeLine(
-            ctx.allocator,
-            ctx.scene_node_id,
-            .{ .x = x1, .y = y1 },
-            .{ .x = x2, .y = y2 },
-            line_width,
-            color,
-            dash_on,
-            dash_off,
-        );
-        return;
-    }
-    c.ss_pdf_stroke_line(ctx.pdf, x1, y1, x2, y2, line_width, color.r, color.g, color.b, dash_on, dash_off);
-}
-
-fn emitRoundedRect(ctx: *DrawContext, frame: Frame, radius: f32, fill: ?Color, stroke: ?Color, line_width: f32) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendRoundedRect(
-            ctx.allocator,
-            ctx.scene_node_id,
-            .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
-            radius,
-            fill,
-            stroke,
-            line_width,
-        );
-        return;
-    }
-    c.ss_pdf_fill_stroke_rounded_rect(
-        ctx.pdf,
-        frame.x,
-        topOf(frame),
-        frame.width,
-        frame.height,
-        radius,
-        if (fill != null) 1 else 0,
-        if (fill) |value| value.r else 0,
-        if (fill) |value| value.g else 0,
-        if (fill) |value| value.b else 0,
-        if (stroke != null) 1 else 0,
-        if (stroke) |value| value.r else 0,
-        if (stroke) |value| value.g else 0,
-        if (stroke) |value| value.b else 0,
-        line_width,
-    );
-}
-
-fn emitTextBaseline(
-    ctx: *DrawContext,
-    x: f32,
-    baseline_y: f32,
-    width: f32,
-    content: []const u8,
-    font: FontFace,
-    font_size: f32,
-    color: Color,
-    wrap: bool,
-    preserve_color_glyphs: bool,
-) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendText(
-            ctx.allocator,
-            ctx.scene_node_id,
-            x,
-            baseline_y,
-            width,
-            content,
-            font,
-            font_size,
-            color,
-            wrap,
-            preserve_color_glyphs,
-        );
-        return;
-    }
-    const family_z = try ctx.allocator.dupeZ(u8, font.family);
-    defer ctx.allocator.free(family_z);
-    const content_z = try ctx.allocator.dupeZ(u8, content);
-    defer ctx.allocator.free(content_z);
-    const result = if (preserve_color_glyphs)
-        c.ss_pdf_draw_color_text_baseline(
-            ctx.pdf,
-            x,
-            baseline_y,
-            width,
-            content_z.ptr,
-            family_z.ptr,
-            @intCast(font.weight),
-            core.font.styleCode(font.style),
-            core.font.stretchCode(font.stretch),
-            font_size,
-            color.r,
-            color.g,
-            color.b,
-            if (wrap) 1 else 0,
-        )
-    else
-        c.ss_pdf_draw_text_baseline(
-            ctx.pdf,
-            x,
-            baseline_y,
-            width,
-            content_z.ptr,
-            family_z.ptr,
-            @intCast(font.weight),
-            core.font.styleCode(font.style),
-            core.font.stretchCode(font.stretch),
-            font_size,
-            color.r,
-            color.g,
-            color.b,
-            if (wrap) 1 else 0,
-        );
-    if (result != 0) return NativePdfError.PangoCreateFailed;
-}
-
-fn emitRaster(ctx: *DrawContext, rect: render_scene.Rect, path: []const u8) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendRaster(ctx.allocator, ctx.scene_node_id, rect, path);
-        return;
-    }
-    const path_z = try ctx.allocator.dupeZ(u8, path);
-    defer ctx.allocator.free(path_z);
-    if (c.ss_pdf_draw_raster(ctx.pdf, path_z.ptr, rect.x, rect.y, rect.width, rect.height) != 0) return NativePdfError.ImageDecodeFailed;
-}
-
-fn emitSvg(ctx: *DrawContext, rect: render_scene.Rect, path: []const u8, tint: ?Color) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendSvg(ctx.allocator, ctx.scene_node_id, rect, path, tint);
-        return;
-    }
-    const path_z = try ctx.allocator.dupeZ(u8, path);
-    defer ctx.allocator.free(path_z);
-    const result = if (tint) |color|
-        c.ss_pdf_draw_svg_tinted(ctx.pdf, path_z.ptr, rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b)
-    else
-        c.ss_pdf_draw_svg(ctx.pdf, path_z.ptr, rect.x, rect.y, rect.width, rect.height);
-    if (result != 0) return NativePdfError.ImageDecodeFailed;
-}
-
-fn emitPdfPage(
-    ctx: *DrawContext,
-    frame: Frame,
-    path: []const u8,
-    page_index: usize,
-    box: core.render_policy.PdfPageBox,
-    copy_annotations: bool,
-) !void {
-    if (recordsScene(ctx)) {
-        try ctx.scene.?.appendPdfPage(
-            ctx.allocator,
-            ctx.scene_node_id,
-            .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
-            path,
-            page_index,
-            box,
-            copy_annotations,
-        );
-        return;
-    }
-    return NativePdfError.UnsupportedAssetType;
-}
-
 fn addDestination(ctx: *DrawContext, maybe_link_id: ?[]const u8, frame: Frame) !void {
     const link_id = maybe_link_id orelse return;
     if (link_id.len == 0) return;
@@ -3943,7 +3507,7 @@ fn drawArrowHead(ctx: *DrawContext, tip_x: f32, tip_y: f32, dir_x: f32, dir_y: f
 }
 
 fn strokeLine(ctx: *DrawContext, x1: f32, y1: f32, x2: f32, y2: f32, line_width: f32, color: Color, dash_on: f32, dash_off: f32) !void {
-    try emitStrokeLine(ctx, x1, y1, x2, y2, line_width, color, dash_on, dash_off);
+    try activeSink(ctx).strokeLine(ctx.allocator, .{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, line_width, color, dash_on, dash_off);
 }
 
 fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !void {
@@ -3951,7 +3515,15 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
         const line_width = render.rule.line_width;
         const y = toTopY(frame.y + @max(frame.height / 2.0, 1.5));
         const dash = render.rule.dash;
-        try emitStrokeLine(ctx, frame.x, y, frame.x + frame.width, y, line_width, stroke, if (dash) |d| d.on else 0, if (dash) |d| d.off else 0);
+        try activeSink(ctx).strokeLine(
+            ctx.allocator,
+            .{ .x = frame.x, .y = y },
+            .{ .x = frame.x + frame.width, .y = y },
+            line_width,
+            stroke,
+            if (dash) |d| d.on else 0,
+            if (dash) |d| d.off else 0,
+        );
     }
 
     if (render.chrome.fill != null or render.chrome.stroke != null) {
@@ -3971,12 +3543,27 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
 
     if (render.underline.color) |color| {
         const y = toTopY(frame.y + render.underline.offset);
-        try emitStrokeLine(ctx, frame.x, y, frame.x + frame.width, y, render.underline.width, color, 0, 0);
+        try activeSink(ctx).strokeLine(
+            ctx.allocator,
+            .{ .x = frame.x, .y = y },
+            .{ .x = frame.x + frame.width, .y = y },
+            render.underline.width,
+            color,
+            0,
+            0,
+        );
     }
 }
 
 fn drawRoundedRect(ctx: *DrawContext, frame: Frame, radius: f32, fill: ?Color, stroke: ?Color, line_width: f32) !void {
-    try emitRoundedRect(ctx, frame, radius, fill, stroke, line_width);
+    try activeSink(ctx).roundedRect(
+        ctx.allocator,
+        .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
+        radius,
+        fill,
+        stroke,
+        line_width,
+    );
 }
 
 fn insetUniformFrame(frame: Frame, inset: f32) Frame {
@@ -4069,9 +3656,9 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
     const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text);
     const frame = placement.frame;
 
-    try emitRoundedRect(
-        ctx,
-        frame,
+    try activeSink(ctx).roundedRect(
+        ctx.allocator,
+        .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
         text.markdown_code_radius,
         text.markdown_code_fill,
         text.markdown_code_stroke,
@@ -4228,7 +3815,14 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         for (0..columns) |column_index| {
             const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * column_width;
             const cell_frame = Frame{ .x = cell_x, .y = row_bottom, .width = column_width, .height = row_height };
-            try emitRoundedRect(ctx, cell_frame, 0, fill, text.markdown_table_border, text.markdown_table_line_width);
+            try activeSink(ctx).roundedRect(
+                ctx.allocator,
+                .{ .x = cell_frame.x, .y = topOf(cell_frame), .width = cell_frame.width, .height = cell_frame.height },
+                0,
+                fill,
+                text.markdown_table_border,
+                text.markdown_table_line_width,
+            );
 
             if (column_index < row.cells.items.len) {
                 const cell = row.cells.items[column_index];
@@ -4905,13 +4499,13 @@ fn drawPlainTextAtTopWithOptions(
 fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
     const y = y_top + paint.font_size * 0.55;
     const line_width = @max(@as(f32, 1.0), paint.font_size * 0.065);
-    try emitStrokeLine(ctx, x, y, x + @max(atom.width, 1), y, line_width, atom.color, 0, 0);
+    try activeSink(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
 }
 
 fn drawUnderline(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
     const y = y_top + paint.font_size * 1.25;
     const line_width = @max(@as(f32, 0.8), paint.font_size * 0.055);
-    try emitStrokeLine(ctx, x, y, x + @max(atom.width, 1), y, line_width, atom.color, 0, 0);
+    try activeSink(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
 }
 
 fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.highlight.Language {
@@ -5518,7 +5112,14 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
             .pdf_page = 1,
             .pdf_box = .crop,
         };
-        try emitPdfPage(ctx, fitted, source, paint.pdf_page - 1, paint.pdf_box, true);
+        try activeSink(ctx).pdfPage(
+            ctx.allocator,
+            .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height },
+            source,
+            paint.pdf_page - 1,
+            paint.pdf_box,
+            true,
+        );
         return;
     }
     return NativePdfError.UnsupportedAssetType;
@@ -5808,7 +5409,7 @@ fn drawRawTextWithMode(
     preserve_color_glyphs: bool,
 ) !void {
     const baseline_y = y_top + font_size;
-    try emitTextBaseline(ctx, x, baseline_y, width, content, font, font_size, color, wrap, preserve_color_glyphs);
+    try activeSink(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, preserve_color_glyphs);
 }
 
 fn drawLinkedRawText(
@@ -5913,33 +5514,31 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
 fn drawRasterNatural(ctx: *DrawContext, frame: Frame, source: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const size = try rasterAssetSize(ctx, source);
     const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
-    try emitRaster(ctx, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, source);
+    try activeSink(ctx).raster(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, source);
 }
 
 fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const svg = try svgAsset(ctx, svg_path);
     const fitted = naturalAssetFrame(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
-    try emitSvg(ctx, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, svg_path, null);
+    try activeSink(ctx).svg(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, svg_path, null);
 }
 
 fn drawSvgFrame(ctx: *DrawContext, frame: Frame, svg_path: []const u8) !void {
-    try emitSvg(ctx, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, null);
+    try activeSink(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, null);
 }
 
 fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, color: Color) !void {
-    try emitSvg(ctx, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
+    try activeSink(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
 }
 
 fn placeMathPdf(ctx: *DrawContext, frame: Frame, path: []const u8, page_index: usize) !void {
-    if (ctx.measurement_depth > 0) {
-        try emitFillRect(ctx, frame.x, topOf(frame), frame.width, frame.height, .{ .r = 0, .g = 0, .b = 0 });
+    const rect = render_scene.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
+    const sink = activeSink(ctx);
+    if (sink.isScene()) {
+        try sink.pdfPage(ctx.allocator, rect, path, page_index, .crop, false);
         return;
     }
-    if (ctx.scene != null) {
-        try emitPdfPage(ctx, frame, path, page_index, .crop, false);
-        return;
-    }
-    try emitFillRect(ctx, frame.x, topOf(frame), frame.width, frame.height, .{ .r = 0, .g = 0, .b = 0 });
+    try sink.fillRect(ctx.allocator, rect, .{ .r = 0, .g = 0, .b = 0 });
 }
 
 const Size = struct { width: f32, height: f32 };
