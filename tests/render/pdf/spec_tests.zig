@@ -91,57 +91,6 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     try expectInternalDestination(json);
 }
 
-test "render PDF spec: Cairo recording fit keeps oversized text inside the page" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const allocator = testing.allocator;
-    const pdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/recording-fit.pdf", .{tmp.sub_path[0..]});
-    defer allocator.free(pdf_path);
-    const pdf_path_z = try allocator.dupeZ(u8, pdf_path);
-    defer allocator.free(pdf_path_z);
-
-    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 320, 180) orelse return error.CairoCreateFailed;
-    defer c.ss_pdf_destroy(pdf);
-    c.ss_pdf_begin_page(pdf, 320, 180);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_recording(pdf));
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_draw_text(
-        pdf,
-        -40,
-        -24,
-        900,
-        "Oversized recording text reaches past both page edges",
-        "sans-serif",
-        700,
-        0,
-        4,
-        52,
-        0,
-        0,
-        0,
-        0,
-    ));
-
-    var ink: c.SsPdfRecordingExtents = undefined;
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_recording_ink_extents(pdf, &ink));
-    try testing.expect(ink.x < 0 or ink.y < 0 or ink.x + ink.width > 320 or ink.y + ink.height > 180);
-
-    var fit: c.SsPdfRecordingFit = undefined;
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_recording_fit(pdf, 320, 180, 1, &fit));
-    const left = fit.tx + fit.bounds.x * fit.scale;
-    const right = fit.tx + (fit.bounds.x + fit.bounds.width) * fit.scale;
-    const top = fit.ty + fit.bounds.y * fit.scale;
-    const bottom = fit.ty + (fit.bounds.y + fit.bounds.height) * fit.scale;
-    const eps = 1e-6;
-    try testing.expect(left >= 1 - eps);
-    try testing.expect(top >= 1 - eps);
-    try testing.expect(right <= 319 + eps);
-    try testing.expect(bottom <= 179 + eps);
-
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_paint_recording_with_fit(pdf, &fit));
-    c.ss_pdf_end_page(pdf);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
-}
-
 test "render PDF spec: Cairo shim draws baseline text without a clipping frame" {
     try expectBaselineTextDrawn(false);
     try expectBaselineTextDrawn(true);
@@ -160,9 +109,21 @@ fn expectBaselineTextDrawn(preserve_color_glyphs: bool) !void {
     defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_begin_page(pdf, 320, 180);
 
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_recording(pdf));
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_begin_measurement(pdf));
     const baseline_y: f64 = 58;
-    const result = if (preserve_color_glyphs)
+    try testing.expectEqual(@as(c_int, 0), drawTestBaselineText(pdf, baseline_y, preserve_color_glyphs));
+    var ink: c.SsPdfInkExtents = undefined;
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_measurement_ink_extents(pdf, &ink));
+    try expectInkCrossesBaseline(ink, baseline_y);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_end_measurement(pdf));
+
+    try testing.expectEqual(@as(c_int, 0), drawTestBaselineText(pdf, baseline_y, preserve_color_glyphs));
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+}
+
+fn drawTestBaselineText(pdf: ?*c.SsPdf, baseline_y: f64, preserve_color_glyphs: bool) c_int {
+    return if (preserve_color_glyphs)
         c.ss_pdf_draw_color_text_baseline(
             pdf,
             20,
@@ -196,17 +157,9 @@ fn expectBaselineTextDrawn(preserve_color_glyphs: bool) !void {
             0,
             1,
         );
-    try testing.expectEqual(@as(c_int, 0), result);
-    var ink: c.SsPdfRecordingExtents = undefined;
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_recording_ink_extents(pdf, &ink));
-    try expectInkCrossesBaseline(ink, baseline_y);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_paint_recording_fit(pdf, 320, 180, 1));
-
-    c.ss_pdf_end_page(pdf);
-    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
 }
 
-fn expectInkCrossesBaseline(ink: c.SsPdfRecordingExtents, baseline_y: f64) !void {
+fn expectInkCrossesBaseline(ink: c.SsPdfInkExtents, baseline_y: f64) !void {
     const eps = 1.0;
     try testing.expect(ink.height > 0);
     try testing.expect(ink.y < baseline_y - eps);

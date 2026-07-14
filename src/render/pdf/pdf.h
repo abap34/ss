@@ -8,19 +8,12 @@ extern "C" {
 #endif
 
 typedef struct SsPdf SsPdf;
-typedef struct SsPdfRecordingExtents {
+typedef struct SsPdfInkExtents {
     double x;
     double y;
     double width;
     double height;
-} SsPdfRecordingExtents;
-
-typedef struct SsPdfRecordingFit {
-    SsPdfRecordingExtents bounds;
-    double scale;
-    double tx;
-    double ty;
-} SsPdfRecordingFit;
+} SsPdfInkExtents;
 
 typedef struct SsQpdfLayer {
     const char *path;
@@ -42,19 +35,14 @@ const char *ss_pdf_harfbuzz_version_string(void);
 const char *ss_qpdf_version_string(void);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
+SsPdf *ss_pdf_create_scratch(void);
 void ss_pdf_destroy(SsPdf *pdf);
 void ss_pdf_set_creator(SsPdf *pdf, const char *creator);
 void ss_pdf_begin_page(SsPdf *pdf, double width, double height);
 void ss_pdf_end_page(SsPdf *pdf);
 int ss_pdf_finish(SsPdf *pdf);
-int ss_pdf_begin_recording(SsPdf *pdf);
-void ss_pdf_discard_recording(SsPdf *pdf);
-int ss_pdf_recording_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents);
-int ss_pdf_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin, SsPdfRecordingFit *fit);
-int ss_pdf_paint_recording_with_fit(SsPdf *pdf, const SsPdfRecordingFit *fit);
-int ss_pdf_paint_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin);
 int ss_pdf_begin_measurement(SsPdf *pdf);
-int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents);
+int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfInkExtents *extents);
 int ss_pdf_end_measurement(SsPdf *pdf);
 
 void ss_pdf_fill_rect(SsPdf *pdf, double x, double y, double width, double height, double r, double g, double b);

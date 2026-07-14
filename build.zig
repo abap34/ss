@@ -365,6 +365,17 @@ fn addTestStep(
     test_step.dependOn(&run_render_pdf_spec_tests.step);
     const render_pdf_test_step = b.step("test-render-pdf", "Run focused native PDF renderer tests");
     render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
+    const render_scene_mod = createModule(ctx, "src/render/scene.zig", &.{
+        import("core", modules.core),
+    }, null);
+    const render_scene_spec_mod = createModule(ctx, "tests/render/scene/spec_tests.zig", &.{
+        import("render_scene", render_scene_mod),
+    }, null);
+    const render_scene_spec_tests = b.addTest(.{ .root_module = render_scene_spec_mod });
+    const run_render_scene_spec_tests = b.addRunArtifact(render_scene_spec_tests);
+    test_step.dependOn(&run_render_scene_spec_tests.step);
+    const render_scene_test_step = b.step("test-render-scene", "Run focused render scene tests");
+    render_scene_test_step.dependOn(&run_render_scene_spec_tests.step);
     const render_wrap_mod = createModule(ctx, "src/render/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/pdf/native_wrap_spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
