@@ -1,6 +1,7 @@
 type LayoutPolicy = top | top_flow | center | center_stack
 type RenderKind = text | code | vector_math | vector_asset | raster_asset | shape | chrome_only
 type ShapeMarker = plain | arrow
+type PdfPageBox = media | crop | bleed | trim | art
 type TextParseMode = none | inline | block
 type WrapMode = on | off
 type FitPolicy = warn | error | ignore
@@ -137,6 +138,8 @@ record ShapeStyle {
 record AssetStyle {
   scale: Number = 1
   width: Number? = none
+  pdf_page: Number = 1
+  pdf_box: PdfPageBox = PdfPageBox.crop
 }
 
 type Doc = object {

@@ -505,10 +505,12 @@ fn/! image(path_value: String, factor: Number = 1, theme: Theme = current_theme(
   return obj
 end
 
-fn/! pdf(path_value: String, factor: Number = 1, theme: Theme = current_theme()) -> Object
+fn/! pdf(path_value: String, factor: Number = 1, page_number: Number = 1, page_box: PdfPageBox = PdfPageBox.crop, theme: Theme = current_theme()) -> Object
   let obj = objects::pdf_obj(path_value)
   let pdf_style = theme.pdf with {
     asset.scale = factor
+    asset.pdf_page = page_number
+    asset.pdf_box = page_box
   }
   obj.layout = pdf_style.layout
   obj.asset = pdf_style.asset

@@ -18,6 +18,7 @@ const ProjectModules = struct {
     language_type: *Module,
     ast: *Module,
     stdlib_assets: *Module,
+    fontawesome_assets: *Module,
     project: *Module,
     core: *Module,
 };
@@ -192,6 +193,12 @@ pub fn build(b: *std.Build) void {
         .install_subdir = "share/ss/stdlib",
         .include_extensions = &.{".ss"},
     });
+    b.installDirectory(.{
+        .source_dir = b.path("third_party/fontawesome-free"),
+        .install_dir = .prefix,
+        .install_subdir = "share/licenses/ss/fontawesome-free",
+        .include_extensions = &.{".txt"},
+    });
 
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| run_cmd.addArgs(args);
@@ -213,6 +220,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("language_type", language_type_mod),
     }, null);
     const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
+    const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
@@ -221,6 +229,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("ast", ast_mod),
         import("model", model_mod),
         import("language_type", language_type_mod),
+        import("fontawesome_assets", fontawesome_assets_mod),
     }, true);
     core_mod.addOptions("build_options", build_options);
     core_mod.addIncludePath(md4c_include);
@@ -236,6 +245,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .language_type = language_type_mod,
         .ast = ast_mod,
         .stdlib_assets = stdlib_assets_mod,
+        .fontawesome_assets = fontawesome_assets_mod,
         .project = project_mod,
         .core = core_mod,
     };
@@ -350,7 +360,11 @@ fn addTestStep(
     }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{}, true);
     addNativePdfBackend(ctx, render_pdf_spec_mod, tree_sitter);
-    addTestModule(b, test_step, render_pdf_spec_mod);
+    const render_pdf_spec_tests = b.addTest(.{ .root_module = render_pdf_spec_mod });
+    const run_render_pdf_spec_tests = b.addRunArtifact(render_pdf_spec_tests);
+    test_step.dependOn(&run_render_pdf_spec_tests.step);
+    const render_pdf_test_step = b.step("test-render-pdf", "Run focused native PDF renderer tests");
+    render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
     const render_wrap_mod = createModule(ctx, "src/render/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/pdf/native_wrap_spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
@@ -391,6 +405,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("model", modules.model),
         import("language_type", modules.language_type),
         import("stdlib_assets", modules.stdlib_assets),
+        import("fontawesome_assets", modules.fontawesome_assets),
     }, link_libc);
 }
 
@@ -449,6 +464,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/lsp_completion_runtime_spec.mjs",
         "tests/runtime/lsp_editor_runtime_spec.mjs",
         "tests/runtime/markdown_table_alignment_runtime_spec.mjs",
+        "tests/runtime/math_pdf_runtime_spec.mjs",
         "tests/runtime/math_scaling_runtime_spec.mjs",
         "tests/runtime/render_page_bounds_runtime_spec.mjs",
         "tests/runtime/render_cache_runtime_spec.mjs",
@@ -505,6 +521,10 @@ fn addNativePdfBackend(ctx: BuildContext, module: *Module, tree_sitter: TreeSitt
     addTreeSitterRuntimeSource(ctx, module, tree_sitter);
     module.addCSourceFile(.{
         .file = b.path("src/render/pdf/pdf.c"),
+    });
+    module.addCSourceFile(.{
+        .file = b.path("src/render/pdf/pdf_qpdf.cpp"),
+        .flags = &.{"-std=c++20"},
     });
     addTreeSitterCSourceFile(ctx, module, b.path("editor/tree-sitter-ss/src/parser.c"));
     for (generated_tree_sitter_sources) |source| {
@@ -853,6 +873,8 @@ fn addNativePdfHeadersAndLibraries(b: *std.Build, module: *Module, tree_sitter: 
     module.addIncludePath(b.path("src/render/pdf"));
     addTreeSitterIncludePaths(b, module, tree_sitter);
     module.linkSystemLibrary("ss-pdf", .{ .use_pkg_config = .force });
+    module.linkSystemLibrary("libqpdf", .{ .use_pkg_config = .force });
+    module.linkSystemLibrary("c++", .{});
 }
 
 fn addTreeSitterIncludePaths(b: *std.Build, module: *Module, tree_sitter: TreeSitterBundle) void {

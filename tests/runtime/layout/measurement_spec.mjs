@@ -6,29 +6,26 @@ import path from "node:path";
 import { assert, ssBin } from "../harness.mjs";
 
 const pdflatexAvailable = await commandAvailable("pdflatex");
-const pdftocairoAvailable = await commandAvailable("pdftocairo");
 const pdftoppmAvailable = await commandAvailable("pdftoppm");
 const magickAvailable = await commandAvailable("magick");
 
 await testNaturalTitleWidthDoesNotSelfWrap();
 await testCheckReportsRasterMeasurementFailure();
+await testPanelHeightUsesRenderedIconMeasurement();
 if (pdflatexAvailable) {
-  await testPanelHeightUsesRenderedIconMeasurement();
   await testCheckReportsInlineMathMeasurementFailure();
   await testPanelHeightUsesRenderedMathMeasurement();
 }
 if (pdflatexAvailable && pdftoppmAvailable && magickAvailable) {
   await testVectorMathKeepsAspectRatio();
 }
-if (pdflatexAvailable && pdftocairoAvailable && pdftoppmAvailable && magickAvailable) {
+if (pdflatexAvailable && pdftoppmAvailable && magickAvailable) {
   await testRawTexBlockUsesMostAvailableWidth();
 }
-if (pdftocairoAvailable) {
-  await testPdfFactorScalesMeasuredAssetFrame();
-  if (pdftoppmAvailable && magickAvailable) {
-    await testPdfFactorControlsRenderedAssetSizeInsideFixedFrame();
-    await testPdfAssetDoesNotShrinkToFixedFrame();
-  }
+await testPdfFactorScalesMeasuredAssetFrame();
+if (pdftoppmAvailable && magickAvailable) {
+  await testPdfFactorControlsRenderedAssetSizeInsideFixedFrame();
+  await testPdfAssetDoesNotShrinkToFixedFrame();
 }
 
 async function testNaturalTitleWidthDoesNotSelfWrap() {
@@ -66,7 +63,7 @@ async function testPanelHeightUsesRenderedIconMeasurement() {
 
 page icon_panel
 body_box! <<
-aaaasifgsousgvfohsvdfou agdfoubvadkfnvadofygaskhbasdkhgasdohgvadkhvasdouags dkhasvdihasgdohvfihvaf asihgasdfkhavf asdghvasfd ![](fa-solid:star)
+aaaasifgsousgvfohsvdfou agdfoubvadkfnvadofygaskhbasdkhgasdohgvadkhvasdouags dkhasvdihasgdohvfihvaf asihgasdfkhavf asdghvasfd ![](fa-solid:star) ![](fa-regular:circle) ![](fa-brands:github)
 >>
 end
 `,

@@ -3,10 +3,12 @@
 #include <cairo-pdf.h>
 #include <cairo.h>
 #include <fontconfig/fontconfig.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
 #include <hb.h>
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,6 +84,10 @@ const char *ss_pdf_librsvg_version_string(void) {
     static char version[32];
     snprintf(version, sizeof(version), "%u.%u.%u", rsvg_major_version, rsvg_minor_version, rsvg_micro_version);
     return version;
+}
+
+const char *ss_pdf_gdk_pixbuf_version_string(void) {
+    return gdk_pixbuf_version;
 }
 
 int ss_pdf_fontconfig_version(void) {
@@ -255,6 +261,10 @@ int ss_pdf_begin_recording(SsPdf *pdf) {
     }
     pdf->cr = pdf->recording_cr;
     return 0;
+}
+
+void ss_pdf_discard_recording(SsPdf *pdf) {
+    ss_pdf_destroy_recording(pdf);
 }
 
 int ss_pdf_recording_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents) {
@@ -802,28 +812,75 @@ double ss_text_measure_text_visual_width(const char *text, const char *font_fami
     return width;
 }
 
-int ss_png_size(const char *path, double *width, double *height) {
-    cairo_surface_t *surface = cairo_image_surface_create_from_png(path);
-    if (surface == NULL || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-        if (surface != NULL) cairo_surface_destroy(surface);
-        return 1;
+static GdkPixbuf *ss_raster_load_oriented(const char *path) {
+    GError *error = NULL;
+    GdkPixbuf *source = gdk_pixbuf_new_from_file(path, &error);
+    if (source == NULL) {
+        if (error != NULL) g_error_free(error);
+        return NULL;
     }
-    if (width != NULL) *width = cairo_image_surface_get_width(surface);
-    if (height != NULL) *height = cairo_image_surface_get_height(surface);
-    cairo_surface_destroy(surface);
-    return 0;
+    GdkPixbuf *oriented = gdk_pixbuf_apply_embedded_orientation(source);
+    g_object_unref(source);
+    return oriented;
 }
 
-int ss_pdf_draw_png(SsPdf *pdf, const char *path, double x, double y, double width, double height) {
-    if (pdf == NULL || pdf->cr == NULL) return 1;
-    cairo_surface_t *image = cairo_image_surface_create_from_png(path);
-    if (image == NULL || cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
-        if (image != NULL) cairo_surface_destroy(image);
-        return 1;
+static cairo_surface_t *ss_raster_surface_from_pixbuf(GdkPixbuf *pixbuf) {
+    if (pixbuf == NULL || gdk_pixbuf_get_colorspace(pixbuf) != GDK_COLORSPACE_RGB ||
+        gdk_pixbuf_get_bits_per_sample(pixbuf) != 8) return NULL;
+
+    const int width = gdk_pixbuf_get_width(pixbuf);
+    const int height = gdk_pixbuf_get_height(pixbuf);
+    const int channels = gdk_pixbuf_get_n_channels(pixbuf);
+    const int source_stride = gdk_pixbuf_get_rowstride(pixbuf);
+    const int has_alpha = gdk_pixbuf_get_has_alpha(pixbuf);
+    const guchar *source = gdk_pixbuf_read_pixels(pixbuf);
+    if (width <= 0 || height <= 0 || source == NULL || (channels != 3 && channels != 4)) return NULL;
+
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    if (surface == NULL || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        if (surface != NULL) cairo_surface_destroy(surface);
+        return NULL;
     }
 
-    double source_width = cairo_image_surface_get_width(image);
-    double source_height = cairo_image_surface_get_height(image);
+    unsigned char *destination = cairo_image_surface_get_data(surface);
+    const int destination_stride = cairo_image_surface_get_stride(surface);
+    for (int row = 0; row < height; row++) {
+        const guchar *source_row = source + row * source_stride;
+        uint32_t *destination_row = (uint32_t *)(destination + row * destination_stride);
+        for (int column = 0; column < width; column++) {
+            const guchar *pixel = source_row + column * channels;
+            const uint32_t alpha = has_alpha ? pixel[3] : 255;
+            const uint32_t red = (pixel[0] * alpha + 127) / 255;
+            const uint32_t green = (pixel[1] * alpha + 127) / 255;
+            const uint32_t blue = (pixel[2] * alpha + 127) / 255;
+            destination_row[column] = (alpha << 24) | (red << 16) | (green << 8) | blue;
+        }
+    }
+    cairo_surface_mark_dirty(surface);
+    return surface;
+}
+
+int ss_raster_size(const char *path, double *width, double *height) {
+    GdkPixbuf *pixbuf = ss_raster_load_oriented(path);
+    if (pixbuf == NULL) return 1;
+    const int source_width = gdk_pixbuf_get_width(pixbuf);
+    const int source_height = gdk_pixbuf_get_height(pixbuf);
+    if (width != NULL) *width = source_width;
+    if (height != NULL) *height = source_height;
+    g_object_unref(pixbuf);
+    return source_width > 0 && source_height > 0 ? 0 : 1;
+}
+
+int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height) {
+    if (pdf == NULL || pdf->cr == NULL) return 1;
+    GdkPixbuf *pixbuf = ss_raster_load_oriented(path);
+    if (pixbuf == NULL) return 1;
+    cairo_surface_t *image = ss_raster_surface_from_pixbuf(pixbuf);
+    g_object_unref(pixbuf);
+    if (image == NULL) return 1;
+
+    const double source_width = cairo_image_surface_get_width(image);
+    const double source_height = cairo_image_surface_get_height(image);
     if (source_width <= 0 || source_height <= 0) {
         cairo_surface_destroy(image);
         return 1;

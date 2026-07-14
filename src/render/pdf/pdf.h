@@ -1,6 +1,8 @@
 #ifndef SS_PDF_H
 #define SS_PDF_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,11 +22,24 @@ typedef struct SsPdfRecordingFit {
     double ty;
 } SsPdfRecordingFit;
 
+typedef struct SsQpdfLayer {
+    const char *path;
+    size_t page_index;
+    int box;
+    double x;
+    double y;
+    double width;
+    double height;
+    int copy_annotations;
+} SsQpdfLayer;
+
 const char *ss_pdf_cairo_version_string(void);
 const char *ss_pdf_pango_version_string(void);
 const char *ss_pdf_librsvg_version_string(void);
+const char *ss_pdf_gdk_pixbuf_version_string(void);
 int ss_pdf_fontconfig_version(void);
 const char *ss_pdf_harfbuzz_version_string(void);
+const char *ss_qpdf_version_string(void);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
 void ss_pdf_destroy(SsPdf *pdf);
@@ -33,6 +48,7 @@ void ss_pdf_begin_page(SsPdf *pdf, double width, double height);
 void ss_pdf_end_page(SsPdf *pdf);
 int ss_pdf_finish(SsPdf *pdf);
 int ss_pdf_begin_recording(SsPdf *pdf);
+void ss_pdf_discard_recording(SsPdf *pdf);
 int ss_pdf_recording_ink_extents(SsPdf *pdf, SsPdfRecordingExtents *extents);
 int ss_pdf_recording_fit(SsPdf *pdf, double page_width, double page_height, double margin, SsPdfRecordingFit *fit);
 int ss_pdf_paint_recording_with_fit(SsPdf *pdf, const SsPdfRecordingFit *fit);
@@ -128,11 +144,17 @@ double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family
 double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
-int ss_png_size(const char *path, double *width, double *height);
-int ss_pdf_draw_png(SsPdf *pdf, const char *path, double x, double y, double width, double height);
+int ss_raster_size(const char *path, double *width, double *height);
+int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_svg_size(const char *path, double *width, double *height);
 int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, double width, double height, double r, double g, double b);
+int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
+int ss_qpdf_empty(const char *output);
+int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
+int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);
+int ss_qpdf_compose(const char *output, const SsQpdfLayer *layers, size_t layer_count);
+const char *ss_qpdf_last_error(void);
 
 #ifdef __cplusplus
 }

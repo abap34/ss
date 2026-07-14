@@ -61,9 +61,6 @@ pub const ArtifactKind = enum {
 
 pub const CommandKind = enum {
     pdflatex,
-    pdftocairo,
-    magick,
-    qpdf,
     other,
 };
 
@@ -108,9 +105,6 @@ var artifact_build_raster = CountTime{};
 var artifact_build_wall = CountTime{};
 
 var command_pdflatex = CountTime{};
-var command_pdftocairo = CountTime{};
-var command_magick = CountTime{};
-var command_qpdf = CountTime{};
 var command_other = CountTime{};
 var command_failures = CountTime{};
 
@@ -239,9 +233,6 @@ pub fn printIfEnabled() void {
     printCounter("artifact build wall", &artifact_build_wall);
 
     printCounter("command pdflatex", &command_pdflatex);
-    printCounter("command pdftocairo", &command_pdftocairo);
-    printCounter("command magick", &command_magick);
-    printCounter("command qpdf", &command_qpdf);
     printCounter("command other", &command_other);
     printCounter("command failures", &command_failures);
 }
@@ -266,9 +257,6 @@ fn monotonicNowNs() i128 {
 fn commandKind(argv0: []const u8) CommandKind {
     const name = std.fs.path.basename(argv0);
     if (std.ascii.eqlIgnoreCase(name, "pdflatex")) return .pdflatex;
-    if (std.ascii.eqlIgnoreCase(name, "pdftocairo")) return .pdftocairo;
-    if (std.ascii.eqlIgnoreCase(name, "magick")) return .magick;
-    if (std.ascii.eqlIgnoreCase(name, "qpdf")) return .qpdf;
     return .other;
 }
 
@@ -306,9 +294,6 @@ fn artifactBuildCounter(kind: ArtifactKind) *CountTime {
 fn commandCounter(kind: CommandKind) *CountTime {
     return switch (kind) {
         .pdflatex => &command_pdflatex,
-        .pdftocairo => &command_pdftocairo,
-        .magick => &command_magick,
-        .qpdf => &command_qpdf,
         .other => &command_other,
     };
 }
