@@ -206,8 +206,8 @@ brew tap abap34/ss
 brew install ss
 ```
 
-The Homebrew formula installs the dependencies **without** `pdflatex`.
-LaTeX math rendering still needs a TeX distribution.
+The Homebrew formula installs the dependencies **without** the TeX tools.
+LaTeX math rendering still needs a TeX distribution that provides `pdflatex`.
 
 ### Build From Source
 
@@ -218,11 +218,10 @@ ss has the following dependencies:
 | Cairo headers and library | Native PDF drawing. |
 | Pango headers and library | Text shaping and layout. |
 | librsvg headers and library | SVG rendering. |
+| GdkPixbuf headers and library | Raster image decoding and orientation. |
 | tree-sitter | Syntax Highlight. |
 | `git` | Fetch pinned tree-sitter runtime and parser sources during the first build. |
-| `qpdf` | PDF assembly and normalization. |
-| `magick` | Raster image conversion, when raster assets need conversion or resizing. |
-| `pdftocairo` | PDF/vector asset conversion, including rendered LaTeX math conversion. |
+| libqpdf headers and library | In-process PDF assembly and embedded PDF placement. |
 | `pdflatex` | LaTeX math rendering, when math objects are used. |
 
 Run `ss doctor` to check project discovery, render tools, and tree-sitter syntax
@@ -244,15 +243,15 @@ zig build -Doptimize=ReleaseSafe install --prefix ~/.local
 Example Homebrew command for the **non**-TeX dependencies:
 
 ```sh
-brew install pkgconf cairo pango librsvg qpdf poppler imagemagick
+brew install pkgconf cairo pango librsvg qpdf
 ```
 
 Example apt command on Ubuntu/Debian:
 
 ```sh
 sudo apt-get install -y \
-  pkg-config libcairo2-dev libpango1.0-dev librsvg2-dev \
-  qpdf poppler-utils imagemagick
+  pkg-config libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
+  libqpdf-dev librsvg2-dev
 ```
 
 ### Container and GitHub Actions

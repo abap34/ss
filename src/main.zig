@@ -34,8 +34,10 @@ fn version() void {
         \\  Cairo: {s}
         \\  Pango: {s}
         \\  librsvg: {s}
+        \\  GdkPixbuf: {s}
         \\  Fontconfig: {d}
         \\  HarfBuzz: {s}
+        \\  qpdf: {s}
         \\render cache schema:
         \\  Page PDF: {s}
         \\  qpdf: {s}
@@ -51,8 +53,10 @@ fn version() void {
         native.cairo,
         native.pango,
         native.librsvg,
+        native.gdk_pixbuf,
         native.fontconfig,
         native.harfbuzz,
+        native.qpdf,
         pdf.page_pdf_cache_version,
         pdf.qpdf_cache_version,
         pdf.native_artifact_cache_version,
@@ -481,9 +485,6 @@ const DoctorTool = struct {
 };
 
 const doctor_tools = [_]DoctorTool{
-    .{ .name = "qpdf", .purpose = "PDF assembly and normalization", .required = true },
-    .{ .name = "magick", .purpose = "raster image conversion and resizing" },
-    .{ .name = "pdftocairo", .purpose = "PDF/vector asset conversion" },
     .{ .name = "pdflatex", .purpose = "LaTeX math rendering" },
 };
 

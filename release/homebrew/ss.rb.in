@@ -9,10 +9,8 @@ class @FORMULA_CLASS@ < Formula
   depends_on "zig" => :build
   depends_on "pkgconf" => :build
   depends_on "cairo"
-  depends_on "imagemagick"
   depends_on "librsvg"
   depends_on "pango"
-  depends_on "poppler"
   depends_on "qpdf"
 
   resource "md4c" do
@@ -37,8 +35,8 @@ class @FORMULA_CLASS@ < Formula
       The VS Code extension does not bundle ss. Keep #{opt_bin}/ss on PATH or
       set the extension's ss.cli.path setting to #{opt_bin}/ss.
 
-      LaTeX math rendering requires an external TeX distribution such as
-      MacTeX or BasicTeX.
+      LaTeX math rendering requires an external TeX distribution that provides
+      pdflatex, such as MacTeX or BasicTeX.
     EOS
   end
 

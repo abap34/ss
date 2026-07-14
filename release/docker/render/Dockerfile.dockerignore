@@ -18,6 +18,8 @@
 !editor/tree-sitter-ss/queries/highlights.scm
 
 !third_party
+!third_party/fontawesome-free
+!third_party/fontawesome-free/**
 !third_party/tree-sitter-languages
 !third_party/tree-sitter-languages/**
 
