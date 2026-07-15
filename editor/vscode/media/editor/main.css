@@ -10,7 +10,6 @@
   --panel-background: #1e2927;
   --toolbar-background: #1b2523;
   --control-background: #151e1c;
-  --control-active: #30423e;
   --viewport-background: radial-gradient(
     circle at 50% 46%,
     #2a3835 0,
@@ -54,7 +53,6 @@
   --panel-background: #f8faf8;
   --toolbar-background: #f7f9f7;
   --control-background: #fff;
-  --control-active: #e2f1ed;
   --viewport-background: radial-gradient(
     circle at 50% 46%,
     #f6faf8 0,
@@ -332,70 +330,35 @@ button {
   border-bottom: 1px solid var(--border);
   background: var(--toolbar-background);
 }
-.segmented {
-  display: flex;
-  padding: 2px;
+.page-mode {
+  min-height: 24px;
+  padding: 2px 26px 2px 8px;
   border: 1px solid var(--control-border);
   border-radius: 5px;
   background: var(--control-background);
-}
-.segmented button {
-  min-height: 22px;
-  padding: 3px 8px;
-  border-radius: 3px;
-  background: transparent;
   color: var(--text-muted);
   font-size: 9px;
   cursor: pointer;
   white-space: nowrap;
 }
-.segmented button:hover {
+.page-mode:hover, .page-mode:focus {
+  border-color: var(--accent-border);
   color: var(--accent-text);
+  outline: none;
 }
-.segmented button.is-active {
-  background: var(--control-active);
-  color: var(--accent-text);
-}
-.toolbar-spacer {
-  flex: 1;
-}
-.sync {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: 8px;
-  white-space: nowrap;
-}
-.sync span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sync i {
-  flex: 0 0 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
-}
-.sync--working i {
-  border: 1px solid var(--text-soft);
-  border-top-color: transparent;
-  background: transparent;
-  animation: spin 0.8s linear infinite;
-}
-.sync--error {
-  color: var(--error);
-}
-.sync--error i {
-  background: var(--error);
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.error-toast {
+  position: absolute;
+  z-index: 30;
+  top: calc(var(--toolbar) + 10px);
+  right: 10px;
+  max-width: min(360px, calc(100% - 20px));
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--error) 17%, var(--panel-background));
+  box-shadow: var(--sheet-shadow);
+  font-size: 9px;
 }
 .viewport {
   position: absolute;
@@ -688,11 +651,24 @@ button {
   padding: 5px 0;
   border-top: 1px solid var(--border);
 }
-.relation-row code {
+.relation-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 3px;
+  min-width: 0;
+}
+.relation-copy code {
   min-width: 0;
   overflow: hidden;
   color: var(--text-soft);
   font: 9px var(--vscode-editor-font-family, ui-monospace, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.relation-source {
+  overflow: hidden;
+  color: var(--text-faint);
+  font: 8px var(--vscode-editor-font-family, ui-monospace, monospace);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -819,11 +795,6 @@ button {
   }
 }
 @media (max-width: 520px) {
-  .segmented button {
-    max-width: 72px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
   .object-sheet {
     grid-template-columns: 1fr 1fr;
   }

@@ -100,7 +100,8 @@
           "strings": "off",
           "other": "on"
         },
-        "editor.suggestOnTriggerCharacters": true
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.wordBasedSuggestions": "off"
       }
     },
     "configuration": {

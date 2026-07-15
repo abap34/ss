@@ -18,6 +18,8 @@ interface Session {
   panel: vscode.WebviewPanel;
   timer?: NodeJS.Timeout;
   serial: number;
+  requestRunning: boolean;
+  refreshPending: boolean;
   disposed: boolean;
   dependencyPaths: Set<string>;
 }
@@ -98,6 +100,8 @@ export class EditorController implements vscode.Disposable {
       document,
       panel,
       serial: 0,
+      requestRunning: false,
+      refreshPending: false,
       disposed: false,
       dependencyPaths: new Set([normalizePath(document.uri.fsPath)]),
     };
@@ -150,11 +154,6 @@ export class EditorController implements vscode.Disposable {
       });
       return;
     }
-    await this.post(session, {
-      type: "sync",
-      state: "working",
-      label: "Applying edit…",
-    });
     const versions = documentVersions();
     try {
       const result = await client.sendRequest<LayoutEditResult>(
@@ -232,23 +231,28 @@ export class EditorController implements vscode.Disposable {
 
   private schedule(session: Session, delayMs: number): void {
     if (session.disposed) return;
+    // Invalidate an in-flight response as soon as an edit is observed, not
+    // after the debounce timer expires.
+    session.serial += 1;
     if (session.timer) clearTimeout(session.timer);
+    const serial = session.serial;
     session.timer = setTimeout(() => {
       session.timer = undefined;
-      void this.refresh(session);
+      void this.refresh(session, serial);
     }, delayMs);
   }
 
-  private async refresh(session: Session): Promise<void> {
+  private async refresh(session: Session, serial: number): Promise<void> {
     const client = this.clientProvider();
-    if (!client || session.disposed) return;
-    const serial = ++session.serial;
-    const started = performance.now();
-    await this.post(session, {
-      type: "sync",
-      state: "working",
-      label: "Updating…",
-    });
+    if (!client || session.disposed || serial !== session.serial) return;
+    if (session.requestRunning) {
+      // The server handles requests serially. Coalescing here prevents obsolete
+      // snapshot work from forming a queue during rapid edits.
+      session.refreshPending = true;
+      return;
+    }
+    session.requestRunning = true;
+    const documentVersion = session.document.version;
     try {
       const snapshot = await client.sendRequest<EditorSnapshot>(
         "ss/editorSnapshot",
@@ -256,7 +260,10 @@ export class EditorController implements vscode.Disposable {
           textDocument: { uri: session.document.uri.toString() },
         },
       );
-      if (session.disposed || serial !== session.serial) return;
+      if (
+        session.disposed || serial !== session.serial ||
+        documentVersion !== session.document.version
+      ) return;
       session.dependencyPaths = new Set(
         snapshot.source_paths.map(normalizePath),
       );
@@ -265,20 +272,23 @@ export class EditorController implements vscode.Disposable {
         session.panel.webview,
         snapshot,
       );
-      const duration = Math.max(0, Math.round(performance.now() - started));
       await this.post(session, {
         type: "snapshot",
         snapshot: prepared,
-        duration,
       });
     } catch (error) {
       if (session.disposed || serial !== session.serial) return;
       this.output.appendLine(`[editor] snapshot failed: ${String(error)}`);
       await this.post(session, {
-        type: "sync",
-        state: "error",
-        label: "Update failed",
+        type: "error",
+        message: "WYSIWYG preview update failed.",
       });
+    } finally {
+      session.requestRunning = false;
+      if (session.refreshPending && !session.disposed) {
+        session.refreshPending = false;
+        this.schedule(session, 0);
+      }
     }
   }
 

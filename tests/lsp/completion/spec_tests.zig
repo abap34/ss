@@ -32,6 +32,7 @@ test "analysis completion: dot module and normal positions keep candidate kinds 
         try expectMissing(result, "add");
         try expectMissing(result, "Align");
         try expectMissing(result, "String");
+        try expectOnlyKind(result, .property);
     }
 
     {
@@ -595,4 +596,8 @@ fn expectUnique(result: query_types.CompletionResult) !void {
         if (seen.contains(item.label)) return error.DuplicateCompletionLabel;
         try seen.put(item.label, {});
     }
+}
+
+fn expectOnlyKind(result: query_types.CompletionResult, kind: query_types.CompletionKind) !void {
+    for (result.items) |item| try testing.expectEqual(kind, item.kind);
 }

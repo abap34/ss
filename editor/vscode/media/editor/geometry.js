@@ -56,6 +56,48 @@ export function anchorSegment(frame, anchor) {
   );
 }
 
+export function constraintGeometry(source, target, axis) {
+  if (axis === "vertical") {
+    const x = sharedCoordinate(source.x1, source.x2, target.x1, target.x2);
+    const connector = segment(x, source.cy, x, target.cy);
+    return {
+      source: segment(
+        Math.min(source.x1, x),
+        source.cy,
+        Math.max(source.x2, x),
+        source.cy,
+      ),
+      target: segment(
+        Math.min(target.x1, x),
+        target.cy,
+        Math.max(target.x2, x),
+        target.cy,
+      ),
+      connector,
+      label: { x: connector.cx + 9, y: connector.cy - 2 },
+    };
+  }
+
+  const y = sharedCoordinate(source.y1, source.y2, target.y1, target.y2);
+  const connector = segment(source.cx, y, target.cx, y);
+  return {
+    source: segment(
+      source.cx,
+      Math.min(source.y1, y),
+      source.cx,
+      Math.max(source.y2, y),
+    ),
+    target: segment(
+      target.cx,
+      Math.min(target.y1, y),
+      target.cx,
+      Math.max(target.y2, y),
+    ),
+    connector,
+    label: { x: connector.cx, y: connector.cy - 7 },
+  };
+}
+
 export function svgPoint(svg, event) {
   const rect = svg.getBoundingClientRect();
   const viewBox = svg.viewBox.baseVal;
@@ -114,4 +156,16 @@ export function editableAncestorNodeId(snapshot, nodeId) {
 
 function segment(x1, y1, x2, y2) {
   return { x1, y1, x2, y2, cx: (x1 + x2) / 2, cy: (y1 + y2) / 2 };
+}
+
+function sharedCoordinate(firstStart, firstEnd, secondStart, secondEnd) {
+  const firstMin = Math.min(firstStart, firstEnd);
+  const firstMax = Math.max(firstStart, firstEnd);
+  const secondMin = Math.min(secondStart, secondEnd);
+  const secondMax = Math.max(secondStart, secondEnd);
+  const overlapStart = Math.max(firstMin, secondMin);
+  const overlapEnd = Math.min(firstMax, secondMax);
+  if (overlapStart <= overlapEnd) return (overlapStart + overlapEnd) / 2;
+  if (firstMax < secondMin) return (firstMax + secondMin) / 2;
+  return (secondMax + firstMin) / 2;
 }

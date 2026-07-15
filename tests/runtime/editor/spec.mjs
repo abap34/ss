@@ -62,6 +62,18 @@ end
         }`,
       );
       const initialTarget = editingTarget(initial, "item");
+      const sourcedConstraint = initial.layout.relations.find((relation) =>
+        relation.kind === "explicit" &&
+        relation.target?.node_id === initialTarget.node_id &&
+        relation.location?.path === slide
+      );
+      assert(
+        Number.isInteger(sourcedConstraint?.location?.line) &&
+          sourcedConstraint.location.line > 0,
+        `explicit constraint omitted its source line: ${
+          JSON.stringify(initial.layout.relations)
+        }`,
+      );
       editingTarget(initial, "parts.root");
       const unboundTarget = editingTarget(initial, "movable_item");
       assert(
