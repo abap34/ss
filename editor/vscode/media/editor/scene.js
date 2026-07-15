@@ -1,5 +1,10 @@
 import { color, element, setAttributes, setRect, svgElement } from "./dom.js";
-import { anchorSegment, frameByNode, signed } from "./geometry.js";
+import {
+  anchorSegment,
+  constraintGeometry,
+  frameByNode,
+  signed,
+} from "./geometry.js";
 
 export function renderScene(snapshot, pageId, thumbnail = false) {
   const display = snapshot?.display.pages.find((page) =>
@@ -27,6 +32,11 @@ export function renderConstraints(snapshot, page, objectId) {
     if (!sourceFrame || !targetFrame) continue;
     const sourceSegment = anchorSegment(sourceFrame, relation.source.anchor);
     const targetSegment = anchorSegment(targetFrame, relation.target.anchor);
+    const geometry = constraintGeometry(
+      sourceSegment,
+      targetSegment,
+      relation.axis,
+    );
     const sourceKind = relation.source.type === "page" ? "page" : "object";
     const relationGroup = svgElement(
       "g",
@@ -35,23 +45,29 @@ export function renderConstraints(snapshot, page, objectId) {
       }`,
     );
     relationGroup.append(
-      segmentLine(sourceSegment, "constraint-anchor constraint-anchor--source"),
+      segmentLine(
+        geometry.source,
+        "constraint-anchor constraint-anchor--source",
+      ),
     );
     relationGroup.append(
-      segmentLine(targetSegment, "constraint-anchor constraint-anchor--target"),
+      segmentLine(
+        geometry.target,
+        "constraint-anchor constraint-anchor--target",
+      ),
     );
     const connector = svgElement("line", "constraint-connector");
     setAttributes(connector, {
-      x1: sourceSegment.cx,
-      y1: sourceSegment.cy,
-      x2: targetSegment.cx,
-      y2: targetSegment.cy,
+      x1: geometry.connector.x1,
+      y1: geometry.connector.y1,
+      x2: geometry.connector.x2,
+      y2: geometry.connector.y2,
     });
     relationGroup.append(connector);
     const label = svgElement("text", "constraint-offset");
     setAttributes(label, {
-      x: (sourceSegment.cx + targetSegment.cx) / 2,
-      y: (sourceSegment.cy + targetSegment.cy) / 2 - 7,
+      x: geometry.label.x,
+      y: geometry.label.y,
     });
     label.textContent = signed(relation.offset);
     relationGroup.append(label);

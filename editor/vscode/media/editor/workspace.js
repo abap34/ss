@@ -14,7 +14,6 @@ export class WorkspaceView {
     this.viewport = null;
     this.interaction = new InteractionController(state, {
       ...actions,
-      updateSync: () => this.updateSync(),
     });
   }
 
@@ -48,6 +47,12 @@ export class WorkspaceView {
         revealSource: this.actions.revealSource,
       }));
     }
+    if (this.state.toast) {
+      const toast = element("div", "error-toast");
+      toast.setAttribute("role", "alert");
+      toast.textContent = this.state.toast;
+      main.append(toast);
+    }
     this.root = main;
     this.viewport = viewport;
     return main;
@@ -55,37 +60,18 @@ export class WorkspaceView {
 
   toolbar() {
     const bar = element("div", "toolbar");
-    const modes = element("div", "segmented");
-    modes.setAttribute("role", "group");
-    modes.setAttribute("aria-label", "Page display");
-    modes.append(
-      this.modeButton("single", "Single page"),
-      this.modeButton("continuous", "Continuous"),
+    const mode = element("select", "page-mode");
+    mode.setAttribute("aria-label", "Page display");
+    mode.append(
+      modeOption("single", "Single page", this.state.mode),
+      modeOption("continuous", "Continuous", this.state.mode),
     );
-    const spacer = element("span", "toolbar-spacer");
-    const sync = element("span", `sync sync--${this.state.sync.state}`);
-    sync.dataset.sync = "true";
-    sync.append(element("i"));
-    const syncLabel = element("span");
-    syncLabel.textContent = this.state.sync.label;
-    sync.append(syncLabel);
-    bar.append(modes, spacer, sync);
-    return bar;
-  }
-
-  modeButton(mode, label) {
-    const button = element(
-      "button",
-      this.state.mode === mode ? "is-active" : "",
-    );
-    button.type = "button";
-    button.textContent = label;
-    button.setAttribute("aria-pressed", String(this.state.mode === mode));
-    button.addEventListener("click", () => {
-      this.state.mode = mode;
+    mode.addEventListener("change", () => {
+      this.state.mode = mode.value;
       this.actions.render();
     });
-    return button;
+    bar.append(mode);
+    return bar;
   }
 
   pageShell(page) {
@@ -160,17 +146,17 @@ export class WorkspaceView {
     }
   }
 
-  updateSync() {
-    const sync = this.root?.querySelector("[data-sync]");
-    if (!sync) return;
-    sync.className = `sync sync--${this.state.sync.state}`;
-    const label = sync.querySelector("span");
-    if (label) label.textContent = this.state.sync.label;
-  }
-
   selectedObject() {
     return this.state.snapshot?.layout.objects.find(
       (object) => object.id === this.state.selectedObjectId,
     ) || null;
   }
+}
+
+function modeOption(value, label, current) {
+  const option = element("option");
+  option.value = value;
+  option.textContent = label;
+  option.selected = value === current;
+  return option;
 }

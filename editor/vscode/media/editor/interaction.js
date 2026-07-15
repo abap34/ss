@@ -151,8 +151,6 @@ export class InteractionController {
       this.actions.render();
       return;
     }
-    this.state.sync = { state: "working", label: "Applying edit…" };
-    this.actions.updateSync();
     this.actions.post({
       type: "translate",
       snapshotId: this.state.snapshot.snapshot_id,

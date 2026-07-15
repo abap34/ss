@@ -622,6 +622,12 @@ function assertPropertyCompletion(completion, label) {
   assertCompletionHas(completion, "text", label);
   assertCompletionHas(completion, "layout", label);
   assertCompletionMissing(completion, ["page", "add", "String", "text_size"], label);
+  for (const item of completion.items ?? []) {
+    assert(
+      item.kind === 10,
+      `${label} included non-property completion ${item.label}: ${JSON.stringify(item)}`,
+    );
+  }
 }
 
 function assertThemeRecordCompletion(completion, label) {

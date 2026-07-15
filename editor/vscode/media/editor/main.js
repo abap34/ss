@@ -14,10 +14,11 @@ const state = {
   theme: persistedState.theme === "light" || persistedState.theme === "dark"
     ? persistedState.theme
     : initialTheme(),
-  sync: { state: "working", label: "Starting…" },
+  toast: null,
 };
 const app = document.getElementById("app");
 document.documentElement.dataset.theme = state.theme;
+let toastTimer = null;
 
 const actions = {
   post: (message) => vscode.postMessage(message),
@@ -34,22 +35,30 @@ window.addEventListener("message", (event) => {
   const message = event.data || {};
   if (message.type === "snapshot") {
     acceptSnapshot(message);
-  } else if (message.type === "sync") {
-    state.sync = { state: message.state, label: message.label };
-    workspace.updateSync();
+  } else if (message.type === "error") {
+    showError(message.message || "WYSIWYG preview update failed.");
   } else if (message.type === "editResult") {
-    state.sync = { state: "error", label: message.message || "Edit rejected" };
-    render();
+    if (message.status !== "stale") {
+      showError(message.message || "The edit could not be applied.");
+    }
   }
 });
 
 function acceptSnapshot(message) {
   state.snapshot = message.snapshot;
-  state.sync = state.snapshot.stale
-    ? { state: "error", label: "Showing last valid layout" }
-    : { state: "ok", label: `Synced · ${message.duration} ms` };
   navigation.reconcile(state.snapshot);
   render();
+}
+
+function showError(message) {
+  state.toast = message;
+  render();
+  if (toastTimer != null) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    state.toast = null;
+    render();
+  }, 5000);
 }
 
 function render() {

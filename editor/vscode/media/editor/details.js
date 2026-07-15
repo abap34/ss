@@ -64,11 +64,13 @@ function relations(state, object) {
   const page = state.snapshot.layout.pages.find((candidate) =>
     candidate.id === object.page_id
   );
-  for (const relation of values) container.append(relationRow(relation, page));
+  for (const relation of values) {
+    container.append(relationRow(relation, page, state.snapshot.entry_path));
+  }
   return container;
 }
 
-function relationRow(relation, page) {
+function relationRow(relation, page, entryPath) {
   const fallback = relation.kind === "fallback";
   const row = element(
     "div",
@@ -83,15 +85,36 @@ function relationRow(relation, page) {
     : "Relative constraint";
   icon.setAttribute("aria-label", icon.title);
   if (constraintKind === "absolute") setPageIconRatio(icon, page);
+  const copy = element("div", "relation-copy");
   const expression = element("code");
   expression.textContent = relation.expression;
-  row.append(icon, expression);
+  copy.append(expression);
+  if (relation.location?.path) {
+    const source = element("small", "relation-source");
+    source.textContent = sourceLabel(relation.location, entryPath);
+    source.title = `${relation.location.path}:${relation.location.line}:${relation.location.column}`;
+    copy.append(source);
+  }
+  row.append(icon, copy);
   if (fallback) {
     const badge = element("small", "relation-kind");
     badge.textContent = "Fallback";
     row.append(badge);
   }
   return row;
+}
+
+function sourceLabel(location, entryPath) {
+  const normalizedPath = location.path.replaceAll("\\", "/");
+  const normalizedEntry = (entryPath || "").replaceAll("\\", "/");
+  const directoryEnd = normalizedEntry.lastIndexOf("/");
+  const directory = directoryEnd >= 0
+    ? normalizedEntry.slice(0, directoryEnd + 1)
+    : "";
+  const displayPath = directory && normalizedPath.startsWith(directory)
+    ? normalizedPath.slice(directory.length)
+    : normalizedPath.split("/").pop() || normalizedPath;
+  return `${displayPath}:${location.line}`;
 }
 
 function setPageIconRatio(icon, page) {
