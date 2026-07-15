@@ -985,34 +985,24 @@ pub const Compiler = struct {
     io: std.Io,
     options: render_compile.Options,
 
-    pub fn backend(self: *Compiler) render_compile.Backend {
-        return .{
-            .context = self,
-            .prepareFn = prepare,
-            .compilePageFn = compilePreparedPage,
-        };
-    }
-
-    fn prepare(
-        context: *anyopaque,
+    pub fn prepare(
+        self: *Compiler,
         allocator: Allocator,
         compiler_context: *core.Context,
         pages: *const core.prepared.PreparedPages,
     ) !void {
-        const self: *Compiler = @ptrCast(@alignCast(context));
         try preloadPreparedPageArtifacts(allocator, self.io, compiler_context, pages, .{
             .cache_dir = self.options.cache_dir,
             .highlight_languages = self.options.highlight_languages,
         }, null);
     }
 
-    fn compilePreparedPage(
-        context: *anyopaque,
+    pub fn compilePage(
+        self: *Compiler,
         allocator: Allocator,
         compiler_context: *core.Context,
         prepared_page: *const core.prepared.PreparedPage,
     ) !render_ir.Page {
-        const self: *Compiler = @ptrCast(@alignCast(context));
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
         defer allocator.free(asset_cache_dir);
         var draw_context = DrawContext{
@@ -1028,7 +1018,7 @@ pub const Compiler = struct {
             for (commands) |*command| command.deinit(allocator);
             allocator.free(commands);
         }
-        return try compilePage(
+        return try buildRenderPage(
             &draw_context,
             prepared_page.page_id,
             prepared_page.index,
@@ -2891,7 +2881,7 @@ fn pageArtifactsReady(work: *PlanExecution, page: PageJob) bool {
 
 fn renderPageJob(parent_ctx: *DrawContext, page: *const PageJob) !void {
     if (page.cache_hit) return;
-    var render_page = try compilePage(parent_ctx, page.page_id, page.index, page.background, page.commands);
+    var render_page = try buildRenderPage(parent_ctx, page.page_id, page.index, page.background, page.commands);
     defer render_page.deinit(parent_ctx.allocator);
     pdf_backend.render(parent_ctx.allocator, parent_ctx.io, &render_page, page.render_path) catch |err| {
         if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose page PDF layers");
@@ -2901,7 +2891,7 @@ fn renderPageJob(parent_ctx: *DrawContext, page: *const PageJob) !void {
     try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
 }
 
-fn compilePage(
+fn buildRenderPage(
     parent_ctx: *DrawContext,
     page_id: core.NodeId,
     page_index: usize,

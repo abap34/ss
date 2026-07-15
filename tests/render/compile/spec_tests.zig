@@ -11,31 +11,21 @@ const FakeCompiler = struct {
     page_count: usize = 0,
     fail_at_index: ?usize = null,
 
-    fn backend(self: *FakeCompiler) render_compile.Backend {
-        return .{
-            .context = self,
-            .prepareFn = prepare,
-            .compilePageFn = compilePage,
-        };
-    }
-
-    fn prepare(
-        context: *anyopaque,
+    pub fn prepare(
+        self: *FakeCompiler,
         _: std.mem.Allocator,
         _: *core.Context,
         _: *const core.prepared.PreparedPages,
     ) !void {
-        const self: *FakeCompiler = @ptrCast(@alignCast(context));
         self.prepare_count += 1;
     }
 
-    fn compilePage(
-        context: *anyopaque,
+    pub fn compilePage(
+        self: *FakeCompiler,
         allocator: std.mem.Allocator,
         _: *core.Context,
         prepared_page: *const core.prepared.PreparedPage,
     ) !render.Page {
-        const self: *FakeCompiler = @ptrCast(@alignCast(context));
         if (self.fail_at_index == prepared_page.index) return error.IntentionalCompileFailure;
         self.page_count += 1;
         var page = render.Page{
@@ -94,7 +84,7 @@ test "render compiler prepares once and preserves page order" {
     const prepared_pages = core.prepared.PreparedPages{ .pages = &source_pages };
     var compiler = FakeCompiler{};
 
-    var result = try render_compile.document(testing.allocator, &context, &prepared_pages, compiler.backend());
+    var result = try render_compile.document(testing.allocator, &context, &prepared_pages, &compiler);
     defer result.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), compiler.prepare_count);
@@ -116,7 +106,7 @@ test "render compiler releases completed pages after a later failure" {
 
     try testing.expectError(
         error.IntentionalCompileFailure,
-        render_compile.document(testing.allocator, &context, &prepared_pages, compiler.backend()),
+        render_compile.document(testing.allocator, &context, &prepared_pages, &compiler),
     );
     try testing.expectEqual(@as(usize, 1), compiler.page_count);
 }
