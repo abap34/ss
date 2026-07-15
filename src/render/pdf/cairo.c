@@ -63,6 +63,17 @@ static void ss_pdf_set_rgb(double r, double g, double b, cairo_t *cr) {
     cairo_set_source_rgb(cr, r, g, b);
 }
 
+static cairo_operator_t ss_pdf_blend_operator(int blend_mode) {
+    switch (blend_mode) {
+        case 1: return CAIRO_OPERATOR_MULTIPLY;
+        case 2: return CAIRO_OPERATOR_SCREEN;
+        case 3: return CAIRO_OPERATOR_OVERLAY;
+        case 4: return CAIRO_OPERATOR_DARKEN;
+        case 5: return CAIRO_OPERATOR_LIGHTEN;
+        default: return CAIRO_OPERATOR_OVER;
+    }
+}
+
 typedef struct SsFtFaceData {
     FT_Library library;
     FT_Face face;
@@ -270,6 +281,46 @@ int ss_pdf_finish(SsPdf *pdf) {
     if (cairo_status(pdf->pdf_cr) != CAIRO_STATUS_SUCCESS) return 1;
     if (cairo_surface_status(pdf->surface) != CAIRO_STATUS_SUCCESS) return 1;
     return 0;
+}
+
+int ss_pdf_begin_item(
+    SsPdf *pdf,
+    double xx,
+    double yx,
+    double xy,
+    double yy,
+    double x0,
+    double y0,
+    int has_clip,
+    double clip_x,
+    double clip_y,
+    double clip_width,
+    double clip_height,
+    double opacity,
+    int blend_mode
+) {
+    if (pdf == NULL || pdf->cr == NULL || opacity < 0 || opacity > 1) return 1;
+    cairo_save(pdf->cr);
+    cairo_matrix_t matrix;
+    cairo_matrix_init(&matrix, xx, yx, xy, yy, x0, y0);
+    cairo_transform(pdf->cr, &matrix);
+    if (has_clip) {
+        cairo_rectangle(pdf->cr, clip_x, clip_y, clip_width, clip_height);
+        cairo_clip(pdf->cr);
+    }
+    if (opacity != 1 || blend_mode != 0) cairo_push_group(pdf->cr);
+    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
+}
+
+int ss_pdf_end_item(SsPdf *pdf, double opacity, int blend_mode) {
+    if (pdf == NULL || pdf->cr == NULL || opacity < 0 || opacity > 1) return 1;
+    if (opacity != 1 || blend_mode != 0) {
+        cairo_pop_group_to_source(pdf->cr);
+        cairo_set_operator(pdf->cr, ss_pdf_blend_operator(blend_mode));
+        cairo_paint_with_alpha(pdf->cr, opacity);
+    }
+    cairo_restore(pdf->cr);
+    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
 int ss_pdf_begin_measurement(SsPdf *pdf) {

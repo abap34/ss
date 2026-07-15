@@ -29,14 +29,21 @@ pub fn document(
         pages.deinit(allocator);
     }
     for (prepared_pages.pages) |*prepared_page| {
-        try pages.append(allocator, try compiler.compilePage(
+        var page = try compiler.compilePage(
             allocator,
             state,
             prepared_page,
             &resources,
             &fonts,
             &math,
-        ));
+        );
+        errdefer page.deinit(allocator);
+        page.name = if (state.getNode(prepared_page.page_id)) |page_node|
+            try allocator.dupe(u8, page_node.name)
+        else
+            try std.fmt.allocPrint(allocator, "Page {d}", .{prepared_page.index + 1});
+        for (page.items.items) |*item| item.setSource(sourceRange(state, item.nodeId()));
+        try pages.append(allocator, page);
     }
     var semantic_tree = try semantics.build(allocator, state, prepared_pages, pages.items);
     errdefer semantic_tree.deinit(allocator);
@@ -59,4 +66,13 @@ pub fn document(
     errdefer ir.deinit(allocator);
     try ir.validate();
     return ir;
+}
+
+fn sourceRange(state: *const core.DocumentState, node_id: ?core.NodeId) ?render.SourceRange {
+    const resolved_node_id = node_id orelse return null;
+    for (state.object_sources.items) |source| {
+        if (source.node_id != resolved_node_id) continue;
+        return .{ .module_id = source.module_id, .start = source.span_start, .end = source.span_end };
+    }
+    return null;
 }
