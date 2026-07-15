@@ -170,6 +170,18 @@ test "core markdown spec: indented lines stay paragraphs instead of code blocks"
     try testing.expectEqual(markdown.BlockKind.paragraph, doc.blocks.items[0].kind);
 }
 
+test "core markdown spec: headings preserve their semantic level" {
+    const allocator = testing.allocator;
+    var doc = try markdown.parseMarkdownContent(allocator, "### Precise heading");
+    defer doc.deinit();
+
+    try testing.expectEqual(@as(usize, 1), doc.blocks.items.len);
+    const block = doc.blocks.items[0];
+    try testing.expectEqual(markdown.BlockKind.heading, block.kind);
+    try testing.expectEqual(@as(?u8, 3), block.heading_level);
+    try testing.expectEqualStrings("Precise heading", block.paragraph.?.lines.items[0].runs.items[0].text);
+}
+
 test "core markdown spec: html blocks do not suppress markdown parsing" {
     const allocator = testing.allocator;
     var doc = try markdown.parseMarkdownContent(allocator,

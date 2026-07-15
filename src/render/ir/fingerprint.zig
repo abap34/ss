@@ -10,6 +10,33 @@ pub fn document(ir: anytype) Digest {
         hash.tag(resource.kind);
         hash.bytes(&resource.id);
     }
+    hash.integer(ir.fonts.instances.len);
+    for (ir.fonts.instances) |font| {
+        hash.bytes(&font.id);
+        hash.bytes(&font.resource);
+        hash.integer(font.face_index);
+        hash.bytes(font.family);
+        hash.bytes(font.postscript_name);
+        hash.integer(font.weight);
+        hash.tag(font.style);
+        hash.tag(font.stretch);
+        hash.float(font.ascent_ratio);
+        hash.float(font.descent_ratio);
+        hash.float(font.line_gap_ratio);
+        hash.integer(font.variations.len);
+        for (font.variations) |variation| {
+            hash.bytes(&variation.tag);
+            hash.float(variation.value);
+        }
+        hash.integer(font.features.len);
+        for (font.features) |feature| {
+            hash.bytes(&feature.tag);
+            hash.integer(feature.value);
+        }
+        hash.boolean(font.synthetic_bold);
+        hash.boolean(font.synthetic_italic);
+        hash.boolean(font.family_substitution);
+    }
     hash.integer(ir.math.trees.len);
     for (ir.math.trees) |tree| {
         hash.integer(tree.id);
@@ -31,8 +58,14 @@ pub fn document(ir: anytype) Digest {
         hash.integer(node.id);
         hash.tag(node.role);
         hash.optionalInteger(node.heading_level);
+        hash.optionalBoolean(node.list_ordered);
+        hash.optionalInteger(node.list_start);
         hash.optionalBytes(node.text);
         hash.optionalBytes(node.alt_text);
+        hash.optionalBytes(node.language);
+        hash.optionalBytes(node.code_language);
+        hash.optionalTag(node.link_kind);
+        hash.optionalBytes(node.link_target);
         hash.integer(node.children.len);
         for (node.children) |child| hash.integer(child);
         hash.integer(node.items.len);
@@ -149,13 +182,8 @@ fn hashText(hash: *Hash, value: anytype) void {
     hash.float(value.x);
     hash.float(value.y);
     hash.float(value.width);
-    hash.integer(value.font_weight);
-    hash.tag(value.font_style);
-    hash.tag(value.font_stretch);
     hash.float(value.font_size);
     hashColor(hash, value.color);
-    hash.boolean(value.wrap);
-    hash.boolean(value.preserve_color_glyphs);
     hash.bytes(value.layout.source_text);
     hashRect(hash, value.layout.logical_bounds);
     hashRect(hash, value.layout.ink_bounds);
@@ -175,25 +203,25 @@ fn hashText(hash: *Hash, value: anytype) void {
         hash.float(run.x);
         hash.float(run.baseline_y);
         hash.float(run.advance);
-        hash.bytes(run.font_family);
-        if (run.font_resource) |resource| {
-            hash.boolean(true);
-            hash.bytes(&resource);
-        } else hash.boolean(false);
-        hash.integer(run.font_index);
-        hash.bytes(run.font_postscript_name);
+        hash.bytes(&run.font_instance);
+        hash.bytes(run.language);
+        hash.tag(run.direction);
+        hash.integer(run.bidi_level);
     }
     hash.integer(value.layout.clusters.len);
     for (value.layout.clusters) |cluster| {
         hashRange(hash, cluster.source);
         hashRange(hash, cluster.glyph_range);
         hash.float(cluster.x);
-        hash.float(cluster.advance);
+        hash.float(cluster.baseline_y);
+        hash.float(cluster.advance_x);
+        hash.float(cluster.advance_y);
+        hashRect(hash, cluster.logical_bounds);
+        hashRect(hash, cluster.ink_bounds);
     }
     hash.integer(value.layout.glyphs.len);
     for (value.layout.glyphs) |glyph| {
         hash.integer(glyph.id);
-        hash.integer(glyph.source_index);
         hash.float(glyph.offset_x);
         hash.float(glyph.offset_y);
         hash.float(glyph.advance_x);
@@ -272,6 +300,20 @@ const Hash = struct {
         if (value) |integer_value| {
             self.boolean(true);
             self.integer(integer_value);
+        } else self.boolean(false);
+    }
+
+    fn optionalBoolean(self: *Hash, value: ?bool) void {
+        if (value) |boolean_value| {
+            self.boolean(true);
+            self.boolean(boolean_value);
+        } else self.boolean(false);
+    }
+
+    fn optionalTag(self: *Hash, value: anytype) void {
+        if (value) |tag_value| {
+            self.boolean(true);
+            self.tag(tag_value);
         } else self.boolean(false);
     }
 

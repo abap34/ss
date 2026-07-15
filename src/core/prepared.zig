@@ -317,7 +317,7 @@ fn collectMarkdownBlockAssetDeps(
 ) !void {
     for (blocks) |block| {
         switch (block.kind) {
-            .paragraph, .code_block => if (block.paragraph) |paragraph| {
+            .paragraph, .heading, .code_block => if (block.paragraph) |paragraph| {
                 try collectLineAssetDeps(allocator, paragraph.lines.items, deps);
             },
             .bullet_list, .ordered_list => if (block.list) |list| {

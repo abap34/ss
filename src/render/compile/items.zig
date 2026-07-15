@@ -816,6 +816,7 @@ pub const Compiler = struct {
         state: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
         resources: *render_ir.ResourceBuilder,
+        fonts: *render_ir.FontBuilder,
         math: *render_ir.MathBuilder,
     ) !render_ir.Page {
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
@@ -840,6 +841,7 @@ pub const Compiler = struct {
             prepared_page.background,
             commands,
             resources,
+            fonts,
             math,
         );
     }
@@ -1942,6 +1944,7 @@ fn buildRenderPage(
     background: ?Color,
     commands: []ObjectCommand,
     resources: *render_ir.ResourceBuilder,
+    fonts: *render_ir.FontBuilder,
     math: *render_ir.MathBuilder,
 ) !render_ir.Page {
     const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
@@ -1963,7 +1966,7 @@ fn buildRenderPage(
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
         .command_failure = parent_ctx.command_failure,
-        .emitter = .{ .page = &page, .resources = resources, .math = math, .io = parent_ctx.io },
+        .emitter = .{ .page = &page, .resources = resources, .fonts = fonts, .math = math, .io = parent_ctx.io },
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
@@ -2110,6 +2113,7 @@ const MeasurementScope = struct {
         .height = Defaults.height,
     },
     resources: render_ir.ResourceBuilder = .{},
+    fonts: render_ir.FontBuilder = .{},
     math: render_ir.MathBuilder = .{},
     links: std.ArrayList(LinkAnnotation) = .empty,
     destinations: std.ArrayList(DestinationAnnotation) = .empty,
@@ -2127,6 +2131,7 @@ const MeasurementScope = struct {
         self.ctx.emitter = .{
             .page = &self.page,
             .resources = &self.resources,
+            .fonts = &self.fonts,
             .math = &self.math,
             .io = self.ctx.io,
         };
@@ -2160,6 +2165,7 @@ const MeasurementScope = struct {
         self.destinations.deinit(self.ctx.allocator);
         self.page.deinit(self.ctx.allocator);
         self.resources.deinit(self.ctx.allocator);
+        self.fonts.deinit(self.ctx.allocator);
         self.math.deinit(self.ctx.allocator);
     }
 };
@@ -2635,7 +2641,7 @@ fn drawMarkdownBlocksAt(ctx: *DrawContext, frame: Frame, baseline_bl: f32, block
     var cursor_bl = baseline_bl;
     for (blocks, 0..) |block, index| {
         switch (block.kind) {
-            .paragraph => {
+            .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
                     cursor_bl = try drawInlineLines(ctx, frame.x, cursor_bl, frame.width, paragraph.lines.items, text, text.wrap, preamble);
                 }
@@ -2927,7 +2933,7 @@ fn markdownBlocksNaturalInlineAdvance(ctx: *DrawContext, blocks: []const *Block,
     var found = false;
     for (blocks) |block| {
         switch (block.kind) {
-            .paragraph => {
+            .paragraph, .heading => {
                 if (block.paragraph) |paragraph| {
                     if (try inlineLinesNaturalAdvance(ctx, paragraph.lines.items, text, preamble)) |width| {
                         max_width = @max(max_width, width);
@@ -2975,7 +2981,7 @@ fn markdownBlocksConstrainedLogicalWidth(ctx: *DrawContext, blocks: []const *Blo
     var max_width: f32 = 0;
     for (blocks) |block| {
         const block_width = switch (block.kind) {
-            .paragraph => blk: {
+            .paragraph, .heading => blk: {
                 const paragraph = block.paragraph orelse break :blk 0;
                 break :blk try inlineLinesConstrainedLogicalWidth(ctx, paragraph.lines.items, text, width, text.wrap, preamble);
             },
@@ -4159,45 +4165,12 @@ fn drawRawText(
     color: Color,
     wrap: bool,
 ) !void {
-    return drawRawTextWithMode(ctx, x, y_top, width, content, font, font_size, color, wrap, false);
-}
-
-fn drawColorRawText(
-    ctx: *DrawContext,
-    x: f32,
-    y_top: f32,
-    width: f32,
-    content: []const u8,
-    font: FontFace,
-    font_size: f32,
-    color: Color,
-    wrap: bool,
-) !void {
-    return drawRawTextWithMode(ctx, x, y_top, width, content, font, font_size, color, wrap, true);
+    const baseline_y = y_top + font_size;
+    try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap);
 }
 
 fn drawAtomRawText(ctx: *DrawContext, x: f32, y_top: f32, width: f32, atom: Atom, paint: AtomPaint, wrap: bool) !void {
-    if (atom.is_emoji) {
-        try drawColorRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap);
-    } else {
-        try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap);
-    }
-}
-
-fn drawRawTextWithMode(
-    ctx: *DrawContext,
-    x: f32,
-    y_top: f32,
-    width: f32,
-    content: []const u8,
-    font: FontFace,
-    font_size: f32,
-    color: Color,
-    wrap: bool,
-    preserve_color_glyphs: bool,
-) !void {
-    const baseline_y = y_top + font_size;
-    try activeEmitter(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, preserve_color_glyphs);
+    try drawRawText(ctx, x, y_top, width, atom.text, atom.font, paint.font_size, atom.color, wrap);
 }
 
 fn drawLinkedRawText(

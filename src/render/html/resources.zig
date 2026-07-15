@@ -49,11 +49,12 @@ pub fn collect(allocator: std.mem.Allocator, ir: *const render.Ir) !Set {
         assets.deinit(allocator);
     }
     var has_pdf = false;
+    for (ir.fonts.instances) |instance| {
+        try addFont(allocator, &assets, &ir.resources, instance.resource, instance.face_index);
+    }
     for (ir.pages) |page| {
         for (page.items.items) |item| switch (item) {
-            .text => |value| for (value.layout.runs) |run| {
-                if (run.font_resource) |resource| try addFont(allocator, &assets, &ir.resources, resource, run.font_index);
-            },
+            .text => {},
             .raster => |value| try add(allocator, &assets, &ir.resources, .raster, value.resource),
             .svg => |value| try add(allocator, &assets, &ir.resources, .svg, value.resource),
             .pdf_page => |value| {

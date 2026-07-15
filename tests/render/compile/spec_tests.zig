@@ -26,6 +26,7 @@ const FakeCompiler = struct {
         _: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
         _: *render.ResourceBuilder,
+        _: *render.FontBuilder,
         _: *render.MathBuilder,
     ) !render.Page {
         if (self.fail_at_index == prepared_page.index) return error.IntentionalCompileFailure;
@@ -37,18 +38,11 @@ const FakeCompiler = struct {
             .height = 720,
         };
         errdefer page.deinit(allocator);
-        try page.appendText(
+        try page.appendFillRect(
             allocator,
             prepared_page.page_id,
-            20,
-            40,
-            200,
-            "owned",
-            .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
-            16,
+            .{ .x = 20, .y = 20, .width = 200, .height = 40 },
             .{ .r = 0, .g = 0, .b = 0 },
-            false,
-            false,
         );
         return page;
     }

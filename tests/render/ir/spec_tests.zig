@@ -1,11 +1,18 @@
 const std = @import("std");
 const render_ir = @import("render");
+const render_support = @import("render_test_support");
 
 const testing = std.testing;
 
 fn addDocumentSemantics(ir: *render_ir.Ir) !void {
-    const nodes = try testing.allocator.alloc(render_ir.SemanticNode, 1);
-    nodes[0] = .{ .id = 1, .role = .document };
+    const nodes = try testing.allocator.alloc(render_ir.SemanticNode, ir.pages.len + 1);
+    const page_ids = try testing.allocator.alloc(render_ir.SemanticId, ir.pages.len);
+    for (ir.pages, 0..) |_, index| {
+        const id: render_ir.SemanticId = @intCast(index + 2);
+        page_ids[index] = id;
+        nodes[index + 1] = .{ .id = id, .role = .page };
+    }
+    nodes[0] = .{ .id = 1, .role = .document, .children = page_ids };
     ir.semantics = .{ .root = 1, .nodes = nodes };
 }
 
@@ -18,20 +25,25 @@ test "render IR page owns placed text and references stable resources" {
     };
     defer page.deinit(testing.allocator);
 
+    var resources = render_ir.ResourceBuilder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render_ir.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
     var text = [_]u8{ 'i', 't', 'e', 'm' };
-    var family = [_]u8{ 'S', 'a', 'n', 's' };
-    try page.appendText(
+    try render_support.appendText(
         testing.allocator,
+        testing.io,
+        &page,
+        &resources,
+        &fonts,
         42,
         12,
         34,
         180,
         &text,
-        .{ .family = &family, .weight = 500, .style = .normal, .stretch = .normal },
+        .{ .family = "Sans", .weight = 500, .style = .normal, .stretch = .normal },
         24,
         .{ .r = 0.1, .g = 0.2, .b = 0.3 },
-        false,
-        false,
     );
     const resource: render_ir.ResourceId = @splat(1);
     try page.appendSvg(
@@ -43,10 +55,10 @@ test "render IR page owns placed text and references stable resources" {
     );
 
     text[0] = 'X';
-    family[0] = 'X';
 
     try testing.expectEqualStrings("item", page.items.items[0].text.layout.source_text);
-    try testing.expectEqualStrings("Sans", page.items.items[0].text.layout.runs[0].font_family);
+    try testing.expect(fonts.instances.items.len > 0);
+    try testing.expect(fonts.instances.items[0].family.len > 0);
     try testing.expectEqual(resource, page.items.items[1].svg.resource);
     try testing.expectEqual(@as(?u32, 42), page.items.items[0].nodeId());
 }
@@ -141,6 +153,133 @@ test "render IR validation rejects non-finite geometry and unstable ordering" {
     pages[0].items.items[0].fill_rect.header.paint_index = 0;
     pages[0].items.items[0].fill_rect.rect.x = std.math.nan(f64);
     try testing.expectError(error.InvalidItemGeometry, ir.validate());
+}
+
+test "render IR stores resolved fonts and bidirectional glyph clusters" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 1280, .height = 720 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+
+    var resources = render_ir.ResourceBuilder{};
+    defer resources.deinit(testing.allocator);
+    var fonts = render_ir.FontBuilder{};
+    defer fonts.deinit(testing.allocator);
+    try render_support.appendText(
+        testing.allocator,
+        testing.io,
+        &pages[0],
+        &resources,
+        &fonts,
+        42,
+        20,
+        80,
+        500,
+        "office العربية",
+        .{ .family = "Sans", .weight = 400, .style = .normal, .stretch = .normal },
+        24,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+    const catalogs = try render_support.takeCatalogs(testing.allocator, &resources, &fonts);
+    ir.resources = catalogs.resources;
+    ir.fonts = catalogs.fonts;
+
+    try ir.validate();
+    const layout = pages[0].items.items[0].text.layout;
+    try testing.expect(layout.runs.len >= 2);
+    try testing.expect(layout.clusters.len > 0);
+    var found_right_to_left = false;
+    for (layout.runs) |run| {
+        try testing.expect(ir.fonts.find(run.font_instance) != null);
+        if (run.direction == .right_to_left) found_right_to_left = true;
+    }
+    for (layout.clusters) |cluster| {
+        try testing.expect(cluster.logical_bounds.isValid());
+        try testing.expect(cluster.ink_bounds.isValid());
+        try testing.expect(cluster.source.start < cluster.source.end);
+        try testing.expect(cluster.glyph_range.start < cluster.glyph_range.end);
+    }
+    try testing.expect(found_right_to_left);
+}
+
+test "font instances use content-derived identities and deterministic catalog order" {
+    var builder = render_ir.FontBuilder{};
+    defer builder.deinit(testing.allocator);
+    const resource: render_ir.ResourceId = @splat(7);
+    const first = try builder.add(testing.allocator, .{
+        .resource = resource,
+        .face_index = 1,
+        .family = "Example Sans",
+        .postscript_name = "ExampleSans-Regular",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+        .ascent_ratio = 0.8,
+        .descent_ratio = 0.2,
+        .line_gap_ratio = 0,
+    });
+    const second = try builder.add(testing.allocator, .{
+        .resource = resource,
+        .face_index = 0,
+        .family = "Example Sans",
+        .postscript_name = "ExampleSans-Regular",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+        .ascent_ratio = 0.8,
+        .descent_ratio = 0.2,
+        .line_gap_ratio = 0,
+    });
+    const duplicate = try builder.add(testing.allocator, .{
+        .resource = resource,
+        .face_index = 1,
+        .family = "Example Sans",
+        .postscript_name = "ExampleSans-Regular",
+        .weight = 400,
+        .style = .normal,
+        .stretch = .normal,
+        .ascent_ratio = 0.8,
+        .descent_ratio = 0.2,
+        .line_gap_ratio = 0,
+    });
+    try testing.expectEqual(first, duplicate);
+    try testing.expect(!std.mem.eql(u8, &first, &second));
+
+    var catalog = try builder.take(testing.allocator);
+    defer catalog.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), catalog.instances.len);
+    try testing.expect(std.mem.order(u8, &catalog.instances[0].id, &catalog.instances[1].id) == .lt);
+}
+
+test "semantic validation rejects unsafe link targets" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    pages[0].reading_order = try testing.allocator.dupe(render_ir.SemanticId, &.{3});
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    const nodes = try testing.allocator.alloc(render_ir.SemanticNode, 3);
+    nodes[0] = .{ .id = 1, .role = .document, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{2}) };
+    nodes[1] = .{ .id = 2, .role = .page, .children = try testing.allocator.dupe(render_ir.SemanticId, &.{3}) };
+    nodes[2] = .{
+        .id = 3,
+        .role = .link,
+        .text = try testing.allocator.dupe(u8, "unsafe"),
+        .link_kind = .uri,
+        .link_target = try testing.allocator.dupe(u8, "javascript:alert(1)"),
+    };
+    ir.semantics = .{ .root = 1, .nodes = nodes };
+    try testing.expectError(error.InvalidSemantics, ir.validate());
+}
+
+test "annotation validation rejects unsafe URI targets" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendLink(testing.allocator, .uri, "javascript:alert(1)", .{ .x = 0, .y = 0, .width = 10, .height = 10 });
+    try testing.expectError(error.InvalidAnnotation, ir.validate());
 }
 
 test "math IR parses structured expressions and deduplicates equal inputs" {

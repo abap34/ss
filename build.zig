@@ -24,6 +24,7 @@ const ProjectModules = struct {
     core: *Module,
     render: *Module,
     pdf_ffi: *Module,
+    render_text: *Module,
     render_emitter: *Module,
     pdf_backend: *Module,
 };
@@ -267,10 +268,15 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
     addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod, tree_sitter);
-    const render_emitter_mod = createModule(ctx, "src/render/compile/emitter.zig", &.{
+    const render_text_mod = createModule(ctx, "src/render/compile/text.zig", &.{
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
+    }, true);
+    const render_emitter_mod = createModule(ctx, "src/render/compile/emitter.zig", &.{
+        import("core", core_mod),
+        import("render", render_mod),
+        import("render_text", render_text_mod),
     }, true);
     const pdf_backend_mod = createModule(ctx, "src/render/pdf/backend.zig", &.{
         import("core", core_mod),
@@ -290,6 +296,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .core = core_mod,
         .render = render_mod,
         .pdf_ffi = pdf_ffi_mod,
+        .render_text = render_text_mod,
         .render_emitter = render_emitter_mod,
         .pdf_backend = pdf_backend_mod,
     };
@@ -418,10 +425,16 @@ fn addTestStep(
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
     }, true);
+    const render_test_support_mod = createModule(ctx, "tests/render/support.zig", &.{
+        import("core", modules.core),
+        import("render", modules.render),
+        import("render_text", modules.render_text),
+    }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_document", render_pdf_document_mod),
         import("render", modules.render),
+        import("render_test_support", render_test_support_mod),
     }, true);
     addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
     const render_pdf_spec_tests = b.addTest(.{ .root_module = render_pdf_spec_mod });
@@ -431,6 +444,7 @@ fn addTestStep(
     render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
     const render_spec_mod = createModule(ctx, "tests/render/ir/spec_tests.zig", &.{
         import("render", modules.render),
+        import("render_test_support", render_test_support_mod),
     }, null);
     const render_spec_tests = b.addTest(.{ .root_module = render_spec_mod });
     const run_render_spec_tests = b.addRunArtifact(render_spec_tests);
@@ -444,6 +458,7 @@ fn addTestStep(
     const render_html_spec_mod = createModule(ctx, "tests/render/html/spec_tests.zig", &.{
         import("render", modules.render),
         import("render_html", render_html_mod),
+        import("render_test_support", render_test_support_mod),
     }, null);
     const render_html_spec_tests = b.addTest(.{ .root_module = render_html_spec_mod });
     const run_render_html_spec_tests = b.addRunArtifact(render_html_spec_tests);
@@ -510,6 +525,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("pdfjs_assets", modules.pdfjs_assets),
         import("render", modules.render),
         import("pdf_ffi", modules.pdf_ffi),
+        import("render_text", modules.render_text),
         import("render_emitter", modules.render_emitter),
         import("pdf_backend", modules.pdf_backend),
     }, link_libc);

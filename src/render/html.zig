@@ -11,6 +11,31 @@ const browser_runtime = @embedFile("html/runtime.js");
 var publication_counter: usize = 0;
 
 pub const Options = struct {};
+pub const ResourceKind = render.ResourceKind;
+pub const ResourceId = render.ResourceId;
+
+pub const Fragment = struct {
+    html: []u8,
+    css: []u8,
+    assets: resources.Set,
+
+    pub fn deinit(self: *Fragment, allocator: std.mem.Allocator) void {
+        allocator.free(self.html);
+        allocator.free(self.css);
+        self.assets.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+pub fn prepareFragment(allocator: std.mem.Allocator, ir: *const render.Ir) !Fragment {
+    try ir.validate();
+    var assets = try resources.collect(allocator, ir);
+    errdefer assets.deinit(allocator);
+    const html = try document.fragment(allocator, ir, &assets);
+    errdefer allocator.free(html);
+    const style_sheet = try document.styleSheet(allocator, ir, &assets, false);
+    return .{ .html = html, .css = style_sheet, .assets = assets };
+}
 
 pub fn write(
     allocator: std.mem.Allocator,
@@ -25,7 +50,7 @@ pub fn write(
     defer assets.deinit(allocator);
     const index = try document.generate(allocator, ir, &assets);
     defer allocator.free(index);
-    const style_sheet = try document.styleSheet(allocator, ir, &assets);
+    const style_sheet = try document.styleSheet(allocator, ir, &assets, true);
     defer allocator.free(style_sheet);
     const manifest = try manifestJson(allocator, &assets);
     defer allocator.free(manifest);

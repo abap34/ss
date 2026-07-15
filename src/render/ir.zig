@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const fonts = @import("ir/fonts.zig");
 const geometry = @import("ir/geometry.zig");
 const ir_fingerprint = @import("ir/fingerprint.zig");
 const math = @import("ir/math.zig");
@@ -19,7 +20,14 @@ pub const TextLayout = text_ir.Layout;
 pub const TextLine = text_ir.Line;
 pub const TextRun = text_ir.Run;
 pub const TextCluster = text_ir.Cluster;
+pub const TextDirection = text_ir.Direction;
 pub const Glyph = text_ir.Glyph;
+pub const FontInstanceId = fonts.Id;
+pub const FontVariation = fonts.Variation;
+pub const FontFeature = fonts.Feature;
+pub const FontInstance = fonts.Instance;
+pub const FontCatalog = fonts.Catalog;
+pub const FontBuilder = fonts.Builder;
 pub const ResourceId = resources.Id;
 pub const ResourceKind = resources.Kind;
 pub const Resource = resources.Resource;
@@ -27,6 +35,7 @@ pub const ResourceGraph = resources.Graph;
 pub const ResourceBuilder = resources.Builder;
 pub const SemanticId = semantics.Id;
 pub const SemanticRole = semantics.Role;
+pub const SemanticLinkKind = semantics.LinkKind;
 pub const SemanticNode = semantics.Node;
 pub const SemanticTree = semantics.Tree;
 pub const MathTreeId = math.TreeId;
@@ -83,13 +92,8 @@ pub const Text = struct {
     y: f64,
     width: f64,
     layout: TextLayout,
-    font_weight: u16,
-    font_style: core.font.Style,
-    font_stretch: core.font.Stretch,
     font_size: f64,
     color: core.render_policy.Color,
-    wrap: bool,
-    preserve_color_glyphs: bool,
 
     fn deinit(self: *Text, allocator: std.mem.Allocator) void {
         self.layout.deinit(allocator);
@@ -293,24 +297,6 @@ pub const Page = struct {
         } });
     }
 
-    pub fn appendText(
-        self: *Page,
-        allocator: std.mem.Allocator,
-        node_id: ?core.NodeId,
-        x: f64,
-        baseline_y: f64,
-        width: f64,
-        text: []const u8,
-        font: core.font.Face,
-        font_size: f64,
-        color: core.render_policy.Color,
-        wrap: bool,
-        preserve_color_glyphs: bool,
-    ) !void {
-        const layout = try TextLayout.simple(allocator, text, font.family, font_size, width);
-        try self.appendTextLayout(allocator, node_id, x, baseline_y, width, layout, font, font_size, color, wrap, preserve_color_glyphs);
-    }
-
     pub fn appendTextLayout(
         self: *Page,
         allocator: std.mem.Allocator,
@@ -319,11 +305,8 @@ pub const Page = struct {
         baseline_y: f64,
         width: f64,
         layout: TextLayout,
-        font: core.font.Face,
         font_size: f64,
         color: core.render_policy.Color,
-        wrap: bool,
-        preserve_color_glyphs: bool,
     ) !void {
         var owned_layout = layout;
         errdefer owned_layout.deinit(allocator);
@@ -338,13 +321,8 @@ pub const Page = struct {
             .y = y,
             .width = width,
             .layout = owned_layout,
-            .font_weight = font.weight,
-            .font_style = font.style,
-            .font_stretch = font.stretch,
             .font_size = font_size,
             .color = color,
-            .wrap = wrap,
-            .preserve_color_glyphs = preserve_color_glyphs,
         } });
     }
 
@@ -444,8 +422,9 @@ pub const Page = struct {
 };
 
 pub const Ir = struct {
-    schema_version: u32 = 3,
+    schema_version: u32 = 4,
     resources: ResourceGraph = .{},
+    fonts: FontCatalog = .{},
     semantics: SemanticTree = .{},
     math: MathCatalog = .{},
     pages: []Page,
@@ -454,6 +433,7 @@ pub const Ir = struct {
         for (self.pages) |*page| page.deinit(allocator);
         allocator.free(self.pages);
         self.resources.deinit(allocator);
+        self.fonts.deinit(allocator);
         self.semantics.deinit(allocator);
         self.math.deinit(allocator);
         self.* = .{ .pages = &.{} };
