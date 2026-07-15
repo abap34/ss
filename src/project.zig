@@ -10,7 +10,7 @@ pub const Config = struct {
     entry: []u8,
     asset_base_dir: []u8,
     lsp: LspConfig = .{},
-    preview: PreviewConfig = .{},
+    wysiwyg: WysiwygConfig = .{},
     page_guide: PageGuideConfig = .{},
     highlight: highlight.Config = .{},
     cli: CliConfig = .{},
@@ -40,19 +40,10 @@ pub const LspConfig = struct {
     colors: bool = true,
 };
 
-pub const PreviewOpenMode = enum {
-    vscode,
-    external,
-};
-
-pub const PreviewConfig = struct {
+pub const WysiwygConfig = struct {
     enabled: bool = true,
-    debounce_ms: u64 = 350,
-    refresh_on_save: bool = true,
+    debounce_ms: u64 = 140,
     refresh_on_dependency_change: bool = true,
-    open_mode: PreviewOpenMode = .vscode,
-    reveal_after_render: bool = true,
-    render_timeout_ms: u64 = 30000,
 };
 
 pub const PageGuideConfig = struct {
@@ -221,7 +212,7 @@ pub fn parseSource(allocator: std.mem.Allocator, path: []const u8, text: []const
         .entry = entry,
         .asset_base_dir = asset_base_dir,
         .lsp = parseLspConfig(text),
-        .preview = parsePreviewConfig(text),
+        .wysiwyg = parseWysiwygConfig(text),
         .page_guide = parsePageGuideConfig(text),
         .highlight = highlight_config,
         .cli = cli_config,
@@ -270,15 +261,11 @@ fn parseLspConfig(text: []const u8) LspConfig {
     };
 }
 
-fn parsePreviewConfig(text: []const u8) PreviewConfig {
+fn parseWysiwygConfig(text: []const u8) WysiwygConfig {
     return .{
-        .enabled = parseBool(text, "editor.preview", "enabled", true),
-        .debounce_ms = parseU64(text, "editor.preview", "debounce", 350),
-        .refresh_on_save = parseBool(text, "editor.preview.refresh", "save", true),
-        .refresh_on_dependency_change = parseBool(text, "editor.preview.refresh", "dependency", true),
-        .open_mode = parsePreviewOpenMode(text, "editor.preview", "open", .vscode),
-        .reveal_after_render = parseBool(text, "editor.preview", "reveal", true),
-        .render_timeout_ms = parseU64(text, "editor.preview.render", "timeout", 30000),
+        .enabled = parseBool(text, "editor.wysiwyg", "enabled", true),
+        .debounce_ms = parseU64(text, "editor.wysiwyg", "debounce", 140),
+        .refresh_on_dependency_change = parseBool(text, "editor.wysiwyg.refresh", "dependency", true),
     };
 }
 
@@ -297,11 +284,6 @@ fn parseCliConfig(text: []const u8) !CliConfig {
     const value = parseString(text, "cli", "diagnostic_level") orelse return .{};
     const level = error_report.parseDiagnosticLevel(value) orelse return error.InvalidDiagnosticLevel;
     return .{ .diagnostic_level = level };
-}
-
-fn parsePreviewOpenMode(text: []const u8, section: []const u8, key: []const u8, default: PreviewOpenMode) PreviewOpenMode {
-    const value = parseString(text, section, key) orelse return default;
-    return std.meta.stringToEnum(PreviewOpenMode, value) orelse default;
 }
 
 fn parseHighlightConfig(allocator: std.mem.Allocator, project_dir: []const u8, text: []const u8) !highlight.Config {

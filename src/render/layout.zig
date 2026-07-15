@@ -4,12 +4,13 @@ const lowering = @import("../lowering.zig");
 const pdf = @import("pdf.zig");
 const schedule = @import("../analysis/schedule.zig");
 
-pub fn evaluateAndSolveWithPdfMeasurements(io: std.Io, ir: *core.Ir, graph: *const schedule.ScheduleGraph) !void {
+pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Ir, graph: *const schedule.ScheduleGraph) !core.page_unit.PreparedPages {
     try lowering.evaluateDocumentWithSchedule(ir, graph);
     var pages = try core.page_unit.prepare(ir.allocator, ir);
-    defer pages.deinit(ir.allocator);
+    errdefer pages.deinit(ir.allocator);
     var results = try solvePreparedPages(io, ir, &pages, null, null);
     defer results.deinit(ir.allocator);
+    return pages;
 }
 
 pub fn preloadPreparedPageArtifacts(

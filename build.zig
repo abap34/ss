@@ -378,6 +378,17 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/lsp/completion/spec_tests.zig", &.{
         import("compiler", compiler_mod),
     }, true);
+    const editor_edit_mod = createModule(ctx, "src/editor/edit.zig", &.{
+        import("utils", modules.utils),
+    }, null);
+    const editor_edit_spec_mod = createModule(ctx, "tests/editor/edit/spec_tests.zig", &.{
+        import("editor_edit", editor_edit_mod),
+    }, null);
+    const editor_edit_spec_tests = b.addTest(.{ .root_module = editor_edit_spec_mod });
+    const run_editor_edit_spec_tests = b.addRunArtifact(editor_edit_spec_tests);
+    test_step.dependOn(&run_editor_edit_spec_tests.step);
+    const editor_edit_test_step = b.step("test-editor-edit", "Run focused WYSIWYG source edit tests");
+    editor_edit_test_step.dependOn(&run_editor_edit_spec_tests.step);
     const watch_mod = createCommonModule(ctx, "src/watch.zig", modules, true);
     addNativePdfHeadersAndLibraries(b, watch_mod, tree_sitter);
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
@@ -497,6 +508,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/completion_runtime_spec.mjs",
         "tests/runtime/debug_runtime_spec.mjs",
         "tests/runtime/doctor_runtime_spec.mjs",
+        "tests/runtime/editor/spec.mjs",
         "tests/runtime/layout/frame_too_small_spec.mjs",
         "tests/runtime/layout/measurement_spec.mjs",
         "tests/runtime/layout/vflow/policy_spec.mjs",
