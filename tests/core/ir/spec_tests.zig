@@ -182,6 +182,44 @@ test "core IR spec: caller updates have authority over deeper updates" {
         .scope_depth = 0,
         .from_update = true,
     }, "page-right");
+    try ir.addConstraintUpdate(object, .center_x, .position, 1, .{
+        .target_node = object,
+        .target_anchor = .center_x,
+        .source = .{ .page = .center_x },
+        .offset = 10,
+        .role = .position,
+        .scope_depth = 1,
+        .from_update = true,
+    }, "component-center");
+
+    try core.constraint_updates.resolve(&ir);
+
+    try testing.expect(!ir.constraint_updates.items[0].active);
+    try testing.expect(ir.constraint_updates.items[1].active);
+    try testing.expect(!ir.constraint_updates.items[2].active);
+    try testing.expectEqual(@as(usize, 1), ir.constraints.items.len);
+    try testing.expectEqual(core.Anchor.right, ir.constraints.items[0].target_anchor);
+    try testing.expectEqual(@as(f32, -60), ir.constraints.items[0].offset);
+    try testing.expectEqual(@as(usize, 2), ir.overridden_constraints.items.len);
+}
+
+test "core IR spec: later updates replace earlier updates in the same scope" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
+    try ir.addConstraintUpdate(object, .left, .position, 0, null, "first");
+    try ir.addConstraintUpdate(object, .right, .position, 0, .{
+        .target_node = object,
+        .target_anchor = .right,
+        .source = .{ .page = .right },
+        .offset = -40,
+        .role = .position,
+        .scope_depth = 0,
+        .from_update = true,
+    }, "second");
 
     try core.constraint_updates.resolve(&ir);
 
@@ -189,21 +227,8 @@ test "core IR spec: caller updates have authority over deeper updates" {
     try testing.expect(ir.constraint_updates.items[1].active);
     try testing.expectEqual(@as(usize, 1), ir.constraints.items.len);
     try testing.expectEqual(core.Anchor.right, ir.constraints.items[0].target_anchor);
-    try testing.expectEqual(@as(f32, -60), ir.constraints.items[0].offset);
+    try testing.expectEqual(@as(f32, -40), ir.constraints.items[0].offset);
     try testing.expectEqual(@as(usize, 1), ir.overridden_constraints.items.len);
-}
-
-test "core IR spec: duplicate updates in one scope are diagnosed per axis and role" {
-    var ir = try initEmptyIr();
-    defer ir.deinit();
-
-    const page = try ir.addPage("Page");
-    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
-    try ir.addConstraintUpdate(object, .left, .position, 0, null, "first");
-    try ir.addConstraintUpdate(object, .right, .position, 0, null, "second");
-
-    try testing.expectError(error.DuplicateConstraintUpdate, core.constraint_updates.resolve(&ir));
-    try expectDiagnosticCode(&ir, "DuplicateConstraintUpdate:");
 }
 
 test "core IR spec: page unit collects inline math asset dependencies" {

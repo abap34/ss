@@ -258,7 +258,7 @@ fn appendEditingNode(
     if (seen.contains(node_id)) return;
     try seen.put(node_id, {});
     const node = ir.getNode(node_id) orelse return;
-    if (editableBinding(ir, node, page_decl)) |binding| {
+    if (editableBinding(ir, node.id, page_id, page_decl)) |binding| {
         var item = try items.objectItem();
         try item.intField("node_id", node.id);
         try item.intField("page_id", page_id);
@@ -275,45 +275,13 @@ fn appendEditingNode(
     }
 }
 
-fn editableBinding(ir: *core.Ir, node: *const core.Node, page: ast.PageDecl) ?[]const u8 {
-    const origin_text = node.origin orelse return null;
-    const located = utils.err.parseLocatedOrigin(origin_text) orelse return null;
-    if (located.path) |path| {
-        if (!std.mem.eql(u8, path, ir.projectPath())) return null;
+fn editableBinding(ir: *core.Ir, node_id: core.NodeId, page_id: core.NodeId, page: ast.PageDecl) ?[]const u8 {
+    var result: ?[]const u8 = null;
+    for (ir.object_bindings.items) |binding| {
+        if (binding.node_id != node_id or binding.page_id != page_id) continue;
+        if (binding.module_id != ir.project_module_id) continue;
+        if (binding.span_start < page.span.start or binding.span_end > page.span.end) continue;
+        result = binding.name;
     }
-    if (located.span.start < page.span.start or located.span.end > page.span.end) return null;
-    if (!constraintsEditableFromPage(ir, node.id, page.span)) return null;
-    return bindingAtSpan(page.statements.items, located.span.start, located.span.end);
-}
-
-fn constraintsEditableFromPage(ir: *core.Ir, node_id: core.NodeId, page_span: anytype) bool {
-    for (ir.constraints.items) |constraint| {
-        if (constraint.target_node != node_id) continue;
-        const origin = constraint.origin orelse return false;
-        const located = utils.err.parseLocatedOrigin(origin) orelse return false;
-        if (located.path) |path| {
-            if (!std.mem.eql(u8, path, ir.projectPath())) return false;
-        }
-        if (located.span.start < page_span.start or located.span.end > page_span.end) return false;
-    }
-    return true;
-}
-
-fn bindingAtSpan(statements: []const ast.Statement, start: usize, end: usize) ?[]const u8 {
-    for (statements) |statement| {
-        if (statement.span.start == start and statement.span.end == end) {
-            return switch (statement.kind) {
-                .let_binding => |binding| binding.name,
-                else => null,
-            };
-        }
-        switch (statement.kind) {
-            .if_stmt => |branch| {
-                if (bindingAtSpan(branch.then_statements.items, start, end)) |binding| return binding;
-                if (bindingAtSpan(branch.else_statements.items, start, end)) |binding| return binding;
-            },
-            else => {},
-        }
-    }
-    return null;
+    return result;
 }

@@ -34,6 +34,7 @@ pub const RelationUpdate = struct {
 };
 
 pub const ParsedRelation = struct {
+    update: bool,
     indent: []const u8,
     target: []const u8,
     target_anchor: []const u8,
@@ -73,8 +74,8 @@ pub fn absolutePosition(
 
     var text = std.ArrayList(u8).empty;
     errdefer text.deinit(allocator);
-    try appendConstraint(allocator, &text, indent, binding, "left", "page", "left", left);
-    try appendConstraint(allocator, &text, indent, binding, "top", "page", "top", -top);
+    try appendConstraint(allocator, &text, true, indent, binding, "left", "page", "left", left);
+    try appendConstraint(allocator, &text, true, indent, binding, "top", "page", "top", -top);
     try edits.append(allocator, .{
         .start = insertion,
         .end = insertion,
@@ -99,6 +100,7 @@ pub fn preserveRelations(
         try appendConstraintWithoutIndent(
             allocator,
             &text,
+            parsed.update,
             parsed.indent,
             update.target,
             update.target_anchor,
@@ -145,14 +147,16 @@ pub fn applyEdits(allocator: std.mem.Allocator, source: []const u8, edits: []con
 pub fn parseRelation(line: []const u8) ?ParsedRelation {
     const indent_end = leadingWhitespace(line);
     const body = std.mem.trim(u8, line[indent_end..], " \t\r\n");
-    if (body.len == 0 or body[0] != '~') return null;
-    const equality = std.mem.indexOf(u8, body[1..], "==") orelse return null;
-    const equality_start = equality + 1;
-    const target = parseEndpoint(std.mem.trim(u8, body[1..equality_start], " \t")) orelse return null;
+    const update = std.mem.startsWith(u8, body, "~!~");
+    const marker_len: usize = if (update) 3 else if (std.mem.startsWith(u8, body, "~")) 1 else return null;
+    const equality = std.mem.indexOf(u8, body[marker_len..], "==") orelse return null;
+    const equality_start = equality + marker_len;
+    const target = parseEndpoint(std.mem.trim(u8, body[marker_len..equality_start], " \t")) orelse return null;
     const right = std.mem.trim(u8, body[equality_start + 2 ..], " \t");
     const endpoint_end = endpointPrefixEnd(right) orelse return null;
     const source_endpoint = parseEndpoint(right[0..endpoint_end]) orelse return null;
     return .{
+        .update = update,
         .indent = line[0..indent_end],
         .target = target.name,
         .target_anchor = target.anchor,
@@ -241,6 +245,7 @@ fn trimLineEnding(source: []const u8, end: usize) usize {
 fn appendConstraint(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    update: bool,
     indent: []const u8,
     target: []const u8,
     target_anchor: []const u8,
@@ -248,13 +253,14 @@ fn appendConstraint(
     source_anchor: []const u8,
     offset: f64,
 ) !void {
-    try appendConstraintWithoutIndent(allocator, out, indent, target, target_anchor, source, source_anchor, offset);
+    try appendConstraintWithoutIndent(allocator, out, update, indent, target, target_anchor, source, source_anchor, offset);
     try out.append(allocator, '\n');
 }
 
 fn appendConstraintWithoutIndent(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
+    update: bool,
     indent: []const u8,
     target: []const u8,
     target_anchor: []const u8,
@@ -265,7 +271,7 @@ fn appendConstraintWithoutIndent(
     const number = try formatNumber(allocator, @abs(offset));
     defer allocator.free(number);
     try out.appendSlice(allocator, indent);
-    try out.appendSlice(allocator, "~ ");
+    try out.appendSlice(allocator, if (update) "~!~" else "~ ");
     try out.appendSlice(allocator, target);
     try out.append(allocator, '.');
     try out.appendSlice(allocator, target_anchor);
