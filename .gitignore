@@ -8,3 +8,4 @@
 /editor/zed/extension.wasm
 /editor/zed/grammars
 /editor/zed/target
+**/node_modules/**
