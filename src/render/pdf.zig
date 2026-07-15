@@ -2,6 +2,7 @@ const native = @import("pdf/native.zig");
 
 pub const RenderProgress = native.RenderProgress;
 pub const RenderOptions = native.RenderOptions;
+pub const SceneOptions = native.SceneOptions;
 pub const TreeSitterHealthItem = native.TreeSitterHealthItem;
 pub const TreeSitterHealthReport = native.TreeSitterHealthReport;
 pub const TreeSitterHealthStatus = native.TreeSitterHealthStatus;
@@ -14,5 +15,6 @@ pub const qpdf_cache_version = native.qpdf_cache_version;
 pub const native_artifact_cache_version = native.native_artifact_cache_version;
 pub const nativeRuntimeVersions = native.nativeRuntimeVersions;
 pub const renderDocumentToPdf = native.renderDocumentToPdf;
+pub const compileDocumentScenes = native.compileDocumentScenes;
 pub const preloadPreparedPageArtifacts = native.preloadPreparedPageArtifacts;
 pub const treeSitterHealthReport = native.treeSitterHealthReport;

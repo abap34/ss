@@ -316,6 +316,11 @@ pub const RenderOptions = struct {
     highlight_languages: []const utils.highlight.Language = &.{},
 };
 
+pub const SceneOptions = struct {
+    cache_dir: []const u8 = ".ss-cache/render",
+    highlight_languages: []const utils.highlight.Language = &.{},
+};
+
 const HighlightSpan = struct {
     start: usize,
     end: usize,
@@ -980,6 +985,95 @@ pub fn preloadPreparedPageArtifacts(
     };
 }
 
+pub fn compileDocumentScenes(
+    allocator: Allocator,
+    io: std.Io,
+    ir: *core.Ir,
+    pages: *const core.page_unit.PreparedPages,
+    options: SceneOptions,
+) !render_scene.Document {
+    try preloadPreparedPageArtifacts(allocator, io, ir, pages, .{
+        .cache_dir = options.cache_dir,
+        .highlight_languages = options.highlight_languages,
+    }, null);
+
+    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
+    defer allocator.free(asset_cache_dir);
+    var ctx = DrawContext{
+        .allocator = allocator,
+        .io = io,
+        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+        .cache_dir = asset_cache_dir,
+        .highlight_languages = options.highlight_languages,
+    };
+
+    var scenes = std.ArrayList(render_scene.Page).empty;
+    errdefer {
+        for (scenes.items) |*scene| scene.deinit(allocator);
+        scenes.deinit(allocator);
+    }
+    for (pages.pages) |*page_unit| {
+        const ops = try compileSceneRenderOps(allocator, ir, page_unit);
+        defer {
+            for (ops) |*op| op.deinit(allocator);
+            allocator.free(ops);
+        }
+        try scenes.append(allocator, try compilePageScene(
+            &ctx,
+            page_unit.page_id,
+            page_unit.index,
+            page_unit.background,
+            ops,
+        ));
+    }
+    return .{ .pages = try scenes.toOwnedSlice(allocator) };
+}
+
+fn compileSceneRenderOps(
+    allocator: Allocator,
+    ir: *core.Ir,
+    page_unit: *const core.page_unit.PageUnit,
+) ![]RenderOp {
+    var ops = std.ArrayList(RenderOp).empty;
+    errdefer {
+        for (ops.items) |*op| op.deinit(allocator);
+        ops.deinit(allocator);
+    }
+    for (page_unit.objects) |*object| {
+        const node = ir.getNode(object.node_id) orelse continue;
+        if (node.kind != .object or !object.attached) continue;
+        if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
+        try ops.append(allocator, try initRenderOp(allocator, page_unit.page_id, node, object, node.frame));
+    }
+    return try ops.toOwnedSlice(allocator);
+}
+
+fn initRenderOp(
+    allocator: Allocator,
+    page_id: core.NodeId,
+    node: *const core.Node,
+    object: *const core.page_unit.ObjectUnit,
+    frame: Frame,
+) !RenderOp {
+    return .{
+        .page_id = page_id,
+        .node_id = node.id,
+        .frame = frame,
+        .content = object.content,
+        .content_provenance = object.content_provenance,
+        .link_id = object.link_id,
+        .render = object.render,
+        .parse_mode = object.parse_mode,
+        .markdown_doc = object.markdownDocument(),
+        .text_layout = object.textLayout(),
+        .asset_deps = object.asset_deps,
+        .tex_preamble = try cloneTexPreambleEntries(allocator, object.tex_preamble),
+        .math_kind = mathKindForNode(node),
+        .origin = object.origin,
+        .payload_kind = object.payload_kind,
+    };
+}
+
 fn buildRenderPlan(
     ctx: *DrawContext,
     ir: *core.Ir,
@@ -1073,23 +1167,13 @@ fn buildRenderPlan(
             const node = ir.getNode(object.node_id) orelse continue;
             if (node.kind != .object or !object.attached) continue;
             if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
-            var op = RenderOp{
-                .page_id = page_unit.page_id,
-                .node_id = node.id,
-                .frame = layout_results.frameOf(page_unit.page_id, node.id) orelse return error.MissingLayoutFrame,
-                .content = object.content,
-                .content_provenance = object.content_provenance,
-                .link_id = object.link_id,
-                .render = object.render,
-                .parse_mode = object.parse_mode,
-                .markdown_doc = object.markdownDocument(),
-                .text_layout = object.textLayout(),
-                .asset_deps = object.asset_deps,
-                .tex_preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
-                .math_kind = mathKindForNode(node),
-                .origin = object.origin,
-                .payload_kind = object.payload_kind,
-            };
+            var op = try initRenderOp(
+                ctx.allocator,
+                page_unit.page_id,
+                node,
+                object,
+                layout_results.frameOf(page_unit.page_id, node.id) orelse return error.MissingLayoutFrame,
+            );
             errdefer op.deinit(ctx.allocator);
             try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
             try ops.append(ctx.allocator, op);
@@ -2798,7 +2882,7 @@ fn pageArtifactsReady(work: *RenderDag, page: RenderPage) bool {
 
 fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
     if (page.cache_hit) return;
-    var scene = try compileRenderPageScene(parent_ctx, page);
+    var scene = try compilePageScene(parent_ctx, page.page_id, page.index, page.background, page.ops);
     defer scene.deinit(parent_ctx.allocator);
     scene_renderer.render(parent_ctx.allocator, parent_ctx.io, &scene, page.render_path) catch |err| {
         if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose scene PDF layers");
@@ -2808,13 +2892,19 @@ fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
     try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
 }
 
-fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !render_scene.Page {
+fn compilePageScene(
+    parent_ctx: *DrawContext,
+    page_id: core.NodeId,
+    page_index: usize,
+    background: ?Color,
+    ops: []RenderOp,
+) !render_scene.Page {
     const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
 
     var scene = render_scene.Page{
-        .page_id = page.page_id,
-        .index = page.index,
+        .page_id = page_id,
+        .index = page_index,
         .width = PageLayout.width,
         .height = PageLayout.height,
     };
@@ -2831,7 +2921,7 @@ fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !re
         .sink = .{ .scene = .{ .page = &scene } },
     };
 
-    const page_fill = page.background orelse Color{ .r = 1, .g = 1, .b = 1 };
+    const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
     try activeSink(&ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = PageLayout.width, .height = PageLayout.height }, page_fill);
 
     var links = std.ArrayList(LinkAnnotation).empty;
@@ -2843,10 +2933,10 @@ fn compileRenderPageScene(parent_ctx: *DrawContext, page: *const RenderPage) !re
     ctx.link_annotations = &links;
     ctx.destinations = &destinations;
 
-    for (page.ops) |*op| {
+    for (ops) |*op| {
         if (op.render.kind == .chrome_only) try drawRenderOpIntoScene(&ctx, op);
     }
-    for (page.ops) |*op| {
+    for (ops) |*op| {
         if (op.render.kind != .chrome_only) try drawRenderOpIntoScene(&ctx, op);
     }
 

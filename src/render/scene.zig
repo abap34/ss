@@ -329,3 +329,13 @@ pub const Page = struct {
         });
     }
 };
+
+pub const Document = struct {
+    pages: []Page,
+
+    pub fn deinit(self: *Document, allocator: std.mem.Allocator) void {
+        for (self.pages) |*page| page.deinit(allocator);
+        allocator.free(self.pages);
+        self.* = .{ .pages = &.{} };
+    }
+};
