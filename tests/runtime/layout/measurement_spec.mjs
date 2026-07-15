@@ -208,7 +208,7 @@ end
       "utf8",
     );
 
-    await runSs(["render", "slide.ss", pdfPath, "--cache-id", "math-aspect"], project);
+    await runSs(["render", "slide.ss", pdfPath], project);
     await runCommand("pdftoppm", ["-png", "-r", "144", pdfPath, "page"], project);
     const geometry = await runCommand("magick", [
       "page-1.png",
@@ -258,7 +258,7 @@ end
     assert(formula, "tex formula node was not found in dump");
     assert(formula.width > 1000, `raw tex block frame should span the available width, got ${frameSummary(formula)}`);
 
-    await runSs(["render", "slide.ss", outputPath, "--cache-id", "raw-tex-width"], project);
+    await runSs(["render", "slide.ss", outputPath], project);
     const rendered = await trimmedRenderedPageGeometry(project, outputPath, 1, "tex");
     assert(rendered.width > 1000, `rendered raw tex block should use most of the available width, got ${geometrySummary(rendered)}`);
     assert(rendered.width < formula.width * 0.99, `rendered raw tex block should leave default breathing room, got ${geometrySummary(rendered)} in ${frameSummary(formula)}`);
@@ -302,7 +302,7 @@ end
     assert(large.height > small.height * 5, `pdf factor should affect measured height, small ${frameSummary(small)}, large ${frameSummary(large)}`);
     assert(large.width > small.width * 5, `pdf factor should affect measured width, small ${frameSummary(small)}, large ${frameSummary(large)}`);
 
-    await runSs(["render", "slide.ss", path.join(project, "out.pdf"), "--cache-id", "pdf-scale"], project);
+    await runSs(["render", "slide.ss", path.join(project, "out.pdf")], project);
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -338,7 +338,7 @@ end
       "utf8",
     );
 
-    await runSs(["render", "slide.ss", outputPath, "--cache-id", "pdf-rendered-scale"], project);
+    await runSs(["render", "slide.ss", outputPath], project);
     const small = await trimmedRenderedPageGeometry(project, outputPath, 1, "small");
     const large = await trimmedRenderedPageGeometry(project, outputPath, 2, "large");
     assert(large.width > small.width * 2, `pdf factor should change rendered width inside a fixed frame, small ${geometrySummary(small)}, large ${geometrySummary(large)}`);
@@ -370,7 +370,7 @@ end
       "utf8",
     );
 
-    const result = await spawnCollect(ssBin, ["render", "slide.ss", outputPath, "--cache-id", "pdf-no-shrink"], project);
+    const result = await spawnCollect(ssBin, ["render", "slide.ss", outputPath], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code === 0, `ss render slide.ss ${outputPath} failed with ${result.code}\n${output}`);
     assert(output.includes("FrameTooSmall"), `fixed asset frame should warn instead of shrinking content:\n${output}`);

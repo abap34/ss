@@ -1,13 +1,20 @@
 const core = @import("core");
+const compiler = @import("../render/compiler.zig");
 const pdf = @import("../render/pdf.zig");
 const utils = @import("utils");
 
 const Progress = utils.progress.Progress;
 
-pub fn render(progress: *Progress) pdf.Progress {
+pub fn render(progress: *Progress) compiler.Progress {
     return .{
         .context = progress,
         .artifactCompleted = onRenderArtifact,
+    };
+}
+
+pub fn pdfWrite(progress: *Progress) pdf.Progress {
+    return .{
+        .context = progress,
         .pageCompleted = onRenderPage,
         .assemblyCompleted = onRenderAssembly,
     };

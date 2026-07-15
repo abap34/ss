@@ -2,7 +2,7 @@ const std = @import("std");
 const core = @import("core");
 const lowering = @import("../lowering.zig");
 const render_layout = @import("../render/layout.zig");
-const render_pdf = @import("../render/pdf.zig");
+const render_compiler = @import("../render/compiler.zig");
 const render_html = @import("../render/html.zig");
 const dump = @import("../dump.zig");
 const utils = @import("utils");
@@ -143,7 +143,7 @@ pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWrit
     defer pages.deinit(state.allocator);
     pages_errdefer_active = false;
     progress.begin("Render PDF");
-    var ir = render_pdf.compileRenderIr(state.allocator, io, &state, &pages, .{
+    var ir = render_compiler.compile(state.allocator, io, &state, &pages, .{
         .cache_dir = request.options.render.cache_dir,
         .highlight_languages = request.options.render.highlight_languages,
     }) catch |err| {
@@ -185,7 +185,7 @@ pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWr
     pages_errdefer_active = false;
 
     progress.begin("Render HTML");
-    var ir = render_pdf.compileRenderIr(state.allocator, io, &state, &pages, .{
+    var ir = render_compiler.compile(state.allocator, io, &state, &pages, .{
         .cache_dir = request.options.render.cache_dir,
         .highlight_languages = request.options.render.highlight_languages,
     }) catch |err| {

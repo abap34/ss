@@ -79,7 +79,7 @@ end
 }
 
 async function renderAndExtract(project, cacheId) {
-  const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf", "--cache-id", cacheId], project);
+  const render = await spawnCollect(ssBin, ["render", "slide.ss", "out.pdf"], project);
   assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
   const extraction = await spawnCollect("pdftotext", ["out.pdf", "out.txt"], project);
   assert(extraction.code === 0, `pdftotext failed:\n${combinedOutput(extraction)}`);

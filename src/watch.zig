@@ -16,7 +16,6 @@ pub const Options = struct {
     project_file: ?[]const u8 = null,
     highlight_languages: []const utils.highlight.Language = &.{},
     jobs: ?usize = null,
-    cache_id: ?[]const u8 = null,
     interval_ms: u64 = 500,
     quiet: bool = false,
 };
@@ -64,7 +63,6 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 utils.progress.Progress.init(8);
             const render_options = app.RenderOptions{
                 .jobs = options.jobs,
-                .cache_id = options.cache_id,
                 .highlight_languages = options.highlight_languages,
             };
             app.writePdf(io, allocator, .{

@@ -165,8 +165,6 @@ async function render(project, outputName, cacheId, diagnosticsPath) {
     "render",
     "slide.ss",
     outputName,
-    "--cache-id",
-    cacheId,
     "--diagnostics-json",
     diagnosticsPath,
   ], project);

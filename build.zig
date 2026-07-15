@@ -413,7 +413,7 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
-    const render_pdf_document_mod = createModule(ctx, "src/render/pdf/document.zig", &.{
+    const render_pdf_document_mod = createModule(ctx, "src/render/pdf.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),

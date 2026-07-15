@@ -283,7 +283,6 @@ fn render(output: Output) void {
         \\  {s}--output PATH{s}           PDF file or HTML directory
         \\  {s}--format pdf|html{s}        Output format
         \\  {s}--jobs N{s}                Parallel render jobs
-        \\  {s}--cache-id ID{s}           Stable cache identity for temporary inputs
         \\  {s}--diagnostics-json FILE{s} Write diagnostics JSON
         \\  {s}--color auto|always|never{s}
         \\  {s}--diagnostic-level LEVEL{s} note|warning|error|off
@@ -295,7 +294,6 @@ fn render(output: Output) void {
         s.command, s.reset,
         s.command, s.reset,
         s.heading, s.reset,
-        s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
@@ -594,7 +592,7 @@ const bash_completion =
     \\  local common_opts="help --help -h"
     \\  local diagnostic_opts="--diagnostic-level --warnings --quiet"
     \\  local project_opts="--project --asset-base-dir --color $diagnostic_opts"
-    \\  local render_opts="--project --asset-base-dir --output --jobs --cache-id --diagnostics-json --color $diagnostic_opts"
+    \\  local render_opts="--project --asset-base-dir --output --jobs --diagnostics-json --color $diagnostic_opts"
     \\
     \\  case "$prev" in
     \\    --project|--asset-base-dir|--output|--diagnostics-json|--entry)
@@ -697,7 +695,7 @@ const zsh_completion =
     \\  local -a common_opts project_opts render_opts
     \\  common_opts=('help[show command help]' '--help[show command help]' '-h[show command help]')
     \\  project_opts=('--project[load ss.toml]:file or dir:_files' '--asset-base-dir[resolve assets from dir]:dir:_files -/' '--color[color mode]:(auto always never)' '--diagnostic-level[diagnostic display level]:(note warning error off)' '--warnings[warning display]:(off)' '--quiet[hide progress and warning diagnostics]')
-    \\  render_opts=($project_opts '--output[output path]:file:_files' '--jobs[parallel render jobs]:jobs:' '--cache-id[stable cache identity]:id:' '--diagnostics-json[diagnostics JSON path]:file:_files')
+    \\  render_opts=($project_opts '--output[output path]:file:_files' '--jobs[parallel render jobs]:jobs:' '--diagnostics-json[diagnostics JSON path]:file:_files')
     \\
     \\  if (( CURRENT == 2 )); then
     \\    _describe 'command' commands
@@ -769,7 +767,6 @@ const fish_completion =
     \\complete -c ss -n '__fish_seen_subcommand_from check dump render watch debug' -l quiet -d 'Hide progress and warning diagnostics'
     \\complete -c ss -n '__fish_seen_subcommand_from dump render watch debug' -l output -r -d 'Output path'
     \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l jobs -r -d 'Parallel render jobs'
-    \\complete -c ss -n '__fish_seen_subcommand_from render watch' -l cache-id -r -d 'Stable cache identity'
     \\complete -c ss -n '__fish_seen_subcommand_from render' -l diagnostics-json -r -d 'Diagnostics JSON path'
     \\complete -c ss -n '__fish_seen_subcommand_from watch' -l interval-ms -r -d 'Poll interval'
     \\complete -c ss -n '__fish_seen_subcommand_from doctor' -l strict -d 'Fail on issues'
