@@ -42,10 +42,10 @@ pub const Target = union(enum) {
         allocator: Allocator,
         start: render_ir.Point,
         end: render_ir.Point,
-        line_width: f32,
+        line_width: f64,
         color: Color,
-        dash_on: f32,
-        dash_off: f32,
+        dash_on: f64,
+        dash_off: f64,
     ) !void {
         switch (self.*) {
             .pdf => |pdf| c.ss_pdf_stroke_line(
@@ -78,10 +78,10 @@ pub const Target = union(enum) {
         self: *Target,
         allocator: Allocator,
         rect: render_ir.Rect,
-        radius: f32,
+        radius: f64,
         fill: ?Color,
         stroke: ?Color,
-        line_width: f32,
+        line_width: f64,
     ) !void {
         switch (self.*) {
             .pdf => |pdf| c.ss_pdf_fill_stroke_rounded_rect(
@@ -116,12 +116,12 @@ pub const Target = union(enum) {
     pub fn textBaseline(
         self: *Target,
         allocator: Allocator,
-        x: f32,
-        baseline_y: f32,
-        width: f32,
+        x: f64,
+        baseline_y: f64,
+        width: f64,
         content: []const u8,
         font: core.font.Face,
-        font_size: f32,
+        font_size: f64,
         color: Color,
         wrap: bool,
         preserve_color_glyphs: bool,
@@ -279,15 +279,15 @@ pub const Target = union(enum) {
 
 fn drawTextBaselineZ(
     pdf: *c.SsPdf,
-    x: f32,
-    baseline_y: f32,
-    width: f32,
+    x: f64,
+    baseline_y: f64,
+    width: f64,
     content: [:0]const u8,
     font_family: [:0]const u8,
     font_weight: u16,
     font_style: core.font.Style,
     font_stretch: core.font.Stretch,
-    font_size: f32,
+    font_size: f64,
     color: Color,
     wrap: bool,
     preserve_color_glyphs: bool,

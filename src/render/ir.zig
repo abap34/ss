@@ -1,61 +1,62 @@
 const std = @import("std");
 const core = @import("core");
+const geometry = @import("ir/geometry.zig");
 
-pub const CoordinateSpace = struct {
-    pub const unit = "pt";
-    pub const origin = "page-top-left";
-    pub const x_axis = "right";
-    pub const y_axis = "down";
-};
+pub const CoordinateSpace = geometry.CoordinateSpace;
+pub const Rect = geometry.Rect;
+pub const Point = geometry.Point;
+pub const Transform = geometry.Transform;
+pub const Clip = geometry.Clip;
 
-pub const Rect = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-};
+pub const ItemId = u64;
 
-pub const Point = struct {
-    x: f32,
-    y: f32,
+pub const ItemHeader = struct {
+    item_id: ItemId,
+    node_id: ?core.NodeId,
+    bounds: Rect,
+    ink_bounds: Rect,
+    transform: Transform = .{},
+    clip: ?Clip = null,
+    opacity: f64 = 1,
+    paint_index: u32,
 };
 
 pub const StrokeLine = struct {
-    node_id: ?core.NodeId,
+    header: ItemHeader,
     start: Point,
     end: Point,
-    line_width: f32,
+    line_width: f64,
     color: core.render_policy.Color,
-    dash_on: f32 = 0,
-    dash_off: f32 = 0,
+    dash_on: f64 = 0,
+    dash_off: f64 = 0,
 };
 
 pub const FillRect = struct {
-    node_id: ?core.NodeId,
+    header: ItemHeader,
     rect: Rect,
     color: core.render_policy.Color,
 };
 
 pub const RoundedRect = struct {
-    node_id: ?core.NodeId,
+    header: ItemHeader,
     rect: Rect,
-    radius: f32,
+    radius: f64,
     fill: ?core.render_policy.Color,
     stroke: ?core.render_policy.Color,
-    line_width: f32,
+    line_width: f64,
 };
 
 pub const Text = struct {
-    node_id: ?core.NodeId,
-    x: f32,
-    baseline_y: f32,
-    width: f32,
+    header: ItemHeader,
+    x: f64,
+    baseline_y: f64,
+    width: f64,
     text: [:0]u8,
     font_family: [:0]u8,
     font_weight: u16,
     font_style: core.font.Style,
     font_stretch: core.font.Stretch,
-    font_size: f32,
+    font_size: f64,
     color: core.render_policy.Color,
     wrap: bool,
     preserve_color_glyphs: bool,
@@ -67,7 +68,7 @@ pub const Text = struct {
 };
 
 pub const Raster = struct {
-    node_id: ?core.NodeId,
+    header: ItemHeader,
     rect: Rect,
     path: [:0]u8,
 
@@ -77,7 +78,7 @@ pub const Raster = struct {
 };
 
 pub const Svg = struct {
-    node_id: ?core.NodeId,
+    header: ItemHeader,
     rect: Rect,
     path: [:0]u8,
     tint: ?core.render_policy.Color,
@@ -88,7 +89,7 @@ pub const Svg = struct {
 };
 
 pub const PdfPage = struct {
-    node_id: ?core.NodeId,
+    header: ItemHeader,
     rect: Rect,
     path: [:0]u8,
     page_index: usize,
@@ -121,7 +122,13 @@ pub const Item = union(enum) {
 
     pub fn nodeId(self: Item) ?core.NodeId {
         return switch (self) {
-            inline else => |item| item.node_id,
+            inline else => |item| item.header.node_id,
+        };
+    }
+
+    pub fn header(self: Item) ItemHeader {
+        return switch (self) {
+            inline else => |item| item.header,
         };
     }
 };
@@ -153,8 +160,8 @@ pub const Destination = struct {
 pub const Page = struct {
     page_id: core.NodeId,
     index: usize,
-    width: f32,
-    height: f32,
+    width: f64,
+    height: f64,
     items: std.ArrayList(Item) = .empty,
     links: std.ArrayList(Link) = .empty,
     destinations: std.ArrayList(Destination) = .empty,
@@ -177,7 +184,7 @@ pub const Page = struct {
 
     pub fn appendFillRect(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, color: core.render_policy.Color) !void {
         try self.items.append(allocator, .{ .fill_rect = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
             .color = color,
         } });
@@ -189,13 +196,26 @@ pub const Page = struct {
         node_id: ?core.NodeId,
         start: Point,
         end: Point,
-        line_width: f32,
+        line_width: f64,
         color: core.render_policy.Color,
-        dash_on: f32,
-        dash_off: f32,
+        dash_on: f64,
+        dash_off: f64,
     ) !void {
+        const half_width = @max(line_width / 2, 0);
+        const bounds = Rect{
+            .x = @min(start.x, end.x),
+            .y = @min(start.y, end.y),
+            .width = @abs(end.x - start.x),
+            .height = @abs(end.y - start.y),
+        };
+        const ink_bounds = Rect{
+            .x = bounds.x - half_width,
+            .y = bounds.y - half_width,
+            .width = bounds.width + line_width,
+            .height = bounds.height + line_width,
+        };
         try self.items.append(allocator, .{ .stroke_line = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, bounds, ink_bounds),
             .start = start,
             .end = end,
             .line_width = line_width,
@@ -210,13 +230,20 @@ pub const Page = struct {
         allocator: std.mem.Allocator,
         node_id: ?core.NodeId,
         rect: Rect,
-        radius: f32,
+        radius: f64,
         fill: ?core.render_policy.Color,
         stroke: ?core.render_policy.Color,
-        line_width: f32,
+        line_width: f64,
     ) !void {
+        const half_width = if (stroke != null) @max(line_width / 2, 0) else 0;
+        const ink_bounds = Rect{
+            .x = rect.x - half_width,
+            .y = rect.y - half_width,
+            .width = rect.width + half_width * 2,
+            .height = rect.height + half_width * 2,
+        };
         try self.items.append(allocator, .{ .rounded_rect = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, rect, ink_bounds),
             .rect = rect,
             .radius = radius,
             .fill = fill,
@@ -229,12 +256,12 @@ pub const Page = struct {
         self: *Page,
         allocator: std.mem.Allocator,
         node_id: ?core.NodeId,
-        x: f32,
-        baseline_y: f32,
-        width: f32,
+        x: f64,
+        baseline_y: f64,
+        width: f64,
         text: []const u8,
         font: core.font.Face,
-        font_size: f32,
+        font_size: f64,
         color: core.render_policy.Color,
         wrap: bool,
         preserve_color_glyphs: bool,
@@ -243,8 +270,14 @@ pub const Page = struct {
         errdefer allocator.free(owned_text);
         const owned_family = try allocator.dupeZ(u8, font.family);
         errdefer allocator.free(owned_family);
+        const bounds = Rect{
+            .x = x,
+            .y = baseline_y - font_size,
+            .width = @max(width, 0),
+            .height = @max(font_size, 0),
+        };
         try self.items.append(allocator, .{ .text = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, bounds, bounds),
             .x = x,
             .baseline_y = baseline_y,
             .width = width,
@@ -264,7 +297,7 @@ pub const Page = struct {
         const owned_path = try allocator.dupeZ(u8, path);
         errdefer allocator.free(owned_path);
         try self.items.append(allocator, .{ .raster = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
             .path = owned_path,
         } });
@@ -281,7 +314,7 @@ pub const Page = struct {
         const owned_path = try allocator.dupeZ(u8, path);
         errdefer allocator.free(owned_path);
         try self.items.append(allocator, .{ .svg = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
             .path = owned_path,
             .tint = tint,
@@ -301,7 +334,7 @@ pub const Page = struct {
         const owned_path = try allocator.dupeZ(u8, path);
         errdefer allocator.free(owned_path);
         try self.items.append(allocator, .{ .pdf_page = .{
-            .node_id = node_id,
+            .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
             .path = owned_path,
             .page_index = page_index,
@@ -328,9 +361,21 @@ pub const Page = struct {
             .point = point,
         });
     }
+
+    fn itemHeader(self: *const Page, node_id: ?core.NodeId, bounds: Rect, ink_bounds: Rect) ItemHeader {
+        const paint_index: u32 = @intCast(self.items.items.len);
+        return .{
+            .item_id = (@as(u64, @intCast(self.index + 1)) << 32) | paint_index,
+            .node_id = node_id,
+            .bounds = bounds,
+            .ink_bounds = ink_bounds,
+            .paint_index = paint_index,
+        };
+    }
 };
 
 pub const Ir = struct {
+    schema_version: u32 = 2,
     pages: []Page,
 
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {

@@ -65,7 +65,7 @@ pub const Object = struct {
         try int(self.allocator, self.sink, value);
     }
 
-    pub fn floatField(self: *Object, key: []const u8, value: f32, comptime fmt: []const u8) !void {
+    pub fn floatField(self: *Object, key: []const u8, value: anytype, comptime fmt: []const u8) !void {
         try self.fieldName(key);
         try float(self.allocator, self.sink, value, fmt);
     }
@@ -116,7 +116,7 @@ pub const Object = struct {
         }
     }
 
-    pub fn optionalFloatField(self: *Object, key: []const u8, value: ?f32, comptime fmt: []const u8) !void {
+    pub fn optionalFloatField(self: *Object, key: []const u8, value: anytype, comptime fmt: []const u8) !void {
         try self.fieldName(key);
         if (value) |number| {
             try float(self.allocator, self.sink, number, fmt);
@@ -182,7 +182,7 @@ pub const Array = struct {
         try int(self.allocator, self.sink, value);
     }
 
-    pub fn floatItem(self: *Array, value: f32, comptime fmt: []const u8) !void {
+    pub fn floatItem(self: *Array, value: anytype, comptime fmt: []const u8) !void {
         try self.comma();
         try float(self.allocator, self.sink, value, fmt);
     }
