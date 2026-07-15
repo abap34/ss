@@ -424,7 +424,7 @@ fn debug(output: Output) void {
         \\  {s}--quiet{s}                 Hide progress and warning diagnostics
         \\
         \\{s}Examples:{s}
-        \\  {s}ss debug schedule slide.ss --output schedule.json{s}
+        \\  {s}ss debug schedule slide.ss --output execution.json{s}
         \\  {s}ss debug layout conflicts --project slides --output layout-conflicts.json{s}
         \\
     , .{

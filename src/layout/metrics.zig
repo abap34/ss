@@ -154,8 +154,8 @@ pub const MeasurementCache = struct {
 
     fn renderedMeasurement(self: *MeasurementCache, ir: anytype, node: *const Node, width: f32, mode: model.LayoutMeasurementMode) !?model.LayoutMeasurement {
         const provider = self.render_provider orelse return null;
-        const ir_ptr: *anyopaque = @ptrCast(@alignCast(ir));
-        const measured = try provider.measure(provider.context, ir_ptr, node, width, mode);
+        const context_ptr: *anyopaque = @ptrCast(@alignCast(ir));
+        const measured = try provider.measure(provider.context, context_ptr, node, width, mode);
         if (measured) |value| {
             if (value.cache_key) |key| self.recordUsedKey(key);
         }

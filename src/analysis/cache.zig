@@ -53,7 +53,7 @@ pub const NameResolutionCache = struct {
         self.functions.deinit();
     }
 
-    pub fn reserve(self: *NameResolutionCache, ir: *const core.Ir) !void {
+    pub fn reserve(self: *NameResolutionCache, ir: *const core.Context) !void {
         try self.functions.ensureTotalCapacity(@intCast(ir.functions.count() * 2));
         try self.constants.ensureTotalCapacity(@intCast(ir.constants.count() * 2));
     }

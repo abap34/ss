@@ -342,7 +342,7 @@ fn addTestStep(
         import("language_type", modules.language_type),
         import("registry", registry_mod),
     }, true);
-    addModuleTest(ctx, test_step, "tests/core/ir/spec_tests.zig", &.{
+    addModuleTest(ctx, test_step, "tests/core/context/spec_tests.zig", &.{
         import("core", modules.core),
         import("utils", modules.utils),
         import("ast", modules.ast),

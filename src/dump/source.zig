@@ -43,7 +43,7 @@ fn writeModule(allocator: std.mem.Allocator, modules: *json.Array, module: core.
     }
     try imports.end();
     try item.stringField("source", module.source);
-    try writeProgram(allocator, &item, module.syntax);
+    try writeModuleSyntax(allocator, &item, module.syntax);
     try item.end();
 }
 
@@ -54,7 +54,7 @@ fn moduleSpecById(modules: []const core.SourceModule, module_id: core.SourceModu
     return null;
 }
 
-fn writeProgram(allocator: std.mem.Allocator, object: *json.Object, program: ast.Module) !void {
+fn writeModuleSyntax(allocator: std.mem.Allocator, object: *json.Object, program: ast.Module) !void {
     var program_object = try object.objectField("program");
 
     var imports = try program_object.arrayField("imports");

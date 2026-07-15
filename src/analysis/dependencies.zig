@@ -542,7 +542,7 @@ pub const RunCache = struct {
         self.name_resolution.deinit();
     }
 
-    pub fn reserve(self: *RunCache, ir: *const core.Ir) !void {
+    pub fn reserve(self: *RunCache, ir: *const core.Context) !void {
         try self.name_resolution.reserve(ir);
         try self.summaries.ensureTotalCapacity(@intCast((ir.functions.count() * 8) + (ir.constants.count() * 2)));
     }

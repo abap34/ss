@@ -226,7 +226,7 @@ fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: 
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(ir: ?*core.Context, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
@@ -234,12 +234,12 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     });
 }
 
-fn continueAfterDiagnostic(ir: *const core.Ir, diagnostic_count_before: usize, err: anyerror) !void {
+fn continueAfterDiagnostic(ir: *const core.Context, diagnostic_count_before: usize, err: anyerror) !void {
     if (ir.diagnostics.items.len > diagnostic_count_before) return;
     return err;
 }
 
-fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+fn rejectDuplicateBinding(ir: ?*core.Context, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
     if (!env.contains(name)) return;
     try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
@@ -247,7 +247,7 @@ fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, 
 
 pub fn checkPageNamesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
 ) !void {
     var pages = std.StringHashMap(void).init(allocator);
     defer pages.deinit();
@@ -269,7 +269,7 @@ pub fn checkPageNamesUnique(
 
 pub fn checkFunction(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     func: ast.FunctionDecl,
@@ -301,7 +301,7 @@ pub fn checkFunction(
 
 pub fn checkConst(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     constant_decl: ast.ConstDecl,
@@ -341,7 +341,7 @@ pub fn checkConst(
 
 pub fn checkPageStatements(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     program: ast.Module,
@@ -382,7 +382,7 @@ pub fn checkPageStatements(
 
 fn checkTopLevelStatement(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     context: StatementContext,
@@ -458,7 +458,7 @@ fn checkTopLevelStatement(
     }
 }
 
-fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const u8) !void {
+fn rejectVoidValue(ir: *core.Context, info: semantic_types.TypeInfo, origin: []const u8) !void {
     if (info.hole != null) return;
     if (info.ty.kind != .void) return;
     try addUserReport(ir, origin, "VoidValue: void results can only be used as statements", .{});
@@ -467,7 +467,7 @@ fn rejectVoidValue(ir: *core.Ir, info: semantic_types.TypeInfo, origin: []const 
 
 fn checkedLetBindingInfo(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     binding: anytype,
     inferred: semantic_types.TypeInfo,
     origin: []const u8,
@@ -478,7 +478,7 @@ fn checkedLetBindingInfo(
 }
 
 fn rejectPageOnlyExpr(
-    ir: *core.Ir,
+    ir: *core.Context,
     context: StatementContext,
     origin: []const u8,
     page_context: *PageContextRequirement,
@@ -494,7 +494,7 @@ fn rejectPageOnlyExpr(
 
 fn validateAnchorRef(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     env: *TypeEnv,
     origin: []const u8,
@@ -522,7 +522,7 @@ fn anchorObjectPath(anchor_ref: ast.AnchorRef) ?[]const u8 {
 }
 
 fn resolveAnchorPathInfo(
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     env: *TypeEnv,
     origin: []const u8,
@@ -562,7 +562,7 @@ fn isObjectLike(info: semantic_types.TypeInfo) bool {
 
 fn checkStatement(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     env: *TypeEnv,

@@ -4,11 +4,11 @@ const core = @import("core");
 const analysis = @import("../analysis.zig");
 const json = @import("utils").json;
 
-pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Context) !void {
     var variables = try root.arrayField("variables");
     for (ir.modules.items) |module| {
         if (module.path == null) continue;
-        var variable_infos = try analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.syntax, module.id, module.source.len, ir);
+        var variable_infos = try analysis.collectScopedVariableInfoFromModule(allocator, &ir.functions, module.syntax, module.id, module.source.len, ir);
         defer variable_infos.deinit(allocator);
         for (variable_infos.items) |entry| {
             var item = try variables.objectItem();
@@ -30,7 +30,7 @@ pub fn writeVariablesField(allocator: std.mem.Allocator, root: *json.Object, ir:
     try variables.end();
 }
 
-pub fn writeDefinitionsField(root: *json.Object, ir: *core.Ir) !void {
+pub fn writeDefinitionsField(root: *json.Object, ir: *core.Context) !void {
     var definitions = try root.arrayField("definitions");
     for (ir.definitions.items) |definition| {
         var item = try definitions.objectItem();

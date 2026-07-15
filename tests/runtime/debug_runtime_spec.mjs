@@ -14,7 +14,7 @@ async function testDebugScheduleJson() {
   const project = await mkdtempProject("ss-debug-schedule-");
   try {
     await writeDeck(project);
-    const output = path.join(project, "schedule.json");
+    const output = path.join(project, "execution.json");
     await runSs(["debug", "schedule", "slide.ss", "--output", output], project);
 
     const payload = JSON.parse(await readFile(output, "utf8"));

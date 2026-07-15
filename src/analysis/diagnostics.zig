@@ -114,9 +114,9 @@ pub const DiagnosticBag = struct {
         }
     }
 
-    pub fn addIr(self: *DiagnosticBag, ir: *core.Ir) !void {
+    pub fn addContext(self: *DiagnosticBag, ir: *core.Context) !void {
         for (ir.diagnostics.items) |diagnostic| {
-            const message = try utils.err.formatIrDiagnostic(self.allocator, diagnostic);
+            const message = try utils.err.formatContextDiagnostic(self.allocator, diagnostic);
             defer self.allocator.free(message);
             const location = diagnosticLocation(ir, diagnostic);
             try self.add(location.path, location.source, diagnostic.severity, diagnosticCode(diagnostic), message, location.span, null);
@@ -139,7 +139,7 @@ const DiagnosticLocation = struct {
     span: ?source.ByteSpan,
 };
 
-fn diagnosticLocation(ir: *core.Ir, diagnostic: core.Diagnostic) DiagnosticLocation {
+fn diagnosticLocation(ir: *core.Context, diagnostic: core.Diagnostic) DiagnosticLocation {
     var report_path = ir.projectPath();
     var report_source = ir.projectSource();
     const located = if (diagnostic.origin) |origin|

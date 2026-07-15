@@ -9,7 +9,7 @@ const ast = @import("ast");
 const names = @import("../language/names.zig");
 const semantic_env = @import("../language/env.zig");
 const registry = @import("../language/registry.zig");
-const schedule = @import("../analysis/schedule.zig");
+const execution = @import("../analysis/execution.zig");
 const value_contracts = @import("value_contracts.zig");
 
 const FunctionDecl = ast.FunctionDecl;
@@ -128,11 +128,11 @@ const LowerDiagnostic = struct {
     };
 };
 
-fn reportUnknownFunction(ir: *core.Ir, name: []const u8, origin: []const u8) !void {
+fn reportUnknownFunction(ir: *core.Context, name: []const u8, origin: []const u8) !void {
     try reportNamedResolutionError(ir, error.UnknownFunction, "function", name, origin);
 }
 
-fn reportUnknownCallable(ir: *core.Ir, sema: *const SemanticEnv, callee: ast.CallableName, origin: []const u8) !void {
+fn reportUnknownCallable(ir: *core.Context, sema: *const SemanticEnv, callee: ast.CallableName, origin: []const u8) !void {
     switch (sema.resolveFunction(callee)) {
         .unknown_alias => |alias| try reportNamedResolutionError(ir, error.UnknownFunction, "import alias", alias, origin),
         else => {
@@ -143,15 +143,15 @@ fn reportUnknownCallable(ir: *core.Ir, sema: *const SemanticEnv, callee: ast.Cal
     }
 }
 
-fn reportUnknownQuery(ir: *core.Ir, name: []const u8, origin: []const u8) !void {
+fn reportUnknownQuery(ir: *core.Context, name: []const u8, origin: []const u8) !void {
     try reportNamedResolutionError(ir, error.UnknownQuery, "query", name, origin);
 }
 
-fn reportUnknownIdentifier(ir: *core.Ir, name: []const u8, origin: []const u8) !void {
+fn reportUnknownIdentifier(ir: *core.Context, name: []const u8, origin: []const u8) !void {
     try reportNamedResolutionError(ir, error.UnknownIdentifier, "identifier", name, origin);
 }
 
-fn reportNamedResolutionError(ir: *core.Ir, err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) !void {
+fn reportNamedResolutionError(ir: *core.Context, err: anyerror, kind: []const u8, name: []const u8, origin: []const u8) !void {
     try reportLowerDiagnostic(ir, .{
         .err = err,
         .origin = origin,
@@ -159,7 +159,7 @@ fn reportNamedResolutionError(ir: *core.Ir, err: anyerror, kind: []const u8, nam
     });
 }
 
-fn reportLowerError(ir: *core.Ir, err: anyerror, origin: ?[]const u8) !void {
+fn reportLowerError(ir: *core.Context, err: anyerror, origin: ?[]const u8) !void {
     try reportLowerDiagnostic(ir, .{
         .err = err,
         .origin = origin,
@@ -167,7 +167,7 @@ fn reportLowerError(ir: *core.Ir, err: anyerror, origin: ?[]const u8) !void {
     });
 }
 
-fn reportDuplicatePropertyDefinition(ir: *core.Ir, origin: []const u8, key: []const u8) !void {
+fn reportDuplicatePropertyDefinition(ir: *core.Context, origin: []const u8, key: []const u8) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .message = try std.fmt.allocPrint(ir.allocator, "DuplicatePropertyDefinition: property '{s}' is already defined on this target", .{key}),
@@ -175,19 +175,19 @@ fn reportDuplicatePropertyDefinition(ir: *core.Ir, origin: []const u8, key: []co
     });
 }
 
-fn reportDuplicateContentDefinition(ir: *core.Ir, origin: []const u8) !void {
+fn reportDuplicateContentDefinition(ir: *core.Context, origin: []const u8) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = try ir.allocator.dupe(u8, "DuplicateContentDefinition: object content is already defined") },
     });
 }
 
-fn reportDuplicateReprDefinition(ir: *core.Ir, origin: []const u8) !void {
+fn reportDuplicateReprDefinition(ir: *core.Context, origin: []const u8) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = try ir.allocator.dupe(u8, "DuplicateReprDefinition: object repr is already defined") },
     });
 }
 
-fn reportRecordUpdateError(ir: *core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn reportRecordUpdateError(ir: *core.Context, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .message = try std.fmt.allocPrint(ir.allocator, fmt, args),
@@ -195,7 +195,7 @@ fn reportRecordUpdateError(ir: *core.Ir, origin: []const u8, comptime fmt: []con
     });
 }
 
-fn reportInvalidRecordLiteral(ir: *core.Ir, origin: []const u8, type_name: []const u8) !void {
+fn reportInvalidRecordLiteral(ir: *core.Context, origin: []const u8, type_name: []const u8) !void {
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{
             .message = try std.fmt.allocPrint(ir.allocator, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ type_name, type_name }),
@@ -203,7 +203,7 @@ fn reportInvalidRecordLiteral(ir: *core.Ir, origin: []const u8, type_name: []con
     });
 }
 
-fn reportLowerDiagnostic(ir: *core.Ir, diagnostic: LowerDiagnostic) !void {
+fn reportLowerDiagnostic(ir: *core.Context, diagnostic: LowerDiagnostic) !void {
     var message_buf: [256]u8 = undefined;
     const message = formatLowerDiagnostic(&message_buf, diagnostic);
     try ir.addValidationDiagnostic(.@"error", null, null, diagnostic.origin, .{
@@ -256,7 +256,7 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
         error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
-        error.ScheduledDependencyCycle => "ScheduledDependencyCycle: document evaluation dependencies contain a cycle",
+        error.ExecutionDependencyCycle => "ExecutionDependencyCycle: document evaluation dependencies contain a cycle",
         error.DuplicateContentDefinition => "DuplicateContentDefinition: object content is already defined",
         error.DuplicatePropertyDefinition => "DuplicatePropertyDefinition: property is already defined on this target",
         error.DuplicateReprDefinition => "DuplicateReprDefinition: object repr is already defined",
@@ -271,13 +271,13 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
-        error.UnsupportedScheduledPrimitive => "UnsupportedScheduledPrimitive: this operation is not valid during document evaluation",
+        error.UnsupportedDocumentEvaluationPrimitive => "UnsupportedDocumentEvaluationPrimitive: this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => null,
     };
 }
 
-pub fn evalIrWithSchedule(allocator: std.mem.Allocator, ir: *core.Ir, graph: *const schedule.ScheduleGraph) !void {
+pub fn executeGraph(allocator: std.mem.Allocator, ir: *core.Context, graph: *const execution.ExecutionGraph) !void {
     var closures = ClosureStore.init(allocator);
     defer closures.deinit();
     var document_states = std.AutoHashMap(core.SourceModuleId, DocumentExecutionState).init(allocator);
@@ -292,11 +292,11 @@ pub fn evalIrWithSchedule(allocator: std.mem.Allocator, ir: *core.Ir, graph: *co
         while (iter.next()) |state| state.deinit(allocator);
         page_states.deinit();
     }
-    for (graph.order) |unit_index| try executeScheduledUnit(ir, &ir.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
+    for (graph.order) |unit_index| try executeUnit(ir, &ir.functions, &closures, &document_states, &page_states, graph.units.items[unit_index]);
     try materializeDisplayContent(ir, &ir.functions, &closures);
 }
 
-fn materializeDisplayContent(ir: *core.Ir, functions: *const core.FunctionMap, closures: *ClosureStore) !void {
+fn materializeDisplayContent(ir: *core.Context, functions: *const core.FunctionMap, closures: *ClosureStore) !void {
     var env = std.StringHashMap(core.Value).init(ir.allocator);
     defer env.deinit();
 
@@ -338,13 +338,13 @@ const DocumentExecutionState = struct {
 
 const PageExecutionState = DocumentExecutionState;
 
-fn executeScheduledUnit(
-    ir: *core.Ir,
+fn executeUnit(
+    ir: *core.Context,
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
     document_states: *std.AutoHashMap(core.SourceModuleId, DocumentExecutionState),
     page_states: *std.AutoHashMap(core.NodeId, PageExecutionState),
-    unit: schedule.ScheduledUnit,
+    unit: execution.ExecutionUnit,
 ) !void {
     const previous_module_id = active_module_id;
     const previous_call_depth = active_call_depth;
@@ -357,18 +357,18 @@ fn executeScheduledUnit(
         .document_statement => |document_statement| {
             const entry = try document_states.getOrPut(unit.module_id);
             if (!entry.found_existing) entry.value_ptr.* = DocumentExecutionState.init(ir.allocator);
-            try executeScheduledDocumentStatement(ir, functions, closures, entry.value_ptr, document_statement.stmt);
+            try executeDocumentStatement(ir, functions, closures, entry.value_ptr, document_statement.stmt);
         },
         .page_statement => |page_statement| {
             const entry = try page_states.getOrPut(page_statement.page_id);
             if (!entry.found_existing) entry.value_ptr.* = PageExecutionState.init(ir.allocator);
-            try executeScheduledPageStatement(ir, functions, closures, entry.value_ptr, page_statement.page_id, page_statement.stmt);
+            try executePageStatement(ir, functions, closures, entry.value_ptr, page_statement.page_id, page_statement.stmt);
         },
     }
 }
 
-fn executeScheduledDocumentStatement(
-    ir: *core.Ir,
+fn executeDocumentStatement(
+    ir: *core.Context,
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
     state: *DocumentExecutionState,
@@ -391,8 +391,8 @@ fn executeScheduledDocumentStatement(
     }
 }
 
-fn executeScheduledPageStatement(
-    ir: *core.Ir,
+fn executePageStatement(
+    ir: *core.Context,
     functions: *const core.FunctionMap,
     closures: *ClosureStore,
     state: *PageExecutionState,
@@ -416,7 +416,7 @@ fn executeScheduledPageStatement(
     }
 }
 
-fn diagnosticErrorCount(ir: *const core.Ir) usize {
+fn diagnosticErrorCount(ir: *const core.Context) usize {
     var count: usize = 0;
     for (ir.diagnostics.items) |diagnostic| {
         if (diagnostic.severity == .@"error") count += 1;
@@ -430,7 +430,7 @@ fn setLowerDiagnosticOrigin(source: []const u8, path: []const u8) void {
 }
 
 fn evalExpr(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -488,7 +488,7 @@ fn evalExpr(
     };
 }
 
-fn registerStringLiteralProvenance(ir: *core.Ir, literal: ast.StringLiteral) !void {
+fn registerStringLiteralProvenance(ir: *core.Context, literal: ast.StringLiteral) !void {
     const source_span = literal.source_span orelse return;
     const origin = try originForActiveModuleSpan(ir, source_span);
     defer ir.allocator.free(origin);
@@ -501,7 +501,7 @@ fn registerStringLiteralProvenance(ir: *core.Ir, literal: ast.StringLiteral) !vo
 }
 
 fn evalConstValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -541,7 +541,7 @@ fn evalConstValue(
 }
 
 fn evalMember(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -557,7 +557,7 @@ fn evalMember(
 }
 
 fn evalMemberValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     mode: EvalMode,
     functions: *const core.FunctionMap,
     target: core.Value,
@@ -585,7 +585,7 @@ fn evalMemberValue(
 }
 
 fn evalMemberPathPrefix(
-    ir: *core.Ir,
+    ir: *core.Context,
     mode: EvalMode,
     functions: *const core.FunctionMap,
     base: core.Value,
@@ -602,7 +602,7 @@ fn evalMemberPathPrefix(
 }
 
 fn evalRecord(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -644,7 +644,7 @@ fn evalRecord(
 }
 
 fn evalRecordDefaults(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -675,7 +675,7 @@ fn evalRecordDefaults(
 }
 
 fn evalRecordUpdate(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -741,7 +741,7 @@ const ResolvedRecordDecl = struct {
     module_id: core.SourceModuleId,
 };
 
-fn findRecordDecl(ir: *const core.Ir, type_name: []const u8) ?ResolvedRecordDecl {
+fn findRecordDecl(ir: *const core.Context, type_name: []const u8) ?ResolvedRecordDecl {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -756,7 +756,7 @@ fn findRecordDecl(ir: *const core.Ir, type_name: []const u8) ?ResolvedRecordDecl
     return null;
 }
 
-fn findEnumDecl(ir: *const core.Ir, type_name: []const u8) ?*const ast.TypeDecl {
+fn findEnumDecl(ir: *const core.Context, type_name: []const u8) ?*const ast.TypeDecl {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -786,7 +786,7 @@ fn putRecordFieldValue(allocator: std.mem.Allocator, record: *core.RecordValue, 
 }
 
 fn materializePropertyRecord(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -812,7 +812,7 @@ fn materializePropertyRecord(
     return evalRecordDefaults(ir, page_id, context, mode, functions, closures, origin, record_name);
 }
 
-fn cloneTaggedRecordForRuntime(ir: *core.Ir, record: core.RecordValue) anyerror!core.RecordValue {
+fn cloneTaggedRecordForRuntime(ir: *core.Context, record: core.RecordValue) anyerror!core.RecordValue {
     var cloned = core.RecordValue.init(try ir.copyString(record.type_name));
     errdefer cloned.deinit(ir.allocator);
     for (record.fields.items) |field| {
@@ -825,7 +825,7 @@ fn cloneTaggedRecordForRuntime(ir: *core.Ir, record: core.RecordValue) anyerror!
     return cloned;
 }
 
-fn cloneTaggedValueForRuntime(ir: *core.Ir, value: core.Value) anyerror!core.Value {
+fn cloneTaggedValueForRuntime(ir: *core.Context, value: core.Value) anyerror!core.Value {
     return switch (value) {
         .string => |text| .{ .string = try ir.copyString(text) },
         .enum_case => |case| .{ .enum_case = .{
@@ -841,7 +841,7 @@ fn cloneTaggedValueForRuntime(ir: *core.Ir, value: core.Value) anyerror!core.Val
 }
 
 fn evalCall(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -912,7 +912,7 @@ fn evalLambda(
 }
 
 fn evalApply(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -935,7 +935,7 @@ fn evalApply(
 }
 
 fn evalCallArgs(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -957,7 +957,7 @@ fn evalCallArgs(
 }
 
 fn evalNodeRepr(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -973,7 +973,7 @@ fn evalNodeRepr(
 }
 
 fn evalNodeReprWithFunction(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -994,7 +994,7 @@ fn evalNodeReprWithFunction(
 }
 
 const BuiltinContext = struct {
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     eval_context: EvalContext,
     mode: EvalMode,
@@ -1163,25 +1163,25 @@ const BuiltinContext = struct {
     pub fn frameX(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedScheduledPrimitive;
+        return error.UnsupportedDocumentEvaluationPrimitive;
     }
 
     pub fn frameY(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedScheduledPrimitive;
+        return error.UnsupportedDocumentEvaluationPrimitive;
     }
 
     pub fn frameWidth(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedScheduledPrimitive;
+        return error.UnsupportedDocumentEvaluationPrimitive;
     }
 
     pub fn frameHeight(self: *BuiltinContext, object_id: core.NodeId) !f32 {
         _ = self;
         _ = object_id;
-        return error.UnsupportedScheduledPrimitive;
+        return error.UnsupportedDocumentEvaluationPrimitive;
     }
 
     pub fn nodeContent(self: *BuiltinContext, object_id: core.NodeId) ?[]const u8 {
@@ -1233,7 +1233,7 @@ const BuiltinContext = struct {
 };
 
 fn evalPrimitiveCall(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1258,7 +1258,7 @@ fn evalPrimitiveCall(
 }
 
 fn emitUserReport(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     origin: []const u8,
     severity: core.DiagnosticSeverity,
@@ -1273,7 +1273,7 @@ fn emitUserReport(
     );
 }
 
-fn validateAssetExists(ir: *core.Ir, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
+fn validateAssetExists(ir: *core.Context, page_id: core.NodeId, object_id: core.NodeId, origin: []const u8) !void {
     const node = ir.getNode(object_id) orelse return error.UnknownNode;
     var diagnostic_origin = try assetContentDiagnosticOrigin(ir, node, origin);
     defer diagnostic_origin.deinit(ir.allocator);
@@ -1318,7 +1318,7 @@ const DiagnosticOrigin = struct {
     }
 };
 
-fn assetContentDiagnosticOrigin(ir: *core.Ir, node: *const core.Node, fallback: []const u8) !DiagnosticOrigin {
+fn assetContentDiagnosticOrigin(ir: *core.Context, node: *const core.Node, fallback: []const u8) !DiagnosticOrigin {
     const content = node.content orelse return .{ .text = fallback };
     if (try originForContentSpan(ir.allocator, node.content_provenance.items, 0, content.len)) |origin| {
         return .{ .text = origin, .owned = true };
@@ -1346,17 +1346,17 @@ fn originForContentSpan(
     return null;
 }
 
-fn attachIntrinsicImageSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+fn attachIntrinsicImageSize(ir: *core.Context, object_id: core.NodeId, resolved_path: []const u8) !void {
     const dimensions = fs_utils.readImageDimensions(ir.allocator, resolved_path) catch return;
     try attachIntrinsicAssetSize(ir, object_id, dimensions);
 }
 
-fn attachIntrinsicPdfSize(ir: *core.Ir, object_id: core.NodeId, resolved_path: []const u8) !void {
+fn attachIntrinsicPdfSize(ir: *core.Context, object_id: core.NodeId, resolved_path: []const u8) !void {
     const dimensions = fs_utils.readPdfDimensions(ir.allocator, resolved_path) catch return;
     try attachIntrinsicAssetSize(ir, object_id, dimensions);
 }
 
-fn attachIntrinsicAssetSize(ir: *core.Ir, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
+fn attachIntrinsicAssetSize(ir: *core.Context, object_id: core.NodeId, dimensions: fs_utils.ImageDimensions) !void {
     try ir.setNodeFieldValue(object_id, "asset_width", .{ .number = dimensions.width });
     try ir.setNodeFieldValue(object_id, "asset_height", .{ .number = dimensions.height });
 }
@@ -1391,7 +1391,7 @@ fn readTextFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn evalSelectCall(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1443,7 +1443,7 @@ fn evalSelectCall(
     }
 }
 
-fn validateFixedArity(ir: *core.Ir, actual: usize, expected: usize, origin: []const u8) !void {
+fn validateFixedArity(ir: *core.Context, actual: usize, expected: usize, origin: []const u8) !void {
     if (actual != expected) {
         try reportLowerDiagnostic(ir, .{
             .err = error.InvalidArity,
@@ -1454,7 +1454,7 @@ fn validateFixedArity(ir: *core.Ir, actual: usize, expected: usize, origin: []co
     }
 }
 
-fn validateUserFunctionArity(ir: *core.Ir, actual: usize, func: FunctionDecl, origin: []const u8) !void {
+fn validateUserFunctionArity(ir: *core.Context, actual: usize, func: FunctionDecl, origin: []const u8) !void {
     const range = eval_functions.arity(func);
     if (actual < range.min or actual > range.max) {
         try reportLowerDiagnostic(ir, .{
@@ -1466,7 +1466,7 @@ fn validateUserFunctionArity(ir: *core.Ir, actual: usize, func: FunctionDecl, or
     }
 }
 
-fn validateArityRange(ir: *core.Ir, actual: usize, min: usize, max: usize, origin: []const u8) !void {
+fn validateArityRange(ir: *core.Context, actual: usize, min: usize, max: usize, origin: []const u8) !void {
     if (actual < min or actual > max) {
         try reportLowerDiagnostic(ir, .{
             .err = error.InvalidArity,
@@ -1478,7 +1478,7 @@ fn validateArityRange(ir: *core.Ir, actual: usize, min: usize, max: usize, origi
 }
 
 fn bindUserFunctionArgs(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1510,7 +1510,7 @@ fn bindUserFunctionArgs(
 }
 
 fn bindUserFunctionValueArgs(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1543,7 +1543,7 @@ fn bindUserFunctionValueArgs(
     _ = caller_env;
 }
 
-fn normalizeForUse(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.Value {
+fn normalizeForUse(ir: *core.Context, mode: EvalMode, value: core.Value) !core.Value {
     _ = ir;
     _ = mode;
     return value;
@@ -1572,7 +1572,7 @@ fn resolveValueAnchor(value: core.Value) !core.AnchorValue {
     };
 }
 
-fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.NodeId {
+fn resolveValueObjectId(ir: *core.Context, mode: EvalMode, value: core.Value) !core.NodeId {
     return switch (try normalizeForUse(ir, mode, value)) {
         .object => |id| id,
         else => return error.ExpectedObject,
@@ -1580,7 +1580,7 @@ fn resolveValueObjectId(ir: *core.Ir, mode: EvalMode, value: core.Value) !core.N
 }
 
 fn evalCallArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1595,7 +1595,7 @@ fn evalCallArg(
 }
 
 fn evalCallStringArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1610,7 +1610,7 @@ fn evalCallStringArg(
 }
 
 fn evalCallNumberArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1625,7 +1625,7 @@ fn evalCallNumberArg(
 }
 
 fn evalCallObjectArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1640,7 +1640,7 @@ fn evalCallObjectArg(
 }
 
 fn evalCallAnchorArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1655,7 +1655,7 @@ fn evalCallAnchorArg(
 }
 
 fn evalCallRoleArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1674,7 +1674,7 @@ fn evalCallRoleArg(
 }
 
 fn evalCallPayloadArg(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1692,7 +1692,7 @@ fn evalCallPayloadArg(
     };
 }
 
-fn singleConstraintSet(ir: *core.Ir, constraint: core.Constraint) !core.ConstraintSet {
+fn singleConstraintSet(ir: *core.Context, constraint: core.Constraint) !core.ConstraintSet {
     var bundle = core.ConstraintSet.init();
     errdefer bundle.deinit(ir.allocator);
     try bundle.items.append(ir.allocator, constraint);
@@ -1700,7 +1700,7 @@ fn singleConstraintSet(ir: *core.Ir, constraint: core.Constraint) !core.Constrai
 }
 
 fn anchorEqualityConstraintSet(
-    ir: *core.Ir,
+    ir: *core.Context,
     target: core.AnchorValue,
     source: core.AnchorValue,
     offset: f32,
@@ -1726,7 +1726,7 @@ const ResolvedTarget = struct {
 };
 
 fn writeNodeFieldValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     node_id: core.NodeId,
     field_name: []const u8,
     value: core.Value,
@@ -1767,7 +1767,7 @@ fn isPropertyTargetValue(value: core.Value) bool {
 }
 
 fn writePropertyPath(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1795,7 +1795,7 @@ fn writePropertyPath(
 }
 
 fn writePropertyPathToTarget(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1822,7 +1822,7 @@ fn writePropertyPathToTarget(
 }
 
 fn writePropertyPathToNode(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1874,7 +1874,7 @@ fn writePropertyPathToNode(
 }
 
 fn executeStatement(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -1991,7 +1991,7 @@ fn executeStatement(
     return .none;
 }
 
-fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
+fn materializeStatementValue(ir: *core.Context, mode: EvalMode, last_code_like: *?core.NodeId, value: core.Value) !void {
     _ = mode;
     switch (value) {
         .constraints => |constraints| try ir.addConstraintSet(constraints),
@@ -2001,7 +2001,7 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
 }
 
 fn addValueObjectSources(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     module_id: core.SourceModuleId,
     path: []const u8,
@@ -2025,14 +2025,14 @@ fn addValueObjectSources(
     }
 }
 
-fn connectReturnedObject(ir: *core.Ir, value: core.Value, start_node_count: usize, origin: []const u8) !void {
+fn connectReturnedObject(ir: *core.Context, value: core.Value, start_node_count: usize, origin: []const u8) !void {
     switch (value) {
         .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count, origin),
         else => {},
     }
 }
 
-fn connectValueObjects(ir: *core.Ir, value: core.Value, start_node_count: usize, origin: []const u8) !void {
+fn connectValueObjects(ir: *core.Context, value: core.Value, start_node_count: usize, origin: []const u8) !void {
     switch (value) {
         .object => |id| try ir.connectGeneratedReturnObjects(id, start_node_count, origin),
         .record => |record| {
@@ -2042,7 +2042,7 @@ fn connectValueObjects(ir: *core.Ir, value: core.Value, start_node_count: usize,
     }
 }
 
-fn discardStatementValue(ir: *core.Ir, value: core.Value) !void {
+fn discardStatementValue(ir: *core.Context, value: core.Value) !void {
     switch (value) {
         .object => |id| try ir.discardObjectSubtree(id),
         .selection => |selection| {
@@ -2054,7 +2054,7 @@ fn discardStatementValue(ir: *core.Ir, value: core.Value) !void {
 }
 
 fn executeCallStatement(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -2115,7 +2115,7 @@ fn executeCallStatement(
 }
 
 fn invokeFunctionRef(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -2138,7 +2138,7 @@ fn invokeFunctionRef(
 }
 
 fn invokeClosureValues(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -2178,7 +2178,7 @@ fn invokeClosureValues(
 }
 
 fn invokeUserFunctionValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -2193,7 +2193,7 @@ fn invokeUserFunctionValue(
 }
 
 fn invokeUserFunctionValueInModule(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -2239,7 +2239,7 @@ fn invokeUserFunctionValueInModule(
 }
 
 fn invokeUserFunctionValues(
-    ir: *core.Ir,
+    ir: *core.Context,
     page_id: core.NodeId,
     context: EvalContext,
     mode: EvalMode,
@@ -2280,7 +2280,7 @@ fn invokeUserFunctionValues(
     return error.FunctionDidNotReturnValue;
 }
 
-fn statementOrigin(ir: *core.Ir, span: ast.Span) ![]const u8 {
+fn statementOrigin(ir: *core.Context, span: ast.Span) ![]const u8 {
     if (ir.modulePath(active_module_id)) |path| {
         return std.fmt.allocPrint(ir.allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
     }
@@ -2290,12 +2290,12 @@ fn statementOrigin(ir: *core.Ir, span: ast.Span) ![]const u8 {
     return std.fmt.allocPrint(ir.allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn originForActiveModuleSpan(ir: *core.Ir, span: ast.Span) ![]const u8 {
+fn originForActiveModuleSpan(ir: *core.Context, span: ast.Span) ![]const u8 {
     return statementOrigin(ir, span);
 }
 
 fn resolveAnchorRef(
-    ir: *core.Ir,
+    ir: *core.Context,
     mode: EvalMode,
     env: *std.StringHashMap(core.Value),
     current_origin: []const u8,
@@ -2320,7 +2320,7 @@ fn resolveAnchorRef(
 }
 
 fn resolveAnchorPathValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     env: *std.StringHashMap(core.Value),
     current_origin: []const u8,
     path: []const u8,

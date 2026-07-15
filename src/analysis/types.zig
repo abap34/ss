@@ -140,7 +140,7 @@ pub fn holeIdFromType(ty: Type) ?ast.HoleId {
 }
 
 pub fn ensureType(
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     allocator: std.mem.Allocator,
     actual: TypeInfo,
     expected: Type,
@@ -151,7 +151,7 @@ pub fn ensureType(
 }
 
 pub fn ensureTypeWithHoles(
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     allocator: std.mem.Allocator,
     actual: TypeInfo,
     expected: Type,

@@ -22,7 +22,7 @@ test "core value text spec: tagged property value deinit frees duplicated names 
 }
 
 test "core value text spec: class default slots deinit tagged record property values" {
-    var ir = try initIrWithTaggedRecordDefault();
+    var ir = try initContextWithTaggedRecordDefault();
     defer ir.deinit();
 
     const document = ir.getNode(ir.document_id).?;
@@ -37,7 +37,7 @@ test "core value text spec: class default slots deinit tagged record property va
     }
 }
 
-fn initIrWithTaggedRecordDefault() !core.Ir {
+fn initContextWithTaggedRecordDefault() !core.Context {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
@@ -62,7 +62,7 @@ fn initIrWithTaggedRecordDefault() !core.Ir {
         .span = zeroSpan(),
     });
 
-    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source, program);
+    var ir = try core.Context.init(allocator, asset_base_dir, project_path, project_source, program);
     program = ast.Module.init();
     errdefer ir.deinit();
     try ir.module_order.append(allocator, ir.project_module_id);

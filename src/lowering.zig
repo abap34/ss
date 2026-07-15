@@ -1,6 +1,6 @@
 pub const document = @import("lowering/document.zig");
 
-pub const evaluateDocumentWithSchedule = document.evaluateDocumentWithSchedule;
+pub const evaluateDocument = document.evaluateDocument;
 pub const solveLayout = document.solveLayout;
 pub const solveLayoutResults = document.solveLayoutResults;
 pub const solveLayoutWithOptions = document.solveLayoutWithOptions;

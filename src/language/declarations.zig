@@ -169,7 +169,7 @@ pub const DeclarationIndex = struct {
     }
 };
 
-pub fn build(allocator: std.mem.Allocator, ir: *const core.Ir) !DeclarationIndex {
+pub fn build(allocator: std.mem.Allocator, ir: *const core.Context) !DeclarationIndex {
     var index = DeclarationIndex.init(allocator);
     errdefer index.deinit();
 
@@ -180,7 +180,7 @@ pub fn build(allocator: std.mem.Allocator, ir: *const core.Ir) !DeclarationIndex
     return index;
 }
 
-pub fn findRoleClass(ir: *const core.Ir, role_name: []const u8) ?[]const u8 {
+pub fn findRoleClass(ir: *const core.Context, role_name: []const u8) ?[]const u8 {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -199,7 +199,7 @@ pub fn findRoleClass(ir: *const core.Ir, role_name: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn findField(ir: *const core.Ir, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+pub fn findField(ir: *const core.Context, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
     var current: ?[]const u8 = class_name;
     while (current) |name| {
         if (findFieldInClass(ir, name, field_name)) |field| return field;
@@ -208,7 +208,7 @@ pub fn findField(ir: *const core.Ir, class_name: []const u8, field_name: []const
     return null;
 }
 
-pub fn findFieldByName(ir: *const core.Ir, field_name: []const u8) ?FieldDescriptor {
+pub fn findFieldByName(ir: *const core.Context, field_name: []const u8) ?FieldDescriptor {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -231,7 +231,7 @@ pub fn findFieldByName(ir: *const core.Ir, field_name: []const u8) ?FieldDescrip
     return null;
 }
 
-pub fn classExists(ir: *const core.Ir, class_name: []const u8) bool {
+pub fn classExists(ir: *const core.Context, class_name: []const u8) bool {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -243,7 +243,7 @@ pub fn classExists(ir: *const core.Ir, class_name: []const u8) bool {
     return false;
 }
 
-pub fn recordExists(ir: *const core.Ir, record_name: []const u8) bool {
+pub fn recordExists(ir: *const core.Context, record_name: []const u8) bool {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -255,7 +255,7 @@ pub fn recordExists(ir: *const core.Ir, record_name: []const u8) bool {
     return false;
 }
 
-pub fn findRecord(ir: *const core.Ir, record_name: []const u8) ?RecordDescriptor {
+pub fn findRecord(ir: *const core.Context, record_name: []const u8) ?RecordDescriptor {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -267,7 +267,7 @@ pub fn findRecord(ir: *const core.Ir, record_name: []const u8) ?RecordDescriptor
     return null;
 }
 
-pub fn findRecordField(ir: *const core.Ir, record_name: []const u8, field_name: []const u8) ?RecordFieldDescriptor {
+pub fn findRecordField(ir: *const core.Context, record_name: []const u8, field_name: []const u8) ?RecordFieldDescriptor {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -292,7 +292,7 @@ pub fn findRecordField(ir: *const core.Ir, record_name: []const u8, field_name: 
     return null;
 }
 
-pub fn findClassBase(ir: *const core.Ir, class_name: []const u8) ?[]const u8 {
+pub fn findClassBase(ir: *const core.Context, class_name: []const u8) ?[]const u8 {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;
@@ -304,7 +304,7 @@ pub fn findClassBase(ir: *const core.Ir, class_name: []const u8) ?[]const u8 {
     return null;
 }
 
-fn findFieldInClass(ir: *const core.Ir, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+fn findFieldInClass(ir: *const core.Context, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
     var index = ir.module_order.items.len;
     while (index > 0) {
         index -= 1;

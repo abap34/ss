@@ -2878,7 +2878,7 @@ test "compiler semantics: member sugar reads and writes properties and content" 
         \\  target.content = target.content ++ "!"
         \\end
         \\
-    , "ScheduledDependencyCycle: document evaluation dependencies contain a cycle");
+    , "ExecutionDependencyCycle: document evaluation dependencies contain a cycle");
 
     try expectObjectContent(
         \\import std:themes/default as *
@@ -3362,7 +3362,7 @@ test "compiler semantics: variable and property dependencies reject inverse cycl
         \\  set_content(item, current)
         \\end
         \\
-    , "ScheduledDependencyCycle: document evaluation dependencies contain a cycle");
+    , "ExecutionDependencyCycle: document evaluation dependencies contain a cycle");
 }
 
 test "compiler semantics: void functions may finish without explicit return" {

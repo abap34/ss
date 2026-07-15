@@ -4,7 +4,7 @@ const core = @import("core");
 
 const testing = std.testing;
 
-fn initEmptyIr() !core.Ir {
+fn initEmptyContext() !core.Context {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
@@ -12,11 +12,11 @@ fn initEmptyIr() !core.Ir {
     errdefer allocator.free(project_path);
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
-    return try core.Ir.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
+    return try core.Context.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
 test "core IR spec: pages are ordered document children with one-based page indexes" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const first = try ir.addPage("First");
@@ -35,7 +35,7 @@ test "core IR spec: pages are ordered document children with one-based page inde
 }
 
 test "core IR spec: containment is idempotent for the same parent-child pair" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -49,7 +49,7 @@ test "core IR spec: containment is idempotent for the same parent-child pair" {
 }
 
 test "core IR spec: page-local validation reports duplicate page ownership" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const first = try ir.addPage("First");
@@ -63,7 +63,7 @@ test "core IR spec: page-local validation reports duplicate page ownership" {
 }
 
 test "core IR spec: page-local validation reports cross-page constraints" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const first = try ir.addPage("First");
@@ -78,7 +78,7 @@ test "core IR spec: page-local validation reports cross-page constraints" {
 }
 
 test "core IR spec: page-local validation reports unowned layout objects" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -92,7 +92,7 @@ test "core IR spec: page-local validation reports unowned layout objects" {
 }
 
 test "core IR spec: position updates replace deeper constraints across anchors on the same axis" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -112,7 +112,7 @@ test "core IR spec: position updates replace deeper constraints across anchors o
 }
 
 test "core IR spec: size updates preserve position constraints" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -141,7 +141,7 @@ test "core IR spec: size updates preserve position constraints" {
 }
 
 test "core IR spec: pure updates suppress inherited constraints without adding a replacement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -157,7 +157,7 @@ test "core IR spec: pure updates suppress inherited constraints without adding a
 }
 
 test "core IR spec: suppressed cross-page constraints are not diagnosed" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const first = try ir.addPage("First");
@@ -179,7 +179,7 @@ test "core IR spec: suppressed cross-page constraints are not diagnosed" {
 }
 
 test "core IR spec: caller updates have authority over deeper updates" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -200,7 +200,7 @@ test "core IR spec: caller updates have authority over deeper updates" {
 }
 
 test "core IR spec: later updates replace earlier updates in the same scope" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -220,7 +220,7 @@ test "core IR spec: later updates replace earlier updates in the same scope" {
 }
 
 test "core IR spec: later pure updates suppress earlier replacements" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -239,7 +239,7 @@ test "core IR spec: later pure updates suppress earlier replacements" {
 }
 
 test "core IR spec: page unit collects inline math asset dependencies" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -261,7 +261,7 @@ test "core IR spec: page unit collects inline math asset dependencies" {
 }
 
 test "core IR spec: prepared page asset keys attach to layout results" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -281,7 +281,7 @@ test "core IR spec: prepared page asset keys attach to layout results" {
 }
 
 test "core IR spec: layout results collect solved page frames" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -303,7 +303,7 @@ test "core IR spec: layout results collect solved page frames" {
 }
 
 test "core IR spec: layout results own page diagnostics" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -321,7 +321,7 @@ test "core IR spec: layout results own page diagnostics" {
 }
 
 test "core IR spec: node fields reject duplicate keys" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -337,7 +337,7 @@ test "core IR spec: node fields reject duplicate keys" {
     try testing.expectEqualStrings("black", ir.getNodeField(object, "stroke").?.string);
 }
 
-fn expectDiagnosticCode(ir: *core.Ir, code: []const u8) !void {
+fn expectDiagnosticCode(ir: *core.Context, code: []const u8) !void {
     for (ir.diagnostics.items) |diagnostic| {
         switch (diagnostic.data) {
             .user_report => |data| {
@@ -350,7 +350,7 @@ fn expectDiagnosticCode(ir: *core.Ir, code: []const u8) !void {
 }
 
 test "core IR spec: explicit field reads ignore inherited class defaults" {
-    var ir = try initIrWithLayoutClassDefaults();
+    var ir = try initContextWithLayoutClassDefaults();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -373,7 +373,7 @@ test "core IR spec: explicit field reads ignore inherited class defaults" {
 }
 
 test "core IR spec: render environment entries are deduplicated by full triple" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -388,7 +388,7 @@ test "core IR spec: render environment entries are deduplicated by full triple" 
     try testing.expectEqual(@as(usize, 3), node.render_env.items.len);
 }
 
-fn initIrWithLayoutClassDefaults() !core.Ir {
+fn initContextWithLayoutClassDefaults() !core.Context {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
@@ -427,7 +427,7 @@ fn initIrWithLayoutClassDefaults() !core.Ir {
         .span = zeroSpan(),
     });
 
-    var ir = try core.Ir.init(allocator, asset_base_dir, project_path, project_source, program);
+    var ir = try core.Context.init(allocator, asset_base_dir, project_path, project_source, program);
     program = ast.Module.init();
     errdefer ir.deinit();
     try ir.module_order.append(allocator, ir.project_module_id);
@@ -439,7 +439,7 @@ fn zeroSpan() ast.Span {
 }
 
 test "core IR spec: TeX preamble render environment resolves in document page object order" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");

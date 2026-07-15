@@ -8,8 +8,8 @@ const hole_facts = @import("hole_facts.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
 const module_loader = @import("../modules/loader.zig");
-const program_analysis = @import("program.zig");
-const schedule = @import("schedule.zig");
+const context_analysis = @import("context.zig");
+const execution = @import("execution.zig");
 const query_completion = @import("query/completion.zig");
 const query_definition = @import("query/definition.zig");
 const query_folding = @import("query/folding.zig");
@@ -64,8 +64,8 @@ pub const LayoutHookResult = struct {
 
 pub const LayoutHook = struct {
     context: *anyopaque,
-    run: *const fn (context: *anyopaque, ir: *core.Ir, graph: *const schedule.ScheduleGraph) anyerror!LayoutHookResult,
-    on_error: ?*const fn (context: *anyopaque, ir: *core.Ir, err: anyerror) anyerror!void = null,
+    run: *const fn (context: *anyopaque, ir: *core.Context, graph: *const execution.ExecutionGraph) anyerror!LayoutHookResult,
+    on_error: ?*const fn (context: *anyopaque, ir: *core.Context, err: anyerror) anyerror!void = null,
 };
 
 pub const SnapshotOptions = struct {
@@ -213,7 +213,7 @@ pub const LayoutFacts = struct {
     conflict_report_json: []u8,
     editor_snapshot_json: ?[]u8 = null,
 
-    pub fn fromIr(allocator: std.mem.Allocator, ir: *core.Ir, owned_editor_snapshot_json: ?[]u8) !LayoutFacts {
+    pub fn fromContext(allocator: std.mem.Allocator, ir: *core.Context, owned_editor_snapshot_json: ?[]u8) !LayoutFacts {
         errdefer if (owned_editor_snapshot_json) |value| allocator.free(value);
         return .{
             .conflict_report_json = try core.layout.conflicts.toJson(allocator, ir),
@@ -249,9 +249,9 @@ pub const AnalysisSnapshot = struct {
     layout: ?LayoutFacts = null,
     diagnostics: diagnostics.DiagnosticBag,
 
-    pub fn fromIr(
+    pub fn fromContext(
         allocator: std.mem.Allocator,
-        ir: *core.Ir,
+        ir: *core.Context,
         diagnostic_bag: diagnostics.DiagnosticBag,
         holes: ?*const syntax_hole.Result,
         project_facts: ProjectFacts,
@@ -416,7 +416,7 @@ pub fn buildSnapshot(
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = program_analysis.loadModuleIndexWithOptions(allocator, sources.io, asset_base_dir, program, .{
+    var index = context_analysis.loadModuleIndexWithOptions(allocator, sources.io, asset_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -446,7 +446,7 @@ pub fn buildSnapshot(
     };
     defer index.deinit();
 
-    var ir = program_analysis.buildIrWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
+    var ir = context_analysis.buildContextWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
         .allow_diagnostics = true,
         .parse_holes = parse_holes,
     }) catch |err| {
@@ -459,29 +459,29 @@ pub fn buildSnapshot(
     defer parse_holes.deinit(allocator);
     defer ir.deinit();
 
-    var analyzed_program: ?program_analysis.ProgramAnalysis = program_analysis.analyzeProgramWithMode(allocator, &ir, .evaluation_schedule) catch null;
-    defer if (analyzed_program) |*analysis_result| analysis_result.deinit();
+    var execution_graph = context_analysis.analyzeContextWithMode(allocator, &ir, .evaluation) catch null;
+    defer if (execution_graph) |*graph| graph.deinit();
     try hole_facts.populateExpectedTypes(allocator, &ir, &parse_holes);
-    try diagnostic_bag.addIr(&ir);
+    try diagnostic_bag.addContext(&ir);
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout) |hook| {
-            if (analyzed_program) |*analysis_result| {
-                if (hook.run(hook.context, &ir, analysis_result.scheduleGraph())) |result| {
-                    layout_facts = try LayoutFacts.fromIr(allocator, &ir, result.editor_snapshot_json);
-                    try diagnostic_bag.addIr(&ir);
+            if (execution_graph) |*graph| {
+                if (hook.run(hook.context, &ir, graph)) |result| {
+                    layout_facts = try LayoutFacts.fromContext(allocator, &ir, result.editor_snapshot_json);
+                    try diagnostic_bag.addContext(&ir);
                 } else |err| switch (err) {
                     error.ConstraintConflict,
                     error.NegativeFrameSize,
                     => {
                         if (hook.on_error) |on_error| {
                             try on_error(hook.context, &ir, err);
-                            layout_facts = try LayoutFacts.fromIr(allocator, &ir, null);
+                            layout_facts = try LayoutFacts.fromContext(allocator, &ir, null);
                         } else {
                             try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
                     },
                     else => {
-                        try diagnostic_bag.addIr(&ir);
+                        try diagnostic_bag.addContext(&ir);
                         if (!diagnostic_bag.hasErrors()) {
                             try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
@@ -496,7 +496,7 @@ pub fn buildSnapshot(
     const module_paths = try collectModulePaths(allocator, &ir);
     const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
     diagnostics_moved = true;
-    var snapshot = try AnalysisSnapshot.fromIr(allocator, &ir, diagnostic_bag, &parse_holes, project_facts);
+    var snapshot = try AnalysisSnapshot.fromContext(allocator, &ir, diagnostic_bag, &parse_holes, project_facts);
     snapshot.generation = options.generation;
     snapshot.layout = layout_facts;
     layout_facts = null;
@@ -560,7 +560,7 @@ fn addBuildDiagnostic(
     try bag.add(path, text, severity, code, message, span, null);
 }
 
-fn collectModulePaths(allocator: std.mem.Allocator, ir: *const core.Ir) ![][]u8 {
+fn collectModulePaths(allocator: std.mem.Allocator, ir: *const core.Context) ![][]u8 {
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     var out = std.ArrayList([]u8).empty;
@@ -800,7 +800,7 @@ fn cloneImports(allocator: std.mem.Allocator, module: core.SourceModule) ![]Impo
     return out.toOwnedSlice(allocator);
 }
 
-fn collectTypeDefinitions(allocator: std.mem.Allocator, ir: *const core.Ir) ![]TypeDefinition {
+fn collectTypeDefinitions(allocator: std.mem.Allocator, ir: *const core.Context) ![]TypeDefinition {
     var out = std.ArrayList(TypeDefinition).empty;
     errdefer {
         for (out.items) |definition| allocator.free(definition.name);
@@ -835,7 +835,7 @@ fn appendTypeDefinition(
     });
 }
 
-fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]ValueBinding {
+fn collectValueBindings(allocator: std.mem.Allocator, ir: *core.Context) ![]ValueBinding {
     var out = std.ArrayList(ValueBinding).empty;
     errdefer {
         deinitValueBindingItems(allocator, out.items);
@@ -909,7 +909,7 @@ fn deinitValueBindingItems(allocator: std.mem.Allocator, bindings: []ValueBindin
     }
 }
 
-fn valueNameExists(ir: *const core.Ir, name: []const u8) bool {
+fn valueNameExists(ir: *const core.Context, name: []const u8) bool {
     var function_iterator = ir.functions.iterator();
     while (function_iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
@@ -921,7 +921,7 @@ fn valueNameExists(ir: *const core.Ir, name: []const u8) bool {
     return false;
 }
 
-fn collectVariableBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]VariableBinding {
+fn collectVariableBindings(allocator: std.mem.Allocator, ir: *core.Context) ![]VariableBinding {
     var out = std.ArrayList(VariableBinding).empty;
     errdefer {
         deinitVariableBindingItems(allocator, out.items);
@@ -929,7 +929,7 @@ fn collectVariableBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]Variab
     }
     for (ir.modules.items) |module| {
         if (module.path == null) continue;
-        var infos = try program_analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.syntax, module.id, module.source.len, ir);
+        var infos = try context_analysis.collectScopedVariableInfoFromModule(allocator, &ir.functions, module.syntax, module.id, module.source.len, ir);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
             const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));

@@ -84,23 +84,23 @@ const PageLayoutJob = struct {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
-        var local_ir = ir.*;
-        local_ir.allocator = arena.allocator();
-        local_ir.diagnostics = .empty;
-        local_ir.constraint_failures = .empty;
-        local_ir.last_constraint_failure = null;
+        var local_context = ir.*;
+        local_context.allocator = arena.allocator();
+        local_context.diagnostics = .empty;
+        local_context.constraint_failures = .empty;
+        local_context.last_constraint_failure = null;
         defer {
-            for (local_ir.diagnostics.items) |*diagnostic| diagnostic.deinit(local_ir.allocator);
-            local_ir.diagnostics.deinit(local_ir.allocator);
-            for (local_ir.constraint_failures.items) |*failure| failure.deinit(local_ir.allocator);
-            local_ir.constraint_failures.deinit(local_ir.allocator);
+            for (local_context.diagnostics.items) |*diagnostic| diagnostic.deinit(local_context.allocator);
+            local_context.diagnostics.deinit(local_context.allocator);
+            for (local_context.constraint_failures.items) |*failure| failure.deinit(local_context.allocator);
+            local_context.constraint_failures.deinit(local_context.allocator);
         }
         var local_options = options;
         local_options.progress = null;
-        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_ir.allocator, local_options.measurement_provider);
+        var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(local_context.allocator, local_options.measurement_provider);
         defer measurement_cache.deinit();
-        var result = try solvePageLayout(&local_ir, self.page_id, self.page_index, &measurement_cache, local_options);
-        defer result.deinit(local_ir.allocator);
+        var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, local_options);
+        defer result.deinit(local_context.allocator);
         return try clonePageLayoutResult(allocator, &result);
     }
 };
@@ -110,9 +110,9 @@ const PageLayoutJobOutput = struct {
     err: ?anyerror = null,
 };
 
-fn PageLayoutWork(comptime IrPtr: type) type {
+fn PageLayoutWork(comptime ContextPtr: type) type {
     return struct {
-        ir: IrPtr,
+        ir: ContextPtr,
         jobs: []const PageLayoutJob,
         options: SolveOptions,
         outputs: []PageLayoutJobOutput,
@@ -141,7 +141,7 @@ fn runPageLayoutJobsSequential(ir: anytype, jobs: []const PageLayoutJob, options
 }
 
 fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(model.PageLayoutResult)) !void {
-    const IrPtr = @TypeOf(ir);
+    const ContextPtr = @TypeOf(ir);
     const outputs = try ir.allocator.alloc(PageLayoutJobOutput, jobs.len);
     defer ir.allocator.free(outputs);
     for (outputs) |*output| output.* = .{};
@@ -151,7 +151,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
         }
     }
 
-    var work = PageLayoutWork(IrPtr){
+    var work = PageLayoutWork(ContextPtr){
         .ir = ir,
         .jobs = jobs,
         .options = options,
@@ -171,7 +171,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
     }
 
     while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, layoutJobWorker, .{ IrPtr, &work });
+        threads[started] = try std.Thread.spawn(.{}, layoutJobWorker, .{ ContextPtr, &work });
     }
 
     for (threads[0..started]) |thread| thread.join();
@@ -195,7 +195,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
     }
 }
 
-fn layoutJobWorker(comptime IrPtr: type, work: *PageLayoutWork(IrPtr)) void {
+fn layoutJobWorker(comptime ContextPtr: type, work: *PageLayoutWork(ContextPtr)) void {
     while (!work.failed.load(.monotonic)) {
         const index = work.next_job.fetchAdd(1, .monotonic);
         if (index >= work.jobs.len) break;
@@ -206,11 +206,11 @@ fn layoutJobWorker(comptime IrPtr: type, work: *PageLayoutWork(IrPtr)) void {
         };
         work.outputs[index].result = result;
         const completed = work.completed.fetchAdd(1, .release) + 1;
-        notifyLayoutProgress(IrPtr, work, completed);
+        notifyLayoutProgress(ContextPtr, work, completed);
     }
 }
 
-fn notifyLayoutProgress(comptime IrPtr: type, work: *PageLayoutWork(IrPtr), completed: usize) void {
+fn notifyLayoutProgress(comptime ContextPtr: type, work: *PageLayoutWork(ContextPtr), completed: usize) void {
     const progress = work.options.progress orelse return;
     lockProgress(&work.progress_lock);
     defer unlockProgress(&work.progress_lock);

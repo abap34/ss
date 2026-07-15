@@ -3,7 +3,7 @@ const core = @import("core");
 
 const json = @import("utils").json;
 
-pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Context) !void {
     var nodes = try root.arrayField("nodes");
     for (ir.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
@@ -12,7 +12,7 @@ pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *co
     try nodes.end();
 }
 
-fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Ir, node: core.Node) !void {
+fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Context, node: core.Node) !void {
     const render = core.render_policy.resolve(ir, &node);
     const display_content = core.nodeDisplayContent(&node);
     const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;

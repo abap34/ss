@@ -12,7 +12,7 @@ const Progress = utils.progress.Progress;
 pub fn renderPdfOrPrintDiagnostics(
     allocator: std.mem.Allocator,
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     layouts: *const core.LayoutResults,
     options: types.RenderOptions,
@@ -21,9 +21,9 @@ pub fn renderPdfOrPrintDiagnostics(
 ) ![]const u8 {
     return pdf.renderDocumentToPdf(allocator, io, ir, pages, layouts, options, app_progress.render(progress)) catch |err| {
         progress.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         try writeDiagnosticsJsonIfRequested(io, allocator, ir, diagnostics_json_path);
-        if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+        if (error_report.hasContextErrors(ir)) return error.DiagnosticsFailed;
         return err;
     };
 }
@@ -31,7 +31,7 @@ pub fn renderPdfOrPrintDiagnostics(
 pub fn writeDiagnosticsJsonIfRequested(
     io: std.Io,
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     diagnostics_json_path: ?[]const u8,
 ) !void {
     const path = diagnostics_json_path orelse return;

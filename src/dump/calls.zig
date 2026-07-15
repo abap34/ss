@@ -6,7 +6,7 @@ const query_signature = @import("../analysis/query/signature.zig");
 const registry = @import("../language/registry.zig");
 const json = @import("utils").json;
 
-pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Ir) !void {
+pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Context) !void {
     var functions = try root.arrayField("functions");
     for (registry.primitiveDescriptors()) |descriptor| {
         if (userValueNameExists(ir, descriptor.name)) continue;
@@ -26,7 +26,7 @@ pub fn writeFunctionsField(allocator: std.mem.Allocator, root: *json.Object, ir:
     try constants.end();
 }
 
-fn userValueNameExists(ir: *const core.Ir, name: []const u8) bool {
+fn userValueNameExists(ir: *const core.Context, name: []const u8) bool {
     var iterator = ir.functions.iterator();
     while (iterator.next()) |entry| {
         if (std.mem.eql(u8, entry.value_ptr.name, name)) return true;
@@ -95,7 +95,7 @@ fn writePrimitiveFunction(allocator: std.mem.Allocator, functions: *json.Array, 
 fn writeUserFunction(
     allocator: std.mem.Allocator,
     functions: *json.Array,
-    ir: *core.Ir,
+    ir: *core.Context,
     name: []const u8,
     func: ast.FunctionDecl,
     module_id: core.SourceModuleId,
@@ -134,7 +134,7 @@ fn writeUserFunction(
 fn writeUserConst(
     allocator: std.mem.Allocator,
     constants: *json.Array,
-    ir: *core.Ir,
+    ir: *core.Context,
     name: []const u8,
     constant_decl: ast.ConstDecl,
     module_id: core.SourceModuleId,
