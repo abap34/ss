@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
-const render_scene = @import("render_scene");
+const render = @import("render");
 const utils = @import("utils");
 
 const json = utils.json;
@@ -10,12 +10,12 @@ const binding_names = @import("names.zig");
 pub fn toJson(
     allocator: std.mem.Allocator,
     ir: *core.Context,
-    scenes: *const render_scene.Document,
+    render_ir: *const render.Ir,
     generation: u64,
 ) ![]u8 {
     const layout_json = try core.layout.conflicts.toJson(allocator, ir);
     defer allocator.free(layout_json);
-    const display_json = try displayJson(allocator, scenes);
+    const display_json = try displayJson(allocator, render_ir);
     defer allocator.free(display_json);
     const outline_json = try outlineJson(allocator, ir);
     defer allocator.free(outline_json);
@@ -78,20 +78,20 @@ fn sourcePathsJson(allocator: std.mem.Allocator, ir: *const core.Context) ![]u8 
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn displayJson(allocator: std.mem.Allocator, scenes: *const render_scene.Document) ![]u8 {
+fn displayJson(allocator: std.mem.Allocator, render_ir: *const render.Ir) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var root = try json.Object.beginBuffer(allocator, &buffer);
     try root.intField("schema", 1);
     var pages = try root.arrayField("pages");
-    for (scenes.pages) |*page| {
+    for (render_ir.pages) |*page| {
         var page_object = try pages.objectItem();
         try page_object.intField("page_id", page.page_id);
         try page_object.intField("index", page.index + 1);
         try page_object.floatField("width", page.width, "{d:.4}");
         try page_object.floatField("height", page.height, "{d:.4}");
         var items = try page_object.arrayField("items");
-        for (page.items.items) |item| try appendSceneItem(&items, item);
+        for (page.items.items) |item| try appendItem(&items, item);
         try items.end();
         try page_object.end();
     }
@@ -100,7 +100,7 @@ fn displayJson(allocator: std.mem.Allocator, scenes: *const render_scene.Documen
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn appendSceneItem(items: *json.Array, item: render_scene.Item) !void {
+fn appendItem(items: *json.Array, item: render.Item) !void {
     var object = try items.objectItem();
     try object.stringField("type", @tagName(item));
     try object.optionalIntField("node_id", item.nodeId());
@@ -160,7 +160,7 @@ fn appendSceneItem(items: *json.Array, item: render_scene.Item) !void {
     try object.end();
 }
 
-fn appendRect(object: *json.Object, rect: render_scene.Rect) !void {
+fn appendRect(object: *json.Object, rect: render.Rect) !void {
     try object.floatField("x", rect.x, "{d:.4}");
     try object.floatField("y", rect.y, "{d:.4}");
     try object.floatField("width", rect.width, "{d:.4}");

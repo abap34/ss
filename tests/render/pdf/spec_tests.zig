@@ -1,5 +1,5 @@
 const std = @import("std");
-const pdf_scene = @import("pdf_scene");
+const pdf_backend = @import("pdf_backend");
 
 const c = @cImport({
     @cInclude("backend.h");
@@ -118,16 +118,16 @@ test "render PDF spec: Cairo shim writes URI and destination link annotations" {
     try expectInternalDestination(json);
 }
 
-test "render PDF spec: scene renderer replays and composes ordered resources" {
+test "render PDF spec: page renderer replays and composes ordered resources" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const allocator = testing.allocator;
-    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/scene-source.pdf", .{tmp.sub_path[0..]});
+    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/page-source.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(source_path);
-    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/scene-composed.pdf", .{tmp.sub_path[0..]});
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/page-composed.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
 
-    var source = pdf_scene.Page{
+    var source = pdf_backend.Page{
         .page_id = 1,
         .index = 0,
         .width = 320,
@@ -141,17 +141,17 @@ test "render PDF spec: scene renderer replays and composes ordered resources" {
         20,
         60,
         260,
-        "selectable scene text",
+        "selectable page text",
         .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
         24,
         .{ .r = 0, .g = 0, .b = 0 },
         false,
         false,
     );
-    try source.appendLink(allocator, .uri, "https://example.com/scene", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
-    try pdf_scene.render(allocator, testing.io, &source, source_path);
+    try source.appendLink(allocator, .uri, "https://example.com/page", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
+    try pdf_backend.render(allocator, testing.io, &source, source_path);
 
-    var composed = pdf_scene.Page{
+    var composed = pdf_backend.Page{
         .page_id = 2,
         .index = 0,
         .width = 320,
@@ -178,15 +178,15 @@ test "render PDF spec: scene renderer replays and composes ordered resources" {
         0,
         0,
     );
-    try pdf_scene.render(allocator, testing.io, &composed, output_path);
+    try pdf_backend.render(allocator, testing.io, &composed, output_path);
 
     const json = try qpdfJson(allocator, testing.io, output_path);
     defer allocator.free(json);
     try expectContains(json, "\"/Subtype\": \"/Form\"");
-    try expectContains(json, "https://example.com/scene");
+    try expectContains(json, "https://example.com/page");
     if (try pdfTextIfAvailable(allocator, testing.io, output_path)) |text| {
         defer allocator.free(text);
-        try expectContains(text, "selectable scene text");
+        try expectContains(text, "selectable page text");
     }
     const first_layer_path = try std.fmt.allocPrint(allocator, "{s}.layer-0.pdf", .{output_path});
     defer allocator.free(first_layer_path);

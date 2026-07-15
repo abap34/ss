@@ -1,24 +1,24 @@
 const std = @import("std");
 const core = @import("core");
 const c = @import("pdf_ffi").c;
-const render_scene = @import("render_scene");
+const render_ir = @import("render");
 
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
 
 pub const Sink = union(enum) {
     pdf: *c.SsPdf,
-    scene: SceneTarget,
+    ir: IrTarget,
 
-    pub const SceneTarget = struct {
-        page: *render_scene.Page,
+    pub const IrTarget = struct {
+        page: *render_ir.Page,
         node_id: ?core.NodeId = null,
     };
 
     pub fn replaceNodeId(self: *Sink, node_id: ?core.NodeId) ?core.NodeId {
         return switch (self.*) {
             .pdf => null,
-            .scene => |*target| blk: {
+            .ir => |*target| blk: {
                 const previous = target.node_id;
                 target.node_id = node_id;
                 break :blk previous;
@@ -26,22 +26,22 @@ pub const Sink = union(enum) {
         };
     }
 
-    pub fn isScene(self: Sink) bool {
-        return self == .scene;
+    pub fn isIr(self: Sink) bool {
+        return self == .ir;
     }
 
-    pub fn fillRect(self: *Sink, allocator: Allocator, rect: render_scene.Rect, color: Color) !void {
+    pub fn fillRect(self: *Sink, allocator: Allocator, rect: render_ir.Rect, color: Color) !void {
         switch (self.*) {
             .pdf => |pdf| c.ss_pdf_fill_rect(pdf, rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b),
-            .scene => |target| try target.page.appendFillRect(allocator, target.node_id, rect, color),
+            .ir => |target| try target.page.appendFillRect(allocator, target.node_id, rect, color),
         }
     }
 
     pub fn strokeLine(
         self: *Sink,
         allocator: Allocator,
-        start: render_scene.Point,
-        end: render_scene.Point,
+        start: render_ir.Point,
+        end: render_ir.Point,
         line_width: f32,
         color: Color,
         dash_on: f32,
@@ -61,7 +61,7 @@ pub const Sink = union(enum) {
                 dash_on,
                 dash_off,
             ),
-            .scene => |target| try target.page.appendStrokeLine(
+            .ir => |target| try target.page.appendStrokeLine(
                 allocator,
                 target.node_id,
                 start,
@@ -77,7 +77,7 @@ pub const Sink = union(enum) {
     pub fn roundedRect(
         self: *Sink,
         allocator: Allocator,
-        rect: render_scene.Rect,
+        rect: render_ir.Rect,
         radius: f32,
         fill: ?Color,
         stroke: ?Color,
@@ -101,7 +101,7 @@ pub const Sink = union(enum) {
                 if (stroke) |value| value.b else 0,
                 line_width,
             ),
-            .scene => |target| try target.page.appendRoundedRect(
+            .ir => |target| try target.page.appendRoundedRect(
                 allocator,
                 target.node_id,
                 rect,
@@ -148,7 +148,7 @@ pub const Sink = union(enum) {
                     preserve_color_glyphs,
                 );
             },
-            .scene => |target| try target.page.appendText(
+            .ir => |target| try target.page.appendText(
                 allocator,
                 target.node_id,
                 x,
@@ -164,32 +164,32 @@ pub const Sink = union(enum) {
         }
     }
 
-    pub fn raster(self: *Sink, allocator: Allocator, rect: render_scene.Rect, path: []const u8) !void {
+    pub fn raster(self: *Sink, allocator: Allocator, rect: render_ir.Rect, path: []const u8) !void {
         switch (self.*) {
             .pdf => |pdf| {
                 const path_z = try allocator.dupeZ(u8, path);
                 defer allocator.free(path_z);
                 try drawRasterZ(pdf, rect, path_z);
             },
-            .scene => |target| try target.page.appendRaster(allocator, target.node_id, rect, path),
+            .ir => |target| try target.page.appendRaster(allocator, target.node_id, rect, path),
         }
     }
 
-    pub fn svg(self: *Sink, allocator: Allocator, rect: render_scene.Rect, path: []const u8, tint: ?Color) !void {
+    pub fn svg(self: *Sink, allocator: Allocator, rect: render_ir.Rect, path: []const u8, tint: ?Color) !void {
         switch (self.*) {
             .pdf => |pdf| {
                 const path_z = try allocator.dupeZ(u8, path);
                 defer allocator.free(path_z);
                 try drawSvgZ(pdf, rect, path_z, tint);
             },
-            .scene => |target| try target.page.appendSvg(allocator, target.node_id, rect, path, tint),
+            .ir => |target| try target.page.appendSvg(allocator, target.node_id, rect, path, tint),
         }
     }
 
     pub fn pdfPage(
         self: *Sink,
         allocator: Allocator,
-        rect: render_scene.Rect,
+        rect: render_ir.Rect,
         path: []const u8,
         page_index: usize,
         box: core.render_policy.PdfPageBox,
@@ -197,7 +197,7 @@ pub const Sink = union(enum) {
     ) !void {
         switch (self.*) {
             .pdf => return error.UnsupportedAssetType,
-            .scene => |target| try target.page.appendPdfPage(
+            .ir => |target| try target.page.appendPdfPage(
                 allocator,
                 target.node_id,
                 rect,
@@ -209,10 +209,10 @@ pub const Sink = union(enum) {
         }
     }
 
-    pub fn replayItem(self: *Sink, item: render_scene.Item) !void {
+    pub fn replayItem(self: *Sink, item: render_ir.Item) !void {
         const pdf = switch (self.*) {
             .pdf => |value| value,
-            .scene => return error.UnsupportedAssetType,
+            .ir => return error.UnsupportedAssetType,
         };
         switch (item) {
             .fill_rect => |fill| c.ss_pdf_fill_rect(
@@ -329,13 +329,13 @@ fn drawTextBaselineZ(
     if (result != 0) return error.PangoCreateFailed;
 }
 
-fn drawRasterZ(pdf: *c.SsPdf, rect: render_scene.Rect, path: [:0]const u8) !void {
+fn drawRasterZ(pdf: *c.SsPdf, rect: render_ir.Rect, path: [:0]const u8) !void {
     if (c.ss_pdf_draw_raster(pdf, path.ptr, rect.x, rect.y, rect.width, rect.height) != 0) {
         return error.ImageDecodeFailed;
     }
 }
 
-fn drawSvgZ(pdf: *c.SsPdf, rect: render_scene.Rect, path: [:0]const u8, tint: ?Color) !void {
+fn drawSvgZ(pdf: *c.SsPdf, rect: render_ir.Rect, path: [:0]const u8, tint: ?Color) !void {
     const result = if (tint) |color|
         c.ss_pdf_draw_svg_tinted(pdf, path.ptr, rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b)
     else

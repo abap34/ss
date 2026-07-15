@@ -1,10 +1,10 @@
 const std = @import("std");
-const scene = @import("render_scene");
+const render_ir = @import("render");
 
 const testing = std.testing;
 
-test "render scene owns placed text and resource paths" {
-    var page = scene.Page{
+test "render IR page owns placed text and resource paths" {
+    var page = render_ir.Page{
         .page_id = 10,
         .index = 2,
         .width = 1280,
@@ -12,7 +12,7 @@ test "render scene owns placed text and resource paths" {
     };
     defer page.deinit(testing.allocator);
 
-    var text = [_]u8{ 's', 'c', 'e', 'n', 'e' };
+    var text = [_]u8{ 'i', 't', 'e', 'm' };
     var family = [_]u8{ 'S', 'a', 'n', 's' };
     try page.appendText(
         testing.allocator,
@@ -40,14 +40,14 @@ test "render scene owns placed text and resource paths" {
     family[0] = 'X';
     path[0] = 'X';
 
-    try testing.expectEqualStrings("scene", page.items.items[0].text.text);
+    try testing.expectEqualStrings("item", page.items.items[0].text.text);
     try testing.expectEqualStrings("Sans", page.items.items[0].text.font_family);
     try testing.expectEqualStrings("icon.svg", page.items.items[1].svg.path);
     try testing.expectEqual(@as(?u32, 42), page.items.items[0].nodeId());
 }
 
-test "render scene preserves PDF placement and annotations" {
-    var page = scene.Page{
+test "render IR page preserves PDF placement and annotations" {
+    var page = render_ir.Page{
         .page_id = 7,
         .index = 0,
         .width = 1280,
@@ -75,7 +75,7 @@ test "render scene preserves PDF placement and annotations" {
     try testing.expect(page.hasPdfPages());
     const pdf = page.items.items[0].pdf_page;
     try testing.expectEqual(@as(usize, 3), pdf.page_index);
-    try testing.expectEqual(scene.CoordinateSpace.origin, "page-top-left");
+    try testing.expectEqual(render_ir.CoordinateSpace.origin, "page-top-left");
     try testing.expectEqualStrings("section", page.destinations.items[0].name);
     try testing.expectEqualStrings("section", page.links.items[0].target);
 }

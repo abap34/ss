@@ -389,9 +389,9 @@ fn runSnapshotLayout(context: *anyopaque, ir: *core.Context, graph: *const analy
     defer pages.deinit(ir.allocator);
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
 
-    var scenes = try render_pdf.compileDocumentScenes(ir.allocator, hook.server.io, ir, &pages, .{});
-    defer scenes.deinit(ir.allocator);
-    return .{ .editor_snapshot_json = try editor_snapshot.toJson(ir.allocator, ir, &scenes, hook.server.documents.generation) };
+    var render_ir = try render_pdf.compileRenderIr(ir.allocator, hook.server.io, ir, &pages, .{});
+    defer render_ir.deinit(ir.allocator);
+    return .{ .editor_snapshot_json = try editor_snapshot.toJson(ir.allocator, ir, &render_ir, hook.server.documents.generation) };
 }
 
 fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Context, err: anyerror) !void {
