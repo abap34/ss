@@ -10,6 +10,8 @@ const json = utils.json;
 const render_emitter = @import("render_emitter");
 const c = @import("pdf_ffi").c;
 const render_ir = @import("render");
+const render_resources = @import("render_resources");
+const render_math = @import("render_math");
 const render_compile = @import("../compile.zig");
 
 const TSLanguage = opaque {};
@@ -815,7 +817,7 @@ pub const Compiler = struct {
         allocator: Allocator,
         state: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
-        resources: *render_ir.ResourceBuilder,
+        resources: *render_resources.Builder,
         fonts: *render_ir.FontBuilder,
         math: *render_ir.MathBuilder,
     ) !render_ir.Page {
@@ -1069,6 +1071,7 @@ fn hashOptionalMathPaint(hasher: *std.hash.Wyhash, maybe: ?MathPaint) void {
         hashF32(hasher, math.raw_tex_width_ratio);
         hashF32(hasher, math.scale);
         hashHorizontalAlign(hasher, math.horizontal_align);
+        hashColor(hasher, math.color);
     }
 }
 
@@ -1283,12 +1286,15 @@ fn collectPreparedObjectPreloads(
                 .kind = .display,
                 .target = dep_target,
             } }),
-            .block_math => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
-                .kind = mathKindForPreparedObject(object),
-                .target = dep_target,
-            } }),
+            .block_math => {
+                const kind = mathKindForPreparedObject(object);
+                if (kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .math = .{
+                    .source = try ctx.allocator.dupe(u8, dep.source),
+                    .preamble = try cloneTexPreambleEntries(ctx.allocator, object.tex_preamble),
+                    .kind = kind,
+                    .target = dep_target,
+                } });
+            },
             .icon => try registerPlanPreloadTask(ctx, tasks, seen, deps, .{ .icon = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
                 .target = dep_target,
@@ -1340,7 +1346,7 @@ fn collectObjectPreloads(
     switch (command.render.kind) {
         .text => {},
         .vector_math => {
-            try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+            if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, command.content),
                 .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
                 .kind = command.math_kind,
@@ -1396,12 +1402,14 @@ fn collectAssetDepsForPlan(
                 .kind = .display,
                 .target = dep_target,
             } }),
-            .block_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
-                .kind = command.math_kind,
-                .target = dep_target,
-            } }),
+            .block_math => {
+                if (command.math_kind == .raw_block) try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
+                    .source = try ctx.allocator.dupe(u8, dep.source),
+                    .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                    .kind = command.math_kind,
+                    .target = dep_target,
+                } });
+            },
             .icon => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .icon = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
                 .target = dep_target,
@@ -1943,7 +1951,7 @@ fn buildRenderPage(
     page_index: usize,
     background: ?Color,
     commands: []ObjectCommand,
-    resources: *render_ir.ResourceBuilder,
+    resources: *render_resources.Builder,
     fonts: *render_ir.FontBuilder,
     math: *render_ir.MathBuilder,
 ) !render_ir.Page {
@@ -2017,7 +2025,7 @@ fn isPdfAssetOp(command: *const ObjectCommand) bool {
 fn pdfAssetPlacement(ctx: *DrawContext, command: *const ObjectCommand, source_z: [:0]const u8) !Frame {
     const content_frame = contentFrameForRender(command.frame, command.render);
     const source = std.mem.span(source_z.ptr);
-    const size = try pdfAssetSize(ctx, source, command.render.asset);
+    const size = try pdfAssetSize(ctx, source, command.render.asset, .pdf);
     return naturalAssetFrame(content_frame, scaledAssetSize(size, command.render.asset));
 }
 
@@ -2112,7 +2120,7 @@ const MeasurementScope = struct {
         .width = Defaults.width,
         .height = Defaults.height,
     },
-    resources: render_ir.ResourceBuilder = .{},
+    resources: render_resources.Builder = .{},
     fonts: render_ir.FontBuilder = .{},
     math: render_ir.MathBuilder = .{},
     links: std.ArrayList(LinkAnnotation) = .empty,
@@ -2128,12 +2136,16 @@ const MeasurementScope = struct {
     }
 
     fn begin(self: *MeasurementScope) !void {
+        const resources = if (self.previous_emitter) |*emitter| emitter.resources else &self.resources;
+        const fonts = if (self.previous_emitter) |*emitter| emitter.fonts else &self.fonts;
+        const math = if (self.previous_emitter) |*emitter| emitter.math else &self.math;
         self.ctx.emitter = .{
             .page = &self.page,
-            .resources = &self.resources,
-            .fonts = &self.fonts,
-            .math = &self.math,
+            .resources = resources,
+            .fonts = fonts,
+            .math = math,
             .io = self.ctx.io,
+            .node_id = if (self.previous_emitter) |emitter| emitter.node_id else null,
         };
         self.ctx.link_annotations = &self.links;
         self.ctx.destinations = &self.destinations;
@@ -2306,6 +2318,34 @@ fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width:
 }
 
 fn measureVectorMathIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
+    if (command.math_kind != .raw_block) {
+        var resources = render_resources.Builder{};
+        defer resources.deinit(ctx.allocator);
+        var fonts = render_ir.FontBuilder{};
+        defer fonts.deinit(ctx.allocator);
+        var math = render_ir.MathBuilder{};
+        defer math.deinit(ctx.allocator);
+        var compiled = try render_math.compile(
+            ctx.allocator,
+            ctx.io,
+            &resources,
+            &fonts,
+            &math,
+            command.content,
+            mathInputKind(command.math_kind),
+            .{ .font_size = structured_math_design_size, .display = command.math_kind != .inline_math },
+        );
+        defer compiled.layout.deinit(ctx.allocator);
+        const fitted = fitVectorMathSize(
+            @floatCast(compiled.layout.width),
+            @floatCast(compiled.layout.height),
+            @max(width, 1),
+            @max(height, 1),
+            command.math_kind,
+            command.render.math,
+        );
+        return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
+    }
     const math = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.math_kind);
     defer ctx.allocator.free(math.path);
     const fitted = fitVectorMathSize(math.width, math.height, @max(width, 1), @max(height, 1), command.math_kind, command.render.math);
@@ -2318,7 +2358,7 @@ fn measureAssetIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width
     const extension = std.fs.path.extension(source);
     var natural: Size = undefined;
     if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
-        natural = try pdfAssetSize(ctx, source, command.render.asset);
+        natural = try pdfAssetSize(ctx, source, command.render.asset, .pdf);
     } else if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
         const svg = try svgAsset(ctx, source);
         natural = .{ .width = svg.width, .height = svg.height };
@@ -2427,7 +2467,7 @@ fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
             const svg = try renderIconToSvg(ctx, icon.source);
             ctx.allocator.free(svg.path);
         },
-        .vector_pdf => |asset| _ = try pdfAssetSize(ctx, asset.source, null),
+        .vector_pdf => |asset| _ = try pdfAssetSize(ctx, asset.source, null, .pdf),
         .raster => |raster| _ = try rasterAssetSize(ctx, raster.source),
     }
 }
@@ -4092,6 +4132,10 @@ fn isPythonKeyword(segment: []const u8) bool {
 }
 
 fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, math: ?MathPaint) !void {
+    if (command.math_kind != .raw_block) {
+        try drawStructuredMath(ctx, command.content, command.math_kind, frame, math);
+        return;
+    }
     const asset = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.math_kind);
     defer ctx.allocator.free(asset.path);
     const fitted = fitVectorMathSize(asset.width, asset.height, frame.width, frame.height, command.math_kind, math);
@@ -4105,6 +4149,72 @@ fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame
     try placeMathPdf(ctx, draw_frame, asset.path, asset.page_index, command.content, command.math_kind);
 }
 
+const structured_math_design_size: f64 = 48;
+
+fn mathInputKind(kind: MathKind) render_ir.MathInputKind {
+    return switch (kind) {
+        .inline_math => .@"inline",
+        .display => .display,
+        .block => .block,
+        .raw_block => .raw,
+    };
+}
+
+fn drawStructuredMath(ctx: *DrawContext, source: []const u8, kind: MathKind, frame: Frame, maybe_paint: ?MathPaint) !void {
+    const emitter = activeEmitter(ctx);
+    var compiled = try render_math.compile(
+        ctx.allocator,
+        ctx.io,
+        emitter.resources,
+        emitter.fonts,
+        emitter.math,
+        source,
+        mathInputKind(kind),
+        .{ .font_size = structured_math_design_size, .display = kind != .inline_math },
+    );
+    errdefer compiled.layout.deinit(ctx.allocator);
+    const fitted = fitVectorMathSize(
+        @floatCast(compiled.layout.width),
+        @floatCast(compiled.layout.height),
+        frame.width,
+        frame.height,
+        kind,
+        maybe_paint,
+    );
+    const factor = @min(
+        @as(f64, fitted.width) / @max(compiled.layout.width, 1),
+        @as(f64, fitted.height) / @max(compiled.layout.height, 1),
+    );
+    try render_math.scale(&compiled.layout, factor);
+    const width: f32 = @floatCast(compiled.layout.width);
+    const height: f32 = @floatCast(compiled.layout.height);
+    const paint = maybe_paint orelse defaultMathPaint();
+    const rect = render_ir.Rect{
+        .x = alignedX(frame.x, frame.width, width, paint.horizontal_align),
+        .y = topOf(.{
+            .x = frame.x,
+            .y = frame.y + @max((frame.height - height) / 2, 0),
+            .width = width,
+            .height = height,
+        }),
+        .width = width,
+        .height = height,
+    };
+    const owned_layout = compiled.layout;
+    compiled.layout = .{ .width = 0, .height = 0, .baseline = 0, .elements = &.{} };
+    try emitter.page.appendMath(
+        ctx.allocator,
+        emitter.node_id,
+        rect,
+        compiled.tree,
+        owned_layout,
+        paint.color,
+        null,
+        0,
+        .crop,
+    );
+}
+
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const source = try resolveAssetPath(ctx, content);
     defer ctx.allocator.free(source);
@@ -4114,7 +4224,7 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
         return;
     }
     if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
-        const size = try pdfAssetSize(ctx, source, asset);
+        const size = try pdfAssetSize(ctx, source, asset, .pdf);
         const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
         const paint = asset orelse core.render_policy.AssetPaint{
             .scale = 1,
@@ -4298,18 +4408,21 @@ fn placeMathPdf(
     kind: MathKind,
 ) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
-    const input_kind: render_ir.MathInputKind = switch (kind) {
-        .inline_math => .@"inline",
-        .display => .display,
-        .block => .block,
-        .raw_block => .raw,
-    };
-    try activeEmitter(ctx).mathItem(ctx.allocator, rect, source, input_kind, path, page_index);
+    try activeEmitter(ctx).mathItem(ctx.allocator, rect, source, mathInputKind(kind), path, page_index);
 }
 
 const Size = struct { width: f32, height: f32 };
 
 fn rasterAssetSize(ctx: *DrawContext, source: []const u8) !Size {
+    if (ctx.emitter) |*emitter| {
+        const id = try emitter.resources.addPath(ctx.allocator, ctx.io, .raster, source);
+        const resource = emitter.resources.find(id) orelse return error.MissingRenderResource;
+        const metadata = switch (resource.metadata) {
+            .raster => |value| value,
+            else => return error.RenderResourceKindConflict,
+        };
+        return .{ .width = @floatFromInt(metadata.oriented_width), .height = @floatFromInt(metadata.oriented_height) };
+    }
     var source_width: f64 = 0;
     var source_height: f64 = 0;
     const source_z = try ctx.allocator.dupeZ(u8, source);
@@ -4318,7 +4431,30 @@ fn rasterAssetSize(ctx: *DrawContext, source: []const u8) !Size {
     return .{ .width = @floatCast(source_width), .height = @floatCast(source_height) };
 }
 
-fn pdfAssetSize(ctx: *DrawContext, source: []const u8, asset: ?core.render_policy.AssetPaint) !Size {
+fn pdfAssetSize(
+    ctx: *DrawContext,
+    source: []const u8,
+    asset: ?core.render_policy.AssetPaint,
+    kind: render_ir.ResourceKind,
+) !Size {
+    if (ctx.emitter) |*emitter| {
+        const id = try emitter.resources.addPath(ctx.allocator, ctx.io, kind, source);
+        const resource = emitter.resources.find(id) orelse return error.MissingRenderResource;
+        const metadata = switch (resource.metadata) {
+            .pdf => |value| value,
+            .math_pdf => |value| value,
+            else => return error.RenderResourceKindConflict,
+        };
+        const page_number = if (asset) |paint| paint.pdf_page else 1;
+        if (page_number == 0 or page_number > metadata.pages.len) return error.InvalidPdfResource;
+        const page = &metadata.pages[page_number - 1];
+        const page_box = if (asset) |paint| paint.pdf_box else .crop;
+        const box = page.box(page_box);
+        var width = box.width() * page.user_unit;
+        var height = box.height() * page.user_unit;
+        if (page.rotation == 90 or page.rotation == 270) std.mem.swap(f64, &width, &height);
+        return .{ .width = @floatCast(width), .height = @floatCast(height) };
+    }
     var source_width: f64 = 0;
     var source_height: f64 = 0;
     const source_z = try ctx.allocator.dupeZ(u8, source);
@@ -4405,6 +4541,7 @@ fn defaultMathPaint() MathPaint {
         .raw_tex_width_ratio = 0.96,
         .scale = 1,
         .horizontal_align = .center,
+        .color = .{ .r = 0, .g = 0, .b = 0.0353 },
     };
 }
 
@@ -4477,7 +4614,7 @@ fn renderMathToPdf(ctx: *DrawContext, source: []const u8, preamble: []const TexP
     try std.Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tex_path, .data = tex, .flags = .{ .truncate = true } });
     try runChecked(ctx, &.{ "pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex" }, .{ .path = dir });
     try publishGeneratedPdf(ctx, pdf_path, output_pdf_path);
-    const size = try pdfAssetSize(ctx, output_pdf_path, null);
+    const size = try pdfAssetSize(ctx, output_pdf_path, null, .math_pdf);
     try writeMathReference(ctx, reference_path, output_pdf_path, 0, size.width, size.height);
     return (try cachedMathReference(ctx, reference_path)) orelse NativePdfError.InvalidPdfCache;
 }
@@ -4771,6 +4908,19 @@ fn cachedSvgAsset(ctx: *DrawContext, path: []const u8) !?SvgAsset {
 }
 
 fn svgAsset(ctx: *DrawContext, path: []const u8) !SvgAsset {
+    if (ctx.emitter) |*emitter| {
+        const id = try emitter.resources.addPath(ctx.allocator, ctx.io, .svg, path);
+        const resource = emitter.resources.find(id) orelse return error.MissingRenderResource;
+        const metadata = switch (resource.metadata) {
+            .svg => |value| value,
+            else => return error.RenderResourceKindConflict,
+        };
+        return .{
+            .path = path,
+            .width = @floatCast(metadata.width),
+            .height = @floatCast(metadata.height),
+        };
+    }
     var source_width: f64 = 0;
     var source_height: f64 = 0;
     const svg_z = try ctx.allocator.dupeZ(u8, path);

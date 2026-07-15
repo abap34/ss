@@ -2,6 +2,11 @@ const module_loader = @import("../modules/loader.zig");
 const html = @import("../render/html.zig");
 const utils = @import("utils");
 
+pub const RenderFormat = enum {
+    pdf,
+    html,
+};
+
 pub const RenderOptions = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
@@ -35,5 +40,12 @@ pub const HtmlWriteOptions = struct {
 pub const HtmlWriteRequest = struct {
     source: SourceRequest,
     output_directory: []const u8,
+    options: HtmlWriteOptions = .{},
+};
+
+pub const PdfAndHtmlWriteRequest = struct {
+    source: SourceRequest,
+    pdf_output_path: []const u8,
+    html_output_directory: []const u8,
     options: HtmlWriteOptions = .{},
 };

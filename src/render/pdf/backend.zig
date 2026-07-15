@@ -59,7 +59,7 @@ fn renderComposed(
     var segment_start: usize = 0;
     var first_native_layer = true;
     for (page.items.items, 0..) |item, item_index| {
-        if (item != .pdf_page and item != .math) continue;
+        if (!isExternalPdfItem(item)) continue;
         if (segment_start < item_index or first_native_layer) {
             try composition.appendNativeLayer(segment_start, item_index, first_native_layer);
             first_native_layer = false;
@@ -75,6 +75,14 @@ fn renderComposed(
         try composition.appendNativeLayer(segment_start, page.items.items.len, first_native_layer);
     }
     try composition.write();
+}
+
+fn isExternalPdfItem(item: render_ir.Item) bool {
+    return switch (item) {
+        .pdf_page => true,
+        .math => |value| value.pdf_resource != null,
+        else => false,
+    };
 }
 
 const Composition = struct {
@@ -138,6 +146,7 @@ const Composition = struct {
             .width = self.page.width,
             .height = self.page.height,
             .copy_annotations = 0,
+            .effects = identityLayerEffects(),
         });
         try self.native_paths.append(self.allocator, native_path);
         self.next_layer_index += 1;
@@ -154,11 +163,13 @@ const Composition = struct {
             .width = item.rect.width,
             .height = item.rect.height,
             .copy_annotations = if (item.copy_annotations) 1 else 0,
+            .effects = layerEffects(item.header, self.page.height),
         });
     }
 
     fn appendMathLayer(self: *Composition, item: render_ir.Math) !void {
-        const path = try self.resources.resolve(item.pdf_resource, .math_pdf);
+        const resource = item.pdf_resource orelse return error.MissingRenderResource;
+        const path = try self.resources.resolve(resource, .math_pdf);
         try self.layers.append(self.allocator, .{
             .path = path.ptr,
             .page_index = item.page_index,
@@ -168,6 +179,7 @@ const Composition = struct {
             .width = item.rect.width,
             .height = item.rect.height,
             .copy_annotations = 0,
+            .effects = layerEffects(item.header, self.page.height),
         });
     }
 
@@ -179,6 +191,47 @@ const Composition = struct {
         }
     }
 };
+
+fn identityLayerEffects() c.SsQpdfLayerEffects {
+    return .{
+        .xx = 1,
+        .yx = 0,
+        .xy = 0,
+        .yy = 1,
+        .x0 = 0,
+        .y0 = 0,
+        .has_clip = 0,
+        .clip_x = 0,
+        .clip_y = 0,
+        .clip_width = 0,
+        .clip_height = 0,
+        .opacity = 1,
+        .blend_mode = 0,
+    };
+}
+
+fn layerEffects(header: render_ir.ItemHeader, page_height: f64) c.SsQpdfLayerEffects {
+    const transform = header.transform;
+    var effects = identityLayerEffects();
+    effects.xx = transform.xx;
+    effects.yx = -transform.yx;
+    effects.xy = -transform.xy;
+    effects.yy = transform.yy;
+    effects.x0 = transform.xy * page_height + transform.x0;
+    effects.y0 = page_height * (1 - transform.yy) - transform.y0;
+    effects.opacity = header.opacity;
+    effects.blend_mode = @intFromEnum(header.blend_mode);
+    if (header.clip) |value| switch (value) {
+        .rect => |rect| {
+            effects.has_clip = 1;
+            effects.clip_x = rect.x;
+            effects.clip_y = page_height - rect.y - rect.height;
+            effects.clip_width = rect.width;
+            effects.clip_height = rect.height;
+        },
+    };
+    return effects;
+}
 
 fn renderNativeLayer(
     allocator: Allocator,
@@ -283,7 +336,8 @@ fn replayItem(
                 c.ss_pdf_draw_svg(pdf, path.ptr, value.rect.x, value.rect.y, value.rect.width, value.rect.height);
             if (result != 0) return error.ImageDecodeFailed;
         },
-        .math, .pdf_page => return error.UnsupportedAssetType,
+        .math => |value| try replayMath(allocator, pdf, ir, value, resources),
+        .pdf_page => return error.UnsupportedAssetType,
     }
 }
 
@@ -321,23 +375,70 @@ fn replayText(
     text: render_ir.Text,
     resources: *const MaterializedResources,
 ) !void {
-    for (text.layout.runs) |run| {
+    try replayTextLayout(allocator, pdf, ir, &text.layout, text.x, text.y, text.font_size, text.color, resources);
+}
+
+fn replayMath(
+    allocator: Allocator,
+    pdf: *c.SsPdf,
+    ir: *const render_ir.Ir,
+    math: render_ir.Math,
+    resources: *const MaterializedResources,
+) !void {
+    const layout = math.layout orelse return error.UnsupportedAssetType;
+    for (layout.elements) |element| switch (element) {
+        .text => |text| try replayTextLayout(
+            allocator,
+            pdf,
+            ir,
+            &text.layout,
+            math.rect.x + text.x,
+            math.rect.y + text.y,
+            text.font_size,
+            math.color,
+            resources,
+        ),
+        .rule => |rule| c.ss_pdf_fill_rect(
+            pdf,
+            math.rect.x + rule.rect.x,
+            math.rect.y + rule.rect.y,
+            rule.rect.width,
+            rule.rect.height,
+            math.color.r,
+            math.color.g,
+            math.color.b,
+        ),
+    };
+}
+
+fn replayTextLayout(
+    allocator: Allocator,
+    pdf: *c.SsPdf,
+    ir: *const render_ir.Ir,
+    layout: *const render_ir.TextLayout,
+    x: f64,
+    y: f64,
+    font_size: f64,
+    color: core.render_policy.Color,
+    resources: *const MaterializedResources,
+) !void {
+    for (layout.runs) |run| {
         const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
         const font_path = try resources.resolve(font.resource, .font);
-        const glyph_source = text.layout.glyphs[run.glyph_range.start..run.glyph_range.end];
+        const glyph_source = layout.glyphs[run.glyph_range.start..run.glyph_range.end];
         const glyphs = try allocator.alloc(c.SsReplayGlyph, glyph_source.len);
         defer allocator.free(glyphs);
-        var cursor = text.x + run.x;
+        var cursor = x + run.x;
         for (glyph_source, 0..) |glyph, index| {
             glyphs[index] = .{
                 .id = glyph.id,
                 .x = cursor + glyph.offset_x,
-                .y = text.y + run.baseline_y - glyph.offset_y,
+                .y = y + run.baseline_y - glyph.offset_y,
             };
             cursor += glyph.advance_x;
         }
 
-        const cluster_source = text.layout.clusters[run.cluster_range.start..run.cluster_range.end];
+        const cluster_source = layout.clusters[run.cluster_range.start..run.cluster_range.end];
         const cluster_order = try allocator.alloc(usize, cluster_source.len);
         defer allocator.free(cluster_order);
         for (cluster_order, 0..) |*entry, index| entry.* = index;
@@ -358,16 +459,16 @@ fn replayText(
             byte_count += bytes;
             glyph_count += cluster_glyphs;
         }
-        const source = text.layout.source_text[run.source.start..run.source.end];
+        const source = layout.source_text[run.source.start..run.source.end];
         if (byte_count != source.len or glyph_count != glyphs.len) return error.InvalidTextLayout;
         if (c.ss_pdf_draw_glyph_run(
             pdf,
             font_path.ptr,
             @intCast(font.face_index),
-            text.font_size,
-            text.color.r,
-            text.color.g,
-            text.color.b,
+            font_size,
+            color.r,
+            color.g,
+            color.b,
             source.ptr,
             @intCast(source.len),
             glyphs.ptr,

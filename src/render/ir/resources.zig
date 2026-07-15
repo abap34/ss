@@ -10,15 +10,150 @@ pub const Kind = enum {
     math_pdf,
 };
 
+pub const RasterOrientation = enum(u8) {
+    normal = 1,
+    mirror_horizontal = 2,
+    rotate_180 = 3,
+    mirror_vertical = 4,
+    transpose = 5,
+    rotate_90 = 6,
+    transverse = 7,
+    rotate_270 = 8,
+};
+
+pub const RasterColorSpace = enum {
+    srgb,
+    icc,
+    unknown,
+};
+
+pub const RasterInterpolation = enum {
+    nearest,
+    bilinear,
+};
+
+pub const RasterMetadata = struct {
+    pixel_width: usize,
+    pixel_height: usize,
+    oriented_width: usize,
+    oriented_height: usize,
+    orientation: RasterOrientation,
+    color_space: RasterColorSpace,
+    has_alpha: bool,
+    interpolation: RasterInterpolation = .bilinear,
+};
+
+pub const SvgAlign = enum {
+    none,
+    x_min_y_min,
+    x_mid_y_min,
+    x_max_y_min,
+    x_min_y_mid,
+    x_mid_y_mid,
+    x_max_y_mid,
+    x_min_y_max,
+    x_mid_y_max,
+    x_max_y_max,
+};
+
+pub const SvgScale = enum {
+    meet,
+    slice,
+};
+
+pub const SvgViewBox = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+pub const SvgMetadata = struct {
+    width: f64,
+    height: f64,
+    view_box: ?SvgViewBox,
+    alignment: SvgAlign = .x_mid_y_mid,
+    scale: SvgScale = .meet,
+};
+
+pub const PdfBox = struct {
+    left: f64,
+    bottom: f64,
+    right: f64,
+    top: f64,
+
+    pub fn width(self: PdfBox) f64 {
+        return self.right - self.left;
+    }
+
+    pub fn height(self: PdfBox) f64 {
+        return self.top - self.bottom;
+    }
+};
+
+pub const PdfPageMetadata = struct {
+    media: PdfBox,
+    crop: PdfBox,
+    bleed: PdfBox,
+    trim: PdfBox,
+    art: PdfBox,
+    user_unit: f64,
+    rotation: u16,
+    annotation_count: usize,
+    has_unsafe_annotations: bool,
+
+    pub fn box(self: *const PdfPageMetadata, kind: @import("core").render_policy.PdfPageBox) PdfBox {
+        return switch (kind) {
+            .media => self.media,
+            .crop => self.crop,
+            .bleed => self.bleed,
+            .trim => self.trim,
+            .art => self.art,
+        };
+    }
+};
+
+pub const PdfMetadata = struct {
+    pages: []PdfPageMetadata,
+    encrypted: bool,
+    has_javascript: bool,
+
+    fn deinit(self: *PdfMetadata, allocator: std.mem.Allocator) void {
+        allocator.free(self.pages);
+    }
+};
+
+pub const FontMetadata = struct {
+    collection: bool,
+};
+
+pub const Metadata = union(Kind) {
+    font: FontMetadata,
+    raster: RasterMetadata,
+    svg: SvgMetadata,
+    pdf: PdfMetadata,
+    math_pdf: PdfMetadata,
+
+    pub fn deinit(self: *Metadata, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .pdf => |*value| value.deinit(allocator),
+            .math_pdf => |*value| value.deinit(allocator),
+            .font, .raster, .svg => {},
+        }
+    }
+};
+
 pub const Resource = struct {
     id: Id,
     kind: Kind,
     name: []u8,
     bytes: []u8,
+    metadata: Metadata,
 
-    fn deinit(self: *Resource, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Resource, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.bytes);
+        self.metadata.deinit(allocator);
     }
 
     pub fn extension(self: *const Resource) []const u8 {
@@ -63,45 +198,6 @@ pub const Graph = struct {
             if (std.mem.eql(u8, &entry.id, &id)) return entry;
         }
         return null;
-    }
-};
-
-pub const Builder = struct {
-    entries: std.ArrayList(Resource) = .empty,
-
-    pub fn deinit(self: *Builder, allocator: std.mem.Allocator) void {
-        for (self.entries.items) |*entry| entry.deinit(allocator);
-        self.entries.deinit(allocator);
-        self.* = .{};
-    }
-
-    pub fn addPath(
-        self: *Builder,
-        allocator: std.mem.Allocator,
-        io: std.Io,
-        kind: Kind,
-        path: []const u8,
-    ) !Id {
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
-        errdefer allocator.free(bytes);
-        const id = identify(kind, bytes);
-        for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, &entry.id, &id)) {
-                allocator.free(bytes);
-                if (entry.kind != kind) return error.RenderResourceKindConflict;
-                return id;
-            }
-        }
-        const name = try allocator.dupe(u8, std.fs.path.basename(path));
-        errdefer allocator.free(name);
-        try self.entries.append(allocator, .{ .id = id, .kind = kind, .name = name, .bytes = bytes });
-        return id;
-    }
-
-    pub fn take(self: *Builder, allocator: std.mem.Allocator) !Graph {
-        const entries = try self.entries.toOwnedSlice(allocator);
-        self.* = .{};
-        return .{ .entries = entries };
     }
 };
 

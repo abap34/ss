@@ -13,14 +13,22 @@ They intentionally assert:
   `tests/core/document_state/`;
 - page-local layout graph semantics, constraint classification, and axis state
   reconciliation under `tests/layout/graph/`;
-- rendering-IR ownership，document compilation，and PDF backend behavior under
-  `tests/render/ir/`，`tests/render/compile/`，and `tests/render/pdf/`;
+- rendering-IR ownership，document compilation，PDF backend behavior，and static
+  HTML generation under `tests/render/ir/`，`tests/render/compile/`，
+  `tests/render/pdf/`，and `tests/render/html/`;
 - compiler, project, render, LSP, watch, and utility contracts under their
   matching subsystem and topic directories;
 - smoke-check acceptance for stdlib, themes, and demo decks through
   `zig build test`.
 - focused CLI，render，and LSP regressions through spec files under
   `tests/runtime/` subsystem directories，also wired into `zig build test`.
+
+PDF and HTML visual parity is a local test boundary under `tests/visual/`．It
+uses the same in-memory `render.Ir` for both outputs，then renders both with the
+pinned Chromium and PDF.js versions．Run `zig build test-render-parity` for the
+normal set and `zig build test-render-parity-full` to include structured
+mathematics．These steps are intentionally outside normal CI and do not use
+Poppler，ImageMagick，or TeX．
 
 CLI and editor smoke tests live under `tests/smoke/`. They should stay thin:
 each script verifies a user-visible workflow end to end, not every bug fix that

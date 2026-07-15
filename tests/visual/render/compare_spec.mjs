@@ -27,6 +27,18 @@ const tolerated = compareImages(white, changed, {
 });
 assert.equal(tolerated.pass, true);
 
+const shiftedLeft = image(4, 3, [255, 255, 255, 255]);
+const shiftedRight = image(4, 3, [255, 255, 255, 255]);
+shiftedLeft.data[4 * (1 * 4 + 1)] = 0;
+shiftedRight.data[4 * (1 * 4 + 2)] = 0;
+const spatiallyTolerated = compareImages(shiftedLeft, shiftedRight, {
+  meanAbsoluteError: 0,
+  largeDifference: 8 / 255,
+  largeDifferenceRatio: 0,
+  spatialTolerance: 1,
+});
+assert.equal(spatiallyTolerated.pass, true);
+
 function image(width, height, color) {
   const result = new PNG({ width, height });
   for (let offset = 0; offset < result.data.length; offset += 4) {

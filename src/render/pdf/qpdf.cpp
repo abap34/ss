@@ -7,12 +7,56 @@
 #include <qpdf/QPDFWriter.hh>
 
 #include <exception>
+#include <cmath>
+#include <cctype>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 static thread_local std::string ss_qpdf_error;
+
+static bool ss_qpdf_finite(double value) {
+    return std::isfinite(value);
+}
+
+static bool ss_qpdf_valid_effects(SsQpdfLayerEffects const& effects) {
+    return ss_qpdf_finite(effects.xx) && ss_qpdf_finite(effects.yx) &&
+        ss_qpdf_finite(effects.xy) && ss_qpdf_finite(effects.yy) &&
+        ss_qpdf_finite(effects.x0) && ss_qpdf_finite(effects.y0) &&
+        ss_qpdf_finite(effects.opacity) && effects.opacity >= 0 && effects.opacity <= 1 &&
+        effects.blend_mode >= 0 && effects.blend_mode <= 5 &&
+        (effects.has_clip == 0 ||
+         (ss_qpdf_finite(effects.clip_x) && ss_qpdf_finite(effects.clip_y) &&
+          ss_qpdf_finite(effects.clip_width) && ss_qpdf_finite(effects.clip_height) &&
+          effects.clip_width >= 0 && effects.clip_height >= 0));
+}
+
+static char const* ss_qpdf_blend_mode(int blend_mode) {
+    switch (blend_mode) {
+    case 1: return "/Multiply";
+    case 2: return "/Screen";
+    case 3: return "/Overlay";
+    case 4: return "/Darken";
+    case 5: return "/Lighten";
+    default: return "/Normal";
+    }
+}
+
+static QPDFMatrix ss_qpdf_combined_matrix(QPDFMatrix const& outer, QPDFMatrix const& inner) {
+    return {
+        outer.a * inner.a + outer.c * inner.b,
+        outer.b * inner.a + outer.d * inner.b,
+        outer.a * inner.c + outer.c * inner.d,
+        outer.b * inner.c + outer.d * inner.d,
+        outer.a * inner.e + outer.c * inner.f + outer.e,
+        outer.b * inner.e + outer.d * inner.f + outer.f,
+    };
+}
+
+static std::string ss_qpdf_real(double value) {
+    return QPDFObjectHandle::newReal(value, 12).unparse();
+}
 
 extern "C" char const* ss_qpdf_version_string(void) {
     return QPDF::QPDFVersion().c_str();
@@ -187,6 +231,145 @@ extern "C" int ss_qpdf_page_sizes(
     return 1;
 }
 
+static bool ss_qpdf_has_javascript(QPDF& pdf) {
+    auto root = pdf.getRoot();
+    auto names = root.getKey("/Names");
+    if (names.isDictionary() && !names.getKey("/JavaScript").isNull()) return true;
+    auto open_action = root.getKey("/OpenAction");
+    return open_action.isDictionary() && open_action.getKey("/S").isName() &&
+        open_action.getKey("/S").getName() == "/JavaScript";
+}
+
+static bool ss_qpdf_safe_uri(std::string const& value) {
+    for (unsigned char byte: value) if (byte < 0x20 || byte == 0x7f) return false;
+    auto colon = value.find(':');
+    if (colon == std::string::npos) return true;
+    auto path_separator = value.find_first_of("/?#");
+    if (path_separator != std::string::npos && colon > path_separator) return true;
+    std::string scheme = value.substr(0, colon);
+    for (char& byte: scheme) byte = static_cast<char>(std::tolower(static_cast<unsigned char>(byte)));
+    return scheme == "http" || scheme == "https" || scheme == "mailto";
+}
+
+static bool ss_qpdf_safe_link_annotation(QPDFObjectHandle const& annotation) {
+    if (!annotation.isDictionary()) return false;
+    auto subtype = annotation.getKey("/Subtype");
+    if (!subtype.isName() || subtype.getName() != "/Link") return false;
+    if (!annotation.getKey("/AA").isNull() || !annotation.getKey("/PA").isNull()) return false;
+    auto action = annotation.getKey("/A");
+    if (action.isNull()) return !annotation.getKey("/Dest").isNull();
+    if (!action.isDictionary() || !action.getKey("/Next").isNull()) return false;
+    auto kind = action.getKey("/S");
+    if (!kind.isName()) return false;
+    if (kind.getName() == "/GoTo") return !action.getKey("/D").isNull();
+    if (kind.getName() != "/URI") return false;
+    auto uri = action.getKey("/URI");
+    return uri.isString() && ss_qpdf_safe_uri(uri.getUTF8Value());
+}
+
+static bool ss_qpdf_unsafe_annotations(QPDFPageObjectHelper& page) {
+    auto annotations = page.getObjectHandle().getKey("/Annots");
+    if (!annotations.isArray()) return false;
+    for (auto annotation: annotations.getArrayAsVector()) {
+        if (!ss_qpdf_safe_link_annotation(annotation)) return true;
+    }
+    return false;
+}
+
+static QPDFObjectHandle ss_qpdf_sanitized_action(QPDFObjectHandle const& action) {
+    auto result = QPDFObjectHandle::newDictionary();
+    auto kind = action.getKey("/S");
+    result.replaceKey("/S", kind.shallowCopy());
+    if (kind.getName() == "/URI") {
+        result.replaceKey("/URI", action.getKey("/URI").shallowCopy());
+        auto is_map = action.getKey("/IsMap");
+        if (is_map.isBool()) result.replaceKey("/IsMap", is_map.shallowCopy());
+    } else {
+        result.replaceKey("/D", action.getKey("/D").shallowCopy());
+    }
+    return result;
+}
+
+static void ss_qpdf_copy_safe_annotations(
+    QPDFPageObjectHelper& destination_page,
+    QPDFPageObjectHelper& source_page,
+    QPDFMatrix const& matrix
+) {
+    auto source_object = source_page.getObjectHandle();
+    auto annotations = source_object.getKey("/Annots");
+    if (!annotations.isArray()) return;
+    auto sanitized = QPDFObjectHandle::newArray();
+    for (auto annotation: annotations.getArrayAsVector()) {
+        if (!ss_qpdf_safe_link_annotation(annotation)) continue;
+        auto copy = annotation.shallowCopy();
+        copy.removeKey("/AA");
+        copy.removeKey("/PA");
+        copy.removeKey("/QuadPoints");
+        auto action = annotation.getKey("/A");
+        if (action.isDictionary()) copy.replaceKey("/A", ss_qpdf_sanitized_action(action));
+        sanitized.appendItem(copy);
+    }
+    if (sanitized.getArrayNItems() == 0) return;
+    source_object.replaceKey("/Annots", sanitized);
+    try {
+        destination_page.copyAnnotations(source_page, matrix);
+        source_object.replaceKey("/Annots", annotations);
+    } catch (...) {
+        source_object.replaceKey("/Annots", annotations);
+        throw;
+    }
+}
+
+extern "C" int ss_qpdf_metadata(
+    char const* path,
+    SsPdfDocumentMetadata* document,
+    SsPdfPageMetadata* page_metadata,
+    size_t page_capacity
+) {
+    ss_qpdf_error.clear();
+    try {
+        if (path == nullptr || document == nullptr) throw std::runtime_error("invalid PDF metadata arguments");
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.processFile(path);
+        auto pages = QPDFPageDocumentHelper::get(pdf).getAllPages();
+        document->page_count = pages.size();
+        document->encrypted = pdf.isEncrypted() ? 1 : 0;
+        document->has_javascript = ss_qpdf_has_javascript(pdf) ? 1 : 0;
+        if (page_capacity == 0) return 0;
+        if (page_metadata == nullptr || page_capacity < pages.size()) {
+            throw std::runtime_error("PDF metadata page buffer is too small");
+        }
+        for (size_t page_index = 0; page_index < pages.size(); ++page_index) {
+            auto& page = pages.at(page_index);
+            auto& metadata = page_metadata[page_index];
+            for (int box = 0; box < 5; ++box) {
+                auto rectangle = ss_qpdf_page_box(page, box).getArrayAsRectangle();
+                metadata.boxes[box][0] = rectangle.llx;
+                metadata.boxes[box][1] = rectangle.lly;
+                metadata.boxes[box][2] = rectangle.urx;
+                metadata.boxes[box][3] = rectangle.ury;
+            }
+            auto object = page.getObjectHandle();
+            auto user_unit = object.getKey("/UserUnit");
+            metadata.user_unit = user_unit.isNumber() ? user_unit.getNumericValue() : 1.0;
+            auto rotation = object.getKey("/Rotate");
+            int normalized_rotation = rotation.isInteger() ? rotation.getIntValue() % 360 : 0;
+            if (normalized_rotation < 0) normalized_rotation += 360;
+            metadata.rotation = normalized_rotation;
+            auto annotations = object.getKey("/Annots");
+            metadata.annotation_count = annotations.isArray() ? annotations.getArrayNItems() : 0;
+            metadata.has_unsafe_annotations = ss_qpdf_unsafe_annotations(page) ? 1 : 0;
+        }
+        return 0;
+    } catch (std::exception const& error) {
+        ss_qpdf_error = error.what();
+    } catch (...) {
+        ss_qpdf_error = "libqpdf failed with an unknown exception";
+    }
+    return 1;
+}
+
 extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, size_t layer_count) {
     ss_qpdf_error.clear();
     char const* stage = "validate composition arguments";
@@ -209,7 +392,8 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
         for (size_t index = 1; index < layer_count; ++index) {
             stage = "validate PDF layer";
             auto const& layer = layers[index];
-            if (layer.path == nullptr || layer.width <= 0 || layer.height <= 0) {
+            if (layer.path == nullptr || layer.width <= 0 || layer.height <= 0 ||
+                !ss_qpdf_valid_effects(layer.effects)) {
                 throw std::runtime_error("invalid PDF layer");
             }
             stage = "read PDF layer";
@@ -250,11 +434,45 @@ extern "C" int ss_qpdf_compose(char const* output, SsQpdfLayer const* layers, si
             stage = "attach PDF form resources";
             resources.mergeResources("<< /XObject << >> >>"_qpdf);
             resources.getKey("/XObject").replaceKey(name, form);
+            auto const& effects = layer.effects;
+            QPDFMatrix effect_matrix(
+                effects.xx,
+                effects.yx,
+                effects.xy,
+                effects.yy,
+                effects.x0,
+                effects.y0
+            );
+            std::string prefix = "q\n";
+            if (effects.xx != 1 || effects.yx != 0 || effects.xy != 0 || effects.yy != 1 ||
+                effects.x0 != 0 || effects.y0 != 0) {
+                prefix += effect_matrix.unparse() + " cm\n";
+            }
+            if (effects.has_clip) {
+                prefix += ss_qpdf_real(effects.clip_x) + " " +
+                    ss_qpdf_real(effects.clip_y) + " " +
+                    ss_qpdf_real(effects.clip_width) + " " +
+                    ss_qpdf_real(effects.clip_height) + " re W n\n";
+            }
+            if (effects.opacity != 1 || effects.blend_mode != 0) {
+                resources.mergeResources("<< /ExtGState << >> >>"_qpdf);
+                auto states = resources.getKey("/ExtGState");
+                int minimum_state_suffix = 1;
+                auto state_name = resources.getUniqueResourceName("/SsState", minimum_state_suffix);
+                auto state = QPDFObjectHandle::newDictionary();
+                state.replaceKey("/Type", QPDFObjectHandle::newName("/ExtGState"));
+                state.replaceKey("/ca", QPDFObjectHandle::newReal(effects.opacity, 12));
+                state.replaceKey("/CA", QPDFObjectHandle::newReal(effects.opacity, 12));
+                state.replaceKey("/BM", QPDFObjectHandle::newName(ss_qpdf_blend_mode(effects.blend_mode)));
+                states.replaceKey(state_name, state);
+                prefix += state_name + " gs\n";
+            }
+            content = prefix + content + "\nQ\n";
             destination_page.addPageContents(destination.newStream("q\n"), true);
             destination_page.addPageContents(destination.newStream("\nQ\n" + content), false);
             if (layer.copy_annotations) {
                 stage = "copy PDF annotations";
-                destination_page.copyAnnotations(source_page, matrix);
+                ss_qpdf_copy_safe_annotations(destination_page, source_page, ss_qpdf_combined_matrix(effect_matrix, matrix));
             }
         }
 

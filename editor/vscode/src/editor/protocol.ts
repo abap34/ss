@@ -96,6 +96,8 @@ export interface DisplaySnapshot {
 export interface DisplayAsset {
   kind: "font" | "raster" | "svg" | "pdf" | "math_pdf";
   resource_id: string;
+  digest: string;
+  media_type: string;
   relative_path: string;
   path: string;
 }

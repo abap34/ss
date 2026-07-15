@@ -1,7 +1,7 @@
 import { element } from "./dom.js";
 import { renderObjectSheet } from "./details.js";
 import { InteractionController } from "./interaction.js";
-import { renderScene } from "./scene.js";
+import { renderPage } from "./document.js";
 
 const rulerSize = 26;
 const singlePageMargin = 32;
@@ -82,7 +82,7 @@ export class WorkspaceView {
     shell.append(this.ruler("horizontal", page.width));
     shell.append(this.ruler("vertical", page.height));
     const surface = element("div", "page-surface");
-    surface.append(renderScene(this.state.snapshot, page.id));
+    surface.append(renderPage(this.state.snapshot, page.id));
     surface.append(this.interaction.renderLayer(page));
     shell.append(surface);
     if (this.state.mode === "continuous") {
@@ -143,7 +143,7 @@ export class WorkspaceView {
       const height = Number(shell.dataset.pageHeight);
       shell.style.setProperty("--page-width", `${width * scale}px`);
       shell.style.setProperty("--page-height", `${height * scale}px`);
-      shell.style.setProperty("--scene-scale", String(scale));
+      shell.style.setProperty("--preview-scale", String(scale));
     }
   }
 

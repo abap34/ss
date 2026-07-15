@@ -100,6 +100,11 @@ fn displayJson(allocator: std.mem.Allocator, fragment: *const render_html.Fragme
         try value.stringField("kind", @tagName(asset.kind));
         const hex = std.fmt.bytesToHex(asset.resource_id, .lower);
         try value.stringField("resource_id", &hex);
+        const digest = std.fmt.bytesToHex(asset.digest, .lower);
+        const digest_text = try std.fmt.allocPrint(allocator, "sha256:{s}", .{digest});
+        defer allocator.free(digest_text);
+        try value.stringField("digest", digest_text);
+        try value.stringField("media_type", asset.media_type);
         try value.stringField("relative_path", asset.relative_path);
         try value.stringField("path", asset.path);
         try value.end();

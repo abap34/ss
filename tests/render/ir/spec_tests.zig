@@ -1,6 +1,7 @@
 const std = @import("std");
 const render_ir = @import("render");
 const render_support = @import("render_test_support");
+const render_resources = @import("render_resources");
 
 const testing = std.testing;
 
@@ -25,7 +26,7 @@ test "render IR page owns placed text and references stable resources" {
     };
     defer page.deinit(testing.allocator);
 
-    var resources = render_ir.ResourceBuilder{};
+    var resources = render_resources.Builder{};
     defer resources.deinit(testing.allocator);
     var fonts = render_ir.FontBuilder{};
     defer fonts.deinit(testing.allocator);
@@ -155,6 +156,66 @@ test "render IR validation rejects non-finite geometry and unstable ordering" {
     try testing.expectError(error.InvalidItemGeometry, ir.validate());
 }
 
+test "render IR fingerprints page source and visual effect metadata" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{
+        .page_id = 1,
+        .index = 0,
+        .name = try testing.allocator.dupe(u8, "Overview"),
+        .width = 320,
+        .height = 180,
+    };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendFillRect(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        .{ .r = 1, .g = 1, .b = 1 },
+    );
+    const header = &pages[0].items.items[0].fill_rect.header;
+    header.source = .{ .module_id = 2, .start = 10, .end = 20 };
+    header.transform.x0 = 4;
+    header.clip = .{ .rect = .{ .x = 12, .y = 22, .width = 20, .height = 30 } };
+    header.opacity = 0.75;
+    header.blend_mode = .multiply;
+    try ir.validate();
+
+    const original = ir.fingerprint();
+    const original_page = render_ir.pageFingerprint(&pages[0]);
+    header.source.?.end += 1;
+    try testing.expect(!std.mem.eql(u8, &original, &ir.fingerprint()));
+    try testing.expectEqualSlices(u8, &original_page, &render_ir.pageFingerprint(&pages[0]));
+    header.source.?.end -= 1;
+    pages[0].name[0] = 'o';
+    try testing.expect(!std.mem.eql(u8, &original, &ir.fingerprint()));
+    try testing.expectEqualSlices(u8, &original_page, &render_ir.pageFingerprint(&pages[0]));
+
+    header.opacity = 0.5;
+    try testing.expect(!std.mem.eql(u8, &original_page, &render_ir.pageFingerprint(&pages[0])));
+}
+
+test "render IR validation rejects invalid source and clip ranges" {
+    var pages = try testing.allocator.alloc(render_ir.Page, 1);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    var ir = render_ir.Ir{ .pages = pages };
+    defer ir.deinit(testing.allocator);
+    try addDocumentSemantics(&ir);
+    try pages[0].appendFillRect(
+        testing.allocator,
+        7,
+        .{ .x = 10, .y = 20, .width = 30, .height = 40 },
+        .{ .r = 1, .g = 1, .b = 1 },
+    );
+    const header = &pages[0].items.items[0].fill_rect.header;
+    header.source = .{ .module_id = 2, .start = 20, .end = 10 };
+    try testing.expectError(error.InvalidItemGeometry, ir.validate());
+    header.source.?.end = 20;
+    header.clip = .{ .rect = .{ .x = 0, .y = 0, .width = -1, .height = 10 } };
+    try testing.expectError(error.InvalidBounds, ir.validate());
+}
+
 test "render IR stores resolved fonts and bidirectional glyph clusters" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 1280, .height = 720 };
@@ -162,7 +223,7 @@ test "render IR stores resolved fonts and bidirectional glyph clusters" {
     defer ir.deinit(testing.allocator);
     try addDocumentSemantics(&ir);
 
-    var resources = render_ir.ResourceBuilder{};
+    var resources = render_resources.Builder{};
     defer resources.deinit(testing.allocator);
     var fonts = render_ir.FontBuilder{};
     defer fonts.deinit(testing.allocator);

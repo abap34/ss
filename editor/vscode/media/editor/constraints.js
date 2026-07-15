@@ -1,47 +1,10 @@
-import { element, setAttributes, svgElement } from "./dom.js";
+import { setAttributes, svgElement } from "./dom.js";
 import {
   anchorSegment,
   constraintGeometry,
   frameByNode,
   signed,
 } from "./geometry.js";
-import { renderPdfItems } from "./pdf.js";
-
-const templates = new WeakMap();
-
-export function renderScene(snapshot, pageId, thumbnail = false) {
-  const scene = element("div", thumbnail ? "thumbnail-scene" : "scene");
-  if (thumbnail) scene.setAttribute("aria-hidden", "true");
-  const page = pageTemplate(snapshot, pageId);
-  if (!page) return scene;
-  const clone = page.cloneNode(true);
-  clone.classList.add("scene-page");
-  if (thumbnail) {
-    clone.querySelectorAll(".ss-semantic-layer, .ss-link, .ss-destination").forEach((node) => node.remove());
-    const layout = snapshot.layout.pages.find((candidate) =>
-      candidate.id === pageId
-    );
-    if (layout) scene.style.setProperty("--scene-scale", String(64 / layout.width));
-  }
-  scene.append(clone);
-  void renderPdfItems(scene).catch((error) => {
-    scene.dataset.error = error instanceof Error ? error.message : String(error);
-  });
-  return scene;
-}
-
-function pageTemplate(snapshot, pageId) {
-  if (!snapshot?.display?.html) return null;
-  let template = templates.get(snapshot);
-  if (!template) {
-    template = document.createElement("template");
-    template.innerHTML = snapshot.display.html;
-    templates.set(snapshot, template);
-  }
-  return [...template.content.querySelectorAll(".ss-page")].find((page) =>
-    Number(page.dataset.ssPageId) === pageId
-  ) || null;
-}
 
 export function renderConstraints(snapshot, page, objectId) {
   const group = svgElement("g", "constraint-layer");

@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const lowering = @import("../lowering.zig");
-const compiler = @import("compiler.zig");
+const compiler = @import("compile.zig");
 const execution = @import("../analysis/execution.zig");
 
 pub fn evaluateAndSolvePreparedPages(io: std.Io, state: *core.DocumentState, graph: *const execution.ExecutionGraph) !core.prepared.PreparedPages {

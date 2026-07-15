@@ -80,6 +80,7 @@ record MathStyle {
   min_height: Number = 30
   raw_tex_width_ratio: Number = 0.96
   align: Align = Align.center
+  color: Color = c"0,0,0.0353"
 }
 
 record CodeStyle {

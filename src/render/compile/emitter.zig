@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const render = @import("render");
+const resources_compile = @import("render_resources");
 const text = @import("render_text");
 
 const Allocator = std.mem.Allocator;
@@ -8,7 +9,7 @@ const Color = core.render_policy.Color;
 
 pub const Emitter = struct {
     page: *render.Page,
-    resources: *render.ResourceBuilder,
+    resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
     math: *render.MathBuilder,
     io: std.Io,
@@ -108,6 +109,6 @@ pub const Emitter = struct {
     ) !void {
         const tree = try self.math.add(allocator, source, input_kind);
         const resource = try self.resources.addPath(allocator, self.io, .math_pdf, path);
-        try self.page.appendMath(allocator, self.node_id, rect, tree, resource, page_index, .crop);
+        try self.page.appendMath(allocator, self.node_id, rect, tree, null, .{ .r = 0, .g = 0, .b = 0 }, resource, page_index, .crop);
     }
 };

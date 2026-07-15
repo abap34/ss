@@ -15,6 +15,7 @@ pub const Options = struct {
     asset_base_dir: []const u8,
     project_file: ?[]const u8 = null,
     highlight_languages: []const utils.highlight.Language = &.{},
+    format: app.RenderFormat = .pdf,
     jobs: ?usize = null,
     interval_ms: u64 = 500,
     quiet: bool = false,
@@ -65,15 +66,23 @@ fn runOnce(io: std.Io, allocator: std.mem.Allocator, mode: Mode, options: Option
                 .jobs = options.jobs,
                 .highlight_languages = options.highlight_languages,
             };
-            app.writePdf(io, allocator, .{
-                .source = .{
-                    .input_path = options.input_path,
-                    .asset_base_dir = options.asset_base_dir,
-                    .layout_jobs = options.jobs,
-                },
-                .output_path = output_path,
-                .options = .{ .render = render_options },
-            }, &progress) catch |err| {
+            const source = app.SourceRequest{
+                .input_path = options.input_path,
+                .asset_base_dir = options.asset_base_dir,
+                .layout_jobs = options.jobs,
+            };
+            (switch (options.format) {
+                .pdf => app.writePdf(io, allocator, .{
+                    .source = source,
+                    .output_path = output_path,
+                    .options = .{ .render = render_options },
+                }, &progress),
+                .html => app.writeHtml(io, allocator, .{
+                    .source = source,
+                    .output_directory = output_path,
+                    .options = .{ .render = render_options },
+                }, &progress),
+            }) catch |err| {
                 reportRunError("render", err);
                 return false;
             };
@@ -110,12 +119,12 @@ pub fn fingerprint(io: std.Io, allocator: std.mem.Allocator, options: Options) !
 
     while (try walker.next(io)) |entry| {
         if (entry.kind == .directory) {
-            if (!skipDirectory(entry.basename)) {
+            if (!skipDirectory(entry.basename) and !isOutputPath(allocator, options, entry.path)) {
                 try walker.enter(io, entry);
             }
             continue;
         }
-        if (isOutputFile(allocator, options, entry.path)) continue;
+        if (isOutputPath(allocator, options, entry.path)) continue;
         if (!watchFile(entry.path)) continue;
         const stat = entry.dir.statFile(io, entry.basename, .{}) catch continue;
         mixBytes(&hash, entry.path);
@@ -230,7 +239,7 @@ fn watchFile(path: []const u8) bool {
         std.mem.eql(u8, ext, ".toml");
 }
 
-fn isOutputFile(allocator: std.mem.Allocator, options: Options, relative_path: []const u8) bool {
+fn isOutputPath(allocator: std.mem.Allocator, options: Options, relative_path: []const u8) bool {
     const output_path = options.output_path orelse return false;
     if (std.mem.eql(u8, output_path, relative_path)) return true;
     const joined = std.fs.path.join(allocator, &.{ options.asset_base_dir, relative_path }) catch return false;

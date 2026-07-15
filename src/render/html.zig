@@ -77,6 +77,7 @@ pub fn write(
         try writeRelative(allocator, io, building, "pdfjs/pdf.worker.mjs", pdfjs_assets.worker);
         try writeRelative(allocator, io, building, "pdfjs/LICENSE", pdfjs_assets.license);
     }
+    try validateBundle(allocator, io, building, &assets);
 
     var moved_previous = false;
     cwd.rename(output_directory, cwd, previous, io) catch |err| switch (err) {
@@ -99,6 +100,20 @@ fn manifestJson(allocator: std.mem.Allocator, assets: *const resources.Set) ![]u
         if (index != 0) try out.append(allocator, ',');
         try out.appendSlice(allocator, "{\"kind\":\"");
         try out.appendSlice(allocator, @tagName(asset.kind));
+        try out.appendSlice(allocator, "\",\"resource_id\":\"");
+        const resource_hex = std.fmt.bytesToHex(asset.resource, .lower);
+        try out.appendSlice(allocator, &resource_hex);
+        try out.appendSlice(allocator, "\",\"font_index\":");
+        if (asset.font_index) |font_index| {
+            const font_index_text = try std.fmt.allocPrint(allocator, "{d}", .{font_index});
+            defer allocator.free(font_index_text);
+            try out.appendSlice(allocator, font_index_text);
+        } else try out.appendSlice(allocator, "null");
+        try out.appendSlice(allocator, ",\"media_type\":\"");
+        try appendJsonStringContent(allocator, &out, asset.media_type);
+        try out.appendSlice(allocator, "\",\"digest\":\"sha256:");
+        const digest_hex = std.fmt.bytesToHex(asset.digest, .lower);
+        try out.appendSlice(allocator, &digest_hex);
         try out.appendSlice(allocator, "\",\"path\":\"");
         try appendJsonStringContent(allocator, &out, asset.relative_path);
         try out.appendSlice(allocator, "\",\"bytes\":");
@@ -125,11 +140,71 @@ fn appendJsonStringContent(allocator: std.mem.Allocator, out: *std.ArrayList(u8)
 }
 
 fn writeRelative(allocator: std.mem.Allocator, io: std.Io, root: []const u8, relative: []const u8, bytes: []const u8) !void {
-    if (std.fs.path.isAbsolute(relative) or std.mem.indexOf(u8, relative, "..") != null) return error.InvalidHtmlResourceName;
+    if (!validRelativePath(relative)) return error.InvalidHtmlResourceName;
     const path = try std.fs.path.join(allocator, &.{ root, relative });
     defer allocator.free(path);
     if (std.fs.path.dirname(path)) |parent| try std.Io.Dir.cwd().createDirPath(io, parent);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes, .flags = .{ .truncate = true } });
+}
+
+fn validateBundle(allocator: std.mem.Allocator, io: std.Io, root: []const u8, assets: *const resources.Set) !void {
+    var paths = std.StringHashMap(void).init(allocator);
+    defer paths.deinit();
+    for (assets.assets) |asset| {
+        if (!validRelativePath(asset.relative_path)) return error.InvalidHtmlResourceName;
+        const entry = try paths.getOrPut(asset.relative_path);
+        if (entry.found_existing) return error.DuplicateHtmlResource;
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(asset.bytes, &digest, .{});
+        if (!std.mem.eql(u8, &digest, &asset.digest)) return error.InvalidHtmlResourceDigest;
+        const path = try std.fs.path.join(allocator, &.{ root, asset.relative_path });
+        defer allocator.free(path);
+        const published = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(asset.bytes.len + 1));
+        defer allocator.free(published);
+        if (!std.mem.eql(u8, published, asset.bytes)) return error.InvalidHtmlResourceDigest;
+    }
+    try validateRequiredFiles(allocator, io, root, &.{ "index.html", "ss.css", "manifest.json" });
+    if (assets.has_pdf) {
+        try validateRequiredFiles(allocator, io, root, &.{ "ss.js", "pdf.js", "pdfjs/pdf.mjs", "pdfjs/pdf.worker.mjs", "pdfjs/LICENSE" });
+    }
+    const manifest_path = try std.fs.path.join(allocator, &.{ root, "manifest.json" });
+    defer allocator.free(manifest_path);
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(io, manifest_path, allocator, .limited(4 * 1024 * 1024));
+    defer allocator.free(manifest);
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, manifest, .{});
+    defer parsed.deinit();
+    const object = switch (parsed.value) {
+        .object => |value| value,
+        else => return error.InvalidHtmlManifest,
+    };
+    const schema = object.get("schema") orelse return error.InvalidHtmlManifest;
+    if (schema != .integer or schema.integer != 1) return error.InvalidHtmlManifest;
+    const kind = object.get("kind") orelse return error.InvalidHtmlManifest;
+    if (kind != .string or !std.mem.eql(u8, kind.string, "ss-html-bundle")) return error.InvalidHtmlManifest;
+    const manifest_resources = object.get("resources") orelse return error.InvalidHtmlManifest;
+    if (manifest_resources != .array or manifest_resources.array.items.len != assets.assets.len) return error.InvalidHtmlManifest;
+}
+
+fn validateRequiredFiles(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    root: []const u8,
+    relative_paths: []const []const u8,
+) !void {
+    for (relative_paths) |relative| {
+        const path = try std.fs.path.join(allocator, &.{ root, relative });
+        defer allocator.free(path);
+        try std.Io.Dir.cwd().access(io, path, .{});
+    }
+}
+
+fn validRelativePath(path: []const u8) bool {
+    if (path.len == 0 or std.fs.path.isAbsolute(path) or std.mem.indexOfScalar(u8, path, '\\') != null) return false;
+    var components = std.mem.splitScalar(u8, path, '/');
+    while (components.next()) |component| {
+        if (component.len == 0 or std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
 }
 
 fn pathExists(io: std.Io, path: []const u8) bool {

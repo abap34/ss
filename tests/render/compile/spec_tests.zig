@@ -1,8 +1,10 @@
 const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
+const c = @import("pdf_ffi").c;
 const render = @import("render");
 const render_compile = @import("render_compile");
+const render_resources = @import("render_resources");
 
 const testing = std.testing;
 
@@ -25,7 +27,7 @@ const FakeCompiler = struct {
         allocator: std.mem.Allocator,
         _: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
-        _: *render.ResourceBuilder,
+        _: *render_resources.Builder,
         _: *render.FontBuilder,
         _: *render.MathBuilder,
     ) !render.Page {
@@ -105,4 +107,65 @@ test "render compiler releases completed pages after a later failure" {
         render_compile.document(testing.allocator, &state, &prepared_pages, &compiler),
     );
     try testing.expectEqual(@as(usize, 1), compiler.page_count);
+}
+
+test "resource compiler records deterministic raster SVG and PDF metadata" {
+    const root = ".ss-cache/test-render-resources";
+    const png_path = root ++ "/pixel.png";
+    const svg_path = root ++ "/shape.svg";
+    const pdf_path = root ++ "/page.pdf";
+    std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(testing.io, root) catch {};
+    try std.Io.Dir.cwd().createDirPath(testing.io, root);
+
+    const encoded_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const png_size = try std.base64.standard.Decoder.calcSizeForSlice(encoded_png);
+    const png = try testing.allocator.alloc(u8, png_size);
+    defer testing.allocator.free(png);
+    try std.base64.standard.Decoder.decode(png, encoded_png);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = png_path, .data = png, .flags = .{ .truncate = true } });
+    try std.Io.Dir.cwd().writeFile(testing.io, .{
+        .sub_path = svg_path,
+        .data = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\" viewBox=\"1 2 80 40\" preserveAspectRatio=\"xMaxYMin slice\"><rect width=\"80\" height=\"40\"/></svg>",
+        .flags = .{ .truncate = true },
+    });
+    const pdf_path_z = try testing.allocator.dupeZ(u8, pdf_path);
+    defer testing.allocator.free(pdf_path_z);
+    const pdf = c.ss_pdf_create(pdf_path_z.ptr, 120, 60) orelse return error.CairoCreateFailed;
+    c.ss_pdf_end_page(pdf);
+    try testing.expectEqual(@as(c_int, 0), c.ss_pdf_finish(pdf));
+    c.ss_pdf_destroy(pdf);
+
+    var builder = render_resources.Builder{};
+    defer builder.deinit(testing.allocator);
+    const raster_id = try builder.addPath(testing.allocator, testing.io, .raster, png_path);
+    const svg_id = try builder.addPath(testing.allocator, testing.io, .svg, svg_path);
+    const pdf_id = try builder.addPath(testing.allocator, testing.io, .pdf, pdf_path);
+    try testing.expectEqual(raster_id, try builder.addPath(testing.allocator, testing.io, .raster, png_path));
+    try testing.expectEqual(@as(usize, 3), builder.entries.items.len);
+
+    const raster = builder.find(raster_id) orelse return error.MissingRenderResource;
+    const raster_metadata = raster.metadata.raster;
+    try testing.expectEqual(@as(usize, 1), raster_metadata.pixel_width);
+    try testing.expectEqual(@as(usize, 1), raster_metadata.pixel_height);
+    try testing.expectEqual(render.RasterOrientation.normal, raster_metadata.orientation);
+    try testing.expect(raster_metadata.has_alpha);
+
+    const svg = builder.find(svg_id) orelse return error.MissingRenderResource;
+    const svg_metadata = svg.metadata.svg;
+    try testing.expectEqual(@as(f64, 80), svg_metadata.width);
+    try testing.expectEqual(@as(f64, 40), svg_metadata.height);
+    try testing.expectEqual(render.SvgAlign.x_max_y_min, svg_metadata.alignment);
+    try testing.expectEqual(render.SvgScale.slice, svg_metadata.scale);
+    try testing.expectEqual(@as(f64, 1), svg_metadata.view_box.?.x);
+    try testing.expectEqual(@as(f64, 2), svg_metadata.view_box.?.y);
+
+    const pdf_resource = builder.find(pdf_id) orelse return error.MissingRenderResource;
+    const pdf_metadata = pdf_resource.metadata.pdf;
+    try testing.expectEqual(@as(usize, 1), pdf_metadata.pages.len);
+    try testing.expectApproxEqAbs(@as(f64, 120), pdf_metadata.pages[0].crop.width(), 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 60), pdf_metadata.pages[0].crop.height(), 0.001);
+    try testing.expectEqual(@as(f64, 1), pdf_metadata.pages[0].user_unit);
+    try testing.expect(!pdf_metadata.encrypted);
+    try testing.expect(!pdf_metadata.has_javascript);
 }

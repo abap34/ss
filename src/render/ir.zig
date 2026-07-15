@@ -25,6 +25,7 @@ pub const Glyph = text_ir.Glyph;
 pub const FontInstanceId = fonts.Id;
 pub const FontVariation = fonts.Variation;
 pub const FontFeature = fonts.Feature;
+pub const MathConstants = fonts.MathConstants;
 pub const FontInstance = fonts.Instance;
 pub const FontCatalog = fonts.Catalog;
 pub const FontBuilder = fonts.Builder;
@@ -32,7 +33,19 @@ pub const ResourceId = resources.Id;
 pub const ResourceKind = resources.Kind;
 pub const Resource = resources.Resource;
 pub const ResourceGraph = resources.Graph;
-pub const ResourceBuilder = resources.Builder;
+pub const identifyResource = resources.identify;
+pub const ResourceMetadata = resources.Metadata;
+pub const RasterMetadata = resources.RasterMetadata;
+pub const RasterOrientation = resources.RasterOrientation;
+pub const RasterColorSpace = resources.RasterColorSpace;
+pub const RasterInterpolation = resources.RasterInterpolation;
+pub const SvgMetadata = resources.SvgMetadata;
+pub const SvgViewBox = resources.SvgViewBox;
+pub const SvgAlign = resources.SvgAlign;
+pub const SvgScale = resources.SvgScale;
+pub const PdfResourceMetadata = resources.PdfMetadata;
+pub const PdfPageMetadata = resources.PdfPageMetadata;
+pub const PdfBox = resources.PdfBox;
 pub const SemanticId = semantics.Id;
 pub const SemanticRole = semantics.Role;
 pub const SemanticLinkKind = semantics.LinkKind;
@@ -46,6 +59,10 @@ pub const MathNode = math.Node;
 pub const MathTree = math.Tree;
 pub const MathCatalog = math.Catalog;
 pub const MathBuilder = math.Builder;
+pub const MathLayout = math.Layout;
+pub const MathElement = math.Element;
+pub const MathTextElement = math.TextElement;
+pub const MathRuleElement = math.RuleElement;
 
 pub const ItemId = u64;
 
@@ -147,7 +164,9 @@ pub const Math = struct {
     header: ItemHeader,
     rect: Rect,
     tree: MathTreeId,
-    pdf_resource: ResourceId,
+    layout: ?MathLayout = null,
+    color: core.render_policy.Color,
+    pdf_resource: ?ResourceId = null,
     page_index: usize,
     box: core.render_policy.PdfPageBox,
 };
@@ -165,7 +184,8 @@ pub const Item = union(enum) {
     pub fn deinit(self: *Item, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .text => |*item| item.deinit(allocator),
-            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .math, .pdf_page => {},
+            .math => |*item| if (item.layout) |*layout| layout.deinit(allocator),
+            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .pdf_page => {},
         }
     }
 
@@ -242,7 +262,8 @@ pub const Page = struct {
 
     pub fn hasPdfPages(self: *const Page) bool {
         for (self.items.items) |item| {
-            if (item == .pdf_page or item == .math) return true;
+            if (item == .pdf_page) return true;
+            if (item == .math and item.math.pdf_resource != null) return true;
         }
         return false;
     }
@@ -401,14 +422,20 @@ pub const Page = struct {
         node_id: ?core.NodeId,
         rect: Rect,
         tree: MathTreeId,
-        pdf_resource: ResourceId,
+        layout: ?MathLayout,
+        color: core.render_policy.Color,
+        pdf_resource: ?ResourceId,
         page_index: usize,
         box: core.render_policy.PdfPageBox,
     ) !void {
+        var owned_layout = layout;
+        errdefer if (owned_layout) |*value| value.deinit(allocator);
         try self.items.append(allocator, .{ .math = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
             .tree = tree,
+            .layout = owned_layout,
+            .color = color,
             .pdf_resource = pdf_resource,
             .page_index = page_index,
             .box = box,
@@ -447,7 +474,7 @@ pub const Page = struct {
 };
 
 pub const Ir = struct {
-    schema_version: u32 = 4,
+    schema_version: u32 = 6,
     resources: ResourceGraph = .{},
     fonts: FontCatalog = .{},
     semantics: SemanticTree = .{},

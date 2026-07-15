@@ -20,11 +20,14 @@ const ProjectModules = struct {
     stdlib_assets: *Module,
     fontawesome_assets: *Module,
     pdfjs_assets: *Module,
+    math_assets: *Module,
     project: *Module,
     core: *Module,
     render: *Module,
+    render_resources: *Module,
     pdf_ffi: *Module,
     render_text: *Module,
+    render_math: *Module,
     render_emitter: *Module,
     pdf_backend: *Module,
 };
@@ -213,19 +216,29 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     addTestStep(ctx, modules, build_options, exe, tree_sitter_abi_check, tree_sitter);
-    addVisualTestSteps(b, exe);
+    addVisualTestSteps(ctx, modules, build_options, tree_sitter);
 }
 
-fn addVisualTestSteps(b: *std.Build, exe: *Step.Compile) void {
+fn addVisualTestSteps(ctx: BuildContext, modules: ProjectModules, build_options: *Step.Options, tree_sitter: TreeSitterBundle) void {
+    const b = ctx.b;
+    const app_mod = createCommonModule(ctx, "src/app.zig", modules, true);
+    app_mod.addOptions("build_options", build_options);
+    const driver_mod = createModule(ctx, "tests/visual/render/driver.zig", &.{
+        import("app", app_mod),
+        import("utils", modules.utils),
+    }, true);
+    addNativePdfHeadersAndLibraries(b, driver_mod, tree_sitter);
+    const driver = b.addExecutable(.{ .name = "ss-render-parity-driver", .root_module = driver_mod });
+
     const parity = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs" });
-    parity.addFileArg(exe.getEmittedBin());
+    parity.addFileArg(driver.getEmittedBin());
     parity.setCwd(b.path("."));
     parity.stdio = .inherit;
     const parity_step = b.step("test-render-parity", "Compare PDF and HTML pixels locally");
     parity_step.dependOn(&parity.step);
 
     const full = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs", "--full" });
-    full.addFileArg(exe.getEmittedBin());
+    full.addFileArg(driver.getEmittedBin());
     full.setCwd(b.path("."));
     full.stdio = .inherit;
     const full_step = b.step("test-render-parity-full", "Compare the extended PDF and HTML fixture set locally");
@@ -245,6 +258,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
     const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
+    const math_assets_mod = createModule(ctx, "third_party/stix-two-math/embed.zig", &.{}, null);
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
@@ -268,14 +282,28 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
     addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod, tree_sitter);
+    const render_resources_mod = createModule(ctx, "src/render/compile/resources.zig", &.{
+        import("pdf_ffi", pdf_ffi_mod),
+        import("render", render_mod),
+    }, true);
     const render_text_mod = createModule(ctx, "src/render/compile/text.zig", &.{
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
+        import("render_resources", render_resources_mod),
+    }, true);
+    const render_math_mod = createModule(ctx, "src/render/compile/math.zig", &.{
+        import("core", core_mod),
+        import("math_assets", math_assets_mod),
+        import("pdf_ffi", pdf_ffi_mod),
+        import("render", render_mod),
+        import("render_resources", render_resources_mod),
+        import("render_text", render_text_mod),
     }, true);
     const render_emitter_mod = createModule(ctx, "src/render/compile/emitter.zig", &.{
         import("core", core_mod),
         import("render", render_mod),
+        import("render_resources", render_resources_mod),
         import("render_text", render_text_mod),
     }, true);
     const pdf_backend_mod = createModule(ctx, "src/render/pdf/backend.zig", &.{
@@ -292,11 +320,14 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .stdlib_assets = stdlib_assets_mod,
         .fontawesome_assets = fontawesome_assets_mod,
         .pdfjs_assets = pdfjs_assets_mod,
+        .math_assets = math_assets_mod,
         .project = project_mod,
         .core = core_mod,
         .render = render_mod,
+        .render_resources = render_resources_mod,
         .pdf_ffi = pdf_ffi_mod,
         .render_text = render_text_mod,
+        .render_math = render_math_mod,
         .render_emitter = render_emitter_mod,
         .pdf_backend = pdf_backend_mod,
     };
@@ -424,16 +455,20 @@ fn addTestStep(
         import("pdf_backend", modules.pdf_backend),
         import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
+        import("render_resources", modules.render_resources),
     }, true);
     const render_test_support_mod = createModule(ctx, "tests/render/support.zig", &.{
         import("core", modules.core),
         import("render", modules.render),
+        import("render_resources", modules.render_resources),
         import("render_text", modules.render_text),
+        import("render_math", modules.render_math),
     }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
         import("pdf_backend", modules.pdf_backend),
         import("pdf_document", render_pdf_document_mod),
         import("render", modules.render),
+        import("render_resources", modules.render_resources),
         import("render_test_support", render_test_support_mod),
     }, true);
     addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
@@ -444,6 +479,7 @@ fn addTestStep(
     render_pdf_test_step.dependOn(&run_render_pdf_spec_tests.step);
     const render_spec_mod = createModule(ctx, "tests/render/ir/spec_tests.zig", &.{
         import("render", modules.render),
+        import("render_resources", modules.render_resources),
         import("render_test_support", render_test_support_mod),
     }, null);
     const render_spec_tests = b.addTest(.{ .root_module = render_spec_mod });
@@ -452,12 +488,17 @@ fn addTestStep(
     const render_test_step = b.step("test-render-ir", "Run focused render IR tests");
     render_test_step.dependOn(&run_render_spec_tests.step);
     const render_html_mod = createModule(ctx, "src/render/html.zig", &.{
+        import("core", modules.core),
         import("render", modules.render),
         import("pdfjs_assets", modules.pdfjs_assets),
+        import("math_assets", modules.math_assets),
     }, null);
     const render_html_spec_mod = createModule(ctx, "tests/render/html/spec_tests.zig", &.{
+        import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
         import("render_html", render_html_mod),
+        import("render_math", modules.render_math),
+        import("render_resources", modules.render_resources),
         import("render_test_support", render_test_support_mod),
     }, null);
     const render_html_spec_tests = b.addTest(.{ .root_module = render_html_spec_mod });
@@ -468,13 +509,16 @@ fn addTestStep(
     const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
         import("core", modules.core),
         import("render", modules.render),
+        import("render_resources", modules.render_resources),
         import("utils", modules.utils),
     }, null);
     const render_compile_spec_mod = createModule(ctx, "tests/render/compile/spec_tests.zig", &.{
         import("ast", modules.ast),
         import("core", modules.core),
+        import("pdf_ffi", modules.pdf_ffi),
         import("render", modules.render),
         import("render_compile", render_compile_mod),
+        import("render_resources", modules.render_resources),
     }, null);
     const render_compile_spec_tests = b.addTest(.{ .root_module = render_compile_spec_mod });
     const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
@@ -524,8 +568,10 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("fontawesome_assets", modules.fontawesome_assets),
         import("pdfjs_assets", modules.pdfjs_assets),
         import("render", modules.render),
+        import("render_resources", modules.render_resources),
         import("pdf_ffi", modules.pdf_ffi),
         import("render_text", modules.render_text),
+        import("render_math", modules.render_math),
         import("render_emitter", modules.render_emitter),
         import("pdf_backend", modules.pdf_backend),
     }, link_libc);
@@ -597,6 +643,7 @@ fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
         "tests/runtime/render_page_bounds_runtime_spec.mjs",
         "tests/runtime/render_cache_runtime_spec.mjs",
         "tests/runtime/render_diagnostics_runtime_spec.mjs",
+        "tests/runtime/render/html/spec.mjs",
         "tests/runtime/stdlib_wrappers_runtime_spec.mjs",
     };
 
