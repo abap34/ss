@@ -11,51 +11,15 @@ pub fn evaluateDocument(ir: *core.Context, graph: *const execution.ExecutionGrap
 }
 
 pub fn solveLayout(ir: *core.Context) !void {
-    var results = try solveLayoutResults(ir);
-    defer results.deinit(ir.allocator);
+    var document = try solveDocument(ir, null, .{});
+    defer document.deinit(ir.allocator);
 }
 
-pub fn solveLayoutResults(ir: *core.Context) !core.LayoutResults {
-    var results = try ir.finalizeWithLayoutResultsAndOptions(null, .{});
-    errdefer results.deinit(ir.allocator);
+pub fn solveDocument(ir: *core.Context, trace_path: ?[]const u8, options: core.layout.graph.SolveOptions) !core.layout.Document {
+    var document = try ir.finalizeDocument(trace_path, options);
+    errdefer document.deinit(ir.allocator);
     try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
-    return results;
-}
-
-pub fn solveLayoutWithOptions(ir: *core.Context, options: core.layout.graph.SolveOptions) !void {
-    var results = try solveLayoutResultsWithOptions(ir, options);
-    defer results.deinit(ir.allocator);
-}
-
-pub fn solveLayoutResultsWithOptions(ir: *core.Context, options: core.layout.graph.SolveOptions) !core.LayoutResults {
-    var results = try ir.finalizeWithLayoutResultsAndOptions(null, options);
-    errdefer results.deinit(ir.allocator);
-    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
-    return results;
-}
-
-pub fn solveLayoutWithTracePath(ir: *core.Context, trace_path: []const u8) !void {
-    var results = try solveLayoutResultsWithTracePath(ir, trace_path);
-    defer results.deinit(ir.allocator);
-}
-
-pub fn solveLayoutResultsWithTracePath(ir: *core.Context, trace_path: []const u8) !core.LayoutResults {
-    var results = try ir.finalizeWithLayoutResultsAndOptions(trace_path, .{});
-    errdefer results.deinit(ir.allocator);
-    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
-    return results;
-}
-
-pub fn solveLayoutWithTracePathAndOptions(ir: *core.Context, trace_path: []const u8, options: core.layout.graph.SolveOptions) !void {
-    var results = try solveLayoutResultsWithTracePathAndOptions(ir, trace_path, options);
-    defer results.deinit(ir.allocator);
-}
-
-pub fn solveLayoutResultsWithTracePathAndOptions(ir: *core.Context, trace_path: []const u8, options: core.layout.graph.SolveOptions) !core.LayoutResults {
-    var results = try ir.finalizeWithLayoutResultsAndOptions(trace_path, options);
-    errdefer results.deinit(ir.allocator);
-    try analysis_index.refreshSolvedFrameHints(ir.allocator, ir);
-    return results;
+    return document;
 }
 
 pub fn scheduleTraceJsonFromGraph(allocator: std.mem.Allocator, ir: *const core.Context, graph: *const execution.ExecutionGraph) ![]u8 {

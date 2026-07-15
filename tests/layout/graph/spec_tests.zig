@@ -1039,7 +1039,7 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
 
     const row_top = @max(left_group_node.frame.y + left_group_node.frame.height, right_group_node.frame.y + right_group_node.frame.height);
     const row_bottom = @min(left_group_node.frame.y, right_group_node.frame.y);
-    try expectFloat(model.PageLayout.height / 2, (row_top + row_bottom) / 2);
+    try expectFloat(core.layout.Defaults.height / 2, (row_top + row_bottom) / 2);
 }
 
 test "layout solver: centered vflow clamps below fixed top components only when needed" {
@@ -1094,7 +1094,7 @@ test "layout solver: document centered vflow is not shadowed by page default pol
     const subtitle_node = ir.getNode(subtitle).?;
     const stack_top = graph.anchorValue(title_node.frame, .top);
     const stack_bottom = graph.anchorValue(subtitle_node.frame, .bottom);
-    try expectFloat(model.PageLayout.height / 2 - 40, (stack_top + stack_bottom) / 2);
+    try expectFloat(core.layout.Defaults.height / 2 - 40, (stack_top + stack_bottom) / 2);
     try testing.expect(graph.anchorValue(title_node.frame, .bottom) > graph.anchorValue(pageno_node.frame, .top));
 }
 
@@ -1128,7 +1128,7 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     const body_center = body_node.frame.y + body_node.frame.height / 2;
     const pipe_center = pipe_node.frame.y + pipe_node.frame.height / 2;
     try expectFloat(body_center, pipe_center);
-    try expectFloat(model.PageLayout.height / 2, body_center);
+    try expectFloat(core.layout.Defaults.height / 2, body_center);
 }
 
 test "layout solver: explicit anchor conflicts and negative frame sizes are rejected" {
@@ -1190,7 +1190,7 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
     const wrapped_node = ir.getNode(wrapped).?;
     const follower_node = ir.getNode(follower).?;
     const style = core.layout.styleForNode(&ir, wrapped_node);
-    const expected_width = model.PageLayout.width - style.default_right_inset - 1100;
+    const expected_width = core.layout.Defaults.width - style.default_right_inset - 1100;
     try expectFloat(expected_width, wrapped_node.frame.width);
     try expectFloat(wrapped_node.frame.x + wrapped_node.frame.width + 20, follower_node.frame.x);
 }
@@ -1326,7 +1326,7 @@ test "layout solver runs page jobs with configured job count" {
     try ir.addAnchorConstraint(second, .top, .{ .page = .top }, -120, "second-top");
 
     var counter = LayoutProgressCounter{};
-    var results = try solver.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{
+    var results = try solver.solveDocument(&ir, null, .{
         .jobs = 2,
         .progress = .{
             .context = &counter,

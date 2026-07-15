@@ -1,4 +1,5 @@
 pub const solver = @import("solver.zig");
+pub const document = @import("document.zig");
 pub const style = @import("style.zig");
 pub const metrics = @import("metrics.zig");
 pub const fallback = @import("fallback.zig");
@@ -7,11 +8,16 @@ pub const graph = @import("graph.zig");
 pub const diagnostics = @import("diagnostics.zig");
 pub const conflicts = @import("conflicts.zig");
 
+pub const Defaults = document.Defaults;
+pub const ObjectFrame = document.ObjectFrame;
+pub const Page = document.Page;
+pub const Document = document.Document;
+
 pub const solveLayout = solver.solveLayout;
 pub const solveLayoutWithTracePath = solver.solveLayoutWithTracePath;
 pub const solveLayoutWithTracePathAndOptions = solver.solveLayoutWithTracePathAndOptions;
-pub const solveLayoutResultsWithTracePathAndOptions = solver.solveLayoutResultsWithTracePathAndOptions;
-pub const applyLayoutResults = solver.applyLayoutResults;
+pub const solveDocument = solver.solveDocument;
+pub const applyDocument = solver.applyDocument;
 pub const styleForNode = style.styleForNode;
 pub const intrinsicWidth = metrics.intrinsicWidth;
 pub const intrinsicHeight = metrics.intrinsicHeight;

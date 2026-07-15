@@ -11,7 +11,7 @@ const Axis = model.Axis;
 const AxisState = model.AxisState;
 const Constraint = model.Constraint;
 const ConstraintSource = model.ConstraintSource;
-const PageLayout = model.PageLayout;
+const Defaults = @import("document.zig").Defaults;
 
 const VerticalFallbackPolicy = enum {
     top_flow,
@@ -168,8 +168,8 @@ fn buildTopFlowVerticalFallbackConstraints(ir: anytype, workspace: *const graph.
     @memset(seen, false);
 
     var current_source: ConstraintSource = .{ .page = .top };
-    var current_offset: f32 = PageLayout.flow_top - PageLayout.height;
-    var current_top_value: f32 = PageLayout.flow_top;
+    var current_offset: f32 = Defaults.flow_top - Defaults.height;
+    var current_top_value: f32 = Defaults.flow_top;
 
     for (seeded.workspace.graph.child_ids, seeded.workspace.states, 0..) |child_id, state, index| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
@@ -297,7 +297,7 @@ fn seededWorkspaceWithSoftConstraints(
 }
 
 fn centerStackTopWithinBand(band: VerticalBand, total_height: f32, center_offset: f32) f32 {
-    var top = PageLayout.height / 2 - center_offset + total_height / 2;
+    var top = Defaults.height / 2 - center_offset + total_height / 2;
     if (band.top <= band.bottom) return top;
 
     const band_height = band.top - band.bottom;
@@ -313,7 +313,7 @@ fn centerStackAvailableBand(
     workspace: *const graph.AxisWorkspace,
     components: *const graph.ComponentSet,
 ) !VerticalBand {
-    var band = VerticalBand{ .bottom = 0, .top = PageLayout.height };
+    var band = VerticalBand{ .bottom = 0, .top = Defaults.height };
     var seen = try ir.allocator.alloc(bool, workspace.graph.len());
     defer ir.allocator.free(seen);
     @memset(seen, false);
@@ -326,14 +326,14 @@ fn centerStackAvailableBand(
 
         const bounds = try componentVerticalBounds(ir, workspace, components, root) orelse continue;
         const center = (bounds.bottom + bounds.top) / 2;
-        if (center >= PageLayout.height / 2) {
+        if (center >= Defaults.height / 2) {
             band.top = @min(band.top, bounds.bottom - bounds.spacing_after);
         } else {
             band.bottom = @max(band.bottom, bounds.top + bounds.spacing_after);
         }
     }
 
-    if (band.top <= band.bottom) return .{ .bottom = 0, .top = PageLayout.height };
+    if (band.top <= band.bottom) return .{ .bottom = 0, .top = Defaults.height };
     return band;
 }
 
@@ -877,7 +877,7 @@ fn absoluteFallbackTargetAnchor(axis: Axis) model.Anchor {
 fn absoluteFallbackOffset(ir: anytype, node: *const model.Node, axis: Axis) f32 {
     return switch (axis) {
         .horizontal => style_defaults.styleForNode(ir, node).default_x,
-        .vertical => PageLayout.flow_top - PageLayout.height,
+        .vertical => Defaults.flow_top - Defaults.height,
     };
 }
 
