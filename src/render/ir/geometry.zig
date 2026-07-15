@@ -25,6 +25,14 @@ pub const Rect = struct {
             std.math.isFinite(self.height) and
             self.width >= 0 and self.height >= 0;
     }
+
+    pub fn unioned(self: Rect, other: Rect) Rect {
+        const left = @min(self.x, other.x);
+        const top = @min(self.y, other.y);
+        const right = @max(self.x + self.width, other.x + other.width);
+        const bottom = @max(self.y + self.height, other.y + other.height);
+        return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
+    }
 };
 
 pub const Transform = struct {
