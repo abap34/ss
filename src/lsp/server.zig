@@ -22,21 +22,20 @@ const feature_layout = @import("features/layout.zig");
 const feature_project = @import("features/project.zig");
 const feature_symbols = @import("features/symbols.zig");
 const feature_tokens = @import("features/tokens.zig");
+const transport = @import("transport.zig");
 
 const JsonValue = protocol.JsonValue;
 const AnalysisSnapshot = lsp_state.AnalysisSnapshot;
 const DocumentStore = lsp_state.DocumentStore;
 const ResponseStore = lsp_state.ResponseStore;
 const DiagnosticSet = lsp_diagnostics.DiagnosticSet;
-const max_poll_timeout_ms = std.math.maxInt(i32);
-
-const readMessage = protocol.readMessage;
 const respond = protocol.respond;
 const respondError = protocol.respondError;
 const sendNotification = protocol.sendNotification;
 const appendJsonValue = protocol.appendJsonValue;
 const appendJsonString = protocol.appendJsonString;
 const stringField = protocol.stringField;
+const intField = protocol.intField;
 const objectField = protocol.objectField;
 const arrayField = protocol.arrayField;
 const uriFromPath = protocol.uriFromPath;
@@ -44,6 +43,7 @@ const uriFromPath = protocol.uriFromPath;
 const Server = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
+    ingress: *transport.Ingress,
     documents: DocumentStore,
     analysis: ?AnalysisSnapshot = null,
     layout_responses: ResponseStore = .{},
@@ -51,13 +51,17 @@ const Server = struct {
     published_diagnostic_uris: std.StringHashMap(void),
     pending_rebuild_path: ?[]u8 = null,
     pending_rebuild_due_ms: u64 = 0,
-    shutdown: bool = false,
+    pending_rebuild_revision: u64 = 0,
+    active_revision: u64 = 0,
+    active_request: ?*const transport.RequestState = null,
+    exiting: bool = false,
     wysiwyg_paths: std.StringHashMap(void),
 
-    fn init(io: std.Io, allocator: std.mem.Allocator) Server {
+    fn init(io: std.Io, allocator: std.mem.Allocator, ingress: *transport.Ingress) Server {
         return .{
             .io = io,
             .allocator = allocator,
+            .ingress = ingress,
             .documents = DocumentStore.init(allocator),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
             .wysiwyg_paths = std.StringHashMap(void).init(allocator),
@@ -75,18 +79,15 @@ const Server = struct {
     }
 
     fn rebuild(self: *Server, changed_path: []const u8) !void {
-        if (self.analysis) |*old| old.deinit();
-        self.analysis = null;
-
+        try self.checkCanceled();
         var diagnostics = DiagnosticSet.init(self.allocator);
         defer diagnostics.deinit();
         const rebuild_generation = self.documents.generation;
         var snapshot = try self.buildAnalysis(changed_path, &diagnostics);
         errdefer snapshot.deinit();
-        if (snapshot.generation != self.documents.generation or rebuild_generation != self.documents.generation) {
-            snapshot.deinit();
-            return;
-        }
+        try self.checkCanceled();
+        if (snapshot.generation != self.documents.generation or rebuild_generation != self.documents.generation) return error.Canceled;
+        if (self.analysis) |*old| old.deinit();
         self.analysis = snapshot;
         if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) {
             try self.publishDiagnostics(&diagnostics);
@@ -113,13 +114,24 @@ const Server = struct {
         self.clearPendingRebuild();
         self.pending_rebuild_path = owned_path;
         self.pending_rebuild_due_ms = saturatedAddMillis(monotonicMillis(), delay_ms);
+        self.pending_rebuild_revision = self.active_revision;
     }
 
     fn flushPendingRebuild(self: *Server) !void {
         const path = self.pending_rebuild_path orelse return;
+        const revision = self.pending_rebuild_revision;
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
+        self.pending_rebuild_revision = 0;
         defer self.allocator.free(path);
+        const previous_revision = self.active_revision;
+        const previous_request = self.active_request;
+        self.active_revision = revision;
+        if (previous_revision != revision) self.active_request = null;
+        defer {
+            self.active_revision = previous_revision;
+            self.active_request = previous_request;
+        }
         try self.rebuild(path);
     }
 
@@ -129,12 +141,11 @@ const Server = struct {
         try self.flushPendingRebuild();
     }
 
-    fn pendingRebuildPollTimeout(self: *const Server) ?i32 {
+    fn pendingRebuildPollTimeout(self: *const Server) ?u64 {
         if (self.pending_rebuild_path == null) return null;
         const now = monotonicMillis();
         if (now >= self.pending_rebuild_due_ms) return 0;
-        const delta = self.pending_rebuild_due_ms - now;
-        return @intCast(@min(delta, @as(u64, @intCast(max_poll_timeout_ms))));
+        return self.pending_rebuild_due_ms - now;
     }
 
     fn lspDebounceMs(self: *const Server) u64 {
@@ -145,6 +156,40 @@ const Server = struct {
         if (self.pending_rebuild_path) |path| self.allocator.free(path);
         self.pending_rebuild_path = null;
         self.pending_rebuild_due_ms = 0;
+        self.pending_rebuild_revision = 0;
+    }
+
+    const WorkStatus = enum {
+        current,
+        canceled,
+        content_modified,
+    };
+
+    fn workStatus(self: *const Server) WorkStatus {
+        if (self.active_request) |request| {
+            if (request.canceled.load(.acquire)) return .canceled;
+        }
+        if (self.active_revision != self.ingress.revision.load(.acquire)) return .content_modified;
+        return .current;
+    }
+
+    fn checkCanceled(self: *const Server) !void {
+        if (self.workStatus() != .current) return error.Canceled;
+    }
+
+    fn respondResult(self: *Server, id: ?JsonValue, result_json: []const u8) !void {
+        switch (self.workStatus()) {
+            .current => try respond(self.allocator, id, result_json),
+            .canceled => try respondError(self.allocator, id, -32800, "request cancelled"),
+            .content_modified => try respondError(self.allocator, id, -32801, "content modified"),
+        }
+    }
+
+    fn respondCanceled(self: *Server, id_json: []const u8) !void {
+        switch (self.workStatus()) {
+            .current, .canceled => try protocol.respondErrorId(self.allocator, id_json, -32800, "request cancelled"),
+            .content_modified => try protocol.respondErrorId(self.allocator, id_json, -32801, "content modified"),
+        }
     }
 
     fn buildAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !AnalysisSnapshot {
@@ -163,12 +208,14 @@ const Server = struct {
         source_override: ?SourceOverride,
         include_editor_snapshot: bool,
     ) !AnalysisSnapshot {
+        try self.checkCanceled();
         const changed_abs = try project.absolutePath(self.allocator, changed_path);
         defer self.allocator.free(changed_abs);
         const changed_dir = std.fs.path.dirname(changed_abs) orelse ".";
 
         const project_path = try project.discoverPath(self.allocator, changed_dir);
         defer if (project_path) |path| self.allocator.free(path);
+        try self.checkCanceled();
 
         var config: ?project.Config = null;
         if (project_path) |path| {
@@ -178,6 +225,7 @@ const Server = struct {
             };
         }
         defer if (config) |*cfg| cfg.deinit(self.allocator);
+        try self.checkCanceled();
         const entry_path = if (config) |cfg| try self.allocator.dupe(u8, cfg.entry) else try self.allocator.dupe(u8, changed_abs);
         defer self.allocator.free(entry_path);
         const asset_base_dir = if (config) |cfg| try self.allocator.dupe(u8, cfg.asset_base_dir) else try dirnameAlloc(self.allocator, entry_path);
@@ -187,6 +235,7 @@ const Server = struct {
         defer sources.deinit();
         try self.documents.fillOverlay(&sources.overlay);
         if (source_override) |override| try sources.put(override.path, override.source);
+        try self.checkCanceled();
 
         var layout_context = AnalysisLayoutContext{
             .server = self,
@@ -205,6 +254,10 @@ const Server = struct {
                 .run = runAnalysisLayout,
                 .on_error = addAnalysisLayoutError,
             },
+            .cancellation = .{
+                .context = self,
+                .is_canceled = analysisCanceled,
+            },
         });
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
@@ -212,6 +265,7 @@ const Server = struct {
     }
 
     fn buildSingleDocumentAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !AnalysisSnapshot {
+        try self.checkCanceled();
         const entry_path = try project.absolutePath(self.allocator, changed_path);
         defer self.allocator.free(entry_path);
         const asset_base_dir = try dirnameAlloc(self.allocator, entry_path);
@@ -223,6 +277,10 @@ const Server = struct {
 
         var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
+            .cancellation = .{
+                .context = self,
+                .is_canceled = analysisCanceled,
+            },
         });
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
@@ -242,6 +300,7 @@ const Server = struct {
     }
 
     fn publishDiagnostics(self: *Server, diagnostics: *DiagnosticSet) !void {
+        try self.checkCanceled();
         var grouped = std.StringHashMap(std.ArrayList(usize)).init(self.allocator);
         defer {
             var it = grouped.iterator();
@@ -260,10 +319,15 @@ const Server = struct {
 
         var it = grouped.iterator();
         while (it.next()) |entry| {
+            try self.checkCanceled();
             var body = std.ArrayList(u8).empty;
             defer body.deinit(self.allocator);
             try body.appendSlice(self.allocator, "{\"uri\":");
             try appendJsonString(self.allocator, &body, entry.key_ptr.*);
+            if (self.documents.versionForUri(entry.key_ptr.*)) |version| {
+                try body.appendSlice(self.allocator, ",\"version\":");
+                try protocol.appendInt(self.allocator, &body, version);
+            }
             try body.appendSlice(self.allocator, ",\"diagnostics\":[");
             for (entry.value_ptr.items, 0..) |diag_index, i| {
                 if (i != 0) try body.append(self.allocator, ',');
@@ -276,6 +340,7 @@ const Server = struct {
 
         var doc_iterator = self.documents.iterator();
         while (doc_iterator.next()) |entry| {
+            try self.checkCanceled();
             const uri = try uriFromPath(self.allocator, entry.key_ptr.*);
             defer self.allocator.free(uri);
             if (current_published.contains(uri)) continue;
@@ -283,6 +348,10 @@ const Server = struct {
             defer body.deinit(self.allocator);
             try body.appendSlice(self.allocator, "{\"uri\":");
             try appendJsonString(self.allocator, &body, uri);
+            if (self.documents.versionForPath(entry.key_ptr.*)) |version| {
+                try body.appendSlice(self.allocator, ",\"version\":");
+                try protocol.appendInt(self.allocator, &body, version);
+            }
             try body.appendSlice(self.allocator, ",\"diagnostics\":[]}");
             try sendNotification(self.allocator, "textDocument/publishDiagnostics", body.items);
             try putStringSet(self.allocator, &current_published, uri);
@@ -290,6 +359,7 @@ const Server = struct {
 
         var previous_iterator = self.published_diagnostic_uris.iterator();
         while (previous_iterator.next()) |entry| {
+            try self.checkCanceled();
             if (current_published.contains(entry.key_ptr.*)) continue;
             var body = std.ArrayList(u8).empty;
             defer body.deinit(self.allocator);
@@ -309,8 +379,17 @@ fn analysisProvider(server: *Server) lsp_state.AnalysisProvider {
         .context = server,
         .current = if (server.analysis) |*snapshot| snapshot else null,
         .generation = server.documents.generation,
+        .cancellation = .{
+            .context = server,
+            .is_canceled = analysisCanceled,
+        },
         .build = buildAnalysisForFeature,
     };
+}
+
+fn analysisCanceled(context: *const anyopaque) bool {
+    const server: *const Server = @ptrCast(@alignCast(context));
+    return server.workStatus() != .current;
 }
 
 fn buildAnalysisForFeature(context: *anyopaque, path: []const u8) !AnalysisSnapshot {
@@ -334,6 +413,7 @@ fn validateLayoutEdit(
     expected_height: f64,
 ) !bool {
     const server: *Server = @ptrCast(@alignCast(context));
+    try server.checkCanceled();
     var diagnostics = DiagnosticSet.init(server.allocator);
     defer diagnostics.deinit();
     var snapshot = server.buildAnalysisWithOverride(path, &diagnostics, .{
@@ -385,12 +465,15 @@ const AnalysisLayoutContext = struct {
 
 fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
+    try hook.server.checkCanceled();
     var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph);
     defer pages.deinit(state.allocator);
+    try hook.server.checkCanceled();
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
 
     var render_ir = try render_pdf.compileRenderIr(state.allocator, hook.server.io, state, &pages, .{});
     defer render_ir.deinit(state.allocator);
+    try hook.server.checkCanceled();
     return .{ .editor_json = try editor_snapshot.toJson(state.allocator, state, &render_ir, hook.server.documents.generation) };
 }
 
@@ -406,29 +489,78 @@ fn putStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void), val
     try set.put(owned, {});
 }
 
+const Worker = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    ingress: *transport.Ingress,
+    failure: ?anyerror = null,
+};
+
 pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
-    var server = Server.init(io, allocator);
+    var ingress: transport.Ingress = undefined;
+    ingress.init(allocator, io);
+    defer ingress.deinit();
+
+    var worker = Worker{
+        .io = io,
+        .allocator = allocator,
+        .ingress = &ingress,
+    };
+    const thread = try std.Thread.spawn(.{}, workerMain, .{&worker});
+    ingress.read();
+    thread.join();
+
+    if (worker.failure) |err| return err;
+    if (ingress.readFailed()) return error.ReadFailed;
+}
+
+fn workerMain(worker: *Worker) void {
+    runWorker(worker.io, worker.allocator, worker.ingress) catch |err| {
+        worker.failure = err;
+    };
+}
+
+fn runWorker(io: std.Io, allocator: std.mem.Allocator, ingress: *transport.Ingress) !void {
+    var server = Server.init(io, allocator, ingress);
     defer server.deinit();
 
-    while (!server.shutdown) {
-        try server.flushPendingRebuildIfDue();
-        const stdin_ready = try waitForStdin(server.pendingRebuildPollTimeout());
-        if (!stdin_ready) {
-            try server.flushPendingRebuild();
+    while (!server.exiting) {
+        server.flushPendingRebuildIfDue() catch |err| switch (err) {
+            error.Canceled => {},
+            else => return err,
+        };
+
+        const envelope = try ingress.next(server.pendingRebuildPollTimeout());
+        if (envelope) |value| {
+            try processEnvelope(&server, value);
             continue;
         }
-        const message = try readMessage(allocator);
-        const body = message orelse break;
-        defer allocator.free(body);
-        try handleMessage(&server, body);
+        if (ingress.isFinished()) break;
     }
 }
 
-fn handleMessage(server: *Server, body: []const u8) !void {
-    var parsed = utils.json.parseValue(server.allocator, body, .{}) catch return;
-    defer parsed.deinit();
-    if (parsed.value != .object) return;
-    const root = parsed.value.object;
+fn processEnvelope(server: *Server, value: transport.Envelope) !void {
+    var envelope = value;
+    defer envelope.deinit(server.ingress);
+
+    server.active_revision = envelope.revision;
+    server.active_request = if (envelope.request) |request| request.state else null;
+    defer {
+        server.active_revision = server.ingress.revision.load(.acquire);
+        server.active_request = null;
+    }
+
+    handleMessage(server, &envelope.message.value) catch |err| switch (err) {
+        error.Canceled => {
+            if (envelope.request) |request| try server.respondCanceled(request.key);
+        },
+        else => return err,
+    };
+}
+
+fn handleMessage(server: *Server, message: *const JsonValue) !void {
+    if (message.* != .object) return;
+    const root = message.object;
     const method = stringField(&root, "method") orelse return;
     const id = if (utils.json.fieldValue(&root, "id")) |value| value.* else null;
     const params = if (utils.json.fieldValue(&root, "params")) |value| value.* else null;
@@ -440,19 +572,18 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "shutdown")) {
-        server.shutdown = true;
         try respond(server.allocator, id, "null");
         return;
     }
     if (std.mem.eql(u8, method, "exit")) {
-        server.shutdown = true;
+        server.exiting = true;
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/didOpen")) {
         if (params) |p| if (objectField(p, "textDocument")) |doc| {
             if (stringField(doc, "uri")) |uri| {
                 const text = stringField(doc, "text") orelse "";
-                const path = try server.documents.replaceUri(uri, text);
+                const path = try server.documents.replaceUri(uri, text, intField(doc, "version"));
                 defer server.allocator.free(path);
                 try server.rebuildImmediately(path);
             }
@@ -468,6 +599,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
                     for (changes.items) |*change| {
                         if (change.* == .object) try server.documents.applyChangeAtPath(path, &change.object);
                     }
+                    if (intField(doc, "version")) |version| try server.documents.setVersionAtPath(path, version);
                     try server.scheduleRebuild(path);
                 };
             }
@@ -501,6 +633,8 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
 
+    if (id != null) try server.checkCanceled();
+
     if (std.mem.eql(u8, method, "textDocument/completion")) {
         var provider = analysisProvider(server);
         var ctx = feature_completion.Context{
@@ -510,7 +644,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_completion.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/hover")) {
@@ -522,7 +656,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_hover.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/definition")) {
@@ -534,7 +668,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_definition.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
@@ -545,7 +679,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_inlay.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
@@ -556,7 +690,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_symbols.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
@@ -567,7 +701,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_folding.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
@@ -579,7 +713,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_tokens.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/documentColor")) {
@@ -591,7 +725,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_colors.documentColorsResult(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/colorPresentation")) {
@@ -603,7 +737,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_colors.colorPresentationResult(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/projectInfo")) {
@@ -614,7 +748,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_project.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/layoutConflicts")) {
@@ -628,7 +762,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_layout.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/editorSnapshot")) {
@@ -651,7 +785,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_editor.snapshotResult(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
     if (std.mem.eql(u8, method, "ss/editorClose")) {
@@ -675,10 +809,14 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         };
         const result = try feature_edit.result(&ctx, params);
         defer server.allocator.free(result);
-        try respond(server.allocator, id, result);
+        try server.respondResult(id, result);
         return;
     }
-    if (id != null) try respondError(server.allocator, id, -32601, "method not found");
+    if (id != null) switch (server.workStatus()) {
+        .current => try respondError(server.allocator, id, -32601, "method not found"),
+        .canceled => try respondError(server.allocator, id, -32800, "request cancelled"),
+        .content_modified => try respondError(server.allocator, id, -32801, "content modified"),
+    };
 }
 
 const initializeResultPrefix =
@@ -692,18 +830,6 @@ fn initializeResult(allocator: std.mem.Allocator) ![]const u8 {
     try appendJsonString(allocator, &out, build_options.version);
     try out.appendSlice(allocator, "}}");
     return out.toOwnedSlice(allocator);
-}
-
-fn waitForStdin(timeout_ms: ?i32) !bool {
-    var fds = [_]std.posix.pollfd{.{
-        .fd = 0,
-        .events = @as(i16, std.posix.POLL.IN),
-        .revents = 0,
-    }};
-    const ready = try std.posix.poll(fds[0..], timeout_ms orelse -1);
-    if (ready == 0) return false;
-    const terminal_events = @as(i16, std.posix.POLL.HUP) | @as(i16, std.posix.POLL.ERR) | @as(i16, std.posix.POLL.NVAL);
-    return (fds[0].revents & (@as(i16, std.posix.POLL.IN) | terminal_events)) != 0;
 }
 
 fn monotonicMillis() u64 {

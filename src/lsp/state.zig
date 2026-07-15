@@ -14,12 +14,14 @@ pub const AnalysisSnapshot = analysis_snapshot.AnalysisSnapshot;
 pub const DocumentStore = struct {
     allocator: std.mem.Allocator,
     items: std.StringHashMap([]u8),
+    versions: std.StringHashMap(i64),
     generation: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator) DocumentStore {
         return .{
             .allocator = allocator,
             .items = std.StringHashMap([]u8).init(allocator),
+            .versions = std.StringHashMap(i64).init(allocator),
         };
     }
 
@@ -30,12 +32,16 @@ pub const DocumentStore = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.items.deinit();
+        var version_iterator = self.versions.iterator();
+        while (version_iterator.next()) |entry| self.allocator.free(entry.key_ptr.*);
+        self.versions.deinit();
     }
 
-    pub fn replaceUri(self: *DocumentStore, uri: []const u8, text: []const u8) ![]u8 {
+    pub fn replaceUri(self: *DocumentStore, uri: []const u8, text: []const u8, version: ?i64) ![]u8 {
         const path = try self.absolutePathFromUri(uri);
         errdefer self.allocator.free(path);
         try self.replacePath(path, text);
+        if (version) |value| try self.setVersionAtPath(path, value);
         return path;
     }
 
@@ -78,6 +84,7 @@ pub const DocumentStore = struct {
             self.allocator.free(entry.value);
             self.generation += 1;
         }
+        if (self.versions.fetchRemove(path)) |entry| self.allocator.free(entry.key);
         return path;
     }
 
@@ -92,6 +99,28 @@ pub const DocumentStore = struct {
         while (it.next()) |entry| {
             try overlay.put(entry.key_ptr.*, entry.value_ptr.*);
         }
+    }
+
+    pub fn setVersionAtPath(self: *DocumentStore, path: []const u8, version: i64) !void {
+        if (self.versions.getPtr(path)) |current| {
+            current.* = version;
+            return;
+        }
+        const owned_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(owned_path);
+        try self.versions.put(owned_path, version);
+    }
+
+    pub fn versionForPath(self: *const DocumentStore, path: []const u8) ?i64 {
+        const absolute = project.absolutePath(self.allocator, path) catch return null;
+        defer self.allocator.free(absolute);
+        return self.versions.get(absolute);
+    }
+
+    pub fn versionForUri(self: *const DocumentStore, uri: []const u8) ?i64 {
+        const path = protocol.pathFromUri(self.allocator, uri) catch return null;
+        defer self.allocator.free(path);
+        return self.versionForPath(path);
     }
 
     pub fn iterator(self: *DocumentStore) std.StringHashMap([]u8).Iterator {
@@ -227,6 +256,7 @@ pub const AnalysisProvider = struct {
     context: *anyopaque,
     current: ?*AnalysisSnapshot,
     generation: u64,
+    cancellation: ?analysis_snapshot.Cancellation = null,
     build: *const fn (context: *anyopaque, path: []const u8) anyerror!AnalysisSnapshot,
 
     pub fn forDocument(self: *AnalysisProvider, doc_path: []const u8, owned_snapshot: *?AnalysisSnapshot) !?*AnalysisSnapshot {

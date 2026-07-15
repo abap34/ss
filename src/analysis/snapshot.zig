@@ -4,6 +4,7 @@ const core = @import("core");
 const project = @import("../project.zig");
 
 const diagnostics = @import("diagnostics.zig");
+const cancellation_module = @import("cancellation.zig");
 const hole_facts = @import("hole_facts.zig");
 const declarations = @import("../language/declarations.zig");
 const registry = @import("../language/registry.zig");
@@ -30,6 +31,7 @@ pub const DefinitionTarget = query_types.DefinitionTarget;
 pub const CompletionCandidate = query_types.CompletionCandidate;
 pub const CompletionKind = query_types.CompletionKind;
 pub const CompletionResult = query_types.CompletionResult;
+pub const Cancellation = cancellation_module.Cancellation;
 
 pub const SourceSet = struct {
     allocator: std.mem.Allocator,
@@ -72,6 +74,11 @@ pub const Options = struct {
     generation: u64 = 0,
     project: ProjectOptions = .{},
     layout_hook: ?LayoutHook = null,
+    cancellation: ?Cancellation = null,
+
+    fn checkCanceled(self: Options) !void {
+        if (self.cancellation) |cancellation| try cancellation.check();
+    }
 };
 
 pub const ProjectFacts = struct {
@@ -386,6 +393,7 @@ pub fn build(
     asset_base_dir: []const u8,
     options: Options,
 ) !AnalysisSnapshot {
+    try options.checkCanceled();
     var diagnostic_bag = diagnostics.DiagnosticBag.init(allocator);
     var diagnostics_moved = false;
     defer if (!diagnostics_moved) diagnostic_bag.deinit();
@@ -395,6 +403,10 @@ pub fn build(
     var entry_source = sources.readFileAlloc(entry_path) catch |err| {
         try addBuildDiagnostic(&diagnostic_bag, entry_path, "", .@"error", "ProjectReadFailed", "ProjectReadFailed: could not read {s}: {s}", .{ entry_path, @errorName(err) }, null);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
+    };
+    options.checkCanceled() catch |err| {
+        allocator.free(entry_source);
+        return err;
     };
 
     const parse_result = syntax.parseRecoveringWithSourceName(allocator, entry_source, entry_path) catch |err| {
@@ -413,6 +425,12 @@ pub fn build(
     };
     var program = parse_result.module;
     var parse_holes = parse_result.holes;
+    options.checkCanceled() catch |err| {
+        program.deinit(allocator);
+        parse_holes.deinit(allocator);
+        allocator.free(entry_source);
+        return err;
+    };
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
@@ -445,6 +463,12 @@ pub fn build(
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
     defer index.deinit();
+    options.checkCanceled() catch |err| {
+        program.deinit(allocator);
+        parse_holes.deinit(allocator);
+        allocator.free(entry_source);
+        return err;
+    };
 
     var state = document_state_analysis.buildDocumentStateWithOptions(allocator, entry_path, asset_base_dir, &entry_source, &program, &index, .{
         .allow_diagnostics = true,
@@ -458,18 +482,24 @@ pub fn build(
     };
     defer parse_holes.deinit(allocator);
     defer state.deinit();
+    try options.checkCanceled();
 
     var execution_graph = document_state_analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch null;
     defer if (execution_graph) |*graph| graph.deinit();
+    try options.checkCanceled();
     try hole_facts.populateExpectedTypes(allocator, &state, &parse_holes);
+    try options.checkCanceled();
     try diagnostic_bag.addDocumentState(&state);
+    try options.checkCanceled();
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout_hook) |hook| {
             if (execution_graph) |*graph| {
+                try options.checkCanceled();
                 if (hook.run(hook.context, &state, graph)) |result| {
                     layout_output = try LayoutOutput.fromDocumentState(allocator, &state, result.editor_json);
                     try diagnostic_bag.addDocumentState(&state);
                 } else |err| switch (err) {
+                    error.Canceled => return error.Canceled,
                     error.ConstraintConflict,
                     error.NegativeFrameSize,
                     => {
@@ -492,8 +522,10 @@ pub fn build(
             }
         }
     }
+    try options.checkCanceled();
 
     const module_paths = try collectModulePaths(allocator, &state);
+    try options.checkCanceled();
     const project_facts = try initProjectFacts(allocator, entry_path, asset_base_dir, module_paths, options.project);
     diagnostics_moved = true;
     var snapshot = try AnalysisSnapshot.fromDocumentState(allocator, &state, diagnostic_bag, &parse_holes, project_facts);

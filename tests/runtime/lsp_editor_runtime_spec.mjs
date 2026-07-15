@@ -754,6 +754,7 @@ end
         message.params.diagnostics.length === 0,
         `debounced diagnostics used an intermediate source: ${JSON.stringify(message.params.diagnostics)}`,
       );
+      assert(message.params.version === 3, `debounced diagnostics used version ${message.params.version} instead of 3`);
     });
   } finally {
     await rm(project, { recursive: true, force: true });

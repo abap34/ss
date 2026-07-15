@@ -28,7 +28,10 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
             .source = pos.source,
             .offset = pos.offset,
             .source_version = snapshot.generation,
-        }, .{ .budget_ms = query_budget.completion_ms });
+        }, .{
+            .budget_ms = query_budget.completion_ms,
+            .cancellation = ctx.provider.cancellation,
+        });
         defer completion_result.deinit(ctx.allocator);
         for (completion_result.items) |item| try builder.addCandidate(item);
     }

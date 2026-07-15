@@ -94,10 +94,17 @@ pub fn respond(allocator: std.mem.Allocator, id: ?JsonValue, result_json: []cons
 }
 
 pub fn respondError(allocator: std.mem.Allocator, id: ?JsonValue, code: i64, message: []const u8) !void {
+    var id_json = std.ArrayList(u8).empty;
+    defer id_json.deinit(allocator);
+    try appendJsonValue(allocator, &id_json, id orelse .null);
+    try respondErrorId(allocator, id_json.items, code, message);
+}
+
+pub fn respondErrorId(allocator: std.mem.Allocator, id_json: []const u8, code: i64, message: []const u8) !void {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     try out.appendSlice(allocator, "{\"jsonrpc\":\"2.0\",\"id\":");
-    try appendJsonValue(allocator, &out, id orelse .null);
+    try out.appendSlice(allocator, id_json);
     try out.appendSlice(allocator, ",\"error\":{\"code\":");
     try appendInt(allocator, &out, code);
     try out.appendSlice(allocator, ",\"message\":");
