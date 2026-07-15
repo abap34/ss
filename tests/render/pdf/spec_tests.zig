@@ -1,5 +1,6 @@
 const std = @import("std");
 const pdf_backend = @import("pdf_backend");
+const render = @import("render");
 
 const c = @cImport({
     @cInclude("backend.h");
@@ -127,7 +128,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/page-composed.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
 
-    var source = pdf_backend.Page{
+    var source = render.Page{
         .page_id = 1,
         .index = 0,
         .width = 320,
@@ -151,7 +152,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     try source.appendLink(allocator, .uri, "https://example.com/page", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
     try pdf_backend.render(allocator, testing.io, &source, source_path);
 
-    var composed = pdf_backend.Page{
+    var composed = render.Page{
         .page_id = 2,
         .index = 0,
         .width = 320,
