@@ -119,7 +119,7 @@ const Activation = struct {
 
 const Analyzer = struct {
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: SemanticEnv,
     states: std.StringHashMap(u8),
     returns: std.StringHashMap(LabelSet),
@@ -127,7 +127,7 @@ const Analyzer = struct {
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
 
-    fn init(allocator: std.mem.Allocator, ir: *core.Ir, sema: *const SemanticEnv) Analyzer {
+    fn init(allocator: std.mem.Allocator, ir: *core.Context, sema: *const SemanticEnv) Analyzer {
         return .{
             .allocator = allocator,
             .ir = ir,
@@ -538,7 +538,7 @@ const Analyzer = struct {
 
 pub fn checkFunctionCallGraph(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
 ) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -548,14 +548,14 @@ pub fn checkFunctionCallGraph(
     try analyzer.checkAll();
 }
 
-fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Ir, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
+fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Context, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
     const origin = try functionOrigin(allocator, ir, module_id, func);
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .recursive_function = .{ .function_name = func.name },
     });
 }
 
-fn activationOrigin(allocator: std.mem.Allocator, ir: *const core.Ir, activation: Activation) !?[]const u8 {
+fn activationOrigin(allocator: std.mem.Allocator, ir: *const core.Context, activation: Activation) !?[]const u8 {
     return switch (activation.label) {
         .function => |key| if (ir.functions.get(key)) |func|
             try originForModuleSpan(allocator, ir, key.module_id, func.span)
@@ -565,11 +565,11 @@ fn activationOrigin(allocator: std.mem.Allocator, ir: *const core.Ir, activation
     };
 }
 
-fn functionOrigin(allocator: std.mem.Allocator, ir: *const core.Ir, module_id: core.SourceModuleId, func: ast.FunctionDecl) ![]const u8 {
+fn functionOrigin(allocator: std.mem.Allocator, ir: *const core.Context, module_id: core.SourceModuleId, func: ast.FunctionDecl) ![]const u8 {
     return originForModuleSpan(allocator, ir, module_id, func.span);
 }
 
-fn originForModuleSpan(allocator: std.mem.Allocator, ir: *const core.Ir, module_id: core.SourceModuleId, span: ast.Span) ![]const u8 {
+fn originForModuleSpan(allocator: std.mem.Allocator, ir: *const core.Context, module_id: core.SourceModuleId, span: ast.Span) ![]const u8 {
     if (ir.moduleById(module_id)) |module| {
         const path = module.path orelse module.spec;
         if (path.len != 0) return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });

@@ -29,13 +29,13 @@ pub const FunctionResolution = name_resolution.Resolution(ResolvedFunction);
 pub const ConstResolution = name_resolution.Resolution(ResolvedConst);
 
 pub const SemanticEnv = struct {
-    ir: ?*const core.Ir,
+    ir: ?*const core.Context,
     declarations: ?*const declarations.DeclarationIndex,
     functions: *const core.FunctionMap,
     module_id: core.SourceModuleId = 0,
 
     pub fn init(
-        ir: ?*const core.Ir,
+        ir: ?*const core.Context,
         declaration_index: ?*const declarations.DeclarationIndex,
         functions: *const core.FunctionMap,
     ) SemanticEnv {
@@ -494,7 +494,7 @@ fn resolveTypeInModule(
     return null;
 }
 
-fn findTypeDescriptor(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
+fn findTypeDescriptor(ir: *const core.Context, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
     if (findTypeInModule(ir, module_id, name)) |descriptor| return descriptor;
     var index = ir.module_order.items.len;
     while (index > 0) {
@@ -506,7 +506,7 @@ fn findTypeDescriptor(ir: *const core.Ir, module_id: core.SourceModuleId, name: 
     return null;
 }
 
-fn findTypeInModule(ir: *const core.Ir, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
+fn findTypeInModule(ir: *const core.Context, module_id: core.SourceModuleId, name: []const u8) ?declarations.TypeDescriptor {
     const module = ir.moduleById(module_id) orelse return null;
     for (module.syntax.types.items) |decl| {
         if (!std.mem.eql(u8, decl.name, name)) continue;

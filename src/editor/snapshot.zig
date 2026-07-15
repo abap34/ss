@@ -9,7 +9,7 @@ const binding_names = @import("names.zig");
 
 pub fn toJson(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     scenes: *const render_scene.Document,
     generation: u64,
 ) ![]u8 {
@@ -60,7 +60,7 @@ pub fn toJson(
     return try out.toOwnedSlice(allocator);
 }
 
-fn sourcePathsJson(allocator: std.mem.Allocator, ir: *const core.Ir) ![]u8 {
+fn sourcePathsJson(allocator: std.mem.Allocator, ir: *const core.Context) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var paths = try json.Array.beginBuffer(allocator, &buffer);
@@ -180,7 +180,7 @@ fn appendOptionalColor(object: *json.Object, name: []const u8, color: ?core.rend
     try object.nullField(name);
 }
 
-fn outlineJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
+fn outlineJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var items = try json.Array.beginBuffer(allocator, &buffer);
@@ -206,7 +206,7 @@ fn outlineJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
 fn appendOutlineNode(
     items: *json.Array,
-    ir: *core.Ir,
+    ir: *core.Context,
     seen: *std.AutoHashMap(core.NodeId, void),
     page_id: core.NodeId,
     parent_id: core.NodeId,
@@ -229,7 +229,7 @@ fn appendOutlineNode(
     }
 }
 
-fn editingJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
+fn editingJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var items = try json.Array.beginBuffer(allocator, &buffer);

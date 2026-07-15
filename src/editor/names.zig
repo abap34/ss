@@ -13,7 +13,7 @@ pub const Generator = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        ir: *const core.Ir,
+        ir: *const core.Context,
         page: *const ast.PageDecl,
     ) !Generator {
         const root_sema = SemanticEnv.init(ir, null, &ir.functions);

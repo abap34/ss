@@ -597,7 +597,7 @@ pub const LayoutMeasurementScope = struct {
     pub fn init(
         allocator: Allocator,
         io: std.Io,
-        ir: *core.Ir,
+        ir: *core.Context,
         pages: *const core.page_unit.PreparedPages,
     ) !LayoutMeasurementScope {
         const default_options: RenderOptions = .{};
@@ -663,17 +663,17 @@ pub const LayoutMeasurementScope = struct {
 
     fn measureLayoutNode(
         context: *anyopaque,
-        ir_ptr: *anyopaque,
+        context_ptr: *anyopaque,
         node: *const core.Node,
         width: f32,
         mode: core.LayoutMeasurementMode,
     ) anyerror!?core.LayoutMeasurement {
         const scope: *LayoutMeasurementScope = @ptrCast(@alignCast(context));
-        const ir: *core.Ir = @ptrCast(@alignCast(ir_ptr));
+        const ir: *core.Context = @ptrCast(@alignCast(context_ptr));
         return try scope.measureNode(ir, node, width, mode);
     }
 
-    fn measureNode(self: *LayoutMeasurementScope, ir: *core.Ir, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+    fn measureNode(self: *LayoutMeasurementScope, ir: *core.Context, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
         const profile_total = utils.measure_profile.start();
         defer utils.measure_profile.recordLayoutMeasurementTotal(profile_total);
 
@@ -884,7 +884,7 @@ fn measurementCacheHeaderMatches(header: []const u8) bool {
 pub fn renderDocumentToPdf(
     allocator: Allocator,
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     layouts: *const core.LayoutResults,
     options: RenderOptions,
@@ -939,7 +939,7 @@ pub fn renderDocumentToPdf(
 pub fn preloadPreparedPageArtifacts(
     allocator: Allocator,
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     options: RenderOptions,
     progress: ?RenderProgress,
@@ -988,7 +988,7 @@ pub fn preloadPreparedPageArtifacts(
 pub fn compileDocumentScenes(
     allocator: Allocator,
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     options: SceneOptions,
 ) !render_scene.Document {
@@ -1031,7 +1031,7 @@ pub fn compileDocumentScenes(
 
 fn compileSceneRenderOps(
     allocator: Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     page_unit: *const core.page_unit.PageUnit,
 ) ![]RenderOp {
     var ops = std.ArrayList(RenderOp).empty;
@@ -1076,7 +1076,7 @@ fn initRenderOp(
 
 fn buildRenderPlan(
     ctx: *DrawContext,
-    ir: *core.Ir,
+    ir: *core.Context,
     prepared_pages: *const core.page_unit.PreparedPages,
     layout_results: *const core.LayoutResults,
     options: RenderOptions,
@@ -1262,7 +1262,7 @@ fn countPageCacheHits(pages: []const RenderPage) usize {
     return count;
 }
 
-fn renderDeckId(allocator: Allocator, ir: *const core.Ir, options: RenderOptions) ![]u8 {
+fn renderDeckId(allocator: Allocator, ir: *const core.Context, options: RenderOptions) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, "ss-render-deck-v1");
     if (options.cache_id) |cache_id| {
@@ -2148,7 +2148,7 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
     try values.append(allocator, value);
 }
 
-fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const RenderPlan, original_err: anyerror) !void {
+fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const RenderPlan, original_err: anyerror) !void {
     ir.clearDiagnosticsForPhase(.render);
     var added = false;
     for (plan.artifact_tasks, 0..) |task, index| {
@@ -2172,13 +2172,13 @@ fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const Re
     if (!added) try addGenericRenderDiagnostic(ir, original_err, null);
 }
 
-fn addPreloadRenderDiagnostic(ir: *core.Ir, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addPreloadRenderDiagnostic(ir: *core.Context, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
     const target = preloadTaskTarget(task);
     try addTargetedRenderDiagnostic(ir, target, preloadTaskLabel(task), err, maybe_message);
 }
 
 fn addTargetedRenderDiagnostic(
-    ir: *core.Ir,
+    ir: *core.Context,
     target: RenderDiagnosticTarget,
     label: []const u8,
     err: anyerror,
@@ -2207,7 +2207,7 @@ const DiagnosticOrigin = struct {
     }
 };
 
-fn preloadTaskDiagnosticOrigin(ir: *core.Ir, target: RenderDiagnosticTarget) !DiagnosticOrigin {
+fn preloadTaskDiagnosticOrigin(ir: *core.Context, target: RenderDiagnosticTarget) !DiagnosticOrigin {
     if (target.content_start) |start| {
         if (target.content_end) |end| {
             if (try originForContentSpan(ir.allocator, target.content_provenance, start, end)) |origin| {
@@ -2238,7 +2238,7 @@ fn originForContentSpan(
     return null;
 }
 
-fn addGenericRenderDiagnostic(ir: *core.Ir, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addGenericRenderDiagnostic(ir: *core.Context, err: anyerror, maybe_message: ?[]const u8) !void {
     const detail = maybe_message orelse @errorName(err);
     const reason = try std.fmt.allocPrint(ir.allocator, "render backend: {s}", .{detail});
     try ir.addRenderDiagnostic(.@"error", null, null, null, .{
@@ -2248,7 +2248,7 @@ fn addGenericRenderDiagnostic(ir: *core.Ir, err: anyerror, maybe_message: ?[]con
     });
 }
 
-fn collectPageRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const RenderPlan) !bool {
+fn collectPageRenderDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const RenderPlan) !bool {
     var added = false;
     for (plan.pages) |*page| {
         if (page.cache_hit) continue;
@@ -2257,7 +2257,7 @@ fn collectPageRenderDiagnostics(ctx: *DrawContext, ir: *core.Ir, plan: *const Re
     return added;
 }
 
-fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, page: *const RenderPage) !bool {
+fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *const RenderPage) !bool {
     const path = try tempCachePath(ctx, page.render_path, "pdf");
     defer ctx.allocator.free(path);
     defer deleteFileIfExists(ctx, path);
@@ -2278,7 +2278,7 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, page: *const Ren
     return added;
 }
 
-fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Ir, page: *const RenderPage) !bool {
+fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Context, page: *const RenderPage) !bool {
     if (page.background) |fill| {
         try activeSink(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = PageLayout.width, .height = PageLayout.height }, fill);
     }
@@ -2295,7 +2295,7 @@ fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Ir, page: *const Rende
     return false;
 }
 
-fn drawRenderOpDiagnostic(ctx: *DrawContext, ir: *core.Ir, op: *const RenderOp) !bool {
+fn drawRenderOpDiagnostic(ctx: *DrawContext, ir: *core.Context, op: *const RenderOp) !bool {
     var sink = CommandFailureSink{ .allocator = ir.allocator };
     defer sink.deinit();
     var diagnostic_ctx = ctx.*;
@@ -2307,11 +2307,11 @@ fn drawRenderOpDiagnostic(ctx: *DrawContext, ir: *core.Ir, op: *const RenderOp) 
     return false;
 }
 
-fn addRenderOpDiagnostic(ir: *core.Ir, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addRenderOpDiagnostic(ir: *core.Context, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
     try addTargetedRenderDiagnostic(ir, renderOpDiagnosticTarget(op), renderOpLabel(op), err, maybe_message);
 }
 
-fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Ir, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
     var tasks = std.ArrayList(PreloadTask).empty;
     defer {
         freePreloadTasks(ctx.allocator, tasks.items);
@@ -2695,7 +2695,7 @@ fn preloadTaskWorker(work: *PreloadWork) void {
 
 fn collectPreloadTaskDiagnostics(
     ctx: *DrawContext,
-    ir: *core.Ir,
+    ir: *core.Context,
     tasks: []const PreloadTask,
     cached: []const bool,
 ) !void {

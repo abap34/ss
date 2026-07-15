@@ -39,14 +39,14 @@ pub const VariableObjectClassExpectation = struct {
     object_class: ?[]const u8,
 };
 
-fn analyzeAndLowerIr(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    var analyzed = try analysis.analyzeProgramWithMode(allocator, ir, .evaluation_schedule);
-    defer analyzed.deinit();
-    if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
-    try lowering.evaluateDocumentWithSchedule(ir, analyzed.scheduleGraph());
-    if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
+fn analyzeAndFinalizeContext(allocator: std.mem.Allocator, ir: *core.Context) !void {
+    var execution_graph = (try analysis.analyzeContextWithMode(allocator, ir, .evaluation)).?;
+    defer execution_graph.deinit();
+    if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
+    try lowering.evaluateDocument(ir, &execution_graph);
+    if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
     try lowering.solveLayout(ir);
-    if (utils.err.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
 }
 
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -56,12 +56,12 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    try analyzeAndLowerIr(allocator, &ir);
+    try analyzeAndFinalizeContext(allocator, &ir);
 }
 
 pub fn buildSourceWithOverlay(
@@ -95,16 +95,16 @@ pub fn buildSourceWithOverlays(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    try analyzeAndLowerIr(allocator, &ir);
+    try analyzeAndFinalizeContext(allocator, &ir);
 }
 
 pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, expected: []const u8) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -123,7 +123,7 @@ pub fn expectObjectContentWithOverlays(
     overlays: []const OverlaySource,
     expected: []const u8,
 ) !void {
-    var ir = try buildLoweredIrWithOverlays(io, allocator, path, source, overlays);
+    var ir = try buildFinalizedContextWithOverlays(io, allocator, path, source, overlays);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -135,7 +135,7 @@ pub fn expectObjectContentWithOverlays(
 }
 
 pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8, expected: []const u8) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -154,7 +154,7 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
 }
 
 pub fn expectObjectPropertyMissing(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -174,7 +174,7 @@ pub fn expectObjectFieldPath(
     field_path: []const []const u8,
     expected: []const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -199,7 +199,7 @@ pub fn expectObjectFieldPathNone(
     root_key: []const u8,
     field_path: []const []const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -221,7 +221,7 @@ pub fn expectObjectFieldPathWithOverlays(
     field_path: []const []const u8,
     expected: []const u8,
 ) !void {
-    var ir = try buildLoweredIrWithOverlays(io, allocator, path, source, overlays);
+    var ir = try buildFinalizedContextWithOverlays(io, allocator, path, source, overlays);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -244,7 +244,7 @@ pub fn expectObjectPropertyWithOverlays(
     key: []const u8,
     expected: []const u8,
 ) !void {
-    var ir = try buildLoweredIrWithOverlays(io, allocator, path, source, overlays);
+    var ir = try buildFinalizedContextWithOverlays(io, allocator, path, source, overlays);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -271,7 +271,7 @@ pub fn expectClassDefaultProperty(
     key: []const u8,
     expected: ?[]const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     var declaration_index = try declarations.build(allocator, &ir);
@@ -309,7 +309,7 @@ pub fn expectBodyTextDefaults(
     source: []const u8,
     expected: BodyTextDefaults,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -330,7 +330,7 @@ pub fn expectBodyTextDefaults(
 }
 
 pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.nodes.items) |node| {
@@ -359,7 +359,7 @@ pub fn expectDumpContains(
     source: []const u8,
     expected: []const []const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     const text = try compiler.dump.toOwnedString(allocator, &ir);
@@ -376,7 +376,7 @@ pub fn expectVariableObjectClasses(
     source: []const u8,
     expected: []const VariableObjectClassExpectation,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     const text = try compiler.dump.toOwnedString(allocator, &ir);
@@ -443,18 +443,17 @@ pub fn expectOverlayDiagnostic(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    var analyzed = analysis.analyzeProgram(allocator, &ir) catch null;
-    defer if (analyzed) |*value| value.deinit();
+    analysis.analyzeContext(allocator, &ir) catch {};
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
@@ -482,47 +481,46 @@ pub fn expectDiagnosticWithOverlays(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    var analyzed = analysis.analyzeProgram(allocator, &ir) catch null;
-    defer if (analyzed) |*value| value.deinit();
+    analysis.analyzeContext(allocator, &ir) catch {};
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
     return error.ExpectedDiagnosticMissing;
 }
 
-fn buildLoweredIr(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.Ir {
+fn buildFinalizedContext(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.Context {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     errdefer ir.deinit();
 
-    try analyzeAndLowerIr(allocator, &ir);
+    try analyzeAndFinalizeContext(allocator, &ir);
     return ir;
 }
 
-fn buildLoweredIrWithOverlays(
+fn buildFinalizedContextWithOverlays(
     io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
     source: []const u8,
     overlays: []const OverlaySource,
-) !core.Ir {
+) !core.Context {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var overlay = module_loader.SourceOverlay.init(allocator);
     defer overlay.deinit();
@@ -535,12 +533,12 @@ fn buildLoweredIrWithOverlays(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     errdefer ir.deinit();
 
-    try analyzeAndLowerIr(allocator, &ir);
+    try analyzeAndFinalizeContext(allocator, &ir);
     return ir;
 }
 
@@ -558,18 +556,17 @@ pub fn expectDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    var analyzed = analysis.analyzeProgram(allocator, &ir) catch null;
-    defer if (analyzed) |*value| value.deinit();
+    analysis.analyzeContext(allocator, &ir) catch {};
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
@@ -589,24 +586,24 @@ pub fn expectLoweringErrorDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildIrWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
     defer ir.deinit();
 
-    var analyzed: ?analysis.ProgramAnalysis = analysis.analyzeProgramWithMode(allocator, &ir, .evaluation_schedule) catch null;
-    defer if (analyzed) |*value| value.deinit();
-    if (!utils.err.hasIrErrors(&ir)) {
-        if (analyzed) |*value| {
-            lowering.evaluateDocumentWithSchedule(&ir, value.scheduleGraph()) catch {};
-            if (!utils.err.hasIrErrors(&ir)) {
+    var execution_graph = analysis.analyzeContextWithMode(allocator, &ir, .evaluation) catch null;
+    defer if (execution_graph) |*graph| graph.deinit();
+    if (!utils.err.hasContextErrors(&ir)) {
+        if (execution_graph) |*graph| {
+            lowering.evaluateDocument(&ir, graph) catch {};
+            if (!utils.err.hasContextErrors(&ir)) {
                 lowering.solveLayout(&ir) catch {};
             }
         }
     }
 
     for (ir.diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
@@ -620,11 +617,11 @@ pub fn expectLoweredDiagnostic(
     source: []const u8,
     expected_message: []const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
@@ -639,13 +636,13 @@ pub fn expectLoweredDiagnosticWithOrigin(
     expected_origin: []const u8,
     expected_message: []const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
     }
@@ -659,11 +656,11 @@ pub fn expectNoLoweredDiagnostic(
     source: []const u8,
     unexpected_message: []const u8,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     for (ir.diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, unexpected_message) != null) {
             return error.UnexpectedDiagnosticPresent;
@@ -679,12 +676,12 @@ pub fn expectLoweredDiagnosticCount(
     expected_message: []const u8,
     expected_count: usize,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     var count: usize = 0;
     for (ir.diagnostics.items) |diagnostic| {
-        const message = try utils.err.formatIrDiagnostic(allocator, diagnostic);
+        const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) count += 1;
     }
@@ -698,7 +695,7 @@ pub fn expectObjectState(
     source: []const u8,
     expected: ObjectStateExpectation,
 ) !void {
-    var ir = try buildLoweredIr(io, allocator, path, source);
+    var ir = try buildFinalizedContext(io, allocator, path, source);
     defer ir.deinit();
 
     var count: usize = 0;

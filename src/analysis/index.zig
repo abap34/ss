@@ -9,17 +9,17 @@ const utils = @import("utils");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
-pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+pub fn populateContextAnalysis(allocator: std.mem.Allocator, ir: *core.Context) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromProgram(allocator, module.source, module.syntax, module.id, module.path, false, &ir.definitions);
-        try collectProgramHints(allocator, ir, &ir.hints, module.source, module.path, module.syntax, module.id, &ir.functions);
+        try collectDefinitionsFromModule(allocator, module.source, module.syntax, module.id, module.path, false, &ir.definitions);
+        try collectModuleHints(allocator, ir, &ir.hints, module.source, module.path, module.syntax, module.id, &ir.functions);
     }
-    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectSyntax(), ir.project_module_id, null, true, &ir.definitions);
-    try collectProgramHints(allocator, ir, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectSyntax(), ir.project_module_id, &ir.functions);
+    try collectDefinitionsFromModule(allocator, ir.projectSource(), ir.projectSyntax(), ir.project_module_id, null, true, &ir.definitions);
+    try collectModuleHints(allocator, ir, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectSyntax(), ir.project_module_id, &ir.functions);
 }
 
-pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void {
+pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Context) !void {
     var write_index: usize = 0;
     for (ir.hints.items) |hint| {
         if (hint.kind == .solved_frame) {
@@ -33,7 +33,7 @@ pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void
     try collectSolvedSizeHints(allocator, ir, &ir.hints);
 }
 
-fn collectDefinitionsFromProgram(
+fn collectDefinitionsFromModule(
     allocator: std.mem.Allocator,
     source: []const u8,
     program: ast.Module,
@@ -148,9 +148,9 @@ fn putDefinition(
     });
 }
 
-fn collectProgramHints(
+fn collectModuleHints(
     allocator: std.mem.Allocator,
-    ir: *const core.Ir,
+    ir: *const core.Context,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
     source_path: ?[]const u8,
@@ -178,7 +178,7 @@ fn collectProgramHints(
 
 fn collectStatementHints(
     allocator: std.mem.Allocator,
-    ir: *const core.Ir,
+    ir: *const core.Context,
     hints: *std.ArrayList(core.InlayHint),
     functions: *const core.FunctionMap,
     source: []const u8,
@@ -205,7 +205,7 @@ fn collectStatementHints(
 
 fn collectExprHints(
     allocator: std.mem.Allocator,
-    ir: *const core.Ir,
+    ir: *const core.Context,
     hints: *std.ArrayList(core.InlayHint),
     functions: *const core.FunctionMap,
     source: []const u8,
@@ -240,7 +240,7 @@ fn collectExprHints(
 
 fn hintForCallExpr(
     allocator: std.mem.Allocator,
-    ir: *const core.Ir,
+    ir: *const core.Context,
     hints: *std.ArrayList(core.InlayHint),
     functions: *const core.FunctionMap,
     source: []const u8,
@@ -260,7 +260,7 @@ fn hintForCallExpr(
 
 fn collectSolvedSizeHints(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     hints: *std.ArrayList(core.InlayHint),
 ) !void {
     var best_by_origin = std.StringHashMap(core.NodeId).init(allocator);
@@ -291,7 +291,7 @@ fn collectSolvedSizeHints(
     }
 }
 
-fn moduleForHintOrigin(ir: *const core.Ir, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
+fn moduleForHintOrigin(ir: *const core.Context, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
     if (file) |origin_path| {
         if (ir.moduleByPathOrSpec(origin_path)) |module| {
             return .{ .id = module.id, .source = module.source, .file = module.path orelse origin_path };

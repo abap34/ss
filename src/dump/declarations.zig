@@ -4,7 +4,7 @@ const core = @import("core");
 const declarations = @import("../language/declarations.zig");
 const json = @import("utils").json;
 
-pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Ir) !void {
+pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Context) !void {
     var index = try declarations.build(allocator, ir);
     defer index.deinit();
 

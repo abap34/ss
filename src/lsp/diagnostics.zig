@@ -88,7 +88,7 @@ pub const DiagnosticSet = struct {
         }
     }
 
-    pub fn addConstraintFailure(self: *DiagnosticSet, ir: *core.Ir, err: anyerror) !void {
+    pub fn addConstraintFailure(self: *DiagnosticSet, ir: *core.Context, err: anyerror) !void {
         if (ir.constraint_failures.items.len > 0) {
             try self.addConstraintFailureItem(ir, ir.constraint_failures.items[0]);
             return;
@@ -103,7 +103,7 @@ pub const DiagnosticSet = struct {
         try self.add(ir.projectPath(), ir.projectSource(), .@"error", @errorName(err), message, null);
     }
 
-    fn addConstraintFailureItem(self: *DiagnosticSet, ir: *core.Ir, failure: core.ConstraintFailure) !void {
+    fn addConstraintFailureItem(self: *DiagnosticSet, ir: *core.Context, failure: core.ConstraintFailure) !void {
         const kind_text = constraintFailureText(failure);
         const message = try formatConstraintFailureMessage(self.allocator, failure, kind_text);
         defer self.allocator.free(message);
@@ -194,7 +194,7 @@ const ConstraintFailureLocation = struct {
     span: ?source.ByteSpan,
 };
 
-fn constraintFailureLocation(ir: *core.Ir, origin: ?[]const u8) ConstraintFailureLocation {
+fn constraintFailureLocation(ir: *core.Context, origin: ?[]const u8) ConstraintFailureLocation {
     var report_path = ir.projectPath();
     var report_source = ir.projectSource();
     var span: ?source.ByteSpan = null;

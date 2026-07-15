@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("model");
-const Ir = @import("ir.zig").Ir;
+const Context = @import("context.zig").Context;
 const markdown = @import("markdown.zig");
 const render_env = @import("render_env.zig");
 const render_policy = @import("render_policy.zig");
@@ -89,7 +89,7 @@ pub const PreparedPages = struct {
     }
 };
 
-pub fn prepare(allocator: std.mem.Allocator, ir: *Ir) !PreparedPages {
+pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
     var pages = std.ArrayList(PageUnit).empty;
     errdefer {
         for (pages.items) |*page| page.deinit(allocator);
@@ -157,13 +157,13 @@ pub fn prepare(allocator: std.mem.Allocator, ir: *Ir) !PreparedPages {
     return .{ .pages = try pages.toOwnedSlice(allocator) };
 }
 
-pub fn prepareObject(allocator: std.mem.Allocator, ir: *Ir, node: *const model.Node) !ObjectUnit {
+pub fn prepareObject(allocator: std.mem.Allocator, ir: *Context, node: *const model.Node) !ObjectUnit {
     return try prepareObjectWithRender(allocator, ir, node, render_policy.resolve(ir, node));
 }
 
 pub fn prepareObjectWithRender(
     allocator: std.mem.Allocator,
-    ir: *Ir,
+    ir: *Context,
     node: *const model.Node,
     render: render_policy.ResolvedRender,
 ) !ObjectUnit {
@@ -412,7 +412,7 @@ fn displayMathSource(allocator: std.mem.Allocator, runs: []const markdown.Run) !
 
 fn collectPageObjectIds(
     allocator: std.mem.Allocator,
-    ir: *Ir,
+    ir: *Context,
     page_id: model.NodeId,
     object_ids: *std.ArrayList(model.NodeId),
 ) !void {
@@ -436,7 +436,7 @@ fn collectPageObjectIds(
 
 fn collectPageConstraints(
     allocator: std.mem.Allocator,
-    ir: *Ir,
+    ir: *Context,
     page_id: model.NodeId,
     constraints: *std.ArrayList(model.Constraint),
 ) !void {

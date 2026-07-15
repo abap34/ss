@@ -383,7 +383,7 @@ const LayoutHookContext = struct {
     include_editor_snapshot: bool,
 };
 
-fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !analysis.snapshot.LayoutHookResult {
+fn runSnapshotLayout(context: *anyopaque, ir: *core.Context, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookResult {
     const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
     var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, ir, graph);
     defer pages.deinit(ir.allocator);
@@ -394,7 +394,7 @@ fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir, graph: *const analysis.s
     return .{ .editor_snapshot_json = try editor_snapshot.toJson(ir.allocator, ir, &scenes, hook.server.documents.generation) };
 }
 
-fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Ir, err: anyerror) !void {
+fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Context, err: anyerror) !void {
     const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
     try hook.diagnostics.addConstraintFailure(ir, err);
 }

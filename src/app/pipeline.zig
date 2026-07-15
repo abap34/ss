@@ -14,43 +14,43 @@ const types = @import("types.zig");
 const error_report = utils.err;
 const Progress = utils.progress.Progress;
 
-pub const AnalyzedFile = struct {
-    ir: core.Ir,
-    program_analysis: analysis.ProgramAnalysis = .{},
+pub const AnalyzedProject = struct {
+    context: core.Context,
+    execution_graph: ?analysis.execution.ExecutionGraph = null,
 
-    pub fn deinit(self: *AnalyzedFile) void {
-        self.program_analysis.deinit();
-        self.ir.deinit();
+    pub fn deinit(self: *AnalyzedProject) void {
+        if (self.execution_graph) |*graph| graph.deinit();
+        self.context.deinit();
     }
 
-    pub fn takeIr(self: *AnalyzedFile) core.Ir {
-        self.program_analysis.deinit();
-        const ir = self.ir;
+    pub fn takeContext(self: *AnalyzedProject) core.Context {
+        if (self.execution_graph) |*graph| graph.deinit();
+        const context = self.context;
         self.* = undefined;
-        return ir;
+        return context;
     }
 
-    pub fn scheduleGraph(self: *const AnalyzedFile) *const analysis.schedule.ScheduleGraph {
-        return self.program_analysis.scheduleGraph();
+    pub fn executionGraph(self: *const AnalyzedProject) *const analysis.execution.ExecutionGraph {
+        return &self.execution_graph.?;
     }
 };
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Ir {
-    var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation_schedule);
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Context {
+    var analyzed = try analyzeFile(io, allocator, request, progress, .evaluation);
     errdefer analyzed.deinit();
-    try evaluateDocument(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    var pages = try preparePages(&analyzed.ir, progress);
-    const ir_allocator = analyzed.ir.allocator;
-    defer pages.deinit(ir_allocator);
-    var layouts = try solveLayouts(io, &analyzed.ir, &pages, progress, request.layout_jobs);
-    defer layouts.deinit(ir_allocator);
-    return analyzed.takeIr();
+    try evaluateDocument(&analyzed.context, analyzed.executionGraph(), progress);
+    var pages = try preparePages(&analyzed.context, progress);
+    const context_allocator = analyzed.context.allocator;
+    defer pages.deinit(context_allocator);
+    var layouts = try solveLayouts(io, &analyzed.context, &pages, progress, request.layout_jobs);
+    defer layouts.deinit(context_allocator);
+    return analyzed.takeContext();
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Ir {
+pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Context {
     var analyzed = try analyzeFile(io, allocator, request, progress, .diagnostics_only);
     errdefer analyzed.deinit();
-    return analyzed.takeIr();
+    return analyzed.takeContext();
 }
 
 pub fn analyzeFile(
@@ -59,7 +59,7 @@ pub fn analyzeFile(
     request: types.SourceRequest,
     progress: ?*Progress,
     mode: analysis.AnalysisMode,
-) !AnalyzedFile {
+) !AnalyzedProject {
     if (progress) |p| p.begin("Read inputs");
     var source = try readSource(io, allocator, request);
     errdefer allocator.free(source);
@@ -90,7 +90,7 @@ pub fn analyzeFile(
         return err;
     };
     defer index.deinit();
-    var ir = analysis.buildIrWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.module, &index, .{
+    var context = analysis.buildContextWithOptions(allocator, request.input_path, request.asset_base_dir, &source, &parsed.module, &index, .{
         .parse_holes = parsed.holes,
     }) catch |err| {
         if (progress) |p| p.endStatusLine();
@@ -110,44 +110,44 @@ pub fn analyzeFile(
         return err;
     };
     app_diagnostics.clearParseHoles(&parsed, allocator);
-    errdefer ir.deinit();
+    errdefer context.deinit();
 
-    var program_analysis = analysis.analyzeProgramWithMode(allocator, &ir, mode) catch |err| {
+    var execution_graph = analysis.analyzeContextWithMode(allocator, &context, mode) catch |err| {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        error_report.printContextDiagnostics(context.projectPath(), context.projectSource(), &context);
         return err;
     };
-    errdefer program_analysis.deinit();
+    errdefer if (execution_graph) |*graph| graph.deinit();
     if (progress) |p| p.step("Analyze");
 
-    if (error_report.hasIrErrors(&ir)) {
+    if (error_report.hasContextErrors(&context)) {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), &ir);
+        error_report.printContextDiagnostics(context.projectPath(), context.projectSource(), &context);
         return error.DiagnosticsFailed;
     }
-    return .{ .ir = ir, .program_analysis = program_analysis };
+    return .{ .context = context, .execution_graph = execution_graph };
 }
 
-pub fn evaluateDocument(ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph, progress: ?*Progress) !void {
+pub fn evaluateDocument(ir: *core.Context, graph: *const analysis.execution.ExecutionGraph, progress: ?*Progress) !void {
     if (progress) |p| p.begin("Evaluate document");
-    lowering.evaluateDocumentWithSchedule(ir, graph) catch |err| {
+    lowering.evaluateDocument(ir, graph) catch |err| {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         return err;
     };
     if (progress) |p| p.step("Evaluate document");
-    if (error_report.hasIrErrors(ir)) {
+    if (error_report.hasContextErrors(ir)) {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         return error.DiagnosticsFailed;
     }
 }
 
-pub fn preparePages(ir: *core.Ir, progress: ?*Progress) !core.page_unit.PreparedPages {
+pub fn preparePages(ir: *core.Context, progress: ?*Progress) !core.page_unit.PreparedPages {
     if (progress) |p| p.begin("Prepare pages");
     var pages = core.page_unit.prepare(ir.allocator, ir) catch |err| {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         return err;
     };
     errdefer pages.deinit(ir.allocator);
@@ -160,7 +160,7 @@ pub fn preparePages(ir: *core.Ir, progress: ?*Progress) !core.page_unit.Prepared
 
 pub fn solveLayouts(
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
@@ -175,14 +175,14 @@ pub fn solveLayouts(
     };
     errdefer layouts.deinit(ir.allocator);
     if (progress) |p| p.step("Solve layouts");
-    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-    if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    if (error_report.hasContextErrors(ir)) return error.DiagnosticsFailed;
     return layouts;
 }
 
 pub fn solveLayoutsWithTracePath(
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     trace_path: []const u8,
     progress: ?*Progress,
@@ -198,14 +198,14 @@ pub fn solveLayoutsWithTracePath(
     };
     errdefer layouts.deinit(ir.allocator);
     if (progress) |p| p.step("Solve layouts");
-    error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-    if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+    error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+    if (error_report.hasContextErrors(ir)) return error.DiagnosticsFailed;
     return layouts;
 }
 
 fn preloadLayoutArtifacts(
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
@@ -213,8 +213,8 @@ fn preloadLayoutArtifacts(
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
     render_layout.preloadPreparedPageArtifacts(io, ir, pages, artifact_progress, jobs) catch |err| {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-        if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+        error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+        if (error_report.hasContextErrors(ir)) return error.DiagnosticsFailed;
         return err;
     };
 }
@@ -247,12 +247,12 @@ fn printUnknownImportDiagnostic(
     });
 }
 
-fn reportLayoutFailure(ir: *core.Ir, err: anyerror) !void {
+fn reportLayoutFailure(ir: *core.Context, err: anyerror) !void {
     switch (err) {
         error.ConstraintConflict, error.NegativeFrameSize => error_report.printConstraintFailure(ir.projectPath(), ir.projectSource(), ir, err),
         else => {
-            error_report.printIrDiagnostics(ir.projectPath(), ir.projectSource(), ir);
-            if (error_report.hasIrErrors(ir)) return error.DiagnosticsFailed;
+            error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+            if (error_report.hasContextErrors(ir)) return error.DiagnosticsFailed;
         },
     }
 }

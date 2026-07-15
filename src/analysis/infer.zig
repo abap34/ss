@@ -31,7 +31,7 @@ const InferenceOptions = struct {
     validate_contracts: bool = true,
 };
 
-fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(ir: ?*core.Context, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const sink = ir orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
@@ -39,7 +39,7 @@ fn addUserReport(ir: ?*core.Ir, origin: []const u8, comptime fmt: []const u8, ar
     });
 }
 
-fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+fn rejectDuplicateBinding(ir: ?*core.Context, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
     if (!env.contains(name)) return;
     try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
@@ -47,7 +47,7 @@ fn rejectDuplicateBinding(ir: ?*core.Ir, env: *const TypeEnv, name: []const u8, 
 
 fn checkedLetBindingInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     binding: anytype,
     inferred: TypeInfo,
     origin: []const u8,
@@ -106,7 +106,7 @@ fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: 
 
 pub fn exprInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
@@ -117,7 +117,7 @@ pub fn exprInfo(
 
 fn exprInfoWithOptions(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
@@ -171,7 +171,7 @@ fn exprInfoWithOptions(
 
 fn inferRecordInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     record: ast.RecordExpr,
@@ -207,7 +207,7 @@ fn inferRecordInfo(
 
 fn inferRecordUpdateInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     update: ast.RecordUpdateExpr,
@@ -236,7 +236,7 @@ fn inferRecordUpdateInfo(
 
 fn rejectOverlappingRecordUpdateFields(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     fields: []const ast.RecordUpdateFieldExpr,
     origin: []const u8,
 ) !void {
@@ -255,7 +255,7 @@ fn rejectOverlappingRecordUpdateFields(
 
 fn inferRecordUpdateField(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     base_record_name: []const u8,
@@ -294,7 +294,7 @@ fn inferRecordUpdateField(
 
 fn inferMemberInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     member: ast.MemberExpr,
@@ -319,7 +319,7 @@ fn inferMemberInfo(
 
 fn inferMemberInfoFromTargetInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     target_info: TypeInfo,
     member_name: []const u8,
@@ -363,7 +363,7 @@ fn inferMemberInfoFromTargetInfo(
 
 fn inferOptionalRecordMemberInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     record_type: Type,
     member_name: []const u8,
@@ -385,7 +385,7 @@ fn inferOptionalRecordMemberInfo(
 
 fn inferOptionalCheckInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     target: ast.Expr,
@@ -403,7 +403,7 @@ fn inferOptionalCheckInfo(
 
 fn inferCoalesceInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     coalesce: ast.CoalesceExpr,
@@ -438,7 +438,7 @@ fn lambdaLabel(allocator: std.mem.Allocator, lambda: ast.LambdaExpr) ![]const u8
 
 fn inferLambdaInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     lambda: ast.LambdaExpr,
@@ -467,7 +467,7 @@ fn inferLambdaInfo(
 
 fn inferCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -506,7 +506,7 @@ fn inferCallInfo(
 
 fn reportCallResolutionFailure(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     callee: ast.CallableName,
     origin: []const u8,
@@ -523,7 +523,7 @@ fn reportCallResolutionFailure(
 
 fn inferApplyInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     callee: ast.Expr,
@@ -537,7 +537,7 @@ fn inferApplyInfo(
 
 fn inferFunctionValueCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     callee_info: TypeInfo,
@@ -566,7 +566,7 @@ fn inferFunctionValueCallInfo(
 
 fn inferUserCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     caller_sema: *const SemanticEnv,
     callee_sema: *const SemanticEnv,
     env: *const TypeEnv,
@@ -596,7 +596,7 @@ fn inferUserCallInfo(
 
 fn inferPrimitiveCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -634,7 +634,7 @@ fn inferPrimitiveCallInfo(
 }
 
 fn validateKnownPropertyKeyCall(
-    ir: *core.Ir,
+    ir: *core.Context,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -659,7 +659,7 @@ fn validateKnownPropertyKeyCall(
 
 fn validateSetReprCall(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -694,7 +694,7 @@ fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: 
 
 fn inferUserFunctionReturnInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
@@ -715,7 +715,7 @@ fn inferUserFunctionReturnInfo(
 
 fn inferUserFunctionReturnInfoInner(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
@@ -769,7 +769,7 @@ fn inferUserFunctionReturnInfoInner(
 
 fn inferReturnInfoFromStatements(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     options: InferenceOptions,
@@ -819,7 +819,7 @@ fn inferReturnInfoFromStatements(
 
 fn primitiveResultTypeInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -902,7 +902,7 @@ fn primitiveResultTypeInfo(
 
 fn validateCallbackShape(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -965,7 +965,7 @@ fn validateCallbackShape(
 
 fn inferSelectionAlgebraInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -1003,7 +1003,7 @@ fn inferSelectionAlgebraInfo(
 
 fn inferSelectCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -1060,7 +1060,7 @@ fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, ca
 }
 
 fn validateSetPropCall(
-    ir: *core.Ir,
+    ir: *core.Context,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -1105,7 +1105,7 @@ fn validateSetPropCall(
 }
 
 fn validateExtendRenderEnvCall(
-    ir: *core.Ir,
+    ir: *core.Context,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -1167,7 +1167,7 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
 }
 
 fn validateFieldValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     field: declarations.FieldDescriptor,
     key: []const u8,
     value_info: TypeInfo,
@@ -1177,7 +1177,7 @@ fn validateFieldValue(
 }
 
 fn validateExpectedFieldValue(
-    ir: *core.Ir,
+    ir: *core.Context,
     expected: Type,
     key: []const u8,
     value_info: TypeInfo,
@@ -1205,7 +1205,7 @@ fn validateExpectedFieldValue(
 
 pub fn validatePropertySetStatement(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     target: ast.Expr,
@@ -1218,7 +1218,7 @@ pub fn validatePropertySetStatement(
 
 fn validatePropertySetStatementWithOptions(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     target: ast.Expr,
@@ -1241,7 +1241,7 @@ fn validatePropertySetStatementWithOptions(
 
 fn validatePropertySetPath(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     target_info: TypeInfo,
     path: []const ast.RecordPathSegment,
@@ -1270,7 +1270,7 @@ fn validatePropertySetPath(
 
 fn memberPathPrefixInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     initial_info: TypeInfo,
     path_prefix: []const ast.RecordPathSegment,
@@ -1287,7 +1287,7 @@ fn memberPathPrefixInfo(
 
 fn validateMemberTargetPropertySetPath(
     allocator: std.mem.Allocator,
-    ir: ?*core.Ir,
+    ir: ?*core.Context,
     sema: *const SemanticEnv,
     object_info: TypeInfo,
     path: []const ast.RecordPathSegment,
@@ -1313,7 +1313,7 @@ fn validateMemberTargetPropertySetPath(
 
 fn validateNestedPropertySetPath(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     path: []const ast.RecordPathSegment,
     root_type: Type,

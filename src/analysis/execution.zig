@@ -17,7 +17,7 @@ pub const BuildOptions = struct {
     page_id_mode: PageIdMode = .synthetic,
 };
 
-pub const ScheduledUnit = struct {
+pub const ExecutionUnit = struct {
     module_id: core.SourceModuleId,
     source: []const u8,
     path: []const u8,
@@ -38,29 +38,29 @@ pub const ScheduledUnit = struct {
         },
     };
 
-    pub fn deinit(self: *ScheduledUnit) void {
+    pub fn deinit(self: *ExecutionUnit) void {
         self.summary.deinit();
     }
 };
 
-pub const ScheduleEdge = struct {
+pub const DependencyEdge = struct {
     from: usize,
     to: usize,
 };
 
-pub const ScheduleGraph = struct {
+pub const ExecutionGraph = struct {
     allocator: std.mem.Allocator,
-    units: std.ArrayList(ScheduledUnit),
-    edges: std.ArrayList(ScheduleEdge),
+    units: std.ArrayList(ExecutionUnit),
+    edges: std.ArrayList(DependencyEdge),
     order: []usize,
 
     pub fn build(
         allocator: std.mem.Allocator,
-        ir: *const core.Ir,
-        document: *core.Ir,
+        context: *const core.Context,
+        diagnostic_context: *core.Context,
         options: BuildOptions,
-    ) !ScheduleGraph {
-        var graph = ScheduleGraph{
+    ) !ExecutionGraph {
+        var graph = ExecutionGraph{
             .allocator = allocator,
             .units = .empty,
             .edges = .empty,
@@ -72,32 +72,32 @@ pub const ScheduleGraph = struct {
         defer collected_modules.deinit();
         var run_cache = dependencies.RunCache.init(allocator);
         defer run_cache.deinit();
-        try run_cache.reserve(ir);
-        var context = BuildContext{
+        try run_cache.reserve(context);
+        var builder = GraphBuilder{
             .allocator = allocator,
-            .core_ir = ir,
-            .document = document,
-            .functions = &ir.functions,
+            .context = context,
+            .diagnostic_context = diagnostic_context,
+            .functions = &context.functions,
             .units = &graph.units,
             .collected_modules = &collected_modules,
             .run_cache = &run_cache,
             .source_order = 0,
             .page_id_mode = options.page_id_mode,
         };
-        try context.collectScheduledUnits(ir.projectModule());
-        try validateScheduledUnits(document, graph.units.items);
-        try buildScheduleEdges(allocator, graph.units.items, &graph.edges);
+        try builder.collectExecutionUnits(context.projectModule());
+        try validateExecutionUnits(diagnostic_context, graph.units.items);
+        try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
         var cycle_hint: ?usize = null;
         graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle_hint) catch |err| {
-            if (err == error.ScheduledDependencyCycle and graph.units.items.len != 0) {
-                try addUnitErrorDiagnostic(document, graph.units.items[cycle_hint orelse 0], analysisErrorMessage(err));
+            if (err == error.ExecutionDependencyCycle and graph.units.items.len != 0) {
+                try addUnitErrorDiagnostic(diagnostic_context, graph.units.items[cycle_hint orelse 0], analysisErrorMessage(err));
             }
             return err;
         };
         return graph;
     }
 
-    pub fn deinit(self: *ScheduleGraph) void {
+    pub fn deinit(self: *ExecutionGraph) void {
         self.allocator.free(self.order);
         self.edges.deinit(self.allocator);
         for (self.units.items) |*unit| unit.deinit();
@@ -105,24 +105,24 @@ pub const ScheduleGraph = struct {
     }
 };
 
-pub fn validateDependencies(allocator: std.mem.Allocator, ir: *core.Ir) !void {
-    var graph = try ScheduleGraph.build(allocator, ir, ir, .{ .page_id_mode = .synthetic });
+pub fn validateDependencies(allocator: std.mem.Allocator, ir: *core.Context) !void {
+    var graph = try ExecutionGraph.build(allocator, ir, ir, .{ .page_id_mode = .synthetic });
     defer graph.deinit();
 }
 
-const BuildContext = struct {
+const GraphBuilder = struct {
     allocator: std.mem.Allocator,
-    core_ir: *const core.Ir,
-    document: *core.Ir,
+    context: *const core.Context,
+    diagnostic_context: *core.Context,
     functions: *const core.FunctionMap,
-    units: *std.ArrayList(ScheduledUnit),
+    units: *std.ArrayList(ExecutionUnit),
     collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
     run_cache: *dependencies.RunCache,
     source_order: usize,
     synthetic_page_count: core.NodeId = 0,
     page_id_mode: PageIdMode,
 
-    fn collectScheduledUnits(self: *BuildContext, module: *const core.SourceModule) !void {
+    fn collectExecutionUnits(self: *GraphBuilder, module: *const core.SourceModule) !void {
         if (module.kind == .library) {
             if (self.collected_modules.contains(module.id)) return;
             try self.collected_modules.put(module.id, {});
@@ -139,8 +139,8 @@ const BuildContext = struct {
                 .import => |import_index| {
                     if (import_index >= module.resolved_import_ids.items.len) continue;
                     const import_id = module.resolved_import_ids.items[import_index];
-                    const imported = self.core_ir.moduleById(import_id) orelse continue;
-                    try self.collectScheduledUnits(imported);
+                    const imported = self.context.moduleById(import_id) orelse continue;
+                    try self.collectExecutionUnits(imported);
                 },
                 .document => |document_index| {
                     if (document_index >= module.syntax.document_blocks.items.len) continue;
@@ -156,12 +156,12 @@ const BuildContext = struct {
     }
 
     fn appendDocumentStatementUnits(
-        self: *BuildContext,
+        self: *GraphBuilder,
         module: *const core.SourceModule,
         statement_start: usize,
         statement_count: usize,
     ) !void {
-        const sema = SemanticEnv.init(self.core_ir, null, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.context, null, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
         defer analyzer.deinit();
         const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
@@ -188,12 +188,12 @@ const BuildContext = struct {
     }
 
     fn appendPageStatementUnits(
-        self: *BuildContext,
+        self: *GraphBuilder,
         module: *const core.SourceModule,
         page: ast.PageDecl,
     ) !void {
         const page_id = try self.nextPageId(page.name);
-        const sema = SemanticEnv.init(self.document, null, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.diagnostic_context, null, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
         for (page.statements.items, 0..) |stmt, stmt_index| {
@@ -219,9 +219,9 @@ const BuildContext = struct {
         }
     }
 
-    fn nextPageId(self: *BuildContext, name: []const u8) !core.NodeId {
+    fn nextPageId(self: *GraphBuilder, name: []const u8) !core.NodeId {
         return switch (self.page_id_mode) {
-            .create => try self.document.addPage(name),
+            .create => try self.diagnostic_context.addPage(name),
             .synthetic => blk: {
                 const id = std.math.maxInt(core.NodeId) - self.synthetic_page_count;
                 self.synthetic_page_count += 1;
@@ -231,7 +231,7 @@ const BuildContext = struct {
     }
 };
 
-fn validateScheduledUnits(ir: *core.Ir, units: []const ScheduledUnit) !void {
+fn validateExecutionUnits(ir: *core.Context, units: []const ExecutionUnit) !void {
     for (units) |unit| {
         if (unit.summary.invalid_selection_mutation) |invalid| {
             const message = "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated";
@@ -252,7 +252,7 @@ fn validateScheduledUnits(ir: *core.Ir, units: []const ScheduledUnit) !void {
     }
 }
 
-fn buildScheduleEdges(allocator: std.mem.Allocator, units: []const ScheduledUnit, edges: *std.ArrayList(ScheduleEdge)) !void {
+fn buildDependencyEdges(allocator: std.mem.Allocator, units: []const ExecutionUnit, edges: *std.ArrayList(DependencyEdge)) !void {
     var edge_index = EdgeIndex.init(allocator);
     defer edge_index.deinit();
 
@@ -364,7 +364,7 @@ const ResourceWriterIndex = struct {
         self: *const ResourceWriterIndex,
         read: dependencies.Resource,
         reader_index: usize,
-        edges: *std.ArrayList(ScheduleEdge),
+        edges: *std.ArrayList(DependencyEdge),
         edge_index: *EdgeIndex,
     ) !void {
         switch (read) {
@@ -416,12 +416,12 @@ const ResourceWriterIndex = struct {
         entries: []const WriteEntry,
         read: dependencies.Resource,
         reader_index: usize,
-        edges: *std.ArrayList(ScheduleEdge),
+        edges: *std.ArrayList(DependencyEdge),
         edge_index: *EdgeIndex,
     ) !void {
         for (entries) |entry| {
             if (entry.resource.intersects(read)) {
-                try addScheduleEdge(self.allocator, edges, edge_index, entry.unit_index, reader_index);
+                try addDependencyEdge(self.allocator, edges, edge_index, entry.unit_index, reader_index);
             }
         }
     }
@@ -450,8 +450,8 @@ fn propertyNameIsContent(name: []const u8) bool {
 
 fn scheduleFromEdges(
     allocator: std.mem.Allocator,
-    units: []const ScheduledUnit,
-    edges: []const ScheduleEdge,
+    units: []const ExecutionUnit,
+    edges: []const DependencyEdge,
     cycle_hint: *?usize,
 ) ![]usize {
     const count = units.len;
@@ -493,7 +493,7 @@ fn scheduleFromEdges(
             if (candidate == null or unit.source_order < units[candidate.?].source_order) candidate = index;
         }
         cycle_hint.* = candidate;
-        return error.ScheduledDependencyCycle;
+        return error.ExecutionDependencyCycle;
     }
     return out;
 }
@@ -514,10 +514,10 @@ const Adjacency = struct {
 
 const ReadyQueue = struct {
     allocator: std.mem.Allocator,
-    units: []const ScheduledUnit,
+    units: []const ExecutionUnit,
     heap: std.ArrayList(usize),
 
-    fn init(allocator: std.mem.Allocator, units: []const ScheduledUnit) ReadyQueue {
+    fn init(allocator: std.mem.Allocator, units: []const ExecutionUnit) ReadyQueue {
         return .{
             .allocator = allocator,
             .units = units,
@@ -579,7 +579,7 @@ const ReadyQueue = struct {
     }
 };
 
-fn buildAdjacency(allocator: std.mem.Allocator, unit_count: usize, edges: []const ScheduleEdge) !Adjacency {
+fn buildAdjacency(allocator: std.mem.Allocator, unit_count: usize, edges: []const DependencyEdge) !Adjacency {
     var offsets = try allocator.alloc(usize, unit_count + 1);
     errdefer allocator.free(offsets);
     @memset(offsets, 0);
@@ -600,9 +600,9 @@ fn buildAdjacency(allocator: std.mem.Allocator, unit_count: usize, edges: []cons
     return .{ .offsets = offsets, .targets = targets };
 }
 
-fn addScheduleEdge(
+fn addDependencyEdge(
     allocator: std.mem.Allocator,
-    edges: *std.ArrayList(ScheduleEdge),
+    edges: *std.ArrayList(DependencyEdge),
     edge_index: *EdgeIndex,
     from: usize,
     to: usize,
@@ -620,7 +620,7 @@ fn addScheduleEdge(
     gop.value_ptr.* = edge_pos;
 }
 
-pub fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph: *const ScheduleGraph) ![]u8 {
+pub fn executionGraphJson(allocator: std.mem.Allocator, ir: *const core.Context, graph: *const ExecutionGraph) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
@@ -649,7 +649,7 @@ pub fn scheduleGraphJson(allocator: std.mem.Allocator, ir: *const core.Ir, graph
                 try item.intField("statement_index", data.index);
             },
         }
-        try item.stringField("source", scheduledUnitSource(unit));
+        try item.stringField("source", executionUnitSource(unit));
         try item.end();
     }
     try units.end();
@@ -680,12 +680,12 @@ fn writeScheduleSpan(object: *utils.json.Object, span: ast.Span) !void {
     try span_object.end();
 }
 
-fn scheduledUnitSource(unit: ScheduledUnit) []const u8 {
+fn executionUnitSource(unit: ExecutionUnit) []const u8 {
     if (unit.span.start > unit.span.end or unit.span.end > unit.source.len) return "";
     return std.mem.trim(u8, unit.source[unit.span.start..unit.span.end], " \t\r\n");
 }
 
-fn addUnitErrorDiagnostic(ir: *core.Ir, unit: ScheduledUnit, message: []const u8) !void {
+fn addUnitErrorDiagnostic(ir: *core.Context, unit: ExecutionUnit, message: []const u8) !void {
     const origin = try unitOrigin(ir.allocator, unit);
     defer ir.allocator.free(origin);
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
@@ -693,7 +693,7 @@ fn addUnitErrorDiagnostic(ir: *core.Ir, unit: ScheduledUnit, message: []const u8
     });
 }
 
-fn unitOrigin(allocator: std.mem.Allocator, unit: ScheduledUnit) ![]const u8 {
+fn unitOrigin(allocator: std.mem.Allocator, unit: ExecutionUnit) ![]const u8 {
     if (unit.path.len != 0) {
         return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ unit.path, unit.span.start, unit.span.end });
     }
@@ -705,7 +705,7 @@ fn analysisErrorMessage(err: anyerror) []const u8 {
         error.InvalidSelectionMutation => "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated",
         error.LayoutDependencyCycle => "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once",
         error.PostLayoutComputationUnsupported => "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet",
-        error.ScheduledDependencyCycle => "ScheduledDependencyCycle: document evaluation dependencies contain a cycle",
+        error.ExecutionDependencyCycle => "ExecutionDependencyCycle: document evaluation dependencies contain a cycle",
         else => "ScheduleAnalysisFailed: scheduled unit analysis failed",
     };
 }

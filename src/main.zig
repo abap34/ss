@@ -1060,14 +1060,14 @@ fn run(init: std.process.Init) !void {
         if (options.output_path) |output_path| {
             try validateOutputParentOrCliError(io, output_path);
             var progress = commandProgress(7, options);
-            try app.writeIrJson(io, allocator, .{
+            try app.writeContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,
             }, output_path, &progress);
         } else {
             var progress = commandProgress(7, options);
-            try app.printIrJson(io, allocator, .{
+            try app.printContextJson(io, allocator, .{
                 .input_path = resolved.entry_path,
                 .asset_base_dir = resolved.asset_base_dir,
                 .layout_jobs = options.jobs,

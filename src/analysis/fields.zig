@@ -9,7 +9,7 @@ const semantic_types = @import("types.zig");
 const SemanticEnv = semantic_env.SemanticEnv;
 const TypeEnv = semantic_types.TypeEnv;
 
-pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema: *const SemanticEnv) !void {
+pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Context, sema: *const SemanticEnv) !void {
     var roles = std.StringHashMap([]const u8).init(allocator);
     defer roles.deinit();
 
@@ -34,7 +34,7 @@ pub fn checkObjectDeclarations(allocator: std.mem.Allocator, ir: *core.Ir, sema:
 
 fn checkRecordNamesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     origin_path: []const u8,
     records: []const ast.RecordDecl,
 ) !void {
@@ -53,7 +53,7 @@ fn checkRecordNamesUnique(
 
 fn checkRecordDeclaration(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     record_decl: ast.RecordDecl,
@@ -63,7 +63,7 @@ fn checkRecordDeclaration(
 
 fn checkObjectNamesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     origin_path: []const u8,
     objects: []const ast.ObjectDecl,
 ) !void {
@@ -82,7 +82,7 @@ fn checkObjectNamesUnique(
 
 fn checkObjectDeclaration(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     object_decl: ast.ObjectDecl,
@@ -100,7 +100,7 @@ fn checkObjectDeclaration(
 
 fn checkObjectExtension(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     extension: ast.ObjectExtensionDecl,
@@ -122,7 +122,7 @@ fn checkObjectExtension(
 
 fn checkObjectFields(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     fields: []const ast.ObjectFieldDecl,
@@ -140,7 +140,7 @@ fn checkObjectFields(
 
 fn checkFieldDefault(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     sema: *const SemanticEnv,
     origin: []const u8,
     ty: ast.Type,
@@ -181,7 +181,7 @@ fn fieldTypeLabel(allocator: std.mem.Allocator, ty: ast.Type) ![]const u8 {
 
 fn checkRolesUnique(
     allocator: std.mem.Allocator,
-    ir: *core.Ir,
+    ir: *core.Context,
     origin_path: []const u8,
     roles: *std.StringHashMap([]const u8),
     class_name: []const u8,
@@ -204,7 +204,7 @@ fn checkRolesUnique(
     }
 }
 
-fn addUserReport(ir: *core.Ir, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+fn addUserReport(ir: *core.Context, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
     const message = try std.fmt.allocPrint(ir.allocator, fmt, args);
     try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },

@@ -9,13 +9,13 @@ const dump_source = @import("dump/source.zig");
 const utils = @import("utils");
 const json = utils.json;
 
-pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
+pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
     var root = try json.Object.beginBuffer(allocator, &buffer);
-    try root.intField("ir_version", 1);
-    try root.stringField("stage", "finalized_ir");
+    try root.intField("context_version", 1);
+    try root.stringField("stage", "finalized_context");
     try root.stringField("project_path", ir.projectPath());
     try root.intField("projectModuleId", ir.project_module_id);
     try root.stringField("asset_base_dir", ir.asset_base_dir);

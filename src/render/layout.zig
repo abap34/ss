@@ -2,10 +2,10 @@ const std = @import("std");
 const core = @import("core");
 const lowering = @import("../lowering.zig");
 const pdf = @import("pdf.zig");
-const schedule = @import("../analysis/schedule.zig");
+const execution = @import("../analysis/execution.zig");
 
-pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Ir, graph: *const schedule.ScheduleGraph) !core.page_unit.PreparedPages {
-    try lowering.evaluateDocumentWithSchedule(ir, graph);
+pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Context, graph: *const execution.ExecutionGraph) !core.page_unit.PreparedPages {
+    try lowering.evaluateDocument(ir, graph);
     var pages = try core.page_unit.prepare(ir.allocator, ir);
     errdefer pages.deinit(ir.allocator);
     var results = try solvePreparedPages(io, ir, &pages, null, null);
@@ -15,7 +15,7 @@ pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Ir, graph: *const sch
 
 pub fn preloadPreparedPageArtifacts(
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     progress: ?pdf.RenderProgress,
     jobs: ?usize,
@@ -27,7 +27,7 @@ pub fn preloadPreparedPageArtifacts(
 
 pub fn solvePreparedPages(
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
@@ -46,7 +46,7 @@ pub fn solvePreparedPages(
 
 pub fn solvePreparedPagesWithTrace(
     io: std.Io,
-    ir: *core.Ir,
+    ir: *core.Context,
     pages: *const core.page_unit.PreparedPages,
     trace_path: []const u8,
     progress: ?core.layout.graph.LayoutProgress,

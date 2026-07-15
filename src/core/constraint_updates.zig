@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("model");
-const core_ir = @import("ir.zig");
+const core_context = @import("context.zig");
 
 const Slot = struct {
     target_node: model.NodeId,
@@ -18,43 +18,43 @@ const Slot = struct {
 
 const WinnerMap = std.AutoHashMap(Slot, usize);
 
-pub fn resolve(ir: *core_ir.Ir) !void {
-    ir.overridden_constraints.clearRetainingCapacity();
-    for (ir.constraint_updates.items) |*update| update.active = false;
-    if (ir.constraint_updates.items.len == 0) return;
+pub fn resolve(context: *core_context.Context) !void {
+    context.overridden_constraints.clearRetainingCapacity();
+    for (context.constraint_updates.items) |*update| update.active = false;
+    if (context.constraint_updates.items.len == 0) return;
 
-    var winners = WinnerMap.init(ir.allocator);
+    var winners = WinnerMap.init(context.allocator);
     defer winners.deinit();
-    try winners.ensureTotalCapacity(@intCast(ir.constraint_updates.items.len));
-    for (ir.constraint_updates.items, 0..) |update, index| {
+    try winners.ensureTotalCapacity(@intCast(context.constraint_updates.items.len));
+    for (context.constraint_updates.items, 0..) |update, index| {
         const result = winners.getOrPutAssumeCapacity(Slot.init(update.target_node, update.target_anchor, update.role));
-        if (!result.found_existing or update.scope_depth <= ir.constraint_updates.items[result.value_ptr.*].scope_depth) {
+        if (!result.found_existing or update.scope_depth <= context.constraint_updates.items[result.value_ptr.*].scope_depth) {
             result.value_ptr.* = index;
         }
     }
-    for (ir.constraint_updates.items, 0..) |*update, index| {
+    for (context.constraint_updates.items, 0..) |*update, index| {
         update.active = winners.get(Slot.init(update.target_node, update.target_anchor, update.role)) == index;
     }
 
     var active_constraints = std.ArrayList(model.Constraint).empty;
-    errdefer active_constraints.deinit(ir.allocator);
-    for (ir.constraints.items) |constraint| {
-        if (isMaskedByWinner(ir.constraint_updates.items, &winners, constraint)) {
-            try ir.overridden_constraints.append(ir.allocator, constraint);
+    errdefer active_constraints.deinit(context.allocator);
+    for (context.constraints.items) |constraint| {
+        if (isMaskedByWinner(context.constraint_updates.items, &winners, constraint)) {
+            try context.overridden_constraints.append(context.allocator, constraint);
         } else {
-            try active_constraints.append(ir.allocator, constraint);
+            try active_constraints.append(context.allocator, constraint);
         }
     }
-    for (ir.constraint_updates.items) |update| {
+    for (context.constraint_updates.items) |update| {
         const replacement = update.replacement orelse continue;
         if (update.active) {
-            try active_constraints.append(ir.allocator, replacement);
+            try active_constraints.append(context.allocator, replacement);
         } else {
-            try ir.overridden_constraints.append(ir.allocator, replacement);
+            try context.overridden_constraints.append(context.allocator, replacement);
         }
     }
-    ir.constraints.deinit(ir.allocator);
-    ir.constraints = active_constraints;
+    context.constraints.deinit(context.allocator);
+    context.constraints = active_constraints;
 }
 
 fn isMaskedByWinner(

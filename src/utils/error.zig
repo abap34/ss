@@ -216,15 +216,15 @@ pub fn printParseError(path: []const u8, text: []const u8, err: anyerror, diagno
     });
 }
 
-pub fn printIrDiagnostics(path: []const u8, text: []const u8, ir: anytype) void {
+pub fn printContextDiagnostics(path: []const u8, text: []const u8, ir: anytype) void {
     for (ir.diagnostics.items) |diagnostic| {
-        var resolved = resolveIrDiagnostic(ir.allocator, path, text, ir, diagnostic) catch {
+        var resolved = resolveContextDiagnostic(ir.allocator, path, text, ir, diagnostic) catch {
             var message_buf: [128]u8 = undefined;
             print(.{
                 .path = path,
                 .source = text,
                 .severity = .@"error",
-                .message = fallbackIrDiagnosticMessage(&message_buf, diagnostic),
+                .message = fallbackContextDiagnosticMessage(&message_buf, diagnostic),
                 .span = null,
             });
             continue;
@@ -238,15 +238,15 @@ pub fn printIrDiagnostics(path: []const u8, text: []const u8, ir: anytype) void 
             .message = resolved.message,
             .span = resolved.span,
         });
-        printIrDiagnosticDetailsWithSource(path, text, ir, diagnostic);
+        printContextDiagnosticDetailsWithSource(path, text, ir, diagnostic);
     }
 }
 
-fn printIrDiagnosticDetails(ir: anytype, diagnostic: anytype) void {
-    printIrDiagnosticDetailsWithSource("", "", ir, diagnostic);
+fn printContextDiagnosticDetails(ir: anytype, diagnostic: anytype) void {
+    printContextDiagnosticDetailsWithSource("", "", ir, diagnostic);
 }
 
-fn printIrDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, ir: anytype, diagnostic: anytype) void {
+fn printContextDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, ir: anytype, diagnostic: anytype) void {
     switch (diagnostic.data) {
         .page_overflow => |data| printPageOverflowBox(ir, diagnostic, data),
         .content_overflow => |data| printContentOverflowBox(default_path, default_source, ir, diagnostic, data),
@@ -280,9 +280,9 @@ pub fn irDiagnosticsJson(
         if (options.phase) |phase| {
             if (!std.mem.eql(u8, @tagName(diagnostic.phase), phase)) continue;
         }
-        var resolved = try resolveIrDiagnostic(allocator, default_path, default_source, ir, diagnostic);
+        var resolved = try resolveContextDiagnostic(allocator, default_path, default_source, ir, diagnostic);
         defer resolved.deinit(allocator);
-        try writeIrDiagnosticJson(&diagnostics, resolved, diagnostic);
+        try writeContextDiagnosticJson(&diagnostics, resolved, diagnostic);
     }
     try diagnostics.end();
     try root.end();
@@ -290,7 +290,7 @@ pub fn irDiagnosticsJson(
     return buffer.toOwnedSlice(allocator);
 }
 
-const ResolvedIrDiagnostic = struct {
+const ResolvedContextDiagnostic = struct {
     phase: []const u8,
     severity: []const u8,
     report_severity: Severity,
@@ -300,21 +300,21 @@ const ResolvedIrDiagnostic = struct {
     source: []const u8,
     span: ?source.ByteSpan,
 
-    fn deinit(self: *ResolvedIrDiagnostic, allocator: std.mem.Allocator) void {
+    fn deinit(self: *ResolvedContextDiagnostic, allocator: std.mem.Allocator) void {
         allocator.free(self.message);
     }
 };
 
-fn resolveIrDiagnostic(
+fn resolveContextDiagnostic(
     allocator: std.mem.Allocator,
     default_path: []const u8,
     default_source: []const u8,
     ir: anytype,
     diagnostic: anytype,
-) !ResolvedIrDiagnostic {
-    const message = try formatIrDiagnostic(allocator, diagnostic);
+) !ResolvedContextDiagnostic {
+    const message = try formatContextDiagnostic(allocator, diagnostic);
     errdefer allocator.free(message);
-    const location = resolveIrDiagnosticLocation(default_path, default_source, ir, diagnostic);
+    const location = resolveContextDiagnosticLocation(default_path, default_source, ir, diagnostic);
     return .{
         .phase = @tagName(diagnostic.phase),
         .severity = @tagName(diagnostic.severity),
@@ -330,9 +330,9 @@ fn resolveIrDiagnostic(
     };
 }
 
-fn writeIrDiagnosticJson(
+fn writeContextDiagnosticJson(
     diagnostics: *json.Array,
-    resolved: ResolvedIrDiagnostic,
+    resolved: ResolvedContextDiagnostic,
     diagnostic: anytype,
 ) !void {
     var item = try diagnostics.objectItem();
@@ -363,7 +363,7 @@ fn writeJsonLocation(object: *json.Object, key: []const u8, text: []const u8, by
     try child.end();
 }
 
-fn resolveIrDiagnosticLocation(
+fn resolveContextDiagnosticLocation(
     default_path: []const u8,
     default_source: []const u8,
     ir: anytype,
@@ -395,7 +395,7 @@ fn irDiagnosticCode(diagnostic: anytype) []const u8 {
     };
 }
 
-fn fallbackIrDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
+fn fallbackContextDiagnosticMessage(buf: []u8, diagnostic: anytype) []const u8 {
     return std.fmt.bufPrint(
         buf,
         "DiagnosticResolutionFailed: could not resolve {s} diagnostic",
@@ -413,7 +413,7 @@ pub fn userReportDiagnosticCode(message: []const u8) []const u8 {
     return code;
 }
 
-pub fn hasIrErrors(ir: anytype) bool {
+pub fn hasContextErrors(ir: anytype) bool {
     for (ir.diagnostics.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return true;
     }
@@ -885,12 +885,12 @@ pub fn isExpectedCliError(err: anyerror) bool {
         error.UnknownRole,
         error.UnknownPayloadKind,
         error.PageCannotBeConstraintTarget,
-        error.UnsupportedScheduledPrimitive,
+        error.UnsupportedDocumentEvaluationPrimitive,
         error.FunctionDidNotReturnValue,
         error.InvalidSelectionMutation,
         error.LayoutDependencyCycle,
         error.PostLayoutComputationUnsupported,
-        error.ScheduledDependencyCycle,
+        error.ExecutionDependencyCycle,
         error.DuplicateContentDefinition,
         error.DuplicatePropertyDefinition,
         error.DuplicateReprDefinition,
@@ -950,7 +950,7 @@ fn parseDiagnosticCode(err: anyerror) []const u8 {
     };
 }
 
-pub fn formatIrDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
+pub fn formatContextDiagnostic(allocator: std.mem.Allocator, diagnostic: anytype) ![]const u8 {
     return switch (diagnostic.data) {
         .user_report => |data| allocator.dupe(u8, data.message),
         .asset_not_found => |data| std.fmt.allocPrint(

@@ -150,7 +150,7 @@ pub const InlayHint = struct {
     file: ?[]const u8 = null,
 };
 
-pub const Ir = struct {
+pub const Context = struct {
     allocator: Allocator,
     asset_base_dir: []u8,
     modules: std.ArrayList(SourceModule),
@@ -184,8 +184,8 @@ pub const Ir = struct {
         project_path: []u8,
         project_source: []u8,
         project_syntax: ast.Module,
-    ) !Ir {
-        var ir = Ir{
+    ) !Context {
+        var context = Context{
             .allocator = allocator,
             .asset_base_dir = asset_base_dir,
             .modules = .empty,
@@ -213,21 +213,21 @@ pub const Ir = struct {
             .next_id = 1,
             .document_id = 0,
         };
-        errdefer ir.deinitPartial();
+        errdefer context.deinitPartial();
 
         const project_spec = try allocator.dupe(u8, project_path);
         errdefer allocator.free(project_spec);
 
-        const doc_id = try ir.freshId();
-        try ir.nodes.append(allocator, .{
+        const doc_id = try context.freshId();
+        try context.nodes.append(allocator, .{
             .id = doc_id,
             .kind = .document,
             .name = "document",
             .attached = true,
         });
-        ir.document_id = doc_id;
+        context.document_id = doc_id;
 
-        try ir.modules.append(allocator, .{
+        try context.modules.append(allocator, .{
             .id = 0,
             .kind = .project,
             .spec = project_spec,
@@ -238,10 +238,10 @@ pub const Ir = struct {
             .resolved_import_ids = .empty,
         });
 
-        return ir;
+        return context;
     }
 
-    fn deinitPartial(self: *Ir) void {
+    fn deinitPartial(self: *Context) void {
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
         self.constants.deinit();
@@ -270,7 +270,7 @@ pub const Ir = struct {
         self.runtime_strings.deinit(self.allocator);
     }
 
-    pub fn deinit(self: *Ir) void {
+    pub fn deinit(self: *Context) void {
         for (self.modules.items) |*module| module.deinit(self.allocator);
         self.modules.deinit(self.allocator);
         self.module_order.deinit(self.allocator);
@@ -315,7 +315,7 @@ pub const Ir = struct {
         self.runtime_strings.deinit(self.allocator);
     }
 
-    fn deinitStringProvenance(self: *Ir) void {
+    fn deinitStringProvenance(self: *Context) void {
         var iterator = self.string_provenance.valueIterator();
         while (iterator.next()) |entries| self.deinitProvenanceList(entries);
         self.string_provenance.deinit();
@@ -325,12 +325,12 @@ pub const Ir = struct {
         return @intFromPtr(text.ptr);
     }
 
-    fn deinitProvenanceList(self: *Ir, entries: *std.ArrayList(ContentProvenance)) void {
+    fn deinitProvenanceList(self: *Context, entries: *std.ArrayList(ContentProvenance)) void {
         for (entries.items) |*entry| entry.deinit(self.allocator);
         entries.deinit(self.allocator);
     }
 
-    fn cloneProvenanceList(self: *Ir, entries: []const ContentProvenance) !std.ArrayList(ContentProvenance) {
+    fn cloneProvenanceList(self: *Context, entries: []const ContentProvenance) !std.ArrayList(ContentProvenance) {
         var cloned = std.ArrayList(ContentProvenance).empty;
         errdefer self.deinitProvenanceList(&cloned);
         for (entries) |entry| {
@@ -339,7 +339,7 @@ pub const Ir = struct {
         return cloned;
     }
 
-    pub fn setStringProvenance(self: *Ir, text: []const u8, entries: []const ContentProvenance) !void {
+    pub fn setStringProvenance(self: *Context, text: []const u8, entries: []const ContentProvenance) !void {
         if (text.len == 0 or entries.len == 0) return;
         var cloned = try self.cloneProvenanceList(entries);
         errdefer self.deinitProvenanceList(&cloned);
@@ -348,19 +348,19 @@ pub const Ir = struct {
         gop.value_ptr.* = cloned;
     }
 
-    pub fn stringProvenance(self: *const Ir, text: []const u8) []const ContentProvenance {
+    pub fn stringProvenance(self: *const Context, text: []const u8) []const ContentProvenance {
         if (text.len == 0) return &.{};
         const entries = self.string_provenance.get(stringKey(text)) orelse return &.{};
         return entries.items;
     }
 
-    pub fn ownString(self: *Ir, text: []u8) ![]const u8 {
+    pub fn ownString(self: *Context, text: []u8) ![]const u8 {
         errdefer self.allocator.free(text);
         try self.runtime_strings.append(self.allocator, text);
         return text;
     }
 
-    pub fn ownStringWithProvenance(self: *Ir, text: []u8, entries: []const ContentProvenance) ![]const u8 {
+    pub fn ownStringWithProvenance(self: *Context, text: []u8, entries: []const ContentProvenance) ![]const u8 {
         errdefer self.allocator.free(text);
         try self.runtime_strings.append(self.allocator, text);
         var appended = true;
@@ -372,38 +372,38 @@ pub const Ir = struct {
         return text;
     }
 
-    pub fn copyString(self: *Ir, text: []const u8) ![]const u8 {
+    pub fn copyString(self: *Context, text: []const u8) ![]const u8 {
         return self.ownString(try self.allocator.dupe(u8, text));
     }
 
-    fn copyOptionalString(self: *Ir, text: ?[]const u8) !?[]const u8 {
+    fn copyOptionalString(self: *Context, text: ?[]const u8) !?[]const u8 {
         return if (text) |value| try self.copyString(value) else null;
     }
 
-    pub fn projectPath(self: *const Ir) []const u8 {
+    pub fn projectPath(self: *const Context) []const u8 {
         return self.projectModule().path orelse "";
     }
 
-    pub fn projectSource(self: *const Ir) []const u8 {
+    pub fn projectSource(self: *const Context) []const u8 {
         return self.projectModule().source;
     }
 
-    pub fn projectSyntax(self: *const Ir) ast.Module {
+    pub fn projectSyntax(self: *const Context) ast.Module {
         return self.projectModule().syntax;
     }
 
-    pub fn projectModule(self: *const Ir) *const SourceModule {
+    pub fn projectModule(self: *const Context) *const SourceModule {
         return self.moduleById(self.project_module_id).?;
     }
 
-    pub fn moduleById(self: *const Ir, id: SourceModuleId) ?*const SourceModule {
+    pub fn moduleById(self: *const Context, id: SourceModuleId) ?*const SourceModule {
         for (self.modules.items) |*module| {
             if (module.id == id) return module;
         }
         return null;
     }
 
-    pub fn moduleByPathOrSpec(self: *const Ir, key: []const u8) ?*const SourceModule {
+    pub fn moduleByPathOrSpec(self: *const Context, key: []const u8) ?*const SourceModule {
         for (self.modules.items) |*module| {
             if (module.path) |module_path| {
                 if (std.mem.eql(u8, module_path, key)) return module;
@@ -413,33 +413,33 @@ pub const Ir = struct {
         return null;
     }
 
-    pub fn projectModuleMutable(self: *Ir) *SourceModule {
+    pub fn projectModuleMutable(self: *Context) *SourceModule {
         return self.moduleByIdMutable(self.project_module_id).?;
     }
 
-    pub fn moduleByIdMutable(self: *Ir, id: SourceModuleId) ?*SourceModule {
+    pub fn moduleByIdMutable(self: *Context, id: SourceModuleId) ?*SourceModule {
         for (self.modules.items) |*module| {
             if (module.id == id) return module;
         }
         return null;
     }
 
-    pub fn modulePath(self: *const Ir, id: SourceModuleId) ?[]const u8 {
+    pub fn modulePath(self: *const Context, id: SourceModuleId) ?[]const u8 {
         const module = self.moduleById(id) orelse return null;
         return module.path;
     }
 
-    fn freshId(self: *Ir) !NodeId {
+    fn freshId(self: *Context) !NodeId {
         const id = self.next_id;
         self.next_id += 1;
         return id;
     }
 
-    pub fn nodeCount(self: *const Ir) usize {
+    pub fn nodeCount(self: *const Context) usize {
         return self.nodes.items.len;
     }
 
-    pub fn addContainment(self: *Ir, parent: NodeId, child: NodeId) !void {
+    pub fn addContainment(self: *Context, parent: NodeId, child: NodeId) !void {
         const gop = try self.contains.getOrPut(parent);
         if (!gop.found_existing) {
             gop.value_ptr.* = .empty;
@@ -450,7 +450,7 @@ pub const Ir = struct {
         try gop.value_ptr.append(self.allocator, child);
     }
 
-    pub fn addPage(self: *Ir, name: []const u8) !NodeId {
+    pub fn addPage(self: *Context, name: []const u8) !NodeId {
         const page_id = try self.freshId();
         const index = self.page_order.items.len + 1;
         const owned_name = try self.copyString(name);
@@ -467,7 +467,7 @@ pub const Ir = struct {
     }
 
     pub fn makeObject(
-        self: *Ir,
+        self: *Context,
         page_id: NodeId,
         name: []const u8,
         role: ?Role,
@@ -479,7 +479,7 @@ pub const Ir = struct {
     }
 
     pub fn makeObjectWithOrigin(
-        self: *Ir,
+        self: *Context,
         page_id: NodeId,
         name: []const u8,
         role: ?Role,
@@ -492,7 +492,7 @@ pub const Ir = struct {
     }
 
     pub fn createObjectWithOrigin(
-        self: *Ir,
+        self: *Context,
         name: []const u8,
         role: ?Role,
         object_kind: ObjectKind,
@@ -504,7 +504,7 @@ pub const Ir = struct {
     }
 
     pub fn makeGroupWithOrigin(
-        self: *Ir,
+        self: *Context,
         page_id: NodeId,
         attached: bool,
         children: []const NodeId,
@@ -528,20 +528,20 @@ pub const Ir = struct {
     }
 
     pub fn createGroupWithOrigin(
-        self: *Ir,
+        self: *Context,
         children: []const NodeId,
         origin: ?[]const u8,
     ) !NodeId {
         return try self.makeGroupWithOrigin(self.document_id, false, children, origin);
     }
 
-    pub fn placeObjectOnPage(self: *Ir, page_id: NodeId, object_id: NodeId) !void {
+    pub fn placeObjectOnPage(self: *Context, page_id: NodeId, object_id: NodeId) !void {
         var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer visited.deinit();
         try self.placeObjectSubtree(page_id, object_id, &visited);
     }
 
-    fn placeObjectSubtree(self: *Ir, page_id: NodeId, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
+    fn placeObjectSubtree(self: *Context, page_id: NodeId, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
         if (visited.contains(object_id)) return;
         try visited.put(object_id, {});
         const node = self.getNode(object_id) orelse return error.UnknownNode;
@@ -553,13 +553,13 @@ pub const Ir = struct {
         for (children) |child_id| try self.placeObjectSubtree(page_id, child_id, visited);
     }
 
-    pub fn discardObjectSubtree(self: *Ir, object_id: NodeId) !void {
+    pub fn discardObjectSubtree(self: *Context, object_id: NodeId) !void {
         var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer visited.deinit();
         try self.discardObjectSubtreeInner(object_id, &visited);
     }
 
-    fn discardObjectSubtreeInner(self: *Ir, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
+    fn discardObjectSubtreeInner(self: *Context, object_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !void {
         if (visited.contains(object_id)) return;
         try visited.put(object_id, {});
         const node = self.getNode(object_id) orelse return error.UnknownNode;
@@ -569,7 +569,7 @@ pub const Ir = struct {
         for (children) |child_id| try self.discardObjectSubtreeInner(child_id, visited);
     }
 
-    pub fn connectGeneratedReturnObjects(self: *Ir, return_id: NodeId, start_index: usize, origin: ?[]const u8) !void {
+    pub fn connectGeneratedReturnObjects(self: *Context, return_id: NodeId, start_index: usize, origin: ?[]const u8) !void {
         const return_node = self.getNode(return_id) orelse return error.UnknownNode;
         if (return_node.kind != .object) return;
 
@@ -610,7 +610,7 @@ pub const Ir = struct {
         if (page_id) |page| try self.placeObjectOnPage(page, return_id);
     }
 
-    fn setGeneratedNodeOrigin(self: *Ir, node_id: NodeId, start_index: usize, origin: []const u8) !void {
+    fn setGeneratedNodeOrigin(self: *Context, node_id: NodeId, start_index: usize, origin: []const u8) !void {
         if (node_id == 0) return;
         const node_index: usize = @intCast(node_id - 1);
         if (node_index < start_index or node_index >= self.nodes.items.len) return;
@@ -620,7 +620,7 @@ pub const Ir = struct {
     }
 
     fn appendConnectedCandidates(
-        self: *Ir,
+        self: *Context,
         candidates: std.AutoHashMap(NodeId, void),
         seen: *std.AutoHashMap(NodeId, void),
         queue: *std.ArrayList(NodeId),
@@ -649,7 +649,7 @@ pub const Ir = struct {
     }
 
     fn appendCandidate(
-        self: *Ir,
+        self: *Context,
         candidates: std.AutoHashMap(NodeId, void),
         seen: *std.AutoHashMap(NodeId, void),
         queue: *std.ArrayList(NodeId),
@@ -660,13 +660,13 @@ pub const Ir = struct {
         try queue.append(self.allocator, candidate);
     }
 
-    fn containsDescendant(self: *Ir, parent_id: NodeId, child_id: NodeId) !bool {
+    fn containsDescendant(self: *Context, parent_id: NodeId, child_id: NodeId) !bool {
         var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer visited.deinit();
         return try self.containsDescendantInner(parent_id, child_id, &visited);
     }
 
-    fn containsDescendantInner(self: *Ir, parent_id: NodeId, child_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !bool {
+    fn containsDescendantInner(self: *Context, parent_id: NodeId, child_id: NodeId, visited: *std.AutoHashMap(NodeId, void)) !bool {
         if (visited.contains(parent_id)) return false;
         try visited.put(parent_id, {});
         const children = self.childrenOf(parent_id) orelse return false;
@@ -677,7 +677,7 @@ pub const Ir = struct {
         return false;
     }
 
-    pub fn setNodeFieldValue(self: *Ir, node_id: NodeId, key: []const u8, value: Value) !void {
+    pub fn setNodeFieldValue(self: *Context, node_id: NodeId, key: []const u8, value: Value) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.fields.items) |field| {
             if (std.mem.eql(u8, field.key, key)) {
@@ -690,7 +690,7 @@ pub const Ir = struct {
         });
     }
 
-    pub fn unsetNodeField(self: *Ir, node_id: NodeId, key: []const u8) !void {
+    pub fn unsetNodeField(self: *Context, node_id: NodeId, key: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.fields.items, 0..) |field, index| {
             if (std.mem.eql(u8, field.key, key)) {
@@ -701,7 +701,7 @@ pub const Ir = struct {
         }
     }
 
-    pub fn extendRenderEnv(self: *Ir, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
+    pub fn extendRenderEnv(self: *Context, node_id: NodeId, op: []const u8, key: []const u8, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         for (node.render_env.items) |entry| {
             if (std.mem.eql(u8, entry.op, op) and
@@ -718,17 +718,17 @@ pub const Ir = struct {
         });
     }
 
-    pub fn getNodeField(self: *Ir, node_id: NodeId, key: []const u8) ?Value {
+    pub fn getNodeField(self: *Context, node_id: NodeId, key: []const u8) ?Value {
         const node = self.getNode(node_id) orelse return null;
         return nodeField(node, key);
     }
 
-    fn clearNodeContentProvenance(self: *Ir, node: *Node) void {
+    fn clearNodeContentProvenance(self: *Context, node: *Node) void {
         for (node.content_provenance.items) |*entry| entry.deinit(self.allocator);
         node.content_provenance.clearRetainingCapacity();
     }
 
-    pub fn setNodeContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+    pub fn setNodeContent(self: *Context, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         if (node.content != null) return error.DuplicateContentDefinition;
         const owned_value = try self.allocator.dupe(u8, value);
@@ -746,7 +746,7 @@ pub const Ir = struct {
         node.content_provenance = owned_provenance;
     }
 
-    pub fn setNodeDisplayContent(self: *Ir, node_id: NodeId, value: []const u8) !void {
+    pub fn setNodeDisplayContent(self: *Context, node_id: NodeId, value: []const u8) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         const owned_value = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(owned_value);
@@ -764,14 +764,14 @@ pub const Ir = struct {
         node.display_content_provenance = owned_provenance;
     }
 
-    pub fn setNodeReprFunction(self: *Ir, node_id: NodeId, function: FunctionRef) !void {
+    pub fn setNodeReprFunction(self: *Context, node_id: NodeId, function: FunctionRef) !void {
         const node = self.getNode(node_id) orelse return error.UnknownNode;
         if (node.repr_function != null) return error.DuplicateReprDefinition;
         node.repr_function = try function.clone(self.allocator);
     }
 
     fn makeNodeWithOrigin(
-        self: *Ir,
+        self: *Context,
         page_id: NodeId,
         attached: bool,
         kind: NodeKind,
@@ -813,14 +813,14 @@ pub const Ir = struct {
         return obj_id;
     }
 
-    pub fn addConstraint(self: *Ir, expr: []const u8) !void {
+    pub fn addConstraint(self: *Context, expr: []const u8) !void {
         _ = self;
         _ = expr;
         return error.StringConstraintsRemoved;
     }
 
     pub fn addAnchorConstraint(
-        self: *Ir,
+        self: *Context,
         target_node: NodeId,
         target_anchor: Anchor,
         source: ConstraintSource,
@@ -831,7 +831,7 @@ pub const Ir = struct {
     }
 
     pub fn addAnchorConstraintAtScope(
-        self: *Ir,
+        self: *Context,
         target_node: NodeId,
         target_anchor: Anchor,
         source: ConstraintSource,
@@ -852,7 +852,7 @@ pub const Ir = struct {
     }
 
     pub fn addConstraintUpdate(
-        self: *Ir,
+        self: *Context,
         target_node: NodeId,
         target_anchor: Anchor,
         role: ConstraintRole,
@@ -881,7 +881,7 @@ pub const Ir = struct {
     }
 
     pub fn addObjectSource(
-        self: *Ir,
+        self: *Context,
         node_id: NodeId,
         page_id: NodeId,
         module_id: SourceModuleId,
@@ -900,11 +900,11 @@ pub const Ir = struct {
         });
     }
 
-    pub fn addConstraintSet(self: *Ir, constraints: ConstraintSet) !void {
+    pub fn addConstraintSet(self: *Context, constraints: ConstraintSet) !void {
         try self.constraints.appendSlice(self.allocator, constraints.items.items);
     }
 
-    pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
+    pub fn noteConstraintFailure(self: *Context, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {
         self.noteConstraintFailureDetailed(
             page_id,
             constraint,
@@ -918,7 +918,7 @@ pub const Ir = struct {
     }
 
     pub fn noteConstraintFailureDetailed(
-        self: *Ir,
+        self: *Context,
         page_id: NodeId,
         constraint: Constraint,
         existing_constraint: ?Constraint,
@@ -942,7 +942,7 @@ pub const Ir = struct {
     }
 
     pub fn noteConstraintFailureDetailedWithPropagation(
-        self: *Ir,
+        self: *Context,
         page_id: NodeId,
         constraint: Constraint,
         existing_constraint: ?Constraint,
@@ -984,22 +984,22 @@ pub const Ir = struct {
         self.last_constraint_failure = self.constraint_failures.items[self.constraint_failures.items.len - 1];
     }
 
-    pub fn hasConstraintFailures(self: *const Ir) bool {
+    pub fn hasConstraintFailures(self: *const Context) bool {
         return self.constraint_failures.items.len > 0;
     }
 
-    pub fn clearConstraintFailures(self: *Ir) void {
+    pub fn clearConstraintFailures(self: *Context) void {
         for (self.constraint_failures.items) |*failure| failure.deinit(self.allocator);
         self.constraint_failures.clearRetainingCapacity();
         self.last_constraint_failure = null;
     }
 
-    pub fn clearDiagnostics(self: *Ir) void {
+    pub fn clearDiagnostics(self: *Context) void {
         for (self.diagnostics.items) |*diagnostic| diagnostic.deinit(self.allocator);
         self.diagnostics.clearRetainingCapacity();
     }
 
-    pub fn clearDiagnosticsForPhase(self: *Ir, phase: DiagnosticPhase) void {
+    pub fn clearDiagnosticsForPhase(self: *Context, phase: DiagnosticPhase) void {
         var write_index: usize = 0;
         for (self.diagnostics.items) |*diagnostic| {
             if (diagnostic.phase == phase) {
@@ -1012,11 +1012,11 @@ pub const Ir = struct {
         self.diagnostics.items.len = write_index;
     }
 
-    pub fn addDiagnostic(self: *Ir, diagnostic: Diagnostic) !void {
+    pub fn addDiagnostic(self: *Context, diagnostic: Diagnostic) !void {
         try self.diagnostics.append(self.allocator, diagnostic);
     }
 
-    fn addLayoutDiagnostic(self: *Ir, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+    fn addLayoutDiagnostic(self: *Context, severity: DiagnosticSeverity, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         const origin = if (node_id) |id| blk: {
             const node = self.getNode(id) orelse break :blk null;
             break :blk node.origin;
@@ -1033,16 +1033,16 @@ pub const Ir = struct {
         try self.addDiagnostic(diagnostic);
     }
 
-    pub fn addLayoutWarning(self: *Ir, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+    pub fn addLayoutWarning(self: *Context, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addLayoutDiagnostic(.warning, page_id, node_id, data);
     }
 
-    pub fn addLayoutError(self: *Ir, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
+    pub fn addLayoutError(self: *Context, page_id: NodeId, node_id: ?NodeId, data: Diagnostic.Data) !void {
         try self.addLayoutDiagnostic(.@"error", page_id, node_id, data);
     }
 
     pub fn addValidationDiagnostic(
-        self: *Ir,
+        self: *Context,
         severity: DiagnosticSeverity,
         page_id: ?NodeId,
         node_id: ?NodeId,
@@ -1062,7 +1062,7 @@ pub const Ir = struct {
     }
 
     pub fn addRenderDiagnostic(
-        self: *Ir,
+        self: *Context,
         severity: DiagnosticSeverity,
         page_id: ?NodeId,
         node_id: ?NodeId,
@@ -1081,7 +1081,7 @@ pub const Ir = struct {
         try self.addDiagnostic(diagnostic);
     }
 
-    pub fn validatePageLocalLayout(self: *Ir) !void {
+    pub fn validatePageLocalLayout(self: *Context) !void {
         try self.addPageOwnershipDiagnostics();
         try self.addUnplacedObjectDiagnostics(.warning);
         for (self.constraints.items) |constraint| {
@@ -1090,7 +1090,7 @@ pub const Ir = struct {
         }
     }
 
-    fn addPageOwnershipDiagnostics(self: *Ir) !void {
+    fn addPageOwnershipDiagnostics(self: *Context) !void {
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.discarded) continue;
             const ownership = self.directPageOwnershipInfo(node.id);
@@ -1110,11 +1110,11 @@ pub const Ir = struct {
         }
     }
 
-    pub fn addUnplacedObjectWarnings(self: *Ir) !void {
+    pub fn addUnplacedObjectWarnings(self: *Context) !void {
         try self.addUnplacedObjectDiagnostics(.warning);
     }
 
-    fn addUnplacedObjectDiagnostics(self: *Ir, severity: DiagnosticSeverity) !void {
+    fn addUnplacedObjectDiagnostics(self: *Context, severity: DiagnosticSeverity) !void {
         for (self.nodes.items) |node| {
             if (node.kind != .object or node.attached or node.discarded) continue;
             if (try self.hasUnplacedObjectParent(node.id)) continue;
@@ -1132,7 +1132,7 @@ pub const Ir = struct {
         count: usize = 0,
     };
 
-    fn directPageOwnershipInfo(self: *Ir, child_id: NodeId) PageOwnershipInfo {
+    fn directPageOwnershipInfo(self: *Context, child_id: NodeId) PageOwnershipInfo {
         var result = PageOwnershipInfo{};
         var it = self.contains.iterator();
         while (it.next()) |entry| {
@@ -1148,7 +1148,7 @@ pub const Ir = struct {
         return result;
     }
 
-    pub fn layoutPageOf(self: *Ir, node_id: NodeId) ?NodeId {
+    pub fn layoutPageOf(self: *Context, node_id: NodeId) ?NodeId {
         const direct = self.directPageOwnershipInfo(node_id);
         if (direct.count == 1) return direct.first;
         if (direct.count > 1) return null;
@@ -1156,7 +1156,7 @@ pub const Ir = struct {
         return self.uniqueAttachedDescendantPage(node_id);
     }
 
-    fn uniqueAttachedDescendantPage(self: *Ir, node_id: NodeId) ?NodeId {
+    fn uniqueAttachedDescendantPage(self: *Context, node_id: NodeId) ?NodeId {
         var result: ?NodeId = null;
         const children = self.childrenOf(node_id) orelse return null;
         for (children) |child_id| {
@@ -1179,7 +1179,7 @@ pub const Ir = struct {
         return result;
     }
 
-    fn addCrossPageConstraintDiagnosticIfKnown(self: *Ir, constraint: Constraint) !void {
+    fn addCrossPageConstraintDiagnosticIfKnown(self: *Context, constraint: Constraint) !void {
         const target_page = self.layoutPageOf(constraint.target_node) orelse return;
         const source_page = switch (constraint.source) {
             .page => target_page,
@@ -1200,7 +1200,7 @@ pub const Ir = struct {
         });
     }
 
-    fn addConstraintEndpointOwnershipDiagnostics(self: *Ir, constraint: Constraint) !void {
+    fn addConstraintEndpointOwnershipDiagnostics(self: *Context, constraint: Constraint) !void {
         try self.addConstraintEndpointOwnershipDiagnostic(constraint.target_node, "target", constraint.origin);
         switch (constraint.source) {
             .page => {},
@@ -1208,7 +1208,7 @@ pub const Ir = struct {
         }
     }
 
-    fn addConstraintEndpointOwnershipDiagnostic(self: *Ir, node_id: NodeId, role: []const u8, origin: ?[]const u8) !void {
+    fn addConstraintEndpointOwnershipDiagnostic(self: *Context, node_id: NodeId, role: []const u8, origin: ?[]const u8) !void {
         if (self.layoutPageOf(node_id) != null) return;
         const ownership = self.directPageOwnershipInfo(node_id);
         if (ownership.count > 1) return;
@@ -1226,7 +1226,7 @@ pub const Ir = struct {
         });
     }
 
-    fn hasUnownedLayoutObjectDiagnostic(self: *Ir, node_id: NodeId, origin: ?[]const u8) bool {
+    fn hasUnownedLayoutObjectDiagnostic(self: *Context, node_id: NodeId, origin: ?[]const u8) bool {
         for (self.diagnostics.items) |diagnostic| {
             if (diagnostic.phase != .validation or diagnostic.node_id != node_id) continue;
             switch (diagnostic.data) {
@@ -1242,7 +1242,7 @@ pub const Ir = struct {
         return false;
     }
 
-    fn hasCrossPageConstraintDiagnostic(self: *Ir, constraint: Constraint) bool {
+    fn hasCrossPageConstraintDiagnostic(self: *Context, constraint: Constraint) bool {
         for (self.diagnostics.items) |diagnostic| {
             if (diagnostic.phase != .validation or diagnostic.node_id != constraint.target_node) continue;
             switch (diagnostic.data) {
@@ -1258,7 +1258,7 @@ pub const Ir = struct {
         return false;
     }
 
-    fn hasUnplacedObjectParent(self: *Ir, child_id: NodeId) !bool {
+    fn hasUnplacedObjectParent(self: *Context, child_id: NodeId) !bool {
         var it = self.contains.iterator();
         while (it.next()) |entry| {
             for (entry.value_ptr.items) |candidate| {
@@ -1270,14 +1270,14 @@ pub const Ir = struct {
         return false;
     }
 
-    fn isConstraintReferencedGroupWithAttachedDescendant(self: *Ir, node_id: NodeId) bool {
+    fn isConstraintReferencedGroupWithAttachedDescendant(self: *Context, node_id: NodeId) bool {
         const node = self.getNode(node_id) orelse return false;
         if (!roleEq(node.role, GroupRole)) return false;
         if (!self.constraintReferencesNode(node_id)) return false;
         return self.hasAttachedDescendant(node_id);
     }
 
-    fn constraintReferencesNode(self: *Ir, node_id: NodeId) bool {
+    fn constraintReferencesNode(self: *Context, node_id: NodeId) bool {
         for (self.constraints.items) |constraint| {
             if (constraint.target_node == node_id) return true;
             switch (constraint.source) {
@@ -1288,7 +1288,7 @@ pub const Ir = struct {
         return false;
     }
 
-    fn hasAttachedDescendant(self: *Ir, node_id: NodeId) bool {
+    fn hasAttachedDescendant(self: *Context, node_id: NodeId) bool {
         const children = self.childrenOf(node_id) orelse return false;
         for (children) |child_id| {
             const child = self.getNode(child_id) orelse continue;
@@ -1298,7 +1298,7 @@ pub const Ir = struct {
         return false;
     }
 
-    pub fn getNode(self: *Ir, id: NodeId) ?*Node {
+    pub fn getNode(self: *Context, id: NodeId) ?*Node {
         if (id != 0) {
             const index: usize = @intCast(id - 1);
             if (index < self.nodes.items.len and self.nodes.items[index].id == id) {
@@ -1311,21 +1311,21 @@ pub const Ir = struct {
         return null;
     }
 
-    pub fn childrenOf(self: *Ir, parent: NodeId) ?[]const NodeId {
+    pub fn childrenOf(self: *Context, parent: NodeId) ?[]const NodeId {
         const children = self.contains.get(parent) orelse return null;
         return children.items;
     }
 
-    pub fn pageIndexOf(self: *Ir, page_id: NodeId) usize {
+    pub fn pageIndexOf(self: *Context, page_id: NodeId) usize {
         const node = self.getNode(page_id) orelse unreachable;
         return node.page_index.?;
     }
 
-    pub fn pageCount(self: *Ir) usize {
+    pub fn pageCount(self: *Context) usize {
         return self.page_order.items.len;
     }
 
-    pub fn parentPageOf(self: *Ir, child_id: NodeId) ?NodeId {
+    pub fn parentPageOf(self: *Context, child_id: NodeId) ?NodeId {
         var it = self.contains.iterator();
         while (it.next()) |entry| {
             const parent_id = entry.key_ptr.*;
@@ -1338,7 +1338,7 @@ pub const Ir = struct {
         return null;
     }
 
-    fn previousPageOf(self: *Ir, page_id: NodeId) ?NodeId {
+    fn previousPageOf(self: *Context, page_id: NodeId) ?NodeId {
         for (self.page_order.items, 0..) |candidate, index| {
             if (candidate != page_id) continue;
             if (index == 0) return null;
@@ -1347,7 +1347,7 @@ pub const Ir = struct {
         return null;
     }
 
-    fn ensureValueTag(self: *Ir, value: Value, expected: ValueTag, context: []const u8) !void {
+    fn ensureValueTag(self: *Context, value: Value, expected: ValueTag, context: []const u8) !void {
         _ = self;
         const actual: ValueTag = switch (value) {
             .none => .none,
@@ -1376,7 +1376,7 @@ pub const Ir = struct {
     }
 
     fn singletonSelection(
-        self: *Ir,
+        self: *Context,
         allocator: Allocator,
         item_tag: SelectionItemTag,
         provenance: []const u8,
@@ -1389,7 +1389,7 @@ pub const Ir = struct {
     }
 
     fn selectPageObjectsByRole(
-        self: *Ir,
+        self: *Context,
         allocator: Allocator,
         page_id: NodeId,
         role: Role,
@@ -1407,7 +1407,7 @@ pub const Ir = struct {
     }
 
     fn selectDocumentObjectsByRole(
-        self: *Ir,
+        self: *Context,
         allocator: Allocator,
         role: Role,
         provenance: []const u8,
@@ -1423,7 +1423,7 @@ pub const Ir = struct {
         return selection;
     }
 
-    fn selectDocumentPages(self: *Ir, allocator: Allocator, provenance: []const u8) !Selection {
+    fn selectDocumentPages(self: *Context, allocator: Allocator, provenance: []const u8) !Selection {
         var selection = Selection.init(.page, provenance);
         for (self.page_order.items) |page_id| {
             try selection.ids.append(allocator, page_id);
@@ -1431,7 +1431,7 @@ pub const Ir = struct {
         return selection;
     }
 
-    fn selectChildren(self: *Ir, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+    fn selectChildren(self: *Context, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
         var selection = Selection.init(.object, provenance);
         const children = self.contains.get(parent_id) orelse return selection;
         for (children.items) |child_id| {
@@ -1441,7 +1441,7 @@ pub const Ir = struct {
         return selection;
     }
 
-    fn appendDescendants(self: *Ir, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
+    fn appendDescendants(self: *Context, allocator: Allocator, parent_id: NodeId, selection: *Selection) !void {
         const children = self.contains.get(parent_id) orelse return;
         for (children.items) |child_id| {
             const child = self.getNode(child_id) orelse continue;
@@ -1450,13 +1450,13 @@ pub const Ir = struct {
         }
     }
 
-    fn selectDescendants(self: *Ir, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
+    fn selectDescendants(self: *Context, allocator: Allocator, parent_id: NodeId, provenance: []const u8) !Selection {
         var selection = Selection.init(.object, provenance);
         try self.appendDescendants(allocator, parent_id, &selection);
         return selection;
     }
 
-    pub fn select(self: *Ir, allocator: Allocator, base: Value, query: Query) !Value {
+    pub fn select(self: *Context, allocator: Allocator, base: Value, query: Query) !Value {
         try self.ensureValueTag(base, query.input, query.name);
 
         return switch (query.op) {
@@ -1487,20 +1487,20 @@ pub const Ir = struct {
         };
     }
 
-    pub fn finalize(self: *Ir) !void {
+    pub fn finalize(self: *Context) !void {
         try self.finalizeWithLayoutTracePath(null);
     }
 
-    pub fn finalizeWithLayoutTracePath(self: *Ir, trace_path: ?[]const u8) !void {
+    pub fn finalizeWithLayoutTracePath(self: *Context, trace_path: ?[]const u8) !void {
         try self.finalizeWithLayoutTracePathAndOptions(trace_path, .{});
     }
 
-    pub fn finalizeWithLayoutTracePathAndOptions(self: *Ir, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !void {
+    pub fn finalizeWithLayoutTracePathAndOptions(self: *Context, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !void {
         var results = try self.finalizeWithLayoutResultsAndOptions(trace_path, options);
         defer results.deinit(self.allocator);
     }
 
-    pub fn finalizeWithLayoutResultsAndOptions(self: *Ir, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !model.LayoutResults {
+    pub fn finalizeWithLayoutResultsAndOptions(self: *Context, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !model.LayoutResults {
         self.clearDiagnosticsForPhase(.layout);
         self.clearConstraintFailures();
         var results = try layout.solveLayoutResultsWithTracePathAndOptions(self, trace_path, options);
@@ -1530,19 +1530,19 @@ pub const Ir = struct {
         return results;
     }
 
-    pub fn styleForNode(self: *Ir, node: *const Node) model.TextStyle {
+    pub fn styleForNode(self: *Context, node: *const Node) model.TextStyle {
         return layout.styleForNode(self, node);
     }
 
-    pub fn intrinsicWidth(self: *Ir, node: *const Node) f32 {
+    pub fn intrinsicWidth(self: *Context, node: *const Node) f32 {
         return layout.intrinsicWidth(self, node);
     }
 
-    pub fn intrinsicHeight(self: *Ir, node: *const Node) f32 {
+    pub fn intrinsicHeight(self: *Context, node: *const Node) f32 {
         return layout.intrinsicHeight(self, node);
     }
 
-    pub fn shouldWrapNode(self: *Ir, node: *const Node) bool {
+    pub fn shouldWrapNode(self: *Context, node: *const Node) bool {
         return layout.shouldWrapNode(self, node);
     }
 };

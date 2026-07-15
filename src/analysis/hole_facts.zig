@@ -9,7 +9,7 @@ const syntax_hole = @import("../syntax/hole.zig");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
-pub fn populateExpectedTypes(allocator: std.mem.Allocator, ir: *core.Ir, holes: *syntax_hole.Result) !void {
+pub fn populateExpectedTypes(allocator: std.mem.Allocator, ir: *core.Context, holes: *syntax_hole.Result) !void {
     var declaration_index = try declarations.build(allocator, ir);
     defer declaration_index.deinit();
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);

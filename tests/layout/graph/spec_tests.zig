@@ -9,7 +9,7 @@ const solver = core.layout.solver;
 
 const testing = std.testing;
 
-fn initEmptyIr() !core.Ir {
+fn initEmptyContext() !core.Context {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
@@ -17,7 +17,7 @@ fn initEmptyIr() !core.Ir {
     errdefer allocator.free(project_path);
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
-    return try core.Ir.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
+    return try core.Context.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
 fn expectFloat(expected: f32, actual: f32) !void {
@@ -30,31 +30,31 @@ fn expectColor(expected_r: f32, expected_g: f32, expected_b: f32, actual: core.r
     try expectFloat(expected_b, actual.b);
 }
 
-fn setStringField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, value: []const u8) !void {
+fn setStringField(ir: *core.Context, node_id: model.NodeId, key: []const u8, value: []const u8) !void {
     try ir.setNodeFieldValue(node_id, key, .{ .string = value });
 }
 
-fn setNumberField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, value: f32) !void {
+fn setNumberField(ir: *core.Context, node_id: model.NodeId, key: []const u8, value: f32) !void {
     try ir.setNodeFieldValue(node_id, key, .{ .number = value });
 }
 
-fn setEnumField(ir: *core.Ir, node_id: model.NodeId, key: []const u8, enum_name: []const u8, case_name: []const u8) !void {
+fn setEnumField(ir: *core.Context, node_id: model.NodeId, key: []const u8, enum_name: []const u8, case_name: []const u8) !void {
     try ir.setNodeFieldValue(node_id, key, .{ .enum_case = .{
         .enum_name = enum_name,
         .case_name = case_name,
     } });
 }
 
-fn setRecordStringField(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: []const u8) !void {
+fn setRecordStringField(ir: *core.Context, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: []const u8) !void {
     try setRecordFieldValue(ir, node_id, root_key, field_name, .{ .string = value });
 }
 
-fn setRecordNumberField(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: f32) !void {
+fn setRecordNumberField(ir: *core.Context, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: f32) !void {
     try setRecordFieldValue(ir, node_id, root_key, field_name, .{ .number = value });
 }
 
 fn setRecordEnumField(
-    ir: *core.Ir,
+    ir: *core.Context,
     node_id: model.NodeId,
     root_key: []const u8,
     field_name: []const u8,
@@ -67,11 +67,11 @@ fn setRecordEnumField(
     } });
 }
 
-fn setRecordFieldValue(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: core.Value) !void {
+fn setRecordFieldValue(ir: *core.Context, node_id: model.NodeId, root_key: []const u8, field_name: []const u8, value: core.Value) !void {
     try setRecordPathValue(ir, node_id, root_key, &.{field_name}, value);
 }
 
-fn setRecordPathValue(ir: *core.Ir, node_id: model.NodeId, root_key: []const u8, path: []const []const u8, value: core.Value) !void {
+fn setRecordPathValue(ir: *core.Context, node_id: model.NodeId, root_key: []const u8, path: []const []const u8, value: core.Value) !void {
     const node = ir.getNode(node_id) orelse return error.UnknownNode;
     for (node.fields.items) |*field| {
         if (!std.mem.eql(u8, field.key, root_key)) continue;
@@ -131,111 +131,111 @@ fn recordTypeName(root_key: []const u8) []const u8 {
     return root_key;
 }
 
-fn setLayoutPolicy(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setLayoutPolicy(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setEnumField(ir, node_id, "layout_v", "LayoutPolicy", case_name);
 }
 
-fn setLayoutCenterOffset(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setLayoutCenterOffset(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setStringField(ir, node_id, "layout_v_center_offset", value);
 }
 
-fn setRenderKind(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setRenderKind(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setEnumField(ir, node_id, "render_kind", "RenderKind", case_name);
 }
 
-fn setMathAlign(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setMathAlign(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setEnumField(ir, node_id, "math_align", "Align", case_name);
 }
 
-fn setLayoutWrap(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setLayoutWrap(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordEnumField(ir, node_id, "layout", "wrap", "WrapMode", case_name);
 }
 
-fn setLayoutFontSize(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setLayoutFontSize(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "layout", "font_size", value);
 }
 
-fn setLayoutLineHeight(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setLayoutLineHeight(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "layout", "line_height", value);
 }
 
-fn setLayoutSpacingAfter(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setLayoutSpacingAfter(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "layout", "spacing_after", value);
 }
 
-fn setTextParse(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setTextParse(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordEnumField(ir, node_id, "text", "parse", "TextParseMode", case_name);
 }
 
-fn setTextSize(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextSize(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "text", "size", value);
 }
 
-fn setTextLineHeight(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextLineHeight(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "text", "line_height", value);
 }
 
-fn setTextInlineMathHeightFactor(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextInlineMathHeightFactor(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "text", "inline_math_height_factor", value);
 }
 
-fn setTextMarkdownBoldColor(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextMarkdownBoldColor(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "text", "markdown_bold_color", value);
 }
 
-fn setTextMarkdownBoldWeight(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextMarkdownBoldWeight(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "text", "bold_weight", value);
 }
 
-fn setTextMarkdownItalicStyle(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setTextMarkdownItalicStyle(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordEnumField(ir, node_id, "text", "italic_style", "FontStyle", case_name);
 }
 
-fn setTextFontFamily(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextFontFamily(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordPathValue(ir, node_id, "text", &.{ "font", "family" }, .{ .string = value });
 }
 
-fn setTextFontWeight(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextFontWeight(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordPathValue(ir, node_id, "text", &.{ "font", "weight" }, .{ .string = value });
 }
 
-fn setTextFontStyle(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setTextFontStyle(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordPathValue(ir, node_id, "text", &.{ "font", "style" }, .{ .enum_case = .{ .enum_name = "FontStyle", .case_name = case_name } });
 }
 
-fn setTextFontStretch(ir: *core.Ir, node_id: model.NodeId, case_name: []const u8) !void {
+fn setTextFontStretch(ir: *core.Context, node_id: model.NodeId, case_name: []const u8) !void {
     try setRecordPathValue(ir, node_id, "text", &.{ "font", "stretch" }, .{ .enum_case = .{ .enum_name = "FontStretch", .case_name = case_name } });
 }
 
-fn setTextCodeFontFamily(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextCodeFontFamily(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordPathValue(ir, node_id, "text", &.{ "code_font", "family" }, .{ .string = value });
 }
 
-fn setTextCodeFontWeight(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setTextCodeFontWeight(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordPathValue(ir, node_id, "text", &.{ "code_font", "weight" }, .{ .string = value });
 }
 
-fn setChromePadX(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setChromePadX(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "chrome", "pad_x", value);
 }
 
-fn setChromePadY(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setChromePadY(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "chrome", "pad_y", value);
 }
 
-fn setChromeLineWidth(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setChromeLineWidth(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "chrome", "line_width", value);
 }
 
-fn setUnderlineWidth(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setUnderlineWidth(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "underline", "width", value);
 }
 
-fn setRuleLineWidth(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setRuleLineWidth(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "rule", "line_width", value);
 }
 
-fn setRuleDash(ir: *core.Ir, node_id: model.NodeId, value: []const u8) !void {
+fn setRuleDash(ir: *core.Context, node_id: model.NodeId, value: []const u8) !void {
     try setRecordStringField(ir, node_id, "rule", "dash", value);
 }
 
@@ -426,7 +426,7 @@ test "layout graph spec: hard anchors move default-sized states" {
 }
 
 test "layout graph spec: page graph indexes direct page children and filters axis constraints" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -463,7 +463,7 @@ test "layout graph spec: page graph indexes direct page children and filters axi
 }
 
 test "layout graph spec: implicit constraint objects stay page local" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const first_page = try ir.addPage("First");
@@ -487,7 +487,7 @@ test "layout graph spec: implicit constraint objects stay page local" {
 }
 
 test "layout graph spec: constraint classification names layout dependency roles" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -556,7 +556,7 @@ test "layout graph spec: constraint classification names layout dependency roles
 }
 
 test "layout graph spec: axis workspaces seed known frames only without target constraints" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -586,7 +586,7 @@ test "layout graph spec: axis workspaces seed known frames only without target c
 }
 
 test "layout solver: final validation rejects unsatisfied hard constraints" {
-    var self_conflict = try initEmptyIr();
+    var self_conflict = try initEmptyContext();
     defer self_conflict.deinit();
 
     const self_page = try self_conflict.addPage("Page");
@@ -594,7 +594,7 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     try self_conflict.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, "self-top");
     try testing.expectError(error.ConstraintConflict, self_conflict.finalize());
 
-    var cycle = try initEmptyIr();
+    var cycle = try initEmptyContext();
     defer cycle.deinit();
 
     const cycle_page = try cycle.addPage("Page");
@@ -606,7 +606,7 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
 }
 
 test "layout solver: consistent constraint cycles are fixed by fallback placement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -626,7 +626,7 @@ test "layout solver: consistent constraint cycles are fixed by fallback placemen
 }
 
 test "layout solver: tautological self-anchor constraints do not block fallback placement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -642,7 +642,7 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
 }
 
 test "layout solver: vertical fallback tries alternate roots in incomplete components" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -667,7 +667,7 @@ test "layout solver: vertical fallback tries alternate roots in incomplete compo
 }
 
 test "layout solver: constraint-referenced objects participate in fallback placement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -686,7 +686,7 @@ test "layout solver: constraint-referenced objects participate in fallback place
 }
 
 test "layout solver: size-only constraints still receive fallback placement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -705,7 +705,7 @@ test "layout solver: size-only constraints still receive fallback placement" {
 }
 
 test "layout solver: page-dependent group children receive local vertical fallback" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -731,7 +731,7 @@ test "layout solver: page-dependent group children receive local vertical fallba
 }
 
 test "layout solver: page-dependent group children before fixed anchors receive fallback" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -753,7 +753,7 @@ test "layout solver: page-dependent group children before fixed anchors receive 
 }
 
 test "layout solver: page-dependent vertical cycles receive fallback placement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -780,7 +780,7 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
 }
 
 test "layout solver: page-dependent horizontal cycles receive fallback placement" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -804,7 +804,7 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
 }
 
 test "layout solver: centered page-dependent group children receive local vertical fallback" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     try setLayoutPolicy(&ir, ir.document_id, "center");
@@ -833,7 +833,7 @@ test "layout solver: centered page-dependent group children receive local vertic
 }
 
 test "layout solver: horizontal alignment alone does not imply vertical row alignment" {
-    var stacked = try initEmptyIr();
+    var stacked = try initEmptyContext();
     defer stacked.deinit();
 
     const stacked_page = try stacked.addPage("Page");
@@ -849,7 +849,7 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     const first_spacing = core.layout.styleForNode(&stacked, first_node).spacing_after;
     try expectFloat(first_node.frame.y - first_spacing, second_node.frame.y + second_node.frame.height);
 
-    var row = try initEmptyIr();
+    var row = try initEmptyContext();
     defer row.deinit();
 
     const row_page = try row.addPage("Page");
@@ -866,7 +866,7 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
 }
 
 test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -882,7 +882,7 @@ test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
 }
 
 test "layout solver: same-target peer equalities form one fallback unit" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -903,7 +903,7 @@ test "layout solver: same-target peer equalities form one fallback unit" {
 }
 
 test "layout solver: chained peer equalities form one fallback unit" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -924,7 +924,7 @@ test "layout solver: chained peer equalities form one fallback unit" {
 }
 
 test "layout solver: hard peer equality conflicts are independent of direction and chaining" {
-    var forward = try initEmptyIr();
+    var forward = try initEmptyContext();
     defer forward.deinit();
 
     const forward_page = try forward.addPage("Page");
@@ -935,7 +935,7 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try forward.addAnchorConstraint(forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, "a-is-b");
     try testing.expectError(error.ConstraintConflict, forward.finalize());
 
-    var reverse = try initEmptyIr();
+    var reverse = try initEmptyContext();
     defer reverse.deinit();
 
     const reverse_page = try reverse.addPage("Page");
@@ -946,7 +946,7 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try reverse.addAnchorConstraint(reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, "b-is-a");
     try testing.expectError(error.ConstraintConflict, reverse.finalize());
 
-    var chain = try initEmptyIr();
+    var chain = try initEmptyContext();
     defer chain.deinit();
 
     const chain_page = try chain.addPage("Page");
@@ -961,7 +961,7 @@ test "layout solver: hard peer equality conflicts are independent of direction a
 }
 
 test "layout solver: horizontal fallback does not seed inconsistent hard cycles" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -974,7 +974,7 @@ test "layout solver: horizontal fallback does not seed inconsistent hard cycles"
 }
 
 test "layout solver: constrained group source forms one fallback unit" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     try setLayoutPolicy(&ir, ir.document_id, "center");
@@ -1004,7 +1004,7 @@ test "layout solver: constrained group source forms one fallback unit" {
 }
 
 test "layout solver: centered vflow treats vertically aligned groups as one row" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     try setLayoutPolicy(&ir, ir.document_id, "center");
@@ -1043,7 +1043,7 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
 }
 
 test "layout solver: centered vflow clamps below fixed top components only when needed" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     try setLayoutPolicy(&ir, ir.document_id, "center");
@@ -1068,7 +1068,7 @@ test "layout solver: centered vflow clamps below fixed top components only when 
 }
 
 test "layout solver: document centered vflow is not shadowed by page default policy" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     try setLayoutPolicy(&ir, ir.document_id, "center");
@@ -1099,7 +1099,7 @@ test "layout solver: document centered vflow is not shadowed by page default pol
 }
 
 test "layout solver: centered vflow preserves page center for side-by-side rows" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     try setLayoutPolicy(&ir, ir.document_id, "center");
@@ -1132,7 +1132,7 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
 }
 
 test "layout solver: explicit anchor conflicts and negative frame sizes are rejected" {
-    var conflict = try initEmptyIr();
+    var conflict = try initEmptyContext();
     defer conflict.deinit();
 
     const conflict_page = try conflict.addPage("Page");
@@ -1141,7 +1141,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
     try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 120, "left-b");
     try testing.expectError(error.ConstraintConflict, conflict.finalize());
 
-    var negative = try initEmptyIr();
+    var negative = try initEmptyContext();
     defer negative.deinit();
 
     const negative_page = try negative.addPage("Page");
@@ -1151,7 +1151,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
 }
 
 test "layout solver: group width propagation must preserve child hard widths" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1167,7 +1167,7 @@ test "layout solver: group width propagation must preserve child hard widths" {
 }
 
 test "layout solver: wrapped width cap propagates through dependent anchors" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1196,7 +1196,7 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
 }
 
 test "layout solver: vertical axis observes width-dependent wrapped height" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1229,12 +1229,12 @@ const FakeMeasurementContext = struct {
 
 fn fakeLayoutMeasurement(
     context: *anyopaque,
-    ir_ptr: *anyopaque,
+    context_ptr: *anyopaque,
     node: *const model.Node,
     width: f32,
     mode: model.LayoutMeasurementMode,
 ) anyerror!?model.LayoutMeasurement {
-    _ = ir_ptr;
+    _ = context_ptr;
     const ctx: *FakeMeasurementContext = @ptrCast(@alignCast(context));
     if (node.id != ctx.target) return null;
     return switch (mode) {
@@ -1256,12 +1256,12 @@ const FakeAllMeasurementContext = struct {
 
 fn fakeAllLayoutMeasurement(
     context: *anyopaque,
-    ir_ptr: *anyopaque,
+    context_ptr: *anyopaque,
     node: *const model.Node,
     width: f32,
     mode: model.LayoutMeasurementMode,
 ) anyerror!?model.LayoutMeasurement {
-    _ = ir_ptr;
+    _ = context_ptr;
     _ = node;
     _ = width;
     _ = mode;
@@ -1271,7 +1271,7 @@ fn fakeAllLayoutMeasurement(
 }
 
 test "layout solver uses render measurement provider for intrinsic object size" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1312,7 +1312,7 @@ fn recordLayoutPageCompleted(context: *anyopaque, completed: usize, total: usize
 }
 
 test "layout solver runs page jobs with configured job count" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const first_page = try ir.addPage("First");
@@ -1345,7 +1345,7 @@ test "layout solver runs page jobs with configured job count" {
 }
 
 test "layout metrics keep asset intrinsic size ahead of render measurement provider" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1374,7 +1374,7 @@ test "layout metrics keep asset intrinsic size ahead of render measurement provi
 }
 
 test "layout metrics use measured font width for wrapped text height" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1390,7 +1390,7 @@ test "layout metrics use measured font width for wrapped text height" {
 }
 
 test "layout metrics use render atom widths for CJK emoji markdown text" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1411,7 +1411,7 @@ test "layout metrics use render atom widths for CJK emoji markdown text" {
 }
 
 test "layout solver keeps CJK emoji markdown text on one line when measured atom width fits" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1434,7 +1434,7 @@ test "layout solver keeps CJK emoji markdown text on one line when measured atom
 }
 
 test "layout metrics: chrome padding is part of visual bounds and yields a content frame" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1457,7 +1457,7 @@ test "layout metrics: chrome padding is part of visual bounds and yields a conte
 }
 
 test "layout metrics: unwrapped text width includes visual glyph bounds" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1479,7 +1479,7 @@ test "layout metrics: unwrapped text width includes visual glyph bounds" {
 }
 
 test "layout solver: group chrome padding expands tight group bounds" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1503,7 +1503,7 @@ test "layout solver: group chrome padding expands tight group bounds" {
 }
 
 test "layout solver: target group width leaves room for chrome padding" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1533,7 +1533,7 @@ test "layout solver: target group width leaves room for chrome padding" {
 }
 
 test "layout diagnostics: fixed-height object reports frame too small" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1571,7 +1571,7 @@ test "layout diagnostics: fixed-height object reports frame too small" {
 }
 
 test "layout diagnostics: one-pixel text reports frame too small" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1596,7 +1596,7 @@ test "layout diagnostics: one-pixel text reports frame too small" {
 }
 
 test "layout metrics use enlarged rendered text size" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1610,7 +1610,7 @@ test "layout metrics use enlarged rendered text size" {
 }
 
 test "layout metrics derive line height from explicit text size" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1626,7 +1626,7 @@ test "layout metrics derive line height from explicit text size" {
 }
 
 test "layout metrics honor explicit text and layout line heights" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1646,7 +1646,7 @@ test "layout metrics honor explicit text and layout line heights" {
 }
 
 test "layout metrics treat zero line heights as automatic" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1663,7 +1663,7 @@ test "layout metrics treat zero line heights as automatic" {
 }
 
 test "render policy: invalid numeric properties fall back before rendering" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1692,7 +1692,7 @@ test "render policy: invalid numeric properties fall back before rendering" {
 }
 
 test "render policy: font face properties resolve structurally" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1719,7 +1719,7 @@ test "render policy: font face properties resolve structurally" {
 }
 
 test "render policy: markdown bold color is optional and resolves as text paint" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");
@@ -1734,7 +1734,7 @@ test "render policy: markdown bold color is optional and resolves as text paint"
 }
 
 test "render policy: math alignment applies to markdown and vector math" {
-    var ir = try initEmptyIr();
+    var ir = try initEmptyContext();
     defer ir.deinit();
 
     const page = try ir.addPage("Page");

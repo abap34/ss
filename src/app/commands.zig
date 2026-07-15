@@ -13,11 +13,11 @@ const types = @import("types.zig");
 const error_report = utils.err;
 const Progress = utils.progress.Progress;
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Ir {
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Context {
     return try pipeline.buildFile(io, allocator, request, progress);
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Ir {
+pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: ?*Progress) !core.Context {
     return try pipeline.buildTypedFile(io, allocator, request, progress);
 }
 
@@ -27,7 +27,7 @@ pub fn checkFile(io: std.Io, allocator: std.mem.Allocator, request: types.Source
     std.debug.print("ok {s}\n", .{request.input_path});
 }
 
-pub fn printIrJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: *Progress) !void {
+pub fn printContextJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, request, progress);
     defer ir.deinit();
     const text = try dump.toOwnedString(allocator, &ir);
@@ -36,7 +36,7 @@ pub fn printIrJson(io: std.Io, allocator: std.mem.Allocator, request: types.Sour
     progress.step("Write JSON");
 }
 
-pub fn writeIrJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
+pub fn writeContextJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
     var ir = try buildFile(io, allocator, request, progress);
     defer ir.deinit();
     const json = try dump.toOwnedString(allocator, &ir);
@@ -46,10 +46,10 @@ pub fn writeIrJson(io: std.Io, allocator: std.mem.Allocator, request: types.Sour
 }
 
 pub fn writeScheduleTraceJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
-    var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation_schedule);
+    var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
-    const json = lowering.scheduleTraceJsonFromGraph(allocator, &analyzed.ir, analyzed.scheduleGraph()) catch |err| {
-        error_report.printIrDiagnostics(analyzed.ir.projectPath(), analyzed.ir.projectSource(), &analyzed.ir);
+    const json = lowering.scheduleTraceJsonFromGraph(allocator, &analyzed.context, analyzed.executionGraph()) catch |err| {
+        error_report.printContextDiagnostics(analyzed.context.projectPath(), analyzed.context.projectSource(), &analyzed.context);
         return err;
     };
     defer allocator.free(json);
@@ -59,13 +59,13 @@ pub fn writeScheduleTraceJson(io: std.Io, allocator: std.mem.Allocator, request:
 }
 
 pub fn writeLayoutTraceJson(io: std.Io, allocator: std.mem.Allocator, request: types.SourceRequest, output_path: []const u8, progress: *Progress) !void {
-    var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation_schedule);
+    var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
-    try pipeline.evaluateDocument(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    var pages = try pipeline.preparePages(&analyzed.ir, progress);
-    defer pages.deinit(analyzed.ir.allocator);
-    var layouts = try pipeline.solveLayoutsWithTracePath(io, &analyzed.ir, &pages, output_path, progress, request.layout_jobs);
-    defer layouts.deinit(analyzed.ir.allocator);
+    try pipeline.evaluateDocument(&analyzed.context, analyzed.executionGraph(), progress);
+    var pages = try pipeline.preparePages(&analyzed.context, progress);
+    defer pages.deinit(analyzed.context.allocator);
+    var layouts = try pipeline.solveLayoutsWithTracePath(io, &analyzed.context, &pages, output_path, progress, request.layout_jobs);
+    defer layouts.deinit(analyzed.context.allocator);
 }
 
 pub fn layoutConflictReportJson(
@@ -74,33 +74,33 @@ pub fn layoutConflictReportJson(
     request: types.SourceRequest,
     progress: ?*Progress,
 ) ![]u8 {
-    var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation_schedule);
+    var analyzed = try pipeline.analyzeFile(io, allocator, request, progress, .evaluation);
     defer analyzed.deinit();
-    try pipeline.evaluateDocument(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    var pages = try pipeline.preparePages(&analyzed.ir, progress);
-    defer pages.deinit(analyzed.ir.allocator);
+    try pipeline.evaluateDocument(&analyzed.context, analyzed.executionGraph(), progress);
+    var pages = try pipeline.preparePages(&analyzed.context, progress);
+    defer pages.deinit(analyzed.context.allocator);
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     const artifact_progress = if (progress) |p| app_progress.render(p) else null;
     if (progress) |p| p.begin("Solve layouts");
-    render_layout.preloadPreparedPageArtifacts(io, &analyzed.ir, &pages, artifact_progress, request.layout_jobs) catch |err| {
+    render_layout.preloadPreparedPageArtifacts(io, &analyzed.context, &pages, artifact_progress, request.layout_jobs) catch |err| {
         if (progress) |p| p.endStatusLine();
-        error_report.printIrDiagnostics(analyzed.ir.projectPath(), analyzed.ir.projectSource(), &analyzed.ir);
-        if (error_report.hasIrErrors(&analyzed.ir)) return error.DiagnosticsFailed;
+        error_report.printContextDiagnostics(analyzed.context.projectPath(), analyzed.context.projectSource(), &analyzed.context);
+        if (error_report.hasContextErrors(&analyzed.context)) return error.DiagnosticsFailed;
         return err;
     };
-    var maybe_layouts: ?core.LayoutResults = render_layout.solvePreparedPages(io, &analyzed.ir, &pages, layout_progress, request.layout_jobs) catch |err| switch (err) {
+    var maybe_layouts: ?core.LayoutResults = render_layout.solvePreparedPages(io, &analyzed.context, &pages, layout_progress, request.layout_jobs) catch |err| switch (err) {
         error.ConstraintConflict,
         error.NegativeFrameSize,
         => null,
         else => {
             if (progress) |p| p.endStatusLine();
-            error_report.printIrDiagnostics(analyzed.ir.projectPath(), analyzed.ir.projectSource(), &analyzed.ir);
+            error_report.printContextDiagnostics(analyzed.context.projectPath(), analyzed.context.projectSource(), &analyzed.context);
             return err;
         },
     };
-    defer if (maybe_layouts) |*layouts| layouts.deinit(analyzed.ir.allocator);
+    defer if (maybe_layouts) |*layouts| layouts.deinit(analyzed.context.allocator);
     if (progress) |p| p.step("Solve layouts");
-    const data = try core.layout.conflicts.toJson(allocator, &analyzed.ir);
+    const data = try core.layout.conflicts.toJson(allocator, &analyzed.context);
     if (progress) |p| p.step("Serialize report");
     return data;
 }
@@ -119,21 +119,21 @@ pub fn writeLayoutConflictReportFile(
 }
 
 pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWriteRequest, progress: *Progress) !void {
-    var analyzed = try pipeline.analyzeFile(io, allocator, request.source, progress, .evaluation_schedule);
+    var analyzed = try pipeline.analyzeFile(io, allocator, request.source, progress, .evaluation);
     var analyzed_active = true;
     errdefer if (analyzed_active) analyzed.deinit();
-    try pipeline.evaluateDocument(&analyzed.ir, analyzed.scheduleGraph(), progress);
-    var pages = try pipeline.preparePages(&analyzed.ir, progress);
-    const prepared_allocator = analyzed.ir.allocator;
+    try pipeline.evaluateDocument(&analyzed.context, analyzed.executionGraph(), progress);
+    var pages = try pipeline.preparePages(&analyzed.context, progress);
+    const prepared_allocator = analyzed.context.allocator;
     var pages_errdefer_active = true;
     errdefer if (pages_errdefer_active) pages.deinit(prepared_allocator);
-    var layouts = pipeline.solveLayouts(io, &analyzed.ir, &pages, progress, request.source.layout_jobs) catch |err| {
-        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.ir, request.options.diagnostics_json_path);
+    var layouts = pipeline.solveLayouts(io, &analyzed.context, &pages, progress, request.source.layout_jobs) catch |err| {
+        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.context, request.options.diagnostics_json_path);
         return err;
     };
     var layouts_errdefer_active = true;
     errdefer if (layouts_errdefer_active) layouts.deinit(prepared_allocator);
-    var ir = analyzed.takeIr();
+    var ir = analyzed.takeContext();
     analyzed_active = false;
     defer ir.deinit();
     defer layouts.deinit(ir.allocator);
