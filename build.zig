@@ -504,6 +504,7 @@ fn addTestModule(b: *std.Build, test_step: *Step, module: *Module) void {
 
 fn addNodeSpecTests(b: *std.Build, test_step: *Step, exe: *Step.Compile) void {
     const node_spec_files = [_][]const u8{
+        "tests/editor/navigation/spec.mjs",
         "tests/runtime/cli_diagnostics_runtime_spec.mjs",
         "tests/runtime/completion_runtime_spec.mjs",
         "tests/runtime/debug_runtime_spec.mjs",
