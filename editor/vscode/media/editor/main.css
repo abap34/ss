@@ -573,6 +573,9 @@ button {
 .constraint--object {
   color: var(--relative);
 }
+.constraint--fallback {
+  opacity: 0.58;
+}
 .constraint line {
   vector-effect: non-scaling-stroke;
 }
@@ -602,7 +605,7 @@ button {
   left: 10px;
   display: grid;
   grid-template-columns:
-    minmax(105px, 135px) minmax(142px, 170px) minmax(210px, 1fr) auto;
+    minmax(105px, 135px) minmax(142px, 170px) minmax(210px, 1fr);
   gap: 14px;
   min-height: 104px;
   max-height: min(42%, 240px);
@@ -693,6 +696,19 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.relation-row--fallback code {
+  color: var(--text-muted);
+}
+.relation-kind {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border: 1px dashed var(--control-border);
+  border-radius: 3px;
+  color: var(--text-faint);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .automatic-layout {
   margin: 4px 0;
   color: var(--text-muted);
@@ -755,21 +771,6 @@ button {
 .relation-icon--relative::after {
   right: 2px;
 }
-.sheet-actions {
-  display: flex;
-  min-width: 120px;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 7px;
-}
-.sheet-actions span {
-  color: var(--text-muted);
-  font-size: 8px;
-  text-align: right;
-}
-.sheet-actions span.movable {
-  color: var(--accent-text);
-}
 .source-button {
   display: flex;
   align-items: center;
@@ -816,12 +817,6 @@ button {
     grid-template-columns:
       minmax(95px, 120px) minmax(130px, 155px) minmax(180px, 1fr);
   }
-  .sheet-actions {
-    grid-column: 1 / -1;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-end;
-  }
 }
 @media (max-width: 520px) {
   .segmented button {
@@ -833,9 +828,6 @@ button {
     grid-template-columns: 1fr 1fr;
   }
   .relation-details {
-    grid-column: 1 / -1;
-  }
-  .sheet-actions {
     grid-column: 1 / -1;
   }
 }

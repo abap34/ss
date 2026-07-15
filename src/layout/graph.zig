@@ -835,12 +835,7 @@ pub fn isGroupNode(node: *const Node) bool {
     return roleEq(node.role, GroupRole);
 }
 
-pub fn anchorAxis(anchor: Anchor) Axis {
-    return switch (anchor) {
-        .left, .right, .center_x => .horizontal,
-        .top, .bottom, .center_y => .vertical,
-    };
-}
+pub const anchorAxis = model.anchorAxis;
 
 pub const SelfConstraint = union(enum) {
     none: void,

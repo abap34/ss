@@ -1,5 +1,10 @@
 import { setRect, svgElement } from "./dom.js";
-import { previewFrame, subtreeNodeIds, svgPoint } from "./geometry.js";
+import {
+  editableAncestorNodeId,
+  previewFrame,
+  subtreeNodeIds,
+  svgPoint,
+} from "./geometry.js";
 import { renderConstraints } from "./scene.js";
 
 export class InteractionController {
@@ -55,7 +60,17 @@ export class InteractionController {
   hitTarget(page, object) {
     const frame = previewFrame(page, object);
     const selected = object.id === this.state.selectedObjectId;
-    const movable = this.isMovable(object.id);
+    const editableNodeId = editableAncestorNodeId(
+      this.state.snapshot,
+      object.id,
+    );
+    const editableObject = editableNodeId == null
+      ? null
+      : this.state.snapshot.layout.objects.find((candidate) =>
+        candidate.id === editableNodeId
+      );
+    const target = editableObject || object;
+    const movable = editableObject != null && this.isMovable(editableObject.id);
     const group = svgElement(
       "g",
       `object-hit${selected ? " is-selected" : ""}${
@@ -68,12 +83,18 @@ export class InteractionController {
     group.append(rect);
     group.addEventListener("click", (event) => {
       event.stopPropagation();
-      this.actions.selectObject(object.id, object.page_id);
+      this.actions.selectObject(target.id, target.page_id);
     });
-    group.addEventListener("dblclick", () => this.actions.revealSource(object));
+    group.addEventListener("dblclick", () => this.actions.revealSource(target));
     group.addEventListener(
       "pointerdown",
-      (event) => this.beginDrag(event, page, object, group, frame),
+      (event) => this.beginDrag(
+        event,
+        page,
+        target,
+        group,
+        previewFrame(page, target),
+      ),
     );
     return group;
   }

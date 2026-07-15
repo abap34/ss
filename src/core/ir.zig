@@ -97,11 +97,12 @@ pub const SourceModule = struct {
     }
 };
 
-pub const ObjectBinding = struct {
+pub const ObjectSource = struct {
     node_id: NodeId,
     page_id: NodeId,
     module_id: SourceModuleId,
-    name: []const u8,
+    path: []const u8,
+    binding_base: ?[]const u8,
     span_start: usize,
     span_end: usize,
 };
@@ -165,9 +166,10 @@ pub const Ir = struct {
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     constraints: std.ArrayList(Constraint),
+    fallback_constraints: std.ArrayList(Constraint),
     constraint_updates: std.ArrayList(ConstraintUpdate),
     overridden_constraints: std.ArrayList(Constraint),
-    object_bindings: std.ArrayList(ObjectBinding),
+    object_sources: std.ArrayList(ObjectSource),
     diagnostics: std.ArrayList(Diagnostic),
     last_constraint_failure: ?ConstraintFailure,
     constraint_failures: std.ArrayList(ConstraintFailure),
@@ -199,9 +201,10 @@ pub const Ir = struct {
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .constraints = .empty,
+            .fallback_constraints = .empty,
             .constraint_updates = .empty,
             .overridden_constraints = .empty,
-            .object_bindings = .empty,
+            .object_sources = .empty,
             .diagnostics = .empty,
             .last_constraint_failure = null,
             .constraint_failures = .empty,
@@ -256,9 +259,10 @@ pub const Ir = struct {
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
+        self.fallback_constraints.deinit(self.allocator);
         self.constraint_updates.deinit(self.allocator);
         self.overridden_constraints.deinit(self.allocator);
-        self.object_bindings.deinit(self.allocator);
+        self.object_sources.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
@@ -298,9 +302,10 @@ pub const Ir = struct {
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
+        self.fallback_constraints.deinit(self.allocator);
         self.constraint_updates.deinit(self.allocator);
         self.overridden_constraints.deinit(self.allocator);
-        self.object_bindings.deinit(self.allocator);
+        self.object_sources.deinit(self.allocator);
         self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.clearConstraintFailures();
@@ -852,7 +857,8 @@ pub const Ir = struct {
         target_anchor: Anchor,
         role: ConstraintRole,
         scope_depth: u32,
-        replacement: ?Constraint,
+        replacement_source: ?ConstraintSource,
+        replacement_offset: f32,
         origin: ?[]const u8,
     ) !void {
         try self.constraint_updates.append(self.allocator, .{
@@ -860,24 +866,35 @@ pub const Ir = struct {
             .target_anchor = target_anchor,
             .role = role,
             .scope_depth = scope_depth,
-            .replacement = replacement,
+            .replacement = if (replacement_source) |source| .{
+                .target_node = target_node,
+                .target_anchor = target_anchor,
+                .source = source,
+                .offset = replacement_offset,
+                .origin = origin,
+                .role = role,
+                .scope_depth = scope_depth,
+                .from_update = true,
+            } else null,
             .origin = origin,
         });
     }
 
-    pub fn addObjectBinding(
+    pub fn addObjectSource(
         self: *Ir,
         node_id: NodeId,
         page_id: NodeId,
         module_id: SourceModuleId,
-        name: []const u8,
+        path: []const u8,
+        binding_base: ?[]const u8,
         span: ast.Span,
     ) !void {
-        try self.object_bindings.append(self.allocator, .{
+        try self.object_sources.append(self.allocator, .{
             .node_id = node_id,
             .page_id = page_id,
             .module_id = module_id,
-            .name = name,
+            .path = try self.copyString(path),
+            .binding_base = if (binding_base) |base| try self.copyString(base) else null,
             .span_start = span.start,
             .span_end = span.end,
         });

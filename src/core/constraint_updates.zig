@@ -1,27 +1,45 @@
 const std = @import("std");
 const model = @import("model");
+const core_ir = @import("ir.zig");
 
-pub fn resolve(ir: anytype) !void {
+const Slot = struct {
+    target_node: model.NodeId,
+    axis: model.Axis,
+    role: model.ConstraintRole,
+
+    fn init(target_node: model.NodeId, target_anchor: model.Anchor, role: model.ConstraintRole) Slot {
+        return .{
+            .target_node = target_node,
+            .axis = model.anchorAxis(target_anchor),
+            .role = role,
+        };
+    }
+};
+
+const WinnerMap = std.AutoHashMap(Slot, usize);
+
+pub fn resolve(ir: *core_ir.Ir) !void {
     ir.overridden_constraints.clearRetainingCapacity();
     for (ir.constraint_updates.items) |*update| update.active = false;
     if (ir.constraint_updates.items.len == 0) return;
 
-    var winners = std.ArrayList(usize).empty;
-    defer winners.deinit(ir.allocator);
+    var winners = WinnerMap.init(ir.allocator);
+    defer winners.deinit();
+    try winners.ensureTotalCapacity(@intCast(ir.constraint_updates.items.len));
     for (ir.constraint_updates.items, 0..) |update, index| {
-        if (winnerPosition(ir.constraint_updates.items, winners.items, update)) |position| {
-            const winner = ir.constraint_updates.items[winners.items[position]];
-            if (update.scope_depth <= winner.scope_depth) winners.items[position] = index;
-        } else {
-            try winners.append(ir.allocator, index);
+        const result = winners.getOrPutAssumeCapacity(Slot.init(update.target_node, update.target_anchor, update.role));
+        if (!result.found_existing or update.scope_depth <= ir.constraint_updates.items[result.value_ptr.*].scope_depth) {
+            result.value_ptr.* = index;
         }
     }
-    for (winners.items) |winner_index| ir.constraint_updates.items[winner_index].active = true;
+    for (ir.constraint_updates.items, 0..) |*update, index| {
+        update.active = winners.get(Slot.init(update.target_node, update.target_anchor, update.role)) == index;
+    }
 
     var active_constraints = std.ArrayList(model.Constraint).empty;
     errdefer active_constraints.deinit(ir.allocator);
     for (ir.constraints.items) |constraint| {
-        if (isMaskedByWinner(ir.constraint_updates.items, winners.items, constraint)) {
+        if (isMaskedByWinner(ir.constraint_updates.items, &winners, constraint)) {
             try ir.overridden_constraints.append(ir.allocator, constraint);
         } else {
             try active_constraints.append(ir.allocator, constraint);
@@ -39,37 +57,12 @@ pub fn resolve(ir: anytype) !void {
     ir.constraints = active_constraints;
 }
 
-fn winnerPosition(
-    updates: []const model.ConstraintUpdate,
-    winners: []const usize,
-    update: model.ConstraintUpdate,
-) ?usize {
-    for (winners, 0..) |winner_index, position| {
-        if (updatesShareSlot(update, updates[winner_index])) return position;
-    }
-    return null;
-}
-
 fn isMaskedByWinner(
     updates: []const model.ConstraintUpdate,
-    winners: []const usize,
+    winners: *const WinnerMap,
     constraint: model.Constraint,
 ) bool {
-    for (winners) |winner_index| {
-        if (updateMasks(updates[winner_index], constraint)) return true;
-    }
-    return false;
-}
-
-fn updatesShareSlot(left: model.ConstraintUpdate, right: model.ConstraintUpdate) bool {
-    return left.target_node == right.target_node and
-        model.anchorsShareAxis(left.target_anchor, right.target_anchor) and
-        left.role == right.role;
-}
-
-fn updateMasks(update: model.ConstraintUpdate, constraint: model.Constraint) bool {
-    return update.target_node == constraint.target_node and
-        model.anchorsShareAxis(update.target_anchor, constraint.target_anchor) and
-        update.role == constraint.role and
-        update.scope_depth <= constraint.scope_depth;
+    const slot = Slot.init(constraint.target_node, constraint.target_anchor, constraint.role);
+    const winner_index = winners.get(slot) orelse return false;
+    return updates[winner_index].scope_depth <= constraint.scope_depth;
 }

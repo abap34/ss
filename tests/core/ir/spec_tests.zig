@@ -99,16 +99,7 @@ test "core IR spec: position updates replace deeper constraints across anchors o
     const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
     try ir.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
     try ir.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "component-width", 1);
-    try ir.addConstraintUpdate(object, .left, .position, 0, .{
-        .target_node = object,
-        .target_anchor = .left,
-        .source = .{ .page = .left },
-        .offset = 80,
-        .origin = "page-left",
-        .role = .position,
-        .scope_depth = 0,
-        .from_update = true,
-    }, "page-left");
+    try ir.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 80, "page-left");
 
     try core.constraint_updates.resolve(&ir);
 
@@ -120,6 +111,35 @@ test "core IR spec: position updates replace deeper constraints across anchors o
     try testing.expect(ir.constraints.items[1].from_update);
 }
 
+test "core IR spec: size updates preserve position constraints" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
+    try ir.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "component-width", 1);
+    try ir.addConstraintUpdate(
+        object,
+        .right,
+        .size,
+        0,
+        .{ .node = .{ .node_id = object, .anchor = .left } },
+        320,
+        "page-width",
+    );
+
+    try core.constraint_updates.resolve(&ir);
+
+    try testing.expectEqual(@as(usize, 2), ir.constraints.items.len);
+    try testing.expectEqual(core.ConstraintRole.position, ir.constraints.items[0].role);
+    try testing.expectEqual(core.ConstraintRole.size, ir.constraints.items[1].role);
+    try testing.expectEqual(@as(f32, 320), ir.constraints.items[1].offset);
+    try testing.expect(ir.constraints.items[1].from_update);
+    try testing.expectEqual(@as(usize, 1), ir.overridden_constraints.items.len);
+    try testing.expectEqual(@as(f32, 240), ir.overridden_constraints.items[0].offset);
+}
+
 test "core IR spec: pure updates suppress inherited constraints without adding a replacement" {
     var ir = try initEmptyIr();
     defer ir.deinit();
@@ -127,7 +147,7 @@ test "core IR spec: pure updates suppress inherited constraints without adding a
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
     try ir.addAnchorConstraintAtScope(object, .top, .{ .page = .top }, -40, "component-top", 1);
-    try ir.addConstraintUpdate(object, .top, .position, 0, null, "page-top");
+    try ir.addConstraintUpdate(object, .top, .position, 0, null, 0, "page-top");
 
     try core.constraint_updates.resolve(&ir);
 
@@ -145,7 +165,7 @@ test "core IR spec: suppressed cross-page constraints are not diagnosed" {
     const target = try ir.makeObject(first, "target", null, .text, .text, "Target");
     const source = try ir.makeObject(second, "source", null, .text, .text, "Source");
     try ir.addAnchorConstraintAtScope(target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, "component-left", 1);
-    try ir.addConstraintUpdate(target, .left, .position, 0, null, "page-left");
+    try ir.addConstraintUpdate(target, .left, .position, 0, null, 0, "page-left");
 
     try core.constraint_updates.resolve(&ir);
     try ir.validatePageLocalLayout();
@@ -164,33 +184,9 @@ test "core IR spec: caller updates have authority over deeper updates" {
 
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
-    try ir.addConstraintUpdate(object, .left, .position, 2, .{
-        .target_node = object,
-        .target_anchor = .left,
-        .source = .{ .page = .left },
-        .offset = 20,
-        .role = .position,
-        .scope_depth = 2,
-        .from_update = true,
-    }, "nested-left");
-    try ir.addConstraintUpdate(object, .right, .position, 0, .{
-        .target_node = object,
-        .target_anchor = .right,
-        .source = .{ .page = .right },
-        .offset = -60,
-        .role = .position,
-        .scope_depth = 0,
-        .from_update = true,
-    }, "page-right");
-    try ir.addConstraintUpdate(object, .center_x, .position, 1, .{
-        .target_node = object,
-        .target_anchor = .center_x,
-        .source = .{ .page = .center_x },
-        .offset = 10,
-        .role = .position,
-        .scope_depth = 1,
-        .from_update = true,
-    }, "component-center");
+    try ir.addConstraintUpdate(object, .left, .position, 2, .{ .page = .left }, 20, "nested-left");
+    try ir.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -60, "page-right");
+    try ir.addConstraintUpdate(object, .center_x, .position, 1, .{ .page = .center_x }, 10, "component-center");
 
     try core.constraint_updates.resolve(&ir);
 
@@ -210,16 +206,8 @@ test "core IR spec: later updates replace earlier updates in the same scope" {
     const page = try ir.addPage("Page");
     const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
     try ir.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
-    try ir.addConstraintUpdate(object, .left, .position, 0, null, "first");
-    try ir.addConstraintUpdate(object, .right, .position, 0, .{
-        .target_node = object,
-        .target_anchor = .right,
-        .source = .{ .page = .right },
-        .offset = -40,
-        .role = .position,
-        .scope_depth = 0,
-        .from_update = true,
-    }, "second");
+    try ir.addConstraintUpdate(object, .left, .position, 0, null, 0, "first");
+    try ir.addConstraintUpdate(object, .right, .position, 0, .{ .page = .right }, -40, "second");
 
     try core.constraint_updates.resolve(&ir);
 
@@ -229,6 +217,25 @@ test "core IR spec: later updates replace earlier updates in the same scope" {
     try testing.expectEqual(core.Anchor.right, ir.constraints.items[0].target_anchor);
     try testing.expectEqual(@as(f32, -40), ir.constraints.items[0].offset);
     try testing.expectEqual(@as(usize, 1), ir.overridden_constraints.items.len);
+}
+
+test "core IR spec: later pure updates suppress earlier replacements" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
+    try ir.addConstraintUpdate(object, .left, .position, 0, .{ .page = .left }, 40, "first");
+    try ir.addConstraintUpdate(object, .right, .position, 0, null, 0, "second");
+
+    try core.constraint_updates.resolve(&ir);
+
+    try testing.expect(!ir.constraint_updates.items[0].active);
+    try testing.expect(ir.constraint_updates.items[1].active);
+    try testing.expectEqual(@as(usize, 0), ir.constraints.items.len);
+    try testing.expectEqual(@as(usize, 2), ir.overridden_constraints.items.len);
+    try testing.expect(ir.overridden_constraints.items[1].from_update);
 }
 
 test "core IR spec: page unit collects inline math asset dependencies" {

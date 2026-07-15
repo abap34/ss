@@ -17,6 +17,7 @@ pub const stringField = json.stringField;
 pub const intField = json.intField;
 pub const usizeField = json.usizeField;
 pub const numberField = json.numberField;
+pub const boolField = json.boolField;
 pub const objectField = json.objectField;
 pub const objectFieldObject = json.objectFieldObject;
 pub const arrayField = json.arrayField;

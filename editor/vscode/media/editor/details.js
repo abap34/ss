@@ -12,7 +12,6 @@ export function renderObjectSheet(state, object, actions) {
     heading(object, actions),
     bounds(frame),
     relations(state, object),
-    actionArea(state, object),
   );
   return sheet;
 }
@@ -70,7 +69,11 @@ function relations(state, object) {
 }
 
 function relationRow(relation, page) {
-  const row = element("div", "relation-row");
+  const fallback = relation.kind === "fallback";
+  const row = element(
+    "div",
+    `relation-row${fallback ? " relation-row--fallback" : ""}`,
+  );
   const constraintKind = relation.source.type === "page"
     ? "absolute"
     : "relative";
@@ -83,6 +86,11 @@ function relationRow(relation, page) {
   const expression = element("code");
   expression.textContent = relation.expression;
   row.append(icon, expression);
+  if (fallback) {
+    const badge = element("small", "relation-kind");
+    badge.textContent = "Fallback";
+    row.append(badge);
+  }
   return row;
 }
 
@@ -99,17 +107,6 @@ function setPageIconRatio(icon, page) {
     "--arrow-width",
     `${Math.min(width, Math.max(1.5, width * 0.74))}px`,
   );
-}
-
-function actionArea(state, object) {
-  const container = element("div", "sheet-actions");
-  const editable = isMovable(state, object.id);
-  const moveState = element("span", editable ? "movable" : "locked");
-  moveState.textContent = editable
-    ? "Drag to edit · Shift keeps relations"
-    : "Generated position";
-  container.append(moveState);
-  return container;
 }
 
 function sourceButton(object, revealSource) {
@@ -145,11 +142,4 @@ function bound(label, value) {
   key.textContent = label;
   node.append(key, document.createTextNode(formatNumber(value)));
   return node;
-}
-
-function isMovable(state, nodeId) {
-  return Boolean(
-    !state.snapshot?.stale &&
-      state.snapshot?.editing.some((target) => target.node_id === nodeId),
-  );
 }

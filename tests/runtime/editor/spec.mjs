@@ -18,6 +18,10 @@ async function testSnapshotAndSourceEdits() {
     const source = `import std:themes/default as *
 import "./position" as *
 
+record Parts {
+  root: Object
+}
+
 fn movable!() -> Object
   let result = text!("Move me")
   ~ result.left == page.left + left_offset
@@ -27,10 +31,19 @@ end
 
 page demo
 let item = movable!()
+let parts = Parts {
+  root = movable!()
+}
+movable!()
+let automatic = text!("Automatic")
+~ item.right == item.left + 220
+if true
+  let local = text!("Local")
+end
 end
 `;
     await writeFile(slide, source, "utf8");
-    await writeFile(position, "const left_offset: Number = 72\n", "utf8");
+    await writeFile(position, dependencySource(72), "utf8");
 
     await withLspClient({ cwd: project }, async (client) => {
       await client.initialize();
@@ -49,13 +62,37 @@ end
         }`,
       );
       const initialTarget = editingTarget(initial, "item");
+      editingTarget(initial, "parts.root");
+      const unboundTarget = editingTarget(initial, "movable_item");
+      assert(
+        unboundTarget.binding_required === true,
+        `unbound component did not require a binding: ${JSON.stringify(unboundTarget)}`,
+      );
+      const automaticTarget = editingTarget(initial, "automatic");
+      const automaticRelations = initial.layout.relations.filter((relation) =>
+        relation.kind === "fallback" &&
+        relation.target?.node_id === automaticTarget.node_id
+      );
+      assert(
+        automaticRelations.some((relation) => relation.axis === "horizontal") &&
+          automaticRelations.some((relation) => relation.axis === "vertical"),
+        `automatic object omitted fallback constraints: ${JSON.stringify(automaticRelations)}`,
+      );
+      assert(
+        initialTarget.page_index === 2,
+        `editing target used page ${initialTarget.page_index} instead of page 2`,
+      );
+      assert(
+        !initial.editing.some((item) => item.binding === "local"),
+        `branch-local binding was exposed as editable: ${JSON.stringify(initial.editing)}`,
+      );
       const initialFrame = previewBounds(initial, initialTarget.node_id);
       assert(
         Math.abs(initialFrame.x - 72) < 0.1,
         `initial dependency offset was ${initialFrame.x}`,
       );
 
-      await writeFile(position, "const left_offset: Number = 84\n", "utf8");
+      await writeFile(position, dependencySource(84), "utf8");
       client.notify("workspace/didChangeWatchedFiles", {
         changes: [{ uri: positionUri, type: 2 }],
       });
@@ -137,17 +174,21 @@ end
         absolute.workspaceEdit?.changes?.[uri] ?? [],
       );
       assert(
-        updated.includes("~!~item.left == page.left + 120"),
+        updated.includes("~!~ item.left == page.left + 120"),
         `absolute edit did not update left: ${updated}`,
       );
       assert(
-        updated.includes("~!~item.top == page.top - 140"),
+        updated.includes("~!~ item.top == page.top - 140"),
         `absolute edit did not update top: ${updated}`,
       );
       assert(
         updated.includes("~ result.left == page.left + left_offset") &&
           updated.includes("~ result.top == page.top - 96"),
         `absolute edit rewrote component constraints: ${updated}`,
+      );
+      assert(
+        updated.includes("~ item.right == item.left + 220"),
+        `absolute edit rewrote the size constraint: ${updated}`,
       );
 
       diagnosticsPromise = client.waitForDiagnostics(uri);
@@ -199,12 +240,16 @@ end
         relative.workspaceEdit?.changes?.[uri] ?? [],
       );
       assert(
-        updated.includes("~!~item.left == page.left + 150"),
+        updated.includes("~!~ item.left == page.left + 150"),
         `relative edit did not update left: ${updated}`,
       );
       assert(
-        updated.includes("~!~item.top == page.top - 165"),
+        updated.includes("~!~ item.top == page.top - 165"),
         `relative edit did not update top: ${updated}`,
+      );
+      assert(
+        updated.includes("~ item.right == item.left + 220"),
+        `relative edit rewrote the size constraint: ${updated}`,
       );
 
       diagnosticsPromise = client.waitForDiagnostics(uri);
@@ -223,10 +268,66 @@ end
         165,
         "relative edit",
       );
+
+      const reboundTarget = editingTarget(afterRelative, "movable_item");
+      const reboundFrom = previewBounds(afterRelative, reboundTarget.node_id);
+      const reboundTo = { ...reboundFrom, x: 260, y: 210 };
+      const rebound = await requestEdit(
+        client,
+        uri,
+        afterRelative,
+        reboundTarget,
+        reboundFrom,
+        reboundTo,
+        "absolute",
+        reboundTarget.page_id,
+      );
+      assert(
+        rebound.status === "ok",
+        `unbound component edit was rejected: ${JSON.stringify(rebound)}`,
+      );
+      updated = applyProtocolEdits(
+        updated,
+        rebound.workspaceEdit?.changes?.[uri] ?? [],
+      );
+      assert(
+        updated.includes("let movable_item = movable!()"),
+        `unbound component was not bound: ${updated}`,
+      );
+      assert(
+        updated.includes("~!~ movable_item.left == page.left + 260") &&
+          updated.includes("~!~ movable_item.top == page.top - 210"),
+        `unbound component constraints were not added: ${updated}`,
+      );
+
+      diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 4, text: updated });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "binding an unbound component produced diagnostics",
+      );
+      const afterBinding = await editorSnapshot(client, uri);
+      assertBounds(
+        previewBounds(
+          afterBinding,
+          editingTarget(afterBinding, "movable_item").node_id,
+        ),
+        260,
+        210,
+        "unbound component edit",
+      );
     });
   } finally {
     await rm(project, { recursive: true, force: true });
   }
+}
+
+function dependencySource(offset) {
+  return `const left_offset: Number = ${offset}
+
+page dependency
+end
+`;
 }
 
 async function testLastGoodSnapshotsAreKeptPerEntry() {

@@ -79,6 +79,11 @@ pub const Anchor = enum {
     center_y,
 };
 
+pub const Axis = enum {
+    horizontal,
+    vertical,
+};
+
 pub const ConstraintSource = union(enum) {
     page: Anchor,
     node: struct {
@@ -119,19 +124,14 @@ pub fn constraintRoleForRelation(target_node: NodeId, target_anchor: Anchor, sou
         .node => |value| value,
     };
     if (node_source.node_id != target_node or node_source.anchor == target_anchor) return .position;
-    return if (anchorsShareAxis(target_anchor, node_source.anchor)) .size else .position;
+    return if (anchorAxis(target_anchor) == anchorAxis(node_source.anchor)) .size else .position;
 }
 
-pub fn anchorsShareAxis(left: Anchor, right: Anchor) bool {
-    const left_horizontal = switch (left) {
-        .left, .right, .center_x => true,
-        .top, .bottom, .center_y => false,
+pub fn anchorAxis(anchor: Anchor) Axis {
+    return switch (anchor) {
+        .left, .right, .center_x => .horizontal,
+        .top, .bottom, .center_y => .vertical,
     };
-    const right_horizontal = switch (right) {
-        .left, .right, .center_x => true,
-        .top, .bottom, .center_y => false,
-    };
-    return left_horizontal == right_horizontal;
 }
 
 pub const ConstraintFailureKind = enum {
@@ -309,6 +309,7 @@ pub const PageLayoutResult = struct {
     page_id: NodeId,
     index: usize,
     object_frames: []ObjectLayoutFrame,
+    fallback_constraints: []Constraint = &.{},
     diagnostics: []Diagnostic = &.{},
     constraint_failures: []ConstraintFailure = &.{},
     asset_keys: []u64 = &.{},
@@ -316,6 +317,7 @@ pub const PageLayoutResult = struct {
 
     pub fn deinit(self: *PageLayoutResult, allocator: Allocator) void {
         allocator.free(self.object_frames);
+        allocator.free(self.fallback_constraints);
         for (self.diagnostics) |*diagnostic| diagnostic.deinit(allocator);
         allocator.free(self.diagnostics);
         for (self.constraint_failures) |*failure| failure.deinit(allocator);
@@ -357,11 +359,6 @@ pub const LayoutResults = struct {
         const page = self.pageById(page_id) orelse return null;
         return page.frameOf(node_id);
     }
-};
-
-pub const Axis = enum {
-    horizontal,
-    vertical,
 };
 
 pub const AxisState = struct {
