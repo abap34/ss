@@ -30,5 +30,5 @@ pub fn compileRenderIr(
     options: CompileOptions,
 ) !render.Ir {
     var compiler = native.Compiler{ .io = io, .options = options };
-    return try render_compile.document(allocator, compiler_context, pages, compiler.backend());
+    return try render_compile.document(allocator, compiler_context, pages, &compiler);
 }
