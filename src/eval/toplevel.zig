@@ -271,7 +271,6 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
-        error.DuplicateConstraintUpdate => "DuplicateConstraintUpdate: the same constraint target is updated more than once in one evaluation scope",
         error.UnsupportedScheduledPrimitive => "UnsupportedScheduledPrimitive: this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => null,

@@ -9,16 +9,14 @@ pub fn resolve(ir: anytype) !void {
     var winners = std.ArrayList(usize).empty;
     defer winners.deinit(ir.allocator);
     for (ir.constraint_updates.items, 0..) |update, index| {
-        if (hasStrongerUpdate(ir.constraint_updates.items, update)) continue;
-        for (winners.items) |winner_index| {
-            const winner = ir.constraint_updates.items[winner_index];
-            if (!updatesShareSlot(update, winner) or winner.scope_depth != update.scope_depth) continue;
-            try addDuplicateDiagnostic(ir, update);
-            return error.DuplicateConstraintUpdate;
+        if (winnerPosition(ir.constraint_updates.items, winners.items, update)) |position| {
+            const winner = ir.constraint_updates.items[winners.items[position]];
+            if (update.scope_depth <= winner.scope_depth) winners.items[position] = index;
+        } else {
+            try winners.append(ir.allocator, index);
         }
-        try winners.append(ir.allocator, index);
-        ir.constraint_updates.items[index].active = true;
     }
+    for (winners.items) |winner_index| ir.constraint_updates.items[winner_index].active = true;
 
     var active_constraints = std.ArrayList(model.Constraint).empty;
     errdefer active_constraints.deinit(ir.allocator);
@@ -41,11 +39,15 @@ pub fn resolve(ir: anytype) !void {
     ir.constraints = active_constraints;
 }
 
-fn hasStrongerUpdate(updates: []const model.ConstraintUpdate, update: model.ConstraintUpdate) bool {
-    for (updates) |candidate| {
-        if (updatesShareSlot(update, candidate) and candidate.scope_depth < update.scope_depth) return true;
+fn winnerPosition(
+    updates: []const model.ConstraintUpdate,
+    winners: []const usize,
+    update: model.ConstraintUpdate,
+) ?usize {
+    for (winners, 0..) |winner_index, position| {
+        if (updatesShareSlot(update, updates[winner_index])) return position;
     }
-    return false;
+    return null;
 }
 
 fn isMaskedByWinner(
@@ -57,19 +59,6 @@ fn isMaskedByWinner(
         if (updateMasks(updates[winner_index], constraint)) return true;
     }
     return false;
-}
-
-fn addDuplicateDiagnostic(ir: anytype, update: model.ConstraintUpdate) !void {
-    const node = ir.getNode(update.target_node);
-    const label = if (node) |value| value.role orelse value.name else "unknown";
-    const message = try std.fmt.allocPrint(
-        ir.allocator,
-        "DuplicateConstraintUpdate: '{s}.{s}' is updated more than once in the same evaluation scope",
-        .{ label, @tagName(update.target_anchor) },
-    );
-    try ir.addValidationDiagnostic(.@"error", null, update.target_node, update.origin, .{
-        .user_report = .{ .message = message },
-    });
 }
 
 fn updatesShareSlot(left: model.ConstraintUpdate, right: model.ConstraintUpdate) bool {

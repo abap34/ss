@@ -18,10 +18,15 @@ async function testSnapshotAndSourceEdits() {
     const source = `import std:themes/default as *
 import "./position" as *
 
+fn movable!() -> Object
+  let result = text!("Move me")
+  ~ result.left == page.left + left_offset
+  ~ result.top == page.top - 96
+  return result
+end
+
 page demo
-let item = text!("Move me")
-~ item.left == page.left + left_offset
-~ item.top == page.top - 96
+let item = movable!()
 end
 `;
     await writeFile(slide, source, "utf8");
@@ -132,12 +137,17 @@ end
         absolute.workspaceEdit?.changes?.[uri] ?? [],
       );
       assert(
-        updated.includes("~ item.left == page.left + 120"),
+        updated.includes("~!~item.left == page.left + 120"),
         `absolute edit did not update left: ${updated}`,
       );
       assert(
-        updated.includes("~ item.top == page.top - 140"),
+        updated.includes("~!~item.top == page.top - 140"),
         `absolute edit did not update top: ${updated}`,
+      );
+      assert(
+        updated.includes("~ result.left == page.left + left_offset") &&
+          updated.includes("~ result.top == page.top - 96"),
+        `absolute edit rewrote component constraints: ${updated}`,
       );
 
       diagnosticsPromise = client.waitForDiagnostics(uri);
@@ -189,11 +199,11 @@ end
         relative.workspaceEdit?.changes?.[uri] ?? [],
       );
       assert(
-        updated.includes("~ item.left == page.left + 150"),
+        updated.includes("~!~item.left == page.left + 150"),
         `relative edit did not update left: ${updated}`,
       );
       assert(
-        updated.includes("~ item.top == page.top - 165"),
+        updated.includes("~!~item.top == page.top - 165"),
         `relative edit did not update top: ${updated}`,
       );
 

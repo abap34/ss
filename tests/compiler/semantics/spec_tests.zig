@@ -4860,17 +4860,18 @@ test "compiler semantics: caller constraint updates override component updates" 
     );
 }
 
-test "compiler semantics: duplicate constraint updates on one axis are diagnosed" {
-    try expectLoweringErrorDiagnostic(
+test "compiler semantics: later constraint updates overwrite earlier updates on one axis" {
+    try buildSource(
         \\import std:themes/default as *
         \\
         \\page demo
         \\  let item = text!("duplicate")
-        \\  ~!~item.left
-        \\  ~!~item.right
+        \\  ~!~item.left == page.left + 40
+        \\  ~!~item.right == page.right - 40
+        \\  ~ item.top == page.top - 80
         \\end
         \\
-    , "DuplicateConstraintUpdate");
+    );
 }
 
 test "compiler semantics: missing constraint anchors are rejected statically" {

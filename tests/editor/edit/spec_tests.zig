@@ -34,8 +34,8 @@ test "absolute position replaces page constraints and inserts top-left anchors" 
     try std.testing.expectEqualStrings(
         \\page demo
         \\let item = text!("Move me")
-        \\~ item.left == page.left + 120
-        \\~ item.top == page.top - 140
+        \\~!~item.left == page.left + 120
+        \\~!~item.top == page.top - 140
         \\end
         \\
     , updated);
@@ -92,4 +92,21 @@ test "relative position accepts compact constraint spacing" {
     const updated = try edit.applyEdits(allocator, source, result.edits);
     defer allocator.free(updated);
     try std.testing.expectEqualStrings("\t~ item.center_x == guide.right + 32\n", updated);
+}
+
+test "relative position preserves the constraint update marker" {
+    const allocator = std.testing.allocator;
+    const source = "  ~!~item.left == page.left + 12\n";
+    var result = try edit.preserveRelations(allocator, source, &.{.{
+        .span = .{ .start = 2, .end = source.len - 1 },
+        .target = "item",
+        .target_anchor = "left",
+        .source = "page",
+        .source_anchor = "left",
+        .offset = 48,
+    }});
+    defer result.deinit(allocator);
+    const updated = try edit.applyEdits(allocator, source, result.edits);
+    defer allocator.free(updated);
+    try std.testing.expectEqualStrings("  ~!~item.left == page.left + 48\n", updated);
 }

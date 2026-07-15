@@ -46,7 +46,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
 
     const node_id: u32 = @intCast(@max(0, protocol.intField(request_object, "nodeId") orelse 0));
     const editing = findEditingTarget(root, node_id) orelse
-        return try statusJson(ctx.allocator, "unsupported", "This object is generated outside the page and cannot be moved directly.");
+        return try statusJson(ctx.allocator, "unsupported", "This object has no editable binding in the page.");
     const requested_page_id = protocol.intField(request_object, "pageId") orelse -1;
     const target_page_id = protocol.intField(editing, "page_id") orelse -1;
     if (requested_page_id != target_page_id) {
