@@ -1,4 +1,4 @@
-import { color, element, setAttributes, setRect, svgElement } from "./dom.js";
+import { color, element, setAttributes, svgElement } from "./dom.js";
 import {
   anchorSegment,
   constraintGeometry,
@@ -10,12 +10,15 @@ export function renderScene(snapshot, pageId, thumbnail = false) {
   const display = snapshot?.display.pages.find((page) =>
     page.page_id === pageId
   );
-  const svg = svgElement("svg", thumbnail ? "thumbnail-scene" : "scene");
-  if (!display) return svg;
-  svg.setAttribute("viewBox", `0 0 ${display.width} ${display.height}`);
-  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-  for (const item of display.items) svg.append(renderItem(item, thumbnail));
-  return svg;
+  const scene = element("div", thumbnail ? "thumbnail-scene" : "scene");
+  if (!display) return scene;
+  const canvas = element("div", "scene-canvas");
+  canvas.style.width = `${display.width}px`;
+  canvas.style.height = `${display.height}px`;
+  if (thumbnail) canvas.style.transform = `scale(${64 / display.width})`;
+  for (const item of display.items) canvas.append(renderItem(item, thumbnail));
+  scene.append(canvas);
+  return scene;
 }
 
 export function renderConstraints(snapshot, page, objectId) {
@@ -79,83 +82,93 @@ export function renderConstraints(snapshot, page, objectId) {
 function renderItem(item, thumbnail) {
   let node;
   if (item.type === "fill_rect") {
-    node = svgElement("rect");
-    setRect(node, item);
-    node.setAttribute("fill", color(item.color));
+    node = element("div", "scene-box");
+    styleRect(node, item);
+    node.style.backgroundColor = color(item.color);
   } else if (item.type === "stroke_line") {
-    node = svgElement("line");
-    setAttributes(node, { x1: item.x1, y1: item.y1, x2: item.x2, y2: item.y2 });
-    node.setAttribute("stroke", color(item.color));
-    node.setAttribute("stroke-width", String(item.line_width));
-    if (item.dash_on > 0) {
-      node.setAttribute("stroke-dasharray", `${item.dash_on} ${item.dash_off}`);
+    node = element("div", "scene-line");
+    const dx = item.x2 - item.x1;
+    const dy = item.y2 - item.y1;
+    node.style.left = `${item.x1}px`;
+    node.style.top = `${item.y1}px`;
+    node.style.width = `${Math.hypot(dx, dy)}px`;
+    node.style.height = `${item.line_width}px`;
+    node.style.backgroundColor = color(item.color);
+    node.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+    if (item.dash_on > 0 && item.dash_off > 0) {
+      const stroke = color(item.color);
+      node.style.background = `repeating-linear-gradient(to right, ${stroke} 0 ${item.dash_on}px, transparent ${item.dash_on}px ${item.dash_on + item.dash_off}px)`;
     }
   } else if (item.type === "rounded_rect") {
-    node = svgElement("rect");
-    setRect(node, item);
-    setAttributes(node, { rx: item.radius, ry: item.radius });
-    node.setAttribute("fill", item.fill ? color(item.fill) : "none");
-    node.setAttribute("stroke", item.stroke ? color(item.stroke) : "none");
-    node.setAttribute("stroke-width", String(item.line_width));
+    node = element("div", "scene-box");
+    styleRect(node, item);
+    node.style.borderRadius = `${item.radius}px`;
+    if (item.fill) node.style.backgroundColor = color(item.fill);
+    if (item.stroke) {
+      node.style.border = `${item.line_width}px solid ${color(item.stroke)}`;
+    }
   } else if (item.type === "text") {
-    node = svgElement("text");
-    setAttributes(node, { x: item.x, y: item.baseline_y });
+    node = element("span", "scene-text");
+    node.style.left = `${item.x}px`;
+    node.style.top = `${item.baseline_y - item.font_size * 0.875}px`;
+    node.style.width = `${item.width}px`;
     node.textContent = item.text;
-    node.setAttribute("fill", color(item.color));
-    node.setAttribute("font-family", item.font_family || "sans-serif");
-    node.setAttribute("font-size", String(item.font_size));
-    node.setAttribute("font-weight", String(item.font_weight));
-    node.setAttribute("font-style", item.font_style || "normal");
-    node.setAttribute("font-stretch", item.font_stretch || "normal");
-    node.setAttribute("xml:space", "preserve");
+    node.style.color = color(item.color);
+    node.style.fontFamily = item.font_family || "sans-serif";
+    node.style.fontSize = `${item.font_size}px`;
+    node.style.fontWeight = String(item.font_weight);
+    node.style.fontStyle = item.font_style || "normal";
+    node.style.fontStretch = item.font_stretch || "normal";
+    node.style.lineHeight = `${item.font_size}px`;
   } else if (item.type === "raster" || (item.type === "svg" && !item.tint)) {
-    node = svgElement("image");
-    setRect(node, item);
-    node.setAttribute("href", item.uri || "");
-    node.setAttribute("preserveAspectRatio", "none");
+    node = element("img", "scene-image");
+    styleRect(node, item);
+    node.src = item.uri || "";
+    node.alt = "";
   } else if (item.type === "svg") {
     node = tintedSvg(item);
-  } else if (item.type === "pdf_page") {
+  } else if (item.type === "math" || item.type === "pdf_page") {
     node = thumbnail ? pdfThumbnail(item) : pdfObject(item);
   } else {
-    node = svgElement("g");
+    node = element("div");
   }
   if (item.node_id == null) return node;
-  const group = svgElement("g");
+  const group = element("div", "scene-node");
   group.dataset.nodeId = String(item.node_id);
   group.append(node);
   return group;
 }
 
 function pdfThumbnail(item) {
-  const node = svgElement("rect");
-  setRect(node, item);
-  node.setAttribute("fill", "#eef2ef");
-  node.setAttribute("stroke", "#93a59f");
+  const node = element("div", "scene-pdf-placeholder");
+  styleRect(node, item);
   return node;
 }
 
 function pdfObject(item) {
-  const node = svgElement("foreignObject");
-  setRect(node, item);
   const object = element("object", "pdf-resource");
+  styleRect(object, item);
   object.setAttribute("data", pdfPageUri(item));
   object.setAttribute("type", "application/pdf");
   object.setAttribute("aria-label", `Embedded PDF page ${item.page_index + 1}`);
-  node.append(object);
-  return node;
+  return object;
 }
 
 function tintedSvg(item) {
-  const node = svgElement("foreignObject");
-  setRect(node, item);
-  const image = element("div", "tinted-svg-resource");
+  const image = element("div", "tinted-svg-resource scene-image");
+  styleRect(image, item);
   const uri = `url("${item.uri || ""}")`;
   image.style.backgroundColor = color(item.tint);
   image.style.maskImage = uri;
   image.style.webkitMaskImage = uri;
-  node.append(image);
-  return node;
+  return image;
+}
+
+function styleRect(node, rect) {
+  node.style.left = `${rect.x}px`;
+  node.style.top = `${rect.y}px`;
+  node.style.width = `${rect.width}px`;
+  node.style.height = `${rect.height}px`;
 }
 
 function pdfPageUri(item) {

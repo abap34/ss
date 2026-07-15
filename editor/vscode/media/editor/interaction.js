@@ -136,7 +136,7 @@ export class InteractionController {
     const scene = drag.svg.previousElementSibling;
     for (const nodeId of drag.nodeIds) {
       for (const item of scene.querySelectorAll(`[data-node-id="${nodeId}"]`)) {
-        item.setAttribute("transform", `translate(${dx} ${dy})`);
+        item.style.transform = `translate(${dx}px, ${dy}px)`;
       }
     }
   }
