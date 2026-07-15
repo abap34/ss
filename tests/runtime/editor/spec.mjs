@@ -379,18 +379,18 @@ end
         "asset preview fixture produced diagnostics",
       );
       const first = await editorSnapshot(client, uri);
-      const firstItem = first.display.pages.flatMap((page) => page.items).find((item) => item.type === "svg");
+      const firstItem = first.display.assets.find((item) => item.kind === "svg");
       assert(firstItem, `snapshot omitted SVG resource: ${JSON.stringify(first.display)}`);
       assert(path.isAbsolute(firstItem.path), `snapshot asset path was not absolute: ${firstItem.path}`);
       assert(
-        path.basename(firstItem.path).startsWith(firstItem.resource_id),
-        `snapshot asset path did not use its content id: ${JSON.stringify(firstItem)}`,
+        first.display.html.includes(firstItem.relative_path),
+        `snapshot HTML did not reference its published SVG: ${JSON.stringify(firstItem)}`,
       );
       assert((await readFile(firstItem.path, "utf8")) === svg, "published editor asset did not preserve SVG bytes");
 
       const firstStat = await stat(firstItem.path);
       const second = await editorSnapshot(client, uri);
-      const secondItem = second.display.pages.flatMap((page) => page.items).find((item) => item.type === "svg");
+      const secondItem = second.display.assets.find((item) => item.kind === "svg");
       assert(secondItem?.path === firstItem.path, "unchanged snapshot published a different editor asset path");
       const secondStat = await stat(firstItem.path);
       assert(secondStat.mtimeMs === firstStat.mtimeMs, "unchanged snapshot rewrote its editor asset");

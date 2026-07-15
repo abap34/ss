@@ -21,11 +21,8 @@ export class ViewResources {
     snapshot: EditorSnapshot,
   ): void {
     const roots = this.roots(document);
-    for (const page of snapshot.display.pages) {
-      for (const item of page.items) {
-        if (!isResource(item)) continue;
-        roots.push(vscode.Uri.file(path.dirname(item.path)));
-      }
+    for (const asset of snapshot.display.assets) {
+      roots.push(vscode.Uri.file(path.dirname(asset.path)));
     }
     const unique = new Map(roots.map((root) => [root.toString(), root]));
     webview.options = {
@@ -39,11 +36,10 @@ export class ViewResources {
     snapshot: EditorSnapshot,
   ): EditorSnapshot {
     const copy = structuredClone(snapshot);
-    for (const page of copy.display.pages) {
-      for (const item of page.items) {
-        if (!isResource(item)) continue;
-        item.uri = webview.asWebviewUri(vscode.Uri.file(item.path)).toString();
-      }
+    for (const asset of copy.display.assets) {
+      const uri = webview.asWebviewUri(vscode.Uri.file(asset.path)).toString();
+      copy.display.html = replaceHtmlAsset(copy.display.html, asset.relative_path, uri);
+      copy.display.css = replaceAll(copy.display.css, `url('${asset.relative_path}')`, `url('${uri}')`);
     }
     return copy;
   }
@@ -61,7 +57,7 @@ export class ViewResources {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: blob:; object-src ${webview.cspSource} data: blob:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}' ${webview.cspSource}; font-src ${webview.cspSource} data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data: blob:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; worker-src ${webview.cspSource} blob:; connect-src ${webview.cspSource}; font-src ${webview.cspSource} data:;">
   <link rel="stylesheet" href="${style}">
 </head>
 <body><div id="app"></div><script type="module" nonce="${nonce}" src="${script}"></script></body>
@@ -69,11 +65,14 @@ export class ViewResources {
   }
 }
 
-function isResource(
-  item: EditorSnapshot["display"]["pages"][number]["items"][number],
-): item is Extract<typeof item, { type: "raster" | "svg" | "math" | "pdf_page" }> {
-  return item.type === "raster" || item.type === "svg" ||
-    item.type === "math" || item.type === "pdf_page";
+function replaceHtmlAsset(html: string, path: string, uri: string): string {
+  let result = replaceAll(html, `src="${path}"`, `src="${uri}"`);
+  result = replaceAll(result, `data-pdf-src="${path}"`, `data-pdf-src="${uri}"`);
+  return replaceAll(result, `url('${path}')`, `url('${uri}')`);
+}
+
+function replaceAll(value: string, source: string, replacement: string): string {
+  return value.split(source).join(replacement);
 }
 
 function randomNonce(): string {

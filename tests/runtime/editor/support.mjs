@@ -13,10 +13,10 @@ export async function editorSnapshot(client, uri) {
     `unexpected coordinates: ${JSON.stringify(snapshot.coordinate_space)}`,
   );
   assert(
-    snapshot.display?.pages?.some((page) =>
-      page.items.some((item) => item.type === "text")
-    ),
-    `snapshot omitted text drawing commands: ${JSON.stringify(snapshot)}`,
+    snapshot.display?.schema === 2 &&
+      snapshot.display.html.includes("class=\"ss-item ss-text\"") &&
+      snapshot.display.css.includes(".ss-text"),
+    `snapshot omitted shared HTML text output: ${JSON.stringify(snapshot)}`,
   );
   return snapshot;
 }

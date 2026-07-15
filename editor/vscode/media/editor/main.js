@@ -46,6 +46,13 @@ window.addEventListener("message", (event) => {
 
 function acceptSnapshot(message) {
   state.snapshot = message.snapshot;
+  let renderStyle = document.getElementById("ss-render-style");
+  if (!renderStyle) {
+    renderStyle = document.createElement("style");
+    renderStyle.id = "ss-render-style";
+    document.head.append(renderStyle);
+  }
+  renderStyle.textContent = state.snapshot.display.css;
   navigation.reconcile(state.snapshot);
   render();
 }
