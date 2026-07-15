@@ -300,67 +300,6 @@ pub const Frame = struct {
     y_set: bool = false,
 };
 
-pub const ObjectLayoutFrame = struct {
-    node_id: NodeId,
-    frame: Frame,
-};
-
-pub const PageLayoutResult = struct {
-    page_id: NodeId,
-    index: usize,
-    object_frames: []ObjectLayoutFrame,
-    fallback_constraints: []Constraint = &.{},
-    diagnostics: []Diagnostic = &.{},
-    constraint_failures: []ConstraintFailure = &.{},
-    asset_keys: []u64 = &.{},
-    measurement_keys: []u64 = &.{},
-
-    pub fn deinit(self: *PageLayoutResult, allocator: Allocator) void {
-        allocator.free(self.object_frames);
-        allocator.free(self.fallback_constraints);
-        for (self.diagnostics) |*diagnostic| diagnostic.deinit(allocator);
-        allocator.free(self.diagnostics);
-        for (self.constraint_failures) |*failure| failure.deinit(allocator);
-        allocator.free(self.constraint_failures);
-        allocator.free(self.asset_keys);
-        allocator.free(self.measurement_keys);
-        self.* = .{
-            .page_id = 0,
-            .index = 0,
-            .object_frames = &.{},
-        };
-    }
-
-    pub fn frameOf(self: *const PageLayoutResult, node_id: NodeId) ?Frame {
-        for (self.object_frames) |entry| {
-            if (entry.node_id == node_id) return entry.frame;
-        }
-        return null;
-    }
-};
-
-pub const LayoutResults = struct {
-    pages: []PageLayoutResult = &.{},
-
-    pub fn deinit(self: *LayoutResults, allocator: Allocator) void {
-        for (self.pages) |*page| page.deinit(allocator);
-        allocator.free(self.pages);
-        self.* = .{};
-    }
-
-    pub fn pageById(self: *const LayoutResults, page_id: NodeId) ?*const PageLayoutResult {
-        for (self.pages) |*page| {
-            if (page.page_id == page_id) return page;
-        }
-        return null;
-    }
-
-    pub fn frameOf(self: *const LayoutResults, page_id: NodeId, node_id: NodeId) ?Frame {
-        const page = self.pageById(page_id) orelse return null;
-        return page.frameOf(node_id);
-    }
-};
-
 pub const AxisState = struct {
     start: ?f32 = null,
     end: ?f32 = null,
@@ -657,18 +596,6 @@ pub const Value = union(ValueTag) {
             .none, .anchor, .function, .string, .enum_case, .record, .number, .boolean, .constraints, .void => null,
         };
     }
-};
-
-pub const PageLayout = struct {
-    pub const width: f32 = 1280;
-    pub const height: f32 = 720;
-    pub const flow_margin_x: f32 = 60;
-    pub const flow_top: f32 = 660;
-    pub const content_indent: f32 = 18;
-    pub const max_visual_width: f32 = 1160;
-    pub const default_asset_width: f32 = 220;
-    pub const max_figure_height: f32 = 220;
-    pub const max_math_height: f32 = 80;
 };
 
 pub const TextStyle = struct {

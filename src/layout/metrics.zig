@@ -11,7 +11,7 @@ const utils = @import("utils");
 const source = utils.source;
 
 const Node = model.Node;
-const PageLayout = model.PageLayout;
+const Defaults = @import("document.zig").Defaults;
 const TextStyle = model.TextStyle;
 
 const MeasurementKind = enum {
@@ -187,7 +187,7 @@ fn styleForNode(ir: anytype, node: *const Node) TextStyle {
 }
 
 fn maxWidthForStyle(style: TextStyle) f32 {
-    return @min(PageLayout.max_visual_width, PageLayout.width - style.default_x - style.default_right_inset);
+    return @min(Defaults.max_visual_width, Defaults.width - style.default_x - style.default_right_inset);
 }
 
 fn assetScale(ir: anytype, node: *const Node) f32 {
@@ -247,7 +247,7 @@ fn intrinsicWidthWithCache(ir: anytype, node: *const Node, cache: ?*MeasurementC
     }
     switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => {
-            const base_width = positiveNodeFloatProperty(ir, node, "asset_width") orelse @min(maxWidthForStyle(style), PageLayout.default_asset_width);
+            const base_width = positiveNodeFloatProperty(ir, node, "asset_width") orelse @min(maxWidthForStyle(style), Defaults.default_asset_width);
             return base_width * assetScale(ir, node) + chrome_width;
         },
         .figure_text => return maxWidthForStyle(style) + chrome_width,
@@ -324,15 +324,15 @@ fn intrinsicHeightWithCache(ir: anytype, node: *const Node, cache: ?*Measurement
     }
     return switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => blk: {
-            const base_height = positiveNodeFloatProperty(ir, node, "asset_height") orelse PageLayout.max_figure_height;
+            const base_height = positiveNodeFloatProperty(ir, node, "asset_height") orelse Defaults.max_figure_height;
             break :blk base_height * assetScale(ir, node) + chrome_height;
         },
-        .figure_text => PageLayout.max_figure_height + chrome_height,
+        .figure_text => Defaults.max_figure_height + chrome_height,
         .math_text, .math_tex => blk: {
             const content = model.nodeDisplayContent(node);
             const lines = @max(source.lineCount(content), 1);
             const base = @as(f32, @floatFromInt(lines)) * 22.0 + 2.0;
-            break :blk @min(PageLayout.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node)) + chrome_height;
+            break :blk @min(Defaults.max_math_height * mathScale(ir, node), @max(@as(f32, 30.0), base) * mathScale(ir, node)) + chrome_height;
         },
         else => blk: {
             const content = model.nodeDisplayContent(node);

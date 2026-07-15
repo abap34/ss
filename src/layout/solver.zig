@@ -1,6 +1,7 @@
 const std = @import("std");
 const model = @import("model");
 const diagnostics = @import("diagnostics.zig");
+const document = @import("document.zig");
 const fallback = @import("fallback.zig");
 const graph = @import("graph.zig");
 const groups = @import("groups.zig");
@@ -12,7 +13,7 @@ const utils = @import("utils");
 const NodeId = model.NodeId;
 const AxisState = model.AxisState;
 const Constraint = model.Constraint;
-const PageLayout = model.PageLayout;
+const Defaults = @import("document.zig").Defaults;
 const ConstraintTolerance = graph.ConstraintTolerance;
 
 pub const SolveOptions = graph.SolveOptions;
@@ -26,12 +27,12 @@ pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
 }
 
 pub fn solveLayoutWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !void {
-    var results = try solveLayoutResultsWithTracePathAndOptions(ir, trace_path, options);
+    var results = try solveDocument(ir, trace_path, options);
     defer results.deinit(ir.allocator);
-    try applyLayoutResults(ir, &results);
+    try applyDocument(ir, &results);
 }
 
-pub fn solveLayoutResultsWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !model.LayoutResults {
+pub fn solveDocument(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
     layout_trace.beginSolve(ir.allocator, trace_path);
     defer layout_trace.endSolve(ir.allocator);
 
@@ -40,8 +41,8 @@ pub fn solveLayoutResultsWithTracePathAndOptions(ir: anytype, trace_path: ?[]con
         page.frame = .{
             .x = 0,
             .y = 0,
-            .width = PageLayout.width,
-            .height = PageLayout.height,
+            .width = Defaults.width,
+            .height = Defaults.height,
             .x_set = true,
             .y_set = true,
         };
@@ -52,7 +53,7 @@ pub fn solveLayoutResultsWithTracePathAndOptions(ir: anytype, trace_path: ?[]con
         if (options.progress) |progress| progress.pageStarted(progress.context, 0, page_count);
     }
 
-    const page_jobs = try ir.allocator.alloc(PageLayoutJob, page_count);
+    const page_jobs = try ir.allocator.alloc(PageJob, page_count);
     defer ir.allocator.free(page_jobs);
     for (ir.page_order.items, 0..) |page_id, page_index| {
         page_jobs[page_index] = .{
@@ -61,26 +62,26 @@ pub fn solveLayoutResultsWithTracePathAndOptions(ir: anytype, trace_path: ?[]con
         };
     }
 
-    var page_results = std.ArrayList(model.PageLayoutResult).empty;
+    var page_results = std.ArrayList(document.Page).empty;
     errdefer {
         for (page_results.items) |*result| result.deinit(ir.allocator);
         page_results.deinit(ir.allocator);
     }
-    try runPageLayoutJobs(ir, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
+    try runPageJobs(ir, page_jobs, options, trace_path == null and !options.record_propagation, &page_results);
     return .{ .pages = try page_results.toOwnedSlice(ir.allocator) };
 }
 
-const PageLayoutJob = struct {
+const PageJob = struct {
     page_id: NodeId,
     page_index: usize,
 
-    fn run(self: PageLayoutJob, ir: anytype, options: SolveOptions) !model.PageLayoutResult {
+    fn run(self: PageJob, ir: anytype, options: SolveOptions) !document.Page {
         var measurement_cache = metrics.MeasurementCache.initWithRenderProvider(ir.allocator, options.measurement_provider);
         defer measurement_cache.deinit();
         return try solvePageLayout(ir, self.page_id, self.page_index, &measurement_cache, options);
     }
 
-    fn runIsolated(self: PageLayoutJob, ir: anytype, allocator: std.mem.Allocator, options: SolveOptions) !model.PageLayoutResult {
+    fn runIsolated(self: PageJob, ir: anytype, allocator: std.mem.Allocator, options: SolveOptions) !document.Page {
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
 
@@ -101,19 +102,19 @@ const PageLayoutJob = struct {
         defer measurement_cache.deinit();
         var result = try solvePageLayout(&local_context, self.page_id, self.page_index, &measurement_cache, local_options);
         defer result.deinit(local_context.allocator);
-        return try clonePageLayoutResult(allocator, &result);
+        return try clonePage(allocator, &result);
     }
 };
 
 const PageLayoutJobOutput = struct {
-    result: ?model.PageLayoutResult = null,
+    result: ?document.Page = null,
     err: ?anyerror = null,
 };
 
-fn PageLayoutWork(comptime ContextPtr: type) type {
+fn PageWork(comptime ContextPtr: type) type {
     return struct {
         ir: ContextPtr,
-        jobs: []const PageLayoutJob,
+        jobs: []const PageJob,
         options: SolveOptions,
         outputs: []PageLayoutJobOutput,
         next_job: std.atomic.Value(usize) = .init(0),
@@ -123,13 +124,13 @@ fn PageLayoutWork(comptime ContextPtr: type) type {
     };
 }
 
-fn runPageLayoutJobs(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, parallel_allowed: bool, out: *std.ArrayList(model.PageLayoutResult)) !void {
+fn runPageJobs(ir: anytype, jobs: []const PageJob, options: SolveOptions, parallel_allowed: bool, out: *std.ArrayList(document.Page)) !void {
     const worker_count = layoutWorkerCount(jobs.len, options, parallel_allowed);
-    if (worker_count <= 1) return try runPageLayoutJobsSequential(ir, jobs, options, out);
-    return try runPageLayoutJobsParallel(ir, jobs, options, worker_count, out);
+    if (worker_count <= 1) return try runPageJobsSequential(ir, jobs, options, out);
+    return try runPageJobsParallel(ir, jobs, options, worker_count, out);
 }
 
-fn runPageLayoutJobsSequential(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, out: *std.ArrayList(model.PageLayoutResult)) !void {
+fn runPageJobsSequential(ir: anytype, jobs: []const PageJob, options: SolveOptions, out: *std.ArrayList(document.Page)) !void {
     for (jobs, 0..) |job, completed_index| {
         var result = try job.run(ir, options);
         var result_transferred = false;
@@ -140,7 +141,7 @@ fn runPageLayoutJobsSequential(ir: anytype, jobs: []const PageLayoutJob, options
     }
 }
 
-fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(model.PageLayoutResult)) !void {
+fn runPageJobsParallel(ir: anytype, jobs: []const PageJob, options: SolveOptions, worker_count: usize, out: *std.ArrayList(document.Page)) !void {
     const ContextPtr = @TypeOf(ir);
     const outputs = try ir.allocator.alloc(PageLayoutJobOutput, jobs.len);
     defer ir.allocator.free(outputs);
@@ -151,7 +152,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
         }
     }
 
-    var work = PageLayoutWork(ContextPtr){
+    var work = PageWork(ContextPtr){
         .ir = ir,
         .jobs = jobs,
         .options = options,
@@ -186,7 +187,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
 
     for (outputs) |*output| {
         const result = if (output.result) |*value| value else return error.LayoutJobFailed;
-        var cloned = try clonePageLayoutResult(ir.allocator, result);
+        var cloned = try clonePage(ir.allocator, result);
         var cloned_transferred = false;
         errdefer if (!cloned_transferred) cloned.deinit(ir.allocator);
         try mergePageLayoutIssues(ir, &cloned);
@@ -195,7 +196,7 @@ fn runPageLayoutJobsParallel(ir: anytype, jobs: []const PageLayoutJob, options: 
     }
 }
 
-fn layoutJobWorker(comptime ContextPtr: type, work: *PageLayoutWork(ContextPtr)) void {
+fn layoutJobWorker(comptime ContextPtr: type, work: *PageWork(ContextPtr)) void {
     while (!work.failed.load(.monotonic)) {
         const index = work.next_job.fetchAdd(1, .monotonic);
         if (index >= work.jobs.len) break;
@@ -210,7 +211,7 @@ fn layoutJobWorker(comptime ContextPtr: type, work: *PageLayoutWork(ContextPtr))
     }
 }
 
-fn notifyLayoutProgress(comptime ContextPtr: type, work: *PageLayoutWork(ContextPtr), completed: usize) void {
+fn notifyLayoutProgress(comptime ContextPtr: type, work: *PageWork(ContextPtr), completed: usize) void {
     const progress = work.options.progress orelse return;
     lockProgress(&work.progress_lock);
     defer unlockProgress(&work.progress_lock);
@@ -234,8 +235,8 @@ fn layoutWorkerCount(job_count: usize, options: SolveOptions, parallel_allowed: 
     return @min(requested, job_count);
 }
 
-fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.PageLayoutResult) !model.PageLayoutResult {
-    const object_frames = try allocator.dupe(model.ObjectLayoutFrame, result.object_frames);
+fn clonePage(allocator: std.mem.Allocator, result: *const document.Page) !document.Page {
+    const object_frames = try allocator.dupe(document.ObjectFrame, result.object_frames);
     var object_frames_transferred = false;
     errdefer if (!object_frames_transferred) allocator.free(object_frames);
     const fallback_constraints = try allocator.dupe(Constraint, result.fallback_constraints);
@@ -295,7 +296,7 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
     };
 }
 
-fn mergePageLayoutIssues(ir: anytype, result: *const model.PageLayoutResult) !void {
+fn mergePageLayoutIssues(ir: anytype, result: *const document.Page) !void {
     for (result.diagnostics) |diagnostic| {
         var cloned = try diagnostic.clone(ir.allocator);
         errdefer cloned.deinit(ir.allocator);
@@ -311,7 +312,7 @@ fn mergePageLayoutIssues(ir: anytype, result: *const model.PageLayoutResult) !vo
     }
 }
 
-pub fn applyLayoutResults(ir: anytype, results: *const model.LayoutResults) !void {
+pub fn applyDocument(ir: anytype, results: *const document.Document) !void {
     ir.fallback_constraints.clearRetainingCapacity();
     for (results.pages) |page| {
         try ir.fallback_constraints.appendSlice(ir.allocator, page.fallback_constraints);
@@ -322,13 +323,13 @@ pub fn applyLayoutResults(ir: anytype, results: *const model.LayoutResults) !voi
     }
 }
 
-fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !model.PageLayoutResult {
+fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_cache: *metrics.MeasurementCache, options: SolveOptions) !document.Page {
     const diagnostic_start = ir.diagnostics.items.len;
     const constraint_failure_start = ir.constraint_failures.items.len;
     const measurement_key_start = measurement_cache.usedKeyCount();
     var page_graph = try graph.PageLayoutGraph.init(ir.allocator, ir, page_id);
     defer page_graph.deinit();
-    if (page_graph.len() == 0) return try collectPageLayoutResult(ir, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+    if (page_graph.len() == 0) return try collectPage(ir, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
     try initializePageObjectMeasurements(ir, &page_graph, measurement_cache);
 
     var horizontal = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .horizontal);
@@ -379,7 +380,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_
 
     try validatePageConstraints(ir, page_id, &page_graph, options);
     try diagnostics.collectPageDiagnosticsCached(ir, page_id, page_graph.child_ids, measurement_cache);
-    return try collectPageLayoutResult(
+    return try collectPage(
         ir,
         page_id,
         page_index,
@@ -393,7 +394,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_
     );
 }
 
-fn collectPageLayoutResult(
+fn collectPage(
     ir: anytype,
     page_id: NodeId,
     page_index: usize,
@@ -404,8 +405,8 @@ fn collectPageLayoutResult(
     constraint_failure_start: usize,
     measurement_cache: *const metrics.MeasurementCache,
     measurement_key_start: usize,
-) !model.PageLayoutResult {
-    var frames = std.ArrayList(model.ObjectLayoutFrame).empty;
+) !document.Page {
+    var frames = std.ArrayList(document.ObjectFrame).empty;
     var fallback_constraints = std.ArrayList(Constraint).empty;
     var diagnostics_out = std.ArrayList(model.Diagnostic).empty;
     var failures_out = std.ArrayList(model.ConstraintFailure).empty;
@@ -552,7 +553,7 @@ fn capDefaultWrappedHorizontalWidths(ir: anytype, workspace: *graph.AxisWorkspac
         if (!metrics.shouldWrapNode(ir, node)) continue;
 
         const style = style_defaults.styleForNode(ir, node);
-        const max_right = PageLayout.width - style.default_right_inset;
+        const max_right = Defaults.width - style.default_right_inset;
         const capped_width = @max(@as(f32, 1.0), max_right - state.start.?);
         if (capped_width >= state.size.? - ConstraintTolerance) continue;
 

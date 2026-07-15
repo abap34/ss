@@ -143,9 +143,9 @@ pub fn evaluateDocument(ir: *core.Context, graph: *const analysis.execution.Exec
     }
 }
 
-pub fn preparePages(ir: *core.Context, progress: ?*Progress) !core.page_unit.PreparedPages {
+pub fn preparePages(ir: *core.Context, progress: ?*Progress) !core.prepared.PreparedPages {
     if (progress) |p| p.begin("Prepare pages");
-    var pages = core.page_unit.prepare(ir.allocator, ir) catch |err| {
+    var pages = core.prepared.prepare(ir.allocator, ir) catch |err| {
         if (progress) |p| p.endStatusLine();
         error_report.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
         return err;
@@ -161,10 +161,10 @@ pub fn preparePages(ir: *core.Context, progress: ?*Progress) !core.page_unit.Pre
 pub fn solveLayouts(
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
-) !core.LayoutResults {
+) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     try preloadLayoutArtifacts(io, ir, pages, progress, jobs);
@@ -183,11 +183,11 @@ pub fn solveLayouts(
 pub fn solveLayoutsWithTracePath(
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     trace_path: []const u8,
     progress: ?*Progress,
     jobs: ?usize,
-) !core.LayoutResults {
+) !core.layout.Document {
     const layout_progress = if (progress) |p| app_progress.layout(p) else null;
     if (progress) |p| p.begin("Solve layouts");
     try preloadLayoutArtifacts(io, ir, pages, progress, jobs);
@@ -206,7 +206,7 @@ pub fn solveLayoutsWithTracePath(
 fn preloadLayoutArtifacts(
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     progress: ?*Progress,
     jobs: ?usize,
 ) !void {

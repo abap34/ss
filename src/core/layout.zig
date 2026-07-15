@@ -1,6 +1,7 @@
 const root = @import("../layout/root.zig");
 
 pub const solver = root.solver;
+pub const document = root.document;
 pub const style = root.style;
 pub const metrics = root.metrics;
 pub const fallback = root.fallback;
@@ -8,11 +9,15 @@ pub const groups = root.groups;
 pub const graph = root.graph;
 pub const diagnostics = root.diagnostics;
 pub const conflicts = root.conflicts;
+pub const Defaults = root.Defaults;
+pub const ObjectFrame = root.ObjectFrame;
+pub const Page = root.Page;
+pub const Document = root.Document;
 pub const solveLayout = root.solveLayout;
 pub const solveLayoutWithTracePath = root.solveLayoutWithTracePath;
 pub const solveLayoutWithTracePathAndOptions = root.solveLayoutWithTracePathAndOptions;
-pub const solveLayoutResultsWithTracePathAndOptions = root.solveLayoutResultsWithTracePathAndOptions;
-pub const applyLayoutResults = root.applyLayoutResults;
+pub const solveDocument = root.solveDocument;
+pub const applyDocument = root.applyDocument;
 pub const styleForNode = root.styleForNode;
 pub const intrinsicWidth = root.intrinsicWidth;
 pub const intrinsicHeight = root.intrinsicHeight;

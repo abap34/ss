@@ -1,11 +1,12 @@
 const std = @import("std");
 const model = @import("model");
 const Context = @import("context.zig").Context;
+const layout_model = @import("layout.zig");
 const markdown = @import("markdown.zig");
 const render_env = @import("render_env.zig");
 const render_policy = @import("render_policy.zig");
 
-pub const ObjectUnit = struct {
+pub const PreparedObject = struct {
     node_id: model.NodeId,
     content: []const u8,
     content_provenance: []const model.ContentProvenance,
@@ -21,7 +22,7 @@ pub const ObjectUnit = struct {
     payload_kind: ?model.PayloadKind,
     attached: bool,
 
-    pub fn deinit(self: *ObjectUnit, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *PreparedObject, allocator: std.mem.Allocator) void {
         for (self.asset_deps) |*dep| dep.deinit(allocator);
         allocator.free(self.asset_deps);
         allocator.free(self.asset_keys);
@@ -30,12 +31,12 @@ pub const ObjectUnit = struct {
         allocator.free(self.tex_preamble);
     }
 
-    pub fn markdownDocument(self: *const ObjectUnit) ?*const markdown.MarkdownDocument {
+    pub fn markdownDocument(self: *const PreparedObject) ?*const markdown.MarkdownDocument {
         if (self.markdown_doc) |*doc| return doc;
         return null;
     }
 
-    pub fn textLayout(self: *const ObjectUnit) ?*const markdown.TextLayout {
+    pub fn textLayout(self: *const PreparedObject) ?*const markdown.TextLayout {
         if (self.text_layout) |*layout| return layout;
         return null;
     }
@@ -62,16 +63,16 @@ pub const AssetDependency = struct {
     }
 };
 
-pub const PageUnit = struct {
+pub const PreparedPage = struct {
     page_id: model.NodeId,
     index: usize,
     background: ?render_policy.Color,
     object_ids: []model.NodeId,
     constraints: []model.Constraint,
-    objects: []ObjectUnit,
+    objects: []PreparedObject,
     asset_keys: []u64 = &.{},
 
-    pub fn deinit(self: *PageUnit, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *PreparedPage, allocator: std.mem.Allocator) void {
         allocator.free(self.object_ids);
         allocator.free(self.constraints);
         for (self.objects) |*object| object.deinit(allocator);
@@ -81,7 +82,7 @@ pub const PageUnit = struct {
 };
 
 pub const PreparedPages = struct {
-    pages: []PageUnit,
+    pages: []PreparedPage,
 
     pub fn deinit(self: *PreparedPages, allocator: std.mem.Allocator) void {
         for (self.pages) |*page| page.deinit(allocator);
@@ -90,7 +91,7 @@ pub const PreparedPages = struct {
 };
 
 pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
-    var pages = std.ArrayList(PageUnit).empty;
+    var pages = std.ArrayList(PreparedPage).empty;
     errdefer {
         for (pages.items) |*page| page.deinit(allocator);
         pages.deinit(allocator);
@@ -106,7 +107,7 @@ pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
         errdefer constraints.deinit(allocator);
         try collectPageConstraints(allocator, ir, page_id, &constraints);
 
-        var objects = std.ArrayList(ObjectUnit).empty;
+        var objects = std.ArrayList(PreparedObject).empty;
         errdefer {
             for (objects.items) |*object| object.deinit(allocator);
             objects.deinit(allocator);
@@ -157,7 +158,7 @@ pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
     return .{ .pages = try pages.toOwnedSlice(allocator) };
 }
 
-pub fn prepareObject(allocator: std.mem.Allocator, ir: *Context, node: *const model.Node) !ObjectUnit {
+pub fn prepareObject(allocator: std.mem.Allocator, ir: *Context, node: *const model.Node) !PreparedObject {
     return try prepareObjectWithRender(allocator, ir, node, render_policy.resolve(ir, node));
 }
 
@@ -166,7 +167,7 @@ pub fn prepareObjectWithRender(
     ir: *Context,
     node: *const model.Node,
     render: render_policy.ResolvedRender,
-) !ObjectUnit {
+) !PreparedObject {
     var env = try render_env.resolveForNode(allocator, ir, node);
     defer env.deinit(allocator);
     const uses_asset_content = switch (node.payload_kind orelse .text) {
@@ -256,12 +257,12 @@ pub fn prepareObjectWithRender(
     };
 }
 
-pub fn attachAssetKeysToLayoutResults(
+pub fn attachAssetKeys(
     allocator: std.mem.Allocator,
-    results: *model.LayoutResults,
+    document: *layout_model.Document,
     pages: *const PreparedPages,
 ) !void {
-    for (results.pages) |*result| {
+    for (document.pages) |*result| {
         const page = pageById(pages, result.page_id) orelse continue;
         const keys = try allocator.dupe(u64, page.asset_keys);
         errdefer allocator.free(keys);
@@ -270,7 +271,7 @@ pub fn attachAssetKeysToLayoutResults(
     }
 }
 
-pub fn pageById(pages: *const PreparedPages, page_id: model.NodeId) ?*const PageUnit {
+pub fn pageById(pages: *const PreparedPages, page_id: model.NodeId) ?*const PreparedPage {
     for (pages.pages) |*page| {
         if (page.page_id == page_id) return page;
     }
@@ -279,7 +280,7 @@ pub fn pageById(pages: *const PreparedPages, page_id: model.NodeId) ?*const Page
 
 pub fn assetDependencyKey(dep: AssetDependency, tex_preamble: []const render_env.TexPreambleEntry) u64 {
     var hasher = std.hash.Wyhash.init(0);
-    hashString(&hasher, "ss-page-unit-asset-v1");
+    hashString(&hasher, "ss-prepared-asset-v2");
     hashString(&hasher, @tagName(dep.kind));
     hashString(&hasher, dep.source);
     switch (dep.kind) {
@@ -300,7 +301,7 @@ fn assetKeysForObject(
     return try keys.toOwnedSlice(allocator);
 }
 
-fn collectPageAssetKeys(allocator: std.mem.Allocator, objects: []const ObjectUnit) ![]u64 {
+fn collectPageAssetKeys(allocator: std.mem.Allocator, objects: []const PreparedObject) ![]u64 {
     var keys = std.ArrayList(u64).empty;
     errdefer keys.deinit(allocator);
     for (objects) |object| {

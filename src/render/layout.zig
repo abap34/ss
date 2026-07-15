@@ -4,9 +4,9 @@ const lowering = @import("../lowering.zig");
 const pdf = @import("pdf.zig");
 const execution = @import("../analysis/execution.zig");
 
-pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Context, graph: *const execution.ExecutionGraph) !core.page_unit.PreparedPages {
+pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Context, graph: *const execution.ExecutionGraph) !core.prepared.PreparedPages {
     try lowering.evaluateDocument(ir, graph);
-    var pages = try core.page_unit.prepare(ir.allocator, ir);
+    var pages = try core.prepared.prepare(ir.allocator, ir);
     errdefer pages.deinit(ir.allocator);
     var results = try solvePreparedPages(io, ir, &pages, null, null);
     defer results.deinit(ir.allocator);
@@ -16,7 +16,7 @@ pub fn evaluateAndSolvePreparedPages(io: std.Io, ir: *core.Context, graph: *cons
 pub fn preloadPreparedPageArtifacts(
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     progress: ?pdf.RenderProgress,
     jobs: ?usize,
 ) !void {
@@ -28,38 +28,38 @@ pub fn preloadPreparedPageArtifacts(
 pub fn solvePreparedPages(
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
-) !core.LayoutResults {
+) !core.layout.Document {
     var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir, pages);
     defer measurement_scope.deinit();
-    var results = try lowering.solveLayoutResultsWithOptions(ir, .{
+    var results = try lowering.solveDocument(ir, null, .{
         .measurement_provider = measurement_scope.provider(),
         .progress = progress,
         .jobs = jobs,
     });
     errdefer results.deinit(ir.allocator);
-    try core.page_unit.attachAssetKeysToLayoutResults(ir.allocator, &results, pages);
+    try core.prepared.attachAssetKeys(ir.allocator, &results, pages);
     return results;
 }
 
 pub fn solvePreparedPagesWithTrace(
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     trace_path: []const u8,
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
-) !core.LayoutResults {
+) !core.layout.Document {
     var measurement_scope = try pdf.LayoutMeasurementScope.init(ir.allocator, io, ir, pages);
     defer measurement_scope.deinit();
-    var results = try lowering.solveLayoutResultsWithTracePathAndOptions(ir, trace_path, .{
+    var results = try lowering.solveDocument(ir, trace_path, .{
         .measurement_provider = measurement_scope.provider(),
         .progress = progress,
         .jobs = jobs,
     });
     errdefer results.deinit(ir.allocator);
-    try core.page_unit.attachAssetKeysToLayoutResults(ir.allocator, &results, pages);
+    try core.prepared.attachAssetKeys(ir.allocator, &results, pages);
     return results;
 }

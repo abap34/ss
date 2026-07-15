@@ -7,7 +7,7 @@ const metrics = @import("metrics.zig");
 
 const Node = model.Node;
 const NodeId = model.NodeId;
-const PageLayout = model.PageLayout;
+const Defaults = @import("document.zig").Defaults;
 const Axis = model.Axis;
 
 const OverflowDiagnostic = struct {
@@ -62,9 +62,9 @@ fn collectPageDiagnosticsWithCache(ir: anytype, page_id: NodeId, child_ids: []co
             const visual_bottom = visual.y;
 
             const overflow_left = @max(@as(f32, 0.0), -visual.x);
-            const overflow_right = @max(@as(f32, 0.0), visual.x + visual.width - PageLayout.width);
+            const overflow_right = @max(@as(f32, 0.0), visual.x + visual.width - Defaults.width);
             const overflow_bottom = @max(@as(f32, 0.0), -visual_bottom);
-            const overflow_top = @max(@as(f32, 0.0), visual_top - PageLayout.height);
+            const overflow_top = @max(@as(f32, 0.0), visual_top - Defaults.height);
 
             if (overflow_left > graph.ConstraintTolerance or overflow_right > graph.ConstraintTolerance or overflow_bottom > graph.ConstraintTolerance or overflow_top > graph.ConstraintTolerance) {
                 const policy = overflowPolicy(ir, node);

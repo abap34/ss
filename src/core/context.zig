@@ -24,7 +24,7 @@ const Value = model.Value;
 const Axis = model.Axis;
 const FunctionRef = model.FunctionRef;
 const Query = model.Query;
-const PageLayout = model.PageLayout;
+
 const Diagnostic = model.Diagnostic;
 const DiagnosticPhase = model.DiagnosticPhase;
 const DiagnosticSeverity = model.DiagnosticSeverity;
@@ -1488,22 +1488,14 @@ pub const Context = struct {
     }
 
     pub fn finalize(self: *Context) !void {
-        try self.finalizeWithLayoutTracePath(null);
+        var document = try self.finalizeDocument(null, .{});
+        defer document.deinit(self.allocator);
     }
 
-    pub fn finalizeWithLayoutTracePath(self: *Context, trace_path: ?[]const u8) !void {
-        try self.finalizeWithLayoutTracePathAndOptions(trace_path, .{});
-    }
-
-    pub fn finalizeWithLayoutTracePathAndOptions(self: *Context, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !void {
-        var results = try self.finalizeWithLayoutResultsAndOptions(trace_path, options);
-        defer results.deinit(self.allocator);
-    }
-
-    pub fn finalizeWithLayoutResultsAndOptions(self: *Context, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !model.LayoutResults {
+    pub fn finalizeDocument(self: *Context, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !layout.Document {
         self.clearDiagnosticsForPhase(.layout);
         self.clearConstraintFailures();
-        var results = try layout.solveLayoutResultsWithTracePathAndOptions(self, trace_path, options);
+        var results = try layout.solveDocument(self, trace_path, options);
         if (self.constraint_failures.items.len > 0) {
             const first_kind = self.constraint_failures.items[0].kind;
             results.deinit(self.allocator);
@@ -1511,7 +1503,7 @@ pub const Context = struct {
             self.clearConstraintFailures();
             var propagation_options = options;
             propagation_options.record_propagation = true;
-            results = try layout.solveLayoutResultsWithTracePathAndOptions(self, trace_path, propagation_options);
+            results = try layout.solveDocument(self, trace_path, propagation_options);
             if (self.constraint_failures.items.len == 0) {
                 results.deinit(self.allocator);
                 switch (first_kind) {
@@ -1526,7 +1518,7 @@ pub const Context = struct {
                 .negative_frame_size => return error.NegativeFrameSize,
             }
         }
-        try layout.applyLayoutResults(self, &results);
+        try layout.applyDocument(self, &results);
         return results;
     }
 

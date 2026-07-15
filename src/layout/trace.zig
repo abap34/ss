@@ -5,7 +5,7 @@ const graph = @import("graph.zig");
 
 const AxisState = model.AxisState;
 const Constraint = model.Constraint;
-const PageLayout = model.PageLayout;
+const Defaults = @import("document.zig").Defaults;
 const json = utils.json;
 
 const TraceState = struct {
@@ -223,8 +223,8 @@ fn appendEventJson(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), ir:
     try object.intField("run", event.run_id);
     try object.intField("page", workspace.graph.page_id);
     try object.stringField("axis", axisName(workspace.axis));
-    try object.floatField("page_width", PageLayout.width, "{d:.4}");
-    try object.floatField("page_height", PageLayout.height, "{d:.4}");
+    try object.floatField("page_width", Defaults.width, "{d:.4}");
+    try object.floatField("page_height", Defaults.height, "{d:.4}");
     try object.intField("nodes", workspace.states.len);
     try object.intField("soft_constraints", workspace.soft_constraints.len);
     try object.optionalIntField("pass", event.pass);

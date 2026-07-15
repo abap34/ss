@@ -245,19 +245,19 @@ test "core IR spec: page unit collects inline math asset dependencies" {
     const page = try ir.addPage("Page");
     _ = try ir.makeObject(page, "body", null, .text, .text, "value $x+y$");
 
-    var pages = try core.page_unit.prepare(testing.allocator, &ir);
+    var pages = try core.prepared.prepare(testing.allocator, &ir);
     defer pages.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), pages.pages.len);
     try testing.expectEqual(@as(usize, 1), pages.pages[0].objects.len);
     const object = pages.pages[0].objects[0];
     try testing.expectEqual(@as(usize, 1), object.asset_deps.len);
-    try testing.expectEqual(core.page_unit.AssetDependency.Kind.inline_math, object.asset_deps[0].kind);
+    try testing.expectEqual(core.prepared.AssetDependency.Kind.inline_math, object.asset_deps[0].kind);
     try testing.expectEqualStrings("x+y", object.asset_deps[0].source);
     try testing.expectEqual(@as(usize, 1), object.asset_keys.len);
     try testing.expectEqual(@as(usize, 1), pages.pages[0].asset_keys.len);
     try testing.expectEqual(object.asset_keys[0], pages.pages[0].asset_keys[0]);
-    try testing.expectEqual(core.page_unit.assetDependencyKey(object.asset_deps[0], object.tex_preamble), object.asset_keys[0]);
+    try testing.expectEqual(core.prepared.assetDependencyKey(object.asset_deps[0], object.tex_preamble), object.asset_keys[0]);
 }
 
 test "core IR spec: prepared page asset keys attach to layout results" {
@@ -269,11 +269,11 @@ test "core IR spec: prepared page asset keys attach to layout results" {
     try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 40, "body-left");
     try ir.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
 
-    var pages = try core.page_unit.prepare(testing.allocator, &ir);
+    var pages = try core.prepared.prepare(testing.allocator, &ir);
     defer pages.deinit(testing.allocator);
-    var results = try core.layout.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{});
+    var results = try core.layout.solveDocument(&ir, null, .{});
     defer results.deinit(testing.allocator);
-    try core.page_unit.attachAssetKeysToLayoutResults(testing.allocator, &results, &pages);
+    try core.prepared.attachAssetKeys(testing.allocator, &results, &pages);
 
     try testing.expectEqual(@as(usize, 1), results.pages.len);
     try testing.expectEqual(@as(usize, 1), results.pages[0].asset_keys.len);
@@ -289,7 +289,7 @@ test "core IR spec: layout results collect solved page frames" {
     try ir.addAnchorConstraint(object, .left, .{ .page = .left }, 40, "body-left");
     try ir.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
 
-    var results = try core.layout.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{});
+    var results = try core.layout.solveDocument(&ir, null, .{});
     defer results.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), results.pages.len);
@@ -311,7 +311,7 @@ test "core IR spec: layout results own page diagnostics" {
     try ir.addAnchorConstraint(object, .left, .{ .page = .left }, -40, "body-left");
     try ir.addAnchorConstraint(object, .top, .{ .page = .top }, -80, "body-top");
 
-    var results = try core.layout.solveLayoutResultsWithTracePathAndOptions(&ir, null, .{});
+    var results = try core.layout.solveDocument(&ir, null, .{});
     defer results.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), results.pages.len);

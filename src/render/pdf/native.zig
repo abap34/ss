@@ -84,7 +84,7 @@ extern fn ts_node_end_byte(TSNode) u32;
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
 const Frame = core.Frame;
-const PageLayout = core.PageLayout;
+const Defaults = core.layout.Defaults;
 const RenderKind = core.render_policy.RenderKind;
 const HorizontalAlign = core.render_policy.HorizontalAlign;
 const FontFace = core.font.Face;
@@ -401,7 +401,7 @@ const RenderOp = struct {
     parse_mode: core.markdown.ParseMode,
     markdown_doc: ?*const MarkdownDocument = null,
     text_layout: ?*const core.markdown.TextLayout = null,
-    asset_deps: []const core.page_unit.AssetDependency = &.{},
+    asset_deps: []const core.prepared.AssetDependency = &.{},
     tex_preamble: []const TexPreambleEntry,
     math_kind: MathKind = .block,
     origin: ?[]const u8 = null,
@@ -587,7 +587,7 @@ pub const LayoutMeasurementScope = struct {
     measurement_cache_dir: []const u8,
     measurement_cache_path: []const u8,
     ctx: DrawContext,
-    prepared_objects: std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit),
+    prepared_objects: std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject),
     cache_mutex: std.Io.Mutex = std.Io.Mutex.init,
     measure_mutex: std.Io.Mutex = std.Io.Mutex.init,
     persistent_measurements: std.AutoHashMap(u64, core.LayoutMeasurement),
@@ -598,7 +598,7 @@ pub const LayoutMeasurementScope = struct {
         allocator: Allocator,
         io: std.Io,
         ir: *core.Context,
-        pages: *const core.page_unit.PreparedPages,
+        pages: *const core.prepared.PreparedPages,
     ) !LayoutMeasurementScope {
         const default_options: RenderOptions = .{};
         const cache_dir = default_options.cache_dir;
@@ -782,7 +782,7 @@ pub const LayoutMeasurementScope = struct {
     fn renderOpForObject(
         allocator: Allocator,
         node: *const core.Node,
-        object: *const core.page_unit.ObjectUnit,
+        object: *const core.prepared.PreparedObject,
         width: f32,
         mode: core.LayoutMeasurementMode,
     ) !RenderOp {
@@ -814,7 +814,7 @@ pub const LayoutMeasurementScope = struct {
         };
     }
 
-    fn preparedObject(self: *const LayoutMeasurementScope, node_id: core.NodeId) ?*const core.page_unit.ObjectUnit {
+    fn preparedObject(self: *const LayoutMeasurementScope, node_id: core.NodeId) ?*const core.prepared.PreparedObject {
         return self.prepared_objects.get(node_id);
     }
 };
@@ -823,14 +823,14 @@ fn measurementFrameHeight(node: *const core.Node, mode: core.LayoutMeasurementMo
     if (mode == .width_constrained and node.frame.height > 0) {
         return @max(node.frame.height, 1);
     }
-    return PageLayout.height;
+    return Defaults.height;
 }
 
 fn buildPreparedObjectLookup(
     allocator: Allocator,
-    pages: *const core.page_unit.PreparedPages,
-) !std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit) {
-    var lookup = std.AutoHashMap(core.NodeId, *const core.page_unit.ObjectUnit).init(allocator);
+    pages: *const core.prepared.PreparedPages,
+) !std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject) {
+    var lookup = std.AutoHashMap(core.NodeId, *const core.prepared.PreparedObject).init(allocator);
     errdefer lookup.deinit();
 
     for (pages.pages) |*page| {
@@ -885,8 +885,8 @@ pub fn renderDocumentToPdf(
     allocator: Allocator,
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
-    layouts: *const core.LayoutResults,
+    pages: *const core.prepared.PreparedPages,
+    layouts: *const core.layout.Document,
     options: RenderOptions,
     progress: ?RenderProgress,
 ) ![]const u8 {
@@ -940,7 +940,7 @@ pub fn preloadPreparedPageArtifacts(
     allocator: Allocator,
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     options: RenderOptions,
     progress: ?RenderProgress,
 ) !void {
@@ -989,7 +989,7 @@ pub fn compileDocumentScenes(
     allocator: Allocator,
     io: std.Io,
     ir: *core.Context,
-    pages: *const core.page_unit.PreparedPages,
+    pages: *const core.prepared.PreparedPages,
     options: SceneOptions,
 ) !render_scene.Document {
     try preloadPreparedPageArtifacts(allocator, io, ir, pages, .{
@@ -1032,7 +1032,7 @@ pub fn compileDocumentScenes(
 fn compileSceneRenderOps(
     allocator: Allocator,
     ir: *core.Context,
-    page_unit: *const core.page_unit.PageUnit,
+    page_unit: *const core.prepared.PreparedPage,
 ) ![]RenderOp {
     var ops = std.ArrayList(RenderOp).empty;
     errdefer {
@@ -1052,7 +1052,7 @@ fn initRenderOp(
     allocator: Allocator,
     page_id: core.NodeId,
     node: *const core.Node,
-    object: *const core.page_unit.ObjectUnit,
+    object: *const core.prepared.PreparedObject,
     frame: Frame,
 ) !RenderOp {
     return .{
@@ -1077,8 +1077,8 @@ fn initRenderOp(
 fn buildRenderPlan(
     ctx: *DrawContext,
     ir: *core.Context,
-    prepared_pages: *const core.page_unit.PreparedPages,
-    layout_results: *const core.LayoutResults,
+    prepared_pages: *const core.prepared.PreparedPages,
+    layout_results: *const core.layout.Document,
     options: RenderOptions,
 ) !RenderPlan {
     const nonce = std.hash.Wyhash.hash(0, ir.projectSource());
@@ -1559,8 +1559,8 @@ fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(File
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, page_pdf_cache_version);
     hashNativePdfRuntime(&hasher);
-    hashF32(&hasher, PageLayout.width);
-    hashF32(&hasher, PageLayout.height);
+    hashF32(&hasher, Defaults.width);
+    hashF32(&hasher, Defaults.height);
     try hashHighlightLanguages(ctx, asset_fingerprints, &hasher);
     hashOptionalColor(&hasher, background);
     hashUsize(&hasher, ops.len);
@@ -1580,8 +1580,8 @@ fn layoutMeasurementCacheKey(ctx: *DrawContext, op: *const RenderOp, width: f32,
     hashString(&hasher, layout_measurement_cache_version);
     hashString(&hasher, native_artifact_cache_version);
     hashNativePdfRuntime(&hasher);
-    hashF32(&hasher, PageLayout.width);
-    hashF32(&hasher, PageLayout.height);
+    hashF32(&hasher, Defaults.width);
+    hashF32(&hasher, Defaults.height);
     hashString(&hasher, @tagName(mode));
     hashF32(&hasher, width);
     try hashRenderOp(ctx, &asset_fingerprints, &hasher, op);
@@ -1913,7 +1913,7 @@ fn hashF32(hasher: *std.hash.Wyhash, value: f32) void {
     hasher.update(std.mem.asBytes(&value));
 }
 
-fn collectPreparedPagePreloadTasks(ctx: *DrawContext, pages: *const core.page_unit.PreparedPages) ![]PreloadTask {
+fn collectPreparedPagePreloadTasks(ctx: *DrawContext, pages: *const core.prepared.PreparedPages) ![]PreloadTask {
     var tasks = std.ArrayList(PreloadTask).empty;
     errdefer {
         freePreloadTasks(ctx.allocator, tasks.items);
@@ -1944,7 +1944,7 @@ fn collectPreparedPagePreloadTasks(ctx: *DrawContext, pages: *const core.page_un
 
 fn collectPreparedObjectPreloads(
     ctx: *DrawContext,
-    object: *const core.page_unit.ObjectUnit,
+    object: *const core.prepared.PreparedObject,
     target: RenderDiagnosticTarget,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
@@ -1987,7 +1987,7 @@ fn collectPreparedObjectPreloads(
     }
 }
 
-fn preparedObjectDiagnosticTarget(page_id: core.NodeId, object: *const core.page_unit.ObjectUnit) RenderDiagnosticTarget {
+fn preparedObjectDiagnosticTarget(page_id: core.NodeId, object: *const core.prepared.PreparedObject) RenderDiagnosticTarget {
     return .{
         .page_id = page_id,
         .node_id = object.node_id,
@@ -1997,7 +1997,7 @@ fn preparedObjectDiagnosticTarget(page_id: core.NodeId, object: *const core.page
     };
 }
 
-fn mathKindForPreparedObject(object: *const core.page_unit.ObjectUnit) MathKind {
+fn mathKindForPreparedObject(object: *const core.prepared.PreparedObject) MathKind {
     return switch (object.payload_kind orelse .text) {
         .math_tex => .raw_block,
         .math_text => .block,
@@ -2265,14 +2265,14 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *cons
     const path_z = try ctx.allocator.dupeZ(u8, path);
     defer ctx.allocator.free(path_z);
 
-    const pdf = c.ss_pdf_create(path_z.ptr, PageLayout.width, PageLayout.height) orelse return false;
+    const pdf = c.ss_pdf_create(path_z.ptr, Defaults.width, Defaults.height) orelse return false;
     defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_set_creator(pdf, "ss native Cairo/Pango backend");
 
     var diagnostic_ctx = ctx.*;
     diagnostic_ctx.sink = .{ .pdf = pdf };
 
-    c.ss_pdf_begin_page(pdf, PageLayout.width, PageLayout.height);
+    c.ss_pdf_begin_page(pdf, Defaults.width, Defaults.height);
     const added = try drawRenderPageDiagnostics(&diagnostic_ctx, ir, page);
     c.ss_pdf_end_page(pdf);
     return added;
@@ -2280,7 +2280,7 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *cons
 
 fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Context, page: *const RenderPage) !bool {
     if (page.background) |fill| {
-        try activeSink(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = PageLayout.width, .height = PageLayout.height }, fill);
+        try activeSink(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, fill);
     }
     for (page.ops) |*op| {
         if (op.render.kind == .chrome_only) {
@@ -2905,8 +2905,8 @@ fn compilePageScene(
     var scene = render_scene.Page{
         .page_id = page_id,
         .index = page_index,
-        .width = PageLayout.width,
-        .height = PageLayout.height,
+        .width = Defaults.width,
+        .height = Defaults.height,
     };
     errdefer scene.deinit(parent_ctx.allocator);
 
@@ -2922,7 +2922,7 @@ fn compilePageScene(
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
-    try activeSink(&ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = PageLayout.width, .height = PageLayout.height }, page_fill);
+    try activeSink(&ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, page_fill);
 
     var links = std.ArrayList(LinkAnnotation).empty;
     defer links.deinit(ctx.allocator);
@@ -3109,7 +3109,7 @@ fn inkExtentsToFrame(extents: c.SsPdfInkExtents) ?Frame {
     const height: f32 = @floatCast(extents.height);
     return .{
         .x = x,
-        .y = PageLayout.height - y_top - height,
+        .y = Defaults.height - y_top - height,
         .width = width,
         .height = height,
     };
@@ -3187,7 +3187,7 @@ fn expandContentMeasurement(render: ResolvedRender, content: core.LayoutMeasurem
 }
 
 fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text: TextPaint, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
-    const baseline_bl = PageLayout.height * 0.5;
+    const baseline_bl = Defaults.height * 0.5;
     return switch (op.parse_mode) {
         .none => .{ .width = 1, .height = 1 },
         .block => blk: {
@@ -3200,7 +3200,7 @@ fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
-            const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height };
+            const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
             const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0, op.tex_preamble);
             var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, text.font_size, text.line_height);
             if (mode == .natural) {
@@ -3242,7 +3242,7 @@ fn measureCodeIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
-    const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = PageLayout.height };
+    const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
     try drawCodeBlock(ctx, frame, op.content, text, op.render.code);
     if (try measurement.inkFrame()) |ink| {
         return .{ .width = @max(ink.width, 1), .height = @max(ink.height, text.line_height) };
@@ -3732,7 +3732,7 @@ const MarkdownCodeBlockMeasure = struct {
 };
 
 fn measureMarkdownCodeBlockContent(ctx: *DrawContext, source: []const u8, width: f32, text: TextPaint, code_paint: CodePaint) !MarkdownCodeBlockMeasure {
-    const baseline_bl = PageLayout.height * 0.5;
+    const baseline_bl = Defaults.height * 0.5;
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
@@ -3998,7 +3998,7 @@ fn markdownCodeBlockConstrainedLogicalWidth(ctx: *DrawContext, block: *const Blo
     const code_paint = markdownCodeBlockPaint(block, text);
     const content_width = @max(width - text.markdown_code_pad_x * 2, 1);
     const measured = try measureMarkdownCodeBlockContent(ctx, source_text, content_width, text, code_paint);
-    const placement = markdownCodeBlockPlacement(0, PageLayout.height * 0.5, width, measured, text);
+    const placement = markdownCodeBlockPlacement(0, Defaults.height * 0.5, width, measured, text);
     return placement.frame.width;
 }
 
@@ -4106,7 +4106,7 @@ const InlineInkBlock = struct {
 };
 
 fn measureInlineLinesInkBlock(ctx: *DrawContext, lines: []const Line, text: TextPaint, width: f32, preamble: []const TexPreambleEntry) !InlineInkBlock {
-    const baseline_bl = PageLayout.height * 0.5;
+    const baseline_bl = Defaults.height * 0.5;
     const content_top_bl = baseline_bl + text.font_size;
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
@@ -4504,7 +4504,7 @@ fn drawPlainTextAtTopWithOptions(
         .emoji_spacing = emoji_spacing,
         .inline_math_spacing = 0,
     };
-    const baseline_bl = PageLayout.height - (y_top + font_size);
+    const baseline_bl = Defaults.height - (y_top + font_size);
     _ = try drawAtomsWithOptions(ctx, x, baseline_bl, width, atoms.items, paint, wrap, preserve_leading_space, .left);
     return atomLineAdvance(atoms.items, paint);
 }
@@ -5516,7 +5516,7 @@ fn baselineBlForBox(frame: Frame, font_size: f32) f32 {
 }
 
 fn baselineTop(baseline_bl: f32, font_size: f32) f32 {
-    return PageLayout.height - baseline_bl - font_size;
+    return Defaults.height - baseline_bl - font_size;
 }
 
 fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize, ordinal: usize) ![]const u8 {
@@ -6233,9 +6233,9 @@ fn insetFrame(frame: Frame, dx: f32, dy: f32) Frame {
 }
 
 fn topOf(frame: Frame) f32 {
-    return PageLayout.height - frame.y - frame.height;
+    return Defaults.height - frame.y - frame.height;
 }
 
 fn toTopY(bottom_y: f32) f32 {
-    return PageLayout.height - bottom_y;
+    return Defaults.height - bottom_y;
 }
