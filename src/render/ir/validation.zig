@@ -20,10 +20,12 @@ pub const Error = error{
 };
 
 pub fn document(ir: anytype) Error!void {
-    if (ir.schema_version != 4) return error.UnsupportedSchema;
+    if (ir.schema_version != 6) return error.UnsupportedSchema;
     for (ir.resources.entries, 0..) |resource, resource_index| {
         const expected = @import("resources.zig").identify(resource.kind, resource.bytes);
         if (!std.mem.eql(u8, &resource.id, &expected)) return error.InvalidResource;
+        if (std.meta.activeTag(resource.metadata) != resource.kind) return error.InvalidResource;
+        try resourceMetadata(resource.metadata);
         for (ir.resources.entries[0..resource_index]) |previous| {
             if (std.mem.eql(u8, &previous.id, &resource.id)) return error.InvalidResource;
         }
@@ -69,6 +71,42 @@ pub fn document(ir: anytype) Error!void {
         }
         for (page.reading_order) |semantic_id| if (ir.semantics.find(semantic_id) == null) return error.InvalidSemantics;
     }
+}
+
+fn resourceMetadata(metadata: anytype) Error!void {
+    switch (metadata) {
+        .font => {},
+        .raster => |value| {
+            if (value.pixel_width == 0 or value.pixel_height == 0 or value.oriented_width == 0 or value.oriented_height == 0) {
+                return error.InvalidResource;
+            }
+        },
+        .svg => |value| {
+            if (!positiveFinite(value.width) or !positiveFinite(value.height)) return error.InvalidResource;
+            if (value.view_box) |view_box| {
+                if (!std.math.isFinite(view_box.x) or !std.math.isFinite(view_box.y) or
+                    !positiveFinite(view_box.width) or !positiveFinite(view_box.height)) return error.InvalidResource;
+            }
+        },
+        .pdf, .math_pdf => |value| {
+            if (value.pages.len == 0) return error.InvalidResource;
+            for (value.pages) |page| {
+                if (!positiveFinite(page.user_unit) or
+                    (page.rotation != 0 and page.rotation != 90 and page.rotation != 180 and page.rotation != 270)) return error.InvalidResource;
+                try pdfBox(page.media);
+                try pdfBox(page.crop);
+                try pdfBox(page.bleed);
+                try pdfBox(page.trim);
+                try pdfBox(page.art);
+            }
+        },
+    }
+}
+
+fn pdfBox(box: anytype) Error!void {
+    if (!std.math.isFinite(box.left) or !std.math.isFinite(box.bottom) or
+        !std.math.isFinite(box.right) or !std.math.isFinite(box.top) or
+        box.right <= box.left or box.top <= box.bottom) return error.InvalidResource;
 }
 
 fn semanticTree(ir: anytype) Error!void {
@@ -269,12 +307,46 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
         },
         .math => |value| {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;
-            if (ir.math.find(value.tree) == null) return error.InvalidItemGeometry;
-            try requireResource(ir, value.pdf_resource, .math_pdf);
+            const tree = ir.math.find(value.tree) orelse return error.InvalidItemGeometry;
+            if (!colorValid(value.color)) return error.InvalidItemGeometry;
+            if (value.layout == null) {
+                const resource_id = value.pdf_resource orelse return error.MissingResource;
+                try requireResource(ir, resource_id, .math_pdf);
+                const resource = ir.resources.find(resource_id) orelse return error.MissingResource;
+                const metadata = switch (resource.metadata) {
+                    .math_pdf => |metadata| metadata,
+                    else => return error.InvalidResource,
+                };
+                if (value.page_index >= metadata.pages.len) return error.InvalidResource;
+            } else {
+                if (value.pdf_resource != null) return error.InvalidResource;
+                if (tree.input_kind == .raw) return error.InvalidItemGeometry;
+                const layout = value.layout.?;
+                if (!nonNegativeFinite(layout.width) or !nonNegativeFinite(layout.height) or
+                    !nonNegativeFinite(layout.baseline) or layout.baseline > layout.height) return error.InvalidItemGeometry;
+                for (layout.elements) |element| switch (element) {
+                    .text => |text| {
+                        if (tree.find(text.node) == null or !std.math.isFinite(text.x) or !std.math.isFinite(text.y) or
+                            !positiveFinite(text.font_size) or !text.layout.logical_bounds.isValid() or
+                            !text.layout.ink_bounds.isValid() or !std.unicode.utf8ValidateSlice(text.layout.source_text))
+                        {
+                            return error.InvalidItemGeometry;
+                        }
+                        for (text.layout.runs) |run| if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
+                    },
+                    .rule => |rule| if (tree.find(rule.node) == null or !rule.rect.isValid()) return error.InvalidItemGeometry,
+                };
+            }
         },
         .pdf_page => |value| {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;
             try requireResource(ir, value.resource, .pdf);
+            const resource = ir.resources.find(value.resource) orelse return error.MissingResource;
+            const metadata = switch (resource.metadata) {
+                .pdf => |metadata| metadata,
+                else => return error.InvalidResource,
+            };
+            if (value.page_index >= metadata.pages.len) return error.InvalidResource;
         },
     }
 }
@@ -293,6 +365,9 @@ fn fontCatalog(ir: anytype) Error!void {
             .ascent_ratio = instance.ascent_ratio,
             .descent_ratio = instance.descent_ratio,
             .line_gap_ratio = instance.line_gap_ratio,
+            .win_ascent_ratio = instance.win_ascent_ratio,
+            .win_descent_ratio = instance.win_descent_ratio,
+            .math = instance.math,
             .variations = instance.variations,
             .features = instance.features,
             .synthetic_bold = instance.synthetic_bold,
@@ -303,9 +378,16 @@ fn fontCatalog(ir: anytype) Error!void {
         if (instance.family.len == 0 or instance.weight < 1 or instance.weight > 1000) return error.InvalidFont;
         if (instance.synthetic_bold or instance.synthetic_italic) return error.InvalidFont;
         if (!positiveFinite(instance.ascent_ratio) or !nonNegativeFinite(instance.descent_ratio) or
-            !nonNegativeFinite(instance.line_gap_ratio)) return error.InvalidFont;
+            !nonNegativeFinite(instance.line_gap_ratio) or !positiveFinite(instance.win_ascent_ratio) or
+            !nonNegativeFinite(instance.win_descent_ratio)) return error.InvalidFont;
         if (!std.unicode.utf8ValidateSlice(instance.family) or !std.unicode.utf8ValidateSlice(instance.postscript_name)) return error.InvalidFont;
         for (instance.variations) |variation| if (!std.math.isFinite(variation.value)) return error.InvalidFont;
+        if (instance.math) |constants| {
+            inline for (std.meta.fields(@TypeOf(constants))) |field| {
+                if (!nonNegativeFinite(@field(constants, field.name))) return error.InvalidFont;
+            }
+            if (constants.script_scale <= 0 or constants.script_script_scale <= 0) return error.InvalidFont;
+        }
         try requireResource(ir, instance.resource, .font);
     }
 }
@@ -350,4 +432,10 @@ fn nonNegativeFinite(value: f64) bool {
 
 fn positiveFinite(value: f64) bool {
     return std.math.isFinite(value) and value > 0;
+}
+
+fn colorValid(value: anytype) bool {
+    return std.math.isFinite(value.r) and value.r >= 0 and value.r <= 1 and
+        std.math.isFinite(value.g) and value.g >= 0 and value.g <= 1 and
+        std.math.isFinite(value.b) and value.b >= 0 and value.b <= 1;
 }

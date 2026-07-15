@@ -1,4 +1,6 @@
 const std = @import("std");
+const geometry = @import("geometry.zig");
+const text_ir = @import("text.zig");
 
 const ParseError = error{ UnsupportedMathSyntax, OutOfMemory };
 
@@ -36,6 +38,48 @@ pub const Node = struct {
     fn deinit(self: *Node, allocator: std.mem.Allocator) void {
         if (self.text) |value| allocator.free(value);
         allocator.free(self.children);
+    }
+};
+
+pub const TextElement = struct {
+    node: NodeId,
+    x: f64,
+    y: f64,
+    font_size: f64,
+    layout: text_ir.Layout,
+
+    fn deinit(self: *TextElement, allocator: std.mem.Allocator) void {
+        self.layout.deinit(allocator);
+    }
+};
+
+pub const RuleElement = struct {
+    node: NodeId,
+    rect: geometry.Rect,
+};
+
+pub const Element = union(enum) {
+    text: TextElement,
+    rule: RuleElement,
+
+    fn deinit(self: *Element, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .text => |*value| value.deinit(allocator),
+            .rule => {},
+        }
+    }
+};
+
+pub const Layout = struct {
+    width: f64,
+    height: f64,
+    baseline: f64,
+    elements: []Element,
+
+    pub fn deinit(self: *Layout, allocator: std.mem.Allocator) void {
+        for (self.elements) |*element| element.deinit(allocator);
+        allocator.free(self.elements);
+        self.* = .{ .width = 0, .height = 0, .baseline = 0, .elements = &.{} };
     }
 };
 
@@ -96,6 +140,11 @@ pub const Builder = struct {
         errdefer tree.deinit(allocator);
         try self.trees.append(allocator, tree);
         return id;
+    }
+
+    pub fn find(self: *const Builder, id: TreeId) ?*const Tree {
+        for (self.trees.items) |*tree| if (tree.id == id) return tree;
+        return null;
     }
 
     pub fn take(self: *Builder, allocator: std.mem.Allocator) !Catalog {

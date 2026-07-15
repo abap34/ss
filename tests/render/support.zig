@@ -1,13 +1,14 @@
 const std = @import("std");
 const core = @import("core");
 const render = @import("render");
+const resources_compile = @import("render_resources");
 const text = @import("render_text");
 
 pub fn appendText(
     allocator: std.mem.Allocator,
     io: std.Io,
     page: *render.Page,
-    resources: *render.ResourceBuilder,
+    resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
     node_id: ?core.NodeId,
     x: f64,
@@ -24,7 +25,7 @@ pub fn appendText(
 
 pub fn takeCatalogs(
     allocator: std.mem.Allocator,
-    resources: *render.ResourceBuilder,
+    resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
 ) !struct { resources: render.ResourceGraph, fonts: render.FontCatalog } {
     const resource_graph = try resources.take(allocator);

@@ -1,5 +1,5 @@
 import { element } from "./dom.js";
-import { renderScene } from "./scene.js";
+import { renderPage } from "./document.js";
 
 export function renderActivityRail(state, actions) {
   const rail = element("nav", "activity-rail");
@@ -60,7 +60,7 @@ function pagesPanel(state, actions) {
     );
     button.type = "button";
     const thumb = element("span", "page-thumbnail");
-    thumb.append(renderScene(state.snapshot, page.id, true));
+    thumb.append(renderPage(state.snapshot, page.id, true));
     const label = element("span", "page-entry-label");
     const number = element("strong");
     number.textContent = String(page.index);

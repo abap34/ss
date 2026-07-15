@@ -38,17 +38,17 @@ function testHorizontalConstraintGeometry() {
 }
 
 async function testSharedHtmlPreview() {
-  const scene = await readFile(
-    path.join(root, "editor", "vscode", "media", "editor", "scene.js"),
+  const document = await readFile(
+    path.join(root, "editor", "vscode", "media", "editor", "document.js"),
     "utf8",
   );
   const snapshot = await readFile(
     path.join(root, "src", "editor", "snapshot.zig"),
     "utf8",
   );
-  assert(scene.includes("snapshot.display.html"), "VS Code preview does not consume the shared HTML fragment");
-  assert(!scene.includes("item.type"), "VS Code preview still contains item-specific drawing branches");
-  assert(!scene.includes("application/pdf"), "VS Code preview still embeds PDF objects");
+  assert(document.includes("snapshot.display.html"), "VS Code preview does not consume the shared HTML fragment");
+  assert(!document.includes("item.type"), "VS Code preview still contains item-specific drawing branches");
+  assert(!document.includes("application/pdf"), "VS Code preview still embeds PDF objects");
   assert(snapshot.includes('root.intField("schema", 2)'), "editor snapshot still exposes the legacy display schema");
   assert(!snapshot.includes('stringField("font_family"'), "editor snapshot still serializes legacy text drawing fields");
 }

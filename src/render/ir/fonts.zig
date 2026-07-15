@@ -14,6 +14,34 @@ pub const Feature = struct {
     value: u32,
 };
 
+pub const MathConstants = struct {
+    script_scale: f64,
+    script_script_scale: f64,
+    axis_height: f64,
+    subscript_shift_down: f64,
+    subscript_top_max: f64,
+    subscript_baseline_drop_min: f64,
+    superscript_shift_up: f64,
+    superscript_bottom_min: f64,
+    superscript_baseline_drop_max: f64,
+    sub_superscript_gap_min: f64,
+    superscript_bottom_max_with_subscript: f64,
+    space_after_script: f64,
+    fraction_numerator_shift_up: f64,
+    fraction_numerator_display_shift_up: f64,
+    fraction_denominator_shift_down: f64,
+    fraction_denominator_display_shift_down: f64,
+    fraction_numerator_gap_min: f64,
+    fraction_numerator_display_gap_min: f64,
+    fraction_rule_thickness: f64,
+    fraction_denominator_gap_min: f64,
+    fraction_denominator_display_gap_min: f64,
+    radical_vertical_gap: f64,
+    radical_display_vertical_gap: f64,
+    radical_rule_thickness: f64,
+    radical_extra_ascender: f64,
+};
+
 pub const Instance = struct {
     id: Id,
     resource: resources.Id,
@@ -26,6 +54,9 @@ pub const Instance = struct {
     ascent_ratio: f64,
     descent_ratio: f64,
     line_gap_ratio: f64,
+    win_ascent_ratio: f64,
+    win_descent_ratio: f64,
+    math: ?MathConstants,
     variations: []Variation = &.{},
     features: []Feature = &.{},
     synthetic_bold: bool = false,
@@ -76,6 +107,9 @@ pub const Spec = struct {
     ascent_ratio: f64,
     descent_ratio: f64,
     line_gap_ratio: f64,
+    win_ascent_ratio: ?f64 = null,
+    win_descent_ratio: ?f64 = null,
+    math: ?MathConstants = null,
     variations: []const Variation = &.{},
     features: []const Feature = &.{},
     synthetic_bold: bool = false,
@@ -117,6 +151,9 @@ pub const Builder = struct {
             .ascent_ratio = spec.ascent_ratio,
             .descent_ratio = spec.descent_ratio,
             .line_gap_ratio = spec.line_gap_ratio,
+            .win_ascent_ratio = spec.win_ascent_ratio orelse spec.ascent_ratio,
+            .win_descent_ratio = spec.win_descent_ratio orelse spec.descent_ratio,
+            .math = spec.math,
             .variations = variations,
             .features = features,
             .synthetic_bold = spec.synthetic_bold,
@@ -124,6 +161,13 @@ pub const Builder = struct {
             .family_substitution = spec.family_substitution,
         });
         return id;
+    }
+
+    pub fn find(self: *const Builder, id: Id) ?*const Instance {
+        for (self.instances.items) |*instance| {
+            if (std.mem.eql(u8, &instance.id, &id)) return instance;
+        }
+        return null;
     }
 
     pub fn take(self: *Builder, allocator: std.mem.Allocator) !Catalog {
@@ -151,6 +195,14 @@ pub fn identify(spec: Spec) Id {
     hashInteger(&hasher, @as(u64, @bitCast(spec.ascent_ratio)));
     hashInteger(&hasher, @as(u64, @bitCast(spec.descent_ratio)));
     hashInteger(&hasher, @as(u64, @bitCast(spec.line_gap_ratio)));
+    hashInteger(&hasher, @as(u64, @bitCast(spec.win_ascent_ratio orelse spec.ascent_ratio)));
+    hashInteger(&hasher, @as(u64, @bitCast(spec.win_descent_ratio orelse spec.descent_ratio)));
+    if (spec.math) |constants| {
+        hasher.update(&.{1});
+        inline for (std.meta.fields(MathConstants)) |field| {
+            hashInteger(&hasher, @as(u64, @bitCast(@field(constants, field.name))));
+        }
+    } else hasher.update(&.{0});
     hashInteger(&hasher, spec.variations.len);
     for (spec.variations) |variation| {
         hasher.update(&variation.tag);

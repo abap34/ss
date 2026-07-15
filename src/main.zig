@@ -6,7 +6,7 @@ const watcher = @import("watch.zig");
 const project = @import("project.zig");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
-const render_compiler = @import("render/compiler.zig");
+const render_compiler = @import("render/compile.zig");
 const cli_help = @import("cli/help.zig");
 const cli_completion = @import("cli/completion.zig");
 const error_report = utils.err;
@@ -111,10 +111,7 @@ const CommandOptions = struct {
     format: RenderFormat = .pdf,
 };
 
-const RenderFormat = enum {
-    pdf,
-    html,
-};
+const RenderFormat = app.RenderFormat;
 
 const InitOptions = struct {
     dir: []const u8 = ".",
@@ -814,7 +811,11 @@ fn runResolvedWatch(
     resolved: *const project.Resolved,
 ) !void {
     const output_path = if (mode == .render)
-        options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf")
+        options.output_path orelse try utils.fs.siblingPathWithExtension(
+            allocator,
+            resolved.entry_path,
+            if (options.format == .pdf) "pdf" else "html",
+        )
     else
         options.output_path;
     if (output_path) |path| try validateOutputParentOrCliError(io, path);
@@ -824,6 +825,7 @@ fn runResolvedWatch(
         .asset_base_dir = resolved.asset_base_dir,
         .project_file = resolved.project_file,
         .highlight_languages = resolved.highlight.languages,
+        .format = options.format,
         .jobs = options.jobs,
         .interval_ms = options.interval_ms,
         .quiet = options.quiet,

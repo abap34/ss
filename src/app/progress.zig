@@ -1,5 +1,5 @@
 const core = @import("core");
-const compiler = @import("../render/compiler.zig");
+const compiler = @import("../render/compile.zig");
 const pdf = @import("../render/pdf.zig");
 const utils = @import("utils");
 

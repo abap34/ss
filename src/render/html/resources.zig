@@ -8,6 +8,8 @@ pub const Asset = struct {
     kind: Kind,
     resource: render.ResourceId,
     font_index: ?u32,
+    digest: [32]u8,
+    media_type: []const u8,
     relative_path: []u8,
     bytes: []u8,
 
@@ -81,9 +83,17 @@ fn add(
     if (resource.kind != kind) return error.RenderResourceKindConflict;
     const bytes = try allocator.dupe(u8, resource.bytes);
     errdefer allocator.free(bytes);
-    const relative_path = try relativePath(allocator, bytes, resource.extension());
-    errdefer allocator.free(relative_path);
-    try assets.append(allocator, .{ .kind = kind, .resource = id, .font_index = null, .relative_path = relative_path, .bytes = bytes });
+    const identity = try identify(allocator, bytes, resource.extension());
+    errdefer allocator.free(identity.relative_path);
+    try assets.append(allocator, .{
+        .kind = kind,
+        .resource = id,
+        .font_index = null,
+        .digest = identity.digest,
+        .media_type = resource.mediaType(),
+        .relative_path = identity.relative_path,
+        .bytes = bytes,
+    });
 }
 
 fn addFont(
@@ -100,14 +110,27 @@ fn addFont(
     if (resource.kind != .font) return error.RenderResourceKindConflict;
     const face = try font.extractFace(allocator, resource.bytes, face_index);
     errdefer allocator.free(face.bytes);
-    const relative_path = try relativePath(allocator, face.bytes, face.extension);
-    errdefer allocator.free(relative_path);
-    try assets.append(allocator, .{ .kind = .font, .resource = id, .font_index = face_index, .relative_path = relative_path, .bytes = face.bytes });
+    const identity = try identify(allocator, face.bytes, face.extension);
+    errdefer allocator.free(identity.relative_path);
+    try assets.append(allocator, .{
+        .kind = .font,
+        .resource = id,
+        .font_index = face_index,
+        .digest = identity.digest,
+        .media_type = if (std.mem.eql(u8, face.extension, "otf")) "font/otf" else "font/ttf",
+        .relative_path = identity.relative_path,
+        .bytes = face.bytes,
+    });
 }
 
-fn relativePath(allocator: std.mem.Allocator, bytes: []const u8, extension: []const u8) ![]u8 {
+const Identity = struct {
+    digest: [32]u8,
+    relative_path: []u8,
+};
+
+fn identify(allocator: std.mem.Allocator, bytes: []const u8, extension: []const u8) !Identity {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return try std.fmt.allocPrint(allocator, "assets/{s}.{s}", .{ hex, extension });
+    return .{ .digest = digest, .relative_path = try std.fmt.allocPrint(allocator, "assets/{s}.{s}", .{ hex, extension }) };
 }

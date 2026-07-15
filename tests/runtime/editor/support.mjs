@@ -16,7 +16,7 @@ export async function editorSnapshot(client, uri) {
     snapshot.display?.schema === 2 &&
       snapshot.display.html.includes("class=\"ss-item ss-text\"") &&
       snapshot.display.css.includes(".ss-text"),
-    `snapshot omitted shared HTML text output: ${JSON.stringify(snapshot)}`,
+    `snapshot omitted shared HTML text output: ${JSON.stringify(snapshot)}\nLSP stderr:\n${client.stderr}`,
   );
   return snapshot;
 }

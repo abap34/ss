@@ -91,7 +91,7 @@ Run `ss: Open WYSIWYG Editor` from the command palette or the editor title
 button. The editor uses the open VS Code buffers through the language server, so
 unsaved source edits are reflected after the configured debounce interval.
 
-The editor displays the drawing scene used by the native PDF renderer together
+The editor displays the shared HTML document used by the PDF and HTML renderers together
 with the compiler's page structure and anchor relations. Pages and the document
 outline are available from the activity rail. Use Single page or Continuous in
 the toolbar to switch page presentation. The theme button at the bottom of the

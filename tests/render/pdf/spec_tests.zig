@@ -3,6 +3,7 @@ const pdf_backend = @import("pdf_backend");
 const pdf_document = @import("pdf_document");
 const render = @import("render");
 const render_support = @import("render_test_support");
+const render_resources = @import("render_resources");
 
 const c = @cImport({
     @cInclude("backend.h");
@@ -39,6 +40,53 @@ fn expectCString(ptr: [*c]const u8) !void {
     try testing.expect(std.mem.span(sentinel).len > 0);
 }
 
+fn expectUriLinkRect(json: []const u8, uri: []const u8, expected: [4]f64) !void {
+    var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    const qpdf_entries = parsed.value.object.get("qpdf") orelse return error.ExpectedPdfJsonTextMissing;
+    for (qpdf_entries.array.items) |entry_group| {
+        var entries = entry_group.object.iterator();
+        while (entries.next()) |entry| {
+            const wrapper = switch (entry.value_ptr.*) {
+                .object => |value| value,
+                else => continue,
+            };
+            const value = wrapper.get("value") orelse continue;
+            const dictionary = switch (value) {
+                .object => |object| object,
+                else => continue,
+            };
+            const action_value = dictionary.get("/A") orelse continue;
+            const action = switch (action_value) {
+                .object => |object| object,
+                else => continue,
+            };
+            const uri_value = action.get("/URI") orelse continue;
+            const actual_uri = switch (uri_value) {
+                .string => |string| if (std.mem.startsWith(u8, string, "u:")) string[2..] else string,
+                else => continue,
+            };
+            if (!std.mem.eql(u8, actual_uri, uri)) continue;
+            const rect_value = dictionary.get("/Rect") orelse return error.ExpectedPdfJsonTextMissing;
+            const rect = switch (rect_value) {
+                .array => |array| array,
+                else => return error.ExpectedPdfJsonTextMissing,
+            };
+            if (rect.items.len != expected.len) return error.ExpectedPdfJsonTextMissing;
+            for (rect.items, expected) |component, expected_component| {
+                const actual = switch (component) {
+                    .integer => |integer| @as(f64, @floatFromInt(integer)),
+                    .float => |float| float,
+                    else => return error.ExpectedPdfJsonTextMissing,
+                };
+                try testing.expectApproxEqAbs(expected_component, actual, 0.001);
+            }
+            return;
+        }
+    }
+    return error.ExpectedPdfJsonTextMissing;
+}
+
 fn qpdfJson(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) ![]const u8 {
     const result = try std.process.run(allocator, io, .{
         .argv = &.{ "qpdf", "--json", pdf_path },
@@ -52,6 +100,21 @@ fn qpdfJson(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) ![]c
     }
     allocator.free(result.stdout);
     return error.QpdfJsonFailed;
+}
+
+fn qpdfQdf(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8, qdf_path: []const u8) ![]const u8 {
+    const result = try std.process.run(allocator, io, .{
+        .argv = &.{ "qpdf", "--qdf", "--object-streams=disable", "--stream-data=uncompress", pdf_path, qdf_path },
+        .stdout_limit = .limited(128 * 1024),
+        .stderr_limit = .limited(128 * 1024),
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code == 0) return std.Io.Dir.cwd().readFileAlloc(io, qdf_path, allocator, .limited(2 * 1024 * 1024)),
+        else => {},
+    }
+    return error.QpdfQdfFailed;
 }
 
 fn pdfTextIfAvailable(allocator: std.mem.Allocator, io: std.Io, pdf_path: []const u8) !?[]const u8 {
@@ -150,7 +213,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     }};
     defer source_pages[0].deinit(allocator);
     try source_pages[0].appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
-    var source_resource_builder = render.ResourceBuilder{};
+    var source_resource_builder = render_resources.Builder{};
     defer source_resource_builder.deinit(allocator);
     var source_font_builder = render.FontBuilder{};
     defer source_font_builder.deinit(allocator);
@@ -195,7 +258,7 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     }};
     defer composed_pages[0].deinit(allocator);
     try composed_pages[0].appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
-    var resource_builder = render.ResourceBuilder{};
+    var resource_builder = render_resources.Builder{};
     defer resource_builder.deinit(allocator);
     const source_resource = try resource_builder.addPath(allocator, testing.io, .pdf, source_path);
     var resources = try resource_builder.take(allocator);
@@ -209,6 +272,10 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         .crop,
         true,
     );
+    composed_pages[0].items.items[1].pdf_page.header.transform.x0 = 6;
+    composed_pages[0].items.items[1].pdf_page.header.clip = .{ .rect = .{ .x = 20, .y = 20, .width = 260, .height = 120 } };
+    composed_pages[0].items.items[1].pdf_page.header.opacity = 0.75;
+    composed_pages[0].items.items[1].pdf_page.header.blend_mode = .multiply;
     try composed_pages[0].appendStrokeLine(
         allocator,
         12,
@@ -227,6 +294,8 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     const json = try qpdfJson(allocator, testing.io, output_path);
     defer allocator.free(json);
     try expectContains(json, "\"/Subtype\": \"/Form\"");
+    try expectContains(json, "\"/BM\": \"/Multiply\"");
+    try expectContains(json, "\"/ca\": 0.75");
     try expectContains(json, "https://example.com/page");
     if (try pdfTextIfAvailable(allocator, testing.io, output_path)) |text| {
         defer allocator.free(text);
@@ -259,7 +328,7 @@ test "render PDF spec: document renderer publishes and reuses content-addressed 
     var ir = render.Ir{ .pages = pages };
     defer ir.deinit(allocator);
     ir.semantics = try documentSemantics(allocator, pages.len);
-    var text_resources = render.ResourceBuilder{};
+    var text_resources = render_resources.Builder{};
     defer text_resources.deinit(allocator);
     var text_fonts = render.FontBuilder{};
     defer text_fonts.deinit(allocator);
@@ -361,8 +430,8 @@ test "render PDF spec: libqpdf composes a selectable page form and copies links"
     try testing.expectApproxEqAbs(@as(f64, 180), source_height, 0.001);
 
     const layers = [_]c.SsQpdfLayer{
-        .{ .path = base_path_z.ptr, .page_index = 0, .box = 1, .x = 0, .y = 0, .width = 320, .height = 180, .copy_annotations = 0 },
-        .{ .path = source_path_z.ptr, .page_index = 0, .box = 1, .x = 40, .y = 30, .width = 160, .height = 90, .copy_annotations = 1 },
+        qpdfLayer(base_path_z.ptr, 0, 0, 320, 180, false),
+        qpdfLayer(source_path_z.ptr, 40, 30, 160, 90, true),
     };
     try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_compose(output_path_z.ptr, &layers, layers.len));
 
@@ -396,8 +465,8 @@ test "render PDF spec: libqpdf omits source links when annotation copying is dis
     try writeQpdfTestLayer(allocator, base_path, "base", null);
     try writeQpdfTestLayer(allocator, source_path, "text without copied link", "https://example.com/omitted");
     const layers = [_]c.SsQpdfLayer{
-        .{ .path = base_path_z.ptr, .page_index = 0, .box = 1, .x = 0, .y = 0, .width = 320, .height = 180, .copy_annotations = 0 },
-        .{ .path = source_path_z.ptr, .page_index = 0, .box = 1, .x = 40, .y = 30, .width = 160, .height = 90, .copy_annotations = 0 },
+        qpdfLayer(base_path_z.ptr, 0, 0, 320, 180, false),
+        qpdfLayer(source_path_z.ptr, 40, 30, 160, 90, false),
     };
     try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_compose(output_path_z.ptr, &layers, layers.len));
 
@@ -410,13 +479,104 @@ test "render PDF spec: libqpdf omits source links when annotation copying is dis
     }
 }
 
+test "render PDF spec: libqpdf applies layer effects to content and copied links" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const base_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/base.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(base_path);
+    const source_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/source.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(source_path);
+    const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(output_path);
+    const qdf_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/composed.qdf.pdf", .{tmp.sub_path[0..]});
+    defer allocator.free(qdf_path);
+    const base_path_z = try allocator.dupeZ(u8, base_path);
+    defer allocator.free(base_path_z);
+    const source_path_z = try allocator.dupeZ(u8, source_path);
+    defer allocator.free(source_path_z);
+    const output_path_z = try allocator.dupeZ(u8, output_path);
+    defer allocator.free(output_path_z);
+
+    try writeQpdfTestLayer(allocator, base_path, "base", null);
+    try writeQpdfTestLayer(allocator, source_path, "effected selectable text", "https://example.com/effected");
+    var layers = [_]c.SsQpdfLayer{
+        qpdfLayer(base_path_z.ptr, 0, 0, 320, 180, false),
+        qpdfLayer(source_path_z.ptr, 40, 30, 160, 90, true),
+    };
+    layers[1].effects = .{
+        .xx = 1,
+        .yx = 0,
+        .xy = 0,
+        .yy = 1,
+        .x0 = 12,
+        .y0 = -8,
+        .has_clip = 1,
+        .clip_x = 40,
+        .clip_y = 30,
+        .clip_width = 120,
+        .clip_height = 80,
+        .opacity = 0.5,
+        .blend_mode = 1,
+    };
+    try testing.expectEqual(@as(c_int, 0), c.ss_qpdf_compose(output_path_z.ptr, &layers, layers.len));
+
+    const json = try qpdfJson(allocator, testing.io, output_path);
+    defer allocator.free(json);
+    try expectContains(json, "\"/BM\": \"/Multiply\"");
+    try expectContains(json, "\"/ca\": 0.5");
+    try expectContains(json, "https://example.com/effected");
+    try expectUriLinkRect(json, "https://example.com/effected", .{ 62, 87, 172, 102 });
+
+    const qdf = try qpdfQdf(allocator, testing.io, output_path, qdf_path);
+    defer allocator.free(qdf);
+    try expectContains(qdf, "1 0 0 1 12 -8 cm");
+    try expectContains(qdf, "40 30 120 80 re W n");
+    try expectContains(qdf, "/SsState1 gs");
+}
+
+fn qpdfLayer(
+    path: [*c]const u8,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    copy_annotations: bool,
+) c.SsQpdfLayer {
+    return .{
+        .path = path,
+        .page_index = 0,
+        .box = 1,
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .copy_annotations = @intFromBool(copy_annotations),
+        .effects = .{
+            .xx = 1,
+            .yx = 0,
+            .xy = 0,
+            .yy = 1,
+            .x0 = 0,
+            .y0 = 0,
+            .has_clip = 0,
+            .clip_x = 0,
+            .clip_y = 0,
+            .clip_width = 0,
+            .clip_height = 0,
+            .opacity = 1,
+            .blend_mode = 0,
+        },
+    };
+}
+
 fn writeQpdfTestLayer(allocator: std.mem.Allocator, path: []const u8, text: []const u8, uri: ?[]const u8) !void {
     var pages = try allocator.alloc(render.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
     var ir = render.Ir{ .pages = pages };
     defer ir.deinit(allocator);
     ir.semantics = try documentSemantics(allocator, pages.len);
-    var resources = render.ResourceBuilder{};
+    var resources = render_resources.Builder{};
     defer resources.deinit(allocator);
     var fonts = render.FontBuilder{};
     defer fonts.deinit(allocator);

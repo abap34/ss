@@ -382,6 +382,8 @@ end
       const firstItem = first.display.assets.find((item) => item.kind === "svg");
       assert(firstItem, `snapshot omitted SVG resource: ${JSON.stringify(first.display)}`);
       assert(path.isAbsolute(firstItem.path), `snapshot asset path was not absolute: ${firstItem.path}`);
+      assert(firstItem.media_type === "image/svg+xml", `snapshot asset media type was wrong: ${JSON.stringify(firstItem)}`);
+      assert(/^sha256:[0-9a-f]{64}$/.test(firstItem.digest), `snapshot asset digest was invalid: ${JSON.stringify(firstItem)}`);
       assert(
         first.display.html.includes(firstItem.relative_path),
         `snapshot HTML did not reference its published SVG: ${JSON.stringify(firstItem)}`,
@@ -394,6 +396,16 @@ end
       assert(secondItem?.path === firstItem.path, "unchanged snapshot published a different editor asset path");
       const secondStat = await stat(firstItem.path);
       assert(secondStat.mtimeMs === firstStat.mtimeMs, "unchanged snapshot rewrote its editor asset");
+
+      await writeFile(firstItem.path, "x".repeat(Buffer.byteLength(svg)), "utf8");
+      const repairedSource = `${source}\n`;
+      const repairedDiagnostics = client.waitForDiagnostics(uri);
+      client.changeDocument({ uri, version: 2, text: repairedSource });
+      assert((await repairedDiagnostics).params.diagnostics.length === 0, "repair generation produced diagnostics");
+      const third = await editorSnapshot(client, uri);
+      const thirdItem = third.display.assets.find((item) => item.kind === "svg");
+      assert(thirdItem?.path === firstItem.path, "repair changed a content-addressed asset path");
+      assert((await readFile(firstItem.path, "utf8")) === svg, "snapshot did not repair a same-size corrupted editor asset");
     });
   } finally {
     await rm(project, { recursive: true, force: true });

@@ -261,7 +261,7 @@ button {
   background: #f4f5f1;
   box-shadow: var(--thumbnail-shadow);
 }
-.thumbnail-scene {
+.thumbnail-preview {
   position: relative;
   display: block;
   width: 100%;
@@ -467,24 +467,24 @@ button {
   background: white;
   box-shadow: var(--page-shadow);
 }
-.scene, .interaction-layer {
+.preview, .interaction-layer {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
 }
-.scene {
+.preview {
   overflow: hidden;
   pointer-events: none;
 }
-.scene-page {
+.preview-page {
   position: absolute;
   top: 0;
   left: 0;
   overflow: hidden;
   box-shadow: none;
-  transform: scale(calc(var(--scene-scale, 1) * 0.75));
+  transform: scale(calc(var(--preview-scale, 1) * 0.75));
   transform-origin: 0 0;
 }
 .interaction-layer {

@@ -7,9 +7,11 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
 #include <hb.h>
+#include <hb-ot.h>
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
 #include <pango/pangofc-font.h>
+#include <pango/pangofc-fontmap.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,8 +20,11 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_TRUETYPE_TABLES_H
 
 #define SS_PI 3.14159265358979323846
+
+static GMutex ss_text_context_mutex;
 
 typedef struct SsPdfMeasurementFrame {
     cairo_surface_t *surface;
@@ -28,11 +33,19 @@ typedef struct SsPdfMeasurementFrame {
     struct SsPdfMeasurementFrame *previous;
 } SsPdfMeasurementFrame;
 
+typedef struct SsPdfFontFace {
+    char *path;
+    long index;
+    cairo_font_face_t *face;
+    struct SsPdfFontFace *next;
+} SsPdfFontFace;
+
 struct SsPdf {
     cairo_surface_t *surface;
     cairo_t *pdf_cr;
     cairo_t *cr;
     SsPdfMeasurementFrame *measurement;
+    SsPdfFontFace *font_faces;
 };
 
 static void ss_pdf_destroy_measurements(SsPdf *pdf) {
@@ -89,6 +102,67 @@ static void ss_ft_face_data_destroy(void *opaque) {
     free(data);
 }
 
+static void ss_pdf_destroy_font_faces(SsPdf *pdf) {
+    if (pdf == NULL) return;
+    while (pdf->font_faces != NULL) {
+        SsPdfFontFace *entry = pdf->font_faces;
+        pdf->font_faces = entry->next;
+        if (entry->face != NULL) cairo_font_face_destroy(entry->face);
+        free(entry->path);
+        free(entry);
+    }
+}
+
+static cairo_font_face_t *ss_pdf_font_face(SsPdf *pdf, const char *path, long index) {
+    if (pdf == NULL || path == NULL) return NULL;
+    for (SsPdfFontFace *entry = pdf->font_faces; entry != NULL; entry = entry->next) {
+        if (entry->index == index && strcmp(entry->path, path) == 0) return entry->face;
+    }
+
+    FT_Library library = NULL;
+    FT_Face face = NULL;
+    cairo_font_face_t *cairo_face = NULL;
+    SsFtFaceData *face_data = NULL;
+    SsPdfFontFace *entry = NULL;
+    if (FT_Init_FreeType(&library) != 0) goto fail;
+    if (FT_New_Face(library, path, index, &face) != 0) goto fail;
+    cairo_face = cairo_ft_font_face_create_for_ft_face(face, 0);
+    if (cairo_face == NULL || cairo_font_face_status(cairo_face) != CAIRO_STATUS_SUCCESS) goto fail;
+    face_data = (SsFtFaceData *)calloc(1, sizeof(SsFtFaceData));
+    if (face_data == NULL) goto fail;
+    face_data->library = library;
+    face_data->face = face;
+    if (cairo_font_face_set_user_data(cairo_face, &ss_ft_face_data_key, face_data, ss_ft_face_data_destroy) != CAIRO_STATUS_SUCCESS) {
+        goto fail;
+    }
+    face_data = NULL;
+    library = NULL;
+    face = NULL;
+
+    entry = (SsPdfFontFace *)calloc(1, sizeof(SsPdfFontFace));
+    if (entry == NULL) goto fail;
+    const size_t path_length = strlen(path);
+    entry->path = (char *)malloc(path_length + 1);
+    if (entry->path == NULL) goto fail;
+    memcpy(entry->path, path, path_length + 1);
+    entry->index = index;
+    entry->face = cairo_face;
+    entry->next = pdf->font_faces;
+    pdf->font_faces = entry;
+    return cairo_face;
+
+fail:
+    if (entry != NULL) {
+        free(entry->path);
+        free(entry);
+    }
+    if (cairo_face != NULL) cairo_font_face_destroy(cairo_face);
+    if (face_data != NULL) free(face_data);
+    if (face != NULL) FT_Done_Face(face);
+    if (library != NULL) FT_Done_FreeType(library);
+    return NULL;
+}
+
 const char *ss_pdf_cairo_version_string(void) {
     return cairo_version_string();
 }
@@ -113,6 +187,19 @@ int ss_pdf_fontconfig_version(void) {
 
 const char *ss_pdf_harfbuzz_version_string(void) {
     return hb_version_string();
+}
+
+int ss_font_register(const char *path) {
+    if (path == NULL || path[0] == '\0') return 1;
+    g_mutex_lock(&ss_text_context_mutex);
+    FcConfig *config = FcConfigGetCurrent();
+    const FcBool added = config != NULL ? FcConfigAppFontAddFile(config, (const FcChar8 *)path) : FcFalse;
+    if (added == FcTrue) {
+        PangoFontMap *font_map = pango_cairo_font_map_get_default();
+        if (font_map != NULL && PANGO_IS_FC_FONT_MAP(font_map)) pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(font_map));
+    }
+    g_mutex_unlock(&ss_text_context_mutex);
+    return added == FcTrue ? 0 : 1;
 }
 
 static void ss_pdf_rounded_rect_path(cairo_t *cr, double x, double y, double width, double height, double radius) {
@@ -256,6 +343,7 @@ void ss_pdf_destroy(SsPdf *pdf) {
     if (pdf == NULL) return;
     ss_pdf_destroy_measurements(pdf);
     if (pdf->pdf_cr != NULL) cairo_destroy(pdf->pdf_cr);
+    ss_pdf_destroy_font_faces(pdf);
     if (pdf->surface != NULL) cairo_surface_destroy(pdf->surface);
     free(pdf);
 }
@@ -528,28 +616,13 @@ int ss_pdf_draw_glyph_run(
     if (pdf == NULL || pdf->cr == NULL || font_path == NULL || utf8 == NULL || utf8_length < 0 ||
         glyph_count < 0 || cluster_count < 0 || font_size <= 0) return 1;
 
-    FT_Library library = NULL;
-    FT_Face face = NULL;
     cairo_font_face_t *cairo_face = NULL;
     cairo_glyph_t *cairo_glyphs = NULL;
     cairo_text_cluster_t *cairo_clusters = NULL;
-    SsFtFaceData *face_data = NULL;
     int result = 1;
 
-    if (FT_Init_FreeType(&library) != 0) goto cleanup;
-    if (FT_New_Face(library, font_path, font_index, &face) != 0) goto cleanup;
-    cairo_face = cairo_ft_font_face_create_for_ft_face(face, 0);
-    if (cairo_face == NULL || cairo_font_face_status(cairo_face) != CAIRO_STATUS_SUCCESS) goto cleanup;
-    face_data = (SsFtFaceData *)calloc(1, sizeof(SsFtFaceData));
-    if (face_data == NULL) goto cleanup;
-    face_data->library = library;
-    face_data->face = face;
-    if (cairo_font_face_set_user_data(cairo_face, &ss_ft_face_data_key, face_data, ss_ft_face_data_destroy) != CAIRO_STATUS_SUCCESS) {
-        goto cleanup;
-    }
-    face_data = NULL;
-    library = NULL;
-    face = NULL;
+    cairo_face = ss_pdf_font_face(pdf, font_path, font_index);
+    if (cairo_face == NULL) goto cleanup;
 
     if (glyph_count > 0) {
         cairo_glyphs = cairo_glyph_allocate(glyph_count);
@@ -589,10 +662,6 @@ int ss_pdf_draw_glyph_run(
 cleanup:
     if (cairo_clusters != NULL) cairo_text_cluster_free(cairo_clusters);
     if (cairo_glyphs != NULL) cairo_glyph_free(cairo_glyphs);
-    if (cairo_face != NULL) cairo_font_face_destroy(cairo_face);
-    if (face_data != NULL) free(face_data);
-    if (face != NULL) FT_Done_Face(face);
-    if (library != NULL) FT_Done_FreeType(library);
     return result;
 }
 
@@ -670,8 +739,6 @@ static cairo_t *ss_text_measure_context(void) {
     }
     return cr;
 }
-
-static GMutex ss_text_context_mutex;
 
 static SsPdfInkExtents ss_pango_extents(PangoRectangle rect) {
     SsPdfInkExtents result;
@@ -756,6 +823,65 @@ static void ss_font_source_copy(
         }
     }
     if (owned_match != NULL) FcPatternDestroy(owned_match);
+}
+
+static void ss_font_win_metrics(
+    const char *path,
+    unsigned int index,
+    double font_size,
+    double *ascent,
+    double *descent
+) {
+    if (path == NULL || path[0] == '\0' || ascent == NULL || descent == NULL || font_size <= 0) return;
+    FT_Library library = NULL;
+    FT_Face face = NULL;
+    if (FT_Init_FreeType(&library) != 0) return;
+    if (FT_New_Face(library, path, index, &face) == 0 && face->units_per_EM > 0) {
+        TT_OS2 *os2 = (TT_OS2 *)FT_Get_Sfnt_Table(face, ft_sfnt_os2);
+        if (os2 != NULL) {
+            *ascent = ((double)os2->usWinAscent / face->units_per_EM) * font_size;
+            *descent = ((double)os2->usWinDescent / face->units_per_EM) * font_size;
+        }
+    }
+    if (face != NULL) FT_Done_Face(face);
+    FT_Done_FreeType(library);
+}
+
+static double ss_math_constant_ratio(hb_font_t *font, hb_ot_math_constant_t constant, double font_size) {
+    return ((double)hb_ot_math_get_constant(font, constant) / PANGO_SCALE) / font_size;
+}
+
+static void ss_font_math_constants(PangoFont *font, double font_size, SsMathConstants *output) {
+    if (font == NULL || output == NULL || font_size <= 0) return;
+    memset(output, 0, sizeof(*output));
+    hb_font_t *hb_font = pango_font_get_hb_font(font);
+    if (hb_font == NULL || !hb_ot_math_has_data(hb_font_get_face(hb_font))) return;
+    output->has_data = 1;
+    output->script_scale = (double)hb_ot_math_get_constant(hb_font, HB_OT_MATH_CONSTANT_SCRIPT_PERCENT_SCALE_DOWN) / 100;
+    output->script_script_scale = (double)hb_ot_math_get_constant(hb_font, HB_OT_MATH_CONSTANT_SCRIPT_SCRIPT_PERCENT_SCALE_DOWN) / 100;
+    output->axis_height = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_AXIS_HEIGHT, font_size);
+    output->subscript_shift_down = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUBSCRIPT_SHIFT_DOWN, font_size);
+    output->subscript_top_max = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUBSCRIPT_TOP_MAX, font_size);
+    output->subscript_baseline_drop_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUBSCRIPT_BASELINE_DROP_MIN, font_size);
+    output->superscript_shift_up = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUPERSCRIPT_SHIFT_UP, font_size);
+    output->superscript_bottom_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUPERSCRIPT_BOTTOM_MIN, font_size);
+    output->superscript_baseline_drop_max = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUPERSCRIPT_BASELINE_DROP_MAX, font_size);
+    output->sub_superscript_gap_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUB_SUPERSCRIPT_GAP_MIN, font_size);
+    output->superscript_bottom_max_with_subscript = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SUPERSCRIPT_BOTTOM_MAX_WITH_SUBSCRIPT, font_size);
+    output->space_after_script = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_SPACE_AFTER_SCRIPT, font_size);
+    output->fraction_numerator_shift_up = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_NUMERATOR_SHIFT_UP, font_size);
+    output->fraction_numerator_display_shift_up = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_NUMERATOR_DISPLAY_STYLE_SHIFT_UP, font_size);
+    output->fraction_denominator_shift_down = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_DENOMINATOR_SHIFT_DOWN, font_size);
+    output->fraction_denominator_display_shift_down = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_DENOMINATOR_DISPLAY_STYLE_SHIFT_DOWN, font_size);
+    output->fraction_numerator_gap_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_NUMERATOR_GAP_MIN, font_size);
+    output->fraction_numerator_display_gap_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_NUM_DISPLAY_STYLE_GAP_MIN, font_size);
+    output->fraction_rule_thickness = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_RULE_THICKNESS, font_size);
+    output->fraction_denominator_gap_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_DENOMINATOR_GAP_MIN, font_size);
+    output->fraction_denominator_display_gap_min = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_FRACTION_DENOM_DISPLAY_STYLE_GAP_MIN, font_size);
+    output->radical_vertical_gap = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_RADICAL_VERTICAL_GAP, font_size);
+    output->radical_display_vertical_gap = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_RADICAL_DISPLAY_STYLE_VERTICAL_GAP, font_size);
+    output->radical_rule_thickness = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_RADICAL_RULE_THICKNESS, font_size);
+    output->radical_extra_ascender = ss_math_constant_ratio(hb_font, HB_OT_MATH_CONSTANT_RADICAL_EXTRA_ASCENDER, font_size);
 }
 
 void ss_text_shape_free(SsTextShape *shape) {
@@ -927,6 +1053,10 @@ int ss_text_shape(
                     run->line_gap = fmax(height - run->ascent - run->descent, 0);
                     pango_font_metrics_unref(metrics);
                 }
+                run->win_ascent = run->ascent;
+                run->win_descent = run->descent;
+                ss_font_win_metrics(run->font_path, run->font_index, font_size, &run->win_ascent, &run->win_descent);
+                ss_font_math_constants(item->analysis.font, font_size, &run->math);
                 double advance = 0;
                 for (int glyph_index = 0; glyph_index < glyphs->num_glyphs; glyph_index++) {
                     PangoGlyphInfo info = glyphs->glyphs[glyph_index];
@@ -1085,6 +1215,37 @@ int ss_raster_size(const char *path, double *width, double *height) {
     return source_width > 0 && source_height > 0 ? 0 : 1;
 }
 
+int ss_raster_metadata(const char *path, SsRasterMetadata *metadata) {
+    if (path == NULL || metadata == NULL) return 1;
+    memset(metadata, 0, sizeof(*metadata));
+    GError *error = NULL;
+    GdkPixbuf *source = gdk_pixbuf_new_from_file(path, &error);
+    if (source == NULL) {
+        if (error != NULL) g_error_free(error);
+        return 1;
+    }
+    const int pixel_width = gdk_pixbuf_get_width(source);
+    const int pixel_height = gdk_pixbuf_get_height(source);
+    const char *orientation_value = gdk_pixbuf_get_option(source, "orientation");
+    long orientation = orientation_value == NULL ? 1 : strtol(orientation_value, NULL, 10);
+    if (orientation < 1 || orientation > 8) orientation = 1;
+    metadata->pixel_width = pixel_width > 0 ? (size_t)pixel_width : 0;
+    metadata->pixel_height = pixel_height > 0 ? (size_t)pixel_height : 0;
+    metadata->orientation = (int)orientation;
+    metadata->has_alpha = gdk_pixbuf_get_has_alpha(source) ? 1 : 0;
+    metadata->color_space = gdk_pixbuf_get_option(source, "icc-profile") == NULL ? 1 : 2;
+
+    GdkPixbuf *oriented = gdk_pixbuf_apply_embedded_orientation(source);
+    g_object_unref(source);
+    if (oriented == NULL) return 1;
+    const int oriented_width = gdk_pixbuf_get_width(oriented);
+    const int oriented_height = gdk_pixbuf_get_height(oriented);
+    metadata->oriented_width = oriented_width > 0 ? (size_t)oriented_width : 0;
+    metadata->oriented_height = oriented_height > 0 ? (size_t)oriented_height : 0;
+    g_object_unref(oriented);
+    return pixel_width > 0 && pixel_height > 0 && oriented_width > 0 && oriented_height > 0 ? 0 : 1;
+}
+
 int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height) {
     if (pdf == NULL || pdf->cr == NULL) return 1;
     GdkPixbuf *pixbuf = ss_raster_load_oriented(path);
@@ -1122,6 +1283,51 @@ int ss_svg_size(const char *path, double *width, double *height) {
     rsvg_handle_get_dimensions(handle, &dimensions);
     if (width != NULL) *width = dimensions.width;
     if (height != NULL) *height = dimensions.height;
+    g_object_unref(handle);
+    return dimensions.width > 0 && dimensions.height > 0 ? 0 : 1;
+}
+
+int ss_svg_metadata(const char *path, SsSvgMetadata *metadata) {
+    if (path == NULL || metadata == NULL) return 1;
+    memset(metadata, 0, sizeof(*metadata));
+    GError *error = NULL;
+    RsvgHandle *handle = rsvg_handle_new_from_file(path, &error);
+    if (handle == NULL) {
+        if (error != NULL) g_error_free(error);
+        return 1;
+    }
+
+    RsvgDimensionData dimensions;
+    rsvg_handle_get_dimensions(handle, &dimensions);
+    metadata->width = dimensions.width;
+    metadata->height = dimensions.height;
+
+    gboolean has_width = FALSE;
+    gboolean has_height = FALSE;
+    gboolean has_view_box = FALSE;
+    RsvgLength intrinsic_width;
+    RsvgLength intrinsic_height;
+    RsvgRectangle view_box;
+    rsvg_handle_get_intrinsic_dimensions(
+        handle,
+        &has_width,
+        &intrinsic_width,
+        &has_height,
+        &intrinsic_height,
+        &has_view_box,
+        &view_box
+    );
+    (void)has_width;
+    (void)intrinsic_width;
+    (void)has_height;
+    (void)intrinsic_height;
+    metadata->has_view_box = has_view_box ? 1 : 0;
+    if (has_view_box) {
+        metadata->view_box_x = view_box.x;
+        metadata->view_box_y = view_box.y;
+        metadata->view_box_width = view_box.width;
+        metadata->view_box_height = view_box.height;
+    }
     g_object_unref(handle);
     return dimensions.width > 0 && dimensions.height > 0 ? 0 : 1;
 }

@@ -9,6 +9,7 @@ pub fn document(ir: anytype) Digest {
     for (ir.resources.entries) |resource| {
         hash.tag(resource.kind);
         hash.bytes(&resource.id);
+        hashResourceMetadata(&hash, resource.metadata);
     }
     hash.integer(ir.fonts.instances.len);
     for (ir.fonts.instances) |font| {
@@ -23,6 +24,12 @@ pub fn document(ir: anytype) Digest {
         hash.float(font.ascent_ratio);
         hash.float(font.descent_ratio);
         hash.float(font.line_gap_ratio);
+        hash.float(font.win_ascent_ratio);
+        hash.float(font.win_descent_ratio);
+        if (font.math) |constants| {
+            hash.boolean(true);
+            inline for (std.meta.fields(@TypeOf(constants))) |field| hash.float(@field(constants, field.name));
+        } else hash.boolean(false);
         hash.integer(font.variations.len);
         for (font.variations) |variation| {
             hash.bytes(&variation.tag);
@@ -73,27 +80,82 @@ pub fn document(ir: anytype) Digest {
     }
     hash.integer(ir.pages.len);
     for (ir.pages) |*page_value| {
-        const digest = pageDigest(page_value);
+        const digest = pageDigest(page_value, true);
         hash.bytes(&digest);
     }
     return hash.final();
 }
 
-pub fn page(page_value: anytype) Digest {
-    return pageDigest(page_value);
+fn hashResourceMetadata(hash: *Hash, metadata: anytype) void {
+    hash.tag(metadata);
+    switch (metadata) {
+        .font => |value| hash.boolean(value.collection),
+        .raster => |value| {
+            hash.integer(value.pixel_width);
+            hash.integer(value.pixel_height);
+            hash.integer(value.oriented_width);
+            hash.integer(value.oriented_height);
+            hash.tag(value.orientation);
+            hash.tag(value.color_space);
+            hash.boolean(value.has_alpha);
+            hash.tag(value.interpolation);
+        },
+        .svg => |value| {
+            hash.float(value.width);
+            hash.float(value.height);
+            if (value.view_box) |view_box| {
+                hash.boolean(true);
+                hash.float(view_box.x);
+                hash.float(view_box.y);
+                hash.float(view_box.width);
+                hash.float(view_box.height);
+            } else hash.boolean(false);
+            hash.tag(value.alignment);
+            hash.tag(value.scale);
+        },
+        .pdf, .math_pdf => |value| {
+            hash.boolean(value.encrypted);
+            hash.boolean(value.has_javascript);
+            hash.integer(value.pages.len);
+            for (value.pages) |page_metadata| {
+                hashPdfBox(hash, page_metadata.media);
+                hashPdfBox(hash, page_metadata.crop);
+                hashPdfBox(hash, page_metadata.bleed);
+                hashPdfBox(hash, page_metadata.trim);
+                hashPdfBox(hash, page_metadata.art);
+                hash.float(page_metadata.user_unit);
+                hash.integer(page_metadata.rotation);
+                hash.integer(page_metadata.annotation_count);
+                hash.boolean(page_metadata.has_unsafe_annotations);
+            }
+        },
+    }
 }
 
-fn pageDigest(page_value: anytype) Digest {
+fn hashPdfBox(hash: *Hash, box: anytype) void {
+    hash.float(box.left);
+    hash.float(box.bottom);
+    hash.float(box.right);
+    hash.float(box.top);
+}
+
+pub fn page(page_value: anytype) Digest {
+    return pageDigest(page_value, false);
+}
+
+fn pageDigest(page_value: anytype, comptime include_metadata: bool) Digest {
     var hash = Hash.init("ss-render-ir-page-v1");
-    hash.integer(page_value.page_id);
-    hash.integer(page_value.index);
-    hash.bytes(page_value.name);
+    if (include_metadata) {
+        hash.integer(page_value.page_id);
+        hash.integer(page_value.index);
+        hash.bytes(page_value.name);
+    }
     hash.float(page_value.width);
     hash.float(page_value.height);
     hash.integer(page_value.items.items.len);
     for (page_value.items.items) |item| {
         hash.tag(item);
-        hashHeader(&hash, item.header());
+        hashHeader(&hash, item.header(), include_metadata);
         switch (item) {
             .fill_rect => |value| {
                 hashRect(&hash, value.rect);
@@ -126,8 +188,35 @@ fn pageDigest(page_value: anytype) Digest {
             },
             .math => |value| {
                 hashRect(&hash, value.rect);
-                hash.integer(value.tree);
-                hash.bytes(&value.pdf_resource);
+                if (include_metadata) hash.integer(value.tree);
+                hashColor(&hash, value.color);
+                if (value.layout) |layout| {
+                    hash.boolean(true);
+                    hash.float(layout.width);
+                    hash.float(layout.height);
+                    hash.float(layout.baseline);
+                    hash.integer(layout.elements.len);
+                    for (layout.elements) |element| {
+                        hash.tag(element);
+                        switch (element) {
+                            .text => |text| {
+                                if (include_metadata) hash.integer(text.node);
+                                hash.float(text.x);
+                                hash.float(text.y);
+                                hash.float(text.font_size);
+                                hashTextLayout(&hash, text.layout);
+                            },
+                            .rule => |rule| {
+                                if (include_metadata) hash.integer(rule.node);
+                                hashRect(&hash, rule.rect);
+                            },
+                        }
+                    }
+                } else hash.boolean(false);
+                if (value.pdf_resource) |resource| {
+                    hash.boolean(true);
+                    hash.bytes(&resource);
+                } else hash.boolean(false);
                 hash.integer(value.page_index);
                 hash.tag(value.box);
             },
@@ -151,23 +240,28 @@ fn pageDigest(page_value: anytype) Digest {
         hash.bytes(destination.name);
         hashPoint(&hash, destination.point);
     }
-    hash.integer(page_value.reading_order.len);
-    for (page_value.reading_order) |semantic_id| hash.integer(semantic_id);
+    if (include_metadata) {
+        hash.integer(page_value.reading_order.len);
+        for (page_value.reading_order) |semantic_id| hash.integer(semantic_id);
+    }
     return hash.final();
 }
 
-fn hashHeader(hash: *Hash, header: anytype) void {
-    hash.integer(header.item_id);
-    hash.optionalInteger(header.node_id);
-    if (header.source) |source| {
-        hash.boolean(true);
-        hash.integer(source.module_id);
-        hash.integer(source.start);
-        hash.integer(source.end);
-    } else hash.boolean(false);
-    hash.optionalInteger(header.semantic_id);
-    hashRect(hash, header.bounds);
-    hashRect(hash, header.ink_bounds);
+fn hashHeader(hash: *Hash, header: anytype, comptime include_metadata: bool) void {
+    if (include_metadata) {
+        hash.integer(header.item_id);
+        hash.optionalInteger(header.node_id);
+        if (header.source) |source| {
+            hash.boolean(true);
+            hash.integer(source.module_id);
+            hash.integer(source.start);
+            hash.integer(source.end);
+        } else hash.boolean(false);
+        hash.optionalInteger(header.semantic_id);
+        hashRect(hash, header.bounds);
+        hashRect(hash, header.ink_bounds);
+        hash.integer(header.paint_index);
+    }
     hash.float(header.transform.xx);
     hash.float(header.transform.yx);
     hash.float(header.transform.xy);
@@ -183,7 +277,6 @@ fn hashHeader(hash: *Hash, header: anytype) void {
     } else hash.boolean(false);
     hash.float(header.opacity);
     hash.tag(header.blend_mode);
-    hash.integer(header.paint_index);
 }
 
 fn hashText(hash: *Hash, value: anytype) void {
@@ -192,19 +285,23 @@ fn hashText(hash: *Hash, value: anytype) void {
     hash.float(value.width);
     hash.float(value.font_size);
     hashColor(hash, value.color);
-    hash.bytes(value.layout.source_text);
-    hashRect(hash, value.layout.logical_bounds);
-    hashRect(hash, value.layout.ink_bounds);
-    hash.integer(value.layout.lines.len);
-    for (value.layout.lines) |line| {
+    hashTextLayout(hash, value.layout);
+}
+
+fn hashTextLayout(hash: *Hash, layout: anytype) void {
+    hash.bytes(layout.source_text);
+    hashRect(hash, layout.logical_bounds);
+    hashRect(hash, layout.ink_bounds);
+    hash.integer(layout.lines.len);
+    for (layout.lines) |line| {
         hashRange(hash, line.source);
         hashRange(hash, line.run_range);
         hash.float(line.baseline_y);
         hashRect(hash, line.logical_bounds);
         hashRect(hash, line.ink_bounds);
     }
-    hash.integer(value.layout.runs.len);
-    for (value.layout.runs) |run| {
+    hash.integer(layout.runs.len);
+    for (layout.runs) |run| {
         hashRange(hash, run.source);
         hashRange(hash, run.glyph_range);
         hashRange(hash, run.cluster_range);
@@ -216,8 +313,8 @@ fn hashText(hash: *Hash, value: anytype) void {
         hash.tag(run.direction);
         hash.integer(run.bidi_level);
     }
-    hash.integer(value.layout.clusters.len);
-    for (value.layout.clusters) |cluster| {
+    hash.integer(layout.clusters.len);
+    for (layout.clusters) |cluster| {
         hashRange(hash, cluster.source);
         hashRange(hash, cluster.glyph_range);
         hash.float(cluster.x);
@@ -227,8 +324,8 @@ fn hashText(hash: *Hash, value: anytype) void {
         hashRect(hash, cluster.logical_bounds);
         hashRect(hash, cluster.ink_bounds);
     }
-    hash.integer(value.layout.glyphs.len);
-    for (value.layout.glyphs) |glyph| {
+    hash.integer(layout.glyphs.len);
+    for (layout.glyphs) |glyph| {
         hash.integer(glyph.id);
         hash.float(glyph.offset_x);
         hash.float(glyph.offset_y);

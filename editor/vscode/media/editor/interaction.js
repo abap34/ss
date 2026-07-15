@@ -5,7 +5,7 @@ import {
   subtreeNodeIds,
   svgPoint,
 } from "./geometry.js";
-import { renderConstraints } from "./scene.js";
+import { renderConstraints } from "./constraints.js";
 
 export class InteractionController {
   constructor(state, actions) {
@@ -133,9 +133,9 @@ export class InteractionController {
     drag.relative = event.shiftKey;
     drag.to = { ...drag.from, x: drag.from.x + dx, y: drag.from.y + dy };
     drag.group.setAttribute("transform", `translate(${dx} ${dy})`);
-    const scene = drag.svg.previousElementSibling;
+    const preview = drag.svg.previousElementSibling;
     for (const nodeId of drag.nodeIds) {
-      for (const item of scene.querySelectorAll(`[data-node-id="${nodeId}"]`)) {
+      for (const item of preview.querySelectorAll(`[data-node-id="${nodeId}"]`)) {
         item.style.transform = `translate(${dx}px, ${dy}px)`;
       }
     }

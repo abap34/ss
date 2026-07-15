@@ -95,6 +95,7 @@ pub const MathPaint = struct {
     raw_tex_width_ratio: f32,
     scale: f32,
     horizontal_align: HorizontalAlign,
+    color: Color,
 };
 
 pub const AssetPaint = struct {
@@ -266,6 +267,7 @@ fn resolveMath(state: anytype, node: *const Node, kind: RenderKind) ?MathPaint {
         .raw_tex_width_ratio = inheritedMathRawTexWidthRatio(state, node) orelse 0.96,
         .scale = positiveRecordFloatProperty(state, node, "math", "scale") orelse 1,
         .horizontal_align = inheritedMathHorizontalAlign(state, node) orelse .center,
+        .color = parseRecordColorProperty(state, node, "math", "color") orelse FALLBACK_TEXT_COLOR,
     };
 }
 

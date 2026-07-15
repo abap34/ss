@@ -1,4 +1,5 @@
 const std = @import("std");
+const core = @import("core");
 const render = @import("render");
 const resources = @import("resources.zig");
 
@@ -17,10 +18,12 @@ pub const fragment_css =
     \\.ss-text { white-space: pre; }
     \\.ss-text-run { position: absolute; white-space: pre; font-kerning: none; font-synthesis: none; }
     \\.ss-text-cluster { position: absolute; top: 0; white-space: pre; }
-    \\.ss-line { height: 0; border-top-style: solid; }
+    \\.ss-line { display: block; }
     \\.ss-image { display: block; object-fit: fill; }
-    \\.ss-math { display: flex; align-items: center; justify-content: center; }
-    \\.ss-math math { margin: 0; padding: 0; }
+    \\.ss-math { display: block; }
+    \\.ss-math-text { position: absolute; white-space: pre; }
+    \\.ss-math-rule { position: absolute; }
+    \\.ss-mathml { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
     \\.ss-pdf { overflow: hidden; }
     \\.ss-pdf canvas, .ss-pdf .textLayer, .ss-pdf .annotationLayer { position: absolute; inset: 0; width: 100%; height: 100%; }
     \\.ss-pdf .textLayer { overflow: hidden; line-height: 1; opacity: 1; }
@@ -49,12 +52,20 @@ pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *c
             font.weight,
             fontStyle(font.style),
             fontStretch(font.stretch),
-            normalized(font.ascent_ratio * 100),
+            normalized(cssAscentOverride(font) * 100),
             normalized(font.descent_ratio * 100),
             normalized(font.line_gap_ratio * 100),
         });
     }
     return try out.toOwnedSlice(allocator);
+}
+
+fn cssAscentOverride(font: render.FontInstance) f64 {
+    const pango_height = font.ascent_ratio + font.descent_ratio;
+    const win_height = font.win_ascent_ratio + font.win_descent_ratio;
+    const win_overflow = @max(win_height - pango_height, 0);
+    if (win_overflow >= pango_height) return font.ascent_ratio;
+    return @max(font.ascent_ratio - win_overflow / 2, 0);
 }
 
 pub fn generate(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set) ![]u8 {
@@ -206,11 +217,24 @@ fn appendItem(
             const dx = value.end.x - value.start.x;
             const dy = value.end.y - value.start.y;
             const rotation = std.math.atan2(dy, dx);
-            try appendItemStart(allocator, out, "div", "ss-line", header, value.start, rotation);
-            try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;border-top-width:{d:.6}pt;border-top-color:{s};", .{
-                normalized(value.start.x), normalized(value.start.y), normalized(@sqrt(dx * dx + dy * dy)), normalized(value.line_width), color(value.color),
+            try appendItemStart(allocator, out, "div", "ss-line", header, value.start, .{
+                .rotation = rotation,
+                .translate_y = -value.line_width / 2,
             });
-            if (value.dash_on > 0 and value.dash_off > 0) try out.appendSlice(allocator, "border-top-style:dashed;");
+            try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;", .{
+                normalized(value.start.x), normalized(value.start.y), normalized(@sqrt(dx * dx + dy * dy)), normalized(value.line_width),
+            });
+            if (value.dash_on > 0 and value.dash_off > 0) {
+                try appendFormat(allocator, out, "background:repeating-linear-gradient(to right,{s} 0,{s} {d:.6}pt,transparent {d:.6}pt,transparent {d:.6}pt);", .{
+                    color(value.color),
+                    color(value.color),
+                    normalized(value.dash_on),
+                    normalized(value.dash_on),
+                    normalized(value.dash_on + value.dash_off),
+                });
+            } else {
+                try appendFormat(allocator, out, "background:{s};", .{color(value.color)});
+            }
             try out.appendSlice(allocator, "\"></div>");
         },
         .text => |value| {
@@ -218,61 +242,7 @@ fn appendItem(
             try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
                 normalized(value.x), normalized(value.y), normalized(value.width), normalized(value.layout.logical_bounds.height),
             });
-            for (value.layout.runs, 0..) |run, run_index| {
-                _ = lineForRun(&value.layout, run_index) orelse return error.InvalidTextLayout;
-                const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
-                const ascent = value.font_size * font.ascent_ratio;
-                const descent = value.font_size * font.descent_ratio;
-                const run_top = run.baseline_y - ascent;
-                try out.appendSlice(allocator, "<span class=\"ss-text-run\"");
-                if (run.language.len != 0) {
-                    try out.appendSlice(allocator, " lang=\"");
-                    try appendAttribute(allocator, out, run.language);
-                    try out.append(allocator, '"');
-                }
-                try appendFormat(allocator, out, " dir=\"{s}\" style=\"left:{d:.6}pt;top:{d:.6}pt;font-family:", .{
-                    if (run.direction == .left_to_right) "ltr" else "rtl",
-                    normalized(run.x),
-                    normalized(run_top),
-                });
-                try out.append(allocator, '\'');
-                try appendFontFamily(allocator, out, font.id);
-                try out.append(allocator, '\'');
-                try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:{s};", .{
-                    normalized(run.advance),
-                    normalized(ascent + descent),
-                    normalized(value.font_size),
-                    font.weight,
-                    fontStyle(font.style),
-                    fontStretch(font.stretch),
-                    normalized(ascent + descent),
-                    color(value.color),
-                });
-                try appendFontSettings(allocator, out, font);
-                try out.appendSlice(allocator, "\">");
-                const clusters = value.layout.clusters[run.cluster_range.start..run.cluster_range.end];
-                if (clusters.len == 0) {
-                    try appendText(allocator, out, value.layout.source_text[run.source.start..run.source.end]);
-                } else {
-                    const order = try allocator.alloc(usize, clusters.len);
-                    defer allocator.free(order);
-                    for (order, 0..) |*entry, index| entry.* = index;
-                    std.mem.sort(usize, order, clusters, struct {
-                        fn lessThan(values: []const render.TextCluster, lhs: usize, rhs: usize) bool {
-                            return values[lhs].source.start < values[rhs].source.start;
-                        }
-                    }.lessThan);
-                    for (order) |cluster_index| {
-                        const cluster = clusters[cluster_index];
-                        try appendFormat(allocator, out, "<span class=\"ss-text-cluster\" style=\"left:{d:.6}pt;width:{d:.6}pt\">", .{
-                            normalized(cluster.x), normalized(cluster.advance_x),
-                        });
-                        try appendText(allocator, out, value.layout.source_text[cluster.source.start..cluster.source.end]);
-                        try out.appendSlice(allocator, "</span>");
-                    }
-                }
-                try out.appendSlice(allocator, "</span>");
-            }
+            try appendTextRuns(allocator, out, ir, &value.layout, value.font_size, value.color);
             try out.appendSlice(allocator, "</span>");
         },
         .raster => |value| {
@@ -302,24 +272,122 @@ fn appendItem(
         .math => |value| {
             const tree = ir.math.find(value.tree) orelse return error.InvalidMathTree;
             if (tree.input_kind == .raw) return error.UnsupportedMathSyntax;
+            const layout = value.layout orelse return error.InvalidMathTree;
             try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
-            try appendFormat(allocator, out, "font-size:{d:.6}pt\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">", .{
-                normalized(@max(value.rect.height * 0.65, 1)),
-            });
+            try out.appendSlice(allocator, "\">");
+            for (layout.elements) |element| switch (element) {
+                .text => |text| {
+                    try appendFormat(allocator, out, "<span class=\"ss-math-text\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
+                        normalized(text.x),
+                        normalized(text.y),
+                        normalized(text.layout.logical_bounds.width),
+                        normalized(text.layout.logical_bounds.height),
+                    });
+                    try appendTextRuns(allocator, out, ir, &text.layout, text.font_size, value.color);
+                    try out.appendSlice(allocator, "</span>");
+                },
+                .rule => |rule| try appendFormat(allocator, out, "<span class=\"ss-math-rule\" style=\"left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt;background:{s}\"></span>", .{
+                    normalized(rule.rect.x),
+                    normalized(rule.rect.y),
+                    normalized(rule.rect.width),
+                    normalized(rule.rect.height),
+                    color(value.color),
+                }),
+            };
+            try out.appendSlice(allocator, "<math class=\"ss-mathml\" xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">");
             try appendMathNode(allocator, out, tree, tree.root, 0);
             try out.appendSlice(allocator, "</math></span>");
         },
         .pdf_page => |value| {
             const path = assets.path(.pdf, value.resource) orelse return error.MissingHtmlResource;
+            const resource = ir.resources.find(value.resource) orelse return error.MissingHtmlResource;
+            const metadata = switch (resource.metadata) {
+                .pdf => |metadata| metadata,
+                else => return error.MissingHtmlResource,
+            };
+            if (value.page_index >= metadata.pages.len) return error.MissingHtmlResource;
+            const page = &metadata.pages[value.page_index];
+            const box = page.box(value.box);
             try appendItemStart(allocator, out, "div", "ss-pdf", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
             try out.appendSlice(allocator, "\" data-pdf-src=\"");
             try appendAttribute(allocator, out, path);
-            try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\"><canvas></canvas><div class=\"textLayer\"></div><div class=\"annotationLayer\"></div></div>", .{
-                value.page_index + 1, @tagName(value.box),
+            try appendFormat(allocator, out, "\" data-page=\"{d}\" data-box=\"{s}\" data-view-box=\"{d:.9},{d:.9},{d:.9},{d:.9}\" data-rotation=\"{d}\"><canvas></canvas><div class=\"textLayer\"></div><div class=\"annotationLayer\"></div></div>", .{
+                value.page_index + 1,
+                @tagName(value.box),
+                normalized(box.left * page.user_unit),
+                normalized(box.bottom * page.user_unit),
+                normalized(box.right * page.user_unit),
+                normalized(box.top * page.user_unit),
+                page.rotation,
             });
         },
+    }
+}
+
+fn appendTextRuns(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    ir: *const render.Ir,
+    layout: *const render.TextLayout,
+    font_size: f64,
+    text_color: core.render_policy.Color,
+) !void {
+    for (layout.runs, 0..) |run, run_index| {
+        _ = lineForRun(layout, run_index) orelse return error.InvalidTextLayout;
+        const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
+        const ascent = font_size * font.ascent_ratio;
+        const descent = font_size * font.descent_ratio;
+        const run_top = run.baseline_y - ascent;
+        try out.appendSlice(allocator, "<span class=\"ss-text-run\"");
+        if (run.language.len != 0) {
+            try out.appendSlice(allocator, " lang=\"");
+            try appendAttribute(allocator, out, run.language);
+            try out.append(allocator, '"');
+        }
+        try appendFormat(allocator, out, " dir=\"{s}\" style=\"left:{d:.6}pt;top:{d:.6}pt;font-family:", .{
+            if (run.direction == .left_to_right) "ltr" else "rtl",
+            normalized(run.x),
+            normalized(run_top),
+        });
+        try out.append(allocator, '\'');
+        try appendFontFamily(allocator, out, font.id);
+        try out.append(allocator, '\'');
+        try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:{s};", .{
+            normalized(run.advance),
+            normalized(ascent + descent),
+            normalized(font_size),
+            font.weight,
+            fontStyle(font.style),
+            fontStretch(font.stretch),
+            normalized(ascent + descent),
+            color(text_color),
+        });
+        try appendFontSettings(allocator, out, font);
+        try out.appendSlice(allocator, "\">");
+        const clusters = layout.clusters[run.cluster_range.start..run.cluster_range.end];
+        if (clusters.len == 0) {
+            try appendText(allocator, out, layout.source_text[run.source.start..run.source.end]);
+        } else {
+            const order = try allocator.alloc(usize, clusters.len);
+            defer allocator.free(order);
+            for (order, 0..) |*entry, index| entry.* = index;
+            std.mem.sort(usize, order, clusters, struct {
+                fn lessThan(values: []const render.TextCluster, lhs: usize, rhs: usize) bool {
+                    return values[lhs].source.start < values[rhs].source.start;
+                }
+            }.lessThan);
+            for (order) |cluster_index| {
+                const cluster = clusters[cluster_index];
+                try appendFormat(allocator, out, "<span class=\"ss-text-cluster\" style=\"left:{d:.6}pt;width:{d:.6}pt\">", .{
+                    normalized(cluster.x), normalized(cluster.advance_x),
+                });
+                try appendText(allocator, out, layout.source_text[cluster.source.start..cluster.source.end]);
+                try out.appendSlice(allocator, "</span>");
+            }
+        }
+        try out.appendSlice(allocator, "</span>");
     }
 }
 
@@ -361,7 +429,7 @@ fn appendItemStart(
     class: []const u8,
     header: render.ItemHeader,
     origin: render.Point,
-    local_rotation: ?f64,
+    local_transform: ?LocalTransform,
 ) !void {
     try appendFormat(allocator, out, "<{s} class=\"ss-item {s}\" data-ss-item-id=\"{d}\"", .{ tag, class, header.item_id });
     if (header.node_id) |node_id| try appendFormat(allocator, out, " data-ss-node-id=\"{d}\"", .{node_id});
@@ -372,7 +440,7 @@ fn appendItemStart(
         normalized(header.opacity),
         @tagName(header.blend_mode),
     });
-    try appendItemTransform(allocator, out, header.transform, origin, local_rotation);
+    try appendItemTransform(allocator, out, header.transform, origin, local_transform);
     if (header.clip) |clip| switch (clip) {
         .rect => |rect| try appendFormat(allocator, out, "clip-path:polygon({d:.6}pt {d:.6}pt,{d:.6}pt {d:.6}pt,{d:.6}pt {d:.6}pt,{d:.6}pt {d:.6}pt);", .{
             normalized(rect.x - origin.x),
@@ -387,17 +455,22 @@ fn appendItemStart(
     };
 }
 
+const LocalTransform = struct {
+    rotation: f64 = 0,
+    translate_y: f64 = 0,
+};
+
 fn appendItemTransform(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     transform: render.Transform,
     origin: render.Point,
-    local_rotation: ?f64,
+    local_transform: ?LocalTransform,
 ) !void {
     const translated_x = transform.xx * origin.x + transform.xy * origin.y + transform.x0 - origin.x;
     const translated_y = transform.yx * origin.x + transform.yy * origin.y + transform.y0 - origin.y;
     const transformed = translated_x != 0 or translated_y != 0 or transform.xx != 1 or transform.yx != 0 or transform.xy != 0 or transform.yy != 1;
-    if (!transformed and local_rotation == null) return;
+    if (!transformed and local_transform == null) return;
     try appendFormat(allocator, out, "transform:translate({d:.9}pt,{d:.9}pt) matrix({d:.12},{d:.12},{d:.12},{d:.12},0,0)", .{
         normalized(translated_x),
         normalized(translated_y),
@@ -406,7 +479,12 @@ fn appendItemTransform(
         normalized(transform.xy),
         normalized(transform.yy),
     });
-    if (local_rotation) |rotation| try appendFormat(allocator, out, " rotate({d:.12}rad)", .{normalized(rotation)});
+    if (local_transform) |local| {
+        try appendFormat(allocator, out, " rotate({d:.12}rad) translate(0,{d:.9}pt)", .{
+            normalized(local.rotation),
+            normalized(local.translate_y),
+        });
+    }
     try out.append(allocator, ';');
 }
 

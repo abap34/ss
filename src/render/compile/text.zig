@@ -2,13 +2,14 @@ const std = @import("std");
 const core = @import("core");
 const c = @import("pdf_ffi").c;
 const render = @import("render");
+const resources_compile = @import("render_resources");
 
 const Allocator = std.mem.Allocator;
 
 pub fn shape(
     allocator: Allocator,
     io: std.Io,
-    resources: *render.ResourceBuilder,
+    resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
     source: []const u8,
     requested_font: core.font.Face,
@@ -39,7 +40,7 @@ pub fn shape(
 fn copy(
     allocator: Allocator,
     io: std.Io,
-    resources: *render.ResourceBuilder,
+    resources: *resources_compile.Builder,
     fonts: *render.FontBuilder,
     source: []const u8,
     requested_font: core.font.Face,
@@ -86,6 +87,9 @@ fn copy(
             .ascent_ratio = run.ascent / font_size,
             .descent_ratio = run.descent / font_size,
             .line_gap_ratio = run.line_gap / font_size,
+            .win_ascent_ratio = run.win_ascent / font_size,
+            .win_descent_ratio = run.win_descent / font_size,
+            .math = mathConstants(run.math),
             .synthetic_bold = false,
             .synthetic_italic = false,
             .family_substitution = !std.ascii.eqlIgnoreCase(std.mem.trim(u8, requested_font.family, " \t"), family),
@@ -131,6 +135,37 @@ fn copy(
         .glyphs = glyphs,
         .logical_bounds = nativeRect(native.logical_bounds),
         .ink_bounds = nativeRect(native.ink_bounds),
+    };
+}
+
+fn mathConstants(value: c.SsMathConstants) ?render.MathConstants {
+    if (value.has_data == 0) return null;
+    return .{
+        .script_scale = value.script_scale,
+        .script_script_scale = value.script_script_scale,
+        .axis_height = value.axis_height,
+        .subscript_shift_down = value.subscript_shift_down,
+        .subscript_top_max = value.subscript_top_max,
+        .subscript_baseline_drop_min = value.subscript_baseline_drop_min,
+        .superscript_shift_up = value.superscript_shift_up,
+        .superscript_bottom_min = value.superscript_bottom_min,
+        .superscript_baseline_drop_max = value.superscript_baseline_drop_max,
+        .sub_superscript_gap_min = value.sub_superscript_gap_min,
+        .superscript_bottom_max_with_subscript = value.superscript_bottom_max_with_subscript,
+        .space_after_script = value.space_after_script,
+        .fraction_numerator_shift_up = value.fraction_numerator_shift_up,
+        .fraction_numerator_display_shift_up = value.fraction_numerator_display_shift_up,
+        .fraction_denominator_shift_down = value.fraction_denominator_shift_down,
+        .fraction_denominator_display_shift_down = value.fraction_denominator_display_shift_down,
+        .fraction_numerator_gap_min = value.fraction_numerator_gap_min,
+        .fraction_numerator_display_gap_min = value.fraction_numerator_display_gap_min,
+        .fraction_rule_thickness = value.fraction_rule_thickness,
+        .fraction_denominator_gap_min = value.fraction_denominator_gap_min,
+        .fraction_denominator_display_gap_min = value.fraction_denominator_display_gap_min,
+        .radical_vertical_gap = value.radical_vertical_gap,
+        .radical_display_vertical_gap = value.radical_display_vertical_gap,
+        .radical_rule_thickness = value.radical_rule_thickness,
+        .radical_extra_ascender = value.radical_extra_ascender,
     };
 }
 

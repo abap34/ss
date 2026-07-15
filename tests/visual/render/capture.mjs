@@ -46,12 +46,44 @@ export async function captureHtmlPages(browser, baseUrl, relativePath) {
           height: (targetHeight + 1) / 1.5,
         },
       });
-      images.push(cropPng(screenshot, targetWidth, targetHeight));
+      images.push({
+        image: cropPng(screenshot, targetWidth, targetHeight),
+        items: await itemRegions(item, box, targetWidth, targetHeight),
+      });
     }
     return images;
   } finally {
     await page.close();
   }
+}
+
+async function itemRegions(page, pageBox, targetWidth, targetHeight) {
+  const scaleX = targetWidth / pageBox.width;
+  const scaleY = targetHeight / pageBox.height;
+  return await page.locator(":scope > .ss-item").evaluateAll((items, geometry) =>
+    items.map((item) => {
+      const box = item.getBoundingClientRect();
+      return {
+        id: item.dataset.ssItemId || "unknown",
+        kind: item.classList.contains("ss-line")
+          ? "line"
+          : item.classList.contains("ss-math")
+          ? "math"
+          : item.classList.contains("ss-text")
+          ? "text"
+          : "other",
+        x: Math.floor((box.x - geometry.pageX) * geometry.scaleX),
+        y: Math.floor((box.y - geometry.pageY) * geometry.scaleY),
+        right: Math.ceil((box.right - geometry.pageX) * geometry.scaleX),
+        bottom: Math.ceil((box.bottom - geometry.pageY) * geometry.scaleY),
+      };
+    }), {
+      pageX: pageBox.x,
+      pageY: pageBox.y,
+      scaleX,
+      scaleY,
+    }
+  );
 }
 
 function cropPng(source, width, height) {

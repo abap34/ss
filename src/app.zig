@@ -6,11 +6,13 @@ const commands = @import("app/commands.zig");
 const types = @import("app/types.zig");
 
 pub const RenderOptions = types.RenderOptions;
+pub const RenderFormat = types.RenderFormat;
 pub const PdfWriteOptions = types.PdfWriteOptions;
 pub const SourceRequest = types.SourceRequest;
 pub const PdfWriteRequest = types.PdfWriteRequest;
 pub const HtmlWriteOptions = types.HtmlWriteOptions;
 pub const HtmlWriteRequest = types.HtmlWriteRequest;
+pub const PdfAndHtmlWriteRequest = types.PdfAndHtmlWriteRequest;
 
 const Progress = utils.progress.Progress;
 
@@ -67,4 +69,8 @@ pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: PdfWriteReque
 
 pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: HtmlWriteRequest, progress: *Progress) !void {
     try commands.writeHtml(io, allocator, request, progress);
+}
+
+pub fn writePdfAndHtml(io: std.Io, allocator: std.mem.Allocator, request: PdfAndHtmlWriteRequest, progress: *Progress) !void {
+    try commands.writePdfAndHtml(io, allocator, request, progress);
 }

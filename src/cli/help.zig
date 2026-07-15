@@ -366,12 +366,13 @@ fn watch(output: Output) void {
     outputPrint(output,
         \\{s}Usage:{s}
         \\  {s}ss watch check [input.ss]{s}
-        \\  {s}ss watch render [input.ss] [output.pdf]{s}
+        \\  {s}ss watch render [--format pdf|html] [input.ss] [output]{s}
         \\
         \\{s}Options:{s}
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
-        \\  {s}--output FILE{s}           Output path for watch render
+        \\  {s}--output PATH{s}           Output file or directory for watch render
+        \\  {s}--format pdf|html{s}       Output format for watch render
         \\  {s}--interval-ms N{s}         Poll interval
         \\  {s}--jobs N{s}                Parallel render jobs
         \\  {s}--color auto|always|never{s}
@@ -393,15 +394,18 @@ fn watch(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
     });
     outputPrint(output,
         \\{s}Examples:{s}
         \\  {s}ss watch check slide.ss{s}
         \\  {s}ss watch render slide.ss deck.pdf{s}
+        \\  {s}ss watch render --format html --output deck-html slide.ss{s}
         \\  {s}ss watch render --project slides --output deck.pdf{s}
         \\
     , .{
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,

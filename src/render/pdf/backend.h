@@ -15,6 +15,40 @@ typedef struct SsPdfInkExtents {
     double height;
 } SsPdfInkExtents;
 
+typedef struct SsRasterMetadata {
+    size_t pixel_width;
+    size_t pixel_height;
+    size_t oriented_width;
+    size_t oriented_height;
+    int orientation;
+    int has_alpha;
+    int color_space;
+} SsRasterMetadata;
+
+typedef struct SsSvgMetadata {
+    double width;
+    double height;
+    int has_view_box;
+    double view_box_x;
+    double view_box_y;
+    double view_box_width;
+    double view_box_height;
+} SsSvgMetadata;
+
+typedef struct SsPdfDocumentMetadata {
+    size_t page_count;
+    int encrypted;
+    int has_javascript;
+} SsPdfDocumentMetadata;
+
+typedef struct SsPdfPageMetadata {
+    double boxes[5][4];
+    double user_unit;
+    int rotation;
+    size_t annotation_count;
+    int has_unsafe_annotations;
+} SsPdfPageMetadata;
+
 typedef struct SsTextGlyph {
     unsigned int id;
     double offset_x;
@@ -22,6 +56,35 @@ typedef struct SsTextGlyph {
     double advance_x;
     double advance_y;
 } SsTextGlyph;
+
+typedef struct SsMathConstants {
+    int has_data;
+    double script_scale;
+    double script_script_scale;
+    double axis_height;
+    double subscript_shift_down;
+    double subscript_top_max;
+    double subscript_baseline_drop_min;
+    double superscript_shift_up;
+    double superscript_bottom_min;
+    double superscript_baseline_drop_max;
+    double sub_superscript_gap_min;
+    double superscript_bottom_max_with_subscript;
+    double space_after_script;
+    double fraction_numerator_shift_up;
+    double fraction_numerator_display_shift_up;
+    double fraction_denominator_shift_down;
+    double fraction_denominator_display_shift_down;
+    double fraction_numerator_gap_min;
+    double fraction_numerator_display_gap_min;
+    double fraction_rule_thickness;
+    double fraction_denominator_gap_min;
+    double fraction_denominator_display_gap_min;
+    double radical_vertical_gap;
+    double radical_display_vertical_gap;
+    double radical_rule_thickness;
+    double radical_extra_ascender;
+} SsMathConstants;
 
 typedef struct SsTextRun {
     size_t source_start;
@@ -36,6 +99,9 @@ typedef struct SsTextRun {
     double ascent;
     double descent;
     double line_gap;
+    double win_ascent;
+    double win_descent;
+    SsMathConstants math;
     char *font_family;
     char *font_path;
     unsigned int font_index;
@@ -96,6 +162,22 @@ typedef struct SsReplayCluster {
     int glyphs;
 } SsReplayCluster;
 
+typedef struct SsQpdfLayerEffects {
+    double xx;
+    double yx;
+    double xy;
+    double yy;
+    double x0;
+    double y0;
+    int has_clip;
+    double clip_x;
+    double clip_y;
+    double clip_width;
+    double clip_height;
+    double opacity;
+    int blend_mode;
+} SsQpdfLayerEffects;
+
 typedef struct SsQpdfLayer {
     const char *path;
     size_t page_index;
@@ -105,6 +187,7 @@ typedef struct SsQpdfLayer {
     double width;
     double height;
     int copy_annotations;
+    SsQpdfLayerEffects effects;
 } SsQpdfLayer;
 
 const char *ss_pdf_cairo_version_string(void);
@@ -114,6 +197,7 @@ const char *ss_pdf_gdk_pixbuf_version_string(void);
 int ss_pdf_fontconfig_version(void);
 const char *ss_pdf_harfbuzz_version_string(void);
 const char *ss_qpdf_version_string(void);
+int ss_font_register(const char *path);
 
 SsPdf *ss_pdf_create(const char *path, double width, double height);
 SsPdf *ss_pdf_create_scratch(void);
@@ -211,14 +295,17 @@ int ss_text_shape(
 );
 void ss_text_shape_free(SsTextShape *shape);
 int ss_raster_size(const char *path, double *width, double *height);
+int ss_raster_metadata(const char *path, SsRasterMetadata *metadata);
 int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_svg_size(const char *path, double *width, double *height);
+int ss_svg_metadata(const char *path, SsSvgMetadata *metadata);
 int ss_pdf_draw_svg(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_pdf_draw_svg_tinted(SsPdf *pdf, const char *path, double x, double y, double width, double height, double r, double g, double b);
 int ss_qpdf_merge(const char *output, const char *const *inputs, size_t input_count, int single_page_inputs);
 int ss_qpdf_empty(const char *output);
 int ss_qpdf_page_size(const char *path, size_t page_index, int box, double *width, double *height);
 int ss_qpdf_page_sizes(const char *path, int box, double *widths, double *heights, size_t page_count);
+int ss_qpdf_metadata(const char *path, SsPdfDocumentMetadata *document, SsPdfPageMetadata *pages, size_t page_capacity);
 int ss_qpdf_compose(const char *output, const SsQpdfLayer *layers, size_t layer_count);
 const char *ss_qpdf_last_error(void);
 
