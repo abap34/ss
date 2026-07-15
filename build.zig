@@ -24,7 +24,7 @@ const ProjectModules = struct {
     core: *Module,
     render: *Module,
     pdf_ffi: *Module,
-    render_target: *Module,
+    render_emitter: *Module,
     pdf_backend: *Module,
 };
 
@@ -267,7 +267,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
     addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod, tree_sitter);
-    const render_target_mod = createModule(ctx, "src/render/target.zig", &.{
+    const render_emitter_mod = createModule(ctx, "src/render/compile/emitter.zig", &.{
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
@@ -290,7 +290,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .core = core_mod,
         .render = render_mod,
         .pdf_ffi = pdf_ffi_mod,
-        .render_target = render_target_mod,
+        .render_emitter = render_emitter_mod,
         .pdf_backend = pdf_backend_mod,
     };
 }
@@ -510,7 +510,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("pdfjs_assets", modules.pdfjs_assets),
         import("render", modules.render),
         import("pdf_ffi", modules.pdf_ffi),
-        import("render_target", modules.render_target),
+        import("render_emitter", modules.render_emitter),
         import("pdf_backend", modules.pdf_backend),
     }, link_libc);
 }

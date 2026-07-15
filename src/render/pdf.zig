@@ -4,22 +4,22 @@ const utils = @import("utils");
 const render = @import("render");
 
 const document = @import("pdf/document.zig");
-const native = @import("pdf/native.zig");
+const compiler = @import("compile/items.zig");
 const render_compile = @import("compile.zig");
 
 pub const CompileOptions = render_compile.Options;
-pub const TreeSitterHealthItem = native.TreeSitterHealthItem;
-pub const TreeSitterHealthReport = native.TreeSitterHealthReport;
-pub const TreeSitterHealthStatus = native.TreeSitterHealthStatus;
-pub const tree_sitter_language_version = native.tree_sitter_language_version;
-pub const tree_sitter_min_compatible_language_version = native.tree_sitter_min_compatible_language_version;
-pub const NativeRuntimeVersions = native.NativeRuntimeVersions;
-pub const LayoutMeasurementScope = native.LayoutMeasurementScope;
+pub const TreeSitterHealthItem = compiler.TreeSitterHealthItem;
+pub const TreeSitterHealthReport = compiler.TreeSitterHealthReport;
+pub const TreeSitterHealthStatus = compiler.TreeSitterHealthStatus;
+pub const tree_sitter_language_version = compiler.tree_sitter_language_version;
+pub const tree_sitter_min_compatible_language_version = compiler.tree_sitter_min_compatible_language_version;
+pub const NativeRuntimeVersions = compiler.NativeRuntimeVersions;
+pub const LayoutMeasurementScope = compiler.LayoutMeasurementScope;
 pub const page_pdf_cache_version = "ss-render-ir-page-v1";
-pub const qpdf_cache_version = native.qpdf_cache_version;
-pub const native_artifact_cache_version = native.native_artifact_cache_version;
-pub const nativeRuntimeVersions = native.nativeRuntimeVersions;
-pub const treeSitterHealthReport = native.treeSitterHealthReport;
+pub const qpdf_cache_version = compiler.qpdf_cache_version;
+pub const native_artifact_cache_version = compiler.native_artifact_cache_version;
+pub const nativeRuntimeVersions = compiler.nativeRuntimeVersions;
+pub const treeSitterHealthReport = compiler.treeSitterHealthReport;
 
 pub const Options = struct {
     jobs: ?usize = null,
@@ -42,8 +42,8 @@ pub fn compileRenderIr(
     pages: *const core.prepared.PreparedPages,
     options: CompileOptions,
 ) !render.Ir {
-    var compiler = native.Compiler{ .io = io, .options = options };
-    return try render_compile.document(allocator, state, pages, &compiler);
+    var ir_compiler = compiler.Compiler{ .io = io, .options = options };
+    return try render_compile.document(allocator, state, pages, &ir_compiler);
 }
 
 pub fn writeRenderIr(
@@ -73,7 +73,7 @@ pub fn preloadPreparedPageArtifacts(
     options: Options,
     progress: ?Progress,
 ) !void {
-    try native.preloadPreparedPageArtifacts(allocator, io, state, pages, .{
+    try compiler.preloadPreparedPageArtifacts(allocator, io, state, pages, .{
         .jobs = options.jobs,
         .cache_dir = options.cache_dir,
         .cache_id = options.cache_id,
