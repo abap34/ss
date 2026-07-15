@@ -396,6 +396,7 @@ fn addTestStep(
     }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
         import("pdf_backend", modules.pdf_backend),
+        import("render", modules.render),
     }, true);
     addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
     const render_pdf_spec_tests = b.addTest(.{ .root_module = render_pdf_spec_mod });

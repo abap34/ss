@@ -6,8 +6,6 @@ const render_ir = @import("render");
 
 const Allocator = std.mem.Allocator;
 
-pub const Page = render_ir.Page;
-
 pub fn render(allocator: Allocator, io: std.Io, page: *const render_ir.Page, output: []const u8) !void {
     errdefer deleteFileIfExists(io, output);
     if (page.hasPdfPages()) {
