@@ -20,7 +20,13 @@ export class InteractionController {
       .sort((left, right) =>
         right.width * right.height - left.width * left.height
       );
-    if (this.state.constraints && this.state.selectedObjectId != null) {
+    if (
+      selectedObjectBelongsToPage(
+        this.state.snapshot,
+        this.state.selectedObjectId,
+        page.id,
+      )
+    ) {
       svg.append(
         renderConstraints(
           this.state.snapshot,
@@ -151,4 +157,11 @@ export class InteractionController {
     drag.group.removeEventListener("pointercancel", this.cancelDrag);
     this.drag = null;
   }
+}
+
+export function selectedObjectBelongsToPage(snapshot, objectId, pageId) {
+  return objectId != null &&
+    snapshot.layout.objects.some((object) =>
+      object.id === objectId && object.page_id === pageId
+    );
 }

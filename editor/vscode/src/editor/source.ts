@@ -64,15 +64,43 @@ export async function revealSource(
     document.positionAt(startOffset),
     document.positionAt(endOffset),
   );
+  const viewColumn = existingViewColumn(document.uri);
   const editor = await vscode.window.showTextDocument(document, {
     preview: false,
     preserveFocus: false,
+    viewColumn,
   });
   editor.selection = new vscode.Selection(range.start, range.end);
   editor.revealRange(
     range,
     vscode.TextEditorRevealType.InCenterIfOutsideViewport,
   );
+}
+
+function existingViewColumn(uri: vscode.Uri): vscode.ViewColumn | undefined {
+  const visible = vscode.window.visibleTextEditors.find((editor) =>
+    editor.document.uri.toString() === uri.toString()
+  );
+  if (visible?.viewColumn != null) return visible.viewColumn;
+
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tabContainsUri(tab.input, uri)) return group.viewColumn;
+    }
+  }
+  return undefined;
+}
+
+function tabContainsUri(input: unknown, uri: vscode.Uri): boolean {
+  const target = uri.toString();
+  if (input instanceof vscode.TabInputText) {
+    return input.uri.toString() === target;
+  }
+  if (input instanceof vscode.TabInputTextDiff) {
+    return input.original.toString() === target ||
+      input.modified.toString() === target;
+  }
+  return false;
 }
 
 function utf16OffsetAtUtf8Byte(source: string, byteOffset: number): number {
