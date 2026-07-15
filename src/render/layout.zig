@@ -1,7 +1,7 @@
 const std = @import("std");
 const core = @import("core");
 const lowering = @import("../lowering.zig");
-const pdf = @import("pdf.zig");
+const compiler = @import("compiler.zig");
 const execution = @import("../analysis/execution.zig");
 
 pub fn evaluateAndSolvePreparedPages(io: std.Io, state: *core.DocumentState, graph: *const execution.ExecutionGraph) !core.prepared.PreparedPages {
@@ -17,10 +17,10 @@ pub fn preloadPreparedPageArtifacts(
     io: std.Io,
     state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
-    progress: ?pdf.Progress,
+    progress: ?compiler.Progress,
     jobs: ?usize,
 ) !void {
-    try pdf.preloadPreparedPageArtifacts(state.allocator, io, state, pages, .{
+    try compiler.preload(state.allocator, io, state, pages, .{
         .jobs = jobs,
     }, progress);
 }
@@ -32,7 +32,7 @@ pub fn solvePreparedPages(
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
 ) !core.layout.Document {
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(state.allocator, io, state, pages);
+    var measurement_scope = try compiler.LayoutMeasurementScope.init(state.allocator, io, state, pages);
     defer measurement_scope.deinit();
     var results = try lowering.solveDocument(state, null, .{
         .measurement_provider = measurement_scope.provider(),
@@ -52,7 +52,7 @@ pub fn solvePreparedPagesWithTrace(
     progress: ?core.layout.graph.LayoutProgress,
     jobs: ?usize,
 ) !core.layout.Document {
-    var measurement_scope = try pdf.LayoutMeasurementScope.init(state.allocator, io, state, pages);
+    var measurement_scope = try compiler.LayoutMeasurementScope.init(state.allocator, io, state, pages);
     defer measurement_scope.deinit();
     var results = try lowering.solveDocument(state, trace_path, .{
         .measurement_provider = measurement_scope.provider(),

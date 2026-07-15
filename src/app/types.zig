@@ -1,8 +1,12 @@
 const module_loader = @import("../modules/loader.zig");
-const pdf = @import("../render/pdf.zig");
 const html = @import("../render/html.zig");
+const utils = @import("utils");
 
-pub const RenderOptions = pdf.Options;
+pub const RenderOptions = struct {
+    jobs: ?usize = null,
+    cache_dir: []const u8 = ".ss-cache/render",
+    highlight_languages: []const utils.highlight.Language = &.{},
+};
 
 pub const PdfWriteOptions = struct {
     render: RenderOptions = .{},

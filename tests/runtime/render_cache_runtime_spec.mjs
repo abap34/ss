@@ -19,13 +19,13 @@ async function testRenderCacheGenerations() {
     const firstSource = deckSource(firstPagesSource);
     await writeFile(slide, firstSource, "utf8");
 
-    await runSs(["render", "slide.ss", "out-1.pdf", "--cache-id", "stable-deck"], project);
+    await runSs(["render", "slide.ss", "out-1.pdf"], project);
     const cacheRoot = path.join(project, ".ss-cache", "render");
     await assertPathMissing(path.join(cacheRoot, "documents"), "document cache directory should not be created");
     await assertPathMissing(path.join(cacheRoot, "pages"), "top-level page cache directory should not be created");
     await assertPathMissing(path.join(cacheRoot, "chunks"), "top-level chunk cache directory should not be created");
 
-    const contentCache = path.join(cacheRoot, "render-ir-v1");
+    const contentCache = path.join(cacheRoot, "ss-pdf-render-ir-v1");
     const firstPages = await pdfFiles(path.join(contentCache, "pages"));
     assert(firstPages.length === firstPagesSource.length, `expected ${firstPagesSource.length} cached page PDFs, got ${firstPages.length}`);
     const firstDocuments = await pdfFiles(path.join(contentCache, "documents"));
@@ -36,7 +36,7 @@ async function testRenderCacheGenerations() {
     secondPagesSource[7] = "Changed page 8";
     const secondSource = deckSource(secondPagesSource);
     await writeFile(slide, secondSource, "utf8");
-    const secondRun = await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "stable-deck"], project);
+    const secondRun = await runSs(["render", "slide.ss", "out-2.pdf"], project);
     assert(secondRun.stderr.includes("pages 17/18"), `rerender did not report mixed page cache hits and misses:\n${secondRun.stderr}`);
 
     const secondPages = await pdfFiles(path.join(contentCache, "pages"));
@@ -46,7 +46,7 @@ async function testRenderCacheGenerations() {
 
     const pageStats = await fileStats(path.join(contentCache, "pages"), secondPages);
     const documentStats = await fileStats(path.join(contentCache, "documents"), secondDocuments);
-    const thirdRun = await runSs(["render", "slide.ss", "out-3.pdf", "--cache-id", "stable-deck"], project);
+    const thirdRun = await runSs(["render", "slide.ss", "out-3.pdf"], project);
     assert(thirdRun.stderr.includes("pages 18/18"), `identical rerender did not report a full document cache hit:\n${thirdRun.stderr}`);
     assertFileSetUnchanged(pageStats, await fileStats(path.join(contentCache, "pages"), await pdfFiles(path.join(contentCache, "pages"))), "identical rerender changed page cache entries");
     assertFileSetUnchanged(documentStats, await fileStats(path.join(contentCache, "documents"), await pdfFiles(path.join(contentCache, "documents"))), "identical rerender changed document cache entries");
@@ -98,12 +98,12 @@ async function testRenderCachePruneIntervalSkipsFreshStamp() {
     const oldDate = new Date(Date.now() - 60_000);
     await utimes(oldArtifact, oldDate, oldDate);
 
-    await runSs(["render", "slide.ss", "out-1.pdf", "--cache-id", "prune-interval"], project, {
+    await runSs(["render", "slide.ss", "out-1.pdf"], project, {
       env: { SS_CACHE_MAX_BYTES: "1b" },
     });
     await stat(oldArtifact);
 
-    await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "prune-interval"], project, {
+    await runSs(["render", "slide.ss", "out-2.pdf"], project, {
       env: { SS_CACHE_MAX_BYTES: "1b", SS_CACHE_PRUNE_INTERVAL_SECONDS: "always" },
     });
     await assertPathMissing(oldArtifact, "forced prune should remove the stale artifact");

@@ -6,6 +6,7 @@ const watcher = @import("watch.zig");
 const project = @import("project.zig");
 const lsp = @import("lsp.zig");
 const pdf = @import("render/pdf.zig");
+const render_compiler = @import("render/compiler.zig");
 const cli_help = @import("cli/help.zig");
 const cli_completion = @import("cli/completion.zig");
 const error_report = utils.err;
@@ -22,7 +23,7 @@ fn failCli(comptime fmt: []const u8, args: anytype) error{InvalidUsage} {
 }
 
 fn version() void {
-    const native = pdf.nativeRuntimeVersions();
+    const native = render_compiler.nativeRuntimeVersions();
     var buffer: [2048]u8 = undefined;
     const text = std.fmt.bufPrint(&buffer,
         \\ss {s}
@@ -39,8 +40,7 @@ fn version() void {
         \\  HarfBuzz: {s}
         \\  qpdf: {s}
         \\render cache schema:
-        \\  Page PDF: {s}
-        \\  qpdf: {s}
+        \\  PDF: {s}
         \\  Native artifacts: {s}
         \\
     , .{
@@ -48,8 +48,8 @@ fn version() void {
         build_options.commit,
         build_options.uncommitted_changes,
         build_options.tree_sitter_manifest_hash,
-        pdf.tree_sitter_min_compatible_language_version,
-        pdf.tree_sitter_language_version,
+        render_compiler.tree_sitter_min_compatible_language_version,
+        render_compiler.tree_sitter_language_version,
         native.cairo,
         native.pango,
         native.librsvg,
@@ -57,9 +57,8 @@ fn version() void {
         native.fontconfig,
         native.harfbuzz,
         native.qpdf,
-        pdf.page_pdf_cache_version,
-        pdf.qpdf_cache_version,
-        pdf.native_artifact_cache_version,
+        pdf.cache_version,
+        render_compiler.native_artifact_cache_version,
     }) catch return;
     utils.io.writeStdoutAll(text) catch {};
 }
@@ -105,7 +104,6 @@ const CommandOptions = struct {
     asset_base_dir: ?[]const u8 = null,
     project_path: ?[]const u8 = null,
     jobs: ?usize = null,
-    cache_id: ?[]const u8 = null,
     diagnostics_json_path: ?[]const u8 = null,
     diagnostic_level: ?error_report.DiagnosticLevel = null,
     quiet: bool = false,
@@ -196,12 +194,6 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
                 return failUsage("invalid --jobs value: {s}", .{args[i + 1]});
             };
             if (options.jobs.? == 0) return failUsage("--jobs must be greater than zero", .{});
-            i += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--cache-id")) {
-            if (i + 1 >= args.len) return failUsage("missing value for --cache-id", .{});
-            options.cache_id = args[i + 1];
             i += 1;
             continue;
         }
@@ -633,8 +625,8 @@ fn doctorTreeSitter(
     }
     std.debug.print("  ok manifest hash: {s}\n", .{build_options.tree_sitter_manifest_hash});
     std.debug.print("  ok runtime ABI range: {d}..{d}\n", .{
-        pdf.tree_sitter_min_compatible_language_version,
-        pdf.tree_sitter_language_version,
+        render_compiler.tree_sitter_min_compatible_language_version,
+        render_compiler.tree_sitter_language_version,
     });
 
     var default_config: ?utils.highlight.Config = null;
@@ -644,7 +636,7 @@ fn doctorTreeSitter(
         break :blk default_config.?.languages;
     };
 
-    var report = try pdf.treeSitterHealthReport(allocator, io, languages);
+    var report = try render_compiler.treeSitterHealthReport(allocator, io, languages);
     defer report.deinit(allocator);
 
     if (report.items.len == 0) {
@@ -833,7 +825,6 @@ fn runResolvedWatch(
         .project_file = resolved.project_file,
         .highlight_languages = resolved.highlight.languages,
         .jobs = options.jobs,
-        .cache_id = options.cache_id,
         .interval_ms = options.interval_ms,
         .quiet = options.quiet,
     });
@@ -1114,7 +1105,6 @@ fn run(init: std.process.Init) !void {
         var progress = commandProgress(8, options);
         const render_options = app.RenderOptions{
             .jobs = options.jobs,
-            .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
         const source = app.SourceRequest{

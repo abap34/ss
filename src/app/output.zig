@@ -20,7 +20,10 @@ pub fn writePdfOrPrintDiagnostics(
     progress: *Progress,
     diagnostics_json_path: ?[]const u8,
 ) !void {
-    return pdf.writeRenderIr(allocator, io, ir, output_path, options, app_progress.render(progress)) catch |err| {
+    return pdf.write(allocator, io, ir, output_path, .{
+        .jobs = options.jobs,
+        .cache_dir = options.cache_dir,
+    }, app_progress.pdfWrite(progress)) catch |err| {
         progress.endStatusLine();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         try writeDiagnosticsJsonIfRequested(io, allocator, state, diagnostics_json_path);

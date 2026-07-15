@@ -55,7 +55,7 @@ end
       "utf8",
     );
 
-    const render = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "math-scaling"], project);
+    const render = await runSs(["render", "slide.ss", "out.pdf"], project);
     assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
 
     await runCommand("pdftoppm", ["-png", "-r", "144", "out.pdf", "page"], project);
@@ -107,7 +107,7 @@ end
       "utf8",
     );
 
-    const render = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "global-raw-tex-width"], project);
+    const render = await runSs(["render", "slide.ss", "out.pdf"], project);
     assert(render.code === 0, `render failed:\n${combinedOutput(render)}`);
 
     await runCommand("pdftoppm", ["-png", "-r", "144", "out.pdf", "page"], project);
@@ -177,8 +177,6 @@ end
       "render",
       "slide.ss",
       "out.pdf",
-      "--cache-id",
-      "math-frame-height",
       "--diagnostics-json",
       diagnosticsPath,
     ], project);

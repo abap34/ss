@@ -31,7 +31,7 @@ end
       "utf8",
     );
 
-    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "render-diagnostics"], project);
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for an invalid artifact");
     assert(output.includes("RenderFailed:"), `render failure did not produce a render diagnostic:\n${output}`);
@@ -65,8 +65,6 @@ end
       "render",
       "slide.ss",
       "out.pdf",
-      "--cache-id",
-      "render-diagnostics-json",
       "--diagnostics-json",
       diagnosticsPath,
     ], project);
@@ -106,7 +104,7 @@ end
       "utf8",
     );
 
-    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "inline-math-diagnostics"], project);
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for invalid inline math");
     assert(output.includes("RenderFailed:"), `inline math failure did not produce a render diagnostic:\n${output}`);
@@ -134,7 +132,7 @@ end
       "utf8",
     );
 
-    const result = await runSs(["render", "slide.ss", "out.pdf", "--cache-id", "concat-math-diagnostics"], project);
+    const result = await runSs(["render", "slide.ss", "out.pdf"], project);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(result.code !== 0, "render should fail for invalid concatenated inline math");
     assert(output.includes("RenderFailed:"), `concatenated math failure did not produce a render diagnostic:\n${output}`);
@@ -167,8 +165,6 @@ end
       "render",
       "slide.ss",
       "out.pdf",
-      "--cache-id",
-      "svg-asset-diagnostics",
       "--diagnostics-json",
       diagnosticsPath,
     ], project);

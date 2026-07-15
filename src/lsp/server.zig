@@ -2,7 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const core = @import("core");
 const render_layout = @import("../render/layout.zig");
-const render_pdf = @import("../render/pdf.zig");
+const render_compiler = @import("../render/compiler.zig");
 const editor_snapshot = @import("../editor/snapshot.zig");
 const analysis = @import("../analysis.zig");
 const project = @import("../project.zig");
@@ -471,7 +471,7 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
     try hook.server.checkCanceled();
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
 
-    var render_ir = try render_pdf.compileRenderIr(state.allocator, hook.server.io, state, &pages, .{});
+    var render_ir = try render_compiler.compile(state.allocator, hook.server.io, state, &pages, .{});
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
     return .{ .editor_json = try editor_snapshot.toJson(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
