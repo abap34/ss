@@ -9,8 +9,8 @@ const wrap_layout = core.render_wrap;
 const json = utils.json;
 const draw_sink = @import("render_sink");
 const c = @import("pdf_ffi").c;
-const render_scene = @import("render_scene");
-const scene_renderer = @import("pdf_scene");
+const render_ir = @import("render");
+const pdf_backend = @import("pdf_backend");
 
 const TSLanguage = opaque {};
 const TSParser = opaque {};
@@ -173,7 +173,7 @@ fn activePdf(ctx: *DrawContext) *c.SsPdf {
     if (ctx.measurement_pdf) |pdf| return pdf;
     return switch (activeSink(ctx).*) {
         .pdf => |pdf| pdf,
-        .scene => unreachable,
+        .ir => unreachable,
     };
 }
 
@@ -316,7 +316,7 @@ pub const RenderOptions = struct {
     highlight_languages: []const utils.highlight.Language = &.{},
 };
 
-pub const SceneOptions = struct {
+pub const CompileOptions = struct {
     cache_dir: []const u8 = ".ss-cache/render",
     highlight_languages: []const utils.highlight.Language = &.{},
 };
@@ -985,13 +985,13 @@ pub fn preloadPreparedPageArtifacts(
     };
 }
 
-pub fn compileDocumentScenes(
+pub fn compileRenderIr(
     allocator: Allocator,
     io: std.Io,
     ir: *core.Context,
     pages: *const core.prepared.PreparedPages,
-    options: SceneOptions,
-) !render_scene.Document {
+    options: CompileOptions,
+) !render_ir.Ir {
     try preloadPreparedPageArtifacts(allocator, io, ir, pages, .{
         .cache_dir = options.cache_dir,
         .highlight_languages = options.highlight_languages,
@@ -1007,18 +1007,18 @@ pub fn compileDocumentScenes(
         .highlight_languages = options.highlight_languages,
     };
 
-    var scenes = std.ArrayList(render_scene.Page).empty;
+    var result_pages = std.ArrayList(render_ir.Page).empty;
     errdefer {
-        for (scenes.items) |*scene| scene.deinit(allocator);
-        scenes.deinit(allocator);
+        for (result_pages.items) |*page| page.deinit(allocator);
+        result_pages.deinit(allocator);
     }
     for (pages.pages) |*page_unit| {
-        const ops = try compileSceneRenderOps(allocator, ir, page_unit);
+        const ops = try compileRenderCommands(allocator, ir, page_unit);
         defer {
             for (ops) |*op| op.deinit(allocator);
             allocator.free(ops);
         }
-        try scenes.append(allocator, try compilePageScene(
+        try result_pages.append(allocator, try compilePage(
             &ctx,
             page_unit.page_id,
             page_unit.index,
@@ -1026,10 +1026,10 @@ pub fn compileDocumentScenes(
             ops,
         ));
     }
-    return .{ .pages = try scenes.toOwnedSlice(allocator) };
+    return .{ .pages = try result_pages.toOwnedSlice(allocator) };
 }
 
-fn compileSceneRenderOps(
+fn compileRenderCommands(
     allocator: Allocator,
     ir: *core.Context,
     page_unit: *const core.prepared.PreparedPage,
@@ -2882,33 +2882,33 @@ fn pageArtifactsReady(work: *RenderDag, page: RenderPage) bool {
 
 fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
     if (page.cache_hit) return;
-    var scene = try compilePageScene(parent_ctx, page.page_id, page.index, page.background, page.ops);
-    defer scene.deinit(parent_ctx.allocator);
-    scene_renderer.render(parent_ctx.allocator, parent_ctx.io, &scene, page.render_path) catch |err| {
-        if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose scene PDF layers");
+    var render_page = try compilePage(parent_ctx, page.page_id, page.index, page.background, page.ops);
+    defer render_page.deinit(parent_ctx.allocator);
+    pdf_backend.render(parent_ctx.allocator, parent_ctx.io, &render_page, page.render_path) catch |err| {
+        if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose page PDF layers");
         return err;
     };
     try validatePdfFile(parent_ctx, page.render_path);
     try publishCacheFile(parent_ctx, page.render_path, page.cache_path);
 }
 
-fn compilePageScene(
+fn compilePage(
     parent_ctx: *DrawContext,
     page_id: core.NodeId,
     page_index: usize,
     background: ?Color,
     ops: []RenderOp,
-) !render_scene.Page {
+) !render_ir.Page {
     const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
 
-    var scene = render_scene.Page{
+    var page = render_ir.Page{
         .page_id = page_id,
         .index = page_index,
         .width = Defaults.width,
         .height = Defaults.height,
     };
-    errdefer scene.deinit(parent_ctx.allocator);
+    errdefer page.deinit(parent_ctx.allocator);
 
     var ctx = DrawContext{
         .allocator = parent_ctx.allocator,
@@ -2918,7 +2918,7 @@ fn compilePageScene(
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
         .command_failure = parent_ctx.command_failure,
-        .sink = .{ .scene = .{ .page = &scene } },
+        .sink = .{ .ir = .{ .page = &page } },
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
@@ -2934,17 +2934,17 @@ fn compilePageScene(
     ctx.destinations = &destinations;
 
     for (ops) |*op| {
-        if (op.render.kind == .chrome_only) try drawRenderOpIntoScene(&ctx, op);
+        if (op.render.kind == .chrome_only) try drawRenderOpIntoIr(&ctx, op);
     }
     for (ops) |*op| {
-        if (op.render.kind != .chrome_only) try drawRenderOpIntoScene(&ctx, op);
+        if (op.render.kind != .chrome_only) try drawRenderOpIntoIr(&ctx, op);
     }
 
     for (destinations.items) |destination| {
-        try scene.appendDestination(ctx.allocator, destination.name, .{ .x = destination.x, .y = destination.y });
+        try page.appendDestination(ctx.allocator, destination.name, .{ .x = destination.x, .y = destination.y });
     }
     for (links.items) |link| {
-        try scene.appendLink(
+        try page.appendLink(
             ctx.allocator,
             if (link.kind == .uri) .uri else .destination,
             link.target,
@@ -2952,10 +2952,10 @@ fn compilePageScene(
         );
     }
 
-    return scene;
+    return page;
 }
 
-fn drawRenderOpIntoScene(ctx: *DrawContext, op: *const RenderOp) !void {
+fn drawRenderOpIntoIr(ctx: *DrawContext, op: *const RenderOp) !void {
     const sink = activeSink(ctx);
     const previous_node_id = sink.replaceNodeId(op.node_id);
     defer _ = sink.replaceNodeId(previous_node_id);
@@ -5545,9 +5545,9 @@ fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, col
 }
 
 fn placeMathPdf(ctx: *DrawContext, frame: Frame, path: []const u8, page_index: usize) !void {
-    const rect = render_scene.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
+    const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
     const sink = activeSink(ctx);
-    if (sink.isScene()) {
+    if (sink.isIr()) {
         try sink.pdfPage(ctx.allocator, rect, path, page_index, .crop, false);
         return;
     }
