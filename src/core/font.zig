@@ -41,10 +41,10 @@ pub const default_code_family = "Courier";
 pub const default_weight: u16 = 400;
 pub const default_bold_weight: u16 = 700;
 
-pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
+pub fn textFacesForNode(state: anytype, node: *const Node) TextFaces {
     const normal = faceFromRecord(
-        ir.allocator,
-        ir,
+        state.allocator,
+        state,
         node,
         "font",
         .{
@@ -54,8 +54,8 @@ pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
             .stretch = .normal,
         },
     );
-    const markdown_bold_weight = fontWeightNumber(fields.read(ir.allocator, ir, node, "text", &.{"bold_weight"}, .number)) orelse default_bold_weight;
-    const markdown_italic_style = parseStyle(fields.read(ir.allocator, ir, node, "text", &.{"italic_style"}, .text) orelse "") orelse .italic;
+    const markdown_bold_weight = fontWeightNumber(fields.read(state.allocator, state, node, "text", &.{"bold_weight"}, .number)) orelse default_bold_weight;
+    const markdown_italic_style = parseStyle(fields.read(state.allocator, state, node, "text", &.{"italic_style"}, .text) orelse "") orelse .italic;
     return .{
         .normal = normal,
         .bold = .{
@@ -71,8 +71,8 @@ pub fn textFacesForNode(ir: anytype, node: *const Node) TextFaces {
             .stretch = normal.stretch,
         },
         .code = faceFromRecord(
-            ir.allocator,
-            ir,
+            state.allocator,
+            state,
             node,
             "code_font",
             .{
@@ -161,16 +161,16 @@ pub fn stretchCode(stretch: Stretch) c_int {
 
 fn faceFromRecord(
     allocator: std.mem.Allocator,
-    ir: anytype,
+    state: anytype,
     node: *const Node,
     font_field: []const u8,
     fallback: Face,
 ) Face {
     return .{
-        .family = cleanFamily(fields.read(allocator, ir, node, "text", &.{ font_field, "family" }, .text) orelse fallback.family),
-        .weight = fontWeightNumber(fields.read(allocator, ir, node, "text", &.{ font_field, "weight" }, .number)) orelse fallback.weight,
-        .style = parseStyle(fields.read(allocator, ir, node, "text", &.{ font_field, "style" }, .text) orelse "") orelse fallback.style,
-        .stretch = parseStretch(fields.read(allocator, ir, node, "text", &.{ font_field, "stretch" }, .text) orelse "") orelse fallback.stretch,
+        .family = cleanFamily(fields.read(allocator, state, node, "text", &.{ font_field, "family" }, .text) orelse fallback.family),
+        .weight = fontWeightNumber(fields.read(allocator, state, node, "text", &.{ font_field, "weight" }, .number)) orelse fallback.weight,
+        .style = parseStyle(fields.read(allocator, state, node, "text", &.{ font_field, "style" }, .text) orelse "") orelse fallback.style,
+        .stretch = parseStretch(fields.read(allocator, state, node, "text", &.{ font_field, "stretch" }, .text) orelse "") orelse fallback.stretch,
     };
 }
 

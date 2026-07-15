@@ -169,22 +169,22 @@ pub const DeclarationIndex = struct {
     }
 };
 
-pub fn build(allocator: std.mem.Allocator, ir: *const core.Context) !DeclarationIndex {
+pub fn build(allocator: std.mem.Allocator, state: *const core.DocumentState) !DeclarationIndex {
     var index = DeclarationIndex.init(allocator);
     errdefer index.deinit();
 
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         try indexModule(&index, module);
     }
     return index;
 }
 
-pub fn findRoleClass(ir: *const core.Context, role_name: []const u8) ?[]const u8 {
-    var index = ir.module_order.items.len;
+pub fn findRoleClass(state: *const core.DocumentState, role_name: []const u8) ?[]const u8 {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.objects.items) |decl| {
             for (decl.roles.items) |role| {
                 if (std.mem.eql(u8, role, role_name)) return decl.name;
@@ -199,20 +199,20 @@ pub fn findRoleClass(ir: *const core.Context, role_name: []const u8) ?[]const u8
     return null;
 }
 
-pub fn findField(ir: *const core.Context, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+pub fn findField(state: *const core.DocumentState, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
     var current: ?[]const u8 = class_name;
     while (current) |name| {
-        if (findFieldInClass(ir, name, field_name)) |field| return field;
-        current = findClassBase(ir, name);
+        if (findFieldInClass(state, name, field_name)) |field| return field;
+        current = findClassBase(state, name);
     }
     return null;
 }
 
-pub fn findFieldByName(ir: *const core.Context, field_name: []const u8) ?FieldDescriptor {
-    var index = ir.module_order.items.len;
+pub fn findFieldByName(state: *const core.DocumentState, field_name: []const u8) ?FieldDescriptor {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.object_extensions.items) |extension| {
             for (extension.fields.items) |field| {
                 if (std.mem.eql(u8, field.name, field_name)) {
@@ -231,11 +231,11 @@ pub fn findFieldByName(ir: *const core.Context, field_name: []const u8) ?FieldDe
     return null;
 }
 
-pub fn classExists(ir: *const core.Context, class_name: []const u8) bool {
-    var index = ir.module_order.items.len;
+pub fn classExists(state: *const core.DocumentState, class_name: []const u8) bool {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.objects.items) |decl| {
             if (std.mem.eql(u8, decl.name, class_name)) return true;
         }
@@ -243,11 +243,11 @@ pub fn classExists(ir: *const core.Context, class_name: []const u8) bool {
     return false;
 }
 
-pub fn recordExists(ir: *const core.Context, record_name: []const u8) bool {
-    var index = ir.module_order.items.len;
+pub fn recordExists(state: *const core.DocumentState, record_name: []const u8) bool {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.records.items) |decl| {
             if (std.mem.eql(u8, decl.name, record_name)) return true;
         }
@@ -255,11 +255,11 @@ pub fn recordExists(ir: *const core.Context, record_name: []const u8) bool {
     return false;
 }
 
-pub fn findRecord(ir: *const core.Context, record_name: []const u8) ?RecordDescriptor {
-    var index = ir.module_order.items.len;
+pub fn findRecord(state: *const core.DocumentState, record_name: []const u8) ?RecordDescriptor {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.records.items) |decl| {
             if (std.mem.eql(u8, decl.name, record_name)) return .{ .name = decl.name, .module_id = module.id };
         }
@@ -267,11 +267,11 @@ pub fn findRecord(ir: *const core.Context, record_name: []const u8) ?RecordDescr
     return null;
 }
 
-pub fn findRecordField(ir: *const core.Context, record_name: []const u8, field_name: []const u8) ?RecordFieldDescriptor {
-    var index = ir.module_order.items.len;
+pub fn findRecordField(state: *const core.DocumentState, record_name: []const u8, field_name: []const u8) ?RecordFieldDescriptor {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.records.items) |decl| {
             if (!std.mem.eql(u8, decl.name, record_name)) continue;
             for (decl.fields.items) |field| {
@@ -292,11 +292,11 @@ pub fn findRecordField(ir: *const core.Context, record_name: []const u8, field_n
     return null;
 }
 
-pub fn findClassBase(ir: *const core.Context, class_name: []const u8) ?[]const u8 {
-    var index = ir.module_order.items.len;
+pub fn findClassBase(state: *const core.DocumentState, class_name: []const u8) ?[]const u8 {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.objects.items) |decl| {
             if (std.mem.eql(u8, decl.name, class_name)) return decl.base;
         }
@@ -304,11 +304,11 @@ pub fn findClassBase(ir: *const core.Context, class_name: []const u8) ?[]const u
     return null;
 }
 
-fn findFieldInClass(ir: *const core.Context, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
-    var index = ir.module_order.items.len;
+fn findFieldInClass(state: *const core.DocumentState, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.object_extensions.items) |extension| {
             if (!std.mem.eql(u8, extension.target, class_name)) continue;
             for (extension.fields.items) |field| {

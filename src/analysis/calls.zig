@@ -119,7 +119,7 @@ const Activation = struct {
 
 const Analyzer = struct {
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: SemanticEnv,
     states: std.StringHashMap(u8),
     returns: std.StringHashMap(LabelSet),
@@ -127,10 +127,10 @@ const Analyzer = struct {
     lambda_exprs: LambdaMap,
     lambda_captures: LambdaCaptureMap,
 
-    fn init(allocator: std.mem.Allocator, ir: *core.Context, sema: *const SemanticEnv) Analyzer {
+    fn init(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) Analyzer {
         return .{
             .allocator = allocator,
-            .ir = ir,
+            .state = state,
             .sema = sema.*,
             .states = std.StringHashMap(u8).init(allocator),
             .returns = std.StringHashMap(LabelSet).init(allocator),
@@ -141,7 +141,7 @@ const Analyzer = struct {
     }
 
     fn checkAll(self: *Analyzer) !void {
-        var const_it = self.ir.constants.iterator();
+        var const_it = self.state.constants.iterator();
         while (const_it.next()) |entry| {
             var labels = try self.constLabels(.{
                 .key = entry.key_ptr.*,
@@ -161,8 +161,8 @@ const Analyzer = struct {
     }
 
     fn checkRoots(self: *Analyzer) !void {
-        for (self.ir.module_order.items) |module_id| {
-            const module = self.ir.moduleById(module_id) orelse continue;
+        for (self.state.module_order.items) |module_id| {
+            const module = self.state.moduleById(module_id) orelse continue;
             const previous = self.sema;
             self.sema = self.sema.forModule(module_id);
             {
@@ -525,12 +525,12 @@ const Analyzer = struct {
 
     fn reportRecursiveActivation(self: *Analyzer, activation: Activation) !void {
         if (activation.owner) |func| {
-            try reportRecursiveFunction(self.allocator, self.ir, activation.module_id, func);
+            try reportRecursiveFunction(self.allocator, self.state, activation.module_id, func);
             return;
         }
-        const origin = try activationOrigin(self.allocator, self.ir, activation);
+        const origin = try activationOrigin(self.allocator, self.state, activation);
         defer if (origin) |text| self.allocator.free(text);
-        try self.ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+        try self.state.addValidationDiagnostic(.@"error", null, null, origin, .{
             .user_report = .{ .message = try self.allocator.dupe(u8, "RecursiveFunction: recursive function value application") },
         });
     }
@@ -538,39 +538,39 @@ const Analyzer = struct {
 
 pub fn checkFunctionCallGraph(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    var analyzer = Analyzer.init(arena.allocator(), ir, sema);
+    var analyzer = Analyzer.init(arena.allocator(), state, sema);
     defer analyzer.const_visiting.deinit();
     try analyzer.checkAll();
 }
 
-fn reportRecursiveFunction(allocator: std.mem.Allocator, ir: *core.Context, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
-    const origin = try functionOrigin(allocator, ir, module_id, func);
-    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
+fn reportRecursiveFunction(allocator: std.mem.Allocator, state: *core.DocumentState, module_id: core.SourceModuleId, func: ast.FunctionDecl) !void {
+    const origin = try functionOrigin(allocator, state, module_id, func);
+    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
         .recursive_function = .{ .function_name = func.name },
     });
 }
 
-fn activationOrigin(allocator: std.mem.Allocator, ir: *const core.Context, activation: Activation) !?[]const u8 {
+fn activationOrigin(allocator: std.mem.Allocator, state: *const core.DocumentState, activation: Activation) !?[]const u8 {
     return switch (activation.label) {
-        .function => |key| if (ir.functions.get(key)) |func|
-            try originForModuleSpan(allocator, ir, key.module_id, func.span)
+        .function => |key| if (state.functions.get(key)) |func|
+            try originForModuleSpan(allocator, state, key.module_id, func.span)
         else
             null,
-        .lambda => |span| try originForModuleSpan(allocator, ir, activation.module_id, span),
+        .lambda => |span| try originForModuleSpan(allocator, state, activation.module_id, span),
     };
 }
 
-fn functionOrigin(allocator: std.mem.Allocator, ir: *const core.Context, module_id: core.SourceModuleId, func: ast.FunctionDecl) ![]const u8 {
-    return originForModuleSpan(allocator, ir, module_id, func.span);
+fn functionOrigin(allocator: std.mem.Allocator, state: *const core.DocumentState, module_id: core.SourceModuleId, func: ast.FunctionDecl) ![]const u8 {
+    return originForModuleSpan(allocator, state, module_id, func.span);
 }
 
-fn originForModuleSpan(allocator: std.mem.Allocator, ir: *const core.Context, module_id: core.SourceModuleId, span: ast.Span) ![]const u8 {
-    if (ir.moduleById(module_id)) |module| {
+fn originForModuleSpan(allocator: std.mem.Allocator, state: *const core.DocumentState, module_id: core.SourceModuleId, span: ast.Span) ![]const u8 {
+    if (state.moduleById(module_id)) |module| {
         const path = module.path orelse module.spec;
         if (path.len != 0) return std.fmt.allocPrint(allocator, "path:{s}:bytes:{d}-{d}", .{ path, span.start, span.end });
     }

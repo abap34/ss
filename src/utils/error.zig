@@ -140,11 +140,11 @@ pub fn printLabeledOrigin(text: []const u8, label: []const u8, origin: ?[]const 
 fn sourceForLocatedOrigin(
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     located: LocatedOrigin,
 ) struct { path: []const u8, source: []const u8 } {
     if (located.path) |origin_path| {
-        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+        if (state.moduleByPathOrSpec(origin_path)) |module| {
             return .{
                 .path = module.path orelse module.spec,
                 .source = module.source,
@@ -158,13 +158,13 @@ fn sourceForLocatedOrigin(
 fn printLocatedOrigin(
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     severity: Severity,
     message: []const u8,
     origin: []const u8,
 ) void {
     const located = parseLocatedOrigin(origin) orelse return;
-    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     print(.{
         .path = resolved.path,
         .source = resolved.source,
@@ -177,14 +177,14 @@ fn printLocatedOrigin(
 fn printLabeledLocatedOrigin(
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     label: []const u8,
     origin: ?[]const u8,
 ) void {
     if (!shouldPrint(.note)) return;
     const origin_text = origin orelse return;
     const located = parseLocatedOrigin(origin_text) orelse return;
-    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     const loc = source.locationAt(resolved.source, located.span.start);
     printDim();
     std.debug.print("  {s} from {s}:{d}:{d}", .{ label, resolved.path, loc.line, loc.column });
@@ -216,9 +216,9 @@ pub fn printParseError(path: []const u8, text: []const u8, err: anyerror, diagno
     });
 }
 
-pub fn printContextDiagnostics(path: []const u8, text: []const u8, ir: anytype) void {
-    for (ir.diagnostics.items) |diagnostic| {
-        var resolved = resolveContextDiagnostic(ir.allocator, path, text, ir, diagnostic) catch {
+pub fn printDocumentStateDiagnostics(path: []const u8, text: []const u8, state: anytype) void {
+    for (state.diagnostics.items) |diagnostic| {
+        var resolved = resolveContextDiagnostic(state.allocator, path, text, state, diagnostic) catch {
             var message_buf: [128]u8 = undefined;
             print(.{
                 .path = path,
@@ -229,7 +229,7 @@ pub fn printContextDiagnostics(path: []const u8, text: []const u8, ir: anytype) 
             });
             continue;
         };
-        defer resolved.deinit(ir.allocator);
+        defer resolved.deinit(state.allocator);
         if (!shouldPrint(resolved.report_severity)) continue;
         print(.{
             .path = resolved.path,
@@ -238,24 +238,24 @@ pub fn printContextDiagnostics(path: []const u8, text: []const u8, ir: anytype) 
             .message = resolved.message,
             .span = resolved.span,
         });
-        printContextDiagnosticDetailsWithSource(path, text, ir, diagnostic);
+        printContextDiagnosticDetailsWithSource(path, text, state, diagnostic);
     }
 }
 
-fn printContextDiagnosticDetails(ir: anytype, diagnostic: anytype) void {
-    printContextDiagnosticDetailsWithSource("", "", ir, diagnostic);
+fn printContextDiagnosticDetails(state: anytype, diagnostic: anytype) void {
+    printContextDiagnosticDetailsWithSource("", "", state, diagnostic);
 }
 
-fn printContextDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, ir: anytype, diagnostic: anytype) void {
+fn printContextDiagnosticDetailsWithSource(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype) void {
     switch (diagnostic.data) {
-        .page_overflow => |data| printPageOverflowBox(ir, diagnostic, data),
-        .content_overflow => |data| printContentOverflowBox(default_path, default_source, ir, diagnostic, data),
+        .page_overflow => |data| printPageOverflowBox(state, diagnostic, data),
+        .content_overflow => |data| printContentOverflowBox(default_path, default_source, state, diagnostic, data),
         else => {},
     }
 }
 
-pub fn irRenderDiagnosticsJson(allocator: std.mem.Allocator, default_path: []const u8, default_source: []const u8, ir: anytype) ![]u8 {
-    return irDiagnosticsJson(allocator, default_path, default_source, ir, .{ .phase = "render" });
+pub fn irRenderDiagnosticsJson(allocator: std.mem.Allocator, default_path: []const u8, default_source: []const u8, state: anytype) ![]u8 {
+    return irDiagnosticsJson(allocator, default_path, default_source, state, .{ .phase = "render" });
 }
 
 pub const DiagnosticsJsonOptions = struct {
@@ -266,7 +266,7 @@ pub fn irDiagnosticsJson(
     allocator: std.mem.Allocator,
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     options: DiagnosticsJsonOptions,
 ) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
@@ -276,11 +276,11 @@ pub fn irDiagnosticsJson(
     try root.intField("schema", 1);
     try root.stringField("kind", "ss-diagnostics");
     var diagnostics = try root.arrayField("diagnostics");
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         if (options.phase) |phase| {
             if (!std.mem.eql(u8, @tagName(diagnostic.phase), phase)) continue;
         }
-        var resolved = try resolveContextDiagnostic(allocator, default_path, default_source, ir, diagnostic);
+        var resolved = try resolveContextDiagnostic(allocator, default_path, default_source, state, diagnostic);
         defer resolved.deinit(allocator);
         try writeContextDiagnosticJson(&diagnostics, resolved, diagnostic);
     }
@@ -309,12 +309,12 @@ fn resolveContextDiagnostic(
     allocator: std.mem.Allocator,
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     diagnostic: anytype,
 ) !ResolvedContextDiagnostic {
     const message = try formatContextDiagnostic(allocator, diagnostic);
     errdefer allocator.free(message);
-    const location = resolveContextDiagnosticLocation(default_path, default_source, ir, diagnostic);
+    const location = resolveContextDiagnosticLocation(default_path, default_source, state, diagnostic);
     return .{
         .phase = @tagName(diagnostic.phase),
         .severity = @tagName(diagnostic.severity),
@@ -366,17 +366,17 @@ fn writeJsonLocation(object: *json.Object, key: []const u8, text: []const u8, by
 fn resolveContextDiagnosticLocation(
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     diagnostic: anytype,
 ) struct { path: []const u8, source: []const u8, span: ?source.ByteSpan } {
     const located = if (diagnostic.origin) |origin|
         parseLocatedOrigin(origin)
     else if (diagnostic.node_id) |node_id| blk: {
-        const node = ir.getNode(node_id) orelse break :blk null;
+        const node = state.getNode(node_id) orelse break :blk null;
         break :blk if (node.origin) |origin| parseLocatedOrigin(origin) else null;
     } else null;
     if (located) |origin| {
-        const resolved = sourceForLocatedOrigin(default_path, default_source, ir, origin);
+        const resolved = sourceForLocatedOrigin(default_path, default_source, state, origin);
         return .{ .path = resolved.path, .source = resolved.source, .span = origin.span };
     }
     return .{ .path = default_path, .source = default_source, .span = null };
@@ -413,8 +413,8 @@ pub fn userReportDiagnosticCode(message: []const u8) []const u8 {
     return code;
 }
 
-pub fn hasContextErrors(ir: anytype) bool {
-    for (ir.diagnostics.items) |diagnostic| {
+pub fn hasDocumentStateErrors(state: anytype) bool {
+    for (state.diagnostics.items) |diagnostic| {
         if (diagnostic.severity == .@"error") return true;
     }
     return false;
@@ -423,11 +423,11 @@ pub fn hasContextErrors(ir: anytype) bool {
 pub fn printConstraintFailure(
     path: []const u8,
     text: []const u8,
-    ir: anytype,
+    state: anytype,
     err: anyerror,
 ) void {
     if (!shouldPrint(.@"error")) return;
-    if (ir.constraint_failures.items.len == 0 and ir.last_constraint_failure == null) {
+    if (state.constraint_failures.items.len == 0 and state.last_constraint_failure == null) {
         var message_buf: [128]u8 = undefined;
         print(.{
             .path = path,
@@ -443,7 +443,7 @@ pub fn printConstraintFailure(
         return;
     }
 
-    const failures = ir.constraint_failures.items;
+    const failures = state.constraint_failures.items;
     const count = if (failures.len > 0) failures.len else 1;
     if (count > 1) {
         printColor(.@"error");
@@ -458,41 +458,41 @@ pub fn printConstraintFailure(
         const limit = @min(failures.len, 3);
         for (failures[0..limit], 0..) |failure, index| {
             if (index != 0 or count > 1) std.debug.print("\n", .{});
-            printConstraintFailureItem(path, text, ir, failure);
+            printConstraintFailureItem(path, text, state, failure);
         }
         return;
     }
 
-    printConstraintFailureItem(path, text, ir, ir.last_constraint_failure.?);
+    printConstraintFailureItem(path, text, state, state.last_constraint_failure.?);
 }
 
-fn printConstraintFailureItem(path: []const u8, text: []const u8, ir: anytype, failure: anytype) void {
+fn printConstraintFailureItem(path: []const u8, text: []const u8, state: anytype, failure: anytype) void {
     const code = constraintFailureCode(failure);
     printColor(.@"error");
     std.debug.print("error: {s}: {s}\n", .{ code, constraintFailureReasonLabel(failure) });
     printReset();
 
-    const located = printRustLocatedOrigin(path, text, ir, .@"error", constraintFailurePrimaryLabel(failure), failure.constraint.origin);
+    const located = printRustLocatedOrigin(path, text, state, .@"error", constraintFailurePrimaryLabel(failure), failure.constraint.origin);
     if (!located and path.len != 0) {
         printDim();
         std.debug.print("  --> {s}\n", .{path});
         printReset();
     }
 
-    printConstraintFailureBox(ir, failure);
+    printConstraintFailureBox(state, failure);
 }
 
 fn printRustLocatedOrigin(
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     severity: Severity,
     label: []const u8,
     origin: ?[]const u8,
 ) bool {
     const origin_text = origin orelse return false;
     const located = parseLocatedOrigin(origin_text) orelse return false;
-    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     const loc = source.locationAt(resolved.source, located.span.start);
     printDim();
     std.debug.print("  --> {s}:{d}:{d}\n", .{ resolved.path, loc.line, loc.column });
@@ -502,14 +502,14 @@ fn printRustLocatedOrigin(
     return true;
 }
 
-fn printConstraintFailureBox(ir: anytype, failure: anytype) void {
+fn printConstraintFailureBox(state: anytype, failure: anytype) void {
     if (failure.propagation) |propagation| {
         printConstraintPropagationBox(failure, propagation);
         return;
     }
 
-    const target_text = constraintTargetLabel(ir.allocator, ir, failure.constraint) catch "";
-    defer if (target_text.len > 0) ir.allocator.free(target_text);
+    const target_text = constraintTargetLabel(state.allocator, state, failure.constraint) catch "";
+    defer if (target_text.len > 0) state.allocator.free(target_text);
 
     printDim();
     std.debug.print("╭─ propagation\n", .{});
@@ -524,16 +524,16 @@ fn printConstraintFailureBox(ir: anytype, failure: anytype) void {
     printReset();
 }
 
-fn printPageOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
+fn printPageOverflowBox(state: anytype, diagnostic: anytype, data: anytype) void {
     printDim();
     std.debug.print("╭─ page overflow\n", .{});
     printReset();
 
-    printDiagnosticPageField(ir, diagnostic.page_id);
-    printDiagnosticNodeField(ir, diagnostic.node_id);
-    printDiagnosticFrameField(ir, diagnostic.node_id);
-    const directions = formatPageOverflowDirections(ir.allocator, data, false) catch null;
-    defer if (directions) |text| ir.allocator.free(text);
+    printDiagnosticPageField(state, diagnostic.page_id);
+    printDiagnosticNodeField(state, diagnostic.node_id);
+    printDiagnosticFrameField(state, diagnostic.node_id);
+    const directions = formatPageOverflowDirections(state.allocator, data, false) catch null;
+    defer if (directions) |text| state.allocator.free(text);
     if (directions) |text| printBoxField("outside page", text);
 
     printDim();
@@ -541,26 +541,26 @@ fn printPageOverflowBox(ir: anytype, diagnostic: anytype, data: anytype) void {
     printReset();
 }
 
-fn printContentOverflowBox(default_path: []const u8, default_source: []const u8, ir: anytype, diagnostic: anytype, data: anytype) void {
+fn printContentOverflowBox(default_path: []const u8, default_source: []const u8, state: anytype, diagnostic: anytype, data: anytype) void {
     printDim();
     std.debug.print("╭─ frame too small\n", .{});
     printReset();
 
-    printDiagnosticPageField(ir, diagnostic.page_id);
-    printDiagnosticNodeField(ir, diagnostic.node_id);
-    printDiagnosticFrameField(ir, diagnostic.node_id);
+    printDiagnosticPageField(state, diagnostic.page_id);
+    printDiagnosticNodeField(state, diagnostic.node_id);
+    printDiagnosticFrameField(state, diagnostic.node_id);
     printFloatTripleField("width", data.required_width, data.frame_width, data.overflow_width);
     printFloatTripleField("height", data.required_height, data.frame_height, data.overflow_height);
-    printFrameTooSmallConstraints(default_path, default_source, ir, diagnostic.node_id, data);
+    printFrameTooSmallConstraints(default_path, default_source, state, diagnostic.node_id, data);
 
     printDim();
     std.debug.print("╰─\n", .{});
     printReset();
 }
 
-fn printDiagnosticPageField(ir: anytype, page_id: anytype) void {
+fn printDiagnosticPageField(state: anytype, page_id: anytype) void {
     const id = page_id orelse return;
-    const page = ir.getNode(id) orelse return;
+    const page = state.getNode(id) orelse return;
     var buffer: [128]u8 = undefined;
     const label = if (page.page_index) |index|
         std.fmt.bufPrint(&buffer, "#{d} page {d}", .{ id, index + 1 }) catch return
@@ -569,9 +569,9 @@ fn printDiagnosticPageField(ir: anytype, page_id: anytype) void {
     printBoxField("page", label);
 }
 
-fn printDiagnosticNodeField(ir: anytype, node_id: anytype) void {
+fn printDiagnosticNodeField(state: anytype, node_id: anytype) void {
     const id = node_id orelse return;
-    const node = ir.getNode(id) orelse return;
+    const node = state.getNode(id) orelse return;
     var buffer: [192]u8 = undefined;
     const role = node.role orelse "-";
     const payload = if (node.payload_kind) |payload_kind| @tagName(payload_kind) else "-";
@@ -579,9 +579,9 @@ fn printDiagnosticNodeField(ir: anytype, node_id: anytype) void {
     printBoxField("object", label);
 }
 
-fn printDiagnosticFrameField(ir: anytype, node_id: anytype) void {
+fn printDiagnosticFrameField(state: anytype, node_id: anytype) void {
     const id = node_id orelse return;
-    const node = ir.getNode(id) orelse return;
+    const node = state.getNode(id) orelse return;
     var buffer: [160]u8 = undefined;
     const label = std.fmt.bufPrint(&buffer, "x={d:.1} y={d:.1} w={d:.1} h={d:.1}", .{ node.frame.x, node.frame.y, node.frame.width, node.frame.height }) catch return;
     printBoxField("object frame", label);
@@ -593,26 +593,26 @@ fn printFloatTripleField(name: []const u8, required: f32, actual: f32, overflow:
     printBoxField(name, label);
 }
 
-fn printFrameTooSmallConstraints(default_path: []const u8, default_source: []const u8, ir: anytype, node_id: anytype, data: anytype) void {
+fn printFrameTooSmallConstraints(default_path: []const u8, default_source: []const u8, state: anytype, node_id: anytype, data: anytype) void {
     const id = node_id orelse return;
     if (data.overflow_width > page_overflow_display_epsilon) {
-        printAxisFrameConstraints(default_path, default_source, ir, id, true, "horizontal frame fixed by");
+        printAxisFrameConstraints(default_path, default_source, state, id, true, "horizontal frame fixed by");
     }
     if (data.overflow_height > page_overflow_display_epsilon) {
-        printAxisFrameConstraints(default_path, default_source, ir, id, false, "vertical frame fixed by");
+        printAxisFrameConstraints(default_path, default_source, state, id, false, "vertical frame fixed by");
     }
 }
 
 fn printAxisFrameConstraints(
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     node_id: anytype,
     horizontal: bool,
     heading: []const u8,
 ) void {
     var printed_heading = false;
-    for (ir.constraints.items) |constraint| {
+    for (state.constraints.items) |constraint| {
         if (constraint.target_node != node_id) continue;
         if (anchorIsHorizontal(constraint.target_anchor) != horizontal) continue;
         if (!printed_heading) {
@@ -620,10 +620,10 @@ fn printAxisFrameConstraints(
             printBoxHeading(heading);
             printed_heading = true;
         }
-        const line = formatConstraintLine(ir.allocator, ir, constraint) catch continue;
-        defer ir.allocator.free(line);
-        const origin = constraintOriginSnippet(ir.allocator, default_path, default_source, ir, constraint.origin) catch null;
-        defer if (origin) |text| ir.allocator.free(text);
+        const line = formatConstraintLine(state.allocator, state, constraint) catch continue;
+        defer state.allocator.free(line);
+        const origin = constraintOriginSnippet(state.allocator, default_path, default_source, state, constraint.origin) catch null;
+        defer if (origin) |text| state.allocator.free(text);
         printBoxIndentedLineWithSource(line, origin);
     }
 }
@@ -635,10 +635,10 @@ fn anchorIsHorizontal(anchor: anytype) bool {
     };
 }
 
-fn formatConstraintLine(allocator: std.mem.Allocator, ir: anytype, constraint: anytype) ![]const u8 {
-    const target = try constraintTargetLabel(allocator, ir, constraint);
+fn formatConstraintLine(allocator: std.mem.Allocator, state: anytype, constraint: anytype) ![]const u8 {
+    const target = try constraintTargetLabel(allocator, state, constraint);
     defer allocator.free(target);
-    const source_label = try constraintSourceLabel(allocator, ir, constraint.source);
+    const source_label = try constraintSourceLabel(allocator, state, constraint.source);
     defer allocator.free(source_label);
     if (@abs(constraint.offset) <= page_overflow_display_epsilon) {
         return std.fmt.allocPrint(allocator, "{s} = {s}", .{ target, source_label });
@@ -650,10 +650,10 @@ fn formatConstraintLine(allocator: std.mem.Allocator, ir: anytype, constraint: a
     );
 }
 
-fn constraintSourceLabel(allocator: std.mem.Allocator, ir: anytype, constraint_source: anytype) ![]const u8 {
+fn constraintSourceLabel(allocator: std.mem.Allocator, state: anytype, constraint_source: anytype) ![]const u8 {
     return switch (constraint_source) {
         .page => |anchor| std.fmt.allocPrint(allocator, "page.{s}", .{@tagName(anchor)}),
-        .node => |node_source| std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(ir, node_source.node_id), @tagName(node_source.anchor) }),
+        .node => |node_source| std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(state, node_source.node_id), @tagName(node_source.anchor) }),
     };
 }
 
@@ -661,12 +661,12 @@ fn constraintOriginSnippet(
     allocator: std.mem.Allocator,
     default_path: []const u8,
     default_source: []const u8,
-    ir: anytype,
+    state: anytype,
     maybe_origin: ?[]const u8,
 ) !?[]const u8 {
     const origin = maybe_origin orelse return null;
     const located = parseLocatedOrigin(origin) orelse return null;
-    const resolved = sourceForLocatedOrigin(default_path, default_source, ir, located);
+    const resolved = sourceForLocatedOrigin(default_path, default_source, state, located);
     if (resolved.source.len == 0) return null;
     const line = source.lineAt(resolved.source, located.span.start);
     const code = std.mem.trim(u8, line.text(resolved.source), " \t\r\n");
@@ -834,12 +834,12 @@ fn constraintFailureReasonLabel(failure: anytype) []const u8 {
     };
 }
 
-fn constraintTargetLabel(allocator: std.mem.Allocator, ir: anytype, constraint: anytype) ![]const u8 {
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(ir, constraint.target_node), @tagName(constraint.target_anchor) });
+fn constraintTargetLabel(allocator: std.mem.Allocator, state: anytype, constraint: anytype) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ nodeLabel(state, constraint.target_node), @tagName(constraint.target_anchor) });
 }
 
-fn nodeLabel(ir: anytype, node_id: anytype) []const u8 {
-    const node = ir.getNode(node_id) orelse return "unknown";
+fn nodeLabel(state: anytype, node_id: anytype) []const u8 {
+    const node = state.getNode(node_id) orelse return "unknown";
     return node.role orelse node.name;
 }
 

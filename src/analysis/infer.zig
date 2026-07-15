@@ -31,29 +31,29 @@ const InferenceOptions = struct {
     validate_contracts: bool = true,
 };
 
-fn addUserReport(ir: ?*core.Context, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
-    const sink = ir orelse return;
+fn addUserReport(state: ?*core.DocumentState, origin: []const u8, comptime fmt: []const u8, args: anytype) !void {
+    const sink = state orelse return;
     const message = try std.fmt.allocPrint(sink.allocator, fmt, args);
     try sink.addValidationDiagnostic(.@"error", null, null, origin, .{
         .user_report = .{ .message = message },
     });
 }
 
-fn rejectDuplicateBinding(ir: ?*core.Context, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
+fn rejectDuplicateBinding(state: ?*core.DocumentState, env: *const TypeEnv, name: []const u8, origin: []const u8) !void {
     if (!env.contains(name)) return;
-    try addUserReport(ir, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
+    try addUserReport(state, origin, "DuplicateBinding: binding '{s}' is already defined in this scope", .{name});
     return error.DuplicateBinding;
 }
 
 fn checkedLetBindingInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     binding: anytype,
     inferred: TypeInfo,
     origin: []const u8,
 ) !TypeInfo {
     const annotation = binding.type_annotation orelse return inferred;
-    try ensureType(ir, allocator, inferred, annotation, origin, .UnmatchedReturnType);
+    try ensureType(state, allocator, inferred, annotation, origin, .UnmatchedReturnType);
     return infoFromType(annotation);
 }
 
@@ -92,8 +92,8 @@ fn firstHoleInExpr(expr: ast.Expr) ?ast.HoleId {
 
 fn originPathForFunction(sema: *const SemanticEnv, func: ast.FunctionDecl) []const u8 {
     _ = func;
-    const ir = sema.ir orelse return "";
-    const module = ir.moduleById(sema.module_id) orelse return "";
+    const state = sema.state orelse return "";
+    const module = state.moduleById(sema.module_id) orelse return "";
     return module.path orelse module.spec;
 }
 
@@ -106,18 +106,18 @@ fn statementOrigin(allocator: std.mem.Allocator, origin_path: []const u8, span: 
 
 pub fn exprInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
     origin: []const u8,
 ) anyerror!TypeInfo {
-    return exprInfoWithOptions(allocator, ir, sema, env, expr, origin, .{});
+    return exprInfoWithOptions(allocator, state, sema, env, expr, origin, .{});
 }
 
 fn exprInfoWithOptions(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     expr: ast.Expr,
@@ -155,23 +155,23 @@ fn exprInfoWithOptions(
                 info.function_labels = try singleFunctionLabel(allocator, func.name);
                 break :blk info;
             }
-            try addUserReport(ir, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
+            try addUserReport(state, origin, "UnknownIdentifier: unknown identifier: {s}", .{name});
             return error.UnknownIdentifier;
         },
-        .call => |call| try inferCallInfo(allocator, ir, sema, env, call, origin, options),
-        .apply => |apply| try inferApplyInfo(allocator, ir, sema, env, apply.callee.*, apply.args.items, origin, options),
-        .lambda => |lambda| try inferLambdaInfo(allocator, ir, sema, env, lambda, origin, options),
-        .record => |record| try inferRecordInfo(allocator, ir, sema, env, record, origin, options),
-        .record_update => |update| try inferRecordUpdateInfo(allocator, ir, sema, env, update, origin, options),
-        .member => |member| try inferMemberInfo(allocator, ir, sema, env, member, origin, options),
-        .optional_check => |check| try inferOptionalCheckInfo(allocator, ir, sema, env, check.target.*, origin, options),
-        .coalesce => |coalesce| try inferCoalesceInfo(allocator, ir, sema, env, coalesce, origin, options),
+        .call => |call| try inferCallInfo(allocator, state, sema, env, call, origin, options),
+        .apply => |apply| try inferApplyInfo(allocator, state, sema, env, apply.callee.*, apply.args.items, origin, options),
+        .lambda => |lambda| try inferLambdaInfo(allocator, state, sema, env, lambda, origin, options),
+        .record => |record| try inferRecordInfo(allocator, state, sema, env, record, origin, options),
+        .record_update => |update| try inferRecordUpdateInfo(allocator, state, sema, env, update, origin, options),
+        .member => |member| try inferMemberInfo(allocator, state, sema, env, member, origin, options),
+        .optional_check => |check| try inferOptionalCheckInfo(allocator, state, sema, env, check.target.*, origin, options),
+        .coalesce => |coalesce| try inferCoalesceInfo(allocator, state, sema, env, coalesce, origin, options),
     };
 }
 
 fn inferRecordInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     record: ast.RecordExpr,
@@ -180,63 +180,63 @@ fn inferRecordInfo(
 ) !TypeInfo {
     const record_decl = sema.record(record.type_name) orelse {
         if (sema.enumExistsAny(record.type_name)) {
-            try addUserReport(ir, origin, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
+            try addUserReport(state, origin, "InvalidRecordLiteral: {s} is an enum type, not a record; use {s}.<case>", .{ record.type_name, record.type_name });
             return error.InvalidType;
         }
-        try addUserReport(ir, origin, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
+        try addUserReport(state, origin, "UnknownRecordType: unknown record type: {s}", .{record.type_name});
         return error.InvalidType;
     };
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (record.fields.items) |field_expr| {
         if (seen.contains(field_expr.name)) {
-            try addUserReport(ir, origin, "DuplicateRecordField: field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
+            try addUserReport(state, origin, "DuplicateRecordField: field '{s}' is already set in {s}", .{ field_expr.name, record.type_name });
             return error.InvalidType;
         }
         try seen.put(field_expr.name, {});
         const field = sema.recordField(record.type_name, field_expr.name) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
+            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record.type_name, field_expr.name });
             return error.InvalidType;
         };
         const expected = field.value_type;
-        const actual = try exprInfoWithOptions(allocator, ir, sema, env, field_expr.value, origin, options);
-        try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, field_expr.value, origin, options);
+        try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
     return infoFromType(Type.recordType(record_decl.name));
 }
 
 fn inferRecordUpdateInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     update: ast.RecordUpdateExpr,
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
-    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, update.target.*, origin, options);
+    const target_info = try exprInfoWithOptions(allocator, state, sema, env, update.target.*, origin, options);
     if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .record) {
         const actual = try typeInfoLabelAlloc(allocator, target_info);
         defer allocator.free(actual);
-        try addUserReport(ir, origin, "InvalidRecordUpdate: with expects a record value, got {s}", .{actual});
+        try addUserReport(state, origin, "InvalidRecordUpdate: with expects a record value, got {s}", .{actual});
         return error.InvalidType;
     }
     const record_name = target_info.ty.class_name orelse {
-        try addUserReport(ir, origin, "InvalidRecordUpdate: record type has no name", .{});
+        try addUserReport(state, origin, "InvalidRecordUpdate: record type has no name", .{});
         return error.InvalidType;
     };
 
-    try rejectOverlappingRecordUpdateFields(allocator, ir, update.fields.items, origin);
+    try rejectOverlappingRecordUpdateFields(allocator, state, update.fields.items, origin);
     for (update.fields.items) |field| {
-        try inferRecordUpdateField(allocator, ir, sema, env, record_name, field, origin, options);
+        try inferRecordUpdateField(allocator, state, sema, env, record_name, field, origin, options);
     }
     return infoFromType(target_info.ty);
 }
 
 fn rejectOverlappingRecordUpdateFields(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     fields: []const ast.RecordUpdateFieldExpr,
     origin: []const u8,
 ) !void {
@@ -247,7 +247,7 @@ fn rejectOverlappingRecordUpdateFields(
             defer allocator.free(left_text);
             const right_text = try ast.formatRecordPath(allocator, right.path.items);
             defer allocator.free(right_text);
-            try addUserReport(ir, origin, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
+            try addUserReport(state, origin, "OverlappingRecordUpdate: update path '{s}' overlaps '{s}'", .{ left_text, right_text });
             return error.InvalidType;
         }
     }
@@ -255,7 +255,7 @@ fn rejectOverlappingRecordUpdateFields(
 
 fn inferRecordUpdateField(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     base_record_name: []const u8,
@@ -267,14 +267,14 @@ fn inferRecordUpdateField(
     for (update_field.path.items, 0..) |segment, index| {
         if (segment.name_hole != null) return;
         const field = sema.recordField(current_record_name, segment.name) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
 
         if (index + 1 == update_field.path.items.len) {
-            const actual = try exprInfoWithOptions(allocator, ir, sema, env, update_field.value, origin, options);
-            try ensureType(ir, allocator, actual, field_type, origin, .UnmatchedArgumentType);
+            const actual = try exprInfoWithOptions(allocator, state, sema, env, update_field.value, origin, options);
+            try ensureType(state, allocator, actual, field_type, origin, .UnmatchedArgumentType);
             return;
         }
         if (field_type.kind != .record) {
@@ -282,11 +282,11 @@ fn inferRecordUpdateField(
             defer allocator.free(path);
             const label = try typeLabelAlloc(allocator, field_type);
             defer allocator.free(label);
-            try addUserReport(ir, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
+            try addUserReport(state, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path, label });
             return error.InvalidType;
         }
         current_record_name = field_type.class_name orelse {
-            try addUserReport(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+            try addUserReport(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
             return error.InvalidType;
         };
     }
@@ -294,7 +294,7 @@ fn inferRecordUpdateField(
 
 fn inferMemberInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     member: ast.MemberExpr,
@@ -306,20 +306,20 @@ fn inferMemberInfo(
         const enum_name = member.target.ident.name;
         if (env.get(enum_name) == null and sema.function(enum_name) == null) {
             if (sema.enumExistsAny(enum_name)) {
-                try addUserReport(ir, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
+                try addUserReport(state, origin, "UnknownEnumCase: enum '{s}' has no case '{s}'", .{ enum_name, member.name });
                 return error.InvalidType;
             }
         }
     }
 
-    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, member.target.*, origin, options);
+    const target_info = try exprInfoWithOptions(allocator, state, sema, env, member.target.*, origin, options);
     if (target_info.hole != null) return target_info;
-    return inferMemberInfoFromTargetInfo(allocator, ir, sema, target_info, member.name, origin);
+    return inferMemberInfoFromTargetInfo(allocator, state, sema, target_info, member.name, origin);
 }
 
 fn inferMemberInfoFromTargetInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     target_info: TypeInfo,
     member_name: []const u8,
@@ -327,18 +327,18 @@ fn inferMemberInfoFromTargetInfo(
 ) !TypeInfo {
     if (target_info.ty.kind == .optional) {
         const child = target_info.ty.optional_child orelse {
-            try addUserReport(ir, origin, "InvalidOptionalType: optional type has no child", .{});
+            try addUserReport(state, origin, "InvalidOptionalType: optional type has no child", .{});
             return error.InvalidType;
         };
-        if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, ir, sema, child.*, member_name, origin);
+        if (child.kind == .record) return inferOptionalRecordMemberInfo(allocator, state, sema, child.*, member_name, origin);
     }
     if (target_info.ty.kind == .record) {
         const record_name = target_info.ty.class_name orelse {
-            try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
+            try addUserReport(state, origin, "InvalidRecordType: record type has no name", .{});
             return error.InvalidType;
         };
         const field = sema.recordField(record_name, member_name) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
+            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
             return error.InvalidType;
         };
         const field_type = field.value_type;
@@ -347,12 +347,12 @@ fn inferMemberInfoFromTargetInfo(
         return infoFromType(result_type);
     }
     if (!isPropertyTarget(target_info)) {
-        try addUserReport(ir, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
+        try addUserReport(state, origin, "InvalidProperty: member target must be Document, Page, Object, or Selection<Object>", .{});
         return error.InvalidType;
     }
     if (std.mem.eql(u8, member_name, "content")) return infoFromType(Type.string);
     const field = lookupFieldForTarget(sema, target_info, member_name) orelse {
-        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{member_name});
+        try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{member_name});
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -363,18 +363,18 @@ fn inferMemberInfoFromTargetInfo(
 
 fn inferOptionalRecordMemberInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     record_type: Type,
     member_name: []const u8,
     origin: []const u8,
 ) !TypeInfo {
     const record_name = record_type.class_name orelse {
-        try addUserReport(ir, origin, "InvalidRecordType: record type has no name", .{});
+        try addUserReport(state, origin, "InvalidRecordType: record type has no name", .{});
         return error.InvalidType;
     };
     const field = sema.recordField(record_name, member_name) orelse {
-        try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
+        try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ record_name, member_name });
         return error.InvalidType;
     };
     const field_type = field.value_type;
@@ -385,17 +385,17 @@ fn inferOptionalRecordMemberInfo(
 
 fn inferOptionalCheckInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     target: ast.Expr,
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
-    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, target, origin, options);
+    const target_info = try exprInfoWithOptions(allocator, state, sema, env, target, origin, options);
     if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .optional) {
-        try addUserReport(ir, origin, "TypeMismatch: '?' expects an optional value", .{});
+        try addUserReport(state, origin, "TypeMismatch: '?' expects an optional value", .{});
         return error.InvalidType;
     }
     return infoFromType(Type.boolean);
@@ -403,25 +403,25 @@ fn inferOptionalCheckInfo(
 
 fn inferCoalesceInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     coalesce: ast.CoalesceExpr,
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
-    const target_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.target.*, origin, options);
+    const target_info = try exprInfoWithOptions(allocator, state, sema, env, coalesce.target.*, origin, options);
     if (target_info.hole != null) return target_info;
     if (target_info.ty.kind != .optional) {
-        try addUserReport(ir, origin, "TypeMismatch: '??' expects an optional value", .{});
+        try addUserReport(state, origin, "TypeMismatch: '??' expects an optional value", .{});
         return error.InvalidType;
     }
     const child = target_info.ty.optional_child orelse {
-        try addUserReport(ir, origin, "TypeMismatch: invalid optional type", .{});
+        try addUserReport(state, origin, "TypeMismatch: invalid optional type", .{});
         return error.InvalidType;
     };
-    const fallback_info = try exprInfoWithOptions(allocator, ir, sema, env, coalesce.fallback.*, origin, options);
-    try ensureType(ir, allocator, fallback_info, child.*, origin, .UnmatchedArgumentType);
+    const fallback_info = try exprInfoWithOptions(allocator, state, sema, env, coalesce.fallback.*, origin, options);
+    try ensureType(state, allocator, fallback_info, child.*, origin, .UnmatchedArgumentType);
     return infoFromType(child.*);
 }
 
@@ -438,7 +438,7 @@ fn lambdaLabel(allocator: std.mem.Allocator, lambda: ast.LambdaExpr) ![]const u8
 
 fn inferLambdaInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     lambda: ast.LambdaExpr,
@@ -450,14 +450,14 @@ fn inferLambdaInfo(
     const param_types = try allocator.alloc(Type, lambda.params.items.len);
     defer allocator.free(param_types);
     for (lambda.params.items, 0..) |param, index| {
-        try rejectDuplicateBinding(ir, &local_env, param.name, origin);
+        try rejectDuplicateBinding(state, &local_env, param.name, origin);
         param_types[index] = param.ty;
         try local_env.put(param.name, infoFromType(param.ty));
     }
-    const body_info = try exprInfoWithOptions(allocator, ir, sema, &local_env, lambda.body.*, origin, options);
+    const body_info = try exprInfoWithOptions(allocator, state, sema, &local_env, lambda.body.*, origin, options);
     if (body_info.hole != null) return body_info;
     if (body_info.ty.kind == .void) {
-        try addUserReport(ir, origin, "VoidValue: lambda bodies must produce a value", .{});
+        try addUserReport(state, origin, "VoidValue: lambda bodies must produce a value", .{});
         return error.InvalidType;
     }
     var info = infoFromType(try Type.functionType(allocator, param_types, body_info.ty));
@@ -467,7 +467,7 @@ fn inferLambdaInfo(
 
 fn inferCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -479,51 +479,51 @@ fn inferCallInfo(
         if (env.get(call.callee.name)) |callee_info| {
             if (callee_info.hole != null) return callee_info;
             if (callee_info.ty.kind == .function and callee_info.ty.fn_result != null) {
-                return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, call.args.items, origin, options);
+                return try inferFunctionValueCallInfo(allocator, state, sema, env, callee_info, call.args.items, origin, options);
             }
         }
     }
     if (sema.resolvedConst(call.callee)) |resolved| {
         const const_info = infoFromType(resolved.decl.value_type);
         if (const_info.ty.kind == .function and const_info.ty.fn_result != null) {
-            return try inferFunctionValueCallInfo(allocator, ir, sema, env, const_info, call.args.items, origin, options);
+            return try inferFunctionValueCallInfo(allocator, state, sema, env, const_info, call.args.items, origin, options);
         }
-        try addUserReport(ir, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
+        try addUserReport(state, origin, "UnknownFunction: constants are values; use '{s}' without parentheses", .{call.callee.name});
         return error.UnknownFunction;
     }
     const descriptor = sema.callCallee(call.callee) orelse {
-        try reportCallResolutionFailure(allocator, ir, sema, call.callee, origin);
+        try reportCallResolutionFailure(allocator, state, sema, call.callee, origin);
         return error.UnknownFunction;
     };
     return switch (descriptor) {
         .function => |resolved| blk: {
             const callee_sema = sema.forModule(resolved.module_id);
-            break :blk try inferUserCallInfo(allocator, ir, sema, &callee_sema, env, call, origin, resolved.decl, options);
+            break :blk try inferUserCallInfo(allocator, state, sema, &callee_sema, env, call, origin, resolved.decl, options);
         },
-        .primitive => |primitive| try inferPrimitiveCallInfo(allocator, ir, sema, env, call, origin, primitive, options),
+        .primitive => |primitive| try inferPrimitiveCallInfo(allocator, state, sema, env, call, origin, primitive, options),
     };
 }
 
 fn reportCallResolutionFailure(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     callee: ast.CallableName,
     origin: []const u8,
 ) !void {
     switch (sema.resolveFunction(callee)) {
-        .unknown_alias => |alias| try addUserReport(ir, origin, "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
+        .unknown_alias => |alias| try addUserReport(state, origin, "UnknownModuleAlias: unknown import alias: {s}", .{alias}),
         else => {
             const name = try callee.displayAlloc(allocator);
             defer allocator.free(name);
-            try addUserReport(ir, origin, "UnknownFunction: unknown function: {s}", .{name});
+            try addUserReport(state, origin, "UnknownFunction: unknown function: {s}", .{name});
         },
     }
 }
 
 fn inferApplyInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     callee: ast.Expr,
@@ -531,13 +531,13 @@ fn inferApplyInfo(
     origin: []const u8,
     options: InferenceOptions,
 ) !TypeInfo {
-    const callee_info = try exprInfoWithOptions(allocator, ir, sema, env, callee, origin, options);
-    return try inferFunctionValueCallInfo(allocator, ir, sema, env, callee_info, args, origin, options);
+    const callee_info = try exprInfoWithOptions(allocator, state, sema, env, callee, origin, options);
+    return try inferFunctionValueCallInfo(allocator, state, sema, env, callee_info, args, origin, options);
 }
 
 fn inferFunctionValueCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     callee_info: TypeInfo,
@@ -549,24 +549,24 @@ fn inferFunctionValueCallInfo(
     if (callee_info.ty.kind != .function or callee_info.ty.fn_result == null) {
         const actual_label = try typeInfoLabelAlloc(allocator, callee_info);
         defer allocator.free(actual_label);
-        try addUserReport(ir, origin, "TypeMismatch: expected Function, got {s}", .{actual_label});
+        try addUserReport(state, origin, "TypeMismatch: expected Function, got {s}", .{actual_label});
         return error.InvalidType;
     }
     if (args.len != callee_info.ty.fn_params.len) {
         if (firstHoleInArgs(args)) |hole_id| return infoFromHole(hole_id);
-        try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
+        try addUserReport(state, origin, "InvalidArity: expected {d}, got {d}", .{ callee_info.ty.fn_params.len, args.len });
         return error.InvalidArity;
     }
     for (args, 0..) |arg, index| {
-        const actual = try exprInfoWithOptions(allocator, ir, sema, env, arg, origin, options);
-        try ensureType(ir, allocator, actual, callee_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
+        try ensureType(state, allocator, actual, callee_info.ty.fn_params[index], origin, .UnmatchedArgumentType);
     }
     return infoFromType(callee_info.ty.fn_result.?.*);
 }
 
 fn inferUserCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     caller_sema: *const SemanticEnv,
     callee_sema: *const SemanticEnv,
     env: *const TypeEnv,
@@ -580,23 +580,23 @@ fn inferUserCallInfo(
     if (call.args.items.len < min_arity or call.args.items.len > max_arity) {
         if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (min_arity == max_arity) {
-            try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity: expected {d}, got {d}", .{ max_arity, call.args.items.len });
         } else {
-            try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ min_arity, max_arity, call.args.items.len });
         }
         return error.InvalidArity;
     }
     for (call.args.items, 0..) |arg, index| {
         const param = func.params.items[index];
-        const actual = try exprInfoWithOptions(allocator, ir, caller_sema, env, arg, origin, options);
-        try ensureType(ir, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
+        const actual = try exprInfoWithOptions(allocator, state, caller_sema, env, arg, origin, options);
+        try ensureType(state, allocator, actual, param.ty, origin, .UnmatchedArgumentType);
     }
-    return try inferUserFunctionReturnInfo(allocator, ir, callee_sema, env, func, call, caller_sema, origin, options);
+    return try inferUserFunctionReturnInfo(allocator, state, callee_sema, env, func, call, caller_sema, origin, options);
 }
 
 fn inferPrimitiveCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -607,26 +607,26 @@ fn inferPrimitiveCallInfo(
     if (call.args.items.len < descriptor.min_arity or call.args.items.len > descriptor.max_arity) {
         if (firstHoleInArgs(call.args.items)) |hole_id| return infoFromHole(hole_id);
         if (descriptor.min_arity == descriptor.max_arity) {
-            try addUserReport(ir, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity: expected {d}, got {d}", .{ descriptor.min_arity, call.args.items.len });
         } else {
-            try addUserReport(ir, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
+            try addUserReport(state, origin, "InvalidArity: expected {d}..{d}, got {d}", .{ descriptor.min_arity, descriptor.max_arity, call.args.items.len });
         }
         return error.InvalidArity;
     }
     for (call.args.items, 0..) |arg, index| {
         if (isPrimitiveFunctionArgument(descriptor, index)) continue;
-        const actual = try exprInfoWithOptions(allocator, ir, sema, env, arg, origin, options);
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, arg, origin, options);
         if (registry.primitiveArgType(descriptor, index)) |expected| {
-            try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+            try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
         }
     }
-    const info = try primitiveResultTypeInfo(allocator, ir, sema, env, call, descriptor, origin, options);
-    if (ir != null and options.validate_contracts) {
+    const info = try primitiveResultTypeInfo(allocator, state, sema, env, call, descriptor, origin, options);
+    if (state != null and options.validate_contracts) {
         switch (descriptor.op) {
-            .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(ir.?, call, env, sema, origin),
-            .set_prop => try validateSetPropCall(ir.?, call, env, sema, origin),
-            .set_repr => try validateSetReprCall(allocator, ir.?, call, env, sema, origin, options),
-            .extend_render_env => try validateExtendRenderEnvCall(ir.?, call, env, sema, origin),
+            .prop, .has_prop, .prop_eq => try validateKnownPropertyKeyCall(state.?, call, env, sema, origin),
+            .set_prop => try validateSetPropCall(state.?, call, env, sema, origin),
+            .set_repr => try validateSetReprCall(allocator, state.?, call, env, sema, origin, options),
+            .extend_render_env => try validateExtendRenderEnvCall(state.?, call, env, sema, origin),
             else => {},
         }
     }
@@ -634,7 +634,7 @@ fn inferPrimitiveCallInfo(
 }
 
 fn validateKnownPropertyKeyCall(
-    ir: *core.Context,
+    state: *core.DocumentState,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -645,21 +645,21 @@ fn validateKnownPropertyKeyCall(
         .string => |literal| literal.text,
         .hole => return,
         else => {
-            try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
+            try addUserReport(state, origin, "InvalidProperty: property key must be a known field literal", .{});
             return error.InvalidType;
         },
     };
-    const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    const target_info = try exprInfo(state.allocator, state, sema, env, call.args.items[0], origin);
     if (target_info.hole != null) return;
     if (lookupFieldForTarget(sema, target_info, key) == null) {
-        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
+        try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{key});
         return error.InvalidType;
     }
 }
 
 fn validateSetReprCall(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -667,24 +667,24 @@ fn validateSetReprCall(
     options: InferenceOptions,
 ) !void {
     if (call.args.items.len < 2) return;
-    const object_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
-    const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[1], origin, options);
+    const object_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
+    const callback_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[1], origin, options);
     if (object_info.hole != null) return;
     if (callback_info.hole != null) return;
     if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
-        try addUserReport(ir, origin, "InvalidCallback: set_repr expects Object -> String", .{});
+        try addUserReport(state, origin, "InvalidCallback: set_repr expects Object -> String", .{});
         return error.InvalidType;
     }
     if (callback_info.ty.fn_params.len != 1) {
-        try addUserReport(ir, origin, "InvalidCallback: set_repr callback receives 1 argument, but its function type has {d}", .{callback_info.ty.fn_params.len});
+        try addUserReport(state, origin, "InvalidCallback: set_repr callback receives 1 argument, but its function type has {d}", .{callback_info.ty.fn_params.len});
         return error.InvalidArity;
     }
     const object_arg_type = if (object_info.ty.kind == .object and object_info.object_class != null)
         Type.objectClass(object_info.object_class.?)
     else
         Type.object;
-    try ensureType(ir, allocator, infoFromType(object_arg_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
-    try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_result.?.*), Type.string, origin, .UnmatchedReturnType);
+    try ensureType(state, allocator, infoFromType(object_arg_type), callback_info.ty.fn_params[0], origin, .UnmatchedArgumentType);
+    try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), Type.string, origin, .UnmatchedReturnType);
 }
 
 fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: usize) bool {
@@ -694,7 +694,7 @@ fn isPrimitiveFunctionArgument(descriptor: registry.PrimitiveDescriptor, index: 
 
 fn inferUserFunctionReturnInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
@@ -704,18 +704,18 @@ fn inferUserFunctionReturnInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     if (active_return_visiting) |visiting| {
-        return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, caller_sema, origin, options, visiting);
+        return inferUserFunctionReturnInfoInner(allocator, state, sema, caller_env, func, call, caller_sema, origin, options, visiting);
     }
     var visiting = FunctionVisitSet.init(allocator);
     defer visiting.deinit();
     active_return_visiting = &visiting;
     defer active_return_visiting = null;
-    return inferUserFunctionReturnInfoInner(allocator, ir, sema, caller_env, func, call, caller_sema, origin, options, &visiting);
+    return inferUserFunctionReturnInfoInner(allocator, state, sema, caller_env, func, call, caller_sema, origin, options, &visiting);
 }
 
 fn inferUserFunctionReturnInfoInner(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     caller_env: *const TypeEnv,
     func: ast.FunctionDecl,
@@ -740,12 +740,12 @@ fn inferUserFunctionReturnInfoInner(
         var param_info = infoFromType(param.ty);
         if (index >= call.args.items.len) {
             if (param.default_value) |default_value| {
-                const default_info = try exprInfoWithOptions(allocator, ir, sema, &env, default_value.*, origin, options);
-                try ensureType(ir, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
+                const default_info = try exprInfoWithOptions(allocator, state, sema, &env, default_value.*, origin, options);
+                try ensureType(state, allocator, default_info, param.ty, origin, .UnmatchedArgumentType);
                 param_info = try mergeTypeInfo(allocator, param_info, default_info);
             }
         } else {
-            const actual_info = try exprInfoWithOptions(allocator, ir, caller_sema, caller_env, call.args.items[index], origin, options);
+            const actual_info = try exprInfoWithOptions(allocator, state, caller_sema, caller_env, call.args.items[index], origin, options);
             param_info = try mergeTypeInfo(allocator, param_info, actual_info);
         }
         try env.put(param.name, param_info);
@@ -754,7 +754,7 @@ fn inferUserFunctionReturnInfoInner(
     var result = infoFromType(func.result_type);
     try inferReturnInfoFromStatements(
         allocator,
-        ir,
+        state,
         sema,
         originPathForFunction(sema, func),
         .{ .validate_contracts = false },
@@ -769,7 +769,7 @@ fn inferUserFunctionReturnInfoInner(
 
 fn inferReturnInfoFromStatements(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     origin_path: []const u8,
     options: InferenceOptions,
@@ -784,34 +784,34 @@ fn inferReturnInfoFromStatements(
             .hole => {},
             .let_binding => |binding| {
                 const binds_name = !language_names.isDiscardBindingName(binding.name);
-                if (binds_name) try rejectDuplicateBinding(ir, env, binding.name, origin);
-                const inferred = try exprInfoWithOptions(allocator, ir, sema, env, binding.expr, origin, options);
-                const info = try checkedLetBindingInfo(allocator, ir, binding, inferred, origin);
+                if (binds_name) try rejectDuplicateBinding(state, env, binding.name, origin);
+                const inferred = try exprInfoWithOptions(allocator, state, sema, env, binding.expr, origin, options);
+                const info = try checkedLetBindingInfo(allocator, state, binding, inferred, origin);
                 if (!binds_name) continue;
                 try env.put(binding.name, info);
             },
             .return_expr => |expr| {
-                const info = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
+                const info = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
                 result.* = try mergeTypeInfo(allocator, result.*, info);
             },
             .return_void => {},
             .property_set => |property_set| {
-                try validatePropertySetStatementWithOptions(allocator, ir, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
+                try validatePropertySetStatementWithOptions(allocator, state, sema, env, property_set.target, property_set.path.items, property_set.value, origin, options);
             },
             .if_stmt => |if_stmt| {
-                _ = try exprInfoWithOptions(allocator, ir, sema, env, if_stmt.condition, origin, options);
+                _ = try exprInfoWithOptions(allocator, state, sema, env, if_stmt.condition, origin, options);
                 var then_env = try env.clone();
                 defer then_env.deinit();
-                try inferReturnInfoFromStatements(allocator, ir, sema, origin_path, options, &then_env, if_stmt.then_statements.items, result);
+                try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &then_env, if_stmt.then_statements.items, result);
                 var else_env = try env.clone();
                 defer else_env.deinit();
-                try inferReturnInfoFromStatements(allocator, ir, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
+                try inferReturnInfoFromStatements(allocator, state, sema, origin_path, options, &else_env, if_stmt.else_statements.items, result);
             },
             .expr_stmt => |expr| {
-                _ = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
+                _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
             },
             .constrain => |decl| {
-                if (decl.offset) |expr| _ = try exprInfoWithOptions(allocator, ir, sema, env, expr, origin, options);
+                if (decl.offset) |expr| _ = try exprInfoWithOptions(allocator, state, sema, env, expr, origin, options);
             },
         }
     }
@@ -819,7 +819,7 @@ fn inferReturnInfoFromStatements(
 
 fn primitiveResultTypeInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -829,13 +829,13 @@ fn primitiveResultTypeInfo(
 ) !TypeInfo {
     if (descriptor.callback) |callback| {
         const selection_info = if (call.args.items.len > 0)
-            try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options)
+            try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options)
         else
             infoFromType(Type.selection(.any));
         if (call.args.items.len > callback.function_arg_index) {
             try validateCallbackShape(
                 allocator,
-                ir,
+                state,
                 sema,
                 env,
                 call,
@@ -853,7 +853,7 @@ fn primitiveResultTypeInfo(
     switch (descriptor.result_policy) {
         .first_selection_item => {
             if (call.args.items.len == 0) return infoFromType(Type.object);
-            const selection_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
+            const selection_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
             if (selection_info.hole != null) return selection_info;
             var info = switch (selection_info.ty.param) {
                 .page => infoFromType(Type.page),
@@ -868,13 +868,13 @@ fn primitiveResultTypeInfo(
         },
         .first_arg => {
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(registry.primitiveResultType(descriptor) orelse Type.object);
-            return try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
+            return try exprInfoWithOptions(allocator, state, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
         },
-        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, ir, sema, env, call, origin, options),
-        .select_query => return try inferSelectCallInfo(allocator, ir, sema, env, call, origin, options),
+        .selection_algebra => return try inferSelectionAlgebraInfo(allocator, state, sema, env, call, origin, options),
+        .select_query => return try inferSelectCallInfo(allocator, state, sema, env, call, origin, options),
         .target_arg => {
             if (call.args.items.len <= descriptor.result_arg_index) return infoFromType(Type.object);
-            const target_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
+            const target_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[descriptor.result_arg_index], origin, options);
             if (target_info.hole != null) return target_info;
             return .{
                 .ty = switch (target_info.ty.kind) {
@@ -902,7 +902,7 @@ fn primitiveResultTypeInfo(
 
 fn validateCallbackShape(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -915,17 +915,17 @@ fn validateCallbackShape(
     options: InferenceOptions,
 ) !void {
     if (call.args.items.len <= function_arg_index) return;
-    const callback_info = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index], origin, options);
+    const callback_info = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[function_arg_index], origin, options);
     if (callback_info.hole != null) return;
     if (selection_info.hole != null) return;
     if (callback_info.ty.kind != .function or callback_info.ty.fn_result == null) {
-        try addUserReport(ir, origin, "InvalidCallback: callback must have a function type", .{});
+        try addUserReport(state, origin, "InvalidCallback: callback must have a function type", .{});
         return error.InvalidType;
     }
     const extra_count = if (call.args.items.len > function_arg_index + 1) call.args.items.len - function_arg_index - 1 else 0;
     const expected_arg_count = supplied_arg_count + extra_count;
     if (expected_arg_count != callback_info.ty.fn_params.len) {
-        try addUserReport(ir, origin, "InvalidCallback: callback receives {d} arguments here, but its function type has {d}", .{
+        try addUserReport(state, origin, "InvalidCallback: callback receives {d} arguments here, but its function type has {d}", .{
             expected_arg_count,
             callback_info.ty.fn_params.len,
         });
@@ -938,34 +938,34 @@ fn validateCallbackShape(
         else => Type.any,
     };
     if (supplied_arg_count == 1) {
-        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
     } else if (supplied_arg_count == 2) {
         switch (descriptor.op) {
             .fold => {
-                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
-                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), Type.string, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[1]), item_type, origin, .UnmatchedArgumentType);
             },
             .foreach_enumerate => {
-                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
-                try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_params[1]), Type.number, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[0]), item_type, origin, .UnmatchedArgumentType);
+                try ensureType(state, allocator, infoFromType(callback_info.ty.fn_params[1]), Type.number, origin, .UnmatchedArgumentType);
             },
             else => {},
         }
     }
     var extra_index: usize = 0;
     while (extra_index < extra_count) : (extra_index += 1) {
-        const actual = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[function_arg_index + 1 + extra_index], origin, options);
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[function_arg_index + 1 + extra_index], origin, options);
         const param_index = supplied_arg_count + extra_index;
-        try ensureType(ir, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
+        try ensureType(state, allocator, actual, callback_info.ty.fn_params[param_index], origin, .UnmatchedArgumentType);
     }
     if (expected_result_type) |result_type| {
-        try ensureType(ir, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin, .UnmatchedReturnType);
+        try ensureType(state, allocator, infoFromType(callback_info.ty.fn_result.?.*), result_type, origin, .UnmatchedReturnType);
     }
 }
 
 fn inferSelectionAlgebraInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -973,10 +973,10 @@ fn inferSelectionAlgebraInfo(
     options: InferenceOptions,
 ) !TypeInfo {
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
-    const left = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
-    const right = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[1], origin, options);
-    try ensureType(ir, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
-    try ensureType(ir, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
+    const left = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
+    const right = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[1], origin, options);
+    try ensureType(state, allocator, left, Type.selection(.any), origin, .UnmatchedArgumentType);
+    try ensureType(state, allocator, right, Type.selection(.any), origin, .UnmatchedArgumentType);
     if (left.hole != null) return left;
     if (right.hole != null) return right;
 
@@ -986,7 +986,7 @@ fn inferSelectionAlgebraInfo(
         const right_label = try typeLabelAlloc(allocator, right.ty);
         defer allocator.free(right_label);
         try addUserReport(
-            ir,
+            state,
             origin,
             "InvalidSelectionAlgebra: cannot combine {s} and {s}",
             .{ left_label, right_label },
@@ -1003,7 +1003,7 @@ fn inferSelectionAlgebraInfo(
 
 fn inferSelectCallInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     call: ast.CallExpr,
@@ -1013,20 +1013,20 @@ fn inferSelectCallInfo(
     if (call.args.items.len < 2) return infoFromType(Type.selection(.any));
     const query_name = resolveStringLiteral(env, call.args.items[1]) orelse return infoFromType(Type.selection(.any));
     const query = sema.query(query_name) orelse {
-        try addUserReport(ir, origin, "UnknownQuery: unknown query: {s}", .{query_name});
+        try addUserReport(state, origin, "UnknownQuery: unknown query: {s}", .{query_name});
         return error.UnknownQuery;
     };
     if (call.args.items.len != query.arity) {
-        try addUserReport(ir, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
+        try addUserReport(state, origin, "InvalidArity: query {s} expects {d} arguments, got {d}", .{ query_name, query.arity, call.args.items.len });
         return error.InvalidArity;
     }
-    const base = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[0], origin, options);
-    try ensureType(ir, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
+    const base = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[0], origin, options);
+    try ensureType(state, allocator, base, registry.queryInputType(query), origin, .UnmatchedInputType);
     for (query.extra_arg_types, 0..) |expected, extra_index| {
         const arg_index = 2 + extra_index;
         if (arg_index >= call.args.items.len) break;
-        const actual = try exprInfoWithOptions(allocator, ir, sema, env, call.args.items[arg_index], origin, options);
-        try ensureType(ir, allocator, actual, expected, origin, .UnmatchedArgumentType);
+        const actual = try exprInfoWithOptions(allocator, state, sema, env, call.args.items[arg_index], origin, options);
+        try ensureType(state, allocator, actual, expected, origin, .UnmatchedArgumentType);
     }
     var info = infoFromType(registry.queryOutputType(query));
     info.object_class = inferQueryOutputClass(sema, env, query, call, base);
@@ -1060,7 +1060,7 @@ fn inferObjectConstructorClass(sema: *const SemanticEnv, env: *const TypeEnv, ca
 }
 
 fn validateSetPropCall(
-    ir: *core.Context,
+    state: *core.DocumentState,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
@@ -1071,17 +1071,17 @@ fn validateSetPropCall(
         .string => |literal| literal.text,
         .hole => return,
         else => {
-            try addUserReport(ir, origin, "InvalidProperty: property key must be a known field literal", .{});
+            try addUserReport(state, origin, "InvalidProperty: property key must be a known field literal", .{});
             return error.InvalidType;
         },
     };
-    const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    const target_info = try exprInfo(state.allocator, state, sema, env, call.args.items[0], origin);
     if (target_info.hole != null) return;
     if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeInfoLabelAlloc(ir.allocator, target_info);
-        defer ir.allocator.free(actual_label);
+        const actual_label = try typeInfoLabelAlloc(state.allocator, target_info);
+        defer state.allocator.free(actual_label);
         try addUserReport(
-            ir,
+            state,
             origin,
             "InvalidProperty: set_prop target must be Document, Page, Object, or Selection<Object>; got {s}",
             .{actual_label},
@@ -1089,36 +1089,36 @@ fn validateSetPropCall(
         return error.InvalidType;
     }
 
-    const value_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[2], origin);
+    const value_info = try exprInfo(state.allocator, state, sema, env, call.args.items[2], origin);
     if (value_info.hole != null) return;
     if (value_info.ty.kind == .function) {
-        try addUserReport(ir, origin, "InvalidProperty: function values cannot be stored as properties", .{});
+        try addUserReport(state, origin, "InvalidProperty: function values cannot be stored as properties", .{});
         return error.InvalidType;
     }
     if (lookupFieldForTarget(sema, target_info, key)) |field| {
-        try validateFieldValue(ir, field, key, value_info, origin);
+        try validateFieldValue(state, field, key, value_info, origin);
         return;
     }
 
-    try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{key});
+    try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{key});
     return error.InvalidType;
 }
 
 fn validateExtendRenderEnvCall(
-    ir: *core.Context,
+    state: *core.DocumentState,
     call: ast.CallExpr,
     env: *const TypeEnv,
     sema: *const SemanticEnv,
     origin: []const u8,
 ) !void {
     if (call.args.items.len < 4) return;
-    const target_info = try exprInfo(ir.allocator, ir, sema, env, call.args.items[0], origin);
+    const target_info = try exprInfo(state.allocator, state, sema, env, call.args.items[0], origin);
     if (target_info.hole != null) return;
     if (!isPropertyTarget(target_info)) {
-        const actual_label = try typeInfoLabelAlloc(ir.allocator, target_info);
-        defer ir.allocator.free(actual_label);
+        const actual_label = try typeInfoLabelAlloc(state.allocator, target_info);
+        defer state.allocator.free(actual_label);
         try addUserReport(
-            ir,
+            state,
             origin,
             "InvalidRenderEnv: extend_render_env target must be Document, Page, Object, or Selection<Object>; got {s}",
             .{actual_label},
@@ -1130,7 +1130,7 @@ fn validateExtendRenderEnvCall(
     const key = resolveStringLiteral(env, call.args.items[2]);
     if (op) |literal| {
         if (!std.mem.eql(u8, literal, core.render_env.OpAdd)) {
-            try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
+            try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment op: {s}", .{literal});
             return error.InvalidType;
         }
     }
@@ -1138,18 +1138,18 @@ fn validateExtendRenderEnvCall(
         if (!std.mem.eql(u8, literal, core.render_env.KeyMathTexPreamble) and
             !std.mem.eql(u8, literal, core.render_env.KeyMathTexPreambleFile))
         {
-            try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
+            try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment key: {s}", .{literal});
             return error.InvalidType;
         }
     }
     if (op != null and key != null and !core.render_env.isSupported(op.?, key.?)) {
-        try addUserReport(ir, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
+        try addUserReport(state, origin, "InvalidRenderEnv: unsupported render environment operation", .{});
         return error.InvalidType;
     }
     if (key != null and core.render_env.isTexPreambleFileKey(key.?)) {
         if (resolveStringLiteral(env, call.args.items[3])) |path| {
             if (!core.render_env.isValidTexPreambleFilePath(path)) {
-                try addUserReport(ir, origin, "InvalidRenderEnv: empty TeX preamble file path", .{});
+                try addUserReport(state, origin, "InvalidRenderEnv: empty TeX preamble file path", .{});
                 return error.InvalidType;
             }
         }
@@ -1167,17 +1167,17 @@ fn lookupFieldForTarget(sema: *const SemanticEnv, target_info: TypeInfo, key: []
 }
 
 fn validateFieldValue(
-    ir: *core.Context,
+    state: *core.DocumentState,
     field: declarations.FieldDescriptor,
     key: []const u8,
     value_info: TypeInfo,
     origin: []const u8,
 ) !void {
-    return validateExpectedFieldValue(ir, field.value_type, key, value_info, origin);
+    return validateExpectedFieldValue(state, field.value_type, key, value_info, origin);
 }
 
 fn validateExpectedFieldValue(
-    ir: *core.Context,
+    state: *core.DocumentState,
     expected: Type,
     key: []const u8,
     value_info: TypeInfo,
@@ -1189,12 +1189,12 @@ fn validateExpectedFieldValue(
         .mismatch => {},
     }
     {
-        const expected_label = try expected.formatAlloc(ir.allocator);
-        defer ir.allocator.free(expected_label);
-        const actual_label = try typeInfoLabelAlloc(ir.allocator, value_info);
-        defer ir.allocator.free(actual_label);
+        const expected_label = try expected.formatAlloc(state.allocator);
+        defer state.allocator.free(expected_label);
+        const actual_label = try typeInfoLabelAlloc(state.allocator, value_info);
+        defer state.allocator.free(actual_label);
         try addUserReport(
-            ir,
+            state,
             origin,
             "InvalidFieldValue: field '{s}' expects {s}, got {s}",
             .{ key, expected_label, actual_label },
@@ -1205,7 +1205,7 @@ fn validateExpectedFieldValue(
 
 pub fn validatePropertySetStatement(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     target: ast.Expr,
@@ -1213,12 +1213,12 @@ pub fn validatePropertySetStatement(
     value: ast.Expr,
     origin: []const u8,
 ) !void {
-    return validatePropertySetStatementWithOptions(allocator, ir, sema, env, target, path, value, origin, .{});
+    return validatePropertySetStatementWithOptions(allocator, state, sema, env, target, path, value, origin, .{});
 }
 
 fn validatePropertySetStatementWithOptions(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     env: *const TypeEnv,
     target: ast.Expr,
@@ -1228,20 +1228,20 @@ fn validatePropertySetStatementWithOptions(
     options: InferenceOptions,
 ) !void {
     if (path.len == 0) return;
-    const object_info = try exprInfoWithOptions(allocator, ir, sema, env, target, origin, options);
+    const object_info = try exprInfoWithOptions(allocator, state, sema, env, target, origin, options);
     if (object_info.hole != null) return;
-    const value_info = try exprInfoWithOptions(allocator, ir, sema, env, value, origin, options);
+    const value_info = try exprInfoWithOptions(allocator, state, sema, env, value, origin, options);
     if (!options.validate_contracts) return;
     if (!isPropertyTarget(object_info)) {
-        try validateMemberTargetPropertySetPath(allocator, ir, sema, object_info, path, value_info, origin);
+        try validateMemberTargetPropertySetPath(allocator, state, sema, object_info, path, value_info, origin);
         return;
     }
-    try validatePropertySetPath(allocator, ir, sema, object_info, path, value_info, origin);
+    try validatePropertySetPath(allocator, state, sema, object_info, path, value_info, origin);
 }
 
 fn validatePropertySetPath(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     target_info: TypeInfo,
     path: []const ast.RecordPathSegment,
@@ -1249,7 +1249,7 @@ fn validatePropertySetPath(
     origin: []const u8,
 ) !void {
     if (path.len == 0) return;
-    if (ir) |sink| {
+    if (state) |sink| {
         const first = path[0];
         if (path.len == 1 and std.mem.eql(u8, first.name, "content")) {
             try ensureType(sink, allocator, value_info, Type.string, origin, .UnmatchedArgumentType);
@@ -1263,14 +1263,14 @@ fn validatePropertySetPath(
             try validateNestedPropertySetPath(allocator, sink, sema, path, field.value_type, value_info, origin);
             return;
         }
-        try addUserReport(ir, origin, "UnknownField: unknown field: {s}", .{first.name});
+        try addUserReport(state, origin, "UnknownField: unknown field: {s}", .{first.name});
         return error.InvalidType;
     }
 }
 
 fn memberPathPrefixInfo(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     initial_info: TypeInfo,
     path_prefix: []const ast.RecordPathSegment,
@@ -1280,14 +1280,14 @@ fn memberPathPrefixInfo(
     for (path_prefix) |segment| {
         if (segment.name_hole != null) return infoFromHole(segment.name_hole.?);
         if (current_info.hole != null) return current_info;
-        current_info = try inferMemberInfoFromTargetInfo(allocator, ir, sema, current_info, segment.name, origin);
+        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, origin);
     }
     return current_info;
 }
 
 fn validateMemberTargetPropertySetPath(
     allocator: std.mem.Allocator,
-    ir: ?*core.Context,
+    state: ?*core.DocumentState,
     sema: *const SemanticEnv,
     object_info: TypeInfo,
     path: []const ast.RecordPathSegment,
@@ -1298,22 +1298,22 @@ fn validateMemberTargetPropertySetPath(
     for (path, 0..) |segment, index| {
         if (current_info.hole != null) return;
         if (isPropertyTarget(current_info)) {
-            try validatePropertySetPath(allocator, ir, sema, current_info, path[index..], value_info, origin);
+            try validatePropertySetPath(allocator, state, sema, current_info, path[index..], value_info, origin);
             return;
         }
         if (segment.name_hole != null) return;
-        current_info = try inferMemberInfoFromTargetInfo(allocator, ir, sema, current_info, segment.name, origin);
+        current_info = try inferMemberInfoFromTargetInfo(allocator, state, sema, current_info, segment.name, origin);
     }
     if (current_info.hole != null) return;
     const actual_label = try typeInfoLabelAlloc(allocator, current_info);
     defer allocator.free(actual_label);
-    try addUserReport(ir, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
+    try addUserReport(state, origin, "InvalidProperty: property target must be Document, Page, Object, or Selection<Object>; got {s}", .{actual_label});
     return error.InvalidType;
 }
 
 fn validateNestedPropertySetPath(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     path: []const ast.RecordPathSegment,
     root_type: Type,
@@ -1325,23 +1325,23 @@ fn validateNestedPropertySetPath(
         defer allocator.free(path_text);
         const label = try typeLabelAlloc(allocator, root_type);
         defer allocator.free(label);
-        try addUserReport(ir, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+        try addUserReport(state, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
         return error.InvalidType;
     }
     var current_record_name = root_type.class_name orelse {
-        try addUserReport(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+        try addUserReport(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
         return error.InvalidType;
     };
     for (path[1..], 1..) |segment, index| {
         if (segment.name_hole != null) return;
         const field = sema.recordField(current_record_name, segment.name) orelse {
-            try addUserReport(ir, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
+            try addUserReport(state, origin, "UnknownRecordField: record type '{s}' has no field '{s}'", .{ current_record_name, segment.name });
             return error.InvalidType;
         };
         if (index + 1 == path.len) {
             const path_text = try ast.formatRecordPath(allocator, path[0 .. index + 1]);
             defer allocator.free(path_text);
-            try validateExpectedFieldValue(ir, field.value_type, path_text, value_info, origin);
+            try validateExpectedFieldValue(state, field.value_type, path_text, value_info, origin);
             return;
         }
         if (field.value_type.kind != .record) {
@@ -1349,11 +1349,11 @@ fn validateNestedPropertySetPath(
             defer allocator.free(path_text);
             const label = try typeLabelAlloc(allocator, field.value_type);
             defer allocator.free(label);
-            try addUserReport(ir, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
+            try addUserReport(state, origin, "InvalidRecordUpdatePath: field '{s}' is {s}, not a record", .{ path_text, label });
             return error.InvalidType;
         }
         current_record_name = field.value_type.class_name orelse {
-            try addUserReport(ir, origin, "InvalidRecordUpdatePath: record type has no name", .{});
+            try addUserReport(state, origin, "InvalidRecordUpdatePath: record type has no name", .{});
             return error.InvalidType;
         };
     }

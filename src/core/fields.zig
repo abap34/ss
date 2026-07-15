@@ -33,9 +33,9 @@ pub fn ReadResult(comptime as: ReadAs) type {
     };
 }
 
-pub fn get(allocator: std.mem.Allocator, ir: anytype, node: *const Node, key: []const u8) !?ValueSlot {
+pub fn get(allocator: std.mem.Allocator, state: anytype, node: *const Node, key: []const u8) !?ValueSlot {
     if (model.nodeField(node, key)) |found| return .{ .value = found };
-    return defaultValue(allocator, ir, node, key);
+    return defaultValue(allocator, state, node, key);
 }
 
 pub fn getWithEnv(allocator: std.mem.Allocator, node: *const Node, key: []const u8, sema: anytype) !?ValueSlot {
@@ -45,13 +45,13 @@ pub fn getWithEnv(allocator: std.mem.Allocator, node: *const Node, key: []const 
 
 pub fn read(
     allocator: std.mem.Allocator,
-    ir: anytype,
+    state: anytype,
     node: *const Node,
     key: []const u8,
     path: []const []const u8,
     comptime as: ReadAs,
 ) ?ReadResult(as) {
-    return readSlotPath(allocator, get(allocator, ir, node, key), path, as);
+    return readSlotPath(allocator, get(allocator, state, node, key), path, as);
 }
 
 pub fn readExplicit(
@@ -76,11 +76,11 @@ pub fn readWithEnv(
     return readSlotPath(allocator, getWithEnv(allocator, node, key, sema), path, as);
 }
 
-pub fn className(ir: anytype, node: *const Node) ?[]const u8 {
+pub fn className(state: anytype, node: *const Node) ?[]const u8 {
     return switch (node.kind) {
         .document => "Doc",
         .page => "PageContext",
-        .object => if (node.role) |role| roleClass(ir, role) else null,
+        .object => if (node.role) |role| roleClass(state, role) else null,
     };
 }
 
@@ -92,11 +92,11 @@ pub fn classNameWithEnv(node: *const Node, sema: anytype) ?[]const u8 {
     };
 }
 
-pub fn roleClass(ir: anytype, role_name: []const u8) ?[]const u8 {
-    var index = ir.module_order.items.len;
+pub fn roleClass(state: anytype, role_name: []const u8) ?[]const u8 {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.object_extensions.items) |extension| {
             for (extension.roles.items) |role| {
                 if (std.mem.eql(u8, role, role_name)) return extension.target;
@@ -111,9 +111,9 @@ pub fn roleClass(ir: anytype, role_name: []const u8) ?[]const u8 {
     return null;
 }
 
-fn defaultValue(allocator: std.mem.Allocator, ir: anytype, node: *const Node, key: []const u8) !?ValueSlot {
-    const class_name = className(ir, node) orelse return null;
-    const descriptor = fieldDescriptor(ir, class_name, key) orelse return null;
+fn defaultValue(allocator: std.mem.Allocator, state: anytype, node: *const Node, key: []const u8) !?ValueSlot {
+    const class_name = className(state, node) orelse return null;
+    const descriptor = fieldDescriptor(state, class_name, key) orelse return null;
     return try parseDefault(allocator, descriptor.default_property_value, descriptor.value_type);
 }
 
@@ -141,20 +141,20 @@ const FieldDescriptor = struct {
     value_type: ast.Type,
 };
 
-fn fieldDescriptor(ir: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+fn fieldDescriptor(state: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
     var current: ?[]const u8 = class_name;
     while (current) |name| {
-        if (fieldDescriptorInClass(ir, name, field_name)) |descriptor| return descriptor;
-        current = classBase(ir, name);
+        if (fieldDescriptorInClass(state, name, field_name)) |descriptor| return descriptor;
+        current = classBase(state, name);
     }
     return null;
 }
 
-fn fieldDescriptorInClass(ir: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
-    var index = ir.module_order.items.len;
+fn fieldDescriptorInClass(state: anytype, class_name: []const u8, field_name: []const u8) ?FieldDescriptor {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.object_extensions.items) |extension| {
             if (!std.mem.eql(u8, extension.target, class_name)) continue;
             for (extension.fields.items) |field| {
@@ -177,11 +177,11 @@ fn fieldDescriptorInClass(ir: anytype, class_name: []const u8, field_name: []con
     return null;
 }
 
-fn classBase(ir: anytype, class_name: []const u8) ?[]const u8 {
-    var index = ir.module_order.items.len;
+fn classBase(state: anytype, class_name: []const u8) ?[]const u8 {
+    var index = state.module_order.items.len;
     while (index > 0) {
         index -= 1;
-        const module = ir.moduleById(ir.module_order.items[index]) orelse continue;
+        const module = state.moduleById(state.module_order.items[index]) orelse continue;
         for (module.syntax.objects.items) |decl| {
             if (std.mem.eql(u8, decl.name, class_name)) return decl.base;
         }

@@ -25,10 +25,10 @@ pub const treeSitterHealthReport = native.treeSitterHealthReport;
 pub fn compileRenderIr(
     allocator: std.mem.Allocator,
     io: std.Io,
-    compiler_context: *core.Context,
+    state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     options: CompileOptions,
 ) !render.Ir {
     var compiler = native.Compiler{ .io = io, .options = options };
-    return try render_compile.document(allocator, compiler_context, pages, &compiler);
+    return try render_compile.document(allocator, state, pages, &compiler);
 }

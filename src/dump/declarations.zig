@@ -4,8 +4,8 @@ const core = @import("core");
 const declarations = @import("../language/declarations.zig");
 const json = @import("utils").json;
 
-pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, ir: *core.Context) !void {
-    var index = try declarations.build(allocator, ir);
+pub fn writeField(root: *json.Object, allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    var index = try declarations.build(allocator, state);
     defer index.deinit();
 
     var object = try root.objectField("declarations");

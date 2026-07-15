@@ -9,8 +9,8 @@ They intentionally assert:
 - surface syntax and parse diagnostics under `tests/syntax/parser/`;
 - language-level type and registry rules under `tests/language/type/` and
   `tests/language/registry/`;
-- compilation-context ownership and graph operations under
-  `tests/core/context/`;
+- document-state ownership and graph operations under
+  `tests/core/document_state/`;
 - page-local layout graph semantics, constraint classification, and axis state
   reconciliation under `tests/layout/graph/`;
 - rendering-IR ownership，document compilation，and PDF backend behavior under

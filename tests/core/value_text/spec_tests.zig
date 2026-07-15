@@ -22,12 +22,12 @@ test "core value text spec: tagged property value deinit frees duplicated names 
 }
 
 test "core value text spec: class default slots deinit tagged record property values" {
-    var ir = try initContextWithTaggedRecordDefault();
-    defer ir.deinit();
+    var state = try initDocumentStateWithTaggedRecordDefault();
+    defer state.deinit();
 
-    const document = ir.getNode(ir.document_id).?;
+    const document = state.getNode(state.document_id).?;
     for (0..16) |_| {
-        var slot = (try core.fields.get(testing.allocator, &ir, document, "style")).?;
+        var slot = (try core.fields.get(testing.allocator, &state, document, "style")).?;
         try testing.expect(slot.owned);
         try testing.expect(slot.owns_tagged_text);
         try testing.expectEqualStrings("TextStyle", slot.value.record.type_name);
@@ -37,7 +37,7 @@ test "core value text spec: class default slots deinit tagged record property va
     }
 }
 
-fn initContextWithTaggedRecordDefault() !core.Context {
+fn initDocumentStateWithTaggedRecordDefault() !core.DocumentState {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
@@ -62,11 +62,11 @@ fn initContextWithTaggedRecordDefault() !core.Context {
         .span = zeroSpan(),
     });
 
-    var ir = try core.Context.init(allocator, asset_base_dir, project_path, project_source, program);
+    var state = try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, program);
     program = ast.Module.init();
-    errdefer ir.deinit();
-    try ir.module_order.append(allocator, ir.project_module_id);
-    return ir;
+    errdefer state.deinit();
+    try state.module_order.append(allocator, state.project_module_id);
+    return state;
 }
 
 fn zeroSpan() ast.Span {

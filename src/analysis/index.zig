@@ -9,28 +9,28 @@ const utils = @import("utils");
 
 const SemanticEnv = semantic_env.SemanticEnv;
 
-pub fn populateContextAnalysis(allocator: std.mem.Allocator, ir: *core.Context) !void {
-    for (ir.modules.items) |module| {
+pub fn populateDocumentStateAnalysis(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    for (state.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromModule(allocator, module.source, module.syntax, module.id, module.path, false, &ir.definitions);
-        try collectModuleHints(allocator, ir, &ir.hints, module.source, module.path, module.syntax, module.id, &ir.functions);
+        try collectDefinitionsFromModule(allocator, module.source, module.syntax, module.id, module.path, false, &state.definitions);
+        try collectModuleHints(allocator, state, &state.hints, module.source, module.path, module.syntax, module.id, &state.functions);
     }
-    try collectDefinitionsFromModule(allocator, ir.projectSource(), ir.projectSyntax(), ir.project_module_id, null, true, &ir.definitions);
-    try collectModuleHints(allocator, ir, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectSyntax(), ir.project_module_id, &ir.functions);
+    try collectDefinitionsFromModule(allocator, state.projectSource(), state.projectSyntax(), state.project_module_id, null, true, &state.definitions);
+    try collectModuleHints(allocator, state, &state.hints, state.projectSource(), state.projectPath(), state.projectSyntax(), state.project_module_id, &state.functions);
 }
 
-pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Context) !void {
+pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
     var write_index: usize = 0;
-    for (ir.hints.items) |hint| {
+    for (state.hints.items) |hint| {
         if (hint.kind == .solved_frame) {
             allocator.free(hint.label);
             continue;
         }
-        ir.hints.items[write_index] = hint;
+        state.hints.items[write_index] = hint;
         write_index += 1;
     }
-    ir.hints.items.len = write_index;
-    try collectSolvedSizeHints(allocator, ir, &ir.hints);
+    state.hints.items.len = write_index;
+    try collectSolvedSizeHints(allocator, state, &state.hints);
 }
 
 fn collectDefinitionsFromModule(
@@ -150,7 +150,7 @@ fn putDefinition(
 
 fn collectModuleHints(
     allocator: std.mem.Allocator,
-    ir: *const core.Context,
+    state: *const core.DocumentState,
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
     source_path: ?[]const u8,
@@ -160,25 +160,25 @@ fn collectModuleHints(
 ) !void {
     for (program.functions.items) |func| {
         for (func.statements.items) |stmt| {
-            try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
+            try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, stmt);
         }
     }
     for (program.constants.items) |constant_decl| {
-        try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, constant_decl.span, constant_decl.value);
+        try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, constant_decl.span, constant_decl.value);
     }
     for (program.document_statements.items) |stmt| {
-        try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
+        try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, stmt);
     }
     for (program.pages.items) |page| {
         for (page.statements.items) |stmt| {
-            try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, stmt);
+            try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, stmt);
         }
     }
 }
 
 fn collectStatementHints(
     allocator: std.mem.Allocator,
-    ir: *const core.Context,
+    state: *const core.DocumentState,
     hints: *std.ArrayList(core.InlayHint),
     functions: *const core.FunctionMap,
     source: []const u8,
@@ -187,25 +187,25 @@ fn collectStatementHints(
     stmt: ast.Statement,
 ) !void {
     switch (stmt.kind) {
-        .let_binding => |binding| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
-        .return_expr => |expr| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, expr),
+        .let_binding => |binding| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, binding.expr),
+        .return_expr => |expr| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, expr),
         .property_set => |property_set| {
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, property_set.target);
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, property_set.value);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, property_set.target);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, property_set.value);
         },
         .if_stmt => |if_stmt| {
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
-            for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, nested);
-            for (if_stmt.else_statements.items) |nested| try collectStatementHints(allocator, ir, hints, functions, source, source_path, module_id, nested);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, if_stmt.condition);
+            for (if_stmt.then_statements.items) |nested| try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, nested);
+            for (if_stmt.else_statements.items) |nested| try collectStatementHints(allocator, state, hints, functions, source, source_path, module_id, nested);
         },
-        .expr_stmt => |expr| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, stmt.span, expr),
+        .expr_stmt => |expr| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, stmt.span, expr),
         else => {},
     }
 }
 
 fn collectExprHints(
     allocator: std.mem.Allocator,
-    ir: *const core.Context,
+    state: *const core.DocumentState,
     hints: *std.ArrayList(core.InlayHint),
     functions: *const core.FunctionMap,
     source: []const u8,
@@ -216,23 +216,23 @@ fn collectExprHints(
 ) !void {
     switch (expr) {
         .call => |call| {
-            try hintForCallExpr(allocator, ir, hints, functions, source, source_path, module_id, call);
-            for (call.args.items) |arg| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, arg);
+            try hintForCallExpr(allocator, state, hints, functions, source, source_path, module_id, call);
+            for (call.args.items) |arg| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, arg);
         },
         .apply => |apply| {
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, apply.callee.*);
-            for (apply.args.items) |arg| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, arg);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, apply.callee.*);
+            for (apply.args.items) |arg| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, arg);
         },
-        .lambda => |lambda| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, lambda.body.*),
+        .lambda => |lambda| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, lambda.body.*),
         .record_update => |update| {
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, update.target.*);
-            for (update.fields.items) |field| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, field.value);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, update.target.*);
+            for (update.fields.items) |field| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, field.value);
         },
-        .member => |member| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, member.target.*),
-        .optional_check => |check| try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, check.target.*),
+        .member => |member| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, member.target.*),
+        .optional_check => |check| try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, check.target.*),
         .coalesce => |coalesce| {
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, coalesce.target.*);
-            try collectExprHints(allocator, ir, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, coalesce.target.*);
+            try collectExprHints(allocator, state, hints, functions, source, source_path, module_id, span, coalesce.fallback.*);
         },
         else => {},
     }
@@ -240,7 +240,7 @@ fn collectExprHints(
 
 fn hintForCallExpr(
     allocator: std.mem.Allocator,
-    ir: *const core.Context,
+    state: *const core.DocumentState,
     hints: *std.ArrayList(core.InlayHint),
     functions: *const core.FunctionMap,
     source: []const u8,
@@ -250,7 +250,7 @@ fn hintForCallExpr(
 ) !void {
     if (call.args.items.len == 0) return;
     const hint_count = @min(call.args.items.len, call.arg_spans.items.len);
-    const sema = SemanticEnv.init(ir, null, functions).forModule(module_id);
+    const sema = SemanticEnv.init(state, null, functions).forModule(module_id);
     for (0..hint_count) |index| {
         const param_name = sema.callCalleeParamName(call.callee, index) orelse continue;
         const label = try std.fmt.allocPrint(allocator, "{s}:", .{param_name});
@@ -260,13 +260,13 @@ fn hintForCallExpr(
 
 fn collectSolvedSizeHints(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     hints: *std.ArrayList(core.InlayHint),
 ) !void {
     var best_by_origin = std.StringHashMap(core.NodeId).init(allocator);
     defer best_by_origin.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object or !node.attached) continue;
         const origin = node.origin orelse continue;
         if (node.role != null and std.mem.eql(u8, node.role.?, "panel")) continue;
@@ -280,8 +280,8 @@ fn collectSolvedSizeHints(
     var iterator = best_by_origin.iterator();
     while (iterator.next()) |entry| {
         const origin = utils.err.parseLocatedOrigin(entry.key_ptr.*) orelse continue;
-        const module = moduleForHintOrigin(ir, origin.path);
-        const node = ir.getNode(entry.value_ptr.*) orelse continue;
+        const module = moduleForHintOrigin(state, origin.path);
+        const node = state.getNode(entry.value_ptr.*) orelse continue;
         const label = try std.fmt.allocPrint(
             allocator,
             " x={d:.0} y={d:.0} w={d:.0} h={d:.0}",
@@ -291,13 +291,13 @@ fn collectSolvedSizeHints(
     }
 }
 
-fn moduleForHintOrigin(ir: *const core.Context, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
+fn moduleForHintOrigin(state: *const core.DocumentState, file: ?[]const u8) struct { id: core.SourceModuleId, source: []const u8, file: ?[]const u8 } {
     if (file) |origin_path| {
-        if (ir.moduleByPathOrSpec(origin_path)) |module| {
+        if (state.moduleByPathOrSpec(origin_path)) |module| {
             return .{ .id = module.id, .source = module.source, .file = module.path orelse origin_path };
         }
     }
-    return .{ .id = ir.project_module_id, .source = ir.projectSource(), .file = ir.projectPath() };
+    return .{ .id = state.project_module_id, .source = state.projectSource(), .file = state.projectPath() };
 }
 
 fn appendInlayHint(

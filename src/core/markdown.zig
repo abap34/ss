@@ -266,28 +266,28 @@ const ImageState = struct {
     src: []const u8,
 };
 
-pub fn parseModeForNode(ir: anytype, node: anytype) ParseMode {
-    if (fields.read(ir.allocator, ir, node, "text", &.{"parse"}, .text)) |mode| {
+pub fn parseModeForNode(state: anytype, node: anytype) ParseMode {
+    if (fields.read(state.allocator, state, node, "text", &.{"parse"}, .text)) |mode| {
         if (std.meta.stringToEnum(ParseMode, mode)) |parsed| return parsed;
     }
     return .@"inline";
 }
 
-pub fn shouldParseInlineNode(ir: anytype, node: anytype) bool {
-    return parseModeForNode(ir, node) != .none;
+pub fn shouldParseInlineNode(state: anytype, node: anytype) bool {
+    return parseModeForNode(state, node) != .none;
 }
 
-pub fn shouldParseBlocksNode(ir: anytype, node: anytype) bool {
-    return parseModeForNode(ir, node) == .block;
+pub fn shouldParseBlocksNode(state: anytype, node: anytype) bool {
+    return parseModeForNode(state, node) == .block;
 }
 
 pub fn parseMarkdownDocumentForNode(
     allocator: Allocator,
-    ir: anytype,
+    state: anytype,
     node: anytype,
     content: []const u8,
 ) !MarkdownDocument {
-    if (!shouldParseBlocksNode(ir, node)) {
+    if (!shouldParseBlocksNode(state, node)) {
         return MarkdownDocument.init(allocator);
     }
     return parseMarkdownContent(allocator, content);
@@ -331,14 +331,14 @@ pub fn parseMarkdownContent(
 
 pub fn parseTextLayoutForNode(
     allocator: Allocator,
-    ir: anytype,
+    state: anytype,
     node: anytype,
     content: []const u8,
 ) !TextLayout {
     var layout = TextLayout{};
     errdefer layout.deinit(allocator);
 
-    if (!shouldParseInlineNode(ir, node)) {
+    if (!shouldParseInlineNode(state, node)) {
         return layout;
     }
 

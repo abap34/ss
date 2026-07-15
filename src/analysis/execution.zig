@@ -56,8 +56,8 @@ pub const ExecutionGraph = struct {
 
     pub fn build(
         allocator: std.mem.Allocator,
-        context: *const core.Context,
-        diagnostic_context: *core.Context,
+        state: *const core.DocumentState,
+        diagnostic_state: *core.DocumentState,
         options: BuildOptions,
     ) !ExecutionGraph {
         var graph = ExecutionGraph{
@@ -72,25 +72,25 @@ pub const ExecutionGraph = struct {
         defer collected_modules.deinit();
         var run_cache = dependencies.RunCache.init(allocator);
         defer run_cache.deinit();
-        try run_cache.reserve(context);
+        try run_cache.reserve(state);
         var builder = GraphBuilder{
             .allocator = allocator,
-            .context = context,
-            .diagnostic_context = diagnostic_context,
-            .functions = &context.functions,
+            .state = state,
+            .diagnostic_state = diagnostic_state,
+            .functions = &state.functions,
             .units = &graph.units,
             .collected_modules = &collected_modules,
             .run_cache = &run_cache,
             .source_order = 0,
             .page_id_mode = options.page_id_mode,
         };
-        try builder.collectExecutionUnits(context.projectModule());
-        try validateExecutionUnits(diagnostic_context, graph.units.items);
+        try builder.collectExecutionUnits(state.projectModule());
+        try validateExecutionUnits(diagnostic_state, graph.units.items);
         try buildDependencyEdges(allocator, graph.units.items, &graph.edges);
         var cycle_hint: ?usize = null;
         graph.order = scheduleFromEdges(allocator, graph.units.items, graph.edges.items, &cycle_hint) catch |err| {
             if (err == error.ExecutionDependencyCycle and graph.units.items.len != 0) {
-                try addUnitErrorDiagnostic(diagnostic_context, graph.units.items[cycle_hint orelse 0], analysisErrorMessage(err));
+                try addUnitErrorDiagnostic(diagnostic_state, graph.units.items[cycle_hint orelse 0], analysisErrorMessage(err));
             }
             return err;
         };
@@ -105,15 +105,15 @@ pub const ExecutionGraph = struct {
     }
 };
 
-pub fn validateDependencies(allocator: std.mem.Allocator, ir: *core.Context) !void {
-    var graph = try ExecutionGraph.build(allocator, ir, ir, .{ .page_id_mode = .synthetic });
+pub fn validateDependencies(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    var graph = try ExecutionGraph.build(allocator, state, state, .{ .page_id_mode = .synthetic });
     defer graph.deinit();
 }
 
 const GraphBuilder = struct {
     allocator: std.mem.Allocator,
-    context: *const core.Context,
-    diagnostic_context: *core.Context,
+    state: *const core.DocumentState,
+    diagnostic_state: *core.DocumentState,
     functions: *const core.FunctionMap,
     units: *std.ArrayList(ExecutionUnit),
     collected_modules: *std.AutoHashMap(core.SourceModuleId, void),
@@ -139,7 +139,7 @@ const GraphBuilder = struct {
                 .import => |import_index| {
                     if (import_index >= module.resolved_import_ids.items.len) continue;
                     const import_id = module.resolved_import_ids.items[import_index];
-                    const imported = self.context.moduleById(import_id) orelse continue;
+                    const imported = self.state.moduleById(import_id) orelse continue;
                     try self.collectExecutionUnits(imported);
                 },
                 .document => |document_index| {
@@ -161,7 +161,7 @@ const GraphBuilder = struct {
         statement_start: usize,
         statement_count: usize,
     ) !void {
-        const sema = SemanticEnv.init(self.context, null, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.state, null, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .document = sema.module_id }, self.run_cache);
         defer analyzer.deinit();
         const statement_end = @min(statement_start + statement_count, module.syntax.document_statements.items.len);
@@ -193,7 +193,7 @@ const GraphBuilder = struct {
         page: ast.PageDecl,
     ) !void {
         const page_id = try self.nextPageId(page.name);
-        const sema = SemanticEnv.init(self.diagnostic_context, null, self.functions).forModule(module.id);
+        const sema = SemanticEnv.init(self.diagnostic_state, null, self.functions).forModule(module.id);
         var analyzer = dependencies.Analyzer.initWithScopeAndCache(self.allocator, &sema, .{ .page = page_id }, self.run_cache);
         defer analyzer.deinit();
         for (page.statements.items, 0..) |stmt, stmt_index| {
@@ -221,7 +221,7 @@ const GraphBuilder = struct {
 
     fn nextPageId(self: *GraphBuilder, name: []const u8) !core.NodeId {
         return switch (self.page_id_mode) {
-            .create => try self.diagnostic_context.addPage(name),
+            .create => try self.diagnostic_state.addPage(name),
             .synthetic => blk: {
                 const id = std.math.maxInt(core.NodeId) - self.synthetic_page_count;
                 self.synthetic_page_count += 1;
@@ -231,22 +231,22 @@ const GraphBuilder = struct {
     }
 };
 
-fn validateExecutionUnits(ir: *core.Context, units: []const ExecutionUnit) !void {
+fn validateExecutionUnits(state: *core.DocumentState, units: []const ExecutionUnit) !void {
     for (units) |unit| {
         if (unit.summary.invalid_selection_mutation) |invalid| {
             const message = "InvalidSelectionMutation: primitive callbacks must not add objects or pages to the selection being iterated";
-            try addUnitErrorDiagnostic(ir, unit, message);
+            try addUnitErrorDiagnostic(state, unit, message);
             _ = invalid;
             return error.InvalidSelectionMutation;
         }
         if (unit.summary.reads_layout and unit.summary.writes_layout_input) {
             const message = "LayoutDependencyCycle: layout reads cannot feed object creation, content, properties, or constraints because layout is solved once";
-            try addUnitErrorDiagnostic(ir, unit, message);
+            try addUnitErrorDiagnostic(state, unit, message);
             return error.LayoutDependencyCycle;
         }
         if (unit.summary.reads_layout) {
             const message = "PostLayoutComputationUnsupported: layout-reading scheduled computations are not implemented yet";
-            try addUnitErrorDiagnostic(ir, unit, message);
+            try addUnitErrorDiagnostic(state, unit, message);
             return error.PostLayoutComputationUnsupported;
         }
     }
@@ -620,14 +620,14 @@ fn addDependencyEdge(
     gop.value_ptr.* = edge_pos;
 }
 
-pub fn executionGraphJson(allocator: std.mem.Allocator, ir: *const core.Context, graph: *const ExecutionGraph) ![]u8 {
+pub fn executionGraphJson(allocator: std.mem.Allocator, state: *const core.DocumentState, graph: *const ExecutionGraph) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
     var root = try utils.json.Object.beginBuffer(allocator, &buffer);
     try root.intField("schema", 1);
     try root.stringField("kind", "ss-schedule-trace");
-    try root.stringField("entry_path", ir.projectPath());
+    try root.stringField("entry_path", state.projectPath());
 
     var units = try root.arrayField("units");
     for (graph.units.items, 0..) |unit, index| {
@@ -685,11 +685,11 @@ fn executionUnitSource(unit: ExecutionUnit) []const u8 {
     return std.mem.trim(u8, unit.source[unit.span.start..unit.span.end], " \t\r\n");
 }
 
-fn addUnitErrorDiagnostic(ir: *core.Context, unit: ExecutionUnit, message: []const u8) !void {
-    const origin = try unitOrigin(ir.allocator, unit);
-    defer ir.allocator.free(origin);
-    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try ir.allocator.dupe(u8, message) },
+fn addUnitErrorDiagnostic(state: *core.DocumentState, unit: ExecutionUnit, message: []const u8) !void {
+    const origin = try unitOrigin(state.allocator, unit);
+    defer state.allocator.free(origin);
+    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try state.allocator.dupe(u8, message) },
     });
 }
 

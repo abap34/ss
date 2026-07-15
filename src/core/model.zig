@@ -372,7 +372,7 @@ pub const LayoutMeasurementProvider = struct {
     context: *anyopaque,
     measure: *const fn (
         context: *anyopaque,
-        ir: *anyopaque,
+        state: *anyopaque,
         node: *const Node,
         width: f32,
         mode: LayoutMeasurementMode,

@@ -13,13 +13,13 @@ pub const Generator = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        ir: *const core.Context,
+        state: *const core.DocumentState,
         page: *const ast.PageDecl,
     ) !Generator {
-        const root_sema = SemanticEnv.init(ir, null, &ir.functions);
+        const root_sema = SemanticEnv.init(state, null, &state.functions);
         var generator = Generator{
             .allocator = allocator,
-            .sema = root_sema.forModule(ir.project_module_id),
+            .sema = root_sema.forModule(state.project_module_id),
             .reserved = std.StringHashMap(void).init(allocator),
             .statements = std.AutoHashMap(usize, []u8).init(allocator),
         };

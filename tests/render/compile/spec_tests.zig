@@ -14,7 +14,7 @@ const FakeCompiler = struct {
     pub fn prepare(
         self: *FakeCompiler,
         _: std.mem.Allocator,
-        _: *core.Context,
+        _: *core.DocumentState,
         _: *const core.prepared.PreparedPages,
     ) !void {
         self.prepare_count += 1;
@@ -23,7 +23,7 @@ const FakeCompiler = struct {
     pub fn compilePage(
         self: *FakeCompiler,
         allocator: std.mem.Allocator,
-        _: *core.Context,
+        _: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
     ) !render.Page {
         if (self.fail_at_index == prepared_page.index) return error.IntentionalCompileFailure;
@@ -52,7 +52,7 @@ const FakeCompiler = struct {
     }
 };
 
-fn initEmptyContext() !core.Context {
+fn initEmptyDocumentState() !core.DocumentState {
     const allocator = testing.allocator;
     const asset_base_dir = try allocator.dupe(u8, ".");
     errdefer allocator.free(asset_base_dir);
@@ -60,7 +60,7 @@ fn initEmptyContext() !core.Context {
     errdefer allocator.free(project_path);
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
-    return try core.Context.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
+    return try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
 fn preparedPage(page_id: core.NodeId, index: usize) core.prepared.PreparedPage {
@@ -75,8 +75,8 @@ fn preparedPage(page_id: core.NodeId, index: usize) core.prepared.PreparedPage {
 }
 
 test "render compiler prepares once and preserves page order" {
-    var context = try initEmptyContext();
-    defer context.deinit();
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
     var source_pages = [_]core.prepared.PreparedPage{
         preparedPage(10, 0),
         preparedPage(20, 1),
@@ -84,7 +84,7 @@ test "render compiler prepares once and preserves page order" {
     const prepared_pages = core.prepared.PreparedPages{ .pages = &source_pages };
     var compiler = FakeCompiler{};
 
-    var result = try render_compile.document(testing.allocator, &context, &prepared_pages, &compiler);
+    var result = try render_compile.document(testing.allocator, &state, &prepared_pages, &compiler);
     defer result.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 1), compiler.prepare_count);
@@ -95,8 +95,8 @@ test "render compiler prepares once and preserves page order" {
 }
 
 test "render compiler releases completed pages after a later failure" {
-    var context = try initEmptyContext();
-    defer context.deinit();
+    var state = try initEmptyDocumentState();
+    defer state.deinit();
     var source_pages = [_]core.prepared.PreparedPage{
         preparedPage(10, 0),
         preparedPage(20, 1),
@@ -106,7 +106,7 @@ test "render compiler releases completed pages after a later failure" {
 
     try testing.expectError(
         error.IntentionalCompileFailure,
-        render_compile.document(testing.allocator, &context, &prepared_pages, &compiler),
+        render_compile.document(testing.allocator, &state, &prepared_pages, &compiler),
     );
     try testing.expectEqual(@as(usize, 1), compiler.page_count);
 }
