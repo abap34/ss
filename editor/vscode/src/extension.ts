@@ -2,22 +2,22 @@ import * as vscode from "vscode";
 import { LanguageClient, LanguageClientOptions, Middleware, ServerOptions, Trace } from "vscode-languageclient/node";
 import { PageGuideDecorations } from "./pageGuide";
 import { projectSettings } from "./projectConfig";
-import { RenderController } from "./renderController";
+import { EditorController } from "./editor/controller";
 
 let client: LanguageClient | undefined;
 let pageGuide: PageGuideDecorations | undefined;
-let renderController: RenderController | undefined;
+let editorController: EditorController | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel("ss");
   outputChannel = output;
   pageGuide = new PageGuideDecorations();
-  renderController = new RenderController(context, output, () => client);
+  editorController = new EditorController(context, output, () => client);
 
-  context.subscriptions.push(output, pageGuide, renderController);
-  context.subscriptions.push(vscode.commands.registerCommand("ss.preview.live", () => {
-    renderController?.openPreview(vscode.window.activeTextEditor?.document);
+  context.subscriptions.push(output, pageGuide, editorController);
+  context.subscriptions.push(vscode.commands.registerCommand("ss.editor.open", () => {
+    editorController?.open(vscode.window.activeTextEditor?.document);
   }));
   context.subscriptions.push(vscode.commands.registerCommand("ss.checkCurrentFile", async () => {
     const document = vscode.window.activeTextEditor?.document;
@@ -41,8 +41,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export async function deactivate(): Promise<void> {
   pageGuide?.dispose();
   pageGuide = undefined;
-  renderController?.dispose();
-  renderController = undefined;
+  editorController?.dispose();
+  editorController = undefined;
   await stopLanguageClient();
   outputChannel = undefined;
 }
@@ -56,7 +56,7 @@ async function restartLanguageClient(context: vscode.ExtensionContext): Promise<
   client = active;
   context.subscriptions.push(active);
   await active.start();
-  renderController?.refreshOpenDocuments(0);
+  editorController?.refreshOpenDocuments(0);
 }
 
 async function stopLanguageClient(): Promise<void> {

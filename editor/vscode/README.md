@@ -45,22 +45,12 @@ enabled = true
 arguments = true
 positions = true
 
-[editor.preview]
+[editor.wysiwyg]
 enabled = true
-debounce = 350
-open = "vscode"
-reveal = true
+debounce = 140
 
-[editor.preview.refresh]
-save = true
+[editor.wysiwyg.refresh]
 dependency = true
-
-[editor.preview.render]
-timeout = 30000
-extra_args = []
-
-[editor.preview.path]
-output = ".ss-cache/vscode-preview"
 
 [editor.page_guide]
 enabled = true
@@ -95,32 +85,20 @@ Add this to your workspace settings:
 }
 ```
 
-## Live Preview
+## WYSIWYG Editor
 
-Live preview renders saved project files. Normal LSP diagnostics continue to use
-open editor buffers, but PDF output and render-phase diagnostics update from the
-files on disk when the deck or a dependency is saved or changed. This covers
-backend errors such as TeX math rendering failures. Opening or closing the PDF
-preview only controls the viewer; render diagnostics continue to use the normal
-editor refresh settings.
+Run `ss: Open WYSIWYG Editor` from the command palette or the editor title
+button. The editor uses the open VS Code buffers through the language server, so
+unsaved source edits are reflected after the configured debounce interval.
 
-Run `ss: Open Live Preview` from the command palette or the editor title button.
-The preview asks the language server for `ss/projectInfo` and refreshes a PDF
-with:
+The editor displays the drawing scene used by the native PDF renderer together
+with the compiler's page structure and anchor relations. Pages and the document
+outline are available from the activity rail. Use Single page or Continuous in
+the toolbar to switch page presentation. Selecting an object opens its bounds
+and constraints in the bottom sheet.
 
-```sh
-ss render <project-entry> .ss-cache/vscode-preview/<file>.pdf --asset-base-dir <project-asset-base> --cache-id <project-entry>
-```
-
-With the default `[editor.preview].open = "vscode"`, the extension opens its own
-PDF.js webview. The webview loads a loopback viewer page, and the extension
-serves the generated PDF plus the bundled PDF.js assets from that local server
-while the preview is open. Later renders update the registered PDF and send a
-refresh message to the viewer, preserving the current page, zoom, and scroll
-position where possible. Set `[editor.preview].open` to `external` in `ss.toml`
-to open the generated PDF in the operating system's PDF application:
-
-```toml
-[editor.preview]
-open = "external"
-```
+Objects backed by a binding in the current page can be dragged. A normal drag
+replaces the page-local position constraints with page-relative `left` and
+`top` constraints. Shift-drag keeps existing horizontal and vertical anchor
+relations and changes their offsets. The language server recompiles the proposed
+source before returning the workspace edit.
