@@ -27,6 +27,7 @@ const webviewCheckOptions = {
   format: "esm",
   platform: "browser",
   target: "chrome120",
+  external: ["../../out/render/pdf.js", "../../out/pdfjs/pdf.mjs"],
 };
 
 function typecheck() {
@@ -48,10 +49,30 @@ function copySchemaAssets() {
   );
 }
 
+function copyRenderAssets() {
+  const pdfjsRoot = path.join(outDir, "pdfjs");
+  const renderRoot = path.join(outDir, "render");
+  fs.mkdirSync(pdfjsRoot, { recursive: true });
+  fs.mkdirSync(renderRoot, { recursive: true });
+  fs.copyFileSync(
+    path.join(repoRoot, "third_party", "pdfjs", "pdf.mjs"),
+    path.join(pdfjsRoot, "pdf.mjs"),
+  );
+  fs.copyFileSync(
+    path.join(repoRoot, "third_party", "pdfjs", "pdf.worker.mjs"),
+    path.join(pdfjsRoot, "pdf.worker.mjs"),
+  );
+  fs.copyFileSync(
+    path.join(repoRoot, "src", "render", "html", "pdf.js"),
+    path.join(renderRoot, "pdf.js"),
+  );
+}
+
 async function main() {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
   copySchemaAssets();
+  copyRenderAssets();
 
   if (watch) {
     const context = await esbuild.context(buildOptions);

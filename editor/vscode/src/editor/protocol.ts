@@ -86,91 +86,18 @@ export interface SourceLocation {
 }
 
 export interface DisplaySnapshot {
-  schema: 1;
-  pages: DisplayPage[];
+  schema: 2;
+  html: string;
+  css: string;
+  has_pdf: boolean;
+  assets: DisplayAsset[];
 }
 
-export interface DisplayPage {
-  page_id: number;
-  index: number;
-  width: number;
-  height: number;
-  items: DisplayItem[];
-}
-
-export type DisplayItem = FillRect | StrokeLine | RoundedRect | TextItem | ResourceItem | MathItem | PdfPageItem;
-
-interface NodeItem {
-  node_id?: number | null;
-}
-
-export interface FillRect extends NodeItem, Rect {
-  type: "fill_rect";
-  color: Color;
-}
-
-export interface StrokeLine extends NodeItem {
-  type: "stroke_line";
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  line_width: number;
-  dash_on: number;
-  dash_off: number;
-  color: Color;
-}
-
-export interface RoundedRect extends NodeItem, Rect {
-  type: "rounded_rect";
-  radius: number;
-  line_width: number;
-  fill: Color | null;
-  stroke: Color | null;
-}
-
-export interface TextItem extends NodeItem {
-  type: "text";
-  x: number;
-  baseline_y: number;
-  width: number;
-  text: string;
-  font_family: string;
-  font_weight: number;
-  font_style: string;
-  font_stretch: string;
-  font_size: number;
-  wrap: boolean;
-  preserve_color_glyphs: boolean;
-  color: Color;
-}
-
-export interface ResourceItem extends NodeItem, Rect {
-  type: "raster" | "svg";
+export interface DisplayAsset {
+  kind: "font" | "raster" | "svg" | "pdf" | "math_pdf";
   resource_id: string;
+  relative_path: string;
   path: string;
-  uri?: string;
-  tint?: Color | null;
-}
-
-export interface PdfPageItem extends NodeItem, Rect {
-  type: "pdf_page";
-  resource_id: string;
-  path: string;
-  uri?: string;
-  page_index: number;
-  box: string;
-  copy_annotations: boolean;
-}
-
-export interface MathItem extends NodeItem, Rect {
-  type: "math";
-  math_tree_id: number;
-  resource_id: string;
-  path: string;
-  uri?: string;
-  page_index: number;
-  box: string;
 }
 
 export interface Rect {
@@ -179,8 +106,6 @@ export interface Rect {
   width: number;
   height: number;
 }
-
-export type Color = [number, number, number];
 
 export interface OutlineItem {
   id: number;

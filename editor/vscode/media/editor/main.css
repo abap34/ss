@@ -478,56 +478,17 @@ button {
   overflow: hidden;
   pointer-events: none;
 }
-.scene-canvas {
+.scene-page {
   position: absolute;
   top: 0;
   left: 0;
   overflow: hidden;
-  transform: scale(var(--scene-scale, 1));
+  box-shadow: none;
+  transform: scale(calc(var(--scene-scale, 1) * 0.75));
   transform-origin: 0 0;
-}
-.scene-node {
-  position: absolute;
-  inset: 0;
-  transform-origin: 0 0;
-}
-.scene-box, .scene-line, .scene-text, .scene-image, .scene-pdf-placeholder,
-.pdf-resource {
-  position: absolute;
-  box-sizing: border-box;
-}
-.scene-line {
-  transform-origin: 0 0;
-}
-.scene-text {
-  white-space: pre;
-}
-.scene-image {
-  display: block;
-  object-fit: fill;
-}
-.scene-pdf-placeholder {
-  border: 1px solid #93a59f;
-  background: #eef2ef;
 }
 .interaction-layer {
   overflow: visible;
-}
-.pdf-resource {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  pointer-events: none;
-}
-.tinted-svg-resource {
-  width: 100%;
-  height: 100%;
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-size: 100% 100%;
-  mask-size: 100% 100%;
 }
 .page-caption {
   position: absolute;

@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("ast");
 const core = @import("core");
 const render = @import("render");
+const render_html = @import("../render/html.zig");
 const utils = @import("utils");
 
 const json = utils.json;
@@ -16,11 +17,13 @@ pub fn toJson(
     generation: u64,
 ) ![]u8 {
     try render_ir.validate();
-    var published_assets = try assets.publish(allocator, io, render_ir, ".ss-cache/render");
+    var fragment = try render_html.prepareFragment(allocator, render_ir);
+    defer fragment.deinit(allocator);
+    var published_assets = try assets.publish(allocator, io, &fragment, ".ss-cache/render");
     defer published_assets.deinit(allocator);
     const layout_json = try core.layout.conflicts.toJson(allocator, state);
     defer allocator.free(layout_json);
-    const display_json = try displayJson(allocator, render_ir, &published_assets);
+    const display_json = try displayJson(allocator, &fragment, &published_assets);
     defer allocator.free(display_json);
     const outline_json = try outlineJson(allocator, state);
     defer allocator.free(outline_json);
@@ -83,123 +86,27 @@ fn sourcePathsJson(allocator: std.mem.Allocator, state: *const core.DocumentStat
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn displayJson(allocator: std.mem.Allocator, render_ir: *const render.Ir, published_assets: *const assets.Set) ![]u8 {
+fn displayJson(allocator: std.mem.Allocator, fragment: *const render_html.Fragment, published_assets: *const assets.Set) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var root = try json.Object.beginBuffer(allocator, &buffer);
-    try root.intField("schema", 1);
-    var pages = try root.arrayField("pages");
-    for (render_ir.pages) |*page| {
-        var page_object = try pages.objectItem();
-        try page_object.intField("page_id", page.page_id);
-        try page_object.intField("index", page.index + 1);
-        try page_object.floatField("width", page.width, "{d:.4}");
-        try page_object.floatField("height", page.height, "{d:.4}");
-        var items = try page_object.arrayField("items");
-        for (page.items.items) |item| try appendItem(&items, item, published_assets);
-        try items.end();
-        try page_object.end();
+    try root.intField("schema", 2);
+    try root.stringField("html", fragment.html);
+    try root.stringField("css", fragment.css);
+    try root.boolField("has_pdf", fragment.assets.has_pdf);
+    var asset_values = try root.arrayField("assets");
+    for (published_assets.assets) |asset| {
+        var value = try asset_values.objectItem();
+        try value.stringField("kind", @tagName(asset.kind));
+        const hex = std.fmt.bytesToHex(asset.resource_id, .lower);
+        try value.stringField("resource_id", &hex);
+        try value.stringField("relative_path", asset.relative_path);
+        try value.stringField("path", asset.path);
+        try value.end();
     }
-    try pages.end();
+    try asset_values.end();
     try root.end();
     return try buffer.toOwnedSlice(allocator);
-}
-
-fn appendItem(items: *json.Array, item: render.Item, published_assets: *const assets.Set) !void {
-    var object = try items.objectItem();
-    try object.stringField("type", @tagName(item));
-    try object.optionalIntField("node_id", item.nodeId());
-    switch (item) {
-        .fill_rect => |value| {
-            try appendRect(&object, value.rect);
-            try appendColor(&object, "color", value.color);
-        },
-        .stroke_line => |value| {
-            try object.floatField("x1", value.start.x, "{d:.4}");
-            try object.floatField("y1", value.start.y, "{d:.4}");
-            try object.floatField("x2", value.end.x, "{d:.4}");
-            try object.floatField("y2", value.end.y, "{d:.4}");
-            try object.floatField("line_width", value.line_width, "{d:.4}");
-            try object.floatField("dash_on", value.dash_on, "{d:.4}");
-            try object.floatField("dash_off", value.dash_off, "{d:.4}");
-            try appendColor(&object, "color", value.color);
-        },
-        .rounded_rect => |value| {
-            try appendRect(&object, value.rect);
-            try object.floatField("radius", value.radius, "{d:.4}");
-            try object.floatField("line_width", value.line_width, "{d:.4}");
-            try appendOptionalColor(&object, "fill", value.fill);
-            try appendOptionalColor(&object, "stroke", value.stroke);
-        },
-        .text => |value| {
-            try object.floatField("x", value.x, "{d:.4}");
-            try object.floatField("baseline_y", value.baselineY(), "{d:.4}");
-            try object.floatField("width", value.width, "{d:.4}");
-            try object.stringField("text", value.layout.source_text);
-            try object.stringField("font_family", if (value.layout.runs.len == 0) "" else value.layout.runs[0].font_family);
-            try object.intField("font_weight", value.font_weight);
-            try object.enumTagField("font_style", value.font_style);
-            try object.enumTagField("font_stretch", value.font_stretch);
-            try object.floatField("font_size", value.font_size, "{d:.4}");
-            try object.boolField("wrap", value.wrap);
-            try object.boolField("preserve_color_glyphs", value.preserve_color_glyphs);
-            try appendColor(&object, "color", value.color);
-        },
-        .raster => |value| {
-            try appendRect(&object, value.rect);
-            try appendResource(&object, published_assets, value.resource);
-        },
-        .svg => |value| {
-            try appendRect(&object, value.rect);
-            try appendResource(&object, published_assets, value.resource);
-            try appendOptionalColor(&object, "tint", value.tint);
-        },
-        .math => |value| {
-            try appendRect(&object, value.rect);
-            try object.intField("math_tree_id", value.tree);
-            try appendResource(&object, published_assets, value.pdf_resource);
-            try object.intField("page_index", value.page_index);
-            try object.enumTagField("box", value.box);
-        },
-        .pdf_page => |value| {
-            try appendRect(&object, value.rect);
-            try appendResource(&object, published_assets, value.resource);
-            try object.intField("page_index", value.page_index);
-            try object.enumTagField("box", value.box);
-            try object.boolField("copy_annotations", value.copy_annotations);
-        },
-    }
-    try object.end();
-}
-
-fn appendResourceId(object: *json.Object, id: render.ResourceId) !void {
-    const hex = std.fmt.bytesToHex(id, .lower);
-    try object.stringField("resource_id", &hex);
-}
-
-fn appendResource(object: *json.Object, published_assets: *const assets.Set, id: render.ResourceId) !void {
-    try appendResourceId(object, id);
-    try object.stringField("path", published_assets.path(id) orelse return error.MissingEditorAsset);
-}
-
-fn appendRect(object: *json.Object, rect: render.Rect) !void {
-    try object.floatField("x", rect.x, "{d:.4}");
-    try object.floatField("y", rect.y, "{d:.4}");
-    try object.floatField("width", rect.width, "{d:.4}");
-    try object.floatField("height", rect.height, "{d:.4}");
-}
-
-fn appendColor(object: *json.Object, name: []const u8, color: core.render_policy.Color) !void {
-    var value = try object.arrayField(name);
-    try value.floatItem(color.r, "{d:.6}");
-    try value.floatItem(color.g, "{d:.6}");
-    try value.floatItem(color.b, "{d:.6}");
-    try value.end();
-}
-
-fn appendOptionalColor(object: *json.Object, name: []const u8, color: ?core.render_policy.Color) !void {
-    if (color) |value| return appendColor(object, name, value);
-    try object.nullField(name);
 }
 
 fn outlineJson(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
