@@ -1,4 +1,4 @@
-import { element } from "./dom.js";
+import { element, setAttributes, svgElement } from "./dom.js";
 import { formatNumber, previewFrame } from "./geometry.js";
 
 export function renderObjectSheet(state, object, actions) {
@@ -9,15 +9,15 @@ export function renderObjectSheet(state, object, actions) {
   const sheet = element("section", "object-sheet");
   sheet.setAttribute("aria-label", "Object details");
   sheet.append(
-    heading(object, actions.close),
+    heading(object, actions),
     bounds(frame),
     relations(state, object),
-    actionArea(state, object, actions.revealSource),
+    actionArea(state, object),
   );
   return sheet;
 }
 
-function heading(object, closeSheet) {
+function heading(object, actions) {
   const container = element("div", "sheet-heading");
   const title = element("div");
   const eyebrow = element("small");
@@ -25,12 +25,15 @@ function heading(object, closeSheet) {
   const name = element("strong");
   name.textContent = object.role || object.name || `Object ${object.id}`;
   title.append(eyebrow, name);
-  const close = element("button");
+  const close = element("button", "close-button");
   close.type = "button";
   close.textContent = "×";
   close.setAttribute("aria-label", "Close details");
-  close.addEventListener("click", closeSheet);
+  close.addEventListener("click", actions.close);
   container.append(title, close);
+  if (object.location?.path) {
+    container.append(sourceButton(object, actions.revealSource));
+  }
   return container;
 }
 
@@ -98,22 +101,42 @@ function setPageIconRatio(icon, page) {
   );
 }
 
-function actionArea(state, object, revealSource) {
-  const actions = element("div", "sheet-actions");
+function actionArea(state, object) {
+  const container = element("div", "sheet-actions");
   const editable = isMovable(state, object.id);
   const moveState = element("span", editable ? "movable" : "locked");
   moveState.textContent = editable
     ? "Drag to edit · Shift keeps relations"
     : "Generated position";
-  actions.append(moveState);
-  if (object.location?.path) {
-    const source = element("button");
-    source.type = "button";
-    source.textContent = "Reveal source";
-    source.addEventListener("click", () => revealSource(object));
-    actions.append(source);
-  }
-  return actions;
+  container.append(moveState);
+  return container;
+}
+
+function sourceButton(object, revealSource) {
+  const source = element("button", "source-button");
+  source.type = "button";
+  source.append(editorIcon(), document.createTextNode("Open in Editor"));
+  source.addEventListener("click", () => revealSource(object));
+  return source;
+}
+
+function editorIcon() {
+  const icon = svgElement("svg", "source-icon");
+  setAttributes(icon, {
+    viewBox: "0 0 16 16",
+    fill: "none",
+    "aria-hidden": "true",
+  });
+  const path = svgElement("path");
+  setAttributes(path, {
+    d: "M5.25 3.75 2.5 8l2.75 4.25M10.75 3.75 13.5 8l-2.75 4.25M9.25 2.5l-2.5 11",
+    stroke: "currentColor",
+    "stroke-width": "1.35",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+  });
+  icon.append(path);
+  return icon;
 }
 
 function bound(label, value) {

@@ -1,11 +1,23 @@
 import { element } from "./dom.js";
 import { renderScene } from "./scene.js";
 
-export function renderActivityRail(state, toggleSidebar) {
+export function renderActivityRail(state, actions) {
   const rail = element("nav", "activity-rail");
   rail.setAttribute("aria-label", "Sidebar views");
-  rail.append(activityButton(state, "pages", "Pages", toggleSidebar));
-  rail.append(activityButton(state, "outline", "Outline", toggleSidebar));
+  rail.append(activityButton(state, "pages", "Pages", actions.toggleSidebar));
+  rail.append(
+    activityButton(state, "outline", "Outline", actions.toggleSidebar),
+  );
+  const theme = element("button", "activity-theme");
+  const nextTheme = state.theme === "dark" ? "light" : "dark";
+  theme.type = "button";
+  theme.title = `Use ${nextTheme} theme`;
+  theme.setAttribute("aria-label", theme.title);
+  theme.append(
+    element("span", `activity-icon activity-icon--theme-${nextTheme}`),
+  );
+  theme.addEventListener("click", actions.toggleTheme);
+  rail.append(theme);
   return rail;
 }
 

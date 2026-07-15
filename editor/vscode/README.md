@@ -94,8 +94,10 @@ unsaved source edits are reflected after the configured debounce interval.
 The editor displays the drawing scene used by the native PDF renderer together
 with the compiler's page structure and anchor relations. Pages and the document
 outline are available from the activity rail. Use Single page or Continuous in
-the toolbar to switch page presentation. Selecting an object opens its bounds
-and constraints in the bottom sheet.
+the toolbar to switch page presentation. The theme button at the bottom of the
+activity rail switches between the light and dark editor themes. Selecting an
+object opens its bounds and constraints in the bottom sheet. Open in Editor
+reveals the existing source tab when one is already open.
 
 Objects backed by a binding in the current page can be dragged. A normal drag
 replaces the page-local position constraints with page-relative `left` and

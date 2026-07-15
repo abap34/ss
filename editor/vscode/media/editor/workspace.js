@@ -3,8 +3,8 @@ import { renderObjectSheet } from "./details.js";
 import { InteractionController } from "./interaction.js";
 import { renderScene } from "./scene.js";
 
-const rulerSize = 18;
-const singlePageMargin = 24;
+const rulerSize = 26;
+const singlePageMargin = 32;
 
 export class WorkspaceView {
   constructor(state, actions) {
@@ -62,21 +62,6 @@ export class WorkspaceView {
       this.modeButton("single", "Single page"),
       this.modeButton("continuous", "Continuous"),
     );
-    const constraints = element(
-      "button",
-      `toolbar-button${this.state.constraints ? " is-active" : ""}`,
-    );
-    constraints.type = "button";
-    constraints.textContent = "Constraints";
-    constraints.setAttribute("aria-pressed", String(this.state.constraints));
-    constraints.addEventListener("click", () => {
-      this.state.constraints = !this.state.constraints;
-      this.actions.render();
-    });
-    const fit = element("button", "toolbar-button");
-    fit.type = "button";
-    fit.textContent = "Fit";
-    fit.addEventListener("click", () => this.updateScale());
     const spacer = element("span", "toolbar-spacer");
     const sync = element("span", `sync sync--${this.state.sync.state}`);
     sync.dataset.sync = "true";
@@ -84,7 +69,7 @@ export class WorkspaceView {
     const syncLabel = element("span");
     syncLabel.textContent = this.state.sync.label;
     sync.append(syncLabel);
-    bar.append(modes, constraints, spacer, fit, sync);
+    bar.append(modes, spacer, sync);
     return bar;
   }
 
@@ -108,7 +93,6 @@ export class WorkspaceView {
     shell.dataset.pageId = String(page.id);
     shell.dataset.pageWidth = String(page.width);
     shell.dataset.pageHeight = String(page.height);
-    shell.append(element("div", "ruler-corner"));
     shell.append(this.ruler("horizontal", page.width));
     shell.append(this.ruler("vertical", page.height));
     const surface = element("div", "page-surface");
@@ -134,7 +118,7 @@ export class WorkspaceView {
       const percent = `${(value / extent) * 100}%`;
       if (axis === "horizontal") tick.style.left = percent;
       else tick.style.top = percent;
-      if (major) {
+      if (value !== 0) {
         const label = element("small");
         label.textContent = String(value);
         tick.append(label);

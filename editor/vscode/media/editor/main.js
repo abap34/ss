@@ -1,18 +1,23 @@
 import { element } from "./dom.js";
+import { EditorNavigation } from "./navigation.js";
 import { renderActivityRail, renderSidebar } from "./sidebar.js";
 import { WorkspaceView } from "./workspace.js";
 
 const vscode = acquireVsCodeApi();
+const persistedState = vscode.getState() || {};
 const state = {
   snapshot: null,
   sidebar: "pages",
   mode: "single",
   currentPageId: null,
   selectedObjectId: null,
-  constraints: true,
+  theme: persistedState.theme === "light" || persistedState.theme === "dark"
+    ? persistedState.theme
+    : initialTheme(),
   sync: { state: "working", label: "Starting…" },
 };
 const app = document.getElementById("app");
+document.documentElement.dataset.theme = state.theme;
 
 const actions = {
   post: (message) => vscode.postMessage(message),
@@ -21,6 +26,7 @@ const actions = {
   selectObject,
   selectPage,
 };
+const navigation = new EditorNavigation(state);
 const workspace = new WorkspaceView(state, actions);
 const resizeObserver = new ResizeObserver(() => workspace.updateScale());
 
@@ -42,27 +48,25 @@ function acceptSnapshot(message) {
   state.sync = state.snapshot.stale
     ? { state: "error", label: "Showing last valid layout" }
     : { state: "ok", label: `Synced · ${message.duration} ms` };
-  const pages = state.snapshot.layout.pages || [];
-  if (!pages.some((page) => page.id === state.currentPageId)) {
-    state.currentPageId = pages[0]?.id ?? null;
-  }
-  const objects = state.snapshot.layout.objects || [];
-  if (!objects.some((object) => object.id === state.selectedObjectId)) {
-    state.selectedObjectId = null;
-  }
+  navigation.reconcile(state.snapshot);
   render();
 }
 
 function render() {
+  navigation.rememberViewport(workspace.viewport);
   resizeObserver.disconnect();
   app.replaceChildren();
   const shell = element("div", "editor-shell");
-  shell.append(renderActivityRail(state, toggleSidebar));
+  shell.append(renderActivityRail(state, { toggleSidebar, toggleTheme }));
   if (state.sidebar) shell.append(renderSidebar(state, actions));
   shell.append(workspace.render());
   app.append(shell);
+  navigation.restoreViewport(workspace.viewport);
   if (workspace.viewport) resizeObserver.observe(workspace.viewport);
-  requestAnimationFrame(() => workspace.updateScale());
+  requestAnimationFrame(() => {
+    workspace.updateScale();
+    navigation.restoreViewport(workspace.viewport);
+  });
 }
 
 function toggleSidebar(view) {
@@ -70,9 +74,15 @@ function toggleSidebar(view) {
   render();
 }
 
+function toggleTheme() {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = state.theme;
+  vscode.setState({ ...persistedState, theme: state.theme });
+  render();
+}
+
 function selectPage(pageId) {
-  state.currentPageId = pageId;
-  if (state.mode === "single") state.selectedObjectId = null;
+  if (!navigation.selectPage(pageId)) return;
   render();
   if (state.mode === "continuous") {
     requestAnimationFrame(() => {
@@ -83,9 +93,15 @@ function selectPage(pageId) {
 }
 
 function selectObject(objectId, pageId, rerender = true) {
-  state.selectedObjectId = objectId;
-  state.currentPageId = pageId;
+  const result = navigation.selectObject(objectId, pageId);
+  if (!result.selected) return;
   if (rerender) render();
+  if (rerender && result.pageChanged && state.mode === "continuous") {
+    requestAnimationFrame(() => {
+      app.querySelector(`.page-shell[data-page-id="${pageId}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
 }
 
 function revealSource(object) {
@@ -96,6 +112,13 @@ function revealSource(object) {
     start: object.location.start,
     end: object.location.end,
   });
+}
+
+function initialTheme() {
+  return document.body.classList.contains("vscode-light") ||
+      document.body.classList.contains("vscode-high-contrast-light")
+    ? "light"
+    : "dark";
 }
 
 render();
