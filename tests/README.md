@@ -9,9 +9,12 @@ They intentionally assert:
 - surface syntax and parse diagnostics under `tests/syntax/parser/`;
 - language-level type and registry rules under `tests/language/type/` and
   `tests/language/registry/`;
-- IR ownership and graph operations under `tests/core/ir/`;
+- compilation-context ownership and graph operations under
+  `tests/core/context/`;
 - page-local layout graph semantics, constraint classification, and axis state
   reconciliation under `tests/layout/graph/`;
+- rendering-IR ownership，document compilation，and PDF backend behavior under
+  `tests/render/ir/`，`tests/render/compile/`，and `tests/render/pdf/`;
 - compiler, project, render, LSP, watch, and utility contracts under their
   matching subsystem and topic directories;
 - smoke-check acceptance for stdlib, themes, and demo decks through
