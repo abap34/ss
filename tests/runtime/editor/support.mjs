@@ -16,7 +16,7 @@ export async function editorSnapshot(client, uri) {
     snapshot.display?.pages?.some((page) =>
       page.items.some((item) => item.type === "text")
     ),
-    "snapshot omitted text drawing commands",
+    `snapshot omitted text drawing commands: ${JSON.stringify(snapshot)}`,
   );
   return snapshot;
 }

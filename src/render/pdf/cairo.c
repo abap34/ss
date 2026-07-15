@@ -1,6 +1,7 @@
 #include "backend.h"
 
 #include <cairo-pdf.h>
+#include <cairo-ft.h>
 #include <cairo.h>
 #include <fontconfig/fontconfig.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -8,10 +9,14 @@
 #include <hb.h>
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
+#include <pango/pangofc-font.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #define SS_PI 3.14159265358979323846
 
@@ -55,6 +60,21 @@ static int ss_pdf_surface_ink_extents(cairo_surface_t *surface, SsPdfInkExtents 
 
 static void ss_pdf_set_rgb(double r, double g, double b, cairo_t *cr) {
     cairo_set_source_rgb(cr, r, g, b);
+}
+
+typedef struct SsFtFaceData {
+    FT_Library library;
+    FT_Face face;
+} SsFtFaceData;
+
+static cairo_user_data_key_t ss_ft_face_data_key;
+
+static void ss_ft_face_data_destroy(void *opaque) {
+    SsFtFaceData *data = (SsFtFaceData *)opaque;
+    if (data == NULL) return;
+    if (data->face != NULL) FT_Done_Face(data->face);
+    if (data->library != NULL) FT_Done_FreeType(data->library);
+    free(data);
 }
 
 const char *ss_pdf_cairo_version_string(void) {
@@ -491,6 +511,93 @@ int ss_pdf_draw_text_baseline(
     return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
+int ss_pdf_draw_glyph_run(
+    SsPdf *pdf,
+    const char *font_path,
+    long font_index,
+    double font_size,
+    double r,
+    double g,
+    double b,
+    const char *utf8,
+    int utf8_length,
+    const SsReplayGlyph *glyphs,
+    int glyph_count,
+    const SsReplayCluster *clusters,
+    int cluster_count,
+    int backward
+) {
+    if (pdf == NULL || pdf->cr == NULL || font_path == NULL || utf8 == NULL || utf8_length < 0 ||
+        glyph_count < 0 || cluster_count < 0 || font_size <= 0) return 1;
+
+    FT_Library library = NULL;
+    FT_Face face = NULL;
+    cairo_font_face_t *cairo_face = NULL;
+    cairo_glyph_t *cairo_glyphs = NULL;
+    cairo_text_cluster_t *cairo_clusters = NULL;
+    SsFtFaceData *face_data = NULL;
+    int result = 1;
+
+    if (FT_Init_FreeType(&library) != 0) goto cleanup;
+    if (FT_New_Face(library, font_path, font_index, &face) != 0) goto cleanup;
+    cairo_face = cairo_ft_font_face_create_for_ft_face(face, 0);
+    if (cairo_face == NULL || cairo_font_face_status(cairo_face) != CAIRO_STATUS_SUCCESS) goto cleanup;
+    face_data = (SsFtFaceData *)calloc(1, sizeof(SsFtFaceData));
+    if (face_data == NULL) goto cleanup;
+    face_data->library = library;
+    face_data->face = face;
+    if (cairo_font_face_set_user_data(cairo_face, &ss_ft_face_data_key, face_data, ss_ft_face_data_destroy) != CAIRO_STATUS_SUCCESS) {
+        goto cleanup;
+    }
+    face_data = NULL;
+    library = NULL;
+    face = NULL;
+
+    if (glyph_count > 0) {
+        cairo_glyphs = cairo_glyph_allocate(glyph_count);
+        if (cairo_glyphs == NULL) goto cleanup;
+        for (int index = 0; index < glyph_count; index++) {
+            cairo_glyphs[index].index = glyphs[index].id;
+            cairo_glyphs[index].x = glyphs[index].x;
+            cairo_glyphs[index].y = glyphs[index].y;
+        }
+    }
+    if (cluster_count > 0) {
+        cairo_clusters = cairo_text_cluster_allocate(cluster_count);
+        if (cairo_clusters == NULL) goto cleanup;
+        for (int index = 0; index < cluster_count; index++) {
+            cairo_clusters[index].num_bytes = clusters[index].bytes;
+            cairo_clusters[index].num_glyphs = clusters[index].glyphs;
+        }
+    }
+
+    cairo_save(pdf->cr);
+    cairo_set_font_face(pdf->cr, cairo_face);
+    cairo_set_font_size(pdf->cr, font_size);
+    ss_pdf_set_rgb(r, g, b, pdf->cr);
+    cairo_show_text_glyphs(
+        pdf->cr,
+        utf8,
+        utf8_length,
+        cairo_glyphs,
+        glyph_count,
+        cairo_clusters,
+        cluster_count,
+        backward ? CAIRO_TEXT_CLUSTER_FLAG_BACKWARD : 0
+    );
+    cairo_restore(pdf->cr);
+    result = cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
+
+cleanup:
+    if (cairo_clusters != NULL) cairo_text_cluster_free(cairo_clusters);
+    if (cairo_glyphs != NULL) cairo_glyph_free(cairo_glyphs);
+    if (cairo_face != NULL) cairo_font_face_destroy(cairo_face);
+    if (face_data != NULL) free(face_data);
+    if (face != NULL) FT_Done_Face(face);
+    if (library != NULL) FT_Done_FreeType(library);
+    return result;
+}
+
 int ss_pdf_draw_color_text_baseline(
     SsPdf *pdf,
     double x,
@@ -620,6 +727,234 @@ static cairo_t *ss_text_measure_context(void) {
     return cr;
 }
 
+static GMutex ss_text_context_mutex;
+
+static SsPdfInkExtents ss_pango_extents(PangoRectangle rect) {
+    SsPdfInkExtents result;
+    result.x = ((double)rect.x) / PANGO_SCALE;
+    result.y = ((double)rect.y) / PANGO_SCALE;
+    result.width = ((double)rect.width) / PANGO_SCALE;
+    result.height = ((double)rect.height) / PANGO_SCALE;
+    return result;
+}
+
+static char *ss_font_family_copy(PangoFont *font) {
+    if (font == NULL) return g_strdup("");
+    PangoFontDescription *description = pango_font_describe(font);
+    if (description == NULL) return g_strdup("");
+    const char *family = pango_font_description_get_family(description);
+    char *result = g_strdup(family != NULL ? family : "");
+    pango_font_description_free(description);
+    return result;
+}
+
+static void ss_font_source_copy(PangoFont *font, char **path_out, unsigned int *index_out, char **postscript_name_out) {
+    *path_out = g_strdup("");
+    *index_out = 0;
+    *postscript_name_out = g_strdup("");
+    if (font == NULL) return;
+    FcPattern *owned_match = NULL;
+    FcPattern *pattern = NULL;
+    if (PANGO_IS_FC_FONT(font)) {
+        pattern = pango_fc_font_get_pattern(PANGO_FC_FONT(font));
+    }
+    if (pattern == NULL) {
+        PangoFontDescription *description = pango_font_describe(font);
+        const char *family = description != NULL ? pango_font_description_get_family(description) : NULL;
+        FcPattern *query = FcPatternCreate();
+        if (query != NULL) {
+            if (family != NULL) FcPatternAddString(query, FC_FAMILY, (const FcChar8 *)family);
+            if (description != NULL) {
+                FcPatternAddInteger(query, FC_WEIGHT, FcWeightFromOpenTypeDouble((double)pango_font_description_get_weight(description)));
+                const PangoStyle style = pango_font_description_get_style(description);
+                FcPatternAddInteger(query, FC_SLANT, style == PANGO_STYLE_NORMAL ? FC_SLANT_ROMAN : (style == PANGO_STYLE_ITALIC ? FC_SLANT_ITALIC : FC_SLANT_OBLIQUE));
+            }
+            FcConfigSubstitute(NULL, query, FcMatchPattern);
+            FcDefaultSubstitute(query);
+            FcResult result = FcResultNoMatch;
+            owned_match = FcFontMatch(NULL, query, &result);
+            FcPatternDestroy(query);
+            pattern = owned_match;
+        }
+        if (description != NULL) pango_font_description_free(description);
+    }
+    if (pattern != NULL) {
+        FcChar8 *path = NULL;
+        int index = 0;
+        FcChar8 *postscript_name = NULL;
+        if (FcPatternGetString(pattern, FC_FILE, 0, &path) == FcResultMatch && path != NULL) {
+            g_free(*path_out);
+            *path_out = g_strdup((const char *)path);
+        }
+        if (FcPatternGetInteger(pattern, FC_INDEX, 0, &index) == FcResultMatch && index >= 0) {
+            *index_out = (unsigned int)index;
+        }
+        if (FcPatternGetString(pattern, FC_POSTSCRIPT_NAME, 0, &postscript_name) == FcResultMatch && postscript_name != NULL) {
+            g_free(*postscript_name_out);
+            *postscript_name_out = g_strdup((const char *)postscript_name);
+        }
+    }
+    if (owned_match != NULL) FcPatternDestroy(owned_match);
+}
+
+void ss_text_shape_free(SsTextShape *shape) {
+    if (shape == NULL) return;
+    if (shape->runs != NULL) {
+        for (size_t index = 0; index < shape->run_count; index++) {
+            g_free(shape->runs[index].font_family);
+            g_free(shape->runs[index].font_path);
+            g_free(shape->runs[index].font_postscript_name);
+        }
+    }
+    free(shape->lines);
+    free(shape->runs);
+    free(shape->glyphs);
+    memset(shape, 0, sizeof(*shape));
+}
+
+int ss_text_shape(
+    const char *text,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
+    double font_size,
+    double width,
+    int wrap,
+    SsTextShape *shape
+) {
+    if (text == NULL || shape == NULL || font_size <= 0) return 1;
+    memset(shape, 0, sizeof(*shape));
+    g_mutex_lock(&ss_text_context_mutex);
+    cairo_t *cr = ss_text_measure_context();
+    if (cr == NULL) {
+        g_mutex_unlock(&ss_text_context_mutex);
+        return 1;
+    }
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    if (layout == NULL) {
+        g_mutex_unlock(&ss_text_context_mutex);
+        return 1;
+    }
+    PangoFontDescription *description = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
+    if (description == NULL) {
+        g_object_unref(layout);
+        g_mutex_unlock(&ss_text_context_mutex);
+        return 1;
+    }
+    pango_layout_set_font_description(layout, description);
+    pango_font_description_free(description);
+    char *valid_text = g_utf8_make_valid(text, -1);
+    if (valid_text == NULL) {
+        g_object_unref(layout);
+        g_mutex_unlock(&ss_text_context_mutex);
+        return 1;
+    }
+    pango_layout_set_text(layout, valid_text, -1);
+    if (wrap && width > 0) {
+        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
+        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    } else {
+        pango_layout_set_width(layout, -1);
+    }
+
+    const int line_count = pango_layout_get_line_count(layout);
+    size_t run_count = 0;
+    size_t glyph_count = 0;
+    for (int line_index = 0; line_index < line_count; line_index++) {
+        PangoLayoutLine *line = pango_layout_get_line_readonly(layout, line_index);
+        if (line == NULL) continue;
+        for (GSList *entry = line->runs; entry != NULL; entry = entry->next) {
+            PangoGlyphItem *item = (PangoGlyphItem *)entry->data;
+            if (item == NULL || item->glyphs == NULL) continue;
+            run_count++;
+            glyph_count += (size_t)item->glyphs->num_glyphs;
+        }
+    }
+    shape->lines = (SsTextLine *)calloc((size_t)line_count, sizeof(SsTextLine));
+    shape->runs = (SsTextRun *)calloc(run_count, sizeof(SsTextRun));
+    shape->glyphs = (SsTextGlyph *)calloc(glyph_count, sizeof(SsTextGlyph));
+    if ((line_count > 0 && shape->lines == NULL) || (run_count > 0 && shape->runs == NULL) ||
+        (glyph_count > 0 && shape->glyphs == NULL)) {
+        g_free(valid_text);
+        g_object_unref(layout);
+        g_mutex_unlock(&ss_text_context_mutex);
+        ss_text_shape_free(shape);
+        return 1;
+    }
+    shape->line_count = (size_t)line_count;
+    shape->run_count = run_count;
+    shape->glyph_count = glyph_count;
+    PangoRectangle layout_ink = {0};
+    PangoRectangle layout_logical = {0};
+    pango_layout_get_extents(layout, &layout_ink, &layout_logical);
+    shape->ink_bounds = ss_pango_extents(layout_ink);
+    shape->logical_bounds = ss_pango_extents(layout_logical);
+
+    size_t next_run = 0;
+    size_t next_glyph = 0;
+    PangoLayoutIter *iterator = pango_layout_get_iter(layout);
+    if (iterator == NULL) {
+        g_free(valid_text);
+        g_object_unref(layout);
+        g_mutex_unlock(&ss_text_context_mutex);
+        ss_text_shape_free(shape);
+        return 1;
+    }
+    for (int line_index = 0; line_index < line_count; line_index++) {
+        PangoLayoutLine *line = pango_layout_iter_get_line_readonly(iterator);
+        SsTextLine *output_line = &shape->lines[line_index];
+        PangoRectangle line_ink = {0};
+        PangoRectangle line_logical = {0};
+        pango_layout_iter_get_line_extents(iterator, &line_ink, &line_logical);
+        output_line->source_start = line != NULL ? (size_t)line->start_index : 0;
+        output_line->source_end = line != NULL ? (size_t)(line->start_index + line->length) : 0;
+        output_line->run_start = next_run;
+        output_line->baseline_y = ((double)pango_layout_iter_get_baseline(iterator)) / PANGO_SCALE;
+        output_line->logical_bounds = ss_pango_extents(line_logical);
+        output_line->ink_bounds = ss_pango_extents(line_ink);
+        if (line != NULL) {
+            double visual_x = 0;
+            for (GSList *entry = line->runs; entry != NULL; entry = entry->next) {
+                PangoGlyphItem *glyph_item = (PangoGlyphItem *)entry->data;
+                if (glyph_item == NULL || glyph_item->item == NULL || glyph_item->glyphs == NULL) continue;
+                PangoItem *item = glyph_item->item;
+                PangoGlyphString *glyphs = glyph_item->glyphs;
+                SsTextRun *run = &shape->runs[next_run++];
+                run->source_start = (size_t)item->offset;
+                run->source_end = (size_t)(item->offset + item->length);
+                run->glyph_start = next_glyph;
+                run->glyph_count = (size_t)glyphs->num_glyphs;
+                run->x = visual_x;
+                run->baseline_y = output_line->baseline_y;
+                run->font_family = ss_font_family_copy(item->analysis.font);
+                ss_font_source_copy(item->analysis.font, &run->font_path, &run->font_index, &run->font_postscript_name);
+                double advance = 0;
+                for (int glyph_index = 0; glyph_index < glyphs->num_glyphs; glyph_index++) {
+                    PangoGlyphInfo info = glyphs->glyphs[glyph_index];
+                    SsTextGlyph *glyph = &shape->glyphs[next_glyph++];
+                    glyph->id = info.glyph;
+                    glyph->source_index = (unsigned int)(item->offset + glyphs->log_clusters[glyph_index]);
+                    glyph->offset_x = ((double)info.geometry.x_offset) / PANGO_SCALE;
+                    glyph->offset_y = ((double)info.geometry.y_offset) / PANGO_SCALE;
+                    glyph->advance_x = ((double)info.geometry.width) / PANGO_SCALE;
+                    glyph->advance_y = 0;
+                    advance += glyph->advance_x;
+                }
+                run->advance = advance;
+                visual_x += advance;
+            }
+        }
+        output_line->run_count = next_run - output_line->run_start;
+        if (line_index + 1 < line_count) pango_layout_iter_next_line(iterator);
+    }
+    pango_layout_iter_free(iterator);
+    g_free(valid_text);
+    g_object_unref(layout);
+    g_mutex_unlock(&ss_text_context_mutex);
+    return 0;
+}
+
 double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
     if (pdf == NULL || pdf->cr == NULL) return 0.0;
     return ss_measure_text_on_cairo(pdf->cr, text, font_family, font_weight, font_style, font_stretch, font_size, 0);
@@ -631,18 +966,16 @@ double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char
 }
 
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    static GMutex measure_mutex;
-    g_mutex_lock(&measure_mutex);
+    g_mutex_lock(&ss_text_context_mutex);
     const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 0);
-    g_mutex_unlock(&measure_mutex);
+    g_mutex_unlock(&ss_text_context_mutex);
     return width;
 }
 
 double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size) {
-    static GMutex measure_mutex;
-    g_mutex_lock(&measure_mutex);
+    g_mutex_lock(&ss_text_context_mutex);
     const double width = ss_measure_text_on_cairo(ss_text_measure_context(), text, font_family, font_weight, font_style, font_stretch, font_size, 1);
-    g_mutex_unlock(&measure_mutex);
+    g_mutex_unlock(&ss_text_context_mutex);
     return width;
 }
 

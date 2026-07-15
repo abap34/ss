@@ -25,6 +25,8 @@ const FakeCompiler = struct {
         allocator: std.mem.Allocator,
         _: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
+        _: *render.ResourceBuilder,
+        _: *render.MathBuilder,
     ) !render.Page {
         if (self.fail_at_index == prepared_page.index) return error.IntentionalCompileFailure;
         self.page_count += 1;

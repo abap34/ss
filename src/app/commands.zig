@@ -2,6 +2,8 @@ const std = @import("std");
 const core = @import("core");
 const lowering = @import("../lowering.zig");
 const render_layout = @import("../render/layout.zig");
+const render_pdf = @import("../render/pdf.zig");
+const render_html = @import("../render/html.zig");
 const dump = @import("../dump.zig");
 const utils = @import("utils");
 
@@ -141,11 +143,62 @@ pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: types.PdfWrit
     defer pages.deinit(state.allocator);
     pages_errdefer_active = false;
     progress.begin("Render PDF");
-    const pdf_data = try app_output.renderPdfOrPrintDiagnostics(allocator, io, &state, &pages, &layouts, request.options.render, progress, request.options.diagnostics_json_path);
-    defer allocator.free(pdf_data);
+    var ir = render_pdf.compileRenderIr(state.allocator, io, &state, &pages, .{
+        .cache_dir = request.options.render.cache_dir,
+        .highlight_languages = request.options.render.highlight_languages,
+    }) catch |err| {
+        progress.endStatusLine();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
+        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, request.options.diagnostics_json_path);
+        if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
+        return err;
+    };
+    defer ir.deinit(state.allocator);
+    progress.step("Compile rendering IR");
+    try app_output.writePdfOrPrintDiagnostics(allocator, io, &state, &ir, request.output_path, request.options.render, progress, request.options.diagnostics_json_path);
     try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, request.options.diagnostics_json_path);
     try utils.render_cache.pruneFromEnv(io, allocator);
     progress.step("Render PDF");
-    try utils.fs.writeFile(io, request.output_path, pdf_data);
-    progress.step("Write output");
+}
+
+pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: types.HtmlWriteRequest, progress: *Progress) !void {
+    var analyzed = try pipeline.analyzeFile(io, allocator, request.source, progress, .evaluation);
+    var analyzed_active = true;
+    errdefer if (analyzed_active) analyzed.deinit();
+    try pipeline.evaluateDocument(&analyzed.state, analyzed.executionGraph(), progress);
+    var pages = try pipeline.preparePages(&analyzed.state, progress);
+    const prepared_allocator = analyzed.state.allocator;
+    var pages_errdefer_active = true;
+    errdefer if (pages_errdefer_active) pages.deinit(prepared_allocator);
+    var layouts = pipeline.solveLayouts(io, &analyzed.state, &pages, progress, request.source.layout_jobs) catch |err| {
+        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &analyzed.state, request.options.diagnostics_json_path);
+        return err;
+    };
+    var layouts_errdefer_active = true;
+    errdefer if (layouts_errdefer_active) layouts.deinit(prepared_allocator);
+    var state = analyzed.takeState();
+    analyzed_active = false;
+    defer state.deinit();
+    defer layouts.deinit(state.allocator);
+    layouts_errdefer_active = false;
+    defer pages.deinit(state.allocator);
+    pages_errdefer_active = false;
+
+    progress.begin("Render HTML");
+    var ir = render_pdf.compileRenderIr(state.allocator, io, &state, &pages, .{
+        .cache_dir = request.options.render.cache_dir,
+        .highlight_languages = request.options.render.highlight_languages,
+    }) catch |err| {
+        progress.endStatusLine();
+        error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), &state);
+        try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, request.options.diagnostics_json_path);
+        if (error_report.hasDocumentStateErrors(&state)) return error.DiagnosticsFailed;
+        return err;
+    };
+    defer ir.deinit(state.allocator);
+    progress.step("Compile rendering IR");
+    try render_html.write(allocator, io, &ir, request.output_directory, request.options.html);
+    progress.step("Write HTML bundle");
+    try app_output.writeDiagnosticsJsonIfRequested(io, allocator, &state, request.options.diagnostics_json_path);
+    try utils.render_cache.pruneFromEnv(io, allocator);
 }

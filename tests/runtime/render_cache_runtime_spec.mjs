@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { assert, ssBin } from "./harness.mjs";
@@ -25,13 +25,12 @@ async function testRenderCacheGenerations() {
     await assertPathMissing(path.join(cacheRoot, "pages"), "top-level page cache directory should not be created");
     await assertPathMissing(path.join(cacheRoot, "chunks"), "top-level chunk cache directory should not be created");
 
-    const firstGeneration = await singleGeneration(cacheRoot);
-    const firstManifest = await readManifest(firstGeneration.path);
-    const firstPages = await pdfFiles(path.join(firstGeneration.path, "pages"));
+    const contentCache = path.join(cacheRoot, "render-ir-v1");
+    const firstPages = await pdfFiles(path.join(contentCache, "pages"));
     assert(firstPages.length === firstPagesSource.length, `expected ${firstPagesSource.length} cached page PDFs, got ${firstPages.length}`);
-    await assertPdfFile(path.join(firstGeneration.path, "document.pdf"), "generation should cache assembled PDF");
-    const firstChunks = await pdfFiles(path.join(firstGeneration.path, "chunks"));
-    assert(firstChunks.length >= 2, `expected chunk PDFs for incremental assembly, got ${firstChunks.length}`);
+    const firstDocuments = await pdfFiles(path.join(contentCache, "documents"));
+    assert(firstDocuments.length === 1, `expected one cached document PDF, got ${firstDocuments.length}`);
+    await assertPdfFile(path.join(contentCache, "documents", firstDocuments[0]), "first render should cache the assembled PDF");
 
     const secondPagesSource = [...firstPagesSource];
     secondPagesSource[7] = "Changed page 8";
@@ -40,15 +39,17 @@ async function testRenderCacheGenerations() {
     const secondRun = await runSs(["render", "slide.ss", "out-2.pdf", "--cache-id", "stable-deck"], project);
     assert(secondRun.stderr.includes("pages 17/18"), `rerender did not report mixed page cache hits and misses:\n${secondRun.stderr}`);
 
-    const secondGeneration = await singleGeneration(cacheRoot);
-    assert(secondGeneration.name !== firstGeneration.name, "second render should publish a fresh generation");
-    const secondManifest = await readManifest(secondGeneration.path);
-    assertExactlyOnePageHashChanged(firstManifest.pageHashes, secondManifest.pageHashes, 7);
-    const secondPages = await pdfFiles(path.join(secondGeneration.path, "pages"));
-    assert(secondPages.length === secondPagesSource.length, `expected ${secondPagesSource.length} cached page PDFs after rerender, got ${secondPages.length}`);
-    await assertPdfFile(path.join(secondGeneration.path, "document.pdf"), "rerender should cache assembled PDF");
-    const secondChunks = await pdfFiles(path.join(secondGeneration.path, "chunks"));
-    assert(secondChunks.length >= 2, `expected chunk PDFs after rerender, got ${secondChunks.length}`);
+    const secondPages = await pdfFiles(path.join(contentCache, "pages"));
+    assertAddedFiles(firstPages, secondPages, 1, "changing one page should add exactly one page cache entry");
+    const secondDocuments = await pdfFiles(path.join(contentCache, "documents"));
+    assertAddedFiles(firstDocuments, secondDocuments, 1, "changing one page should add exactly one document cache entry");
+
+    const pageStats = await fileStats(path.join(contentCache, "pages"), secondPages);
+    const documentStats = await fileStats(path.join(contentCache, "documents"), secondDocuments);
+    const thirdRun = await runSs(["render", "slide.ss", "out-3.pdf", "--cache-id", "stable-deck"], project);
+    assert(thirdRun.stderr.includes("pages 18/18"), `identical rerender did not report a full document cache hit:\n${thirdRun.stderr}`);
+    assertFileSetUnchanged(pageStats, await fileStats(path.join(contentCache, "pages"), await pdfFiles(path.join(contentCache, "pages"))), "identical rerender changed page cache entries");
+    assertFileSetUnchanged(documentStats, await fileStats(path.join(contentCache, "documents"), await pdfFiles(path.join(contentCache, "documents"))), "identical rerender changed document cache entries");
   } finally {
     await rm(project, { recursive: true, force: true });
   }
@@ -186,40 +187,31 @@ async function spawnCollect(command, args, cwd, options = {}) {
   });
 }
 
-async function singleGeneration(cacheRoot) {
-  const decks = await readdir(path.join(cacheRoot, "decks"), { withFileTypes: true });
-  const deckDirs = decks.filter((entry) => entry.isDirectory());
-  assert(deckDirs.length === 1, `expected one deck cache, got ${deckDirs.map((entry) => entry.name).join(", ")}`);
-
-  const generationsRoot = path.join(cacheRoot, "decks", deckDirs[0].name, "generations");
-  const entries = await readdir(generationsRoot, { withFileTypes: true });
-  const generations = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith(".building-"));
-  assert(generations.length === 1, `expected one published generation, got ${generations.map((entry) => entry.name).join(", ")}`);
-  return {
-    name: generations[0].name,
-    path: path.join(generationsRoot, generations[0].name),
-  };
-}
-
 async function pdfFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
-  return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".pdf"));
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".pdf"))
+    .map((entry) => entry.name)
+    .sort();
 }
 
-async function readManifest(generationPath) {
-  return JSON.parse(await readFile(path.join(generationPath, "manifest.json"), "utf8"));
+function assertAddedFiles(first, second, expected, message) {
+  const firstSet = new Set(first);
+  const added = second.filter((file) => !firstSet.has(file));
+  assert(second.length === first.length + expected && added.length === expected, `${message}; added ${added.join(", ")}`);
 }
 
-function assertExactlyOnePageHashChanged(first, second, changedIndex) {
-  assert(first.length === second.length, `page hash count changed from ${first.length} to ${second.length}`);
-  const changed = [];
-  for (let index = 0; index < first.length; index += 1) {
-    if (first[index] !== second[index]) changed.push(index);
+async function fileStats(directory, files) {
+  return new Map(await Promise.all(files.map(async (file) => [file, await fileStatSignature(path.join(directory, file))])));
+}
+
+function assertFileSetUnchanged(first, second, message) {
+  assert(first.size === second.size, `${message}; file count changed from ${first.size} to ${second.size}`);
+  for (const [file, firstStat] of first) {
+    const secondStat = second.get(file);
+    assert(secondStat, `${message}; ${file} disappeared`);
+    assertFileStatUnchanged(firstStat, secondStat, `${message}; ${file}`);
   }
-  assert(
-    changed.length === 1 && changed[0] === changedIndex,
-    `expected only page ${changedIndex + 1} hash to change, got ${changed.map((index) => index + 1).join(", ")}`,
-  );
 }
 
 async function fileStatSignature(filePath) {

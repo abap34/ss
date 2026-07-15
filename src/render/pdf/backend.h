@@ -15,6 +15,61 @@ typedef struct SsPdfInkExtents {
     double height;
 } SsPdfInkExtents;
 
+typedef struct SsTextGlyph {
+    unsigned int id;
+    unsigned int source_index;
+    double offset_x;
+    double offset_y;
+    double advance_x;
+    double advance_y;
+} SsTextGlyph;
+
+typedef struct SsTextRun {
+    size_t source_start;
+    size_t source_end;
+    size_t glyph_start;
+    size_t glyph_count;
+    double x;
+    double baseline_y;
+    double advance;
+    char *font_family;
+    char *font_path;
+    unsigned int font_index;
+    char *font_postscript_name;
+} SsTextRun;
+
+typedef struct SsTextLine {
+    size_t source_start;
+    size_t source_end;
+    size_t run_start;
+    size_t run_count;
+    double baseline_y;
+    SsPdfInkExtents logical_bounds;
+    SsPdfInkExtents ink_bounds;
+} SsTextLine;
+
+typedef struct SsTextShape {
+    SsTextLine *lines;
+    size_t line_count;
+    SsTextRun *runs;
+    size_t run_count;
+    SsTextGlyph *glyphs;
+    size_t glyph_count;
+    SsPdfInkExtents logical_bounds;
+    SsPdfInkExtents ink_bounds;
+} SsTextShape;
+
+typedef struct SsReplayGlyph {
+    unsigned long id;
+    double x;
+    double y;
+} SsReplayGlyph;
+
+typedef struct SsReplayCluster {
+    int bytes;
+    int glyphs;
+} SsReplayCluster;
+
 typedef struct SsQpdfLayer {
     const char *path;
     size_t page_index;
@@ -112,10 +167,38 @@ int ss_pdf_draw_color_text_baseline(
     double b,
     int wrap
 );
+int ss_pdf_draw_glyph_run(
+    SsPdf *pdf,
+    const char *font_path,
+    long font_index,
+    double font_size,
+    double r,
+    double g,
+    double b,
+    const char *utf8,
+    int utf8_length,
+    const SsReplayGlyph *glyphs,
+    int glyph_count,
+    const SsReplayCluster *clusters,
+    int cluster_count,
+    int backward
+);
 double ss_pdf_measure_text(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_pdf_measure_text_visual_width(SsPdf *pdf, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
 double ss_text_measure_text_visual_width(const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size);
+int ss_text_shape(
+    const char *text,
+    const char *font_family,
+    int font_weight,
+    int font_style,
+    int font_stretch,
+    double font_size,
+    double width,
+    int wrap,
+    SsTextShape *shape
+);
+void ss_text_shape_free(SsTextShape *shape);
 int ss_raster_size(const char *path, double *width, double *height);
 int ss_pdf_draw_raster(SsPdf *pdf, const char *path, double x, double y, double width, double height);
 int ss_svg_size(const char *path, double *width, double *height);

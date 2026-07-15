@@ -1,0 +1,11 @@
+{
+  "name": "pdfjs-dist",
+  "version": "4.8.69",
+  "source": "https://www.npmjs.com/package/pdfjs-dist/v/4.8.69",
+  "license": "Apache-2.0",
+  "files": {
+    "LICENSE": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+    "pdf.mjs": "85d678eca696a50ed3e372afb4e4831d9cd16c3d56b9b14011b0d982f8e6bcc2",
+    "pdf.worker.mjs": "8806d6a3b155fca69eb4b590629f760794fe3e21e82df102a39762d60eed53e1"
+  }
+}

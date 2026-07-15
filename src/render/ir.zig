@@ -1,18 +1,49 @@
 const std = @import("std");
 const core = @import("core");
 const geometry = @import("ir/geometry.zig");
+const ir_fingerprint = @import("ir/fingerprint.zig");
+const math = @import("ir/math.zig");
+const resources = @import("ir/resources.zig");
+const semantics = @import("ir/semantics.zig");
+const text_ir = @import("ir/text.zig");
+const validation = @import("ir/validation.zig");
 
 pub const CoordinateSpace = geometry.CoordinateSpace;
 pub const Rect = geometry.Rect;
 pub const Point = geometry.Point;
 pub const Transform = geometry.Transform;
 pub const Clip = geometry.Clip;
+pub const ValidationError = validation.Error;
+pub const Fingerprint = ir_fingerprint.Digest;
+pub const TextLayout = text_ir.Layout;
+pub const TextLine = text_ir.Line;
+pub const TextRun = text_ir.Run;
+pub const TextCluster = text_ir.Cluster;
+pub const Glyph = text_ir.Glyph;
+pub const ResourceId = resources.Id;
+pub const ResourceKind = resources.Kind;
+pub const Resource = resources.Resource;
+pub const ResourceGraph = resources.Graph;
+pub const ResourceBuilder = resources.Builder;
+pub const SemanticId = semantics.Id;
+pub const SemanticRole = semantics.Role;
+pub const SemanticNode = semantics.Node;
+pub const SemanticTree = semantics.Tree;
+pub const MathTreeId = math.TreeId;
+pub const MathNodeId = math.NodeId;
+pub const MathInputKind = math.InputKind;
+pub const MathNodeKind = math.Kind;
+pub const MathNode = math.Node;
+pub const MathTree = math.Tree;
+pub const MathCatalog = math.Catalog;
+pub const MathBuilder = math.Builder;
 
 pub const ItemId = u64;
 
 pub const ItemHeader = struct {
     item_id: ItemId,
     node_id: ?core.NodeId,
+    semantic_id: ?SemanticId = null,
     bounds: Rect,
     ink_bounds: Rect,
     transform: Transform = .{},
@@ -49,10 +80,9 @@ pub const RoundedRect = struct {
 pub const Text = struct {
     header: ItemHeader,
     x: f64,
-    baseline_y: f64,
+    y: f64,
     width: f64,
-    text: [:0]u8,
-    font_family: [:0]u8,
+    layout: TextLayout,
     font_weight: u16,
     font_style: core.font.Style,
     font_stretch: core.font.Stretch,
@@ -62,43 +92,43 @@ pub const Text = struct {
     preserve_color_glyphs: bool,
 
     fn deinit(self: *Text, allocator: std.mem.Allocator) void {
-        allocator.free(self.text);
-        allocator.free(self.font_family);
+        self.layout.deinit(allocator);
+    }
+
+    pub fn baselineY(self: *const Text) f64 {
+        return self.y + self.layout.firstBaseline();
     }
 };
 
 pub const Raster = struct {
     header: ItemHeader,
     rect: Rect,
-    path: [:0]u8,
-
-    fn deinit(self: *Raster, allocator: std.mem.Allocator) void {
-        allocator.free(self.path);
-    }
+    resource: ResourceId,
 };
 
 pub const Svg = struct {
     header: ItemHeader,
     rect: Rect,
-    path: [:0]u8,
+    resource: ResourceId,
     tint: ?core.render_policy.Color,
-
-    fn deinit(self: *Svg, allocator: std.mem.Allocator) void {
-        allocator.free(self.path);
-    }
 };
 
 pub const PdfPage = struct {
     header: ItemHeader,
     rect: Rect,
-    path: [:0]u8,
+    resource: ResourceId,
     page_index: usize,
     box: core.render_policy.PdfPageBox,
     copy_annotations: bool,
+};
 
-    fn deinit(self: *PdfPage, allocator: std.mem.Allocator) void {
-        allocator.free(self.path);
-    }
+pub const Math = struct {
+    header: ItemHeader,
+    rect: Rect,
+    tree: MathTreeId,
+    pdf_resource: ResourceId,
+    page_index: usize,
+    box: core.render_policy.PdfPageBox,
 };
 
 pub const Item = union(enum) {
@@ -108,15 +138,13 @@ pub const Item = union(enum) {
     text: Text,
     raster: Raster,
     svg: Svg,
+    math: Math,
     pdf_page: PdfPage,
 
     pub fn deinit(self: *Item, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .text => |*item| item.deinit(allocator),
-            .raster => |*item| item.deinit(allocator),
-            .svg => |*item| item.deinit(allocator),
-            .pdf_page => |*item| item.deinit(allocator),
-            .fill_rect, .stroke_line, .rounded_rect => {},
+            .fill_rect, .stroke_line, .rounded_rect, .raster, .svg, .math, .pdf_page => {},
         }
     }
 
@@ -130,6 +158,12 @@ pub const Item = union(enum) {
         return switch (self) {
             inline else => |item| item.header,
         };
+    }
+
+    pub fn setSemanticId(self: *Item, semantic_id: ?SemanticId) void {
+        switch (self.*) {
+            inline else => |*item| item.header.semantic_id = semantic_id,
+        }
     }
 };
 
@@ -165,6 +199,7 @@ pub const Page = struct {
     items: std.ArrayList(Item) = .empty,
     links: std.ArrayList(Link) = .empty,
     destinations: std.ArrayList(Destination) = .empty,
+    reading_order: []SemanticId = &.{},
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
         for (self.items.items) |*item| item.deinit(allocator);
@@ -173,11 +208,12 @@ pub const Page = struct {
         self.links.deinit(allocator);
         for (self.destinations.items) |*destination| destination.deinit(allocator);
         self.destinations.deinit(allocator);
+        allocator.free(self.reading_order);
     }
 
     pub fn hasPdfPages(self: *const Page) bool {
         for (self.items.items) |item| {
-            if (item == .pdf_page) return true;
+            if (item == .pdf_page or item == .math) return true;
         }
         return false;
     }
@@ -266,23 +302,37 @@ pub const Page = struct {
         wrap: bool,
         preserve_color_glyphs: bool,
     ) !void {
-        const owned_text = try allocator.dupeZ(u8, text);
-        errdefer allocator.free(owned_text);
-        const owned_family = try allocator.dupeZ(u8, font.family);
-        errdefer allocator.free(owned_family);
-        const bounds = Rect{
-            .x = x,
-            .y = baseline_y - font_size,
-            .width = @max(width, 0),
-            .height = @max(font_size, 0),
-        };
+        const layout = try TextLayout.simple(allocator, text, font.family, font_size, width);
+        try self.appendTextLayout(allocator, node_id, x, baseline_y, width, layout, font, font_size, color, wrap, preserve_color_glyphs);
+    }
+
+    pub fn appendTextLayout(
+        self: *Page,
+        allocator: std.mem.Allocator,
+        node_id: ?core.NodeId,
+        x: f64,
+        baseline_y: f64,
+        width: f64,
+        layout: TextLayout,
+        font: core.font.Face,
+        font_size: f64,
+        color: core.render_policy.Color,
+        wrap: bool,
+        preserve_color_glyphs: bool,
+    ) !void {
+        var owned_layout = layout;
+        errdefer owned_layout.deinit(allocator);
+        const y = baseline_y - owned_layout.firstBaseline();
+        const logical = owned_layout.logical_bounds;
+        const ink = owned_layout.ink_bounds;
+        const bounds = Rect{ .x = x + logical.x, .y = y + logical.y, .width = logical.width, .height = logical.height };
+        const ink_bounds = Rect{ .x = x + ink.x, .y = y + ink.y, .width = ink.width, .height = ink.height };
         try self.items.append(allocator, .{ .text = .{
-            .header = self.itemHeader(node_id, bounds, bounds),
+            .header = self.itemHeader(node_id, bounds, ink_bounds),
             .x = x,
-            .baseline_y = baseline_y,
+            .y = y,
             .width = width,
-            .text = owned_text,
-            .font_family = owned_family,
+            .layout = owned_layout,
             .font_weight = font.weight,
             .font_style = font.style,
             .font_stretch = font.stretch,
@@ -293,13 +343,11 @@ pub const Page = struct {
         } });
     }
 
-    pub fn appendRaster(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, path: []const u8) !void {
-        const owned_path = try allocator.dupeZ(u8, path);
-        errdefer allocator.free(owned_path);
+    pub fn appendRaster(self: *Page, allocator: std.mem.Allocator, node_id: ?core.NodeId, rect: Rect, resource: ResourceId) !void {
         try self.items.append(allocator, .{ .raster = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
-            .path = owned_path,
+            .resource = resource,
         } });
     }
 
@@ -308,15 +356,13 @@ pub const Page = struct {
         allocator: std.mem.Allocator,
         node_id: ?core.NodeId,
         rect: Rect,
-        path: []const u8,
+        resource: ResourceId,
         tint: ?core.render_policy.Color,
     ) !void {
-        const owned_path = try allocator.dupeZ(u8, path);
-        errdefer allocator.free(owned_path);
         try self.items.append(allocator, .{ .svg = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
-            .path = owned_path,
+            .resource = resource,
             .tint = tint,
         } });
     }
@@ -326,20 +372,38 @@ pub const Page = struct {
         allocator: std.mem.Allocator,
         node_id: ?core.NodeId,
         rect: Rect,
-        path: []const u8,
+        resource: ResourceId,
         page_index: usize,
         box: core.render_policy.PdfPageBox,
         copy_annotations: bool,
     ) !void {
-        const owned_path = try allocator.dupeZ(u8, path);
-        errdefer allocator.free(owned_path);
         try self.items.append(allocator, .{ .pdf_page = .{
             .header = self.itemHeader(node_id, rect, rect),
             .rect = rect,
-            .path = owned_path,
+            .resource = resource,
             .page_index = page_index,
             .box = box,
             .copy_annotations = copy_annotations,
+        } });
+    }
+
+    pub fn appendMath(
+        self: *Page,
+        allocator: std.mem.Allocator,
+        node_id: ?core.NodeId,
+        rect: Rect,
+        tree: MathTreeId,
+        pdf_resource: ResourceId,
+        page_index: usize,
+        box: core.render_policy.PdfPageBox,
+    ) !void {
+        try self.items.append(allocator, .{ .math = .{
+            .header = self.itemHeader(node_id, rect, rect),
+            .rect = rect,
+            .tree = tree,
+            .pdf_resource = pdf_resource,
+            .page_index = page_index,
+            .box = box,
         } });
     }
 
@@ -375,12 +439,30 @@ pub const Page = struct {
 };
 
 pub const Ir = struct {
-    schema_version: u32 = 2,
+    schema_version: u32 = 3,
+    resources: ResourceGraph = .{},
+    semantics: SemanticTree = .{},
+    math: MathCatalog = .{},
     pages: []Page,
 
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {
         for (self.pages) |*page| page.deinit(allocator);
         allocator.free(self.pages);
+        self.resources.deinit(allocator);
+        self.semantics.deinit(allocator);
+        self.math.deinit(allocator);
         self.* = .{ .pages = &.{} };
     }
+
+    pub fn validate(self: *const Ir) ValidationError!void {
+        try validation.document(self);
+    }
+
+    pub fn fingerprint(self: *const Ir) Fingerprint {
+        return ir_fingerprint.document(self);
+    }
 };
+
+pub fn pageFingerprint(page: *const Page) Fingerprint {
+    return ir_fingerprint.page(page);
+}
