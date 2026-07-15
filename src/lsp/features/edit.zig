@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const editor_edit = @import("../../editor/edit.zig");
+const edit_relations = @import("edit/relations.zig");
 const protocol = @import("../protocol.zig");
 const lsp_state = @import("../state.zig");
 const utils = @import("utils");
@@ -45,7 +46,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     }
 
     const node_id: u32 = @intCast(@max(0, protocol.intField(request_object, "nodeId") orelse 0));
-    const editing = findEditingTarget(root, node_id) orelse
+    const editing = edit_relations.editingTarget(root, node_id) orelse
         return try statusJson(ctx.allocator, "unsupported", "This object has no editable binding in the page.");
     const requested_page_id = protocol.intField(request_object, "pageId") orelse -1;
     const target_page_id = protocol.intField(editing, "page_id") orelse -1;
@@ -97,14 +98,15 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         if (binding_required) {
             return try statusJson(ctx.allocator, "unsupported", "Set an absolute position before keeping this object's relations.");
         }
-        const updates = try relationUpdates(ctx.allocator, root, source, path, node_id, binding, to_x - from_x, to_y - from_y);
-        defer ctx.allocator.free(updates);
-        if (!hasBothAxes(root, node_id, path, page_span)) {
-            return try statusJson(ctx.allocator, "unsupported", "Keeping relations requires explicit horizontal and vertical constraints in this page.");
+        const adjustments = try edit_relations.collect(ctx.allocator, root, source, path, node_id, binding, page_span, to_x - from_x, to_y - from_y);
+        defer ctx.allocator.free(adjustments);
+        if (!edit_relations.haveBothAxes(adjustments)) {
+            return try statusJson(ctx.allocator, "unsupported", "Keeping relations requires expressible horizontal and vertical position relations.");
         }
-        break :blk try editor_edit.preserveRelations(ctx.allocator, source, updates);
+        break :blk (try editor_edit.relativePosition(ctx.allocator, source, page_span, adjustments)) orelse
+            return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
     } else blk: {
-        const spans = try editableConstraintSpans(ctx.allocator, root, node_id, path, page_span);
+        const spans = try edit_relations.existingUpdateSpans(ctx.allocator, root, node_id, path, page_span);
         defer ctx.allocator.free(spans);
         const introduction: ?editor_edit.BindingIntroduction = if (binding_required) .{ .statement = .{
             .start = protocol.usizeField(editing, "statement_start") orelse
@@ -135,116 +137,6 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const uri = try protocol.uriFromPath(ctx.allocator, path);
     defer ctx.allocator.free(uri);
     return try editStatusJson(ctx.allocator, uri, source, edit_result.edits);
-}
-
-fn findEditingTarget(root: *const protocol.JsonObject, node_id: u32) ?*const protocol.JsonObject {
-    const items = protocol.arrayFieldObject(root, "editing") orelse return null;
-    for (items.items) |*item| {
-        if (item.* != .object) continue;
-        if ((protocol.intField(&item.object, "node_id") orelse -1) == node_id) return &item.object;
-    }
-    return null;
-}
-
-fn editableConstraintSpans(
-    allocator: std.mem.Allocator,
-    root: *const protocol.JsonObject,
-    node_id: u32,
-    path: []const u8,
-    page_span: editor_edit.ByteSpan,
-) ![]editor_edit.ByteSpan {
-    var spans = std.ArrayList(editor_edit.ByteSpan).empty;
-    errdefer spans.deinit(allocator);
-    const relations = layoutRelations(root) orelse return try spans.toOwnedSlice(allocator);
-    for (relations.items) |*relation_value| {
-        if (relation_value.* != .object) continue;
-        const relation = &relation_value.object;
-        if (!relationTargetsNode(relation, node_id)) continue;
-        if (!relationHasRole(relation, "position")) continue;
-        const location = protocol.objectFieldObject(relation, "location") orelse continue;
-        const relation_path = protocol.stringField(location, "path") orelse continue;
-        const start = protocol.usizeField(location, "start") orelse continue;
-        const end = protocol.usizeField(location, "end") orelse continue;
-        if (!std.mem.eql(u8, relation_path, path) or start < page_span.start or end > page_span.end) continue;
-        try spans.append(allocator, .{ .start = start, .end = end });
-    }
-    return try spans.toOwnedSlice(allocator);
-}
-
-fn relationUpdates(
-    allocator: std.mem.Allocator,
-    root: *const protocol.JsonObject,
-    source: []const u8,
-    path: []const u8,
-    node_id: u32,
-    binding: []const u8,
-    dx: f64,
-    dy: f64,
-) ![]editor_edit.RelationUpdate {
-    var updates = std.ArrayList(editor_edit.RelationUpdate).empty;
-    errdefer updates.deinit(allocator);
-    const relations = layoutRelations(root) orelse return try updates.toOwnedSlice(allocator);
-    for (relations.items) |*relation_value| {
-        if (relation_value.* != .object) continue;
-        const relation = &relation_value.object;
-        if (!relationTargetsNode(relation, node_id)) continue;
-        if (!relationHasRole(relation, "position")) continue;
-        const location = protocol.objectFieldObject(relation, "location") orelse continue;
-        const relation_path = protocol.stringField(location, "path") orelse continue;
-        if (!std.mem.eql(u8, relation_path, path)) continue;
-        const start = protocol.usizeField(location, "start") orelse continue;
-        const end = protocol.usizeField(location, "end") orelse continue;
-        if (start >= source.len or end > source.len or end <= start) continue;
-        const parsed = editor_edit.parseRelation(source[start..end]) orelse continue;
-        if (!std.mem.eql(u8, parsed.target, binding)) continue;
-        const axis = protocol.stringField(relation, "axis") orelse continue;
-        const offset = protocol.numberField(relation, "offset") orelse 0;
-        try updates.append(allocator, .{
-            .span = .{ .start = start, .end = end },
-            .target = parsed.target,
-            .target_anchor = parsed.target_anchor,
-            .source = parsed.source,
-            .source_anchor = parsed.source_anchor,
-            .offset = offset + if (std.mem.eql(u8, axis, "horizontal")) dx else -dy,
-        });
-    }
-    return try updates.toOwnedSlice(allocator);
-}
-
-fn hasBothAxes(root: *const protocol.JsonObject, node_id: u32, path: []const u8, page_span: editor_edit.ByteSpan) bool {
-    var horizontal = false;
-    var vertical = false;
-    const relations = layoutRelations(root) orelse return false;
-    for (relations.items) |*relation_value| {
-        if (relation_value.* != .object) continue;
-        const relation = &relation_value.object;
-        if (!relationTargetsNode(relation, node_id)) continue;
-        if (!relationHasRole(relation, "position")) continue;
-        const location = protocol.objectFieldObject(relation, "location") orelse continue;
-        const relation_path = protocol.stringField(location, "path") orelse continue;
-        const start = protocol.usizeField(location, "start") orelse continue;
-        const end = protocol.usizeField(location, "end") orelse continue;
-        if (!std.mem.eql(u8, relation_path, path) or start < page_span.start or end > page_span.end) continue;
-        const axis = protocol.stringField(relation, "axis") orelse continue;
-        horizontal = horizontal or std.mem.eql(u8, axis, "horizontal");
-        vertical = vertical or std.mem.eql(u8, axis, "vertical");
-    }
-    return horizontal and vertical;
-}
-
-fn layoutRelations(root: *const protocol.JsonObject) ?*const protocol.JsonArray {
-    const layout = protocol.objectFieldObject(root, "layout") orelse return null;
-    return protocol.arrayFieldObject(layout, "relations");
-}
-
-fn relationTargetsNode(relation: *const protocol.JsonObject, node_id: u32) bool {
-    const target = protocol.objectFieldObject(relation, "target") orelse return false;
-    return (protocol.intField(target, "node_id") orelse -1) == node_id;
-}
-
-fn relationHasRole(relation: *const protocol.JsonObject, expected: []const u8) bool {
-    const role = protocol.stringField(relation, "role") orelse return false;
-    return std.mem.eql(u8, role, expected);
 }
 
 fn statusJson(

@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils");
+const relation = @import("relation.zig");
 
 pub const ByteSpan = utils.source.ByteSpan;
 
@@ -24,24 +25,6 @@ pub const Result = struct {
     }
 };
 
-pub const RelationUpdate = struct {
-    span: ByteSpan,
-    target: []const u8,
-    target_anchor: []const u8,
-    source: []const u8,
-    source_anchor: []const u8,
-    offset: f64,
-};
-
-pub const ParsedRelation = struct {
-    update: bool,
-    indent: []const u8,
-    target: []const u8,
-    target_anchor: []const u8,
-    source: []const u8,
-    source_anchor: []const u8,
-};
-
 pub const BindingIntroduction = struct {
     statement: ByteSpan,
 };
@@ -53,7 +36,7 @@ pub fn absolutePosition(
     binding: []const u8,
     left: f64,
     top: f64,
-    replaced_constraints: []const ByteSpan,
+    existing_updates: []const ByteSpan,
     binding_introduction: ?BindingIntroduction,
 ) !?Result {
     const insertion = pageEndLineStart(source, page_span) orelse return null;
@@ -61,20 +44,39 @@ pub fn absolutePosition(
 
     var edits = std.ArrayList(TextEdit).empty;
     errdefer deinitEdits(allocator, &edits);
-    var normalized = std.ArrayList(ByteSpan).empty;
-    defer normalized.deinit(allocator);
-    for (replaced_constraints) |span| {
-        const line = constraintLineSpan(source, span) orelse continue;
-        if (containsSpan(normalized.items, line)) continue;
-        try normalized.append(allocator, line);
-    }
-    std.mem.sort(ByteSpan, normalized.items, {}, spanLessThan);
-    for (normalized.items) |span| {
+    var horizontal_updated = false;
+    var vertical_updated = false;
+    var seen_updates = std.ArrayList(ByteSpan).empty;
+    defer seen_updates.deinit(allocator);
+    for (existing_updates) |origin| {
+        const span = constraintLineSpan(source, origin) orelse continue;
+        if (containsSpan(seen_updates.items, span)) continue;
+        try seen_updates.append(allocator, span);
+        const line = source[span.start..trimLineEnding(source, span.end)];
+        const parsed = relation.parse(line) orelse continue;
+        if (!parsed.update or !relation.sameObjectPath(parsed.target, binding)) continue;
+        const horizontal = relation.isHorizontal(parsed.target_anchor) orelse continue;
+        var text = std.ArrayList(u8).empty;
+        errdefer text.deinit(allocator);
+        try relation.appendNumeric(
+            allocator,
+            &text,
+            true,
+            parsed.indent,
+            binding,
+            if (horizontal) "left" else "top",
+            "page",
+            if (horizontal) "left" else "top",
+            if (horizontal) left else -top,
+        );
+        try relation.appendSuffix(allocator, &text, parsed);
+        if (span.end > span.start and source[span.end - 1] == '\n') try text.append(allocator, '\n');
         try edits.append(allocator, .{
             .start = span.start,
             .end = span.end,
-            .text = try allocator.dupe(u8, ""),
+            .text = try text.toOwnedSlice(allocator),
         });
+        if (horizontal) horizontal_updated = true else vertical_updated = true;
     }
 
     if (binding_introduction) |introduction| {
@@ -83,49 +85,88 @@ pub fn absolutePosition(
     }
 
     var text = std.ArrayList(u8).empty;
-    errdefer text.deinit(allocator);
-    try appendConstraint(allocator, &text, true, indent, binding, "left", "page", "left", left);
-    try appendConstraint(allocator, &text, true, indent, binding, "top", "page", "top", -top);
-    try edits.append(allocator, .{
-        .start = insertion,
-        .end = insertion,
-        .text = try text.toOwnedSlice(allocator),
-    });
-    return .{ .edits = try edits.toOwnedSlice(allocator) };
-}
-
-pub fn preserveRelations(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    updates: []const RelationUpdate,
-) !Result {
-    var edits = std.ArrayList(TextEdit).empty;
-    errdefer deinitEdits(allocator, &edits);
-    for (updates) |update| {
-        const line_span = constraintLineSpan(source, update.span) orelse return error.InvalidConstraintOrigin;
-        const line = source[line_span.start..trimLineEnding(source, line_span.end)];
-        const parsed = parseRelation(line) orelse return error.InvalidConstraintOrigin;
-        var text = std.ArrayList(u8).empty;
-        errdefer text.deinit(allocator);
-        try appendConstraintWithoutIndent(
-            allocator,
-            &text,
-            parsed.update,
-            parsed.indent,
-            update.target,
-            update.target_anchor,
-            update.source,
-            update.source_anchor,
-            update.offset,
-        );
-        if (line_span.end > line_span.start and source[line_span.end - 1] == '\n') try text.append(allocator, '\n');
+    defer text.deinit(allocator);
+    if (!horizontal_updated) try appendConstraint(allocator, &text, true, indent, binding, "left", "page", "left", left);
+    if (!vertical_updated) try appendConstraint(allocator, &text, true, indent, binding, "top", "page", "top", -top);
+    if (text.items.len != 0) {
         try edits.append(allocator, .{
-            .start = line_span.start,
-            .end = line_span.end,
+            .start = insertion,
+            .end = insertion,
             .text = try text.toOwnedSlice(allocator),
         });
     }
     return .{ .edits = try edits.toOwnedSlice(allocator) };
+}
+
+pub fn relativePosition(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    page_span: ByteSpan,
+    adjustments: []const relation.Adjustment,
+) !?Result {
+    var edits = std.ArrayList(TextEdit).empty;
+    errdefer deinitEdits(allocator, &edits);
+    var additions = std.ArrayList(u8).empty;
+    defer additions.deinit(allocator);
+    var insertion: ?usize = null;
+    var insertion_indent: []const u8 = "";
+
+    for (adjustments) |adjustment| {
+        switch (adjustment.action) {
+            .replace => |origin| {
+                const located = try locateRelation(source, origin, adjustment);
+                var text = std.ArrayList(u8).empty;
+                errdefer text.deinit(allocator);
+                try relation.appendAdjusted(allocator, &text, located.parsed.update, located.parsed.indent, adjustment, located.parsed.offset_source);
+                try relation.appendSuffix(allocator, &text, located.parsed);
+                if (located.span.end > located.span.start and source[located.span.end - 1] == '\n') try text.append(allocator, '\n');
+                try edits.append(allocator, .{
+                    .start = located.span.start,
+                    .end = located.span.end,
+                    .text = try text.toOwnedSlice(allocator),
+                });
+            },
+            .append_update => |origin| {
+                if (insertion == null) {
+                    insertion = pageEndLineStart(source, page_span) orelse return null;
+                    insertion_indent = pageBodyIndent(source, page_span, insertion.?);
+                }
+                const offset_source = if (origin) |span|
+                    (try locateRelation(source, span, adjustment)).parsed.offset_source
+                else
+                    null;
+                try relation.appendAdjusted(
+                    allocator,
+                    &additions,
+                    true,
+                    insertion_indent,
+                    adjustment,
+                    offset_source,
+                );
+                try additions.append(allocator, '\n');
+            },
+        }
+    }
+    if (insertion) |offset| {
+        try edits.append(allocator, .{
+            .start = offset,
+            .end = offset,
+            .text = try additions.toOwnedSlice(allocator),
+        });
+    }
+    return .{ .edits = try edits.toOwnedSlice(allocator) };
+}
+
+const LocatedRelation = struct {
+    span: ByteSpan,
+    parsed: relation.Parsed,
+};
+
+fn locateRelation(source: []const u8, origin: ByteSpan, adjustment: relation.Adjustment) !LocatedRelation {
+    const span = constraintLineSpan(source, origin) orelse return error.InvalidConstraintOrigin;
+    const parsed = relation.parse(source[span.start..trimLineEnding(source, span.end)]) orelse return error.InvalidConstraintOrigin;
+    if (!relation.matches(parsed, adjustment)) return error.InvalidConstraintOrigin;
+    return .{ .span = span, .parsed = parsed };
 }
 
 pub fn applyEdits(allocator: std.mem.Allocator, source: []const u8, edits: []const TextEdit) ![]u8 {
@@ -152,54 +193,6 @@ pub fn applyEdits(allocator: std.mem.Allocator, source: []const u8, edits: []con
     }
     try out.appendSlice(allocator, source[cursor..]);
     return try out.toOwnedSlice(allocator);
-}
-
-pub fn parseRelation(line: []const u8) ?ParsedRelation {
-    const indent_end = leadingWhitespace(line);
-    const body = std.mem.trim(u8, line[indent_end..], " \t\r\n");
-    const update = std.mem.startsWith(u8, body, "~!~");
-    const marker_len: usize = if (update) 3 else if (std.mem.startsWith(u8, body, "~")) 1 else return null;
-    const equality = std.mem.indexOf(u8, body[marker_len..], "==") orelse return null;
-    const equality_start = equality + marker_len;
-    const target = parseEndpoint(std.mem.trim(u8, body[marker_len..equality_start], " \t")) orelse return null;
-    const right = std.mem.trim(u8, body[equality_start + 2 ..], " \t");
-    const endpoint_end = endpointPrefixEnd(right) orelse return null;
-    const source_endpoint = parseEndpoint(right[0..endpoint_end]) orelse return null;
-    return .{
-        .update = update,
-        .indent = line[0..indent_end],
-        .target = target.name,
-        .target_anchor = target.anchor,
-        .source = source_endpoint.name,
-        .source_anchor = source_endpoint.anchor,
-    };
-}
-
-const Endpoint = struct {
-    name: []const u8,
-    anchor: []const u8,
-};
-
-fn parseEndpoint(text: []const u8) ?Endpoint {
-    const dot = std.mem.lastIndexOfScalar(u8, text, '.') orelse return null;
-    if (dot == 0 or dot + 1 >= text.len) return null;
-    const name = std.mem.trim(u8, text[0..dot], " \t");
-    const anchor = std.mem.trim(u8, text[dot + 1 ..], " \t");
-    if (name.len == 0 or !validAnchor(anchor)) return null;
-    return .{ .name = name, .anchor = anchor };
-}
-
-fn endpointPrefixEnd(text: []const u8) ?usize {
-    var index: usize = 0;
-    while (index < text.len and !std.ascii.isWhitespace(text[index]) and text[index] != '+' and text[index] != '-') index += 1;
-    if (index == 0) return null;
-    return index;
-}
-
-fn validAnchor(anchor: []const u8) bool {
-    const anchors = [_][]const u8{ "left", "right", "top", "bottom", "center_x", "center_y" };
-    for (anchors) |candidate| if (std.mem.eql(u8, anchor, candidate)) return true;
-    return false;
 }
 
 fn pageEndLineStart(source: []const u8, page_span: ByteSpan) ?usize {
@@ -263,36 +256,8 @@ fn appendConstraint(
     source_anchor: []const u8,
     offset: f64,
 ) !void {
-    try appendConstraintWithoutIndent(allocator, out, update, indent, target, target_anchor, source, source_anchor, offset);
+    try relation.appendNumeric(allocator, out, update, indent, target, target_anchor, source, source_anchor, offset);
     try out.append(allocator, '\n');
-}
-
-fn appendConstraintWithoutIndent(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayList(u8),
-    update: bool,
-    indent: []const u8,
-    target: []const u8,
-    target_anchor: []const u8,
-    source: []const u8,
-    source_anchor: []const u8,
-    offset: f64,
-) !void {
-    const number = try formatNumber(allocator, @abs(offset));
-    defer allocator.free(number);
-    try out.appendSlice(allocator, indent);
-    try out.appendSlice(allocator, if (update) "~!~ " else "~ ");
-    try out.appendSlice(allocator, target);
-    try out.append(allocator, '.');
-    try out.appendSlice(allocator, target_anchor);
-    try out.appendSlice(allocator, " == ");
-    try out.appendSlice(allocator, source);
-    try out.append(allocator, '.');
-    try out.appendSlice(allocator, source_anchor);
-    if (@abs(offset) > 0.0005) {
-        try out.appendSlice(allocator, if (offset < 0) " - " else " + ");
-        try out.appendSlice(allocator, number);
-    }
 }
 
 fn appendBindingIntroduction(
@@ -334,25 +299,10 @@ fn appendBindingIntroduction(
     });
 }
 
-fn formatNumber(allocator: std.mem.Allocator, value: f64) ![]u8 {
-    const text = try std.fmt.allocPrint(allocator, "{d:.2}", .{value});
-    var end = text.len;
-    while (end > 0 and text[end - 1] == '0') end -= 1;
-    if (end > 0 and text[end - 1] == '.') end -= 1;
-    if (end == text.len) return text;
-    const result = try allocator.dupe(u8, text[0..end]);
-    allocator.free(text);
-    return result;
-}
-
 fn leadingWhitespace(text: []const u8) usize {
     var index: usize = 0;
     while (index < text.len and (text[index] == ' ' or text[index] == '\t')) index += 1;
     return index;
-}
-
-fn spanLessThan(_: void, left: ByteSpan, right: ByteSpan) bool {
-    return left.start < right.start;
 }
 
 fn containsSpan(spans: []const ByteSpan, needle: ByteSpan) bool {
