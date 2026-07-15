@@ -1982,7 +1982,7 @@ fn executeStatement(
             if (context == .page and active_call_depth == 0) {
                 const binding_base = switch (expr) {
                     .call => |call| call.callee.name,
-                    else => "item",
+                    else => "",
                 };
                 try addValueObjectSources(ir, page_id, active_module_id, "", binding_base, stmt.span, value);
             }

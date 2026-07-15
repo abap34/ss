@@ -5,6 +5,7 @@ const render_scene = @import("render_scene");
 const utils = @import("utils");
 
 const json = utils.json;
+const binding_names = @import("names.zig");
 
 pub fn toJson(
     allocator: std.mem.Allocator,
@@ -236,17 +237,8 @@ fn editingJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     defer seen.deinit();
     const program = ir.projectProgram();
     for (program.pages.items) |*page_decl| {
-        var used_names = std.StringHashMap(void).init(allocator);
-        defer used_names.deinit();
-        for (page_decl.statements.items) |statement| {
-            if (statement.kind == .let_binding) try used_names.put(statement.kind.let_binding.name, {});
-        }
-        var generated_names = std.AutoHashMap(usize, []u8).init(allocator);
-        defer {
-            var values = generated_names.valueIterator();
-            while (values.next()) |name| allocator.free(name.*);
-            generated_names.deinit();
-        }
+        var names = try binding_names.Generator.init(allocator, ir, page_decl);
+        defer names.deinit();
 
         for (ir.object_sources.items) |object_source| {
             if (object_source.module_id != ir.project_module_id or seen.contains(object_source.node_id)) continue;
@@ -258,13 +250,7 @@ fn editingJson(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
 
             const binding_required = object_source.binding_base != null;
             const binding = if (object_source.binding_base) |base| blk: {
-                const generated = try generatedNameForStatement(
-                    allocator,
-                    &generated_names,
-                    &used_names,
-                    statement.span.start,
-                    base,
-                );
+                const generated = try names.forStatement(statement.span.start, base);
                 break :blk try std.fmt.allocPrint(allocator, "{s}{s}", .{ generated, object_source.path });
             } else try allocator.dupe(u8, object_source.path);
             defer allocator.free(binding);
@@ -305,35 +291,6 @@ fn topLevelSourceStatement(page: *const ast.PageDecl, object_source: core.Object
         return null;
     }
     return null;
-}
-
-fn generatedNameForStatement(
-    allocator: std.mem.Allocator,
-    generated_names: *std.AutoHashMap(usize, []u8),
-    used_names: *std.StringHashMap(void),
-    statement_start: usize,
-    raw_base: []const u8,
-) ![]const u8 {
-    if (generated_names.get(statement_start)) |name| return name;
-    var base_end = raw_base.len;
-    while (base_end > 0 and raw_base[base_end - 1] == '!') base_end -= 1;
-    const without_marker = raw_base[0..base_end];
-    const base = if (without_marker.len == 0) "item" else without_marker;
-    var suffix: usize = 1;
-    while (true) : (suffix += 1) {
-        const candidate = if (suffix == 1)
-            try std.fmt.allocPrint(allocator, "{s}_item", .{base})
-        else
-            try std.fmt.allocPrint(allocator, "{s}_item_{d}", .{ base, suffix });
-        if (used_names.contains(candidate)) {
-            allocator.free(candidate);
-            continue;
-        }
-        errdefer allocator.free(candidate);
-        try used_names.put(candidate, {});
-        try generated_names.put(statement_start, candidate);
-        return candidate;
-    }
 }
 
 fn pageOrderIndex(page_order: []const core.NodeId, page_id: core.NodeId) ?usize {
