@@ -12,11 +12,11 @@ const SemanticEnv = semantic_env.SemanticEnv;
 pub fn populateIrAnalysis(allocator: std.mem.Allocator, ir: *core.Ir) !void {
     for (ir.modules.items) |module| {
         if (module.kind == .project) continue;
-        try collectDefinitionsFromProgram(allocator, module.source, module.program, module.id, module.path, false, &ir.definitions);
-        try collectProgramHints(allocator, ir, &ir.hints, module.source, module.path, module.program, module.id, &ir.functions);
+        try collectDefinitionsFromProgram(allocator, module.source, module.syntax, module.id, module.path, false, &ir.definitions);
+        try collectProgramHints(allocator, ir, &ir.hints, module.source, module.path, module.syntax, module.id, &ir.functions);
     }
-    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectProgram(), ir.project_module_id, null, true, &ir.definitions);
-    try collectProgramHints(allocator, ir, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectProgram(), ir.project_module_id, &ir.functions);
+    try collectDefinitionsFromProgram(allocator, ir.projectSource(), ir.projectSyntax(), ir.project_module_id, null, true, &ir.definitions);
+    try collectProgramHints(allocator, ir, &ir.hints, ir.projectSource(), ir.projectPath(), ir.projectSyntax(), ir.project_module_id, &ir.functions);
 }
 
 pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void {
@@ -36,7 +36,7 @@ pub fn refreshSolvedFrameHints(allocator: std.mem.Allocator, ir: *core.Ir) !void
 fn collectDefinitionsFromProgram(
     allocator: std.mem.Allocator,
     source: []const u8,
-    program: ast.Program,
+    program: ast.Module,
     module_id: core.SourceModuleId,
     file: ?[]const u8,
     include_variables: bool,
@@ -154,7 +154,7 @@ fn collectProgramHints(
     hints: *std.ArrayList(core.InlayHint),
     source: []const u8,
     source_path: ?[]const u8,
-    program: ast.Program,
+    program: ast.Module,
     module_id: core.SourceModuleId,
     functions: *const core.FunctionMap,
 ) !void {

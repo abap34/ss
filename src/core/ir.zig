@@ -83,12 +83,12 @@ pub const SourceModule = struct {
     spec: []u8,
     path: ?[]u8,
     source: []u8,
-    program: ast.Program,
+    syntax: ast.Module,
     implicit_import_ids: std.ArrayList(SourceModuleId),
     resolved_import_ids: std.ArrayList(SourceModuleId),
 
     pub fn deinit(self: *SourceModule, allocator: Allocator) void {
-        self.program.deinit(allocator);
+        self.syntax.deinit(allocator);
         self.implicit_import_ids.deinit(allocator);
         self.resolved_import_ids.deinit(allocator);
         allocator.free(self.spec);
@@ -183,7 +183,7 @@ pub const Ir = struct {
         asset_base_dir: []u8,
         project_path: []u8,
         project_source: []u8,
-        project_program: ast.Program,
+        project_syntax: ast.Module,
     ) !Ir {
         var ir = Ir{
             .allocator = allocator,
@@ -233,7 +233,7 @@ pub const Ir = struct {
             .spec = project_spec,
             .path = project_path,
             .source = project_source,
-            .program = project_program,
+            .syntax = project_syntax,
             .implicit_import_ids = .empty,
             .resolved_import_ids = .empty,
         });
@@ -388,8 +388,8 @@ pub const Ir = struct {
         return self.projectModule().source;
     }
 
-    pub fn projectProgram(self: *const Ir) ast.Program {
-        return self.projectModule().program;
+    pub fn projectSyntax(self: *const Ir) ast.Module {
+        return self.projectModule().syntax;
     }
 
     pub fn projectModule(self: *const Ir) *const SourceModule {

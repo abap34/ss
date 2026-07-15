@@ -17,7 +17,7 @@ fn initEmptyIr() !core.Ir {
     errdefer allocator.free(project_path);
     const project_source = try allocator.dupe(u8, "");
     errdefer allocator.free(project_source);
-    return try core.Ir.init(allocator, asset_base_dir, project_path, project_source, ast.Program.init());
+    return try core.Ir.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
 fn expectFloat(expected: f32, actual: f32) !void {

@@ -33,18 +33,18 @@ pub fn at(
         if (parsed) |*result| result.deinit(allocator);
         parsed = null;
     }
-    const parsed_program = if (parsed) |*result| &result.program else null;
-    if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_program)) |result| return result;
-    if (try completeModuleAccessAt(allocator, snapshot, req, parsed_program)) |result| return result;
-    if (try completeMemberAccessAt(allocator, snapshot, req, parsed_program)) |result| return result;
-    return completeRegular(allocator, snapshot, req, parsed_program);
+    const parsed_module = if (parsed) |*result| &result.module else null;
+    if (try completeRecordUpdateAt(allocator, snapshot, req, parsed_module)) |result| return result;
+    if (try completeModuleAccessAt(allocator, snapshot, req, parsed_module)) |result| return result;
+    if (try completeMemberAccessAt(allocator, snapshot, req, parsed_module)) |result| return result;
+    return completeRegular(allocator, snapshot, req, parsed_module);
 }
 
 fn emptyResult(allocator: std.mem.Allocator) !Result {
     return .{ .items = try allocator.alloc(Candidate, 0) };
 }
 
-fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !Result {
+fn completeRegular(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !Result {
     var builder = CandidateBuilder.init(allocator);
     defer builder.deinit();
 
@@ -90,7 +90,7 @@ const CandidateBuilder = struct {
     }
 };
 
-fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !?Result {
+fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
     const parsed = program orelse return null;
     const callable = cursor.callableAt(parsed, req.offset) orelse return null;
     if (callable.role != .name) return null;
@@ -104,7 +104,7 @@ fn completeModuleAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
     return try builder.finish();
 }
 
-fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !?Result {
+fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
     const parsed = program orelse return null;
     const member = cursor.memberAt(parsed, req.offset) orelse return null;
     var builder = CandidateBuilder.init(allocator);
@@ -117,7 +117,7 @@ fn completeMemberAccessAt(allocator: std.mem.Allocator, snapshot: anytype, req: 
     return try builder.finish();
 }
 
-fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Program) !?Result {
+fn completeRecordUpdateAt(allocator: std.mem.Allocator, snapshot: anytype, req: types.SourceRequest, program: ?*const ast.Module) !?Result {
     const parsed = program orelse return null;
     const target = cursor.recordUpdateCompletionAt(parsed, req.offset) orelse return null;
     const base_record_name = recordNameForCompletionExpr(snapshot, req, parsed, target.target, 0) orelse return null;
@@ -209,7 +209,7 @@ fn appendVisibleVariables(builder: *CandidateBuilder, snapshot: anytype, module_
     }
 }
 
-fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, program: ?*const ast.Program, source: []const u8) !void {
+fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, program: ?*const ast.Module, source: []const u8) !void {
     for (type_resolution.builtinTypes()) |builtin| {
         try builder.add(.{ .label = builtin.name, .kind = .type_decl, .detail = "builtin type" });
     }
@@ -230,7 +230,7 @@ fn appendTypeNameCompletions(builder: *CandidateBuilder, snapshot: anytype, prog
     }
 }
 
-fn appendParsedTypeNameCompletions(builder: *CandidateBuilder, program: ?*const ast.Program, source: []const u8) !void {
+fn appendParsedTypeNameCompletions(builder: *CandidateBuilder, program: ?*const ast.Module, source: []const u8) !void {
     const parsed = program orelse return;
     for (parsed.types.items) |decl| {
         const label = spanText(source, decl.name_span) orelse continue;
@@ -336,7 +336,7 @@ fn enumTypeInModule(snapshot: anytype, module_id: core.SourceModuleId, name: []c
     return null;
 }
 
-fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Program, expr: ast.Expr, depth: usize) ?PropertyTarget {
+fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?PropertyTarget {
     const module = snapshot.moduleForPath(req.path) orelse return null;
     if (recordNameForCompletionExpr(snapshot, req, program, expr, depth)) |record_name| return .{ .record = record_name };
     if (depth > 16) return null;
@@ -364,7 +364,7 @@ fn propertyTargetForExpr(snapshot: anytype, req: types.SourceRequest, program: *
     };
 }
 
-fn recordNameForCompletionExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Program, expr: ast.Expr, depth: usize) ?[]const u8 {
+fn recordNameForCompletionExpr(snapshot: anytype, req: types.SourceRequest, program: *const ast.Module, expr: ast.Expr, depth: usize) ?[]const u8 {
     const module = snapshot.moduleForPath(req.path) orelse return null;
     if (resolve_query.recordNameForExpr(snapshot, module.id, req.offset, expr)) |record_name| return record_name;
     if (depth > 16) return null;

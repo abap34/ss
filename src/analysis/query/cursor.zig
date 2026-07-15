@@ -58,7 +58,7 @@ pub const CallableTarget = struct {
     role: QualifiedCallableRole,
 };
 
-pub fn callableAt(program: *const ast.Program, offset: usize) ?CallableTarget {
+pub fn callableAt(program: *const ast.Module, offset: usize) ?CallableTarget {
     for (program.records.items) |record| {
         if (callableInFields(record.fields.items, offset)) |target| return target;
     }
@@ -81,7 +81,7 @@ pub fn callableAt(program: *const ast.Program, offset: usize) ?CallableTarget {
     return null;
 }
 
-pub fn sourceNameAt(program: *const ast.Program, offset: usize) ?SourceNameTarget {
+pub fn sourceNameAt(program: *const ast.Module, offset: usize) ?SourceNameTarget {
     for (program.imports.items) |import_decl| {
         if (spanContainsOffset(import_decl.spec_span, offset)) return .{
             .text = import_decl.spec,
@@ -125,7 +125,7 @@ pub fn sourceNameAt(program: *const ast.Program, offset: usize) ?SourceNameTarge
     return null;
 }
 
-pub fn recordUpdatePathAt(program: *const ast.Program, offset: usize) ?RecordUpdatePathTarget {
+pub fn recordUpdatePathAt(program: *const ast.Module, offset: usize) ?RecordUpdatePathTarget {
     for (program.records.items) |record| {
         if (recordUpdatePathInFields(record.fields.items, offset)) |target| return target;
     }
@@ -153,7 +153,7 @@ pub fn recordUpdatePathAt(program: *const ast.Program, offset: usize) ?RecordUpd
     return null;
 }
 
-pub fn recordUpdateCompletionAt(program: *const ast.Program, offset: usize) ?RecordUpdateCompletionTarget {
+pub fn recordUpdateCompletionAt(program: *const ast.Module, offset: usize) ?RecordUpdateCompletionTarget {
     for (program.records.items) |record| {
         if (recordUpdateCompletionInFields(record.fields.items, offset)) |target| return target;
     }
@@ -181,7 +181,7 @@ pub fn recordUpdateCompletionAt(program: *const ast.Program, offset: usize) ?Rec
     return null;
 }
 
-pub fn memberAt(program: *const ast.Program, offset: usize) ?MemberTarget {
+pub fn memberAt(program: *const ast.Module, offset: usize) ?MemberTarget {
     for (program.records.items) |record| {
         if (memberInFields(record.fields.items, offset)) |target| return target;
     }
@@ -209,7 +209,7 @@ pub fn memberAt(program: *const ast.Program, offset: usize) ?MemberTarget {
     return null;
 }
 
-pub fn visibleLetBindingAt(program: *const ast.Program, offset: usize, name: []const u8) ?LetBindingTarget {
+pub fn visibleLetBindingAt(program: *const ast.Module, offset: usize, name: []const u8) ?LetBindingTarget {
     for (program.functions.items) |func| {
         if (!spanContainsOffset(func.span, offset)) continue;
         return visibleLetBindingInStatements(func.statements.items, offset, name);
@@ -226,7 +226,7 @@ pub fn visibleLetBindingAt(program: *const ast.Program, offset: usize, name: []c
     return null;
 }
 
-pub fn qualifiedCallableAt(program: *const ast.Program, offset: usize) ?QualifiedCallableTarget {
+pub fn qualifiedCallableAt(program: *const ast.Module, offset: usize) ?QualifiedCallableTarget {
     const target = callableAt(program, offset) orelse return null;
     const qualifier = target.callee.qualifier orelse return null;
     return .{
@@ -236,18 +236,18 @@ pub fn qualifiedCallableAt(program: *const ast.Program, offset: usize) ?Qualifie
     };
 }
 
-pub fn qualifiedCallableQualifierForName(program: *const ast.Program, offset: usize) ?[]const u8 {
+pub fn qualifiedCallableQualifierForName(program: *const ast.Module, offset: usize) ?[]const u8 {
     const target = qualifiedCallableAt(program, offset) orelse return null;
     if (target.role != .name) return null;
     return target.qualifier;
 }
 
-pub fn isQualifiedCallableQualifierAt(program: *const ast.Program, offset: usize) bool {
+pub fn isQualifiedCallableQualifierAt(program: *const ast.Module, offset: usize) bool {
     const target = qualifiedCallableAt(program, offset) orelse return false;
     return target.role == .qualifier;
 }
 
-pub fn isImportAliasAt(program: *const ast.Program, offset: usize) bool {
+pub fn isImportAliasAt(program: *const ast.Module, offset: usize) bool {
     for (program.imports.items) |import_decl| {
         const alias_span = import_decl.alias_span orelse continue;
         if (spanContainsOffset(alias_span, offset)) return true;
@@ -255,7 +255,7 @@ pub fn isImportAliasAt(program: *const ast.Program, offset: usize) bool {
     return false;
 }
 
-pub fn importSpecAt(program: *const ast.Program, offset: usize) ?[]const u8 {
+pub fn importSpecAt(program: *const ast.Module, offset: usize) ?[]const u8 {
     for (program.imports.items) |import_decl| {
         if (spanContainsOffset(import_decl.spec_span, offset)) return import_decl.spec;
     }

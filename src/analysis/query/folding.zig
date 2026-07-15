@@ -8,7 +8,7 @@ pub const Range = struct {
     span: source.ByteSpan,
 };
 
-pub fn collect(allocator: std.mem.Allocator, text: []const u8, program: ast.Program) ![]Range {
+pub fn collect(allocator: std.mem.Allocator, text: []const u8, program: ast.Module) ![]Range {
     var out = std.ArrayList(Range).empty;
     errdefer out.deinit(allocator);
 

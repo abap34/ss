@@ -255,7 +255,7 @@ pub fn checkPageNamesUnique(
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
         const origin_path = originPathForModule(module);
-        for (module.program.pages.items) |page| {
+        for (module.syntax.pages.items) |page| {
             if (pages.contains(page.name)) {
                 const origin = try statementOrigin(allocator, origin_path, page.span);
                 defer allocator.free(origin);
@@ -344,7 +344,7 @@ pub fn checkPageStatements(
     ir: *core.Ir,
     sema: *const SemanticEnv,
     origin_path: []const u8,
-    program: ast.Program,
+    program: ast.Module,
 ) !void {
     var page_context = PageContextRequirement.init(allocator, sema);
     defer page_context.deinit();

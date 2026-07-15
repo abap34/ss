@@ -15,14 +15,14 @@ pub fn populateExpectedTypes(allocator: std.mem.Allocator, ir: *core.Ir, holes: 
     const sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
     for (ir.modules.items) |module| {
         var module_sema = sema.forModule(module.id);
-        try moduleExpectedTypes(allocator, &module_sema, module.program, holes);
+        try moduleExpectedTypes(allocator, &module_sema, module.syntax, holes);
     }
 }
 
 fn moduleExpectedTypes(
     allocator: std.mem.Allocator,
     sema: *const SemanticEnv,
-    program: ast.Program,
+    program: ast.Module,
     holes: *syntax_hole.Result,
 ) !void {
     for (program.constants.items) |decl| {

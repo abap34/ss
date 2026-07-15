@@ -27,8 +27,8 @@ pub const Context = struct {
                 parsed = null;
             }
         }
-        const parsed_program = if (parsed) |*result| &result.program else null;
-        const target = try targetAtOffset(allocator, req.source, req.offset, parsed_program) orelse return error.NoQueryTarget;
+        const parsed_module = if (parsed) |*result| &result.module else null;
+        const target = try targetAtOffset(allocator, req.source, req.offset, parsed_module) orelse return error.NoQueryTarget;
         return .{
             .target = target.text,
             .target_kind = target.kind,
@@ -44,31 +44,31 @@ pub const Context = struct {
         if (self.parsed) |*result| result.deinit(allocator);
     }
 
-    pub fn program(self: *const Context) ?*const ast.Program {
-        return if (self.parsed) |*result| &result.program else null;
+    pub fn module(self: *const Context) ?*const ast.Module {
+        return if (self.parsed) |*result| &result.module else null;
     }
 
     pub fn qualifiedCallableAlias(self: *const Context) ?[]const u8 {
         if (self.kindIs(.callable_name)) return self.qualifier;
-        const parsed = self.program() orelse return null;
+        const parsed = self.module() orelse return null;
         return cursor.qualifiedCallableQualifierForName(parsed, self.offset);
     }
 
     pub fn isQualifiedCallableQualifier(self: *const Context) bool {
         if (self.kindIs(.callable_qualifier)) return true;
-        const parsed = self.program() orelse return false;
+        const parsed = self.module() orelse return false;
         return cursor.isQualifiedCallableQualifierAt(parsed, self.offset);
     }
 
     pub fn isImportAlias(self: *const Context) bool {
         if (self.kindIs(.import_alias)) return true;
-        const parsed = self.program() orelse return false;
+        const parsed = self.module() orelse return false;
         return cursor.isImportAliasAt(parsed, self.offset);
     }
 
     pub fn importSpecAtOffset(self: *const Context) bool {
         if (self.kindIs(.import_spec)) return true;
-        const parsed = self.program() orelse return false;
+        const parsed = self.module() orelse return false;
         return cursor.importSpecAt(parsed, self.offset) != null;
     }
 
@@ -77,7 +77,7 @@ pub const Context = struct {
     }
 
     pub fn callableRoleIsName(self: *const Context) bool {
-        const parsed = self.program() orelse return false;
+        const parsed = self.module() orelse return false;
         if (cursor.callableAt(parsed, self.offset)) |target| {
             return target.role == .name;
         }
@@ -95,7 +95,7 @@ const TargetAtOffset = struct {
     qualifier: ?[]u8 = null,
 };
 
-fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Program) !?TargetAtOffset {
+fn targetAtOffset(allocator: std.mem.Allocator, text: []const u8, offset: usize, program: ?*const ast.Module) !?TargetAtOffset {
     if (program) |parsed| {
         if (cursor.sourceNameAt(parsed, offset)) |target| return .{
             .text = try allocator.dupe(u8, target.text),

@@ -411,12 +411,12 @@ pub fn buildSnapshot(
         allocator.free(entry_source);
         return finishDiagnosticSnapshot(allocator, entry_path, asset_base_dir, options.generation, options.project, &diagnostic_bag, &diagnostics_moved);
     };
-    var program = parse_result.program;
+    var program = parse_result.module;
     var parse_holes = parse_result.holes;
 
     var load_diagnostics = module_loader.LoadDiagnostics.init(allocator);
     defer load_diagnostics.deinit();
-    var index = program_analysis.loadProgramIndexWithOptions(allocator, sources.io, asset_base_dir, program, .{
+    var index = program_analysis.loadModuleIndexWithOptions(allocator, sources.io, asset_base_dir, program, .{
         .overlay = &sources.overlay,
         .diagnostics = &load_diagnostics,
         .print_diagnostics = false,
@@ -706,9 +706,9 @@ fn cloneModules(allocator: std.mem.Allocator, modules: []const core.SourceModule
         errdefer deinitScopes(allocator, function_scopes);
         const page_scopes = try clonePageScopes(allocator, module);
         errdefer deinitScopes(allocator, page_scopes);
-        const symbols = try query_symbols.collect(allocator, module.source, module.program);
+        const symbols = try query_symbols.collect(allocator, module.source, module.syntax);
         errdefer query_symbols.deinit(allocator, symbols);
-        const folding_ranges = try query_folding.collect(allocator, module.source, module.program);
+        const folding_ranges = try query_folding.collect(allocator, module.source, module.syntax);
         errdefer allocator.free(folding_ranges);
 
         const fact = ModuleFact{
@@ -735,7 +735,7 @@ fn cloneFunctionScopes(allocator: std.mem.Allocator, module: core.SourceModule) 
         deinitScopeItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (module.program.functions.items) |func| {
+    for (module.syntax.functions.items) |func| {
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, func.name),
             .start = func.span.start,
@@ -751,7 +751,7 @@ fn clonePageScopes(allocator: std.mem.Allocator, module: core.SourceModule) ![]S
         deinitScopeItems(allocator, out.items);
         out.deinit(allocator);
     }
-    for (module.program.pages.items) |page| {
+    for (module.syntax.pages.items) |page| {
         try out.append(allocator, .{
             .name = try allocator.dupe(u8, page.name),
             .start = page.span.start,
@@ -787,7 +787,7 @@ fn cloneImports(allocator: std.mem.Allocator, module: core.SourceModule) ![]Impo
         }
         out.deinit(allocator);
     }
-    for (module.program.imports.items, 0..) |import_decl, import_index| {
+    for (module.syntax.imports.items, 0..) |import_decl, import_index| {
         try out.append(allocator, .{
             .spec = try allocator.dupe(u8, import_decl.spec),
             .spec_span = import_decl.spec_span,
@@ -808,9 +808,9 @@ fn collectTypeDefinitions(allocator: std.mem.Allocator, ir: *const core.Ir) ![]T
     }
     for (ir.module_order.items) |module_id| {
         const module = ir.moduleById(module_id) orelse continue;
-        for (module.program.records.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .record, decl.name, decl.name_span);
-        for (module.program.objects.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .object, decl.name, decl.name_span);
-        for (module.program.types.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .enum_type, decl.name, decl.name_span);
+        for (module.syntax.records.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .record, decl.name, decl.name_span);
+        for (module.syntax.objects.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .object, decl.name, decl.name_span);
+        for (module.syntax.types.items) |decl| try appendTypeDefinition(allocator, &out, module.*, .enum_type, decl.name, decl.name_span);
     }
     return out.toOwnedSlice(allocator);
 }
@@ -929,7 +929,7 @@ fn collectVariableBindings(allocator: std.mem.Allocator, ir: *core.Ir) ![]Variab
     }
     for (ir.modules.items) |module| {
         if (module.path == null) continue;
-        var infos = try program_analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.program, module.id, module.source.len, ir);
+        var infos = try program_analysis.collectScopedVariableInfoFromProgram(allocator, &ir.functions, module.syntax, module.id, module.source.len, ir);
         defer infos.deinit(allocator);
         for (infos.items) |entry| {
             const type_label: []u8 = @constCast(try semantic_types.typeInfoLabelAlloc(allocator, entry.info));

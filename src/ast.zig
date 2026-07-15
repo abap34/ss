@@ -6,7 +6,7 @@ const Allocator = std.mem.Allocator;
 pub const Type = types.Type;
 pub const HoleId = u32;
 
-pub const Program = struct {
+pub const Module = struct {
     imports: std.ArrayList(ImportDecl),
     top_level_items: std.ArrayList(TopLevelItem),
     types: std.ArrayList(TypeDecl),
@@ -19,11 +19,11 @@ pub const Program = struct {
     document_statements: std.ArrayList(Statement),
     pages: std.ArrayList(PageDecl),
 
-    pub fn init() Program {
+    pub fn init() Module {
         return .{ .imports = .empty, .top_level_items = .empty, .types = .empty, .records = .empty, .objects = .empty, .object_extensions = .empty, .constants = .empty, .functions = .empty, .document_blocks = .empty, .document_statements = .empty, .pages = .empty };
     }
 
-    pub fn deinit(self: *Program, allocator: Allocator) void {
+    pub fn deinit(self: *Module, allocator: Allocator) void {
         for (self.imports.items) |import_decl| {
             allocator.free(import_decl.spec);
             if (import_decl.mode.alias) |alias| allocator.free(alias);
