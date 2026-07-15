@@ -2,6 +2,8 @@ const std = @import("std");
 const build_options = @import("build_options");
 const core = @import("core");
 const render_layout = @import("../render/layout.zig");
+const render_pdf = @import("../render/pdf.zig");
+const editor_snapshot = @import("../editor/snapshot.zig");
 const analysis = @import("../analysis.zig");
 const project = @import("../project.zig");
 const utils = @import("utils");
@@ -11,6 +13,8 @@ const lsp_state = @import("state.zig");
 const feature_colors = @import("features/colors.zig");
 const feature_completion = @import("features/completion.zig");
 const feature_definition = @import("features/definition.zig");
+const feature_editor = @import("features/editor.zig");
+const feature_edit = @import("features/edit.zig");
 const feature_folding = @import("features/folding.zig");
 const feature_hover = @import("features/hover.zig");
 const feature_inlay = @import("features/inlay.zig");
@@ -43,10 +47,12 @@ const Server = struct {
     documents: DocumentStore,
     snapshot: ?Snapshot = null,
     layout_snapshots: LayoutStore = .{},
+    editor_snapshots: LayoutStore = .{},
     published_diagnostic_uris: std.StringHashMap(void),
     pending_rebuild_path: ?[]u8 = null,
     pending_rebuild_due_ms: u64 = 0,
     shutdown: bool = false,
+    wysiwyg_paths: std.StringHashMap(void),
 
     fn init(io: std.Io, allocator: std.mem.Allocator) Server {
         return .{
@@ -54,6 +60,7 @@ const Server = struct {
             .allocator = allocator,
             .documents = DocumentStore.init(allocator),
             .published_diagnostic_uris = std.StringHashMap(void).init(allocator),
+            .wysiwyg_paths = std.StringHashMap(void).init(allocator),
         };
     }
 
@@ -61,7 +68,9 @@ const Server = struct {
         self.documents.deinit();
         if (self.snapshot) |*snapshot| snapshot.deinit();
         self.layout_snapshots.deinit(self.allocator);
+        self.editor_snapshots.deinit(self.allocator);
         lsp_state.deinitStringSet(self.allocator, &self.published_diagnostic_uris);
+        lsp_state.deinitStringSet(self.allocator, &self.wysiwyg_paths);
         self.clearPendingRebuild();
     }
 
@@ -139,6 +148,21 @@ const Server = struct {
     }
 
     fn buildSnapshot(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !Snapshot {
+        return try self.buildSnapshotWithOverride(changed_path, diagnostics, null, true);
+    }
+
+    const SourceOverride = struct {
+        path: []const u8,
+        source: []const u8,
+    };
+
+    fn buildSnapshotWithOverride(
+        self: *Server,
+        changed_path: []const u8,
+        diagnostics: *DiagnosticSet,
+        source_override: ?SourceOverride,
+        include_editor_snapshot: bool,
+    ) !Snapshot {
         const changed_abs = try project.absolutePath(self.allocator, changed_path);
         defer self.allocator.free(changed_abs);
         const changed_dir = std.fs.path.dirname(changed_abs) orelse ".";
@@ -162,13 +186,18 @@ const Server = struct {
         var sources = analysis.snapshot.SourceSet.init(self.allocator, self.io);
         defer sources.deinit();
         try self.documents.fillOverlay(&sources.overlay);
+        if (source_override) |override| try sources.put(override.path, override.source);
 
-        var layout_context = LayoutHookContext{ .server = self, .diagnostics = diagnostics };
+        var layout_context = LayoutHookContext{
+            .server = self,
+            .diagnostics = diagnostics,
+            .include_editor_snapshot = include_editor_snapshot,
+        };
         var analysis_snapshot = try analysis.snapshot.buildSnapshot(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
             .project = .{
                 .lsp = if (config) |cfg| cfg.lsp else .{},
-                .preview = if (config) |cfg| cfg.preview else .{},
+                .wysiwyg = if (config) |cfg| cfg.wysiwyg else .{},
                 .page_guide = if (config) |cfg| cfg.page_guide else .{},
             },
             .layout = .{
@@ -198,10 +227,6 @@ const Server = struct {
         errdefer analysis_snapshot.deinit();
         try diagnostics.addAnalysisBag(&analysis_snapshot.diagnostics);
         return analysis_snapshot;
-    }
-
-    fn evaluateAndSolveLayoutWithRenderMeasurements(self: *Server, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
-        try render_layout.evaluateAndSolveWithPdfMeasurements(self.io, ir, graph);
     }
 
     fn addProjectConfigDiagnostic(self: *Server, diagnostics: *DiagnosticSet, path: []const u8, err: anyerror) !void {
@@ -298,14 +323,75 @@ fn buildSnapshotForFeature(context: *anyopaque, path: []const u8) !Snapshot {
     return try server.buildSingleDocumentSnapshot(path, &diagnostics);
 }
 
+fn validateLayoutEdit(
+    context: *anyopaque,
+    path: []const u8,
+    source: []const u8,
+    node_id: u32,
+    expected_x: f64,
+    expected_y: f64,
+    expected_width: f64,
+    expected_height: f64,
+) !bool {
+    const server: *Server = @ptrCast(@alignCast(context));
+    var diagnostics = DiagnosticSet.init(server.allocator);
+    defer diagnostics.deinit();
+    var snapshot = server.buildSnapshotWithOverride(path, &diagnostics, .{
+        .path = path,
+        .source = source,
+    }, false) catch return false;
+    defer snapshot.deinit();
+    const layout = if (snapshot.layout) |*value| value else return false;
+    var parsed = utils.json.parseValue(server.allocator, layout.conflict_report_json, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const objects = utils.json.arrayFieldObject(&parsed.value.object, "objects") orelse return false;
+    const pages = utils.json.arrayFieldObject(&parsed.value.object, "pages") orelse return false;
+
+    var object: ?*const utils.json.ObjectMap = null;
+    for (objects.items) |*item| {
+        if (item.* != .object) continue;
+        if ((utils.json.intField(&item.object, "id") orelse -1) == node_id) {
+            object = &item.object;
+            break;
+        }
+    }
+    const value = object orelse return false;
+    const page_id = utils.json.intField(value, "page_id") orelse return false;
+    var page_height: ?f64 = null;
+    for (pages.items) |*item| {
+        if (item.* != .object) continue;
+        if ((utils.json.intField(&item.object, "id") orelse -1) != page_id) continue;
+        page_height = utils.json.numberField(&item.object, "height");
+        break;
+    }
+    const core_x = utils.json.numberField(value, "x") orelse return false;
+    const core_y = utils.json.numberField(value, "y") orelse return false;
+    const width = utils.json.numberField(value, "width") orelse return false;
+    const height = utils.json.numberField(value, "height") orelse return false;
+    const preview_y = (page_height orelse return false) - core_y - height;
+    const tolerance: f64 = core.layout.graph.ConstraintTolerance;
+    return @abs(core_x - expected_x) <= tolerance and
+        @abs(preview_y - expected_y) <= tolerance and
+        @abs(width - expected_width) <= tolerance and
+        @abs(height - expected_height) <= tolerance;
+}
+
 const LayoutHookContext = struct {
     server: *Server,
     diagnostics: *DiagnosticSet,
+    include_editor_snapshot: bool,
 };
 
-fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !void {
+fn runSnapshotLayout(context: *anyopaque, ir: *core.Ir, graph: *const analysis.schedule.ScheduleGraph) !analysis.snapshot.LayoutHookResult {
     const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
-    try hook.server.evaluateAndSolveLayoutWithRenderMeasurements(ir, graph);
+    var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, ir, graph);
+    defer pages.deinit(ir.allocator);
+    if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
+
+    var scenes = try render_pdf.compileDocumentScenes(ir.allocator, hook.server.io, ir, &pages, .{});
+    defer scenes.deinit(ir.allocator);
+    return .{ .editor_snapshot_json = try editor_snapshot.toJson(ir.allocator, ir, &scenes, hook.server.documents.generation) };
 }
 
 fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Ir, err: anyerror) !void {
@@ -541,6 +627,53 @@ fn handleMessage(server: *Server, body: []const u8) !void {
             .layout_snapshots = &server.layout_snapshots,
         };
         const result = try feature_layout.result(&ctx, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/editorSnapshot")) {
+        if (server.pending_rebuild_path != null) try server.flushPendingRebuild();
+        const doc_path = try protocol.docPathFromParams(server.allocator, params);
+        defer if (doc_path) |path| server.allocator.free(path);
+        if (doc_path) |path| {
+            const first_for_path = !server.wysiwyg_paths.contains(path);
+            if (first_for_path) try putStringSet(server.allocator, &server.wysiwyg_paths, path);
+            if (first_for_path or server.snapshot == null or server.snapshot.?.layout == null or server.snapshot.?.layout.?.editor_snapshot_json == null) {
+                try server.rebuildImmediately(path);
+            }
+        }
+        var provider = snapshotProvider(server);
+        var ctx = feature_editor.Context{
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .provider = &provider,
+            .snapshots = &server.editor_snapshots,
+        };
+        const result = try feature_editor.snapshotResult(&ctx, params);
+        defer server.allocator.free(result);
+        try respond(server.allocator, id, result);
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/editorClose")) {
+        const doc_path = try protocol.docPathFromParams(server.allocator, params);
+        defer if (doc_path) |path| server.allocator.free(path);
+        if (doc_path) |path| {
+            if (server.wysiwyg_paths.fetchRemove(path)) |entry| server.allocator.free(entry.key);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, method, "ss/layoutEdit")) {
+        var provider = snapshotProvider(server);
+        var ctx = feature_edit.Context{
+            .io = server.io,
+            .allocator = server.allocator,
+            .documents = &server.documents,
+            .active_editor_paths = &server.wysiwyg_paths,
+            .provider = &provider,
+            .validation_context = server,
+            .validate = validateLayoutEdit,
+        };
+        const result = try feature_edit.result(&ctx, params);
         defer server.allocator.free(result);
         try respond(server.allocator, id, result);
         return;

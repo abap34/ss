@@ -59,15 +59,10 @@ fn appendSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), facts: 
     try appendBoolField(allocator, out, "colors", facts.lsp.colors, false);
     try out.append(allocator, '}');
 
-    try out.appendSlice(allocator, ",\"preview\":{");
-    try appendBoolField(allocator, out, "enabled", facts.preview.enabled, true);
-    try appendIntField(allocator, out, "debounce", facts.preview.debounce_ms, false);
-    try appendBoolField(allocator, out, "refreshOnSave", facts.preview.refresh_on_save, false);
-    try appendBoolField(allocator, out, "refreshOnDependencyChange", facts.preview.refresh_on_dependency_change, false);
-    try out.appendSlice(allocator, ",\"open\":");
-    try protocol.appendJsonString(allocator, out, if (facts.preview.open_mode == .external) "external" else "vscode");
-    try appendBoolField(allocator, out, "reveal", facts.preview.reveal_after_render, false);
-    try appendIntField(allocator, out, "timeout", facts.preview.render_timeout_ms, false);
+    try out.appendSlice(allocator, ",\"wysiwyg\":{");
+    try appendBoolField(allocator, out, "enabled", facts.wysiwyg.enabled, true);
+    try appendIntField(allocator, out, "debounce", facts.wysiwyg.debounce_ms, false);
+    try appendBoolField(allocator, out, "refreshOnDependencyChange", facts.wysiwyg.refresh_on_dependency_change, false);
     try out.append(allocator, '}');
 
     try out.appendSlice(allocator, ",\"pageGuide\":{");

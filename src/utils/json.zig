@@ -145,6 +145,12 @@ pub const Array = struct {
     sink: Sink,
     first: bool = true,
 
+    pub fn beginBuffer(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8)) !Array {
+        const sink: Sink = .{ .buffer = .{ .value = buffer, .allocator = allocator } };
+        try writeByte(sink, '[');
+        return .{ .allocator = allocator, .sink = sink };
+    }
+
     pub fn end(self: *Array) !void {
         try writeByte(self.sink, ']');
     }

@@ -275,28 +275,36 @@ pub const LayoutSnapshot = struct {
 };
 
 pub const LayoutStore = struct {
-    last_good: ?LayoutSnapshot = null,
+    items: std.ArrayList(LayoutSnapshot) = .empty,
 
     pub fn deinit(self: *LayoutStore, allocator: std.mem.Allocator) void {
-        if (self.last_good) |*layout| layout.deinit(allocator);
-        self.last_good = null;
+        for (self.items.items) |*layout| layout.deinit(allocator);
+        self.items.deinit(allocator);
+        self.* = .{};
     }
 
     pub fn remember(self: *LayoutStore, allocator: std.mem.Allocator, snapshot: *const Snapshot, json: []const u8) !void {
-        const next = try LayoutSnapshot.init(
+        var next = try LayoutSnapshot.init(
             allocator,
             snapshot.project.entry_path,
             snapshot.generation,
             json,
         );
-        if (self.last_good) |*layout| layout.deinit(allocator);
-        self.last_good = next;
+        errdefer next.deinit(allocator);
+        for (self.items.items) |*layout| {
+            if (!layout.matchesEntry(snapshot.project.entry_path)) continue;
+            layout.deinit(allocator);
+            layout.* = next;
+            return;
+        }
+        try self.items.append(allocator, next);
     }
 
     pub fn jsonForEntry(self: *const LayoutStore, allocator: std.mem.Allocator, entry_path: []const u8) !?[]const u8 {
-        const layout = if (self.last_good) |*value| value else return null;
-        if (!layout.matchesEntry(entry_path)) return null;
-        return try layout.cloneJson(allocator);
+        for (self.items.items) |*layout| {
+            if (layout.matchesEntry(entry_path)) return try layout.cloneJson(allocator);
+        }
+        return null;
     }
 };
 

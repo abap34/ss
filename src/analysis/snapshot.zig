@@ -58,9 +58,13 @@ pub const SourceSet = struct {
     }
 };
 
+pub const LayoutHookResult = struct {
+    editor_snapshot_json: ?[]u8 = null,
+};
+
 pub const LayoutHook = struct {
     context: *anyopaque,
-    run: *const fn (context: *anyopaque, ir: *core.Ir, graph: *const schedule.ScheduleGraph) anyerror!void,
+    run: *const fn (context: *anyopaque, ir: *core.Ir, graph: *const schedule.ScheduleGraph) anyerror!LayoutHookResult,
     on_error: ?*const fn (context: *anyopaque, ir: *core.Ir, err: anyerror) anyerror!void = null,
 };
 
@@ -75,7 +79,7 @@ pub const ProjectFacts = struct {
     asset_base_dir: []u8 = &.{},
     module_paths: [][]u8 = &.{},
     lsp: project.LspConfig = .{},
-    preview: project.PreviewConfig = .{},
+    wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
 
     pub fn deinit(self: *ProjectFacts, allocator: std.mem.Allocator) void {
@@ -89,7 +93,7 @@ pub const ProjectFacts = struct {
 
 pub const ProjectOptions = struct {
     lsp: project.LspConfig = .{},
-    preview: project.PreviewConfig = .{},
+    wysiwyg: project.WysiwygConfig = .{},
     page_guide: project.PageGuideConfig = .{},
 };
 
@@ -207,16 +211,20 @@ pub const EnumCaseFact = struct {
 
 pub const LayoutFacts = struct {
     conflict_report_json: []u8,
+    editor_snapshot_json: ?[]u8 = null,
 
-    pub fn fromIr(allocator: std.mem.Allocator, ir: *core.Ir) !LayoutFacts {
+    pub fn fromIr(allocator: std.mem.Allocator, ir: *core.Ir, owned_editor_snapshot_json: ?[]u8) !LayoutFacts {
+        errdefer if (owned_editor_snapshot_json) |value| allocator.free(value);
         return .{
             .conflict_report_json = try core.layout.conflicts.toJson(allocator, ir),
+            .editor_snapshot_json = owned_editor_snapshot_json,
         };
     }
 
     pub fn deinit(self: *LayoutFacts, allocator: std.mem.Allocator) void {
         allocator.free(self.conflict_report_json);
-        self.* = .{ .conflict_report_json = &.{} };
+        if (self.editor_snapshot_json) |value| allocator.free(value);
+        self.* = .{ .conflict_report_json = &.{}, .editor_snapshot_json = null };
     }
 };
 
@@ -458,16 +466,16 @@ pub fn buildSnapshot(
     if (!diagnostic_bag.hasErrors()) {
         if (options.layout) |hook| {
             if (analyzed_program) |*analysis_result| {
-                if (hook.run(hook.context, &ir, analysis_result.scheduleGraph())) {
+                if (hook.run(hook.context, &ir, analysis_result.scheduleGraph())) |result| {
+                    layout_facts = try LayoutFacts.fromIr(allocator, &ir, result.editor_snapshot_json);
                     try diagnostic_bag.addIr(&ir);
-                    layout_facts = try LayoutFacts.fromIr(allocator, &ir);
                 } else |err| switch (err) {
                     error.ConstraintConflict,
                     error.NegativeFrameSize,
                     => {
                         if (hook.on_error) |on_error| {
                             try on_error(hook.context, &ir, err);
-                            layout_facts = try LayoutFacts.fromIr(allocator, &ir);
+                            layout_facts = try LayoutFacts.fromIr(allocator, &ir, null);
                         } else {
                             try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
@@ -522,7 +530,7 @@ fn initProjectFacts(
     var facts = ProjectFacts{
         .module_paths = module_paths,
         .lsp = options.lsp,
-        .preview = options.preview,
+        .wysiwyg = options.wysiwyg,
         .page_guide = options.page_guide,
     };
     errdefer facts.deinit(allocator);
