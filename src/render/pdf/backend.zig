@@ -1,6 +1,6 @@
 const std = @import("std");
 const core = @import("core");
-const draw_sink = @import("render_sink");
+const draw_target = @import("render_target");
 const c = @import("pdf_ffi").c;
 const render_ir = @import("render");
 
@@ -149,8 +149,8 @@ fn renderNativeLayer(
 }
 
 fn replayItems(pdf: *c.SsPdf, items: []const render_ir.Item) !void {
-    var sink = draw_sink.Sink{ .pdf = pdf };
-    for (items) |item| try sink.replayItem(item);
+    var target = draw_target.Target{ .pdf = pdf };
+    for (items) |item| try target.replayItem(item);
 }
 
 fn emitAnnotations(pdf: *c.SsPdf, page: *const render_ir.Page) !void {

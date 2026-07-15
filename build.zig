@@ -23,7 +23,7 @@ const ProjectModules = struct {
     core: *Module,
     render: *Module,
     pdf_ffi: *Module,
-    render_sink: *Module,
+    render_target: *Module,
     pdf_backend: *Module,
 };
 
@@ -248,7 +248,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     }, null);
     const pdf_ffi_mod = createModule(ctx, "src/render/pdf/ffi.zig", &.{}, true);
     addNativePdfHeadersAndLibraries(ctx.b, pdf_ffi_mod, tree_sitter);
-    const render_sink_mod = createModule(ctx, "src/render/sink.zig", &.{
+    const render_target_mod = createModule(ctx, "src/render/target.zig", &.{
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
@@ -257,7 +257,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
-        import("render_sink", render_sink_mod),
+        import("render_target", render_target_mod),
     }, true);
 
     return .{
@@ -271,7 +271,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .core = core_mod,
         .render = render_mod,
         .pdf_ffi = pdf_ffi_mod,
-        .render_sink = render_sink_mod,
+        .render_target = render_target_mod,
         .pdf_backend = pdf_backend_mod,
     };
 }
@@ -411,6 +411,22 @@ fn addTestStep(
     test_step.dependOn(&run_render_spec_tests.step);
     const render_test_step = b.step("test-render-ir", "Run focused render IR tests");
     render_test_step.dependOn(&run_render_spec_tests.step);
+    const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
+        import("core", modules.core),
+        import("render", modules.render),
+        import("utils", modules.utils),
+    }, null);
+    const render_compile_spec_mod = createModule(ctx, "tests/render/compile/spec_tests.zig", &.{
+        import("ast", modules.ast),
+        import("core", modules.core),
+        import("render", modules.render),
+        import("render_compile", render_compile_mod),
+    }, null);
+    const render_compile_spec_tests = b.addTest(.{ .root_module = render_compile_spec_mod });
+    const run_render_compile_spec_tests = b.addRunArtifact(render_compile_spec_tests);
+    test_step.dependOn(&run_render_compile_spec_tests.step);
+    const render_compile_test_step = b.step("test-render-compile", "Run focused render compiler tests");
+    render_compile_test_step.dependOn(&run_render_compile_spec_tests.step);
     const render_wrap_mod = createModule(ctx, "src/render/text/wrap.zig", &.{}, null);
     addModuleTest(ctx, test_step, "tests/render/wrap/spec_tests.zig", &.{
         import("render_wrap", render_wrap_mod),
@@ -454,7 +470,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("fontawesome_assets", modules.fontawesome_assets),
         import("render", modules.render),
         import("pdf_ffi", modules.pdf_ffi),
-        import("render_sink", modules.render_sink),
+        import("render_target", modules.render_target),
         import("pdf_backend", modules.pdf_backend),
     }, link_libc);
 }

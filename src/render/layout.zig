@@ -17,7 +17,7 @@ pub fn preloadPreparedPageArtifacts(
     io: std.Io,
     ir: *core.Context,
     pages: *const core.prepared.PreparedPages,
-    progress: ?pdf.RenderProgress,
+    progress: ?pdf.Progress,
     jobs: ?usize,
 ) !void {
     try pdf.preloadPreparedPageArtifacts(ir.allocator, io, ir, pages, .{

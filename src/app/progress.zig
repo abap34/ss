@@ -4,7 +4,7 @@ const utils = @import("utils");
 
 const Progress = utils.progress.Progress;
 
-pub fn render(progress: *Progress) pdf.RenderProgress {
+pub fn render(progress: *Progress) pdf.Progress {
     return .{
         .context = progress,
         .artifactCompleted = onRenderArtifact,
