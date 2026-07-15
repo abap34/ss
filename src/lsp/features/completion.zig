@@ -7,7 +7,7 @@ const lsp_state = @import("../state.zig");
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    provider: *lsp_state.SnapshotProvider,
+    provider: *lsp_state.AnalysisProvider,
     documents: *lsp_state.DocumentStore,
 };
 
@@ -19,10 +19,10 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     var builder = try begin(ctx.allocator, &out);
     defer builder.deinit();
     if (position) |*pos| {
-        var owned_snapshot: ?lsp_state.Snapshot = null;
+        var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
         defer if (owned_snapshot) |*snapshot| snapshot.deinit();
         const snapshot = try ctx.provider.forDocument(pos.doc_path, &owned_snapshot) orelse return finish(ctx.allocator, &out);
-        if (!lsp_state.featureEnabledForSnapshot(snapshot, .completion)) return finish(ctx.allocator, &out);
+        if (!lsp_state.featureEnabledForAnalysis(snapshot, .completion)) return finish(ctx.allocator, &out);
         var completion_result = try analysis_snapshot.completeAt(ctx.allocator, snapshot, .{
             .path = pos.doc_path,
             .source = pos.source,

@@ -12,7 +12,7 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     documents: *lsp_state.DocumentStore,
-    current_snapshot: ?*const lsp_state.Snapshot,
+    current_snapshot: ?*const lsp_state.AnalysisSnapshot,
 };
 
 pub fn documentColorsResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {

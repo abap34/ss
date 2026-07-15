@@ -10,7 +10,7 @@ pub const Context = struct {
     allocator: std.mem.Allocator,
     documents: *lsp_state.DocumentStore,
     active_editor_paths: *const std.StringHashMap(void),
-    provider: *lsp_state.SnapshotProvider,
+    provider: *lsp_state.AnalysisProvider,
     validation_context: *anyopaque,
     validate: *const fn (context: *anyopaque, path: []const u8, source: []const u8, node_id: u32, x: f64, y: f64, width: f64, height: f64) anyerror!bool,
 };
@@ -26,12 +26,12 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active for this document.");
     }
 
-    var owned_snapshot: ?lsp_state.Snapshot = null;
+    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse
         return try statusJson(ctx.allocator, "unsupported", "No compiler snapshot is available.");
-    const layout = if (snapshot.layout) |*value| value else return try statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
-    const editor_json = layout.editor_snapshot_json orelse
+    const layout = if (snapshot.layout_output) |*value| value else return try statusJson(ctx.allocator, "unsupported", "No solved layout is available.");
+    const editor_json = layout.editor_json orelse
         return try statusJson(ctx.allocator, "unsupported", "The WYSIWYG editor is not active.");
 
     var parsed = try utils.json.parseValue(ctx.allocator, editor_json, .{});

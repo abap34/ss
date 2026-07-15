@@ -548,17 +548,17 @@ const CompletionCase = struct {
 
     fn snapshotFor(self: *CompletionCase, source: []const u8) !*snapshot_api.AnalysisSnapshot {
         if (self.snapshot) |*snapshot| snapshot.deinit();
-        self.snapshot = try buildSnapshot(self.allocator, self.path, source);
+        self.snapshot = try buildAnalysis(self.allocator, self.path, source);
         return if (self.snapshot) |*snapshot| snapshot else unreachable;
     }
 };
 
-fn buildSnapshot(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !snapshot_api.AnalysisSnapshot {
+fn buildAnalysis(allocator: std.mem.Allocator, path: []const u8, source: []const u8) !snapshot_api.AnalysisSnapshot {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var sources = snapshot_api.SourceSet.init(allocator, testing.io);
     defer sources.deinit();
     try sources.put(path, source);
-    return snapshot_api.buildSnapshot(allocator, &sources, path, asset_base_dir, .{});
+    return snapshot_api.build(allocator, &sources, path, asset_base_dir, .{});
 }
 
 fn offsetAfter(source: []const u8, needle: []const u8) usize {

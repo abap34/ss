@@ -24,9 +24,9 @@ const feature_symbols = @import("features/symbols.zig");
 const feature_tokens = @import("features/tokens.zig");
 
 const JsonValue = protocol.JsonValue;
-const Snapshot = lsp_state.Snapshot;
+const AnalysisSnapshot = lsp_state.AnalysisSnapshot;
 const DocumentStore = lsp_state.DocumentStore;
-const LayoutStore = lsp_state.LayoutStore;
+const ResponseStore = lsp_state.ResponseStore;
 const DiagnosticSet = lsp_diagnostics.DiagnosticSet;
 const max_poll_timeout_ms = std.math.maxInt(i32);
 
@@ -45,9 +45,9 @@ const Server = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     documents: DocumentStore,
-    snapshot: ?Snapshot = null,
-    layout_snapshots: LayoutStore = .{},
-    editor_snapshots: LayoutStore = .{},
+    analysis: ?AnalysisSnapshot = null,
+    layout_responses: ResponseStore = .{},
+    editor_responses: ResponseStore = .{},
     published_diagnostic_uris: std.StringHashMap(void),
     pending_rebuild_path: ?[]u8 = null,
     pending_rebuild_due_ms: u64 = 0,
@@ -66,29 +66,29 @@ const Server = struct {
 
     fn deinit(self: *Server) void {
         self.documents.deinit();
-        if (self.snapshot) |*snapshot| snapshot.deinit();
-        self.layout_snapshots.deinit(self.allocator);
-        self.editor_snapshots.deinit(self.allocator);
+        if (self.analysis) |*snapshot| snapshot.deinit();
+        self.layout_responses.deinit(self.allocator);
+        self.editor_responses.deinit(self.allocator);
         lsp_state.deinitStringSet(self.allocator, &self.published_diagnostic_uris);
         lsp_state.deinitStringSet(self.allocator, &self.wysiwyg_paths);
         self.clearPendingRebuild();
     }
 
     fn rebuild(self: *Server, changed_path: []const u8) !void {
-        if (self.snapshot) |*old| old.deinit();
-        self.snapshot = null;
+        if (self.analysis) |*old| old.deinit();
+        self.analysis = null;
 
         var diagnostics = DiagnosticSet.init(self.allocator);
         defer diagnostics.deinit();
         const rebuild_generation = self.documents.generation;
-        var snapshot = try self.buildSnapshot(changed_path, &diagnostics);
+        var snapshot = try self.buildAnalysis(changed_path, &diagnostics);
         errdefer snapshot.deinit();
         if (snapshot.generation != self.documents.generation or rebuild_generation != self.documents.generation) {
             snapshot.deinit();
             return;
         }
-        self.snapshot = snapshot;
-        if (self.snapshot.?.project.lsp.enabled and self.snapshot.?.project.lsp.diagnostics) {
+        self.analysis = snapshot;
+        if (self.analysis.?.project.lsp.enabled and self.analysis.?.project.lsp.diagnostics) {
             try self.publishDiagnostics(&diagnostics);
         } else {
             var empty = DiagnosticSet.init(self.allocator);
@@ -138,7 +138,7 @@ const Server = struct {
     }
 
     fn lspDebounceMs(self: *const Server) u64 {
-        return if (self.snapshot) |*snapshot| snapshot.project.lsp.debounce_ms else (project.LspConfig{}).debounce_ms;
+        return if (self.analysis) |*snapshot| snapshot.project.lsp.debounce_ms else (project.LspConfig{}).debounce_ms;
     }
 
     fn clearPendingRebuild(self: *Server) void {
@@ -147,8 +147,8 @@ const Server = struct {
         self.pending_rebuild_due_ms = 0;
     }
 
-    fn buildSnapshot(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !Snapshot {
-        return try self.buildSnapshotWithOverride(changed_path, diagnostics, null, true);
+    fn buildAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !AnalysisSnapshot {
+        return try self.buildAnalysisWithOverride(changed_path, diagnostics, null, true);
     }
 
     const SourceOverride = struct {
@@ -156,13 +156,13 @@ const Server = struct {
         source: []const u8,
     };
 
-    fn buildSnapshotWithOverride(
+    fn buildAnalysisWithOverride(
         self: *Server,
         changed_path: []const u8,
         diagnostics: *DiagnosticSet,
         source_override: ?SourceOverride,
         include_editor_snapshot: bool,
-    ) !Snapshot {
+    ) !AnalysisSnapshot {
         const changed_abs = try project.absolutePath(self.allocator, changed_path);
         defer self.allocator.free(changed_abs);
         const changed_dir = std.fs.path.dirname(changed_abs) orelse ".";
@@ -188,22 +188,22 @@ const Server = struct {
         try self.documents.fillOverlay(&sources.overlay);
         if (source_override) |override| try sources.put(override.path, override.source);
 
-        var layout_context = LayoutHookContext{
+        var layout_context = AnalysisLayoutContext{
             .server = self,
             .diagnostics = diagnostics,
             .include_editor_snapshot = include_editor_snapshot,
         };
-        var analysis_snapshot = try analysis.snapshot.buildSnapshot(self.allocator, &sources, entry_path, asset_base_dir, .{
+        var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
             .project = .{
                 .lsp = if (config) |cfg| cfg.lsp else .{},
                 .wysiwyg = if (config) |cfg| cfg.wysiwyg else .{},
                 .page_guide = if (config) |cfg| cfg.page_guide else .{},
             },
-            .layout = .{
+            .layout_hook = .{
                 .context = &layout_context,
-                .run = runSnapshotLayout,
-                .on_error = addSnapshotLayoutError,
+                .run = runAnalysisLayout,
+                .on_error = addAnalysisLayoutError,
             },
         });
         errdefer analysis_snapshot.deinit();
@@ -211,7 +211,7 @@ const Server = struct {
         return analysis_snapshot;
     }
 
-    fn buildSingleDocumentSnapshot(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !Snapshot {
+    fn buildSingleDocumentAnalysis(self: *Server, changed_path: []const u8, diagnostics: *DiagnosticSet) !AnalysisSnapshot {
         const entry_path = try project.absolutePath(self.allocator, changed_path);
         defer self.allocator.free(entry_path);
         const asset_base_dir = try dirnameAlloc(self.allocator, entry_path);
@@ -221,7 +221,7 @@ const Server = struct {
         defer sources.deinit();
         try self.documents.fillOverlay(&sources.overlay);
 
-        var analysis_snapshot = try analysis.snapshot.buildSnapshot(self.allocator, &sources, entry_path, asset_base_dir, .{
+        var analysis_snapshot = try analysis.snapshot.build(self.allocator, &sources, entry_path, asset_base_dir, .{
             .generation = self.documents.generation,
         });
         errdefer analysis_snapshot.deinit();
@@ -304,23 +304,23 @@ const Server = struct {
     }
 };
 
-fn snapshotProvider(server: *Server) lsp_state.SnapshotProvider {
+fn analysisProvider(server: *Server) lsp_state.AnalysisProvider {
     return .{
         .context = server,
-        .current = if (server.snapshot) |*snapshot| snapshot else null,
+        .current = if (server.analysis) |*snapshot| snapshot else null,
         .generation = server.documents.generation,
-        .build = buildSnapshotForFeature,
+        .build = buildAnalysisForFeature,
     };
 }
 
-fn buildSnapshotForFeature(context: *anyopaque, path: []const u8) !Snapshot {
+fn buildAnalysisForFeature(context: *anyopaque, path: []const u8) !AnalysisSnapshot {
     const server: *Server = @ptrCast(@alignCast(context));
     var diagnostics = DiagnosticSet.init(server.allocator);
     defer diagnostics.deinit();
-    var snapshot = try server.buildSnapshot(path, &diagnostics);
+    var snapshot = try server.buildAnalysis(path, &diagnostics);
     if (snapshot.coversPath(path)) return snapshot;
     snapshot.deinit();
-    return try server.buildSingleDocumentSnapshot(path, &diagnostics);
+    return try server.buildSingleDocumentAnalysis(path, &diagnostics);
 }
 
 fn validateLayoutEdit(
@@ -336,13 +336,13 @@ fn validateLayoutEdit(
     const server: *Server = @ptrCast(@alignCast(context));
     var diagnostics = DiagnosticSet.init(server.allocator);
     defer diagnostics.deinit();
-    var snapshot = server.buildSnapshotWithOverride(path, &diagnostics, .{
+    var snapshot = server.buildAnalysisWithOverride(path, &diagnostics, .{
         .path = path,
         .source = source,
     }, false) catch return false;
     defer snapshot.deinit();
-    const layout = if (snapshot.layout) |*value| value else return false;
-    var parsed = utils.json.parseValue(server.allocator, layout.conflict_report_json, .{}) catch return false;
+    const layout = if (snapshot.layout_output) |*value| value else return false;
+    var parsed = utils.json.parseValue(server.allocator, layout.conflicts_json, .{}) catch return false;
     defer parsed.deinit();
     if (parsed.value != .object) return false;
     const objects = utils.json.arrayFieldObject(&parsed.value.object, "objects") orelse return false;
@@ -377,25 +377,25 @@ fn validateLayoutEdit(
         @abs(height - expected_height) <= tolerance;
 }
 
-const LayoutHookContext = struct {
+const AnalysisLayoutContext = struct {
     server: *Server,
     diagnostics: *DiagnosticSet,
     include_editor_snapshot: bool,
 };
 
-fn runSnapshotLayout(context: *anyopaque, ir: *core.Context, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookResult {
-    const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
+fn runAnalysisLayout(context: *anyopaque, ir: *core.Context, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
+    const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
     var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, ir, graph);
     defer pages.deinit(ir.allocator);
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
 
     var render_ir = try render_pdf.compileRenderIr(ir.allocator, hook.server.io, ir, &pages, .{});
     defer render_ir.deinit(ir.allocator);
-    return .{ .editor_snapshot_json = try editor_snapshot.toJson(ir.allocator, ir, &render_ir, hook.server.documents.generation) };
+    return .{ .editor_json = try editor_snapshot.toJson(ir.allocator, ir, &render_ir, hook.server.documents.generation) };
 }
 
-fn addSnapshotLayoutError(context: *anyopaque, ir: *core.Context, err: anyerror) !void {
-    const hook: *LayoutHookContext = @ptrCast(@alignCast(context));
+fn addAnalysisLayoutError(context: *anyopaque, ir: *core.Context, err: anyerror) !void {
+    const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
     try hook.diagnostics.addConstraintFailure(ir, err);
 }
 
@@ -485,7 +485,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "workspace/didChangeWatchedFiles")) {
-        if (server.snapshot) |*snapshot| {
+        if (server.analysis) |*snapshot| {
             const entry_path = try server.allocator.dupe(u8, snapshot.project.entry_path);
             defer server.allocator.free(entry_path);
             try server.scheduleRebuild(entry_path);
@@ -502,7 +502,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
     }
 
     if (std.mem.eql(u8, method, "textDocument/completion")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_completion.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -514,7 +514,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/hover")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_hover.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -526,7 +526,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/definition")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_definition.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -538,7 +538,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_inlay.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -549,7 +549,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_symbols.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -560,7 +560,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_folding.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -575,7 +575,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
             .allocator = server.allocator,
             .io = server.io,
             .documents = &server.documents,
-            .current_snapshot = if (server.snapshot) |*snapshot| snapshot else null,
+            .current_snapshot = if (server.analysis) |*snapshot| snapshot else null,
         };
         const result = try feature_tokens.result(&ctx, params);
         defer server.allocator.free(result);
@@ -587,7 +587,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
             .allocator = server.allocator,
             .io = server.io,
             .documents = &server.documents,
-            .current_snapshot = if (server.snapshot) |*snapshot| snapshot else null,
+            .current_snapshot = if (server.analysis) |*snapshot| snapshot else null,
         };
         const result = try feature_colors.documentColorsResult(&ctx, params);
         defer server.allocator.free(result);
@@ -599,7 +599,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
             .allocator = server.allocator,
             .io = server.io,
             .documents = &server.documents,
-            .current_snapshot = if (server.snapshot) |*snapshot| snapshot else null,
+            .current_snapshot = if (server.analysis) |*snapshot| snapshot else null,
         };
         const result = try feature_colors.colorPresentationResult(&ctx, params);
         defer server.allocator.free(result);
@@ -607,7 +607,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "ss/projectInfo")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_project.Context{
             .allocator = server.allocator,
             .provider = &provider,
@@ -618,13 +618,13 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "ss/layoutConflicts")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_layout.Context{
             .io = server.io,
             .allocator = server.allocator,
             .documents = &server.documents,
             .provider = &provider,
-            .layout_snapshots = &server.layout_snapshots,
+            .responses = &server.layout_responses,
         };
         const result = try feature_layout.result(&ctx, params);
         defer server.allocator.free(result);
@@ -638,16 +638,16 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         if (doc_path) |path| {
             const first_for_path = !server.wysiwyg_paths.contains(path);
             if (first_for_path) try putStringSet(server.allocator, &server.wysiwyg_paths, path);
-            if (first_for_path or server.snapshot == null or server.snapshot.?.layout == null or server.snapshot.?.layout.?.editor_snapshot_json == null) {
+            if (first_for_path or server.analysis == null or server.analysis.?.layout_output == null or server.analysis.?.layout_output.?.editor_json == null) {
                 try server.rebuildImmediately(path);
             }
         }
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_editor.Context{
             .allocator = server.allocator,
             .documents = &server.documents,
             .provider = &provider,
-            .snapshots = &server.editor_snapshots,
+            .responses = &server.editor_responses,
         };
         const result = try feature_editor.snapshotResult(&ctx, params);
         defer server.allocator.free(result);
@@ -663,7 +663,7 @@ fn handleMessage(server: *Server, body: []const u8) !void {
         return;
     }
     if (std.mem.eql(u8, method, "ss/layoutEdit")) {
-        var provider = snapshotProvider(server);
+        var provider = analysisProvider(server);
         var ctx = feature_edit.Context{
             .io = server.io,
             .allocator = server.allocator,
