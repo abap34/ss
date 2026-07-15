@@ -101,7 +101,7 @@ export class WorkspaceView {
     shell.append(surface);
     if (this.state.mode === "continuous") {
       const caption = element("div", "page-caption");
-      caption.textContent = `${page.index} · ${page.name}`;
+      caption.textContent = page.name;
       shell.append(caption);
     }
     return shell;
