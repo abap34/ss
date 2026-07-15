@@ -1,6 +1,6 @@
 const std = @import("std");
 const model = @import("model");
-const Context = @import("context.zig").Context;
+const DocumentState = @import("document_state.zig").DocumentState;
 const layout_model = @import("layout.zig");
 const markdown = @import("markdown.zig");
 const render_env = @import("render_env.zig");
@@ -90,22 +90,22 @@ pub const PreparedPages = struct {
     }
 };
 
-pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
+pub fn prepare(allocator: std.mem.Allocator, state: *DocumentState) !PreparedPages {
     var pages = std.ArrayList(PreparedPage).empty;
     errdefer {
         for (pages.items) |*page| page.deinit(allocator);
         pages.deinit(allocator);
     }
 
-    for (ir.page_order.items, 0..) |page_id, page_index| {
-        const page = ir.getNode(page_id) orelse continue;
+    for (state.page_order.items, 0..) |page_id, page_index| {
+        const page = state.getNode(page_id) orelse continue;
         var object_ids = std.ArrayList(model.NodeId).empty;
         errdefer object_ids.deinit(allocator);
-        try collectPageObjectIds(allocator, ir, page_id, &object_ids);
+        try collectPageObjectIds(allocator, state, page_id, &object_ids);
 
         var constraints = std.ArrayList(model.Constraint).empty;
         errdefer constraints.deinit(allocator);
-        try collectPageConstraints(allocator, ir, page_id, &constraints);
+        try collectPageConstraints(allocator, state, page_id, &constraints);
 
         var objects = std.ArrayList(PreparedObject).empty;
         errdefer {
@@ -113,9 +113,9 @@ pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
             objects.deinit(allocator);
         }
         for (object_ids.items) |node_id| {
-            const node = ir.getNode(node_id) orelse continue;
+            const node = state.getNode(node_id) orelse continue;
             if (node.kind != .object) continue;
-            var unit = try prepareObject(allocator, ir, node);
+            var unit = try prepareObject(allocator, state, node);
             var unit_transferred = false;
             errdefer if (!unit_transferred) unit.deinit(allocator);
             try objects.append(allocator, unit);
@@ -143,7 +143,7 @@ pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
         try pages.append(allocator, .{
             .page_id = page_id,
             .index = page_index,
-            .background = render_policy.resolvePageBackground(ir, page),
+            .background = render_policy.resolvePageBackground(state, page),
             .object_ids = ids_slice,
             .constraints = constraint_slice,
             .objects = object_slice,
@@ -158,17 +158,17 @@ pub fn prepare(allocator: std.mem.Allocator, ir: *Context) !PreparedPages {
     return .{ .pages = try pages.toOwnedSlice(allocator) };
 }
 
-pub fn prepareObject(allocator: std.mem.Allocator, ir: *Context, node: *const model.Node) !PreparedObject {
-    return try prepareObjectWithRender(allocator, ir, node, render_policy.resolve(ir, node));
+pub fn prepareObject(allocator: std.mem.Allocator, state: *DocumentState, node: *const model.Node) !PreparedObject {
+    return try prepareObjectWithRender(allocator, state, node, render_policy.resolve(state, node));
 }
 
 pub fn prepareObjectWithRender(
     allocator: std.mem.Allocator,
-    ir: *Context,
+    state: *DocumentState,
     node: *const model.Node,
     render: render_policy.ResolvedRender,
 ) !PreparedObject {
-    var env = try render_env.resolveForNode(allocator, ir, node);
+    var env = try render_env.resolveForNode(allocator, state, node);
     defer env.deinit(allocator);
     const uses_asset_content = switch (node.payload_kind orelse .text) {
         .image_ref, .pdf_ref => true,
@@ -183,7 +183,7 @@ pub fn prepareObjectWithRender(
         if (markdown_doc) |*doc| doc.deinit();
         if (text_layout) |*layout| layout.deinit(allocator);
     }
-    const parse_mode = markdown.parseModeForNode(ir, node);
+    const parse_mode = markdown.parseModeForNode(state, node);
     const content = if (uses_asset_content) node.content orelse "" else model.nodeDisplayContent(node);
     switch (render.kind) {
         .text => switch (parse_mode) {
@@ -413,21 +413,21 @@ fn displayMathSource(allocator: std.mem.Allocator, runs: []const markdown.Run) !
 
 fn collectPageObjectIds(
     allocator: std.mem.Allocator,
-    ir: *Context,
+    state: *DocumentState,
     page_id: model.NodeId,
     object_ids: *std.ArrayList(model.NodeId),
 ) !void {
-    if (ir.childrenOf(page_id)) |children| {
+    if (state.childrenOf(page_id)) |children| {
         for (children) |child_id| try appendUniqueNodeId(allocator, object_ids, child_id);
     }
-    for (ir.constraints.items) |constraint| {
-        if (ir.layoutPageOf(constraint.target_node) == page_id) {
+    for (state.constraints.items) |constraint| {
+        if (state.layoutPageOf(constraint.target_node) == page_id) {
             try appendUniqueNodeId(allocator, object_ids, constraint.target_node);
         }
         switch (constraint.source) {
             .page => {},
             .node => |source| {
-                if (ir.layoutPageOf(source.node_id) == page_id) {
+                if (state.layoutPageOf(source.node_id) == page_id) {
                     try appendUniqueNodeId(allocator, object_ids, source.node_id);
                 }
             },
@@ -437,12 +437,12 @@ fn collectPageObjectIds(
 
 fn collectPageConstraints(
     allocator: std.mem.Allocator,
-    ir: *Context,
+    state: *DocumentState,
     page_id: model.NodeId,
     constraints: *std.ArrayList(model.Constraint),
 ) !void {
-    for (ir.constraints.items) |constraint| {
-        if (ir.layoutPageOf(constraint.target_node) != page_id) continue;
+    for (state.constraints.items) |constraint| {
+        if (state.layoutPageOf(constraint.target_node) != page_id) continue;
         try constraints.append(allocator, constraint);
     }
 }

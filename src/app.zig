@@ -12,11 +12,11 @@ pub const PdfWriteRequest = types.PdfWriteRequest;
 
 const Progress = utils.progress.Progress;
 
-pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.Context {
+pub fn buildFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.DocumentState {
     return try commands.buildFile(io, allocator, request, progress);
 }
 
-pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.Context {
+pub fn buildTypedFile(io: std.Io, allocator: std.mem.Allocator, request: SourceRequest, progress: ?*Progress) !core.DocumentState {
     return try commands.buildTypedFile(io, allocator, request, progress);
 }
 

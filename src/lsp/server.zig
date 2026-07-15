@@ -383,20 +383,20 @@ const AnalysisLayoutContext = struct {
     include_editor_snapshot: bool,
 };
 
-fn runAnalysisLayout(context: *anyopaque, ir: *core.Context, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
+fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *const analysis.execution.ExecutionGraph) !analysis.snapshot.LayoutHookOutput {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
-    var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, ir, graph);
-    defer pages.deinit(ir.allocator);
+    var pages = try render_layout.evaluateAndSolvePreparedPages(hook.server.io, state, graph);
+    defer pages.deinit(state.allocator);
     if (!hook.include_editor_snapshot or hook.server.wysiwyg_paths.count() == 0) return .{};
 
-    var render_ir = try render_pdf.compileRenderIr(ir.allocator, hook.server.io, ir, &pages, .{});
-    defer render_ir.deinit(ir.allocator);
-    return .{ .editor_json = try editor_snapshot.toJson(ir.allocator, ir, &render_ir, hook.server.documents.generation) };
+    var render_ir = try render_pdf.compileRenderIr(state.allocator, hook.server.io, state, &pages, .{});
+    defer render_ir.deinit(state.allocator);
+    return .{ .editor_json = try editor_snapshot.toJson(state.allocator, state, &render_ir, hook.server.documents.generation) };
 }
 
-fn addAnalysisLayoutError(context: *anyopaque, ir: *core.Context, err: anyerror) !void {
+fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, err: anyerror) !void {
     const hook: *AnalysisLayoutContext = @ptrCast(@alignCast(context));
-    try hook.diagnostics.addConstraintFailure(ir, err);
+    try hook.diagnostics.addConstraintFailure(state, err);
 }
 
 fn putStringSet(allocator: std.mem.Allocator, set: *std.StringHashMap(void), value: []const u8) !void {

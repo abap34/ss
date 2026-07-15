@@ -10,11 +10,11 @@ pub const Options = struct {
 
 pub fn document(
     allocator: std.mem.Allocator,
-    compiler_context: *core.Context,
+    state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
     compiler: anytype,
 ) !render.Ir {
-    try compiler.prepare(allocator, compiler_context, prepared_pages);
+    try compiler.prepare(allocator, state, prepared_pages);
 
     var pages = std.ArrayList(render.Page).empty;
     errdefer {
@@ -24,7 +24,7 @@ pub fn document(
     for (prepared_pages.pages) |*prepared_page| {
         try pages.append(allocator, try compiler.compilePage(
             allocator,
-            compiler_context,
+            state,
             prepared_page,
         ));
     }

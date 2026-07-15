@@ -9,34 +9,34 @@ const dump_source = @import("dump/source.zig");
 const utils = @import("utils");
 const json = utils.json;
 
-pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
+pub fn toOwnedString(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
 
     var root = try json.Object.beginBuffer(allocator, &buffer);
     try root.intField("context_version", 1);
     try root.stringField("stage", "finalized_context");
-    try root.stringField("project_path", ir.projectPath());
-    try root.intField("projectModuleId", ir.project_module_id);
-    try root.stringField("asset_base_dir", ir.asset_base_dir);
+    try root.stringField("project_path", state.projectPath());
+    try root.intField("projectModuleId", state.project_module_id);
+    try root.stringField("asset_base_dir", state.asset_base_dir);
 
-    try dump_source.writeModulesField(allocator, &root, ir.modules.items);
+    try dump_source.writeModulesField(allocator, &root, state.modules.items);
 
-    try dump_calls.writeFunctionsField(allocator, &root, ir);
-    try dump_editor.writeVariablesField(allocator, &root, ir);
-    try dump_declarations.writeField(&root, allocator, ir);
+    try dump_calls.writeFunctionsField(allocator, &root, state);
+    try dump_editor.writeVariablesField(allocator, &root, state);
+    try dump_declarations.writeField(&root, allocator, state);
     try dump_calls.writeQueryContractsField(allocator, &root);
-    try dump_editor.writeDefinitionsField(&root, ir);
-    try dump_editor.writeHintsField(&root, ir.hints.items);
+    try dump_editor.writeDefinitionsField(&root, state);
+    try dump_editor.writeHintsField(&root, state.hints.items);
 
-    try root.intField("document_id", ir.document_id);
-    try dump_layout.writePageOrderField(&root, ir.page_order.items);
-    try dump_core_graph.writeNodesField(allocator, &root, ir);
-    try dump_layout.writeContainsField(&root, &ir.contains);
-    try dump_layout.writeConstraintsField(&root, ir.constraints.items);
-    try dump_layout.writeConstraintUpdatesField(&root, ir.constraint_updates.items);
-    try dump_layout.writeOverriddenConstraintsField(&root, ir.overridden_constraints.items);
-    try writeDiagnosticsField(&root, ir.diagnostics.items);
+    try root.intField("document_id", state.document_id);
+    try dump_layout.writePageOrderField(&root, state.page_order.items);
+    try dump_core_graph.writeNodesField(allocator, &root, state);
+    try dump_layout.writeContainsField(&root, &state.contains);
+    try dump_layout.writeConstraintsField(&root, state.constraints.items);
+    try dump_layout.writeConstraintUpdatesField(&root, state.constraint_updates.items);
+    try dump_layout.writeOverriddenConstraintsField(&root, state.overridden_constraints.items);
+    try writeDiagnosticsField(&root, state.diagnostics.items);
 
     try root.end();
     try json.appendNewline(&buffer, allocator);

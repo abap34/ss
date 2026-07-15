@@ -593,7 +593,7 @@ pub const LayoutMeasurementScope = struct {
     pub fn init(
         allocator: Allocator,
         io: std.Io,
-        ir: *core.Context,
+        state: *core.DocumentState,
         pages: *const core.prepared.PreparedPages,
     ) !LayoutMeasurementScope {
         const default_options: Options = .{};
@@ -629,7 +629,7 @@ pub const LayoutMeasurementScope = struct {
                 .allocator = allocator,
                 .io = io,
                 .target = .{ .pdf = pdf },
-                .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+                .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
             },
@@ -659,30 +659,30 @@ pub const LayoutMeasurementScope = struct {
 
     fn measureLayoutNode(
         context: *anyopaque,
-        context_ptr: *anyopaque,
+        state_ptr: *anyopaque,
         node: *const core.Node,
         width: f32,
         mode: core.LayoutMeasurementMode,
     ) anyerror!?core.LayoutMeasurement {
         const scope: *LayoutMeasurementScope = @ptrCast(@alignCast(context));
-        const ir: *core.Context = @ptrCast(@alignCast(context_ptr));
-        return try scope.measureNode(ir, node, width, mode);
+        const state: *core.DocumentState = @ptrCast(@alignCast(state_ptr));
+        return try scope.measureNode(state, node, width, mode);
     }
 
-    fn measureNode(self: *LayoutMeasurementScope, ir: *core.Context, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+    fn measureNode(self: *LayoutMeasurementScope, state: *core.DocumentState, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
         const profile_total = utils.measure_profile.start();
         defer utils.measure_profile.recordLayoutMeasurementTotal(profile_total);
 
         if (node.kind != .object) return null;
 
         const profile_object_command = utils.measure_profile.start();
-        var command = try self.objectCommandForNode(ir.allocator, node, width, mode);
+        var command = try self.objectCommandForNode(state.allocator, node, width, mode);
         utils.measure_profile.recordLayoutMeasurementObjectCommand(profile_object_command);
-        defer command.deinit(ir.allocator);
+        defer command.deinit(state.allocator);
 
         const profile_cache_key = utils.measure_profile.start();
         var key_ctx = self.ctx;
-        key_ctx.allocator = ir.allocator;
+        key_ctx.allocator = state.allocator;
         const cache_key = try layoutMeasurementCacheKey(&key_ctx, &command, width, mode);
         utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
 
@@ -695,15 +695,15 @@ pub const LayoutMeasurementScope = struct {
 
         if (try self.cachedMeasurement(cache_key, false)) |cached| return cached;
 
-        var target = CommandFailure{ .allocator = ir.allocator };
+        var target = CommandFailure{ .allocator = state.allocator };
         defer target.deinit();
         var measurement_ctx = self.ctx;
-        measurement_ctx.allocator = ir.allocator;
+        measurement_ctx.allocator = state.allocator;
         measurement_ctx.command_failure = &target;
         const profile_intrinsic = utils.measure_profile.start();
         defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
         var measured = measureObjectCommandIntrinsic(&measurement_ctx, &command, width, mode) catch |err| {
-            try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &command, err, target.message);
+            try addMeasurementRenderDiagnostic(&measurement_ctx, state, &command, err, target.message);
             return err;
         };
         if (measured) |*value| {
@@ -880,7 +880,7 @@ fn measurementCacheHeaderMatches(header: []const u8) bool {
 pub fn renderDocumentToPdf(
     allocator: Allocator,
     io: std.Io,
-    ir: *core.Context,
+    state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     layouts: *const core.layout.Document,
     options: Options,
@@ -894,12 +894,12 @@ pub fn renderDocumentToPdf(
     var ctx = DrawContext{
         .allocator = allocator,
         .io = io,
-        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+        .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
         .cache_dir = asset_cache_dir,
         .highlight_languages = options.highlight_languages,
     };
 
-    var plan = try buildPlan(&ctx, ir, pages, layouts, options);
+    var plan = try buildPlan(&ctx, state, pages, layouts, options);
     defer {
         std.Io.Dir.cwd().deleteTree(io, plan.run_dir) catch {};
         if (!plan.generation_published) std.Io.Dir.cwd().deleteTree(io, plan.building_dir) catch {};
@@ -908,23 +908,23 @@ pub fn renderDocumentToPdf(
     }
 
     executePlan(&ctx, &plan, options, progress) catch |err| {
-        try collectPlanDiagnostics(&ctx, ir, &plan, err);
+        try collectPlanDiagnostics(&ctx, state, &plan, err);
         return error.DiagnosticsFailed;
     };
     try writeRenderManifest(&ctx, &plan);
-    var assembly_failure = CommandFailure{ .allocator = ir.allocator };
+    var assembly_failure = CommandFailure{ .allocator = state.allocator };
     defer assembly_failure.deinit();
     var assembly_ctx = ctx;
     assembly_ctx.command_failure = &assembly_failure;
     const reused_document = try reusePreviousDocumentPdf(&assembly_ctx, &plan, progress);
     if (!reused_document) {
         assemblePlan(&assembly_ctx, &plan, options, progress) catch |err| {
-            try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
+            try addGenericRenderDiagnostic(state, err, assembly_failure.message);
             return error.DiagnosticsFailed;
         };
     }
     storePlanDocumentPdf(&assembly_ctx, &plan) catch |err| {
-        try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
+        try addGenericRenderDiagnostic(state, err, assembly_failure.message);
         return error.DiagnosticsFailed;
     };
     try publishRenderGeneration(&ctx, &plan);
@@ -935,7 +935,7 @@ pub fn renderDocumentToPdf(
 pub fn preloadPreparedPageArtifacts(
     allocator: Allocator,
     io: std.Io,
-    ir: *core.Context,
+    state: *core.DocumentState,
     pages: *const core.prepared.PreparedPages,
     options: Options,
     progress: ?Progress,
@@ -948,7 +948,7 @@ pub fn preloadPreparedPageArtifacts(
     var ctx = DrawContext{
         .allocator = allocator,
         .io = io,
-        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
+        .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
         .cache_dir = asset_cache_dir,
         .highlight_languages = options.highlight_languages,
     };
@@ -976,7 +976,7 @@ pub fn preloadPreparedPageArtifacts(
     const profile_build_wall = utils.measure_profile.start();
     defer utils.measure_profile.recordArtifactBuildWall(miss_count, profile_build_wall);
     executePreloadTaskList(&ctx, tasks, cached, miss_count, options, progress) catch |err| {
-        try collectPreloadTaskDiagnostics(&ctx, ir, tasks, cached);
+        try collectPreloadTaskDiagnostics(&ctx, state, tasks, cached);
         return err;
     };
 }
@@ -988,10 +988,10 @@ pub const Compiler = struct {
     pub fn prepare(
         self: *Compiler,
         allocator: Allocator,
-        compiler_context: *core.Context,
+        state: *core.DocumentState,
         pages: *const core.prepared.PreparedPages,
     ) !void {
-        try preloadPreparedPageArtifacts(allocator, self.io, compiler_context, pages, .{
+        try preloadPreparedPageArtifacts(allocator, self.io, state, pages, .{
             .cache_dir = self.options.cache_dir,
             .highlight_languages = self.options.highlight_languages,
         }, null);
@@ -1000,7 +1000,7 @@ pub const Compiler = struct {
     pub fn compilePage(
         self: *Compiler,
         allocator: Allocator,
-        compiler_context: *core.Context,
+        state: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
     ) !render_ir.Page {
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
@@ -1008,12 +1008,12 @@ pub const Compiler = struct {
         var draw_context = DrawContext{
             .allocator = allocator,
             .io = self.io,
-            .asset_base_dir = if (compiler_context.asset_base_dir.len == 0) "." else compiler_context.asset_base_dir,
+            .asset_base_dir = if (state.asset_base_dir.len == 0) "." else state.asset_base_dir,
             .cache_dir = asset_cache_dir,
             .highlight_languages = self.options.highlight_languages,
         };
 
-        const commands = try buildObjectCommands(allocator, compiler_context, prepared_page);
+        const commands = try buildObjectCommands(allocator, state, prepared_page);
         defer {
             for (commands) |*command| command.deinit(allocator);
             allocator.free(commands);
@@ -1030,7 +1030,7 @@ pub const Compiler = struct {
 
 fn buildObjectCommands(
     allocator: Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     page_unit: *const core.prepared.PreparedPage,
 ) ![]ObjectCommand {
     var commands = std.ArrayList(ObjectCommand).empty;
@@ -1039,9 +1039,9 @@ fn buildObjectCommands(
         commands.deinit(allocator);
     }
     for (page_unit.objects) |*object| {
-        const node = ir.getNode(object.node_id) orelse continue;
+        const node = state.getNode(object.node_id) orelse continue;
         if (node.kind != .object or !object.attached) continue;
-        if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
+        if ((state.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
         try commands.append(allocator, try initObjectCommand(allocator, page_unit.page_id, node, object, node.frame));
     }
     return try commands.toOwnedSlice(allocator);
@@ -1075,19 +1075,19 @@ fn initObjectCommand(
 
 fn buildPlan(
     ctx: *DrawContext,
-    ir: *core.Context,
+    state: *core.DocumentState,
     prepared_pages: *const core.prepared.PreparedPages,
     layout_results: *const core.layout.Document,
     options: Options,
 ) !Plan {
-    const nonce = std.hash.Wyhash.hash(0, ir.projectSource());
+    const nonce = std.hash.Wyhash.hash(0, state.projectSource());
     const pid = std.c.getpid();
     const serial = @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic);
     const run_id = try std.fmt.allocPrint(ctx.allocator, "run-{d}-{x}-{d}", .{ pid, nonce, serial });
     defer ctx.allocator.free(run_id);
     const run_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "runs", run_id });
     errdefer ctx.allocator.free(run_dir);
-    const deck_id = try deckId(ctx.allocator, ir, options);
+    const deck_id = try deckId(ctx.allocator, state, options);
     defer ctx.allocator.free(deck_id);
     const deck_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "decks", deck_id });
     defer ctx.allocator.free(deck_dir);
@@ -1163,9 +1163,9 @@ fn buildPlan(
         errdefer deps.deinit(ctx.allocator);
 
         for (page_unit.objects) |*object| {
-            const node = ir.getNode(object.node_id) orelse continue;
+            const node = state.getNode(object.node_id) orelse continue;
             if (node.kind != .object or !object.attached) continue;
-            if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
+            if ((state.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
             var command = try initObjectCommand(
                 ctx.allocator,
                 page_unit.page_id,
@@ -1261,14 +1261,14 @@ fn countPageJobCacheHits(pages: []const PageJob) usize {
     return count;
 }
 
-fn deckId(allocator: Allocator, ir: *const core.Context, options: Options) ![]u8 {
+fn deckId(allocator: Allocator, state: *const core.DocumentState, options: Options) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, "ss-render-deck-v1");
     if (options.cache_id) |cache_id| {
         hashString(&hasher, cache_id);
     } else {
-        hashString(&hasher, ir.projectPath());
-        hashString(&hasher, if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir);
+        hashString(&hasher, state.projectPath());
+        hashString(&hasher, if (state.asset_base_dir.len == 0) "." else state.asset_base_dir);
     }
     return std.fmt.allocPrint(allocator, "deck-{x}", .{hasher.final()});
 }
@@ -2147,47 +2147,47 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
     try values.append(allocator, value);
 }
 
-fn collectPlanDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const Plan, original_err: anyerror) !void {
-    ir.clearDiagnosticsForPhase(.render);
+fn collectPlanDiagnostics(ctx: *DrawContext, state: *core.DocumentState, plan: *const Plan, original_err: anyerror) !void {
+    state.clearDiagnosticsForPhase(.render);
     var added = false;
     for (plan.artifact_tasks, 0..) |task, index| {
         if (index < plan.artifact_cached.len and plan.artifact_cached[index]) continue;
         if (try preloadTaskCached(ctx, task)) continue;
 
-        var target = CommandFailure{ .allocator = ir.allocator };
+        var target = CommandFailure{ .allocator = state.allocator };
         defer target.deinit();
         var diagnostic_ctx = ctx.*;
         diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |err| {
-            try addPreloadRenderDiagnostic(ir, task, err, target.message);
+            try addPreloadRenderDiagnostic(state, task, err, target.message);
             added = true;
         };
     }
 
     if (!added) {
-        added = try collectPageJobDiagnostics(ctx, ir, plan);
+        added = try collectPageJobDiagnostics(ctx, state, plan);
     }
 
-    if (!added) try addGenericRenderDiagnostic(ir, original_err, null);
+    if (!added) try addGenericRenderDiagnostic(state, original_err, null);
 }
 
-fn addPreloadRenderDiagnostic(ir: *core.Context, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addPreloadRenderDiagnostic(state: *core.DocumentState, task: PreloadTask, err: anyerror, maybe_message: ?[]const u8) !void {
     const target = preloadTaskTarget(task);
-    try addTargetedRenderDiagnostic(ir, target, preloadTaskLabel(task), err, maybe_message);
+    try addTargetedRenderDiagnostic(state, target, preloadTaskLabel(task), err, maybe_message);
 }
 
 fn addTargetedRenderDiagnostic(
-    ir: *core.Context,
+    state: *core.DocumentState,
     target: RenderDiagnosticTarget,
     label: []const u8,
     err: anyerror,
     maybe_message: ?[]const u8,
 ) !void {
-    var origin = try preloadTaskDiagnosticOrigin(ir, target);
-    defer origin.deinit(ir.allocator);
+    var origin = try preloadTaskDiagnosticOrigin(state, target);
+    defer origin.deinit(state.allocator);
     const detail = maybe_message orelse @errorName(err);
-    const reason = try std.fmt.allocPrint(ir.allocator, "{s}: {s}", .{ label, detail });
-    try ir.addRenderDiagnostic(.@"error", target.page_id, target.node_id, origin.text, .{
+    const reason = try std.fmt.allocPrint(state.allocator, "{s}: {s}", .{ label, detail });
+    try state.addRenderDiagnostic(.@"error", target.page_id, target.node_id, origin.text, .{
         .render_failed = .{
             .reason = reason,
             .payload_kind = target.payload_kind,
@@ -2206,10 +2206,10 @@ const DiagnosticOrigin = struct {
     }
 };
 
-fn preloadTaskDiagnosticOrigin(ir: *core.Context, target: RenderDiagnosticTarget) !DiagnosticOrigin {
+fn preloadTaskDiagnosticOrigin(state: *core.DocumentState, target: RenderDiagnosticTarget) !DiagnosticOrigin {
     if (target.content_start) |start| {
         if (target.content_end) |end| {
-            if (try originForContentSpan(ir.allocator, target.content_provenance, start, end)) |origin| {
+            if (try originForContentSpan(state.allocator, target.content_provenance, start, end)) |origin| {
                 return .{ .text = origin, .owned = true };
             }
         }
@@ -2237,26 +2237,26 @@ fn originForContentSpan(
     return null;
 }
 
-fn addGenericRenderDiagnostic(ir: *core.Context, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addGenericRenderDiagnostic(state: *core.DocumentState, err: anyerror, maybe_message: ?[]const u8) !void {
     const detail = maybe_message orelse @errorName(err);
-    const reason = try std.fmt.allocPrint(ir.allocator, "render backend: {s}", .{detail});
-    try ir.addRenderDiagnostic(.@"error", null, null, null, .{
+    const reason = try std.fmt.allocPrint(state.allocator, "render backend: {s}", .{detail});
+    try state.addRenderDiagnostic(.@"error", null, null, null, .{
         .render_failed = .{
             .reason = reason,
         },
     });
 }
 
-fn collectPageJobDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const Plan) !bool {
+fn collectPageJobDiagnostics(ctx: *DrawContext, state: *core.DocumentState, plan: *const Plan) !bool {
     var added = false;
     for (plan.pages) |*page| {
         if (page.cache_hit) continue;
-        if (try collectPageJobDiagnostic(ctx, ir, page)) added = true;
+        if (try collectPageJobDiagnostic(ctx, state, page)) added = true;
     }
     return added;
 }
 
-fn collectPageJobDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *const PageJob) !bool {
+fn collectPageJobDiagnostic(ctx: *DrawContext, state: *core.DocumentState, page: *const PageJob) !bool {
     const path = try tempCachePath(ctx, page.render_path, "pdf");
     defer ctx.allocator.free(path);
     defer deleteFileIfExists(ctx, path);
@@ -2272,45 +2272,45 @@ fn collectPageJobDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *const P
     diagnostic_ctx.target = .{ .pdf = pdf };
 
     c.ss_pdf_begin_page(pdf, Defaults.width, Defaults.height);
-    const added = try drawPageJobDiagnostics(&diagnostic_ctx, ir, page);
+    const added = try drawPageJobDiagnostics(&diagnostic_ctx, state, page);
     c.ss_pdf_end_page(pdf);
     return added;
 }
 
-fn drawPageJobDiagnostics(ctx: *DrawContext, ir: *core.Context, page: *const PageJob) !bool {
+fn drawPageJobDiagnostics(ctx: *DrawContext, state: *core.DocumentState, page: *const PageJob) !bool {
     if (page.background) |fill| {
         try activeTarget(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, fill);
     }
     for (page.commands) |*command| {
         if (command.render.kind == .chrome_only) {
-            if (try drawObjectCommandDiagnostic(ctx, ir, command)) return true;
+            if (try drawObjectCommandDiagnostic(ctx, state, command)) return true;
         }
     }
     for (page.commands) |*command| {
         if (command.render.kind != .chrome_only) {
-            if (try drawObjectCommandDiagnostic(ctx, ir, command)) return true;
+            if (try drawObjectCommandDiagnostic(ctx, state, command)) return true;
         }
     }
     return false;
 }
 
-fn drawObjectCommandDiagnostic(ctx: *DrawContext, ir: *core.Context, command: *const ObjectCommand) !bool {
-    var target = CommandFailure{ .allocator = ir.allocator };
+fn drawObjectCommandDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand) !bool {
+    var target = CommandFailure{ .allocator = state.allocator };
     defer target.deinit();
     var diagnostic_ctx = ctx.*;
     diagnostic_ctx.command_failure = &target;
     drawObjectCommand(&diagnostic_ctx, command) catch |err| {
-        try addObjectCommandDiagnostic(ir, command, err, target.message);
+        try addObjectCommandDiagnostic(state, command, err, target.message);
         return true;
     };
     return false;
 }
 
-fn addObjectCommandDiagnostic(ir: *core.Context, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
-    try addTargetedRenderDiagnostic(ir, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, maybe_message);
+fn addObjectCommandDiagnostic(state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
+    try addTargetedRenderDiagnostic(state, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, maybe_message);
 }
 
-fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addMeasurementRenderDiagnostic(ctx: *DrawContext, state: *core.DocumentState, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
     var tasks = std.ArrayList(PreloadTask).empty;
     defer {
         freePreloadTasks(ctx.allocator, tasks.items);
@@ -2326,22 +2326,22 @@ fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, command:
     defer page_deps.deinit(ctx.allocator);
 
     collectObjectPreloads(ctx, command, &tasks, &seen, &page_deps) catch {
-        try addObjectCommandDiagnostic(ir, command, err, maybe_message);
+        try addObjectCommandDiagnostic(state, command, err, maybe_message);
         return;
     };
 
     for (tasks.items) |task| {
-        var target = CommandFailure{ .allocator = ir.allocator };
+        var target = CommandFailure{ .allocator = state.allocator };
         defer target.deinit();
         var diagnostic_ctx = ctx.*;
         diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |task_err| {
-            try addPreloadRenderDiagnostic(ir, task, task_err, target.message);
+            try addPreloadRenderDiagnostic(state, task, task_err, target.message);
             return;
         };
     }
 
-    try addObjectCommandDiagnostic(ir, command, err, maybe_message);
+    try addObjectCommandDiagnostic(state, command, err, maybe_message);
 }
 
 fn objectCommandDiagnosticTarget(command: *const ObjectCommand) RenderDiagnosticTarget {
@@ -2694,19 +2694,19 @@ fn preloadTaskWorker(work: *PreloadWork) void {
 
 fn collectPreloadTaskDiagnostics(
     ctx: *DrawContext,
-    ir: *core.Context,
+    state: *core.DocumentState,
     tasks: []const PreloadTask,
     cached: []const bool,
 ) !void {
     for (tasks, 0..) |task, index| {
         if (cached[index]) continue;
         if (preloadTaskCached(ctx, task) catch false) continue;
-        var target = CommandFailure{ .allocator = ir.allocator };
+        var target = CommandFailure{ .allocator = state.allocator };
         defer target.deinit();
         var diagnostic_ctx = ctx.*;
         diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |err| {
-            try addPreloadRenderDiagnostic(ir, task, err, target.message);
+            try addPreloadRenderDiagnostic(state, task, err, target.message);
         };
     }
 }

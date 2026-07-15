@@ -39,19 +39,19 @@ pub const VariableObjectClassExpectation = struct {
     object_class: ?[]const u8,
 };
 
-fn analyzeAndFinalizeContext(allocator: std.mem.Allocator, ir: *core.Context) !void {
-    var execution_graph = (try analysis.analyzeContextWithMode(allocator, ir, .evaluation)).?;
+fn analyzeAndFinalizeDocumentState(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    var execution_graph = (try analysis.analyzeDocumentStateWithMode(allocator, state, .evaluation)).?;
     defer execution_graph.deinit();
-    if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
-    try lowering.evaluateDocument(ir, &execution_graph);
-    if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
-    try solveDocumentAndDiscard(ir);
-    if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
+    if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
+    try lowering.evaluateDocument(state, &execution_graph);
+    if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
+    try solveDocumentAndDiscard(state);
+    if (utils.err.hasDocumentStateErrors(state)) return error.DiagnosticsFailed;
 }
 
-fn solveDocumentAndDiscard(ir: *core.Context) !void {
-    var document = try lowering.solveDocument(ir, null, .{});
-    defer document.deinit(ir.allocator);
+fn solveDocumentAndDiscard(state: *core.DocumentState) !void {
+    var document = try lowering.solveDocument(state, null, .{});
+    defer document.deinit(state.allocator);
 }
 
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -61,12 +61,12 @@ pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, s
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    defer ir.deinit();
+    defer state.deinit();
 
-    try analyzeAndFinalizeContext(allocator, &ir);
+    try analyzeAndFinalizeDocumentState(allocator, &state);
 }
 
 pub fn buildSourceWithOverlay(
@@ -100,19 +100,19 @@ pub fn buildSourceWithOverlays(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    defer ir.deinit();
+    defer state.deinit();
 
-    try analyzeAndFinalizeContext(allocator, &ir);
+    try analyzeAndFinalizeDocumentState(allocator, &state);
 }
 
 pub fn expectObjectContent(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, expected: []const u8) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind == .object) {
             if (std.mem.eql(u8, core.nodeDisplayContent(&node), expected)) return;
         }
@@ -128,10 +128,10 @@ pub fn expectObjectContentWithOverlays(
     overlays: []const OverlaySource,
     expected: []const u8,
 ) !void {
-    var ir = try buildFinalizedContextWithOverlays(io, allocator, path, source, overlays);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind == .object) {
             if (std.mem.eql(u8, core.nodeDisplayContent(&node), expected)) return;
         }
@@ -140,10 +140,10 @@ pub fn expectObjectContentWithOverlays(
 }
 
 pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8, expected: []const u8) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (!std.mem.eql(u8, field.key, key)) continue;
@@ -159,10 +159,10 @@ pub fn expectObjectProperty(io: std.Io, allocator: std.mem.Allocator, path: []co
 }
 
 pub fn expectObjectPropertyMissing(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8, key: []const u8) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (std.mem.eql(u8, field.key, key)) return error.ExpectedObjectPropertyAbsent;
@@ -179,10 +179,10 @@ pub fn expectObjectFieldPath(
     field_path: []const []const u8,
     expected: []const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
@@ -204,10 +204,10 @@ pub fn expectObjectFieldPathNone(
     root_key: []const u8,
     field_path: []const []const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
@@ -226,10 +226,10 @@ pub fn expectObjectFieldPathWithOverlays(
     field_path: []const []const u8,
     expected: []const u8,
 ) !void {
-    var ir = try buildFinalizedContextWithOverlays(io, allocator, path, source, overlays);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const root = core.nodeField(&node, root_key) orelse continue;
         const value_at_path = core.fields.pathValue(root, field_path) orelse continue;
@@ -249,10 +249,10 @@ pub fn expectObjectPropertyWithOverlays(
     key: []const u8,
     expected: []const u8,
 ) !void {
-    var ir = try buildFinalizedContextWithOverlays(io, allocator, path, source, overlays);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentStateWithOverlays(io, allocator, path, source, overlays);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         for (node.fields.items) |field| {
             if (!std.mem.eql(u8, field.key, key)) continue;
@@ -276,14 +276,14 @@ pub fn expectClassDefaultProperty(
     key: []const u8,
     expected: ?[]const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    var declaration_index = try declarations.build(allocator, &ir);
+    var declaration_index = try declarations.build(allocator, &state);
     defer declaration_index.deinit();
-    const sema = semantic_env.SemanticEnv.init(&ir, &declaration_index, &ir.functions);
+    const sema = semantic_env.SemanticEnv.init(&state, &declaration_index, &state.functions);
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const node_role = node.role orelse continue;
         if (!std.mem.eql(u8, node_role, role)) continue;
@@ -314,14 +314,14 @@ pub fn expectBodyTextDefaults(
     source: []const u8,
     expected: BodyTextDefaults,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const role = node.role orelse continue;
         if (!std.mem.eql(u8, role, "body")) continue;
-        const render = core.render_policy.resolve(&ir, &node);
+        const render = core.render_policy.resolve(&state, &node);
         const text = render.text orelse continue;
         try std.testing.expectApproxEqAbs(expected.link_underline_width, text.link_underline_width, 0.0001);
         try std.testing.expectApproxEqAbs(expected.link_underline_offset, text.link_underline_offset, 0.0001);
@@ -335,14 +335,14 @@ pub fn expectBodyTextDefaults(
 }
 
 pub fn expectResolvedCodePaintIsColorful(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         const role = node.role orelse continue;
         if (!std.mem.eql(u8, role, "code")) continue;
-        const render = core.render_policy.resolve(&ir, &node);
+        const render = core.render_policy.resolve(&state, &node);
         const code = render.code orelse continue;
         try expectColorDiffers(code.keyword, code.plain);
         try expectColorDiffers(code.function, code.plain);
@@ -364,10 +364,10 @@ pub fn expectDumpContains(
     source: []const u8,
     expected: []const []const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    const text = try compiler.dump.toOwnedString(allocator, &ir);
+    const text = try compiler.dump.toOwnedString(allocator, &state);
     defer allocator.free(text);
     for (expected) |needle| {
         if (std.mem.indexOf(u8, text, needle) == null) return error.ExpectedDumpTextMissing;
@@ -381,10 +381,10 @@ pub fn expectVariableObjectClasses(
     source: []const u8,
     expected: []const VariableObjectClassExpectation,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    const text = try compiler.dump.toOwnedString(allocator, &ir);
+    const text = try compiler.dump.toOwnedString(allocator, &state);
     defer allocator.free(text);
     var parsed = try utils.json.parseValue(allocator, text, .{});
     defer parsed.deinit();
@@ -448,14 +448,14 @@ pub fn expectOverlayDiagnostic(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    defer ir.deinit();
+    defer state.deinit();
 
-    analysis.analyzeContext(allocator, &ir) catch {};
+    analysis.analyzeDocumentState(allocator, &state) catch {};
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
@@ -486,14 +486,14 @@ pub fn expectDiagnosticWithOverlays(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    defer ir.deinit();
+    defer state.deinit();
 
-    analysis.analyzeContext(allocator, &ir) catch {};
+    analysis.analyzeDocumentState(allocator, &state) catch {};
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
@@ -503,29 +503,29 @@ pub fn expectDiagnosticWithOverlays(
     return error.ExpectedDiagnosticMissing;
 }
 
-fn buildFinalizedContext(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.Context {
+fn buildFinalizedDocumentState(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !core.DocumentState {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var source_buf = try allocator.dupe(u8, source);
     var program = try syntax.parseWithSourceName(allocator, source_buf, path);
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    errdefer ir.deinit();
+    errdefer state.deinit();
 
-    try analyzeAndFinalizeContext(allocator, &ir);
-    return ir;
+    try analyzeAndFinalizeDocumentState(allocator, &state);
+    return state;
 }
 
-fn buildFinalizedContextWithOverlays(
+fn buildFinalizedDocumentStateWithOverlays(
     io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
     source: []const u8,
     overlays: []const OverlaySource,
-) !core.Context {
+) !core.DocumentState {
     const asset_base_dir = std.fs.path.dirname(path) orelse ".";
     var overlay = module_loader.SourceOverlay.init(allocator);
     defer overlay.deinit();
@@ -538,13 +538,13 @@ fn buildFinalizedContextWithOverlays(
     var index = try analysis.loadModuleIndexWithOverlay(allocator, io, asset_base_dir, program, &overlay);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    errdefer ir.deinit();
+    errdefer state.deinit();
 
-    try analyzeAndFinalizeContext(allocator, &ir);
-    return ir;
+    try analyzeAndFinalizeDocumentState(allocator, &state);
+    return state;
 }
 
 pub fn expectDiagnostic(
@@ -561,14 +561,14 @@ pub fn expectDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    defer ir.deinit();
+    defer state.deinit();
 
-    analysis.analyzeContext(allocator, &ir) catch {};
+    analysis.analyzeDocumentState(allocator, &state) catch {};
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
@@ -591,23 +591,23 @@ pub fn expectLoweringErrorDiagnostic(
     var index = try analysis.loadModuleIndex(allocator, io, asset_base_dir, program);
     defer index.deinit();
 
-    var ir = try analysis.buildContextWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
+    var state = try analysis.buildDocumentStateWithOptions(allocator, path, asset_base_dir, &source_buf, &program, &index, .{
         .allow_diagnostics = true,
     });
-    defer ir.deinit();
+    defer state.deinit();
 
-    var execution_graph = analysis.analyzeContextWithMode(allocator, &ir, .evaluation) catch null;
+    var execution_graph = analysis.analyzeDocumentStateWithMode(allocator, &state, .evaluation) catch null;
     defer if (execution_graph) |*graph| graph.deinit();
-    if (!utils.err.hasContextErrors(&ir)) {
+    if (!utils.err.hasDocumentStateErrors(&state)) {
         if (execution_graph) |*graph| {
-            lowering.evaluateDocument(&ir, graph) catch {};
-            if (!utils.err.hasContextErrors(&ir)) {
-                solveDocumentAndDiscard(&ir) catch {};
+            lowering.evaluateDocument(&state, graph) catch {};
+            if (!utils.err.hasDocumentStateErrors(&state)) {
+                solveDocumentAndDiscard(&state) catch {};
             }
         }
     }
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -622,10 +622,10 @@ pub fn expectLoweredDiagnostic(
     source: []const u8,
     expected_message: []const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) return;
@@ -641,10 +641,10 @@ pub fn expectLoweredDiagnosticWithOrigin(
     expected_origin: []const u8,
     expected_message: []const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const origin = diagnostic.origin orelse continue;
         if (std.mem.indexOf(u8, origin, expected_origin) == null) continue;
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
@@ -661,10 +661,10 @@ pub fn expectNoLoweredDiagnostic(
     source: []const u8,
     unexpected_message: []const u8,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, unexpected_message) != null) {
@@ -681,11 +681,11 @@ pub fn expectLoweredDiagnosticCount(
     expected_message: []const u8,
     expected_count: usize,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
     var count: usize = 0;
-    for (ir.diagnostics.items) |diagnostic| {
+    for (state.diagnostics.items) |diagnostic| {
         const message = try utils.err.formatContextDiagnostic(allocator, diagnostic);
         defer allocator.free(message);
         if (std.mem.indexOf(u8, message, expected_message) != null) count += 1;
@@ -700,11 +700,11 @@ pub fn expectObjectState(
     source: []const u8,
     expected: ObjectStateExpectation,
 ) !void {
-    var ir = try buildFinalizedContext(io, allocator, path, source);
-    defer ir.deinit();
+    var state = try buildFinalizedDocumentState(io, allocator, path, source);
+    defer state.deinit();
 
     var count: usize = 0;
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind != .object) continue;
         if (expected.role) |role| {
             const node_role = node.role orelse continue;

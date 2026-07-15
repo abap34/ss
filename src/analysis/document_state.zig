@@ -50,7 +50,7 @@ pub const ModuleIndex = struct {
     }
 };
 
-pub const BuildContextOptions = struct {
+pub const BuildDocumentStateOptions = struct {
     allow_diagnostics: bool = false,
     parse_holes: ?syntax_hole.Result = null,
 };
@@ -95,32 +95,32 @@ fn findModuleById(modules: []const core.SourceModule, module_id: core.SourceModu
 
 pub fn checkFunctionDefinitions(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     functions: *const core.FunctionMap,
 ) !void {
-    const sema = SemanticEnv.init(ir, null, functions);
-    try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
+    const sema = SemanticEnv.init(state, null, functions);
+    try checkFunctionDefinitionsWithEnv(allocator, state, &sema);
 }
 
 fn checkFunctionDefinitionsWithEnv(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    try calls.checkFunctionCallGraph(allocator, ir, sema);
+    try calls.checkFunctionCallGraph(allocator, state, sema);
 
     var had_diagnostics = false;
-    var const_it = ir.constants.iterator();
+    var const_it = state.constants.iterator();
     while (const_it.next()) |entry| {
         const module_id = entry.key_ptr.module_id;
         const origin_path = blk: {
-            if (ir.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
+            if (state.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
-        const diagnostic_count = ir.diagnostics.items.len;
-        checker.checkConst(allocator, ir, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
-            try continueAfterDiagnostic(ir, diagnostic_count, err);
+        const diagnostic_count = state.diagnostics.items.len;
+        checker.checkConst(allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
     }
@@ -129,76 +129,76 @@ fn checkFunctionDefinitionsWithEnv(
     while (it.next()) |entry| {
         const module_id = entry.key_ptr.module_id;
         const origin_path = blk: {
-            if (ir.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
+            if (state.moduleById(module_id)) |module| break :blk checker.originPathForModule(module);
             break :blk "";
         };
         const module_sema = sema.forModule(module_id);
-        const diagnostic_count = ir.diagnostics.items.len;
-        checker.checkFunction(allocator, ir, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
-            try continueAfterDiagnostic(ir, diagnostic_count, err);
+        const diagnostic_count = state.diagnostics.items.len;
+        checker.checkFunction(allocator, state, &module_sema, origin_path, entry.value_ptr.*) catch |err| {
+            try continueAfterDiagnostic(state, diagnostic_count, err);
             had_diagnostics = true;
         };
     }
     if (had_diagnostics) return error.DiagnosticsFailed;
 }
 
-fn continueAfterDiagnostic(ir: *const core.Context, diagnostic_count_before: usize, err: anyerror) !void {
-    if (ir.diagnostics.items.len > diagnostic_count_before) return;
+fn continueAfterDiagnostic(state: *const core.DocumentState, diagnostic_count_before: usize, err: anyerror) !void {
+    if (state.diagnostics.items.len > diagnostic_count_before) return;
     return err;
 }
 
-pub fn analyzeContext(
+pub fn analyzeDocumentState(
     allocator: std.mem.Allocator,
-    context: *core.Context,
+    state: *core.DocumentState,
 ) !void {
-    try analyzeContextSemantics(allocator, context);
-    try execution.validateDependencies(allocator, context);
+    try analyzeDocumentStateSemantics(allocator, state);
+    try execution.validateDependencies(allocator, state);
 }
 
-pub fn analyzeContextWithMode(
+pub fn analyzeDocumentStateWithMode(
     allocator: std.mem.Allocator,
-    context: *core.Context,
+    state: *core.DocumentState,
     mode: AnalysisMode,
 ) !?execution.ExecutionGraph {
-    try analyzeContextSemantics(allocator, context);
+    try analyzeDocumentStateSemantics(allocator, state);
     return switch (mode) {
         .diagnostics_only => blk: {
-            try execution.validateDependencies(allocator, context);
+            try execution.validateDependencies(allocator, state);
             break :blk null;
         },
-        .evaluation => try execution.ExecutionGraph.build(allocator, context, context, .{ .page_id_mode = .create }),
+        .evaluation => try execution.ExecutionGraph.build(allocator, state, state, .{ .page_id_mode = .create }),
     };
 }
 
-fn analyzeContextSemantics(
+fn analyzeDocumentStateSemantics(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
 ) !void {
-    var declaration_index = try declarations.build(allocator, ir);
+    var declaration_index = try declarations.build(allocator, state);
     defer declaration_index.deinit();
-    var sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
+    var sema = SemanticEnv.init(state, &declaration_index, &state.functions);
 
-    try checkTypeDeclarations(allocator, ir);
-    try resolveTypeReferences(allocator, ir, &sema);
-    try resolveEnumCaseExpressionsAndDefaults(allocator, ir, &sema);
-    const next_declaration_index = try declarations.build(allocator, ir);
+    try checkTypeDeclarations(allocator, state);
+    try resolveTypeReferences(allocator, state, &sema);
+    try resolveEnumCaseExpressionsAndDefaults(allocator, state, &sema);
+    const next_declaration_index = try declarations.build(allocator, state);
     declaration_index.deinit();
     declaration_index = next_declaration_index;
-    sema = SemanticEnv.init(ir, &declaration_index, &ir.functions);
-    try rebuildConstDeclarations(allocator, ir);
-    try rebuildFunctionDeclarations(allocator, ir);
-    try checkDuplicateValueDeclarations(allocator, ir);
-    try checkTypeAnnotations(allocator, ir, &sema);
-    try fields.checkObjectDeclarations(allocator, ir, &sema);
-    try checker.checkPageNamesUnique(allocator, ir);
-    try checkPlacementEffectDeclarations(allocator, ir);
-    try checkFunctionDefinitionsWithEnv(allocator, ir, &sema);
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+    sema = SemanticEnv.init(state, &declaration_index, &state.functions);
+    try rebuildConstDeclarations(allocator, state);
+    try rebuildFunctionDeclarations(allocator, state);
+    try checkDuplicateValueDeclarations(allocator, state);
+    try checkTypeAnnotations(allocator, state, &sema);
+    try fields.checkObjectDeclarations(allocator, state, &sema);
+    try checker.checkPageNamesUnique(allocator, state);
+    try checkPlacementEffectDeclarations(allocator, state);
+    try checkFunctionDefinitionsWithEnv(allocator, state, &sema);
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         const module_sema = sema.forModule(module_id);
-        try checker.checkPageStatements(allocator, ir, &module_sema, checker.originPathForModule(module), module.syntax);
+        try checker.checkPageStatements(allocator, state, &module_sema, checker.originPathForModule(module), module.syntax);
     }
-    try addDependencyQueryDiagnostics(allocator, ir, &sema);
+    try addDependencyQueryDiagnostics(allocator, state, &sema);
 }
 
 const DependencyQuery = struct {
@@ -212,9 +212,9 @@ const DependencyQueryTarget = struct {
     scope_display: dependencies.ScopeDisplayName,
 };
 
-fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, ir: *core.Context, sema: *const SemanticEnv) !void {
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, state: *core.DocumentState, sema: *const SemanticEnv) !void {
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         if (std.mem.indexOf(u8, module.source, "^dep?") == null) continue;
         const module_sema = sema.forModule(module_id);
         var query_iter = DependencyQueryIterator.init(module.source);
@@ -232,14 +232,14 @@ fn addDependencyQueryDiagnostics(allocator: std.mem.Allocator, ir: *core.Context
                 .scope = target.scope,
                 .name = target.scope_display,
             }};
-            const message = try dependencies.formatAccessSummaryWithOptions(ir.allocator, summary, .{
+            const message = try dependencies.formatAccessSummaryWithOptions(state.allocator, summary, .{
                 .variable_scope_displays = &scope_displays,
                 .pages_scope_displays = &scope_displays,
             });
-            errdefer ir.allocator.free(message);
+            errdefer state.allocator.free(message);
             const origin = try queryOrigin(allocator, module, query.span);
             defer allocator.free(origin);
-            try ir.addValidationDiagnostic(.warning, null, null, origin, .{
+            try state.addValidationDiagnostic(.warning, null, null, origin, .{
                 .user_report = .{ .message = message },
             });
         }
@@ -329,11 +329,11 @@ fn queryOrigin(allocator: std.mem.Allocator, module: *const core.SourceModule, s
     return std.fmt.allocPrint(allocator, "bytes:{d}-{d}", .{ span.start, span.end });
 }
 
-fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, ir: *core.Context) !void {
-    var base_sema = SemanticEnv.init(ir, null, &ir.functions);
+fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    var base_sema = SemanticEnv.init(state, null, &state.functions);
     var analyzer = dependencies.Analyzer.init(allocator, &base_sema);
     defer analyzer.deinit();
-    var it = ir.functions.iterator();
+    var it = state.functions.iterator();
     while (it.next()) |entry| {
         const func = entry.value_ptr.*;
         if (dependencies.callableNamePlacesObjects(func.name)) continue;
@@ -342,18 +342,18 @@ fn checkPlacementEffectDeclarations(allocator: std.mem.Allocator, ir: *core.Cont
         var summary = try analyzer.functionBody(func);
         defer summary.deinit();
         if (!summary.places_objects) continue;
-        const origin = try functionOrigin(allocator, ir, module_id, func.name);
+        const origin = try functionOrigin(allocator, state, module_id, func.name);
         defer allocator.free(origin);
-        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "PlacementEffect: function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
+        try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "PlacementEffect: function '{s}' calls a placing operation and must end with '!'", .{func.name}) },
         });
         return error.DiagnosticsFailed;
     }
 }
 
-fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Context) !void {
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+fn checkTypeDeclarations(allocator: std.mem.Allocator, state: *core.DocumentState) !void {
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         const origin_path = checker.originPathForModule(module);
         var names = std.StringHashMap([]const u8).init(allocator);
         defer names.deinit();
@@ -362,16 +362,16 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Context) !void 
             if (isBuiltinTypeName(object_decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, object_decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{object_decl.name}) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{object_decl.name}) },
                 });
                 return error.UnknownType;
             }
             if (names.get(object_decl.name)) |existing_kind| {
                 const origin = try originForModuleSpan(allocator, origin_path, object_decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, object_decl.name }) },
                 });
                 return error.UnknownType;
             }
@@ -382,16 +382,16 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Context) !void 
             if (isBuiltinTypeName(record_decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, record_decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{record_decl.name}) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{record_decl.name}) },
                 });
                 return error.UnknownType;
             }
             if (names.get(record_decl.name)) |existing_kind| {
                 const origin = try originForModuleSpan(allocator, origin_path, record_decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, record_decl.name }) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, record_decl.name }) },
                 });
                 return error.UnknownType;
             }
@@ -402,16 +402,16 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Context) !void 
             if (isBuiltinTypeName(decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{decl.name}) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: type '{s}' conflicts with a built-in type", .{decl.name}) },
                 });
                 return error.UnknownType;
             }
             if (names.get(decl.name)) |existing_kind| {
                 const origin = try originForModuleSpan(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, decl.name }) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateType: {s} type '{s}' is already defined in this module", .{ existing_kind, decl.name }) },
                 });
                 return error.UnknownType;
             }
@@ -419,8 +419,8 @@ fn checkTypeDeclarations(allocator: std.mem.Allocator, ir: *core.Context) !void 
             if (try type_defs.duplicateEnumCase(allocator, decl.cases.items)) |case_name| {
                 const origin = try originForModuleSpan(allocator, origin_path, decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateEnumCase: enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateEnumCase: enum '{s}' already has case '{s}'", .{ decl.name, case_name }) },
                 });
                 return error.UnknownType;
             }
@@ -434,37 +434,37 @@ fn isBuiltinTypeName(name: []const u8) bool {
 
 fn checkTypeAnnotations(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
     var had_diagnostics = false;
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         const origin_path = checker.originPathForModule(module);
 
         for (module.syntax.records.items) |record_decl| {
             for (record_decl.fields.items) |field| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
         }
         for (module.syntax.objects.items) |object_decl| {
             for (object_decl.fields.items) |field| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
         }
         for (module.syntax.object_extensions.items) |extension| {
             for (extension.fields.items) |field| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkFieldTypeAnnotation(allocator, ir, sema, module_id, origin_path, field) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkFieldTypeAnnotation(allocator, state, sema, module_id, origin_path, field) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
@@ -474,22 +474,22 @@ fn checkTypeAnnotations(
             const origin = try originForModuleSpan(allocator, origin_path, func.span);
             defer allocator.free(origin);
             for (func.params.items) |param| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkTypeAnnotation(ir, sema, module_id, param.ty, origin) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
                 if (param.default_value) |default_value| {
-                    const expr_diagnostic_count = ir.diagnostics.items.len;
-                    checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, default_value.*) catch |err| {
-                        try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+                    const expr_diagnostic_count = state.diagnostics.items.len;
+                    checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, default_value.*) catch |err| {
+                        try continueAfterDiagnostic(state, expr_diagnostic_count, err);
                         had_diagnostics = true;
                     };
                 }
             }
-            const result_diagnostic_count = ir.diagnostics.items.len;
-            checkTypeAnnotation(ir, sema, module_id, func.result_type, origin) catch |err| {
-                try continueAfterDiagnostic(ir, result_diagnostic_count, err);
+            const result_diagnostic_count = state.diagnostics.items.len;
+            checkTypeAnnotation(state, sema, module_id, func.result_type, origin) catch |err| {
+                try continueAfterDiagnostic(state, result_diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
@@ -497,30 +497,30 @@ fn checkTypeAnnotations(
         for (module.syntax.constants.items) |constant_decl| {
             const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
             defer allocator.free(origin);
-            const type_diagnostic_count = ir.diagnostics.items.len;
-            checkTypeAnnotation(ir, sema, module_id, constant_decl.value_type, origin) catch |err| {
-                try continueAfterDiagnostic(ir, type_diagnostic_count, err);
+            const type_diagnostic_count = state.diagnostics.items.len;
+            checkTypeAnnotation(state, sema, module_id, constant_decl.value_type, origin) catch |err| {
+                try continueAfterDiagnostic(state, type_diagnostic_count, err);
                 had_diagnostics = true;
             };
-            const expr_diagnostic_count = ir.diagnostics.items.len;
-            checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, constant_decl.value) catch |err| {
-                try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+            const expr_diagnostic_count = state.diagnostics.items.len;
+            checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, constant_decl.value) catch |err| {
+                try continueAfterDiagnostic(state, expr_diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
 
         for (module.syntax.document_statements.items) |stmt| {
-            const diagnostic_count = ir.diagnostics.items.len;
-            checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt) catch |err| {
-                try continueAfterDiagnostic(ir, diagnostic_count, err);
+            const diagnostic_count = state.diagnostics.items.len;
+            checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, stmt) catch |err| {
+                try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
         for (module.syntax.pages.items) |page| {
             for (page.statements.items) |stmt| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, stmt) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, stmt) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
@@ -531,7 +531,7 @@ fn checkTypeAnnotations(
 
 fn checkFieldTypeAnnotation(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     origin_path: []const u8,
@@ -540,15 +540,15 @@ fn checkFieldTypeAnnotation(
     const origin = try originForModuleSpan(allocator, origin_path, field.span);
     defer allocator.free(origin);
     var had_diagnostics = false;
-    const type_diagnostic_count = ir.diagnostics.items.len;
-    checkTypeAnnotation(ir, sema, module_id, field.value_type, origin) catch |err| {
-        try continueAfterDiagnostic(ir, type_diagnostic_count, err);
+    const type_diagnostic_count = state.diagnostics.items.len;
+    checkTypeAnnotation(state, sema, module_id, field.value_type, origin) catch |err| {
+        try continueAfterDiagnostic(state, type_diagnostic_count, err);
         had_diagnostics = true;
     };
     if (field.default_value) |default_value| {
-        const expr_diagnostic_count = ir.diagnostics.items.len;
-        checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, default_value.*) catch |err| {
-            try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+        const expr_diagnostic_count = state.diagnostics.items.len;
+        checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, default_value.*) catch |err| {
+            try continueAfterDiagnostic(state, expr_diagnostic_count, err);
             had_diagnostics = true;
         };
     }
@@ -557,10 +557,10 @@ fn checkFieldTypeAnnotation(
 
 fn resolveTypeReferences(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    for (ir.modules.items) |*module| {
+    for (state.modules.items) |*module| {
         try resolveModuleTypeReferences(allocator, &module.syntax, module.id, sema);
     }
 }
@@ -690,10 +690,10 @@ fn resolveExprTypeReferences(
 
 fn resolveEnumCaseExpressionsAndDefaults(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
 ) !void {
-    for (ir.modules.items) |*module| {
+    for (state.modules.items) |*module| {
         try resolveModuleEnumCasesAndDefaults(allocator, module.id, sema, &module.syntax);
     }
 }
@@ -1060,31 +1060,31 @@ fn resolveTypeReference(
 
 fn rebuildConstDeclarations(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
 ) !void {
     _ = allocator;
-    ir.constants.clearRetainingCapacity();
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        try appendConstDeclarations(&ir.constants, module.syntax, module.id);
+    state.constants.clearRetainingCapacity();
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        try appendConstDeclarations(&state.constants, module.syntax, module.id);
     }
 }
 
 fn rebuildFunctionDeclarations(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
 ) !void {
     _ = allocator;
-    ir.functions.clearRetainingCapacity();
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
-        try appendFunctionDeclarations(&ir.functions, module.syntax, module.id);
+    state.functions.clearRetainingCapacity();
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
+        try appendFunctionDeclarations(&state.functions, module.syntax, module.id);
     }
 }
 
 fn checkStatementTypeAnnotations(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     origin_path: []const u8,
@@ -1097,54 +1097,54 @@ fn checkStatementTypeAnnotations(
             defer allocator.free(origin);
             var had_diagnostics = false;
             if (binding.type_annotation) |annotation| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkTypeAnnotation(ir, sema, module_id, annotation, origin) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkTypeAnnotation(state, sema, module_id, annotation, origin) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
-            const expr_diagnostic_count = ir.diagnostics.items.len;
-            checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, binding.expr) catch |err| {
-                try continueAfterDiagnostic(ir, expr_diagnostic_count, err);
+            const expr_diagnostic_count = state.diagnostics.items.len;
+            checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, binding.expr) catch |err| {
+                try continueAfterDiagnostic(state, expr_diagnostic_count, err);
                 had_diagnostics = true;
             };
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
-        .return_expr => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
+        .return_expr => |expr| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, expr),
         .return_void => {},
         .property_set => |property_set| {
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.target);
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, property_set.value);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, property_set.target);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, property_set.value);
         },
         .if_stmt => |if_stmt| {
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, if_stmt.condition);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, if_stmt.condition);
             var had_diagnostics = false;
             for (if_stmt.then_statements.items) |nested| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, nested) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
             for (if_stmt.else_statements.items) |nested| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkStatementTypeAnnotations(allocator, ir, sema, module_id, origin_path, nested) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkStatementTypeAnnotations(allocator, state, sema, module_id, origin_path, nested) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
-        .expr_stmt => |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr),
+        .expr_stmt => |expr| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, expr),
         .constrain => |constraint| {
-            if (constraint.offset) |expr| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, expr);
+            if (constraint.offset) |expr| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, expr);
         },
     }
 }
 
 fn checkExprTypeAnnotations(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     origin_path: []const u8,
@@ -1155,21 +1155,21 @@ fn checkExprTypeAnnotations(
         .call => |call| {
             var had_diagnostics = false;
             for (call.args.items) |arg| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, arg) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .apply => |apply| {
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, apply.callee.*);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, apply.callee.*);
             var had_diagnostics = false;
             for (apply.args.items) |arg| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, arg) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, arg) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
@@ -1180,15 +1180,15 @@ fn checkExprTypeAnnotations(
             defer allocator.free(origin);
             var had_diagnostics = false;
             for (lambda.params.items) |param| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkTypeAnnotation(ir, sema, module_id, param.ty, origin) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkTypeAnnotation(state, sema, module_id, param.ty, origin) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
-            const body_diagnostic_count = ir.diagnostics.items.len;
-            checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, lambda.body.*) catch |err| {
-                try continueAfterDiagnostic(ir, body_diagnostic_count, err);
+            const body_diagnostic_count = state.diagnostics.items.len;
+            checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, lambda.body.*) catch |err| {
+                try continueAfterDiagnostic(state, body_diagnostic_count, err);
                 had_diagnostics = true;
             };
             if (had_diagnostics) return error.DiagnosticsFailed;
@@ -1196,37 +1196,37 @@ fn checkExprTypeAnnotations(
         .record => |record| {
             var had_diagnostics = false;
             for (record.fields.items) |field| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, field.value) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
         .record_update => |update| {
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, update.target.*);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, update.target.*);
             var had_diagnostics = false;
             for (update.fields.items) |field| {
-                const diagnostic_count = ir.diagnostics.items.len;
-                checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, field.value) catch |err| {
-                    try continueAfterDiagnostic(ir, diagnostic_count, err);
+                const diagnostic_count = state.diagnostics.items.len;
+                checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, field.value) catch |err| {
+                    try continueAfterDiagnostic(state, diagnostic_count, err);
                     had_diagnostics = true;
                 };
             }
             if (had_diagnostics) return error.DiagnosticsFailed;
         },
-        .member => |member| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, member.target.*),
-        .optional_check => |check| try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, check.target.*),
+        .member => |member| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, member.target.*),
+        .optional_check => |check| try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, check.target.*),
         .coalesce => |coalesce| {
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, coalesce.target.*);
-            try checkExprTypeAnnotations(allocator, ir, sema, module_id, origin_path, coalesce.fallback.*);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, coalesce.target.*);
+            try checkExprTypeAnnotations(allocator, state, sema, module_id, origin_path, coalesce.fallback.*);
         },
     }
 }
 
 fn checkTypeAnnotation(
-    ir: *core.Context,
+    state: *core.DocumentState,
     sema: *const SemanticEnv,
     module_id: core.SourceModuleId,
     ty: ast.Type,
@@ -1234,33 +1234,33 @@ fn checkTypeAnnotation(
 ) !void {
     if (ty.kind == .enum_type or ty.kind == .color or ty.kind == .none or ty.kind == .hole) return;
     if (ty.kind == .optional) {
-        if (ty.optional_child) |child| try checkTypeAnnotation(ir, sema, module_id, child.*, origin);
+        if (ty.optional_child) |child| try checkTypeAnnotation(state, sema, module_id, child.*, origin);
         return;
     }
     if (ty.kind == .record) {
         const record_name = ty.class_name orelse return;
-        if (!sema.recordExists(record_name)) return reportUnknownType(ir, origin, record_name);
+        if (!sema.recordExists(record_name)) return reportUnknownType(state, origin, record_name);
     } else if (ty.class_name) |class_name| {
         if (!sema.classExists(class_name)) {
-            return reportUnknownType(ir, origin, class_name);
+            return reportUnknownType(state, origin, class_name);
         }
     }
     if (ty.param_class_name) |class_name| {
-        if (!sema.classExists(class_name)) return reportUnknownType(ir, origin, class_name);
+        if (!sema.classExists(class_name)) return reportUnknownType(state, origin, class_name);
     }
     if (ty.kind == .function) {
         var had_diagnostics = false;
         for (ty.fn_params) |param| {
-            const diagnostic_count = ir.diagnostics.items.len;
-            checkTypeAnnotation(ir, sema, module_id, param, origin) catch |err| {
-                try continueAfterDiagnostic(ir, diagnostic_count, err);
+            const diagnostic_count = state.diagnostics.items.len;
+            checkTypeAnnotation(state, sema, module_id, param, origin) catch |err| {
+                try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
         if (ty.fn_result) |result| {
-            const diagnostic_count = ir.diagnostics.items.len;
-            checkTypeAnnotation(ir, sema, module_id, result.*, origin) catch |err| {
-                try continueAfterDiagnostic(ir, diagnostic_count, err);
+            const diagnostic_count = state.diagnostics.items.len;
+            checkTypeAnnotation(state, sema, module_id, result.*, origin) catch |err| {
+                try continueAfterDiagnostic(state, diagnostic_count, err);
                 had_diagnostics = true;
             };
         }
@@ -1268,19 +1268,19 @@ fn checkTypeAnnotation(
     }
 }
 
-fn reportUnknownType(ir: *core.Context, origin: []const u8, type_name: []const u8) !void {
-    try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-        .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "UnknownType: unknown type: {s}", .{type_name}) },
+fn reportUnknownType(state: *core.DocumentState, origin: []const u8, type_name: []const u8) !void {
+    try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+        .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "UnknownType: unknown type: {s}", .{type_name}) },
     });
     return error.UnknownType;
 }
 
 fn checkDuplicateValueDeclarations(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
 ) !void {
-    for (ir.module_order.items) |module_id| {
-        const module = ir.moduleById(module_id) orelse continue;
+    for (state.module_order.items) |module_id| {
+        const module = state.moduleById(module_id) orelse continue;
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
         const origin_path = checker.originPathForModule(module);
@@ -1288,8 +1288,8 @@ fn checkDuplicateValueDeclarations(
             if (names.contains(func.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, func.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateFunction: function '{s}' is already defined in this module", .{func.name}) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateFunction: function '{s}' is already defined in this module", .{func.name}) },
                 });
                 return error.DiagnosticsFailed;
             }
@@ -1299,8 +1299,8 @@ fn checkDuplicateValueDeclarations(
             if (names.contains(constant_decl.name)) {
                 const origin = try originForModuleSpan(allocator, origin_path, constant_decl.span);
                 defer allocator.free(origin);
-                try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-                    .user_report = .{ .message = try std.fmt.allocPrint(ir.allocator, "DuplicateValue: value '{s}' is already defined in this module", .{constant_decl.name}) },
+                try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+                    .user_report = .{ .message = try std.fmt.allocPrint(state.allocator, "DuplicateValue: value '{s}' is already defined in this module", .{constant_decl.name}) },
                 });
                 return error.DiagnosticsFailed;
             }
@@ -1318,11 +1318,11 @@ fn originForModuleSpan(allocator: std.mem.Allocator, origin_path: []const u8, sp
 
 fn functionOrigin(
     allocator: std.mem.Allocator,
-    ir: *const core.Context,
+    state: *const core.DocumentState,
     module_id: core.SourceModuleId,
     function_name: []const u8,
 ) ![]const u8 {
-    const module = ir.moduleById(module_id);
+    const module = state.moduleById(module_id);
     const path = if (module) |m| m.path orelse m.spec else "";
     if (module) |m| {
         for (m.syntax.functions.items) |func| {
@@ -1339,9 +1339,9 @@ pub fn collectVariableInfoFromModule(
     allocator: std.mem.Allocator,
     functions: *const core.FunctionMap,
     program: ast.Module,
-    diagnostic_context: ?*core.Context,
+    diagnostic_state: ?*core.DocumentState,
 ) !std.StringHashMap(VariableInfo) {
-    const sema = SemanticEnv.init(diagnostic_context, null, functions);
+    const sema = SemanticEnv.init(diagnostic_state, null, functions);
     var variables = std.StringHashMap(VariableInfo).init(allocator);
     errdefer variables.deinit();
 
@@ -1353,8 +1353,8 @@ pub fn collectVariableInfoFromModule(
             if (param.default_value) |default_value| {
                 const origin = try statementOrigin(allocator, func.span);
                 defer allocator.free(origin);
-                const info = try inferExprInfo(allocator, diagnostic_context, &sema, &env, default_value.*, origin);
-                try ensureType(diagnostic_context, allocator, info, param.ty, origin, .UnmatchedArgumentType);
+                const info = try inferExprInfo(allocator, diagnostic_state, &sema, &env, default_value.*, origin);
+                try ensureType(diagnostic_state, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
             const info = semantic_types.infoFromType(param.ty);
             try env.put(param.name, info);
@@ -1362,7 +1362,7 @@ pub fn collectVariableInfoFromModule(
         }
 
         for (func.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_context, &env, &sema, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables);
         }
     }
 
@@ -1370,7 +1370,7 @@ pub fn collectVariableInfoFromModule(
         var env = TypeEnv.init(allocator);
         defer env.deinit();
         for (program.document_statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_context, &env, &sema, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables);
         }
     }
 
@@ -1379,7 +1379,7 @@ pub fn collectVariableInfoFromModule(
         defer env.deinit();
 
         for (page.statements.items) |stmt| {
-            try collectVariableTypesFromStatement(allocator, diagnostic_context, &env, &sema, stmt, &variables);
+            try collectVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables);
         }
     }
 
@@ -1392,9 +1392,9 @@ pub fn collectScopedVariableInfoFromModule(
     program: ast.Module,
     module_id: core.SourceModuleId,
     source_len: usize,
-    diagnostic_context: ?*core.Context,
+    diagnostic_state: ?*core.DocumentState,
 ) !std.ArrayList(ScopedVariableInfo) {
-    const root_sema = SemanticEnv.init(diagnostic_context, null, functions);
+    const root_sema = SemanticEnv.init(diagnostic_state, null, functions);
     const sema = root_sema.forModule(module_id);
     var variables = std.ArrayList(ScopedVariableInfo).empty;
     errdefer variables.deinit(allocator);
@@ -1407,8 +1407,8 @@ pub fn collectScopedVariableInfoFromModule(
             if (param.default_value) |default_value| {
                 const origin = try statementOrigin(allocator, func.span);
                 defer allocator.free(origin);
-                const info = try inferExprInfo(allocator, diagnostic_context, &sema, &env, default_value.*, origin);
-                try ensureType(diagnostic_context, allocator, info, param.ty, origin, .UnmatchedArgumentType);
+                const info = try inferExprInfo(allocator, diagnostic_state, &sema, &env, default_value.*, origin);
+                try ensureType(diagnostic_state, allocator, info, param.ty, origin, .UnmatchedArgumentType);
             }
             const info = semantic_types.infoFromType(param.ty);
             try env.put(param.name, info);
@@ -1418,7 +1418,7 @@ pub fn collectScopedVariableInfoFromModule(
         }
 
         for (func.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_context, &env, &sema, stmt, &variables, module_id, analysis_scope.functionScope(func), func.span.end);
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables, module_id, analysis_scope.functionScope(func), func.span.end);
         }
     }
 
@@ -1427,7 +1427,7 @@ pub fn collectScopedVariableInfoFromModule(
         defer env.deinit();
         const document_scope = analysis_scope.documentScope(source_len);
         for (program.document_statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_context, &env, &sema, stmt, &variables, module_id, document_scope, source_len);
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables, module_id, document_scope, source_len);
         }
     }
 
@@ -1437,7 +1437,7 @@ pub fn collectScopedVariableInfoFromModule(
         const page_scope = analysis_scope.pageScope(page);
 
         for (page.statements.items) |stmt| {
-            try collectScopedVariableTypesFromStatement(allocator, diagnostic_context, &env, &sema, stmt, &variables, module_id, page_scope, page.span.end);
+            try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &env, &sema, stmt, &variables, module_id, page_scope, page.span.end);
         }
     }
 
@@ -1464,100 +1464,100 @@ fn appendConstDeclarations(
     }
 }
 
-pub fn buildContext(
+pub fn buildDocumentState(
     allocator: std.mem.Allocator,
     input_path: []const u8,
     asset_base_path: []const u8,
     project_source: *[]u8,
     project_syntax: *ast.Module,
     index: *ModuleIndex,
-) !core.Context {
-    return buildContextWithOptions(allocator, input_path, asset_base_path, project_source, project_syntax, index, .{});
+) !core.DocumentState {
+    return buildDocumentStateWithOptions(allocator, input_path, asset_base_path, project_source, project_syntax, index, .{});
 }
 
-pub fn buildContextWithOptions(
+pub fn buildDocumentStateWithOptions(
     allocator: std.mem.Allocator,
     input_path: []const u8,
     asset_base_path: []const u8,
     project_source: *[]u8,
     project_syntax: *ast.Module,
     index: *ModuleIndex,
-    options: BuildContextOptions,
-) !core.Context {
+    options: BuildDocumentStateOptions,
+) !core.DocumentState {
     const asset_base_dir = try allocator.dupe(u8, asset_base_path);
     var owns_asset_base_dir = true;
     errdefer if (owns_asset_base_dir) allocator.free(asset_base_dir);
     const project_path = try allocator.dupe(u8, input_path);
     var owns_project_path = true;
     errdefer if (owns_project_path) allocator.free(project_path);
-    var ir = try core.Context.init(allocator, asset_base_dir, project_path, project_source.*, project_syntax.*);
+    var state = try core.DocumentState.init(allocator, asset_base_dir, project_path, project_source.*, project_syntax.*);
     owns_asset_base_dir = false;
     owns_project_path = false;
     project_source.* = &.{};
     project_syntax.* = ast.Module.init();
-    errdefer ir.deinit();
+    errdefer state.deinit();
     if (options.parse_holes) |holes| {
-        try addParseHoleDiagnostics(&ir, holes);
+        try addParseHoleDiagnostics(&state, holes);
     }
 
-    ir.constants = index.constants;
+    state.constants = index.constants;
     index.constants = core.ConstMap.init(allocator);
-    ir.functions = index.functions;
+    state.functions = index.functions;
     index.functions = core.FunctionMap.init(allocator);
-    ir.module_order = index.module_graph.module_order;
+    state.module_order = index.module_graph.module_order;
     index.module_graph.module_order = .empty;
-    ir.projectModuleMutable().implicit_import_ids = index.module_graph.project_implicit_import_ids;
+    state.projectModuleMutable().implicit_import_ids = index.module_graph.project_implicit_import_ids;
     index.module_graph.project_implicit_import_ids = .empty;
-    ir.projectModuleMutable().resolved_import_ids = index.module_graph.project_import_ids;
+    state.projectModuleMutable().resolved_import_ids = index.module_graph.project_import_ids;
     index.module_graph.project_import_ids = .empty;
-    for (index.module_graph.modules.items) |module| try ir.modules.append(allocator, module);
+    for (index.module_graph.modules.items) |module| try state.modules.append(allocator, module);
     index.module_graph.modules = .empty;
-    if (ir.module_order.items.len == 0 or ir.module_order.items[ir.module_order.items.len - 1] != ir.project_module_id) {
-        try ir.module_order.append(allocator, ir.project_module_id);
+    if (state.module_order.items.len == 0 or state.module_order.items[state.module_order.items.len - 1] != state.project_module_id) {
+        try state.module_order.append(allocator, state.project_module_id);
     }
     {
-        var declaration_index = try declarations.build(allocator, &ir);
+        var declaration_index = try declarations.build(allocator, &state);
         defer declaration_index.deinit();
-        const sema = SemanticEnv.init(&ir, &declaration_index, &ir.functions);
-        try resolveTypeReferences(allocator, &ir, &sema);
-        try resolveEnumCaseExpressionsAndDefaults(allocator, &ir, &sema);
-        try rebuildConstDeclarations(allocator, &ir);
-        try rebuildFunctionDeclarations(allocator, &ir);
+        const sema = SemanticEnv.init(&state, &declaration_index, &state.functions);
+        try resolveTypeReferences(allocator, &state, &sema);
+        try resolveEnumCaseExpressionsAndDefaults(allocator, &state, &sema);
+        try rebuildConstDeclarations(allocator, &state);
+        try rebuildFunctionDeclarations(allocator, &state);
     }
-    const variable_diagnostic_context: ?*core.Context = if (options.allow_diagnostics) null else &ir;
-    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromModule(allocator, &ir.functions, ir.projectSyntax(), variable_diagnostic_context) catch |err| blk: {
+    const variable_diagnostic_state: ?*core.DocumentState = if (options.allow_diagnostics) null else &state;
+    var variable_infos: ?std.StringHashMap(VariableInfo) = collectVariableInfoFromModule(allocator, &state.functions, state.projectSyntax(), variable_diagnostic_state) catch |err| blk: {
         if (!options.allow_diagnostics) {
-            printContextDiagnosticsOrFallback(&ir, err);
+            printDocumentStateDiagnosticsOrFallback(&state, err);
             return error.DiagnosticsFailed;
         }
         break :blk null;
     };
     if (variable_infos) |*infos| infos.deinit();
-    try analysis_index.populateContextAnalysis(allocator, &ir);
-    return ir;
+    try analysis_index.populateDocumentStateAnalysis(allocator, &state);
+    return state;
 }
 
-fn addParseHoleDiagnostics(ir: *core.Context, holes: syntax_hole.Result) !void {
-    const origin_path = ir.projectPath();
+fn addParseHoleDiagnostics(state: *core.DocumentState, holes: syntax_hole.Result) !void {
+    const origin_path = state.projectPath();
     for (holes.diagnostics) |diagnostic| {
-        const origin = try originForModuleSpan(ir.allocator, origin_path, diagnostic.span);
-        defer ir.allocator.free(origin);
+        const origin = try originForModuleSpan(state.allocator, origin_path, diagnostic.span);
+        defer state.allocator.free(origin);
         var message_buf: [256]u8 = undefined;
         const message_text = utils.err.formatParseDiagnostic(&message_buf, diagnostic);
-        try ir.addValidationDiagnostic(.@"error", null, null, origin, .{
-            .user_report = .{ .message = try ir.allocator.dupe(u8, message_text) },
+        try state.addValidationDiagnostic(.@"error", null, null, origin, .{
+            .user_report = .{ .message = try state.allocator.dupe(u8, message_text) },
         });
     }
 }
 
-fn printContextDiagnosticsOrFallback(ir: *core.Context, err: anyerror) void {
-    if (utils.err.hasContextErrors(ir)) {
-        utils.err.printContextDiagnostics(ir.projectPath(), ir.projectSource(), ir);
+fn printDocumentStateDiagnosticsOrFallback(state: *core.DocumentState, err: anyerror) void {
+    if (utils.err.hasDocumentStateErrors(state)) {
+        utils.err.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
     } else {
         var message_buf: [128]u8 = undefined;
         utils.err.print(.{
-            .path = ir.projectPath(),
-            .source = ir.projectSource(),
+            .path = state.projectPath(),
+            .source = state.projectSource(),
             .severity = .@"error",
             .message = std.fmt.bufPrint(&message_buf, "BuildFailed: {s}", .{@errorName(err)}) catch "BuildFailed: internal analysis failure",
             .span = null,
@@ -1633,7 +1633,7 @@ pub fn loadModuleIndexForPath(
 
 fn collectVariableTypesFromStatement(
     allocator: std.mem.Allocator,
-    diagnostic_context: ?*core.Context,
+    diagnostic_state: ?*core.DocumentState,
     env: *TypeEnv,
     sema: *const SemanticEnv,
     stmt: ast.Statement,
@@ -1644,40 +1644,40 @@ fn collectVariableTypesFromStatement(
     switch (stmt.kind) {
         .hole => {},
         .let_binding => |binding| {
-            const inferred = try inferExprInfo(allocator, diagnostic_context, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(allocator, diagnostic_state, sema, env, binding.expr, origin);
             const info = letBindingInfo(binding, inferred);
             if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try variables.put(binding.name, info);
         },
         .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
         },
         .return_void => {},
         .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, property_set.target, origin);
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, property_set.value, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.target, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
-            const condition = try inferExprInfo(allocator, diagnostic_context, sema, env, if_stmt.condition, origin);
-            try semantic_types.ensureType(diagnostic_context, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
+            const condition = try inferExprInfo(allocator, diagnostic_state, sema, env, if_stmt.condition, origin);
+            try semantic_types.ensureType(diagnostic_state, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             for (if_stmt.then_statements.items) |nested| {
-                try collectVariableTypesFromStatement(allocator, diagnostic_context, &then_env, sema, nested, variables);
+                try collectVariableTypesFromStatement(allocator, diagnostic_state, &then_env, sema, nested, variables);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             for (if_stmt.else_statements.items) |nested| {
-                try collectVariableTypesFromStatement(allocator, diagnostic_context, &else_env, sema, nested, variables);
+                try collectVariableTypesFromStatement(allocator, diagnostic_state, &else_env, sema, nested, variables);
             }
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, diagnostic_context, sema, env, expr, origin);
+                _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
             }
         },
     }
@@ -1685,7 +1685,7 @@ fn collectVariableTypesFromStatement(
 
 fn collectScopedVariableTypesFromStatement(
     allocator: std.mem.Allocator,
-    diagnostic_context: ?*core.Context,
+    diagnostic_state: ?*core.DocumentState,
     env: *TypeEnv,
     sema: *const SemanticEnv,
     stmt: ast.Statement,
@@ -1699,42 +1699,42 @@ fn collectScopedVariableTypesFromStatement(
     switch (stmt.kind) {
         .hole => {},
         .let_binding => |binding| {
-            const inferred = try inferExprInfo(allocator, diagnostic_context, sema, env, binding.expr, origin);
+            const inferred = try inferExprInfo(allocator, diagnostic_state, sema, env, binding.expr, origin);
             const info = letBindingInfo(binding, inferred);
             if (language_names.isDiscardBindingName(binding.name)) return;
             try env.put(binding.name, info);
             try appendScopedVariable(allocator, variables, binding.name, info, module_id, scope, stmt.span.start, stmt.span.end, stmt.span.start, visible_end);
         },
         .return_expr => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
         },
         .return_void => {},
         .property_set => |property_set| {
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, property_set.target, origin);
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, property_set.value, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.target, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, property_set.value, origin);
         },
         .if_stmt => |if_stmt| {
-            const condition = try inferExprInfo(allocator, diagnostic_context, sema, env, if_stmt.condition, origin);
-            try semantic_types.ensureType(diagnostic_context, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
+            const condition = try inferExprInfo(allocator, diagnostic_state, sema, env, if_stmt.condition, origin);
+            try semantic_types.ensureType(diagnostic_state, allocator, condition, ast.Type.boolean, origin, .UnmatchedArgumentType);
             var then_env = try env.clone();
             defer then_env.deinit();
             const then_end = analysis_scope.statementsVisibleEnd(if_stmt.then_statements.items, stmt.span.end);
             for (if_stmt.then_statements.items) |nested| {
-                try collectScopedVariableTypesFromStatement(allocator, diagnostic_context, &then_env, sema, nested, variables, module_id, scope, then_end);
+                try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &then_env, sema, nested, variables, module_id, scope, then_end);
             }
             var else_env = try env.clone();
             defer else_env.deinit();
             const else_end = analysis_scope.statementsVisibleEnd(if_stmt.else_statements.items, stmt.span.end);
             for (if_stmt.else_statements.items) |nested| {
-                try collectScopedVariableTypesFromStatement(allocator, diagnostic_context, &else_env, sema, nested, variables, module_id, scope, else_end);
+                try collectScopedVariableTypesFromStatement(allocator, diagnostic_state, &else_env, sema, nested, variables, module_id, scope, else_end);
             }
         },
         .expr_stmt => |expr| {
-            _ = try inferExprInfo(allocator, diagnostic_context, sema, env, expr, origin);
+            _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
         },
         .constrain => |decl| {
             if (decl.offset) |expr| {
-                _ = try inferExprInfo(allocator, diagnostic_context, sema, env, expr, origin);
+                _ = try inferExprInfo(allocator, diagnostic_state, sema, env, expr, origin);
             }
         },
     }

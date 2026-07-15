@@ -9,24 +9,24 @@ const binding_names = @import("names.zig");
 
 pub fn toJson(
     allocator: std.mem.Allocator,
-    ir: *core.Context,
+    state: *core.DocumentState,
     render_ir: *const render.Ir,
     generation: u64,
 ) ![]u8 {
-    const layout_json = try core.layout.conflicts.toJson(allocator, ir);
+    const layout_json = try core.layout.conflicts.toJson(allocator, state);
     defer allocator.free(layout_json);
     const display_json = try displayJson(allocator, render_ir);
     defer allocator.free(display_json);
-    const outline_json = try outlineJson(allocator, ir);
+    const outline_json = try outlineJson(allocator, state);
     defer allocator.free(outline_json);
-    const editing_json = try editingJson(allocator, ir);
+    const editing_json = try editingJson(allocator, state);
     defer allocator.free(editing_json);
-    const source_paths_json = try sourcePathsJson(allocator, ir);
+    const source_paths_json = try sourcePathsJson(allocator, state);
     defer allocator.free(source_paths_json);
 
     var hasher = std.hash.Wyhash.init(generation);
-    hasher.update(ir.projectPath());
-    hasher.update(ir.projectSource());
+    hasher.update(state.projectPath());
+    hasher.update(state.projectSource());
     hasher.update(layout_json);
     hasher.update(display_json);
     hasher.update(outline_json);
@@ -45,7 +45,7 @@ pub fn toJson(
     try out.appendSlice(allocator, ",\"generation\":");
     try json.appendInt(allocator, &out, generation);
     try out.appendSlice(allocator, ",\"entry_path\":");
-    try json.appendString(allocator, &out, ir.projectPath());
+    try json.appendString(allocator, &out, state.projectPath());
     try out.appendSlice(allocator, ",\"source_paths\":");
     try out.appendSlice(allocator, source_paths_json);
     try out.appendSlice(allocator, ",\"coordinate_space\":{\"unit\":\"pt\",\"origin\":\"page-top-left\",\"x_axis\":\"right\",\"y_axis\":\"down\"},\"layout\":");
@@ -60,15 +60,15 @@ pub fn toJson(
     return try out.toOwnedSlice(allocator);
 }
 
-fn sourcePathsJson(allocator: std.mem.Allocator, ir: *const core.Context) ![]u8 {
+fn sourcePathsJson(allocator: std.mem.Allocator, state: *const core.DocumentState) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var paths = try json.Array.beginBuffer(allocator, &buffer);
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
-    try paths.stringItem(ir.projectPath());
-    try seen.put(ir.projectPath(), {});
-    for (ir.modules.items) |module| {
+    try paths.stringItem(state.projectPath());
+    try seen.put(state.projectPath(), {});
+    for (state.modules.items) |module| {
         const path = module.path orelse continue;
         if (seen.contains(path)) continue;
         try paths.stringItem(path);
@@ -180,14 +180,14 @@ fn appendOptionalColor(object: *json.Object, name: []const u8, color: ?core.rend
     try object.nullField(name);
 }
 
-fn outlineJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
+fn outlineJson(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var items = try json.Array.beginBuffer(allocator, &buffer);
     var seen = std.AutoHashMap(core.NodeId, void).init(allocator);
     defer seen.deinit();
-    for (ir.page_order.items) |page_id| {
-        const page = ir.getNode(page_id) orelse continue;
+    for (state.page_order.items) |page_id| {
+        const page = state.getNode(page_id) orelse continue;
         var page_item = try items.objectItem();
         try page_item.intField("id", page.id);
         try page_item.nullField("parent_id");
@@ -196,8 +196,8 @@ fn outlineJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
         try page_item.stringField("label", page.name);
         try page_item.end();
         try seen.put(page.id, {});
-        if (ir.childrenOf(page_id)) |children| {
-            for (children) |child_id| try appendOutlineNode(&items, ir, &seen, page_id, page_id, child_id);
+        if (state.childrenOf(page_id)) |children| {
+            for (children) |child_id| try appendOutlineNode(&items, state, &seen, page_id, page_id, child_id);
         }
     }
     try items.end();
@@ -206,14 +206,14 @@ fn outlineJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
 
 fn appendOutlineNode(
     items: *json.Array,
-    ir: *core.Context,
+    state: *core.DocumentState,
     seen: *std.AutoHashMap(core.NodeId, void),
     page_id: core.NodeId,
     parent_id: core.NodeId,
     node_id: core.NodeId,
 ) !void {
     if (seen.contains(node_id)) return;
-    const node = ir.getNode(node_id) orelse return;
+    const node = state.getNode(node_id) orelse return;
     if (node.kind != .object) return;
     try seen.put(node_id, {});
     var item = try items.objectItem();
@@ -224,28 +224,28 @@ fn appendOutlineNode(
     try item.stringField("label", node.role orelse node.name);
     try item.optionalStringField("role", node.role);
     try item.end();
-    if (ir.childrenOf(node_id)) |children| {
-        for (children) |child_id| try appendOutlineNode(items, ir, seen, page_id, node_id, child_id);
+    if (state.childrenOf(node_id)) |children| {
+        for (children) |child_id| try appendOutlineNode(items, state, seen, page_id, node_id, child_id);
     }
 }
 
-fn editingJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
+fn editingJson(allocator: std.mem.Allocator, state: *core.DocumentState) ![]u8 {
     var buffer = std.ArrayList(u8).empty;
     errdefer buffer.deinit(allocator);
     var items = try json.Array.beginBuffer(allocator, &buffer);
     var seen = std.AutoHashMap(core.NodeId, void).init(allocator);
     defer seen.deinit();
-    const program = ir.projectSyntax();
+    const program = state.projectSyntax();
     for (program.pages.items) |*page_decl| {
-        var names = try binding_names.Generator.init(allocator, ir, page_decl);
+        var names = try binding_names.Generator.init(allocator, state, page_decl);
         defer names.deinit();
 
-        for (ir.object_sources.items) |object_source| {
-            if (object_source.module_id != ir.project_module_id or seen.contains(object_source.node_id)) continue;
-            if (ir.parentPageOf(object_source.node_id) != object_source.page_id) continue;
+        for (state.object_sources.items) |object_source| {
+            if (object_source.module_id != state.project_module_id or seen.contains(object_source.node_id)) continue;
+            if (state.parentPageOf(object_source.node_id) != object_source.page_id) continue;
             const statement = topLevelSourceStatement(page_decl, object_source) orelse continue;
-            const page_index = pageOrderIndex(ir.page_order.items, object_source.page_id) orelse continue;
-            const node = ir.getNode(object_source.node_id) orelse continue;
+            const page_index = pageOrderIndex(state.page_order.items, object_source.page_id) orelse continue;
+            const node = state.getNode(object_source.node_id) orelse continue;
             if (node.kind != .object) continue;
 
             const binding_required = object_source.binding_base != null;
@@ -265,7 +265,7 @@ fn editingJson(allocator: std.mem.Allocator, ir: *core.Context) ![]u8 {
             try item.boolField("binding_required", binding_required);
             try item.intField("statement_start", statement.span.start);
             try item.intField("statement_end", statement.span.end);
-            try item.stringField("path", ir.projectPath());
+            try item.stringField("path", state.projectPath());
             try item.intField("page_start", page_decl.span.start);
             try item.intField("page_end", page_decl.span.end);
             try item.end();

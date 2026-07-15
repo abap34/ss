@@ -116,12 +116,12 @@ pub fn recordConstraintPropagation(
 
 pub fn axisPassBegin(
     allocator: std.mem.Allocator,
-    ir: anytype,
+    state: anytype,
     workspace: *const graph.AxisWorkspace,
     run_id: usize,
 ) void {
     const summary = summarizeAxisStates(workspace.states);
-    emitEvent(allocator, ir, workspace, .{
+    emitEvent(allocator, state, workspace, .{
         .name = "begin",
         .run_id = run_id,
         .summary = summary,
@@ -130,7 +130,7 @@ pub fn axisPassBegin(
 
 pub fn axisPassIteration(
     allocator: std.mem.Allocator,
-    ir: anytype,
+    state: anytype,
     run_id: usize,
     workspace: *const graph.AxisWorkspace,
     pass: usize,
@@ -142,7 +142,7 @@ pub fn axisPassIteration(
     soft_group_sources_changed: bool,
 ) void {
     const summary = summarizeAxisStates(workspace.states);
-    emitEvent(allocator, ir, workspace, .{
+    emitEvent(allocator, state, workspace, .{
         .name = "iteration",
         .run_id = run_id,
         .pass = pass + 1,
@@ -158,14 +158,14 @@ pub fn axisPassIteration(
 
 pub fn axisPassEnd(
     allocator: std.mem.Allocator,
-    ir: anytype,
+    state: anytype,
     run_id: usize,
     workspace: *const graph.AxisWorkspace,
     iteration_count: usize,
     converged: bool,
 ) void {
     const summary = summarizeAxisStates(workspace.states);
-    emitEvent(allocator, ir, workspace, .{
+    emitEvent(allocator, state, workspace, .{
         .name = "end",
         .run_id = run_id,
         .iterations = iteration_count,
@@ -189,12 +189,12 @@ const Event = struct {
     summary: AxisTraceSummary,
 };
 
-fn emitEvent(allocator: std.mem.Allocator, ir: anytype, workspace: *const graph.AxisWorkspace, event: Event) void {
+fn emitEvent(allocator: std.mem.Allocator, state: anytype, workspace: *const graph.AxisWorkspace, event: Event) void {
     if (trace_state.json_path == null) return;
 
     var buffer = std.ArrayList(u8).empty;
     defer buffer.deinit(allocator);
-    appendEventJson(allocator, &buffer, ir, workspace, event) catch |err| {
+    appendEventJson(allocator, &buffer, state, workspace, event) catch |err| {
         std.debug.print("layout trace: failed to encode trace event: {s}\n", .{@errorName(err)});
         return;
     };
@@ -217,7 +217,7 @@ fn appendEventToPath(allocator: std.mem.Allocator, path: []const u8, event_json:
     count.* += 1;
 }
 
-fn appendEventJson(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), ir: anytype, workspace: *const graph.AxisWorkspace, event: Event) !void {
+fn appendEventJson(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), state: anytype, workspace: *const graph.AxisWorkspace, event: Event) !void {
     var object = try json.Object.beginBuffer(allocator, buffer);
     try object.stringField("event", event.name);
     try object.intField("run", event.run_id);
@@ -252,26 +252,26 @@ fn appendEventJson(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), ir:
     var messages = try object.arrayField("messages");
     for (trace_state.pending_messages.items) |message| {
         var item = try messages.objectItem();
-        try appendTraceMessage(&item, ir, message);
+        try appendTraceMessage(&item, state, message);
         try item.end();
     }
     try messages.end();
 
-    try appendStateArray(&object, ir, "states", workspace.graph.child_ids, workspace.states);
+    try appendStateArray(&object, state, "states", workspace.graph.child_ids, workspace.states);
 
     try object.end();
 }
 
-fn appendStateArray(object: *json.Object, ir: anytype, field_name: []const u8, child_ids: []const model.NodeId, axis_states: []const AxisState) !void {
+fn appendStateArray(object: *json.Object, state: anytype, field_name: []const u8, child_ids: []const model.NodeId, axis_states: []const AxisState) !void {
     var states = try object.arrayField(field_name);
-    for (child_ids, axis_states) |child_id, state| {
-        const node = ir.getNode(child_id) orelse continue;
+    for (child_ids, axis_states) |child_id, axis_state| {
+        const node = state.getNode(child_id) orelse continue;
         var item = try states.objectItem();
         try item.intField("id", child_id);
         try item.stringField("name", node.name);
         try item.optionalStringField("role", node.role);
         try item.stringField("kind", @tagName(node.kind));
-        try appendAxisState(&item, state);
+        try appendAxisState(&item, axis_state);
         try item.end();
     }
     try states.end();
@@ -298,19 +298,19 @@ const TraceMessage = struct {
     }
 };
 
-fn appendTraceMessage(object: *json.Object, ir: anytype, message: TraceMessage) !void {
+fn appendTraceMessage(object: *json.Object, state: anytype, message: TraceMessage) !void {
     try object.stringField("kind", messageKindName(message.kind));
     try object.stringField("axis", axisName(message.axis));
     try object.boolField("soft", message.soft);
     try object.boolField("reverse", message.reverse);
 
     var constraint = try object.objectField("constraint");
-    try appendConstraint(&constraint, ir, message.constraint);
+    try appendConstraint(&constraint, state, message.constraint);
     try constraint.end();
 
     if (message.reverse) {
         var from = try object.objectField("from");
-        try appendNodeEndpoint(&from, ir, message.constraint.target_node, message.constraint.target_anchor);
+        try appendNodeEndpoint(&from, state, message.constraint.target_node, message.constraint.target_anchor);
         try from.end();
 
         const source = switch (message.constraint.source) {
@@ -318,29 +318,29 @@ fn appendTraceMessage(object: *json.Object, ir: anytype, message: TraceMessage) 
             .node => |node_source| node_source,
         };
         var to = try object.objectField("to");
-        try appendNodeEndpoint(&to, ir, source.node_id, source.anchor);
+        try appendNodeEndpoint(&to, state, source.node_id, source.anchor);
         try to.end();
     } else {
         var from = try object.objectField("from");
-        try appendConstraintSourceEndpoint(&from, ir, message.constraint.source);
+        try appendConstraintSourceEndpoint(&from, state, message.constraint.source);
         try from.end();
 
         var to = try object.objectField("to");
-        try appendNodeEndpoint(&to, ir, message.constraint.target_node, message.constraint.target_anchor);
+        try appendNodeEndpoint(&to, state, message.constraint.target_node, message.constraint.target_anchor);
         try to.end();
     }
 
     if (message.affected_node) |node_id| {
         var affected = try object.objectField("affected");
-        try appendNodeEndpoint(&affected, ir, node_id, affectedAnchor(message));
+        try appendNodeEndpoint(&affected, state, node_id, affectedAnchor(message));
         try affected.end();
     }
-    if (message.affected_state) |state| {
+    if (message.affected_state) |axis_state| {
         var state_object = try object.objectField("state");
-        try appendAxisState(&state_object, state);
+        try appendAxisState(&state_object, axis_state);
         try state_object.end();
     }
-    try appendStateArray(object, ir, "states", message.snapshot.child_ids, message.snapshot.states);
+    try appendStateArray(object, state, "states", message.snapshot.child_ids, message.snapshot.states);
 }
 
 fn appendAxisState(object: *json.Object, state: AxisState) !void {
@@ -390,33 +390,33 @@ fn affectedAnchor(message: TraceMessage) model.Anchor {
     return message.constraint.target_anchor;
 }
 
-fn appendConstraint(object: *json.Object, ir: anytype, constraint: Constraint) !void {
+fn appendConstraint(object: *json.Object, state: anytype, constraint: Constraint) !void {
     try object.optionalStringField("origin", constraint.origin);
     try object.stringField("target_anchor", anchorName(constraint.target_anchor));
     try object.floatField("offset", constraint.offset, "{d:.4}");
 
     var target = try object.objectField("target");
-    try appendNodeEndpoint(&target, ir, constraint.target_node, constraint.target_anchor);
+    try appendNodeEndpoint(&target, state, constraint.target_node, constraint.target_anchor);
     try target.end();
 
     var source = try object.objectField("source");
-    try appendConstraintSourceEndpoint(&source, ir, constraint.source);
+    try appendConstraintSourceEndpoint(&source, state, constraint.source);
     try source.end();
 }
 
-fn appendConstraintSourceEndpoint(object: *json.Object, ir: anytype, source: model.ConstraintSource) !void {
+fn appendConstraintSourceEndpoint(object: *json.Object, state: anytype, source: model.ConstraintSource) !void {
     switch (source) {
         .page => |anchor| {
             try object.stringField("type", "page");
             try object.stringField("name", "page");
             try object.stringField("anchor", anchorName(anchor));
         },
-        .node => |node_source| try appendNodeEndpoint(object, ir, node_source.node_id, node_source.anchor),
+        .node => |node_source| try appendNodeEndpoint(object, state, node_source.node_id, node_source.anchor),
     }
 }
 
-fn appendNodeEndpoint(object: *json.Object, ir: anytype, node_id: model.NodeId, anchor: model.Anchor) !void {
-    const node = ir.getNode(node_id);
+fn appendNodeEndpoint(object: *json.Object, state: anytype, node_id: model.NodeId, anchor: model.Anchor) !void {
+    const node = state.getNode(node_id);
     try object.stringField("type", "node");
     try object.intField("id", node_id);
     try object.stringField("name", if (node) |value| value.name else "unknown");

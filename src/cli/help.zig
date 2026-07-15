@@ -337,8 +337,8 @@ fn dump(output: Output) void {
         \\
         \\{s}Examples:{s}
         \\  {s}ss dump slide.ss{s}
-        \\  {s}ss dump slide.ss ir.json{s}
-        \\  {s}ss dump --project slides --output ir.json{s}
+        \\  {s}ss dump slide.ss state.json{s}
+        \\  {s}ss dump --project slides --output state.json{s}
         \\
     , .{
         s.heading, s.reset,

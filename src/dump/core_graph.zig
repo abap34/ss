@@ -3,21 +3,21 @@ const core = @import("core");
 
 const json = @import("utils").json;
 
-pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, ir: *core.Context) !void {
+pub fn writeNodesField(allocator: std.mem.Allocator, root: *json.Object, state: *core.DocumentState) !void {
     var nodes = try root.arrayField("nodes");
-    for (ir.nodes.items) |node| {
+    for (state.nodes.items) |node| {
         if (node.kind == .object and !node.attached) continue;
-        try writeNode(allocator, &nodes, ir, node);
+        try writeNode(allocator, &nodes, state, node);
     }
     try nodes.end();
 }
 
-fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Context, node: core.Node) !void {
-    const render = core.render_policy.resolve(ir, &node);
+fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, state: *core.DocumentState, node: core.Node) !void {
+    const render = core.render_policy.resolve(state, &node);
     const display_content = core.nodeDisplayContent(&node);
     const has_display_content = display_content.len != 0 or node.content != null or node.display_content != null;
-    const should_parse_blocks = core.markdown.shouldParseBlocksNode(ir, &node) and has_display_content;
-    const should_parse_inline = core.markdown.shouldParseInlineNode(ir, &node) and has_display_content and !should_parse_blocks;
+    const should_parse_blocks = core.markdown.shouldParseBlocksNode(state, &node) and has_display_content;
+    const should_parse_inline = core.markdown.shouldParseInlineNode(state, &node) and has_display_content and !should_parse_blocks;
 
     var markdown_doc_storage = core.markdown.MarkdownDocument.init(allocator);
     defer markdown_doc_storage.deinit();
@@ -26,7 +26,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Context
     if (should_parse_blocks) {
         markdown_doc_storage = try core.markdown.parseMarkdownDocumentForNode(
             allocator,
-            ir,
+            state,
             &node,
             display_content,
         );
@@ -34,7 +34,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Context
     if (should_parse_inline) {
         inline_layout_storage = try core.markdown.parseTextLayoutForNode(
             allocator,
-            ir,
+            state,
             &node,
             display_content,
         );
@@ -62,7 +62,7 @@ fn writeNode(allocator: std.mem.Allocator, nodes: *json.Array, ir: *core.Context
         try item.nullField("inline_lines");
     }
     try writeFields(allocator, &item, node.fields.items);
-    var render_env = try core.render_env.resolveForNode(allocator, ir, &node);
+    var render_env = try core.render_env.resolveForNode(allocator, state, &node);
     defer render_env.deinit(allocator);
     try writeRenderEnv(&item, render_env);
     try item.optionalIntField("page_index", node.page_index);
