@@ -49,15 +49,32 @@ pub const MathBuilder = math.Builder;
 
 pub const ItemId = u64;
 
+pub const SourceRange = struct {
+    module_id: core.SourceModuleId,
+    start: usize,
+    end: usize,
+};
+
+pub const BlendMode = enum {
+    normal,
+    multiply,
+    screen,
+    overlay,
+    darken,
+    lighten,
+};
+
 pub const ItemHeader = struct {
     item_id: ItemId,
     node_id: ?core.NodeId,
+    source: ?SourceRange = null,
     semantic_id: ?SemanticId = null,
     bounds: Rect,
     ink_bounds: Rect,
     transform: Transform = .{},
     clip: ?Clip = null,
     opacity: f64 = 1,
+    blend_mode: BlendMode = .normal,
     paint_index: u32,
 };
 
@@ -169,6 +186,12 @@ pub const Item = union(enum) {
             inline else => |*item| item.header.semantic_id = semantic_id,
         }
     }
+
+    pub fn setSource(self: *Item, source: ?SourceRange) void {
+        switch (self.*) {
+            inline else => |*item| item.header.source = source,
+        }
+    }
 };
 
 pub const LinkKind = enum {
@@ -198,6 +221,7 @@ pub const Destination = struct {
 pub const Page = struct {
     page_id: core.NodeId,
     index: usize,
+    name: []u8 = &.{},
     width: f64,
     height: f64,
     items: std.ArrayList(Item) = .empty,
@@ -206,6 +230,7 @@ pub const Page = struct {
     reading_order: []SemanticId = &.{},
 
     pub fn deinit(self: *Page, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
         for (self.items.items) |*item| item.deinit(allocator);
         self.items.deinit(allocator);
         for (self.links.items) |*link| link.deinit(allocator);

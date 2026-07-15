@@ -87,6 +87,7 @@ fn pageDigest(page_value: anytype) Digest {
     var hash = Hash.init("ss-render-ir-page-v1");
     hash.integer(page_value.page_id);
     hash.integer(page_value.index);
+    hash.bytes(page_value.name);
     hash.float(page_value.width);
     hash.float(page_value.height);
     hash.integer(page_value.items.items.len);
@@ -158,6 +159,12 @@ fn pageDigest(page_value: anytype) Digest {
 fn hashHeader(hash: *Hash, header: anytype) void {
     hash.integer(header.item_id);
     hash.optionalInteger(header.node_id);
+    if (header.source) |source| {
+        hash.boolean(true);
+        hash.integer(source.module_id);
+        hash.integer(source.start);
+        hash.integer(source.end);
+    } else hash.boolean(false);
     hash.optionalInteger(header.semantic_id);
     hashRect(hash, header.bounds);
     hashRect(hash, header.ink_bounds);
@@ -175,6 +182,7 @@ fn hashHeader(hash: *Hash, header: anytype) void {
         }
     } else hash.boolean(false);
     hash.float(header.opacity);
+    hash.tag(header.blend_mode);
     hash.integer(header.paint_index);
 }
 

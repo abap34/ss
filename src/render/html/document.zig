@@ -11,7 +11,7 @@ const document_css =
 
 pub const fragment_css =
     \\* { box-sizing: border-box; }
-    \\.ss-page { position: relative; flex: none; overflow: hidden; background: white; box-shadow: 0 2pt 12pt rgb(15 23 42 / 18%); }
+    \\.ss-page { position: relative; flex: none; overflow: hidden; isolation: isolate; background: white; box-shadow: 0 2pt 12pt rgb(15 23 42 / 18%); }
     \\.ss-item { position: absolute; transform-origin: 0 0; }
     \\.ss-semantic-layer { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
     \\.ss-text { white-space: pre; }
@@ -88,9 +88,11 @@ fn appendPage(
     page: *const render.Page,
     assets: *const resources.Set,
 ) !void {
-    try appendFormat(allocator, out, "<section class=\"ss-page\" data-ss-page-id=\"{d}\" data-ss-page-index=\"{d}\" style=\"width:{d:.6}pt;height:{d:.6}pt\">", .{
-        page.page_id, page.index + 1, normalized(page.width), normalized(page.height),
+    try appendFormat(allocator, out, "<section class=\"ss-page\" data-ss-page-id=\"{d}\" data-ss-page-index=\"{d}\" aria-label=\"", .{
+        page.page_id, page.index + 1,
     });
+    try appendAttribute(allocator, out, page.name);
+    try appendFormat(allocator, out, "\" style=\"width:{d:.6}pt;height:{d:.6}pt\">", .{ normalized(page.width), normalized(page.height) });
     for (page.destinations.items) |destination| {
         try out.appendSlice(allocator, "<span class=\"ss-destination\" id=\"");
         try appendAttribute(allocator, out, destination.name);
@@ -189,12 +191,12 @@ fn appendItem(
     const header = item.header();
     switch (item) {
         .fill_rect => |value| {
-            try appendItemStart(allocator, out, "div", "ss-box", header);
+            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
             try appendFormat(allocator, out, "background:{s}\"></div>", .{color(value.color)});
         },
         .rounded_rect => |value| {
-            try appendItemStart(allocator, out, "div", "ss-box", header);
+            try appendItemStart(allocator, out, "div", "ss-box", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
             if (value.fill) |fill| try appendFormat(allocator, out, "background:{s};", .{color(fill)});
             if (value.stroke) |stroke| try appendFormat(allocator, out, "border:{d:.6}pt solid {s};", .{ normalized(value.line_width), color(stroke) });
@@ -203,15 +205,16 @@ fn appendItem(
         .stroke_line => |value| {
             const dx = value.end.x - value.start.x;
             const dy = value.end.y - value.start.y;
-            try appendItemStart(allocator, out, "div", "ss-line", header);
-            try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;border-top-width:{d:.6}pt;border-top-color:{s};transform:rotate({d:.9}rad);", .{
-                normalized(value.start.x), normalized(value.start.y), normalized(@sqrt(dx * dx + dy * dy)), normalized(value.line_width), color(value.color), normalized(std.math.atan2(dy, dx)),
+            const rotation = std.math.atan2(dy, dx);
+            try appendItemStart(allocator, out, "div", "ss-line", header, value.start, rotation);
+            try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;border-top-width:{d:.6}pt;border-top-color:{s};", .{
+                normalized(value.start.x), normalized(value.start.y), normalized(@sqrt(dx * dx + dy * dy)), normalized(value.line_width), color(value.color),
             });
             if (value.dash_on > 0 and value.dash_off > 0) try out.appendSlice(allocator, "border-top-style:dashed;");
             try out.appendSlice(allocator, "\"></div>");
         },
         .text => |value| {
-            try appendItemStart(allocator, out, "span", "ss-text", header);
+            try appendItemStart(allocator, out, "span", "ss-text", header, .{ .x = value.x, .y = value.y }, null);
             try appendFormat(allocator, out, "left:{d:.6}pt;top:{d:.6}pt;width:{d:.6}pt;height:{d:.6}pt\">", .{
                 normalized(value.x), normalized(value.y), normalized(value.width), normalized(value.layout.logical_bounds.height),
             });
@@ -274,7 +277,7 @@ fn appendItem(
         },
         .raster => |value| {
             const path = assets.path(.raster, value.resource) orelse return error.MissingHtmlResource;
-            try appendItemStart(allocator, out, "img", "ss-image", header);
+            try appendItemStart(allocator, out, "img", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
             try out.appendSlice(allocator, "\" alt=\"\" src=\"");
             try appendAttribute(allocator, out, path);
@@ -283,13 +286,13 @@ fn appendItem(
         .svg => |value| {
             const path = assets.path(.svg, value.resource) orelse return error.MissingHtmlResource;
             if (value.tint) |tint| {
-                try appendItemStart(allocator, out, "span", "ss-image", header);
+                try appendItemStart(allocator, out, "span", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
                 try appendRectStyle(allocator, out, value.rect);
                 try appendFormat(allocator, out, "background:{s};mask:url('", .{color(tint)});
                 try appendCssUrl(allocator, out, path);
                 try out.appendSlice(allocator, "') center/100% 100% no-repeat\"></span>");
             } else {
-                try appendItemStart(allocator, out, "img", "ss-image", header);
+                try appendItemStart(allocator, out, "img", "ss-image", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
                 try appendRectStyle(allocator, out, value.rect);
                 try out.appendSlice(allocator, "\" alt=\"\" src=\"");
                 try appendAttribute(allocator, out, path);
@@ -299,7 +302,7 @@ fn appendItem(
         .math => |value| {
             const tree = ir.math.find(value.tree) orelse return error.InvalidMathTree;
             if (tree.input_kind == .raw) return error.UnsupportedMathSyntax;
-            try appendItemStart(allocator, out, "span", "ss-math", header);
+            try appendItemStart(allocator, out, "span", "ss-math", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
             try appendFormat(allocator, out, "font-size:{d:.6}pt\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\">", .{
                 normalized(@max(value.rect.height * 0.65, 1)),
@@ -309,7 +312,7 @@ fn appendItem(
         },
         .pdf_page => |value| {
             const path = assets.path(.pdf, value.resource) orelse return error.MissingHtmlResource;
-            try appendItemStart(allocator, out, "div", "ss-pdf", header);
+            try appendItemStart(allocator, out, "div", "ss-pdf", header, .{ .x = value.rect.x, .y = value.rect.y }, null);
             try appendRectStyle(allocator, out, value.rect);
             try out.appendSlice(allocator, "\" data-pdf-src=\"");
             try appendAttribute(allocator, out, path);
@@ -351,12 +354,60 @@ fn appendMathNode(
     try appendFormat(allocator, out, "</{s}>", .{tag});
 }
 
-fn appendItemStart(allocator: std.mem.Allocator, out: *std.ArrayList(u8), tag: []const u8, class: []const u8, header: render.ItemHeader) !void {
+fn appendItemStart(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    tag: []const u8,
+    class: []const u8,
+    header: render.ItemHeader,
+    origin: render.Point,
+    local_rotation: ?f64,
+) !void {
     try appendFormat(allocator, out, "<{s} class=\"ss-item {s}\" data-ss-item-id=\"{d}\"", .{ tag, class, header.item_id });
     if (header.node_id) |node_id| try appendFormat(allocator, out, " data-ss-node-id=\"{d}\"", .{node_id});
     if (header.semantic_id) |semantic_id| try appendFormat(allocator, out, " data-ss-semantic-id=\"{d}\"", .{semantic_id});
     try out.appendSlice(allocator, " aria-hidden=\"true\"");
-    try appendFormat(allocator, out, " style=\"z-index:{d};opacity:{d:.6};", .{ header.paint_index, normalized(header.opacity) });
+    try appendFormat(allocator, out, " style=\"z-index:{d};opacity:{d:.6};mix-blend-mode:{s};", .{
+        header.paint_index,
+        normalized(header.opacity),
+        @tagName(header.blend_mode),
+    });
+    try appendItemTransform(allocator, out, header.transform, origin, local_rotation);
+    if (header.clip) |clip| switch (clip) {
+        .rect => |rect| try appendFormat(allocator, out, "clip-path:polygon({d:.6}pt {d:.6}pt,{d:.6}pt {d:.6}pt,{d:.6}pt {d:.6}pt,{d:.6}pt {d:.6}pt);", .{
+            normalized(rect.x - origin.x),
+            normalized(rect.y - origin.y),
+            normalized(rect.x + rect.width - origin.x),
+            normalized(rect.y - origin.y),
+            normalized(rect.x + rect.width - origin.x),
+            normalized(rect.y + rect.height - origin.y),
+            normalized(rect.x - origin.x),
+            normalized(rect.y + rect.height - origin.y),
+        }),
+    };
+}
+
+fn appendItemTransform(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    transform: render.Transform,
+    origin: render.Point,
+    local_rotation: ?f64,
+) !void {
+    const translated_x = transform.xx * origin.x + transform.xy * origin.y + transform.x0 - origin.x;
+    const translated_y = transform.yx * origin.x + transform.yy * origin.y + transform.y0 - origin.y;
+    const transformed = translated_x != 0 or translated_y != 0 or transform.xx != 1 or transform.yx != 0 or transform.xy != 0 or transform.yy != 1;
+    if (!transformed and local_rotation == null) return;
+    try appendFormat(allocator, out, "transform:translate({d:.9}pt,{d:.9}pt) matrix({d:.12},{d:.12},{d:.12},{d:.12},0,0)", .{
+        normalized(translated_x),
+        normalized(translated_y),
+        normalized(transform.xx),
+        normalized(transform.yx),
+        normalized(transform.xy),
+        normalized(transform.yy),
+    });
+    if (local_rotation) |rotation| try appendFormat(allocator, out, " rotate({d:.12}rad)", .{normalized(rotation)});
+    try out.append(allocator, ';');
 }
 
 fn appendRectStyle(allocator: std.mem.Allocator, out: *std.ArrayList(u8), rect: render.Rect) !void {

@@ -209,7 +209,25 @@ fn replayItems(
     items: []const render_ir.Item,
     resources: *const MaterializedResources,
 ) !void {
-    for (items) |item| switch (item) {
+    for (items) |item| {
+        const header = item.header();
+        try beginItem(pdf, header);
+        replayItem(allocator, pdf, ir, item, resources) catch |err| {
+            _ = c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode));
+            return err;
+        };
+        if (c.ss_pdf_end_item(pdf, header.opacity, @intFromEnum(header.blend_mode)) != 0) return error.CairoFailed;
+    }
+}
+
+fn replayItem(
+    allocator: Allocator,
+    pdf: *c.SsPdf,
+    ir: *const render_ir.Ir,
+    item: render_ir.Item,
+    resources: *const MaterializedResources,
+) !void {
+    switch (item) {
         .fill_rect => |value| c.ss_pdf_fill_rect(
             pdf,
             value.rect.x,
@@ -266,7 +284,34 @@ fn replayItems(
             if (result != 0) return error.ImageDecodeFailed;
         },
         .math, .pdf_page => return error.UnsupportedAssetType,
+    }
+}
+
+fn beginItem(pdf: *c.SsPdf, header: render_ir.ItemHeader) !void {
+    var has_clip: c_int = 0;
+    var clip = render_ir.Rect{ .x = 0, .y = 0, .width = 0, .height = 0 };
+    if (header.clip) |value| switch (value) {
+        .rect => |rect| {
+            has_clip = 1;
+            clip = rect;
+        },
     };
+    if (c.ss_pdf_begin_item(
+        pdf,
+        header.transform.xx,
+        header.transform.yx,
+        header.transform.xy,
+        header.transform.yy,
+        header.transform.x0,
+        header.transform.y0,
+        has_clip,
+        clip.x,
+        clip.y,
+        clip.width,
+        clip.height,
+        header.opacity,
+        @intFromEnum(header.blend_mode),
+    ) != 0) return error.CairoFailed;
 }
 
 fn replayText(

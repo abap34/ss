@@ -122,6 +122,23 @@ void ss_pdf_set_creator(SsPdf *pdf, const char *creator);
 void ss_pdf_begin_page(SsPdf *pdf, double width, double height);
 void ss_pdf_end_page(SsPdf *pdf);
 int ss_pdf_finish(SsPdf *pdf);
+int ss_pdf_begin_item(
+    SsPdf *pdf,
+    double xx,
+    double yx,
+    double xy,
+    double yy,
+    double x0,
+    double y0,
+    int has_clip,
+    double clip_x,
+    double clip_y,
+    double clip_width,
+    double clip_height,
+    double opacity,
+    int blend_mode
+);
+int ss_pdf_end_item(SsPdf *pdf, double opacity, int blend_mode);
 int ss_pdf_begin_measurement(SsPdf *pdf);
 int ss_pdf_measurement_ink_extents(SsPdf *pdf, SsPdfInkExtents *extents);
 int ss_pdf_end_measurement(SsPdf *pdf);

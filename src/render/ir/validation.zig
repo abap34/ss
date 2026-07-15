@@ -42,6 +42,10 @@ pub fn document(ir: anytype) Error!void {
             if (!header.bounds.isValid() or !header.ink_bounds.isValid()) return error.InvalidBounds;
             if (!header.transform.isFinite()) return error.InvalidTransform;
             if (!std.math.isFinite(header.opacity) or header.opacity < 0 or header.opacity > 1) return error.InvalidOpacity;
+            if (header.source) |source| if (source.start > source.end) return error.InvalidItemGeometry;
+            if (header.clip) |clip| switch (clip) {
+                .rect => |rect| if (!rect.isValid()) return error.InvalidBounds,
+            };
             try itemGeometry(ir, item);
             if (header.semantic_id) |semantic_id| {
                 const semantic = ir.semantics.find(semantic_id) orelse return error.InvalidSemantics;
