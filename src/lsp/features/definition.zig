@@ -26,7 +26,10 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .source = position.source,
         .offset = position.offset,
         .source_version = snapshot.generation,
-    }, .{ .budget_ms = query_budget.definition_ms });
+    }, .{
+        .budget_ms = query_budget.definition_ms,
+        .cancellation = ctx.provider.cancellation,
+    });
     defer ctx.allocator.free(targets);
     return json(ctx.allocator, targets);
 }

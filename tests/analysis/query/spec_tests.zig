@@ -12,6 +12,18 @@ test "analysis query spec: positive budget is available at query start" {
     try testing.expect(!budget.expired());
 }
 
+test "analysis query spec: cancellation expires an active budget" {
+    var canceled = true;
+    const budget = analysis.query.types.QueryBudget.start(.{
+        .budget_ms = 1000,
+        .cancellation = .{
+            .context = &canceled,
+            .is_canceled = cancellationState,
+        },
+    });
+    try testing.expect(budget.expired());
+}
+
 test "analysis query spec: expired structural parse budget keeps callable target" {
     const source =
         \\page title
@@ -57,4 +69,9 @@ test "analysis query spec: expired structural parse budget keeps local target" {
 
     try testing.expect(context.module() == null);
     try testing.expectEqualStrings("t1", context.target);
+}
+
+fn cancellationState(context: *const anyopaque) bool {
+    const canceled: *const bool = @ptrCast(@alignCast(context));
+    return canceled.*;
 }

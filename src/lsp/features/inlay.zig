@@ -20,7 +20,10 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try ctx.allocator.dupe(u8, "[]");
     if (!lsp_state.featureEnabledForAnalysis(snapshot, .inlay_hints)) return try ctx.allocator.dupe(u8, "[]");
-    const hints = analysis_snapshot.inlayHints(snapshot, doc_path, .{ .budget_ms = query_budget.inlay_ms });
+    const hints = analysis_snapshot.inlayHints(snapshot, doc_path, .{
+        .budget_ms = query_budget.inlay_ms,
+        .cancellation = ctx.provider.cancellation,
+    });
     return json(ctx.allocator, &snapshot.project, doc_path, hints);
 }
 

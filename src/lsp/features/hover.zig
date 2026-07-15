@@ -23,7 +23,10 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
         .source = position.source,
         .offset = position.offset,
         .source_version = snapshot.generation,
-    }, .{ .budget_ms = query_budget.hover_ms }) orelse return nullJson(ctx.allocator);
+    }, .{
+        .budget_ms = query_budget.hover_ms,
+        .cancellation = ctx.provider.cancellation,
+    }) orelse return nullJson(ctx.allocator);
     defer hover.deinit(ctx.allocator);
     return json(ctx.allocator, hover);
 }
