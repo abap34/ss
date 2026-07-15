@@ -238,6 +238,9 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
     const object_frames = try allocator.dupe(model.ObjectLayoutFrame, result.object_frames);
     var object_frames_transferred = false;
     errdefer if (!object_frames_transferred) allocator.free(object_frames);
+    const fallback_constraints = try allocator.dupe(Constraint, result.fallback_constraints);
+    var fallback_constraints_transferred = false;
+    errdefer if (!fallback_constraints_transferred) allocator.free(fallback_constraints);
 
     const diagnostics_slice = try allocator.alloc(model.Diagnostic, result.diagnostics.len);
     var diagnostics_transferred = false;
@@ -275,6 +278,7 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
     errdefer if (!measurement_keys_transferred) allocator.free(measurement_keys);
 
     object_frames_transferred = true;
+    fallback_constraints_transferred = true;
     diagnostics_transferred = true;
     failures_transferred = true;
     asset_keys_transferred = true;
@@ -283,6 +287,7 @@ fn clonePageLayoutResult(allocator: std.mem.Allocator, result: *const model.Page
         .page_id = result.page_id,
         .index = result.index,
         .object_frames = object_frames,
+        .fallback_constraints = fallback_constraints,
         .diagnostics = diagnostics_slice,
         .constraint_failures = failure_slice,
         .asset_keys = asset_keys,
@@ -307,7 +312,9 @@ fn mergePageLayoutIssues(ir: anytype, result: *const model.PageLayoutResult) !vo
 }
 
 pub fn applyLayoutResults(ir: anytype, results: *const model.LayoutResults) !void {
+    ir.fallback_constraints.clearRetainingCapacity();
     for (results.pages) |page| {
+        try ir.fallback_constraints.appendSlice(ir.allocator, page.fallback_constraints);
         for (page.object_frames) |entry| {
             const node = ir.getNode(entry.node_id) orelse return error.UnknownNode;
             node.frame = entry.frame;
@@ -321,7 +328,7 @@ fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_
     const measurement_key_start = measurement_cache.usedKeyCount();
     var page_graph = try graph.PageLayoutGraph.init(ir.allocator, ir, page_id);
     defer page_graph.deinit();
-    if (page_graph.len() == 0) return try collectPageLayoutResult(ir, page_id, page_index, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+    if (page_graph.len() == 0) return try collectPageLayoutResult(ir, page_id, page_index, &.{}, &.{}, &.{}, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
     try initializePageObjectMeasurements(ir, &page_graph, measurement_cache);
 
     var horizontal = try graph.AxisWorkspace.init(ir.allocator, ir, &page_graph, .horizontal);
@@ -372,7 +379,18 @@ fn solvePageLayout(ir: anytype, page_id: NodeId, page_index: usize, measurement_
 
     try validatePageConstraints(ir, page_id, &page_graph, options);
     try diagnostics.collectPageDiagnosticsCached(ir, page_id, page_graph.child_ids, measurement_cache);
-    return try collectPageLayoutResult(ir, page_id, page_index, page_graph.child_ids, diagnostic_start, constraint_failure_start, measurement_cache, measurement_key_start);
+    return try collectPageLayoutResult(
+        ir,
+        page_id,
+        page_index,
+        page_graph.child_ids,
+        horizontal_fallback.items,
+        vertical_fallback.items,
+        diagnostic_start,
+        constraint_failure_start,
+        measurement_cache,
+        measurement_key_start,
+    );
 }
 
 fn collectPageLayoutResult(
@@ -380,23 +398,29 @@ fn collectPageLayoutResult(
     page_id: NodeId,
     page_index: usize,
     child_ids: []const NodeId,
+    horizontal_fallback: []const Constraint,
+    vertical_fallback: []const Constraint,
     diagnostic_start: usize,
     constraint_failure_start: usize,
     measurement_cache: *const metrics.MeasurementCache,
     measurement_key_start: usize,
 ) !model.PageLayoutResult {
     var frames = std.ArrayList(model.ObjectLayoutFrame).empty;
+    var fallback_constraints = std.ArrayList(Constraint).empty;
     var diagnostics_out = std.ArrayList(model.Diagnostic).empty;
     var failures_out = std.ArrayList(model.ConstraintFailure).empty;
     var measurement_keys = std.ArrayList(u64).empty;
     errdefer {
         frames.deinit(ir.allocator);
+        fallback_constraints.deinit(ir.allocator);
         for (diagnostics_out.items) |*diagnostic| diagnostic.deinit(ir.allocator);
         diagnostics_out.deinit(ir.allocator);
         for (failures_out.items) |*failure| failure.deinit(ir.allocator);
         failures_out.deinit(ir.allocator);
         measurement_keys.deinit(ir.allocator);
     }
+    try fallback_constraints.appendSlice(ir.allocator, horizontal_fallback);
+    try fallback_constraints.appendSlice(ir.allocator, vertical_fallback);
     for (child_ids) |child_id| {
         const node = ir.getNode(child_id) orelse return error.UnknownNode;
         if (node.kind != .object) continue;
@@ -425,6 +449,9 @@ fn collectPageLayoutResult(
     const frame_slice = try frames.toOwnedSlice(ir.allocator);
     var frame_slice_transferred = false;
     errdefer if (!frame_slice_transferred) ir.allocator.free(frame_slice);
+    const fallback_slice = try fallback_constraints.toOwnedSlice(ir.allocator);
+    var fallback_slice_transferred = false;
+    errdefer if (!fallback_slice_transferred) ir.allocator.free(fallback_slice);
     const diagnostic_slice = try diagnostics_out.toOwnedSlice(ir.allocator);
     var diagnostic_slice_transferred = false;
     errdefer {
@@ -445,6 +472,7 @@ fn collectPageLayoutResult(
     var measurement_key_slice_transferred = false;
     errdefer if (!measurement_key_slice_transferred) ir.allocator.free(measurement_key_slice);
     frame_slice_transferred = true;
+    fallback_slice_transferred = true;
     diagnostic_slice_transferred = true;
     failure_slice_transferred = true;
     measurement_key_slice_transferred = true;
@@ -452,6 +480,7 @@ fn collectPageLayoutResult(
         .page_id = page_id,
         .index = page_index,
         .object_frames = frame_slice,
+        .fallback_constraints = fallback_slice,
         .diagnostics = diagnostic_slice,
         .constraint_failures = failure_slice,
         .measurement_keys = measurement_key_slice,

@@ -55,6 +55,7 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const path = protocol.stringField(editing, "path") orelse doc_path;
     const binding = protocol.stringField(editing, "binding") orelse
         return try statusJson(ctx.allocator, "unsupported", "The object has no source binding.");
+    const binding_required = protocol.boolField(editing, "binding_required") orelse false;
     const page_span = editor_edit.ByteSpan{
         .start = protocol.usizeField(editing, "page_start") orelse 0,
         .end = protocol.usizeField(editing, "page_end") orelse 0,
@@ -93,6 +94,9 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     }
 
     var edit_result = if (std.mem.eql(u8, mode, "relative")) blk: {
+        if (binding_required) {
+            return try statusJson(ctx.allocator, "unsupported", "Set an absolute position before keeping this object's relations.");
+        }
         const updates = try relationUpdates(ctx.allocator, root, source, path, node_id, binding, to_x - from_x, to_y - from_y);
         defer ctx.allocator.free(updates);
         if (!hasBothAxes(root, node_id, path, page_span)) {
@@ -102,7 +106,22 @@ pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     } else blk: {
         const spans = try editableConstraintSpans(ctx.allocator, root, node_id, path, page_span);
         defer ctx.allocator.free(spans);
-        break :blk (try editor_edit.absolutePosition(ctx.allocator, source, page_span, binding, to_x, to_y, spans)) orelse
+        const introduction: ?editor_edit.BindingIntroduction = if (binding_required) .{ .statement = .{
+            .start = protocol.usizeField(editing, "statement_start") orelse
+                return try statusJson(ctx.allocator, "unsupported", "The component statement has no source location."),
+            .end = protocol.usizeField(editing, "statement_end") orelse
+                return try statusJson(ctx.allocator, "unsupported", "The component statement has no source location."),
+        } } else null;
+        break :blk (try editor_edit.absolutePosition(
+            ctx.allocator,
+            source,
+            page_span,
+            binding,
+            to_x,
+            to_y,
+            spans,
+            introduction,
+        )) orelse
             return try statusJson(ctx.allocator, "unsupported", "The page insertion point could not be located.");
     };
     defer edit_result.deinit(ctx.allocator);
@@ -141,6 +160,7 @@ fn editableConstraintSpans(
         if (relation_value.* != .object) continue;
         const relation = &relation_value.object;
         if (!relationTargetsNode(relation, node_id)) continue;
+        if (!relationHasRole(relation, "position")) continue;
         const location = protocol.objectFieldObject(relation, "location") orelse continue;
         const relation_path = protocol.stringField(location, "path") orelse continue;
         const start = protocol.usizeField(location, "start") orelse continue;
@@ -168,6 +188,7 @@ fn relationUpdates(
         if (relation_value.* != .object) continue;
         const relation = &relation_value.object;
         if (!relationTargetsNode(relation, node_id)) continue;
+        if (!relationHasRole(relation, "position")) continue;
         const location = protocol.objectFieldObject(relation, "location") orelse continue;
         const relation_path = protocol.stringField(location, "path") orelse continue;
         if (!std.mem.eql(u8, relation_path, path)) continue;
@@ -198,6 +219,7 @@ fn hasBothAxes(root: *const protocol.JsonObject, node_id: u32, path: []const u8,
         if (relation_value.* != .object) continue;
         const relation = &relation_value.object;
         if (!relationTargetsNode(relation, node_id)) continue;
+        if (!relationHasRole(relation, "position")) continue;
         const location = protocol.objectFieldObject(relation, "location") orelse continue;
         const relation_path = protocol.stringField(location, "path") orelse continue;
         const start = protocol.usizeField(location, "start") orelse continue;
@@ -218,6 +240,11 @@ fn layoutRelations(root: *const protocol.JsonObject) ?*const protocol.JsonArray 
 fn relationTargetsNode(relation: *const protocol.JsonObject, node_id: u32) bool {
     const target = protocol.objectFieldObject(relation, "target") orelse return false;
     return (protocol.intField(target, "node_id") orelse -1) == node_id;
+}
+
+fn relationHasRole(relation: *const protocol.JsonObject, expected: []const u8) bool {
+    const role = protocol.stringField(relation, "role") orelse return false;
+    return std.mem.eql(u8, role, expected);
 }
 
 fn statusJson(

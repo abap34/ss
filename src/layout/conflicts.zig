@@ -70,23 +70,10 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
 
     var relations = try root.arrayField("relations");
     for (ir.constraints.items, 0..) |constraint, index| {
-        var item = try relations.objectItem();
-        try item.intField("index", index);
-        try item.stringField("kind", "explicit");
-        try item.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
-        try item.enumTagField("role", constraint.role);
-        try item.boolField("from_update", constraint.from_update);
-        try item.optionalStringField("origin", constraint.origin);
-        try appendOriginObject(&item, "location", ir, constraint.origin);
-        try item.floatField("offset", constraint.offset, "{d:.4}");
-        try appendConstraintExpression(&item, "expression", ir, constraint);
-        var target = try item.objectField("target");
-        try appendNodeEndpoint(&target, ir, constraint.target_node, constraint.target_anchor);
-        try target.end();
-        var source = try item.objectField("source");
-        try appendSourceEndpoint(&source, ir, constraint.source);
-        try source.end();
-        try item.end();
+        try appendRelation(&relations, ir, index, "explicit", constraint);
+    }
+    for (ir.fallback_constraints.items, 0..) |constraint, index| {
+        try appendRelation(&relations, ir, ir.constraints.items.len + index, "fallback", constraint);
     }
     try relations.end();
 
@@ -120,6 +107,26 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
     try root.end();
     try json.appendNewline(&buffer, allocator);
     return buffer.toOwnedSlice(allocator);
+}
+
+fn appendRelation(relations: *json.Array, ir: anytype, index: usize, kind: []const u8, constraint: Constraint) !void {
+    var item = try relations.objectItem();
+    try item.intField("index", index);
+    try item.stringField("kind", kind);
+    try item.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
+    try item.enumTagField("role", constraint.role);
+    try item.boolField("from_update", constraint.from_update);
+    try item.optionalStringField("origin", constraint.origin);
+    try appendOriginObject(&item, "location", ir, constraint.origin);
+    try item.floatField("offset", constraint.offset, "{d:.4}");
+    try appendConstraintExpression(&item, "expression", ir, constraint);
+    var target = try item.objectField("target");
+    try appendNodeEndpoint(&target, ir, constraint.target_node, constraint.target_anchor);
+    try target.end();
+    var source = try item.objectField("source");
+    try appendSourceEndpoint(&source, ir, constraint.source);
+    try source.end();
+    try item.end();
 }
 
 fn appendNodeAnchors(anchors: *json.Array, ir: anytype, page_id: NodeId, node_id: NodeId) !void {

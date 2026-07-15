@@ -1898,16 +1898,10 @@ fn executeStatement(
                 try discardStatementValue(ir, value);
                 return .none;
             }
-            const bound_object: ?core.NodeId = switch (value) {
-                .object => |node_id| node_id,
-                else => null,
-            };
-            try putEnvValue(ir.allocator, env, binding.name, value);
             if (context == .page and active_call_depth == 0) {
-                if (bound_object) |node_id| {
-                    try ir.addObjectBinding(node_id, page_id, active_module_id, binding.name, stmt.span);
-                }
+                try addValueObjectSources(ir, page_id, active_module_id, binding.name, null, stmt.span, value);
             }
+            try putEnvValue(ir.allocator, env, binding.name, value);
         },
         .return_expr => |expr| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
@@ -1961,44 +1955,37 @@ fn executeStatement(
                     origin,
                     active_call_depth,
                 ),
-                .update => {
-                    const replacement: ?core.Constraint = if (resolved_source) |source| .{
-                        .target_node = target.node_id,
-                        .target_anchor = target.anchor,
-                        .source = source,
-                        .offset = offset,
-                        .origin = origin,
-                        .role = role,
-                        .scope_depth = active_call_depth,
-                        .from_update = true,
-                    } else null;
-                    try ir.addConstraintUpdate(
-                        target.node_id,
-                        target.anchor,
-                        role,
-                        active_call_depth,
-                        replacement,
-                        origin,
-                    );
-                },
+                .update => try ir.addConstraintUpdate(
+                    target.node_id,
+                    target.anchor,
+                    role,
+                    active_call_depth,
+                    resolved_source,
+                    offset,
+                    origin,
+                ),
             }
         },
-        .expr_stmt => |expr| switch (expr) {
-            .call => |call| {
-                const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
-                if (sema.resolvedFunction(call.callee) != null) {
-                    try executeCallStatement(ir, page_id, context, mode, env, functions, closures, last_code_like, origin, call);
-                } else {
-                    var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
-                    defer value.deinit(ir.allocator);
-                    try materializeStatementValue(ir, mode, last_code_like, value);
-                }
-            },
-            else => {
-                var value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
-                defer value.deinit(ir.allocator);
-                try materializeStatementValue(ir, mode, last_code_like, value);
-            },
+        .expr_stmt => |expr| {
+            var value = switch (expr) {
+                .call => |call| blk: {
+                    const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
+                    if (sema.resolvedFunction(call.callee) != null) {
+                        break :blk try executeCallStatement(ir, page_id, context, mode, env, functions, closures, last_code_like, origin, call);
+                    }
+                    break :blk try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
+                },
+                else => try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr),
+            };
+            defer value.deinit(ir.allocator);
+            try materializeStatementValue(ir, mode, last_code_like, value);
+            if (context == .page and active_call_depth == 0) {
+                const binding_base = switch (expr) {
+                    .call => |call| call.callee.name,
+                    else => "item",
+                };
+                try addValueObjectSources(ir, page_id, active_module_id, "", binding_base, stmt.span, value);
+            }
         },
     }
     return .none;
@@ -2009,6 +1996,31 @@ fn materializeStatementValue(ir: *core.Ir, mode: EvalMode, last_code_like: *?cor
     switch (value) {
         .constraints => |constraints| try ir.addConstraintSet(constraints),
         .object => |id| last_code_like.* = id,
+        else => {},
+    }
+}
+
+fn addValueObjectSources(
+    ir: *core.Ir,
+    page_id: core.NodeId,
+    module_id: core.SourceModuleId,
+    path: []const u8,
+    binding_base: ?[]const u8,
+    span: ast.Span,
+    value: core.Value,
+) !void {
+    switch (value) {
+        .object => |node_id| try ir.addObjectSource(node_id, page_id, module_id, path, binding_base, span),
+        .record => |record| {
+            for (record.fields.items) |field| {
+                const field_path = if (path.len == 0)
+                    try std.fmt.allocPrint(ir.allocator, ".{s}", .{field.name})
+                else
+                    try std.fmt.allocPrint(ir.allocator, "{s}.{s}", .{ path, field.name });
+                defer ir.allocator.free(field_path);
+                try addValueObjectSources(ir, page_id, module_id, field_path, binding_base, span, field.value);
+            }
+        },
         else => {},
     }
 }
@@ -2052,11 +2064,10 @@ fn executeCallStatement(
     last_code_like: *?core.NodeId,
     current_origin: []const u8,
     call: CallExpr,
-) anyerror!void {
+) anyerror!core.Value {
     const sema = SemanticEnv.init(ir, null, functions).forModule(active_module_id);
     const resolved = sema.resolvedFunction(call.callee) orelse {
-        _ = try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call);
-        return;
+        return try evalCall(ir, page_id, context, mode, env, functions, closures, current_origin, call);
     };
     const func = resolved.decl;
     try validateUserFunctionArity(ir, call.args.items.len, func, current_origin);
@@ -2077,22 +2088,30 @@ fn executeCallStatement(
         switch (flow) {
             .none => {},
             .returned => |value| {
-                defer {
-                    var owned = value;
-                    owned.deinit(ir.allocator);
-                }
                 if (func.result_type.kind == .void) {
-                    try value_contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType);
+                    value_contracts.ensureValueTypeWithCode(ir, page_id, value, .void, current_origin, .UnmatchedReturnType) catch |err| {
+                        var owned = value;
+                        owned.deinit(ir.allocator);
+                        return err;
+                    };
                 } else {
-                    try value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType);
-                    try connectReturnedObject(ir, value, start_node_count, current_origin);
-                    try materializeStatementValue(ir, mode, last_code_like, value);
+                    value_contracts.ensureValueConformsToType(ir, page_id, value, func.result_type, current_origin, .UnmatchedReturnType) catch |err| {
+                        var owned = value;
+                        owned.deinit(ir.allocator);
+                        return err;
+                    };
+                    connectValueObjects(ir, value, start_node_count, current_origin) catch |err| {
+                        var owned = value;
+                        owned.deinit(ir.allocator);
+                        return err;
+                    };
                 }
-                return;
+                return value;
             },
         }
     }
     if (func.result_type.kind != .void) return error.FunctionDidNotReturnValue;
+    return .{ .void = {} };
 }
 
 fn invokeFunctionRef(

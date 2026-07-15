@@ -42,6 +42,10 @@ pub const ParsedRelation = struct {
     source_anchor: []const u8,
 };
 
+pub const BindingIntroduction = struct {
+    statement: ByteSpan,
+};
+
 pub fn absolutePosition(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -50,6 +54,7 @@ pub fn absolutePosition(
     left: f64,
     top: f64,
     replaced_constraints: []const ByteSpan,
+    binding_introduction: ?BindingIntroduction,
 ) !?Result {
     const insertion = pageEndLineStart(source, page_span) orelse return null;
     const indent = pageBodyIndent(source, page_span, insertion);
@@ -70,6 +75,11 @@ pub fn absolutePosition(
             .end = span.end,
             .text = try allocator.dupe(u8, ""),
         });
+    }
+
+    if (binding_introduction) |introduction| {
+        const binding_name = binding[0 .. std.mem.indexOfScalar(u8, binding, '.') orelse binding.len];
+        try appendBindingIntroduction(allocator, &edits, source, binding_name, introduction.statement);
     }
 
     var text = std.ArrayList(u8).empty;
@@ -271,7 +281,7 @@ fn appendConstraintWithoutIndent(
     const number = try formatNumber(allocator, @abs(offset));
     defer allocator.free(number);
     try out.appendSlice(allocator, indent);
-    try out.appendSlice(allocator, if (update) "~!~" else "~ ");
+    try out.appendSlice(allocator, if (update) "~!~ " else "~ ");
     try out.appendSlice(allocator, target);
     try out.append(allocator, '.');
     try out.appendSlice(allocator, target_anchor);
@@ -283,6 +293,45 @@ fn appendConstraintWithoutIndent(
         try out.appendSlice(allocator, if (offset < 0) " - " else " + ");
         try out.appendSlice(allocator, number);
     }
+}
+
+fn appendBindingIntroduction(
+    allocator: std.mem.Allocator,
+    edits: *std.ArrayList(TextEdit),
+    source: []const u8,
+    binding: []const u8,
+    statement: ByteSpan,
+) !void {
+    if (statement.start >= statement.end or statement.end > source.len) return error.InvalidBindingStatement;
+    const statement_end = trimLineEnding(source, statement.end);
+    if (statement_end <= statement.start) return error.InvalidBindingStatement;
+    const statement_text = source[statement.start..statement_end];
+    const callee_end = std.mem.indexOfAny(u8, statement_text, " \t\r\n(") orelse statement_text.len;
+    if (callee_end == 0) return error.InvalidBindingStatement;
+    const raw_rest = statement_text[callee_end..];
+    const rest = raw_rest[leadingWhitespace(raw_rest)..];
+    if (rest.len == 0 or rest[0] == '(' or rest[0] == '"' or std.mem.startsWith(u8, rest, "<<")) {
+        try edits.append(allocator, .{
+            .start = statement.start,
+            .end = statement.start,
+            .text = try std.fmt.allocPrint(allocator, "let {s} = ", .{binding}),
+        });
+        return;
+    }
+
+    const line_start = lineStartBefore(source, statement.start, 0);
+    const indent = source[line_start..statement.start];
+    const raw_text = std.mem.trim(u8, statement_text[callee_end..], " \t\r\n");
+    const replacement = try std.fmt.allocPrint(
+        allocator,
+        "let {s} = {s} <<\n{s}{s}\n{s}>>",
+        .{ binding, statement_text[0..callee_end], indent, raw_text, indent },
+    );
+    try edits.append(allocator, .{
+        .start = statement.start,
+        .end = statement_end,
+        .text = replacement,
+    });
 }
 
 fn formatNumber(allocator: std.mem.Allocator, value: f64) ![]u8 {

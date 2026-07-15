@@ -59,7 +59,7 @@ export interface LayoutAnchor {
 
 export interface LayoutRelation {
   index: number;
-  kind: "explicit";
+  kind: "explicit" | "fallback";
   axis: "horizontal" | "vertical";
   offset: number;
   expression: string;
@@ -185,6 +185,9 @@ export interface EditingTarget {
   page_index: number;
   page_name: string;
   binding: string;
+  binding_required: boolean;
+  statement_start: number;
+  statement_end: number;
   path: string;
   page_start: number;
   page_end: number;

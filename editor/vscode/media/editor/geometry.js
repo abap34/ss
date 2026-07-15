@@ -94,6 +94,24 @@ export function subtreeNodeIds(snapshot, rootId) {
   return result;
 }
 
+export function editableAncestorNodeId(snapshot, nodeId) {
+  const editable = new Set(
+    (snapshot?.editing || []).map((target) => target.node_id),
+  );
+  const parents = new Map();
+  for (const item of snapshot?.outline || []) {
+    if (item.parent_id != null) parents.set(item.id, item.parent_id);
+  }
+  const seen = new Set();
+  let current = nodeId;
+  while (current != null && !seen.has(current)) {
+    if (editable.has(current)) return current;
+    seen.add(current);
+    current = parents.get(current);
+  }
+  return null;
+}
+
 function segment(x1, y1, x2, y2) {
   return { x1, y1, x2, y2, cx: (x1 + x2) / 2, cy: (y1 + y2) / 2 };
 }

@@ -30,7 +30,9 @@ export function renderConstraints(snapshot, page, objectId) {
     const sourceKind = relation.source.type === "page" ? "page" : "object";
     const relationGroup = svgElement(
       "g",
-      `constraint constraint--${sourceKind}`,
+      `constraint constraint--${sourceKind}${
+        relation.kind === "fallback" ? " constraint--fallback" : ""
+      }`,
     );
     relationGroup.append(
       segmentLine(sourceSegment, "constraint-anchor constraint-anchor--source"),

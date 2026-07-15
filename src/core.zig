@@ -54,6 +54,7 @@ pub const Ir = @import("core/ir.zig").Ir;
 pub const SourceModuleKind = @import("core/ir.zig").SourceModuleKind;
 pub const SourceModuleId = @import("core/ir.zig").SourceModuleId;
 pub const SourceModule = @import("core/ir.zig").SourceModule;
+pub const ObjectSource = @import("core/ir.zig").ObjectSource;
 pub const FunctionKey = @import("core/ir.zig").FunctionKey;
 pub const FunctionKeyContext = @import("core/ir.zig").FunctionKeyContext;
 pub const FunctionMap = @import("core/ir.zig").FunctionMap;

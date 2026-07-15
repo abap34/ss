@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { strict as assert } from "node:assert";
 import { selectedObjectBelongsToPage } from "../../../editor/vscode/media/editor/interaction.js";
+import { editableAncestorNodeId } from "../../../editor/vscode/media/editor/geometry.js";
 import { EditorNavigation } from "../../../editor/vscode/media/editor/navigation.js";
 
 const firstPage = { id: 11 };
@@ -63,3 +64,16 @@ assert.equal(
   ),
   false,
 );
+
+const groupedSnapshot = {
+  editing: [{ node_id: 50 }],
+  outline: [
+    { id: 50, parent_id: secondPage.id },
+    { id: 51, parent_id: 50 },
+    { id: 52, parent_id: 51 },
+    { id: 60, parent_id: secondPage.id },
+  ],
+};
+assert.equal(editableAncestorNodeId(groupedSnapshot, 50), 50);
+assert.equal(editableAncestorNodeId(groupedSnapshot, 52), 50);
+assert.equal(editableAncestorNodeId(groupedSnapshot, 60), null);

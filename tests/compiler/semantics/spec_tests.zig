@@ -4874,6 +4874,34 @@ test "compiler semantics: later constraint updates overwrite earlier updates on 
     );
 }
 
+test "compiler semantics: size constraint updates replace inherited dimensions" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\fn component!() -> Object
+        \\  let item = text!("resize")
+        \\  ~ item.center_x == page.center_x
+        \\  ~ item.top == page.top - 60
+        \\  ~ item.width == 240
+        \\  return item
+        \\end
+        \\
+        \\page demo
+        \\  let item = component!()
+        \\  ~!~item.width == 320
+        \\end
+        \\
+    ;
+
+    try buildSource(source);
+    try expectDumpContains(source, &.{
+        "\"target_anchor\":\"right\"",
+        "\"offset\":320.0",
+        "\"role\":\"size\"",
+        "\"from_update\":true",
+    });
+}
+
 test "compiler semantics: missing constraint anchors are rejected statically" {
     try expectBuildFails(
         \\import std:themes/default as *
