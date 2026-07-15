@@ -238,17 +238,22 @@ pub const Page = struct {
         dash_off: f64,
     ) !void {
         const half_width = @max(line_width / 2, 0);
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = @sqrt(dx * dx + dy * dy);
+        const x_padding = if (length > 0) half_width * @abs(dy) / length else 0;
+        const y_padding = if (length > 0) half_width * @abs(dx) / length else 0;
         const bounds = Rect{
             .x = @min(start.x, end.x),
             .y = @min(start.y, end.y),
-            .width = @abs(end.x - start.x),
-            .height = @abs(end.y - start.y),
+            .width = @abs(dx),
+            .height = @abs(dy),
         };
         const ink_bounds = Rect{
-            .x = bounds.x - half_width,
-            .y = bounds.y - half_width,
-            .width = bounds.width + line_width,
-            .height = bounds.height + line_width,
+            .x = bounds.x - x_padding,
+            .y = bounds.y - y_padding,
+            .width = bounds.width + x_padding * 2,
+            .height = bounds.height + y_padding * 2,
         };
         try self.items.append(allocator, .{ .stroke_line = .{
             .header = self.itemHeader(node_id, bounds, ink_bounds),
