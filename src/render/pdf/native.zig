@@ -7,9 +7,10 @@ const fontawesome_assets = @import("fontawesome_assets");
 const text_tokenize = core.text_tokenize;
 const wrap_layout = core.render_wrap;
 const json = utils.json;
-const draw_sink = @import("render_sink");
+const draw_target = @import("render_target");
 const c = @import("pdf_ffi").c;
 const render_ir = @import("render");
+const render_compile = @import("../compile.zig");
 const pdf_backend = @import("pdf_backend");
 
 const TSLanguage = opaque {};
@@ -159,19 +160,19 @@ const DrawContext = struct {
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
-    command_failure: ?*CommandFailureSink = null,
+    command_failure: ?*CommandFailure = null,
     link_annotations: ?*std.ArrayList(LinkAnnotation) = null,
     destinations: ?*std.ArrayList(DestinationAnnotation) = null,
-    sink: ?draw_sink.Sink = null,
+    target: ?draw_target.Target = null,
 };
 
-fn activeSink(ctx: *DrawContext) *draw_sink.Sink {
-    return if (ctx.sink) |*sink| sink else unreachable;
+fn activeTarget(ctx: *DrawContext) *draw_target.Target {
+    return if (ctx.target) |*target| target else unreachable;
 }
 
 fn activePdf(ctx: *DrawContext) *c.SsPdf {
     if (ctx.measurement_pdf) |pdf| return pdf;
-    return switch (activeSink(ctx).*) {
+    return switch (activeTarget(ctx).*) {
         .pdf => |pdf| pdf,
         .ir => unreachable,
     };
@@ -295,29 +296,24 @@ const RenderDiagnosticTarget = struct {
     content_end: ?usize = null,
 };
 
-const CommandFailureSink = struct {
+const CommandFailure = struct {
     allocator: Allocator,
     message: ?[]u8 = null,
 
-    fn deinit(self: *CommandFailureSink) void {
+    fn deinit(self: *CommandFailure) void {
         if (self.message) |message| self.allocator.free(message);
     }
 
-    fn record(self: *CommandFailureSink, message: []const u8) !void {
+    fn record(self: *CommandFailure, message: []const u8) !void {
         if (self.message != null) return;
         self.message = try self.allocator.dupe(u8, message);
     }
 };
 
-pub const RenderOptions = struct {
+pub const Options = struct {
     jobs: ?usize = null,
     cache_dir: []const u8 = ".ss-cache/render",
     cache_id: ?[]const u8 = null,
-    highlight_languages: []const utils.highlight.Language = &.{},
-};
-
-pub const CompileOptions = struct {
-    cache_dir: []const u8 = ".ss-cache/render",
     highlight_languages: []const utils.highlight.Language = &.{},
 };
 
@@ -390,7 +386,7 @@ const TreeSitterRuntime = struct {
     }
 };
 
-const RenderOp = struct {
+const ObjectCommand = struct {
     page_id: core.NodeId,
     node_id: core.NodeId,
     frame: Frame,
@@ -407,34 +403,34 @@ const RenderOp = struct {
     origin: ?[]const u8 = null,
     payload_kind: ?core.PayloadKind = null,
 
-    fn deinit(self: *RenderOp, allocator: Allocator) void {
+    fn deinit(self: *ObjectCommand, allocator: Allocator) void {
         allocator.free(self.tex_preamble);
     }
 };
 
-const RenderPage = struct {
+const PageJob = struct {
     page_id: core.NodeId,
     index: usize,
     background: ?Color,
-    ops: []RenderOp,
+    commands: []ObjectCommand,
     artifact_deps: []usize,
     page_hash: u64,
     render_path: []const u8,
     cache_path: []const u8,
     cache_hit: bool,
 
-    fn deinit(self: *RenderPage, allocator: Allocator) void {
-        for (self.ops) |*op| op.deinit(allocator);
-        allocator.free(self.ops);
+    fn deinit(self: *PageJob, allocator: Allocator) void {
+        for (self.commands) |*command| command.deinit(allocator);
+        allocator.free(self.commands);
         allocator.free(self.artifact_deps);
         allocator.free(self.render_path);
         allocator.free(self.cache_path);
     }
 };
 
-const RenderPlan = struct {
+const Plan = struct {
     allocator: Allocator,
-    pages: []RenderPage,
+    pages: []PageJob,
     artifact_tasks: []PreloadTask,
     artifact_cached: []bool,
     artifact_miss_count: usize,
@@ -454,7 +450,7 @@ const RenderPlan = struct {
     lease_path: []const u8,
     generation_published: bool = false,
 
-    fn deinit(self: *RenderPlan) void {
+    fn deinit(self: *Plan) void {
         for (self.pages) |*page| page.deinit(self.allocator);
         self.allocator.free(self.pages);
         freePreloadTasks(self.allocator, self.artifact_tasks);
@@ -536,15 +532,15 @@ const PreviousGeneration = struct {
     }
 };
 
-pub const RenderProgress = struct {
+pub const Progress = struct {
     context: *anyopaque,
     artifactCompleted: *const fn (context: *anyopaque, completed: usize, total: usize) void,
     pageCompleted: *const fn (context: *anyopaque, completed: usize, total: usize) void,
     assemblyCompleted: *const fn (context: *anyopaque, completed: usize, total: usize) void,
 };
 
-const RenderDag = struct {
-    plan: *const RenderPlan,
+const PlanExecution = struct {
+    plan: *const Plan,
     next_artifact: std.atomic.Value(usize) = .init(0),
     completed_artifacts: std.atomic.Value(usize) = .init(0),
     completed_pages: std.atomic.Value(usize) = .init(0),
@@ -556,7 +552,7 @@ const RenderDag = struct {
     asset_base_dir: []const u8,
     cache_dir: []const u8,
     highlight_languages: []const utils.highlight.Language,
-    progress: ?RenderProgress,
+    progress: ?Progress,
 };
 
 const MergeChunk = struct {
@@ -572,7 +568,7 @@ const MergeWork = struct {
     failed: std.atomic.Value(bool) = .init(false),
     io: std.Io,
     cache_dir: []const u8,
-    progress: ?RenderProgress,
+    progress: ?Progress,
     progress_offset: usize,
     progress_total: usize,
 };
@@ -600,7 +596,7 @@ pub const LayoutMeasurementScope = struct {
         ir: *core.Context,
         pages: *const core.prepared.PreparedPages,
     ) !LayoutMeasurementScope {
-        const default_options: RenderOptions = .{};
+        const default_options: Options = .{};
         const cache_dir = default_options.cache_dir;
         try std.Io.Dir.cwd().createDirPath(io, cache_dir);
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ cache_dir, "artifacts", "native" });
@@ -632,7 +628,7 @@ pub const LayoutMeasurementScope = struct {
             .ctx = .{
                 .allocator = allocator,
                 .io = io,
-                .sink = .{ .pdf = pdf },
+                .target = .{ .pdf = pdf },
                 .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
                 .cache_dir = asset_cache_dir,
                 .highlight_languages = &.{},
@@ -679,15 +675,15 @@ pub const LayoutMeasurementScope = struct {
 
         if (node.kind != .object) return null;
 
-        const profile_render_op = utils.measure_profile.start();
-        var op = try self.renderOpForNode(ir.allocator, node, width, mode);
-        utils.measure_profile.recordLayoutMeasurementRenderOp(profile_render_op);
-        defer op.deinit(ir.allocator);
+        const profile_object_command = utils.measure_profile.start();
+        var command = try self.objectCommandForNode(ir.allocator, node, width, mode);
+        utils.measure_profile.recordLayoutMeasurementObjectCommand(profile_object_command);
+        defer command.deinit(ir.allocator);
 
         const profile_cache_key = utils.measure_profile.start();
         var key_ctx = self.ctx;
         key_ctx.allocator = ir.allocator;
-        const cache_key = try layoutMeasurementCacheKey(&key_ctx, &op, width, mode);
+        const cache_key = try layoutMeasurementCacheKey(&key_ctx, &command, width, mode);
         utils.measure_profile.recordLayoutMeasurementCacheKey(profile_cache_key);
 
         if (try self.cachedMeasurement(cache_key, true)) |cached| return cached;
@@ -699,15 +695,15 @@ pub const LayoutMeasurementScope = struct {
 
         if (try self.cachedMeasurement(cache_key, false)) |cached| return cached;
 
-        var sink = CommandFailureSink{ .allocator = ir.allocator };
-        defer sink.deinit();
+        var target = CommandFailure{ .allocator = ir.allocator };
+        defer target.deinit();
         var measurement_ctx = self.ctx;
         measurement_ctx.allocator = ir.allocator;
-        measurement_ctx.command_failure = &sink;
+        measurement_ctx.command_failure = &target;
         const profile_intrinsic = utils.measure_profile.start();
-        defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(op.render.kind), profile_intrinsic);
-        var measured = measureRenderOpIntrinsic(&measurement_ctx, &op, width, mode) catch |err| {
-            try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &op, err, sink.message);
+        defer utils.measure_profile.recordRenderIntrinsic(profileRenderMeasureKind(command.render.kind), profile_intrinsic);
+        var measured = measureObjectCommandIntrinsic(&measurement_ctx, &command, width, mode) catch |err| {
+            try addMeasurementRenderDiagnostic(&measurement_ctx, ir, &command, err, target.message);
             return err;
         };
         if (measured) |*value| {
@@ -774,18 +770,18 @@ pub const LayoutMeasurementScope = struct {
         self.measurement_cache_dirty = false;
     }
 
-    fn renderOpForNode(self: *LayoutMeasurementScope, allocator: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !RenderOp {
+    fn objectCommandForNode(self: *LayoutMeasurementScope, allocator: Allocator, node: *const core.Node, width: f32, mode: core.LayoutMeasurementMode) !ObjectCommand {
         const object = self.preparedObject(node.id) orelse return error.MissingPreparedObject;
-        return try renderOpForObject(allocator, node, object, width, mode);
+        return try objectCommandForObject(allocator, node, object, width, mode);
     }
 
-    fn renderOpForObject(
+    fn objectCommandForObject(
         allocator: Allocator,
         node: *const core.Node,
         object: *const core.prepared.PreparedObject,
         width: f32,
         mode: core.LayoutMeasurementMode,
-    ) !RenderOp {
+    ) !ObjectCommand {
         var render = object.render;
         if (mode == .natural) {
             if (render.text) |*text| text.wrap = false;
@@ -887,8 +883,8 @@ pub fn renderDocumentToPdf(
     ir: *core.Context,
     pages: *const core.prepared.PreparedPages,
     layouts: *const core.layout.Document,
-    options: RenderOptions,
-    progress: ?RenderProgress,
+    options: Options,
+    progress: ?Progress,
 ) ![]const u8 {
     try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
     const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
@@ -903,7 +899,7 @@ pub fn renderDocumentToPdf(
         .highlight_languages = options.highlight_languages,
     };
 
-    var plan = try buildRenderPlan(&ctx, ir, pages, layouts, options);
+    var plan = try buildPlan(&ctx, ir, pages, layouts, options);
     defer {
         std.Io.Dir.cwd().deleteTree(io, plan.run_dir) catch {};
         if (!plan.generation_published) std.Io.Dir.cwd().deleteTree(io, plan.building_dir) catch {};
@@ -911,23 +907,23 @@ pub fn renderDocumentToPdf(
         plan.deinit();
     }
 
-    executeRenderDag(&ctx, &plan, options, progress) catch |err| {
-        try collectPlanRenderDiagnostics(&ctx, ir, &plan, err);
+    executePlan(&ctx, &plan, options, progress) catch |err| {
+        try collectPlanDiagnostics(&ctx, ir, &plan, err);
         return error.DiagnosticsFailed;
     };
     try writeRenderManifest(&ctx, &plan);
-    var assembly_failure = CommandFailureSink{ .allocator = ir.allocator };
+    var assembly_failure = CommandFailure{ .allocator = ir.allocator };
     defer assembly_failure.deinit();
     var assembly_ctx = ctx;
     assembly_ctx.command_failure = &assembly_failure;
     const reused_document = try reusePreviousDocumentPdf(&assembly_ctx, &plan, progress);
     if (!reused_document) {
-        assembleRenderPlan(&assembly_ctx, &plan, options, progress) catch |err| {
+        assemblePlan(&assembly_ctx, &plan, options, progress) catch |err| {
             try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
             return error.DiagnosticsFailed;
         };
     }
-    storeRenderPlanDocumentPdf(&assembly_ctx, &plan) catch |err| {
+    storePlanDocumentPdf(&assembly_ctx, &plan) catch |err| {
         try addGenericRenderDiagnostic(ir, err, assembly_failure.message);
         return error.DiagnosticsFailed;
     };
@@ -941,8 +937,8 @@ pub fn preloadPreparedPageArtifacts(
     io: std.Io,
     ir: *core.Context,
     pages: *const core.prepared.PreparedPages,
-    options: RenderOptions,
-    progress: ?RenderProgress,
+    options: Options,
+    progress: ?Progress,
 ) !void {
     try std.Io.Dir.cwd().createDirPath(io, options.cache_dir);
     const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
@@ -985,76 +981,89 @@ pub fn preloadPreparedPageArtifacts(
     };
 }
 
-pub fn compileRenderIr(
-    allocator: Allocator,
+pub const Compiler = struct {
     io: std.Io,
-    ir: *core.Context,
-    pages: *const core.prepared.PreparedPages,
-    options: CompileOptions,
-) !render_ir.Ir {
-    try preloadPreparedPageArtifacts(allocator, io, ir, pages, .{
-        .cache_dir = options.cache_dir,
-        .highlight_languages = options.highlight_languages,
-    }, null);
+    options: render_compile.Options,
 
-    const asset_cache_dir = try std.fs.path.join(allocator, &.{ options.cache_dir, "artifacts", "native" });
-    defer allocator.free(asset_cache_dir);
-    var ctx = DrawContext{
-        .allocator = allocator,
-        .io = io,
-        .asset_base_dir = if (ir.asset_base_dir.len == 0) "." else ir.asset_base_dir,
-        .cache_dir = asset_cache_dir,
-        .highlight_languages = options.highlight_languages,
-    };
-
-    var result_pages = std.ArrayList(render_ir.Page).empty;
-    errdefer {
-        for (result_pages.items) |*page| page.deinit(allocator);
-        result_pages.deinit(allocator);
+    pub fn backend(self: *Compiler) render_compile.Backend {
+        return .{
+            .context = self,
+            .prepareFn = prepare,
+            .compilePageFn = compilePreparedPage,
+        };
     }
-    for (pages.pages) |*page_unit| {
-        const ops = try compileRenderCommands(allocator, ir, page_unit);
+
+    fn prepare(
+        context: *anyopaque,
+        allocator: Allocator,
+        compiler_context: *core.Context,
+        pages: *const core.prepared.PreparedPages,
+    ) !void {
+        const self: *Compiler = @ptrCast(@alignCast(context));
+        try preloadPreparedPageArtifacts(allocator, self.io, compiler_context, pages, .{
+            .cache_dir = self.options.cache_dir,
+            .highlight_languages = self.options.highlight_languages,
+        }, null);
+    }
+
+    fn compilePreparedPage(
+        context: *anyopaque,
+        allocator: Allocator,
+        compiler_context: *core.Context,
+        prepared_page: *const core.prepared.PreparedPage,
+    ) !render_ir.Page {
+        const self: *Compiler = @ptrCast(@alignCast(context));
+        const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
+        defer allocator.free(asset_cache_dir);
+        var draw_context = DrawContext{
+            .allocator = allocator,
+            .io = self.io,
+            .asset_base_dir = if (compiler_context.asset_base_dir.len == 0) "." else compiler_context.asset_base_dir,
+            .cache_dir = asset_cache_dir,
+            .highlight_languages = self.options.highlight_languages,
+        };
+
+        const commands = try buildObjectCommands(allocator, compiler_context, prepared_page);
         defer {
-            for (ops) |*op| op.deinit(allocator);
-            allocator.free(ops);
+            for (commands) |*command| command.deinit(allocator);
+            allocator.free(commands);
         }
-        try result_pages.append(allocator, try compilePage(
-            &ctx,
-            page_unit.page_id,
-            page_unit.index,
-            page_unit.background,
-            ops,
-        ));
+        return try compilePage(
+            &draw_context,
+            prepared_page.page_id,
+            prepared_page.index,
+            prepared_page.background,
+            commands,
+        );
     }
-    return .{ .pages = try result_pages.toOwnedSlice(allocator) };
-}
+};
 
-fn compileRenderCommands(
+fn buildObjectCommands(
     allocator: Allocator,
     ir: *core.Context,
     page_unit: *const core.prepared.PreparedPage,
-) ![]RenderOp {
-    var ops = std.ArrayList(RenderOp).empty;
+) ![]ObjectCommand {
+    var commands = std.ArrayList(ObjectCommand).empty;
     errdefer {
-        for (ops.items) |*op| op.deinit(allocator);
-        ops.deinit(allocator);
+        for (commands.items) |*command| command.deinit(allocator);
+        commands.deinit(allocator);
     }
     for (page_unit.objects) |*object| {
         const node = ir.getNode(object.node_id) orelse continue;
         if (node.kind != .object or !object.attached) continue;
         if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
-        try ops.append(allocator, try initRenderOp(allocator, page_unit.page_id, node, object, node.frame));
+        try commands.append(allocator, try initObjectCommand(allocator, page_unit.page_id, node, object, node.frame));
     }
-    return try ops.toOwnedSlice(allocator);
+    return try commands.toOwnedSlice(allocator);
 }
 
-fn initRenderOp(
+fn initObjectCommand(
     allocator: Allocator,
     page_id: core.NodeId,
     node: *const core.Node,
     object: *const core.prepared.PreparedObject,
     frame: Frame,
-) !RenderOp {
+) !ObjectCommand {
     return .{
         .page_id = page_id,
         .node_id = node.id,
@@ -1074,13 +1083,13 @@ fn initRenderOp(
     };
 }
 
-fn buildRenderPlan(
+fn buildPlan(
     ctx: *DrawContext,
     ir: *core.Context,
     prepared_pages: *const core.prepared.PreparedPages,
     layout_results: *const core.layout.Document,
-    options: RenderOptions,
-) !RenderPlan {
+    options: Options,
+) !Plan {
     const nonce = std.hash.Wyhash.hash(0, ir.projectSource());
     const pid = std.c.getpid();
     const serial = @atomicRmw(usize, &temp_cache_counter, .Add, 1, .monotonic);
@@ -1088,7 +1097,7 @@ fn buildRenderPlan(
     defer ctx.allocator.free(run_id);
     const run_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "runs", run_id });
     errdefer ctx.allocator.free(run_dir);
-    const deck_id = try renderDeckId(ctx.allocator, ir, options);
+    const deck_id = try deckId(ctx.allocator, ir, options);
     defer ctx.allocator.free(deck_id);
     const deck_dir = try std.fs.path.join(ctx.allocator, &.{ options.cache_dir, "decks", deck_id });
     defer ctx.allocator.free(deck_dir);
@@ -1128,7 +1137,7 @@ fn buildRenderPlan(
     var previous_generation = try readPreviousGeneration(ctx, generations_dir, current_path);
     defer if (previous_generation) |*previous| previous.deinit(ctx.allocator);
 
-    var pages = std.ArrayList(RenderPage).empty;
+    var pages = std.ArrayList(PageJob).empty;
     errdefer {
         for (pages.items) |*page| page.deinit(ctx.allocator);
         pages.deinit(ctx.allocator);
@@ -1155,10 +1164,10 @@ fn buildRenderPlan(
     }
 
     for (prepared_pages.pages) |*page_unit| {
-        var ops = std.ArrayList(RenderOp).empty;
+        var commands = std.ArrayList(ObjectCommand).empty;
         errdefer {
-            for (ops.items) |*op| op.deinit(ctx.allocator);
-            ops.deinit(ctx.allocator);
+            for (commands.items) |*command| command.deinit(ctx.allocator);
+            commands.deinit(ctx.allocator);
         }
         var deps = std.ArrayList(usize).empty;
         errdefer deps.deinit(ctx.allocator);
@@ -1167,30 +1176,30 @@ fn buildRenderPlan(
             const node = ir.getNode(object.node_id) orelse continue;
             if (node.kind != .object or !object.attached) continue;
             if ((ir.parentPageOf(node.id) orelse continue) != page_unit.page_id) continue;
-            var op = try initRenderOp(
+            var command = try initObjectCommand(
                 ctx.allocator,
                 page_unit.page_id,
                 node,
                 object,
                 layout_results.frameOf(page_unit.page_id, node.id) orelse return error.MissingLayoutFrame,
             );
-            errdefer op.deinit(ctx.allocator);
-            try collectOpPreloads(ctx, &op, &tasks, &seen, &deps);
-            try ops.append(ctx.allocator, op);
+            errdefer command.deinit(ctx.allocator);
+            try collectObjectPreloads(ctx, &command, &tasks, &seen, &deps);
+            try commands.append(ctx.allocator, command);
         }
 
-        const op_slice = try ops.toOwnedSlice(ctx.allocator);
+        const command_slice = try commands.toOwnedSlice(ctx.allocator);
         var op_slice_transferred = false;
         errdefer {
             if (!op_slice_transferred) {
-                for (op_slice) |*op| op.deinit(ctx.allocator);
-                ctx.allocator.free(op_slice);
+                for (command_slice) |*command| command.deinit(ctx.allocator);
+                ctx.allocator.free(command_slice);
             }
         }
         const dep_slice = try deps.toOwnedSlice(ctx.allocator);
         var dep_slice_transferred = false;
         errdefer if (!dep_slice_transferred) ctx.allocator.free(dep_slice);
-        const page_hash = try renderPageHash(ctx, &asset_fingerprints, page_unit.background, op_slice);
+        const page_hash = try pageJobHash(ctx, &asset_fingerprints, page_unit.background, command_slice);
         const cache_path = try pagePath(ctx.allocator, pages_dir, page_unit.index);
         var cache_path_transferred = false;
         errdefer if (!cache_path_transferred) ctx.allocator.free(cache_path);
@@ -1202,7 +1211,7 @@ fn buildRenderPlan(
             .page_id = page_unit.page_id,
             .index = page_unit.index,
             .background = page_unit.background,
-            .ops = op_slice,
+            .commands = command_slice,
             .artifact_deps = dep_slice,
             .page_hash = page_hash,
             .render_path = render_path,
@@ -1222,7 +1231,7 @@ fn buildRenderPlan(
     }
     const artifact_slice = try tasks.toOwnedSlice(ctx.allocator);
     errdefer freePreloadTasks(ctx.allocator, artifact_slice);
-    const page_cache_hit_count = countPageCacheHits(page_slice);
+    const page_cache_hit_count = countPageJobCacheHits(page_slice);
     const artifact_cache = try buildPreloadCacheStateForPages(ctx, artifact_slice, page_slice);
     errdefer ctx.allocator.free(artifact_cache.cached);
     const previous_chunks_dir = try previousGenerationSubdir(ctx, if (previous_generation) |*previous| previous else null, "chunks");
@@ -1230,7 +1239,7 @@ fn buildRenderPlan(
     const previous_document_path = try reusablePreviousDocumentPdf(ctx, if (previous_generation) |*previous| previous else null, page_slice);
     errdefer if (previous_document_path) |path| ctx.allocator.free(path);
 
-    const plan = RenderPlan{
+    const plan = Plan{
         .allocator = ctx.allocator,
         .pages = page_slice,
         .artifact_tasks = artifact_slice,
@@ -1254,7 +1263,7 @@ fn buildRenderPlan(
     return plan;
 }
 
-fn countPageCacheHits(pages: []const RenderPage) usize {
+fn countPageJobCacheHits(pages: []const PageJob) usize {
     var count: usize = 0;
     for (pages) |page| {
         if (page.cache_hit) count += 1;
@@ -1262,7 +1271,7 @@ fn countPageCacheHits(pages: []const RenderPage) usize {
     return count;
 }
 
-fn renderDeckId(allocator: Allocator, ir: *const core.Context, options: RenderOptions) ![]u8 {
+fn deckId(allocator: Allocator, ir: *const core.Context, options: Options) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, "ss-render-deck-v1");
     if (options.cache_id) |cache_id| {
@@ -1362,7 +1371,7 @@ fn previousGenerationSubdir(ctx: *DrawContext, previous: ?*const PreviousGenerat
     return try std.fs.path.join(ctx.allocator, &.{ generation.dir, name });
 }
 
-fn reusablePreviousDocumentPdf(ctx: *DrawContext, previous: ?*const PreviousGeneration, pages: []const RenderPage) !?[]u8 {
+fn reusablePreviousDocumentPdf(ctx: *DrawContext, previous: ?*const PreviousGeneration, pages: []const PageJob) !?[]u8 {
     const generation = previous orelse return null;
     if (generation.manifest.hashes.len != pages.len) return null;
     for (pages, 0..) |page, index| {
@@ -1405,7 +1414,7 @@ fn writeLeaseFile(ctx: *DrawContext, lease_path: []const u8, deck_id: []const u8
     try renameReplacing(ctx, tmp, lease_path);
 }
 
-fn writeRenderManifest(ctx: *DrawContext, plan: *const RenderPlan) !void {
+fn writeRenderManifest(ctx: *DrawContext, plan: *const Plan) !void {
     const path = try std.fs.path.join(ctx.allocator, &.{ plan.building_dir, "manifest.json" });
     defer ctx.allocator.free(path);
     const tmp = try tempCachePath(ctx, path, "json");
@@ -1425,7 +1434,7 @@ fn writeRenderManifest(ctx: *DrawContext, plan: *const RenderPlan) !void {
     try renameReplacing(ctx, tmp, path);
 }
 
-fn publishRenderGeneration(ctx: *DrawContext, plan: *RenderPlan) !void {
+fn publishRenderGeneration(ctx: *DrawContext, plan: *Plan) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.rename(plan.building_dir, cwd, plan.generation_dir, ctx.io);
     errdefer cwd.deleteTree(ctx.io, plan.generation_dir) catch {};
@@ -1449,7 +1458,7 @@ fn writeCurrentGeneration(ctx: *DrawContext, current_path: []const u8, generatio
     try renameReplacing(ctx, tmp, current_path);
 }
 
-fn pruneOldGenerations(ctx: *DrawContext, plan: *const RenderPlan) !void {
+fn pruneOldGenerations(ctx: *DrawContext, plan: *const Plan) !void {
     try pruneStaleLeases(ctx, plan.leases_dir);
     if (try activeRenderLeaseExists(ctx, plan.leases_dir)) return;
     var dir = std.Io.Dir.cwd().openDir(ctx.io, plan.generations_dir, .{ .iterate = true }) catch |err| switch (err) {
@@ -1541,7 +1550,7 @@ fn renameReplacing(ctx: *DrawContext, tmp_path: []const u8, final_path: []const 
     };
 }
 
-fn qpdfPageHashCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, pages: []const RenderPage) ![]u8 {
+fn qpdfPageHashCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8, pages: []const PageJob) ![]u8 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, qpdf_cache_version);
     hashString(&hasher, prefix);
@@ -1555,7 +1564,7 @@ fn qpdfCachePath(allocator: Allocator, cache_dir: []const u8, prefix: []const u8
     return std.fmt.allocPrint(allocator, "{s}/{s}-{x}.pdf", .{ cache_dir, prefix, hash });
 }
 
-fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), background: ?Color, ops: []const RenderOp) !u64 {
+fn pageJobHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), background: ?Color, commands: []const ObjectCommand) !u64 {
     var hasher = std.hash.Wyhash.init(0);
     hashString(&hasher, page_pdf_cache_version);
     hashNativePdfRuntime(&hasher);
@@ -1563,12 +1572,12 @@ fn renderPageHash(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(File
     hashF32(&hasher, Defaults.height);
     try hashHighlightLanguages(ctx, asset_fingerprints, &hasher);
     hashOptionalColor(&hasher, background);
-    hashUsize(&hasher, ops.len);
-    for (ops) |*op| try hashRenderOp(ctx, asset_fingerprints, &hasher, op);
+    hashUsize(&hasher, commands.len);
+    for (commands) |*command| try hashObjectCommand(ctx, asset_fingerprints, &hasher, command);
     return hasher.final();
 }
 
-fn layoutMeasurementCacheKey(ctx: *DrawContext, op: *const RenderOp, width: f32, mode: core.LayoutMeasurementMode) !u64 {
+fn layoutMeasurementCacheKey(ctx: *DrawContext, command: *const ObjectCommand, width: f32, mode: core.LayoutMeasurementMode) !u64 {
     var asset_fingerprints = std.StringHashMap(FileFingerprint).init(ctx.allocator);
     defer {
         var key_it = asset_fingerprints.keyIterator();
@@ -1584,7 +1593,7 @@ fn layoutMeasurementCacheKey(ctx: *DrawContext, op: *const RenderOp, width: f32,
     hashF32(&hasher, Defaults.height);
     hashString(&hasher, @tagName(mode));
     hashF32(&hasher, width);
-    try hashRenderOp(ctx, &asset_fingerprints, &hasher, op);
+    try hashObjectCommand(ctx, &asset_fingerprints, &hasher, command);
     return hasher.final();
 }
 
@@ -1602,17 +1611,17 @@ fn hashHighlightLanguages(ctx: *DrawContext, asset_fingerprints: *std.StringHash
     }
 }
 
-fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, op: *const RenderOp) !void {
-    hashFrame(hasher, op.frame);
-    hashString(hasher, op.content);
-    hashOptionalString(hasher, op.link_id);
-    hashString(hasher, @tagName(op.parse_mode));
-    try hashTexPreambleEntries(ctx, asset_fingerprints, hasher, op.tex_preamble);
-    hashResolvedRender(hasher, op);
-    switch (op.render.kind) {
-        .vector_math => hashString(hasher, @tagName(op.math_kind)),
+fn hashObjectCommand(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFingerprint), hasher: *std.hash.Wyhash, command: *const ObjectCommand) !void {
+    hashFrame(hasher, command.frame);
+    hashString(hasher, command.content);
+    hashOptionalString(hasher, command.link_id);
+    hashString(hasher, @tagName(command.parse_mode));
+    try hashTexPreambleEntries(ctx, asset_fingerprints, hasher, command.tex_preamble);
+    hashResolvedRender(hasher, command);
+    switch (command.render.kind) {
+        .vector_math => hashString(hasher, @tagName(command.math_kind)),
         .vector_asset, .raster_asset => {
-            const source = try resolveAssetPath(ctx, op.content);
+            const source = try resolveAssetPath(ctx, command.content);
             defer ctx.allocator.free(source);
             try hashAssetFile(ctx, asset_fingerprints, hasher, source);
         },
@@ -1620,8 +1629,8 @@ fn hashRenderOp(ctx: *DrawContext, asset_fingerprints: *std.StringHashMap(FileFi
     }
 }
 
-fn hashResolvedRender(hasher: *std.hash.Wyhash, op: *const RenderOp) void {
-    const render = op.render;
+fn hashResolvedRender(hasher: *std.hash.Wyhash, command: *const ObjectCommand) void {
+    const render = command.render;
     hashString(hasher, @tagName(render.kind));
     hashOptionalTextPaint(hasher, render.text);
     hashOptionalMathPaint(hasher, render.math);
@@ -2005,49 +2014,49 @@ fn mathKindForPreparedObject(object: *const core.prepared.PreparedObject) MathKi
     };
 }
 
-fn collectOpPreloads(
+fn collectObjectPreloads(
     ctx: *DrawContext,
-    op: *const RenderOp,
+    command: *const ObjectCommand,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
 ) !void {
-    const target = opDiagnosticTarget(op);
-    if (op.asset_deps.len != 0) {
-        try collectAssetDepsForPlan(ctx, op, target, tasks, seen, page_deps);
-        if (op.render.kind == .text or op.render.kind == .vector_math or op.render.kind == .vector_asset) return;
-    } else if (op.render.kind == .text) {
+    const target = objectDiagnosticTarget(command);
+    if (command.asset_deps.len != 0) {
+        try collectAssetDepsForPlan(ctx, command, target, tasks, seen, page_deps);
+        if (command.render.kind == .text or command.render.kind == .vector_math or command.render.kind == .vector_asset) return;
+    } else if (command.render.kind == .text) {
         return;
     }
-    switch (op.render.kind) {
+    switch (command.render.kind) {
         .text => {},
         .vector_math => {
             try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
-                .source = try ctx.allocator.dupe(u8, op.content),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
-                .kind = op.math_kind,
-                .target = targetWithContentSpan(target, 0, op.content.len),
+                .source = try ctx.allocator.dupe(u8, command.content),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                .kind = command.math_kind,
+                .target = targetWithContentSpan(target, 0, command.content.len),
             } });
         },
         .vector_asset => {
-            const source = try resolveAssetPath(ctx, op.content);
+            const source = try resolveAssetPath(ctx, command.content);
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".pdf")) {
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .vector_pdf = .{
                     .source = source,
-                    .target = targetWithContentSpan(target, 0, op.content.len),
+                    .target = targetWithContentSpan(target, 0, command.content.len),
                 } });
             } else {
                 ctx.allocator.free(source);
             }
         },
         .raster_asset => {
-            const source = try resolveAssetPath(ctx, op.content);
+            const source = try resolveAssetPath(ctx, command.content);
             if (std.ascii.eqlIgnoreCase(std.fs.path.extension(source), ".svg")) {
                 ctx.allocator.free(source);
             } else {
                 try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .raster = .{
                     .source = source,
-                    .target = targetWithContentSpan(target, 0, op.content.len),
+                    .target = targetWithContentSpan(target, 0, command.content.len),
                 } });
             }
         },
@@ -2057,31 +2066,31 @@ fn collectOpPreloads(
 
 fn collectAssetDepsForPlan(
     ctx: *DrawContext,
-    op: *const RenderOp,
+    command: *const ObjectCommand,
     target: RenderDiagnosticTarget,
     tasks: *std.ArrayList(PreloadTask),
     seen: *std.StringHashMap(usize),
     page_deps: *std.ArrayList(usize),
 ) !void {
-    for (op.asset_deps) |dep| {
+    for (command.asset_deps) |dep| {
         const dep_target = targetWithContentSpan(target, dep.content_start, dep.content_end);
         switch (dep.kind) {
             .inline_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
                 .kind = .inline_math,
                 .target = dep_target,
             } }),
             .display_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
                 .kind = .display,
                 .target = dep_target,
             } }),
             .block_math => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .math = .{
                 .source = try ctx.allocator.dupe(u8, dep.source),
-                .preamble = try cloneTexPreambleEntries(ctx.allocator, op.tex_preamble),
-                .kind = op.math_kind,
+                .preamble = try cloneTexPreambleEntries(ctx.allocator, command.tex_preamble),
+                .kind = command.math_kind,
                 .target = dep_target,
             } }),
             .icon => try registerPlanPreloadTask(ctx, tasks, seen, page_deps, .{ .icon = .{
@@ -2100,13 +2109,13 @@ fn collectAssetDepsForPlan(
     }
 }
 
-fn opDiagnosticTarget(op: *const RenderOp) RenderDiagnosticTarget {
+fn objectDiagnosticTarget(command: *const ObjectCommand) RenderDiagnosticTarget {
     return .{
-        .page_id = op.page_id,
-        .node_id = op.node_id,
-        .origin = op.origin,
-        .payload_kind = op.payload_kind,
-        .content_provenance = op.content_provenance,
+        .page_id = command.page_id,
+        .node_id = command.node_id,
+        .origin = command.origin,
+        .payload_kind = command.payload_kind,
+        .content_provenance = command.content_provenance,
     };
 }
 
@@ -2148,25 +2157,25 @@ fn appendUniqueIndex(allocator: Allocator, values: *std.ArrayList(usize), value:
     try values.append(allocator, value);
 }
 
-fn collectPlanRenderDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const RenderPlan, original_err: anyerror) !void {
+fn collectPlanDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const Plan, original_err: anyerror) !void {
     ir.clearDiagnosticsForPhase(.render);
     var added = false;
     for (plan.artifact_tasks, 0..) |task, index| {
         if (index < plan.artifact_cached.len and plan.artifact_cached[index]) continue;
         if (try preloadTaskCached(ctx, task)) continue;
 
-        var sink = CommandFailureSink{ .allocator = ir.allocator };
-        defer sink.deinit();
+        var target = CommandFailure{ .allocator = ir.allocator };
+        defer target.deinit();
         var diagnostic_ctx = ctx.*;
-        diagnostic_ctx.command_failure = &sink;
+        diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |err| {
-            try addPreloadRenderDiagnostic(ir, task, err, sink.message);
+            try addPreloadRenderDiagnostic(ir, task, err, target.message);
             added = true;
         };
     }
 
     if (!added) {
-        added = try collectPageRenderDiagnostics(ctx, ir, plan);
+        added = try collectPageJobDiagnostics(ctx, ir, plan);
     }
 
     if (!added) try addGenericRenderDiagnostic(ir, original_err, null);
@@ -2248,16 +2257,16 @@ fn addGenericRenderDiagnostic(ir: *core.Context, err: anyerror, maybe_message: ?
     });
 }
 
-fn collectPageRenderDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const RenderPlan) !bool {
+fn collectPageJobDiagnostics(ctx: *DrawContext, ir: *core.Context, plan: *const Plan) !bool {
     var added = false;
     for (plan.pages) |*page| {
         if (page.cache_hit) continue;
-        if (try collectPageRenderDiagnostic(ctx, ir, page)) added = true;
+        if (try collectPageJobDiagnostic(ctx, ir, page)) added = true;
     }
     return added;
 }
 
-fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *const RenderPage) !bool {
+fn collectPageJobDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *const PageJob) !bool {
     const path = try tempCachePath(ctx, page.render_path, "pdf");
     defer ctx.allocator.free(path);
     defer deleteFileIfExists(ctx, path);
@@ -2270,48 +2279,48 @@ fn collectPageRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, page: *cons
     c.ss_pdf_set_creator(pdf, "ss native Cairo/Pango backend");
 
     var diagnostic_ctx = ctx.*;
-    diagnostic_ctx.sink = .{ .pdf = pdf };
+    diagnostic_ctx.target = .{ .pdf = pdf };
 
     c.ss_pdf_begin_page(pdf, Defaults.width, Defaults.height);
-    const added = try drawRenderPageDiagnostics(&diagnostic_ctx, ir, page);
+    const added = try drawPageJobDiagnostics(&diagnostic_ctx, ir, page);
     c.ss_pdf_end_page(pdf);
     return added;
 }
 
-fn drawRenderPageDiagnostics(ctx: *DrawContext, ir: *core.Context, page: *const RenderPage) !bool {
+fn drawPageJobDiagnostics(ctx: *DrawContext, ir: *core.Context, page: *const PageJob) !bool {
     if (page.background) |fill| {
-        try activeSink(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, fill);
+        try activeTarget(ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, fill);
     }
-    for (page.ops) |*op| {
-        if (op.render.kind == .chrome_only) {
-            if (try drawRenderOpDiagnostic(ctx, ir, op)) return true;
+    for (page.commands) |*command| {
+        if (command.render.kind == .chrome_only) {
+            if (try drawObjectCommandDiagnostic(ctx, ir, command)) return true;
         }
     }
-    for (page.ops) |*op| {
-        if (op.render.kind != .chrome_only) {
-            if (try drawRenderOpDiagnostic(ctx, ir, op)) return true;
+    for (page.commands) |*command| {
+        if (command.render.kind != .chrome_only) {
+            if (try drawObjectCommandDiagnostic(ctx, ir, command)) return true;
         }
     }
     return false;
 }
 
-fn drawRenderOpDiagnostic(ctx: *DrawContext, ir: *core.Context, op: *const RenderOp) !bool {
-    var sink = CommandFailureSink{ .allocator = ir.allocator };
-    defer sink.deinit();
+fn drawObjectCommandDiagnostic(ctx: *DrawContext, ir: *core.Context, command: *const ObjectCommand) !bool {
+    var target = CommandFailure{ .allocator = ir.allocator };
+    defer target.deinit();
     var diagnostic_ctx = ctx.*;
-    diagnostic_ctx.command_failure = &sink;
-    drawRenderOp(&diagnostic_ctx, op) catch |err| {
-        try addRenderOpDiagnostic(ir, op, err, sink.message);
+    diagnostic_ctx.command_failure = &target;
+    drawObjectCommand(&diagnostic_ctx, command) catch |err| {
+        try addObjectCommandDiagnostic(ir, command, err, target.message);
         return true;
     };
     return false;
 }
 
-fn addRenderOpDiagnostic(ir: *core.Context, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
-    try addTargetedRenderDiagnostic(ir, renderOpDiagnosticTarget(op), renderOpLabel(op), err, maybe_message);
+fn addObjectCommandDiagnostic(ir: *core.Context, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
+    try addTargetedRenderDiagnostic(ir, objectCommandDiagnosticTarget(command), objectCommandLabel(command), err, maybe_message);
 }
 
-fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, op: *const RenderOp, err: anyerror, maybe_message: ?[]const u8) !void {
+fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, command: *const ObjectCommand, err: anyerror, maybe_message: ?[]const u8) !void {
     var tasks = std.ArrayList(PreloadTask).empty;
     defer {
         freePreloadTasks(ctx.allocator, tasks.items);
@@ -2326,35 +2335,35 @@ fn addMeasurementRenderDiagnostic(ctx: *DrawContext, ir: *core.Context, op: *con
     var page_deps = std.ArrayList(usize).empty;
     defer page_deps.deinit(ctx.allocator);
 
-    collectOpPreloads(ctx, op, &tasks, &seen, &page_deps) catch {
-        try addRenderOpDiagnostic(ir, op, err, maybe_message);
+    collectObjectPreloads(ctx, command, &tasks, &seen, &page_deps) catch {
+        try addObjectCommandDiagnostic(ir, command, err, maybe_message);
         return;
     };
 
     for (tasks.items) |task| {
-        var sink = CommandFailureSink{ .allocator = ir.allocator };
-        defer sink.deinit();
+        var target = CommandFailure{ .allocator = ir.allocator };
+        defer target.deinit();
         var diagnostic_ctx = ctx.*;
-        diagnostic_ctx.command_failure = &sink;
+        diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |task_err| {
-            try addPreloadRenderDiagnostic(ir, task, task_err, sink.message);
+            try addPreloadRenderDiagnostic(ir, task, task_err, target.message);
             return;
         };
     }
 
-    try addRenderOpDiagnostic(ir, op, err, maybe_message);
+    try addObjectCommandDiagnostic(ir, command, err, maybe_message);
 }
 
-fn renderOpDiagnosticTarget(op: *const RenderOp) RenderDiagnosticTarget {
-    const target = opDiagnosticTarget(op);
-    return switch (op.render.kind) {
-        .vector_math, .vector_asset, .raster_asset => targetWithContentSpan(target, 0, op.content.len),
+fn objectCommandDiagnosticTarget(command: *const ObjectCommand) RenderDiagnosticTarget {
+    const target = objectDiagnosticTarget(command);
+    return switch (command.render.kind) {
+        .vector_math, .vector_asset, .raster_asset => targetWithContentSpan(target, 0, command.content.len),
         else => target,
     };
 }
 
-fn renderOpLabel(op: *const RenderOp) []const u8 {
-    return switch (op.render.kind) {
+fn objectCommandLabel(command: *const ObjectCommand) []const u8 {
+    return switch (command.render.kind) {
         .text => "text object",
         .code => "code block",
         .chrome_only => "object chrome",
@@ -2416,7 +2425,7 @@ fn preloadMathTaskBatches(
     ctx: *DrawContext,
     tasks: []const PreloadTask,
     cached: []bool,
-    progress: ?RenderProgress,
+    progress: ?Progress,
     completed: *usize,
 ) !void {
     var groups = std.ArrayList(MathBatchGroup).empty;
@@ -2495,7 +2504,7 @@ fn mathBatchGroupKey(ctx: *DrawContext, preamble: []const TexPreambleEntry) ![]u
 fn preloadMathBatchGroup(
     ctx: *DrawContext,
     entries: []const MathBatchEntry,
-    progress: ?RenderProgress,
+    progress: ?Progress,
     completed: *usize,
     total: usize,
 ) !void {
@@ -2522,7 +2531,7 @@ fn publishMathBatch(
     ctx: *DrawContext,
     entries: []const MathBatchEntry,
     generated_pdf_path: []const u8,
-    progress: ?RenderProgress,
+    progress: ?Progress,
     completed: *usize,
     total: usize,
 ) !void {
@@ -2583,8 +2592,8 @@ fn executePreloadTaskList(
     tasks: []const PreloadTask,
     cached: []bool,
     miss_count: usize,
-    options: RenderOptions,
-    progress: ?RenderProgress,
+    options: Options,
+    progress: ?Progress,
 ) !void {
     if (tasks.len == 0 or miss_count == 0) return;
     var completed = tasks.len - miss_count;
@@ -2650,7 +2659,7 @@ fn executePreloadTaskListSequential(
     tasks: []const PreloadTask,
     cached: []const bool,
     initial_done: usize,
-    progress: ?RenderProgress,
+    progress: ?Progress,
 ) !void {
     var done = initial_done;
     for (tasks, 0..) |task, index| {
@@ -2702,17 +2711,17 @@ fn collectPreloadTaskDiagnostics(
     for (tasks, 0..) |task, index| {
         if (cached[index]) continue;
         if (preloadTaskCached(ctx, task) catch false) continue;
-        var sink = CommandFailureSink{ .allocator = ir.allocator };
-        defer sink.deinit();
+        var target = CommandFailure{ .allocator = ir.allocator };
+        defer target.deinit();
         var diagnostic_ctx = ctx.*;
-        diagnostic_ctx.command_failure = &sink;
+        diagnostic_ctx.command_failure = &target;
         preloadOne(&diagnostic_ctx, task) catch |err| {
-            try addPreloadRenderDiagnostic(ir, task, err, sink.message);
+            try addPreloadRenderDiagnostic(ir, task, err, target.message);
         };
     }
 }
 
-fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
+fn executePlan(ctx: *DrawContext, plan: *const Plan, options: Options, progress: ?Progress) !void {
     const initial_artifacts_done = plan.artifact_tasks.len - plan.artifact_miss_count;
     const initial_pages_done = plan.page_cache_hit_count;
     if (progress) |p| {
@@ -2721,8 +2730,8 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     }
     const work_count = plan.artifact_miss_count + (plan.pages.len - plan.page_cache_hit_count);
     if (work_count == 0) return;
-    const worker_count = renderDagWorkerCount(plan, options);
-    if (worker_count <= 1) return executeRenderDagSequential(ctx, plan, progress);
+    const worker_count = planWorkerCount(plan, options);
+    if (worker_count <= 1) return executePlanSequential(ctx, plan, progress);
 
     const artifact_done = try ctx.allocator.alloc(std.atomic.Value(bool), plan.artifact_tasks.len);
     defer ctx.allocator.free(artifact_done);
@@ -2736,7 +2745,7 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     defer ctx.allocator.free(page_done);
     for (page_done, 0..) |*flag, index| flag.* = .init(plan.pages[index].cache_hit);
 
-    var work = RenderDag{
+    var work = PlanExecution{
         .plan = plan,
         .completed_artifacts = .init(initial_artifacts_done),
         .completed_pages = .init(initial_pages_done),
@@ -2763,7 +2772,7 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     }
 
     while (started < worker_count) : (started += 1) {
-        threads[started] = try std.Thread.spawn(.{}, renderDagWorker, .{&work});
+        threads[started] = try std.Thread.spawn(.{}, planWorker, .{&work});
     }
 
     var last_artifacts: usize = initial_artifacts_done;
@@ -2797,7 +2806,7 @@ fn executeRenderDag(ctx: *DrawContext, plan: *const RenderPlan, options: RenderO
     if (work.failed.load(.seq_cst)) return NativePdfError.AssetConversionFailed;
 }
 
-fn executeRenderDagSequential(ctx: *DrawContext, plan: *const RenderPlan, progress: ?RenderProgress) !void {
+fn executePlanSequential(ctx: *DrawContext, plan: *const Plan, progress: ?Progress) !void {
     var artifacts_done = plan.artifact_tasks.len - plan.artifact_miss_count;
     for (plan.artifact_tasks, 0..) |task, index| {
         if (plan.artifact_cached[index]) continue;
@@ -2808,13 +2817,13 @@ fn executeRenderDagSequential(ctx: *DrawContext, plan: *const RenderPlan, progre
     var pages_done = plan.page_cache_hit_count;
     for (plan.pages) |*page| {
         if (page.cache_hit) continue;
-        try renderOnePage(ctx, page);
+        try renderPageJob(ctx, page);
         pages_done += 1;
         if (progress) |p| p.pageCompleted(p.context, pages_done, plan.pages.len);
     }
 }
 
-fn renderDagWorker(work: *RenderDag) void {
+fn planWorker(work: *PlanExecution) void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
 
@@ -2827,7 +2836,7 @@ fn renderDagWorker(work: *RenderDag) void {
                 .cache_dir = work.cache_dir,
                 .highlight_languages = work.highlight_languages,
             };
-            renderOnePage(&ctx, &work.plan.pages[page_index]) catch {
+            renderPageJob(&ctx, &work.plan.pages[page_index]) catch {
                 work.failed.store(true, .seq_cst);
                 break;
             };
@@ -2862,7 +2871,7 @@ fn renderDagWorker(work: *RenderDag) void {
     }
 }
 
-fn tryClaimReadyPage(work: *RenderDag) ?usize {
+fn tryClaimReadyPage(work: *PlanExecution) ?usize {
     for (work.plan.pages, 0..) |page, page_index| {
         if (work.page_done[page_index].load(.acquire)) continue;
         if (!pageArtifactsReady(work, page)) continue;
@@ -2873,16 +2882,16 @@ fn tryClaimReadyPage(work: *RenderDag) ?usize {
     return null;
 }
 
-fn pageArtifactsReady(work: *RenderDag, page: RenderPage) bool {
+fn pageArtifactsReady(work: *PlanExecution, page: PageJob) bool {
     for (page.artifact_deps) |dep| {
         if (!work.artifact_done[dep].load(.acquire)) return false;
     }
     return true;
 }
 
-fn renderOnePage(parent_ctx: *DrawContext, page: *const RenderPage) !void {
+fn renderPageJob(parent_ctx: *DrawContext, page: *const PageJob) !void {
     if (page.cache_hit) return;
-    var render_page = try compilePage(parent_ctx, page.page_id, page.index, page.background, page.ops);
+    var render_page = try compilePage(parent_ctx, page.page_id, page.index, page.background, page.commands);
     defer render_page.deinit(parent_ctx.allocator);
     pdf_backend.render(parent_ctx.allocator, parent_ctx.io, &render_page, page.render_path) catch |err| {
         if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose page PDF layers");
@@ -2897,7 +2906,7 @@ fn compilePage(
     page_id: core.NodeId,
     page_index: usize,
     background: ?Color,
-    ops: []RenderOp,
+    commands: []ObjectCommand,
 ) !render_ir.Page {
     const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
@@ -2918,11 +2927,11 @@ fn compilePage(
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
         .command_failure = parent_ctx.command_failure,
-        .sink = .{ .ir = .{ .page = &page } },
+        .target = .{ .ir = .{ .page = &page } },
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
-    try activeSink(&ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, page_fill);
+    try activeTarget(&ctx).fillRect(ctx.allocator, .{ .x = 0, .y = 0, .width = Defaults.width, .height = Defaults.height }, page_fill);
 
     var links = std.ArrayList(LinkAnnotation).empty;
     defer links.deinit(ctx.allocator);
@@ -2933,11 +2942,11 @@ fn compilePage(
     ctx.link_annotations = &links;
     ctx.destinations = &destinations;
 
-    for (ops) |*op| {
-        if (op.render.kind == .chrome_only) try drawRenderOpIntoIr(&ctx, op);
+    for (commands) |*command| {
+        if (command.render.kind == .chrome_only) try drawObjectCommandIntoIr(&ctx, command);
     }
-    for (ops) |*op| {
-        if (op.render.kind != .chrome_only) try drawRenderOpIntoIr(&ctx, op);
+    for (commands) |*command| {
+        if (command.render.kind != .chrome_only) try drawObjectCommandIntoIr(&ctx, command);
     }
 
     for (destinations.items) |destination| {
@@ -2955,22 +2964,22 @@ fn compilePage(
     return page;
 }
 
-fn drawRenderOpIntoIr(ctx: *DrawContext, op: *const RenderOp) !void {
-    const sink = activeSink(ctx);
-    const previous_node_id = sink.replaceNodeId(op.node_id);
-    defer _ = sink.replaceNodeId(previous_node_id);
-    try drawRenderOp(ctx, op);
+fn drawObjectCommandIntoIr(ctx: *DrawContext, command: *const ObjectCommand) !void {
+    const target = activeTarget(ctx);
+    const previous_node_id = target.replaceNodeId(command.node_id);
+    defer _ = target.replaceNodeId(previous_node_id);
+    try drawObjectCommand(ctx, command);
 }
 
-fn isPdfAssetOp(op: *const RenderOp) bool {
-    return op.render.kind == .vector_asset and std.ascii.eqlIgnoreCase(std.fs.path.extension(op.content), ".pdf");
+fn isPdfAssetOp(command: *const ObjectCommand) bool {
+    return command.render.kind == .vector_asset and std.ascii.eqlIgnoreCase(std.fs.path.extension(command.content), ".pdf");
 }
 
-fn pdfAssetPlacement(ctx: *DrawContext, op: *const RenderOp, source_z: [:0]const u8) !Frame {
-    const content_frame = contentFrameForRender(op.frame, op.render);
+fn pdfAssetPlacement(ctx: *DrawContext, command: *const ObjectCommand, source_z: [:0]const u8) !Frame {
+    const content_frame = contentFrameForRender(command.frame, command.render);
     const source = std.mem.span(source_z.ptr);
-    const size = try pdfAssetSize(ctx, source, op.render.asset);
-    return naturalAssetFrame(content_frame, scaledAssetSize(size, op.render.asset));
+    const size = try pdfAssetSize(ctx, source, command.render.asset);
+    return naturalAssetFrame(content_frame, scaledAssetSize(size, command.render.asset));
 }
 
 fn deinitLinkAnnotations(allocator: Allocator, links: []const LinkAnnotation) void {
@@ -2981,54 +2990,54 @@ fn deinitDestinationAnnotations(allocator: Allocator, destinations: []const Dest
     for (destinations) |destination| destination.deinit(allocator);
 }
 
-fn drawRenderOp(ctx: *DrawContext, op: *const RenderOp) !void {
-    const visual_frame = try measuredRenderOpVisualFrame(ctx, op);
-    try addDestination(ctx, op.link_id, visual_frame);
-    try drawObjectChrome(ctx, visual_frame, op.render);
-    const content_frame = contentFrameForRender(op.frame, op.render);
-    switch (op.render.kind) {
-        .text => if (op.render.text) |text| try drawTextOp(ctx, op, content_frame, text),
-        .code => if (op.render.text) |text| {
+fn drawObjectCommand(ctx: *DrawContext, command: *const ObjectCommand) !void {
+    const visual_frame = try measuredObjectCommandVisualFrame(ctx, command);
+    try addDestination(ctx, command.link_id, visual_frame);
+    try drawObjectChrome(ctx, visual_frame, command.render);
+    const content_frame = contentFrameForRender(command.frame, command.render);
+    switch (command.render.kind) {
+        .text => if (command.render.text) |text| try drawTextCommand(ctx, command, content_frame, text),
+        .code => if (command.render.text) |text| {
             var code_text = text;
             code_text.font = text.code_font;
-            try drawCodeBlock(ctx, content_frame, op.content, code_text, op.render.code);
+            try drawCodeBlock(ctx, content_frame, command.content, code_text, command.render.code);
         },
         .chrome_only => {},
-        .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
-        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content, op.render.asset),
-        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content, op.render.asset),
-        .shape => if (op.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
+        .vector_math => try drawVectorMathCommand(ctx, command, content_frame, command.render.math),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
+        .shape => if (command.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
     }
 }
 
-fn measuredRenderOpVisualFrame(ctx: *DrawContext, op: *const RenderOp) !Frame {
-    if (isPdfAssetOp(op)) {
-        const source = try resolveAssetPath(ctx, op.content);
+fn measuredObjectCommandVisualFrame(ctx: *DrawContext, command: *const ObjectCommand) !Frame {
+    if (isPdfAssetOp(command)) {
+        const source = try resolveAssetPath(ctx, command.content);
         defer ctx.allocator.free(source);
         const source_z = try ctx.allocator.dupeZ(u8, source);
         defer ctx.allocator.free(source_z);
-        const placement = try pdfAssetPlacement(ctx, op, source_z);
-        return expandFrameToMeasuredInk(op.frame, op.render, placement);
+        const placement = try pdfAssetPlacement(ctx, command, source_z);
+        return expandFrameToMeasuredInk(command.frame, command.render, placement);
     }
-    switch (op.render.kind) {
-        .text => if (op.render.text) |text| {
-            const measured = try measureRenderedOpContent(ctx, op, text);
-            return expandFrameToMeasuredInk(op.frame, op.render, measured);
+    switch (command.render.kind) {
+        .text => if (command.render.text) |text| {
+            const measured = try measureObjectCommandContent(ctx, command, text);
+            return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
-        .code => if (op.render.text) |text| {
+        .code => if (command.render.text) |text| {
             var code_text = text;
             code_text.font = text.code_font;
-            const measured = try measureRenderedOpContent(ctx, op, code_text);
-            return expandFrameToMeasuredInk(op.frame, op.render, measured);
+            const measured = try measureObjectCommandContent(ctx, command, code_text);
+            return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
         .vector_math, .vector_asset, .raster_asset => {
-            const measured = try measureRenderedOpContent(ctx, op, null);
-            return expandFrameToMeasuredInk(op.frame, op.render, measured);
+            const measured = try measureObjectCommandContent(ctx, command, null);
+            return expandFrameToMeasuredInk(command.frame, command.render, measured);
         },
-        .shape => return op.frame,
+        .shape => return command.frame,
         else => {},
     }
-    return op.frame;
+    return command.frame;
 }
 
 fn expandFrameToMeasuredInk(frame: Frame, render: ResolvedRender, maybe_ink: ?Frame) Frame {
@@ -3057,7 +3066,7 @@ const MeasurementScope = struct {
     ctx: *DrawContext,
     previous_links: ?*std.ArrayList(LinkAnnotation),
     previous_destinations: ?*std.ArrayList(DestinationAnnotation),
-    previous_sink: ?draw_sink.Sink,
+    previous_target: ?draw_target.Target,
     links: std.ArrayList(LinkAnnotation) = .empty,
     destinations: std.ArrayList(DestinationAnnotation) = .empty,
     active: bool = false,
@@ -3067,7 +3076,7 @@ const MeasurementScope = struct {
             .ctx = ctx,
             .previous_links = ctx.link_annotations,
             .previous_destinations = ctx.destinations,
-            .previous_sink = ctx.sink,
+            .previous_target = ctx.target,
         };
     }
 
@@ -3075,7 +3084,7 @@ const MeasurementScope = struct {
         const pdf = activePdf(self.ctx);
         if (c.ss_pdf_begin_measurement(pdf) != 0) return NativePdfError.CairoCreateFailed;
         self.active = true;
-        self.ctx.sink = .{ .pdf = pdf };
+        self.ctx.target = .{ .pdf = pdf };
         self.ctx.link_annotations = &self.links;
         self.ctx.destinations = &self.destinations;
     }
@@ -3089,7 +3098,7 @@ const MeasurementScope = struct {
     fn deinit(self: *MeasurementScope) void {
         self.ctx.link_annotations = self.previous_links;
         self.ctx.destinations = self.previous_destinations;
-        self.ctx.sink = self.previous_sink;
+        self.ctx.target = self.previous_target;
         deinitLinkAnnotations(self.ctx.allocator, self.links.items);
         self.links.deinit(self.ctx.allocator);
         deinitDestinationAnnotations(self.ctx.allocator, self.destinations.items);
@@ -3115,61 +3124,61 @@ fn inkExtentsToFrame(extents: c.SsPdfInkExtents) ?Frame {
     };
 }
 
-fn measureRenderedOpContent(ctx: *DrawContext, op: *const RenderOp, maybe_text: ?TextPaint) !?Frame {
+fn measureObjectCommandContent(ctx: *DrawContext, command: *const ObjectCommand, maybe_text: ?TextPaint) !?Frame {
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
 
-    const content_frame = contentFrameForRender(op.frame, op.render);
-    switch (op.render.kind) {
-        .text => if (maybe_text) |text| try drawTextOp(ctx, op, content_frame, text),
-        .code => if (maybe_text) |text| try drawCodeBlock(ctx, content_frame, op.content, text, op.render.code),
-        .vector_math => try drawVectorMathOp(ctx, op, content_frame, op.render.math),
-        .vector_asset => try drawVectorAsset(ctx, content_frame, op.content, op.render.asset),
-        .raster_asset => try drawRasterAsset(ctx, content_frame, op.content, op.render.asset),
-        .shape => if (op.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
+    const content_frame = contentFrameForRender(command.frame, command.render);
+    switch (command.render.kind) {
+        .text => if (maybe_text) |text| try drawTextCommand(ctx, command, content_frame, text),
+        .code => if (maybe_text) |text| try drawCodeBlock(ctx, content_frame, command.content, text, command.render.code),
+        .vector_math => try drawVectorMathCommand(ctx, command, content_frame, command.render.math),
+        .vector_asset => try drawVectorAsset(ctx, content_frame, command.content, command.render.asset),
+        .raster_asset => try drawRasterAsset(ctx, content_frame, command.content, command.render.asset),
+        .shape => if (command.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
         else => return null,
     }
     return try measurement.inkFrame();
 }
 
-fn measureRenderOpIntrinsic(ctx: *DrawContext, op: *const RenderOp, outer_width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
-    var render = op.render;
+fn measureObjectCommandIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, outer_width: f32, mode: core.LayoutMeasurementMode) !?core.LayoutMeasurement {
+    var render = command.render;
     if (mode == .natural) {
         if (render.text) |*text| text.wrap = false;
     }
     if (render.kind == .shape or render.kind == .chrome_only) {
         const frame_width: f32 = if (mode == .natural) 1 else @max(outer_width, 1);
-        return try measureFrameIntrinsic(ctx, op, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
+        return try measureFrameIntrinsic(ctx, command, Frame{ .x = 0, .y = 0, .width = frame_width, .height = 1 });
     }
-    const frame = Frame{ .x = 0, .y = 0, .width = @max(outer_width, 1), .height = @max(op.frame.height, 1) };
+    const frame = Frame{ .x = 0, .y = 0, .width = @max(outer_width, 1), .height = @max(command.frame.height, 1) };
     const content_frame = contentFrameForRender(frame, render);
     const content_measure = switch (render.kind) {
         .text => if (render.text) |text|
-            try measureTextIntrinsic(ctx, op, content_frame.width, text, mode)
+            try measureTextIntrinsic(ctx, command, content_frame.width, text, mode)
         else
             return null,
         .code => if (render.text) |text| blk: {
             var code_text = text;
             code_text.font = text.code_font;
-            break :blk try measureCodeIntrinsic(ctx, op, content_frame.width, code_text);
+            break :blk try measureCodeIntrinsic(ctx, command, content_frame.width, code_text);
         } else return null,
-        .vector_math => try measureVectorMathIntrinsic(ctx, op, content_frame.width, content_frame.height),
-        .vector_asset, .raster_asset => try measureAssetIntrinsic(ctx, op, content_frame.width),
+        .vector_math => try measureVectorMathIntrinsic(ctx, command, content_frame.width, content_frame.height),
+        .vector_asset, .raster_asset => try measureAssetIntrinsic(ctx, command, content_frame.width),
         .shape, .chrome_only => unreachable,
     };
     return expandContentMeasurement(render, content_measure);
 }
 
-fn measureFrameIntrinsic(ctx: *DrawContext, op: *const RenderOp, frame: Frame) !core.LayoutMeasurement {
+fn measureFrameIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame) !core.LayoutMeasurement {
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
 
-    try drawObjectChrome(ctx, frame, op.render);
-    const content_frame = contentFrameForRender(frame, op.render);
-    switch (op.render.kind) {
-        .shape => if (op.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
+    try drawObjectChrome(ctx, frame, command.render);
+    const content_frame = contentFrameForRender(frame, command.render);
+    switch (command.render.kind) {
+        .shape => if (command.render.shape) |shape| try drawShapeOp(ctx, content_frame, shape),
         .chrome_only => {},
         else => unreachable,
     }
@@ -3186,37 +3195,37 @@ fn expandContentMeasurement(render: ResolvedRender, content: core.LayoutMeasurem
     };
 }
 
-fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text: TextPaint, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
+fn measureTextIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, text: TextPaint, mode: core.LayoutMeasurementMode) !core.LayoutMeasurement {
     const baseline_bl = Defaults.height * 0.5;
-    return switch (op.parse_mode) {
+    return switch (command.parse_mode) {
         .none => .{ .width = 1, .height = 1 },
         .block => blk: {
             var owned_doc: ?MarkdownDocument = null;
             defer if (owned_doc) |*doc| doc.deinit();
-            const doc = op.markdown_doc orelse blk2: {
-                owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
+            const doc = command.markdown_doc orelse blk2: {
+                owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, command.content);
                 break :blk2 &owned_doc.?;
             };
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
             const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
-            const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0, op.tex_preamble);
+            const next_bl = try drawMarkdownBlocksAt(ctx, frame, baseline_bl, doc.blocks.items, text, 0, command.tex_preamble);
             var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, text.font_size, text.line_height);
             if (mode == .natural) {
-                if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0, op.tex_preamble)) |natural_width| {
+                if (try markdownBlocksNaturalInlineAdvance(ctx, doc.blocks.items, text, 0, command.tex_preamble)) |natural_width| {
                     measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
                 }
             } else {
-                measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width, op.tex_preamble), 1);
+                measured.width = @max(try markdownBlocksConstrainedLogicalWidth(ctx, doc.blocks.items, text, 0, width, command.tex_preamble), 1);
             }
             break :blk measured;
         },
         .@"inline" => blk: {
             var owned_layout: ?core.markdown.TextLayout = null;
             defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
-            const layout = op.text_layout orelse blk2: {
-                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
+            const layout = command.text_layout orelse blk2: {
+                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
                 break :blk2 &owned_layout.?;
             };
             var inline_text = text;
@@ -3224,46 +3233,46 @@ fn measureTextIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text
             var measurement = MeasurementScope.init(ctx);
             try measurement.begin();
             defer measurement.deinit();
-            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap, op.tex_preamble);
+            const next_bl = try drawInlineLines(ctx, 0, baseline_bl, @max(width, 1), layout.lines.items, inline_text, inline_text.wrap, command.tex_preamble);
             var measured = try measurementFromInk(&measurement, baseline_bl, next_bl, inline_text.font_size, inline_text.line_height);
             if (mode == .natural) {
-                if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text, op.tex_preamble)) |natural_width| {
+                if (try inlineLinesNaturalAdvance(ctx, layout.lines.items, inline_text, command.tex_preamble)) |natural_width| {
                     measured.width = @max(measured.width, guardedNaturalMeasurementWidth(natural_width));
                 }
             } else {
-                measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap, op.tex_preamble), 1);
+                measured.width = @max(try inlineLinesConstrainedLogicalWidth(ctx, layout.lines.items, inline_text, width, inline_text.wrap, command.tex_preamble), 1);
             }
             break :blk measured;
         },
     };
 }
 
-fn measureCodeIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, text: TextPaint) !core.LayoutMeasurement {
+fn measureCodeIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, text: TextPaint) !core.LayoutMeasurement {
     var measurement = MeasurementScope.init(ctx);
     try measurement.begin();
     defer measurement.deinit();
     const frame = Frame{ .x = 0, .y = 0, .width = @max(width, 1), .height = Defaults.height };
-    try drawCodeBlock(ctx, frame, op.content, text, op.render.code);
+    try drawCodeBlock(ctx, frame, command.content, text, command.render.code);
     if (try measurement.inkFrame()) |ink| {
         return .{ .width = @max(ink.width, 1), .height = @max(ink.height, text.line_height) };
     }
     return .{ .width = 1, .height = text.line_height };
 }
 
-fn measureVectorMathIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32, height: f32) !core.LayoutMeasurement {
-    const math = try renderMathToPdf(ctx, op.content, op.tex_preamble, op.math_kind);
+fn measureVectorMathIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32, height: f32) !core.LayoutMeasurement {
+    const math = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.math_kind);
     defer ctx.allocator.free(math.path);
-    const fitted = fitVectorMathSize(math.width, math.height, @max(width, 1), @max(height, 1), op.math_kind, op.render.math);
+    const fitted = fitVectorMathSize(math.width, math.height, @max(width, 1), @max(height, 1), command.math_kind, command.render.math);
     return .{ .width = @max(fitted.width, 1), .height = @max(fitted.height, 1) };
 }
 
-fn measureAssetIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !core.LayoutMeasurement {
-    const source = try resolveAssetPath(ctx, op.content);
+fn measureAssetIntrinsic(ctx: *DrawContext, command: *const ObjectCommand, width: f32) !core.LayoutMeasurement {
+    const source = try resolveAssetPath(ctx, command.content);
     defer ctx.allocator.free(source);
     const extension = std.fs.path.extension(source);
     var natural: Size = undefined;
     if (std.ascii.eqlIgnoreCase(extension, ".pdf")) {
-        natural = try pdfAssetSize(ctx, source, op.render.asset);
+        natural = try pdfAssetSize(ctx, source, command.render.asset);
     } else if (std.ascii.eqlIgnoreCase(extension, ".svg")) {
         const svg = try svgAsset(ctx, source);
         natural = .{ .width = svg.width, .height = svg.height };
@@ -3271,7 +3280,7 @@ fn measureAssetIntrinsic(ctx: *DrawContext, op: *const RenderOp, width: f32) !co
         _ = width;
         natural = try rasterAssetSize(ctx, source);
     }
-    const scaled = scaledAssetSize(natural, op.render.asset);
+    const scaled = scaledAssetSize(natural, command.render.asset);
     return .{ .width = @max(scaled.width, 1), .height = @max(scaled.height, 1) };
 }
 
@@ -3324,7 +3333,7 @@ fn preloadTaskKey(ctx: *DrawContext, task: PreloadTask) ![]u8 {
     };
 }
 
-fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask, pages: []const RenderPage) !PreloadCacheState {
+fn buildPreloadCacheStateForPages(ctx: *DrawContext, tasks: []const PreloadTask, pages: []const PageJob) !PreloadCacheState {
     const cached = try ctx.allocator.alloc(bool, tasks.len);
     errdefer ctx.allocator.free(cached);
     for (cached) |*value| value.* = true;
@@ -3403,13 +3412,13 @@ fn preloadOne(ctx: *DrawContext, task: PreloadTask) !void {
     }
 }
 
-fn renderDagWorkerCount(plan: *const RenderPlan, options: RenderOptions) usize {
+fn planWorkerCount(plan: *const Plan, options: Options) usize {
     const task_count = plan.artifact_miss_count + (plan.pages.len - plan.page_cache_hit_count);
     if (configuredWorkerCount(task_count, options)) |count| return count;
     return preloadWorkerCount(task_count, plan.artifact_miss_count, options);
 }
 
-fn preloadWorkerCount(task_count: usize, missing_artifacts: usize, options: RenderOptions) usize {
+fn preloadWorkerCount(task_count: usize, missing_artifacts: usize, options: Options) usize {
     if (configuredWorkerCount(task_count, options)) |count| return count;
     const cpu = autoCpuCount();
     const desired = if (missing_artifacts == 0)
@@ -3421,12 +3430,12 @@ fn preloadWorkerCount(task_count: usize, missing_artifacts: usize, options: Rend
     return clampWorkerCount(desired, task_count);
 }
 
-fn mergeWorkerCount(task_count: usize, options: RenderOptions) usize {
+fn mergeWorkerCount(task_count: usize, options: Options) usize {
     if (configuredWorkerCount(task_count, options)) |count| return count;
     return clampWorkerCount(@min(autoCpuCount(), warm_render_job_cap), task_count);
 }
 
-fn configuredWorkerCount(task_count: usize, options: RenderOptions) ?usize {
+fn configuredWorkerCount(task_count: usize, options: Options) ?usize {
     if (options.jobs) |jobs| return clampWorkerCount(jobs, task_count);
     if (std.c.getenv("SS_RENDER_JOBS")) |raw| {
         const text = std.mem.span(raw);
@@ -3520,7 +3529,7 @@ fn drawArrowHead(ctx: *DrawContext, tip_x: f32, tip_y: f32, dir_x: f32, dir_y: f
 }
 
 fn strokeLine(ctx: *DrawContext, x1: f32, y1: f32, x2: f32, y2: f32, line_width: f32, color: Color, dash_on: f32, dash_off: f32) !void {
-    try activeSink(ctx).strokeLine(ctx.allocator, .{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, line_width, color, dash_on, dash_off);
+    try activeTarget(ctx).strokeLine(ctx.allocator, .{ .x = x1, .y = y1 }, .{ .x = x2, .y = y2 }, line_width, color, dash_on, dash_off);
 }
 
 fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !void {
@@ -3528,7 +3537,7 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
         const line_width = render.rule.line_width;
         const y = toTopY(frame.y + @max(frame.height / 2.0, 1.5));
         const dash = render.rule.dash;
-        try activeSink(ctx).strokeLine(
+        try activeTarget(ctx).strokeLine(
             ctx.allocator,
             .{ .x = frame.x, .y = y },
             .{ .x = frame.x + frame.width, .y = y },
@@ -3556,7 +3565,7 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
 
     if (render.underline.color) |color| {
         const y = toTopY(frame.y + render.underline.offset);
-        try activeSink(ctx).strokeLine(
+        try activeTarget(ctx).strokeLine(
             ctx.allocator,
             .{ .x = frame.x, .y = y },
             .{ .x = frame.x + frame.width, .y = y },
@@ -3569,7 +3578,7 @@ fn drawObjectChrome(ctx: *DrawContext, frame: Frame, render: ResolvedRender) !vo
 }
 
 fn drawRoundedRect(ctx: *DrawContext, frame: Frame, radius: f32, fill: ?Color, stroke: ?Color, line_width: f32) !void {
-    try activeSink(ctx).roundedRect(
+    try activeTarget(ctx).roundedRect(
         ctx.allocator,
         .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
         radius,
@@ -3589,27 +3598,27 @@ fn insetUniformFrame(frame: Frame, inset: f32) Frame {
     };
 }
 
-fn drawTextOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, text: TextPaint) !void {
-    switch (op.parse_mode) {
+fn drawTextCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, text: TextPaint) !void {
+    switch (command.parse_mode) {
         .none => return,
         .block => {
             var owned_doc: ?MarkdownDocument = null;
             defer if (owned_doc) |*doc| doc.deinit();
-            const doc = op.markdown_doc orelse blk: {
-                owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, op.content);
+            const doc = command.markdown_doc orelse blk: {
+                owned_doc = try core.markdown.parseMarkdownContent(ctx.allocator, command.content);
                 break :blk &owned_doc.?;
             };
-            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, op.tex_preamble);
+            _ = try drawMarkdownBlocks(ctx, frame, doc.blocks.items, text, 0, command.tex_preamble);
         },
         .@"inline" => {
             var owned_layout: ?core.markdown.TextLayout = null;
             defer if (owned_layout) |*layout| layout.deinit(ctx.allocator);
-            const layout = op.text_layout orelse blk: {
-                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, op.content);
+            const layout = command.text_layout orelse blk: {
+                owned_layout = try core.markdown.parseTextLayoutContent(ctx.allocator, command.content);
                 break :blk &owned_layout.?;
             };
             const baseline = baselineBlForBox(frame, text.font_size);
-            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, op.tex_preamble);
+            _ = try drawInlineLines(ctx, frame.x, baseline, frame.width, layout.lines.items, text, text.wrap, command.tex_preamble);
         },
     }
 }
@@ -3669,7 +3678,7 @@ fn drawMarkdownCodeBlock(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32
     const placement = markdownCodeBlockPlacement(x, baseline_bl, width, measured, text);
     const frame = placement.frame;
 
-    try activeSink(ctx).roundedRect(
+    try activeTarget(ctx).roundedRect(
         ctx.allocator,
         .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height },
         text.markdown_code_radius,
@@ -3828,7 +3837,7 @@ fn drawTable(ctx: *DrawContext, x: f32, baseline_bl: f32, width: f32, block: *co
         for (0..columns) |column_index| {
             const cell_x = table_x + @as(f32, @floatFromInt(column_index)) * column_width;
             const cell_frame = Frame{ .x = cell_x, .y = row_bottom, .width = column_width, .height = row_height };
-            try activeSink(ctx).roundedRect(
+            try activeTarget(ctx).roundedRect(
                 ctx.allocator,
                 .{ .x = cell_frame.x, .y = topOf(cell_frame), .width = cell_frame.width, .height = cell_frame.height },
                 0,
@@ -4512,13 +4521,13 @@ fn drawPlainTextAtTopWithOptions(
 fn drawStrikethrough(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
     const y = y_top + paint.font_size * 0.55;
     const line_width = @max(@as(f32, 1.0), paint.font_size * 0.065);
-    try activeSink(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
+    try activeTarget(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
 }
 
 fn drawUnderline(ctx: *DrawContext, x: f32, y_top: f32, atom: Atom, paint: AtomPaint) !void {
     const y = y_top + paint.font_size * 1.25;
     const line_width = @max(@as(f32, 0.8), paint.font_size * 0.055);
-    try activeSink(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
+    try activeTarget(ctx).strokeLine(ctx.allocator, .{ .x = x, .y = y }, .{ .x = x + @max(atom.width, 1), .y = y }, line_width, atom.color, 0, 0);
 }
 
 fn highlightLanguageFor(ctx: *DrawContext, language: []const u8) ?*const utils.highlight.Language {
@@ -5095,10 +5104,10 @@ fn isPythonKeyword(segment: []const u8) bool {
     return false;
 }
 
-fn drawVectorMathOp(ctx: *DrawContext, op: *const RenderOp, frame: Frame, math: ?MathPaint) !void {
-    const asset = try renderMathToPdf(ctx, op.content, op.tex_preamble, op.math_kind);
+fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame: Frame, math: ?MathPaint) !void {
+    const asset = try renderMathToPdf(ctx, command.content, command.tex_preamble, command.math_kind);
     defer ctx.allocator.free(asset.path);
-    const fitted = fitVectorMathSize(asset.width, asset.height, frame.width, frame.height, op.math_kind, math);
+    const fitted = fitVectorMathSize(asset.width, asset.height, frame.width, frame.height, command.math_kind, math);
     const horizontal_align = if (math) |m| m.horizontal_align else HorizontalAlign.center;
     const draw_frame = Frame{
         .x = alignedX(frame.x, frame.width, fitted.width, horizontal_align),
@@ -5125,7 +5134,7 @@ fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
             .pdf_page = 1,
             .pdf_box = .crop,
         };
-        try activeSink(ctx).pdfPage(
+        try activeTarget(ctx).pdfPage(
             ctx.allocator,
             .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height },
             source,
@@ -5151,7 +5160,7 @@ fn drawRasterAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: 
 const direct_merge_page_limit: usize = 16;
 const merge_chunk_size: usize = 16;
 
-fn reusePreviousDocumentPdf(ctx: *DrawContext, plan: *const RenderPlan, progress: ?RenderProgress) !bool {
+fn reusePreviousDocumentPdf(ctx: *DrawContext, plan: *const Plan, progress: ?Progress) !bool {
     const source = plan.previous_document_path orelse return false;
     if (progress) |p| p.assemblyCompleted(p.context, 0, 1);
     copyOrLinkCacheFile(ctx, source, plan.final_pdf_path) catch return false;
@@ -5160,14 +5169,14 @@ fn reusePreviousDocumentPdf(ctx: *DrawContext, plan: *const RenderPlan, progress
     return true;
 }
 
-fn storeRenderPlanDocumentPdf(ctx: *DrawContext, plan: *const RenderPlan) !void {
+fn storePlanDocumentPdf(ctx: *DrawContext, plan: *const Plan) !void {
     const destination = try documentPdfPath(ctx.allocator, plan.building_dir);
     defer ctx.allocator.free(destination);
     try copyOrLinkCacheFile(ctx, plan.final_pdf_path, destination);
     if (!(try cachedPdfAvailable(ctx, destination))) return NativePdfError.InvalidPdfCache;
 }
 
-fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: RenderOptions, progress: ?RenderProgress) !void {
+fn assemblePlan(ctx: *DrawContext, plan: *const Plan, options: Options, progress: ?Progress) !void {
     const page_paths = try ctx.allocator.alloc([]const u8, plan.pages.len);
     defer ctx.allocator.free(page_paths);
     for (plan.pages, 0..) |page, index| page_paths[index] = page.cache_path;
@@ -5224,7 +5233,7 @@ fn assembleRenderPlan(ctx: *DrawContext, plan: *const RenderPlan, options: Rende
     if (progress) |p| p.assemblyCompleted(p.context, total_steps, total_steps);
 }
 
-fn reusePreviousMergeChunk(ctx: *DrawContext, plan: *const RenderPlan, destination: []const u8) !bool {
+fn reusePreviousMergeChunk(ctx: *DrawContext, plan: *const Plan, destination: []const u8) !bool {
     const previous_chunks_dir = plan.previous_chunks_dir orelse return false;
     const source = try std.fs.path.join(ctx.allocator, &.{ previous_chunks_dir, std.fs.path.basename(destination) });
     defer ctx.allocator.free(source);
@@ -5236,8 +5245,8 @@ fn reusePreviousMergeChunk(ctx: *DrawContext, plan: *const RenderPlan, destinati
 fn runMergeChunks(
     ctx: *DrawContext,
     chunks: []const MergeChunk,
-    options: RenderOptions,
-    progress: ?RenderProgress,
+    options: Options,
+    progress: ?Progress,
     progress_offset: usize,
     progress_total: usize,
 ) !void {
@@ -5355,10 +5364,10 @@ fn writeZeroPagePdf(ctx: *DrawContext, output: []const u8) !void {
 fn recordQpdfFailure(ctx: *DrawContext, operation: []const u8) !void {
     const detail_pointer = c.ss_qpdf_last_error();
     const detail = if (detail_pointer == null) "unknown libqpdf error" else std.mem.span(detail_pointer);
-    if (ctx.command_failure) |sink| {
+    if (ctx.command_failure) |target| {
         const message = try std.fmt.allocPrint(ctx.allocator, "failed to {s}: {s}", .{ operation, detail });
         defer ctx.allocator.free(message);
-        try sink.record(message);
+        try target.record(message);
     }
 }
 
@@ -5421,7 +5430,7 @@ fn drawRawTextWithMode(
     preserve_color_glyphs: bool,
 ) !void {
     const baseline_y = y_top + font_size;
-    try activeSink(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, preserve_color_glyphs);
+    try activeTarget(ctx).textBaseline(ctx.allocator, x, baseline_y, width, content, font, font_size, color, wrap, preserve_color_glyphs);
 }
 
 fn drawLinkedRawText(
@@ -5527,31 +5536,31 @@ fn listMarker(allocator: Allocator, kind: core.markdown.BlockKind, depth: usize,
 fn drawRasterNatural(ctx: *DrawContext, frame: Frame, source: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const size = try rasterAssetSize(ctx, source);
     const fitted = naturalAssetFrame(frame, scaledAssetSize(size, asset));
-    try activeSink(ctx).raster(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, source);
+    try activeTarget(ctx).raster(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, source);
 }
 
 fn drawSvgNatural(ctx: *DrawContext, frame: Frame, svg_path: []const u8, asset: ?core.render_policy.AssetPaint) !void {
     const svg = try svgAsset(ctx, svg_path);
     const fitted = naturalAssetFrame(frame, scaledAssetSize(.{ .width = svg.width, .height = svg.height }, asset));
-    try activeSink(ctx).svg(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, svg_path, null);
+    try activeTarget(ctx).svg(ctx.allocator, .{ .x = fitted.x, .y = topOf(fitted), .width = fitted.width, .height = fitted.height }, svg_path, null);
 }
 
 fn drawSvgFrame(ctx: *DrawContext, frame: Frame, svg_path: []const u8) !void {
-    try activeSink(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, null);
+    try activeTarget(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, null);
 }
 
 fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, color: Color) !void {
-    try activeSink(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
+    try activeTarget(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
 }
 
 fn placeMathPdf(ctx: *DrawContext, frame: Frame, path: []const u8, page_index: usize) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
-    const sink = activeSink(ctx);
-    if (sink.isIr()) {
-        try sink.pdfPage(ctx.allocator, rect, path, page_index, .crop, false);
+    const target = activeTarget(ctx);
+    if (target.recordsIr()) {
+        try target.pdfPage(ctx.allocator, rect, path, page_index, .crop, false);
         return;
     }
-    try sink.fillRect(ctx.allocator, rect, .{ .r = 0, .g = 0, .b = 0 });
+    try target.fillRect(ctx.allocator, rect, .{ .r = 0, .g = 0, .b = 0 });
 }
 
 const Size = struct { width: f32, height: f32 };
@@ -5924,10 +5933,10 @@ fn readTexPreambleFile(ctx: *DrawContext, path: []const u8) ![]const u8 {
     const resolved = try resolveAssetPath(ctx, path);
     defer ctx.allocator.free(resolved);
     return std.Io.Dir.cwd().readFileAlloc(ctx.io, resolved, ctx.allocator, .unlimited) catch |err| {
-        if (ctx.command_failure) |sink| {
+        if (ctx.command_failure) |target| {
             const message = try std.fmt.allocPrint(ctx.allocator, "TeX preamble file not found: {s} (resolved: {s})", .{ path, resolved });
             defer ctx.allocator.free(message);
-            try sink.record(message);
+            try target.record(message);
         }
         return err;
     };
@@ -6069,7 +6078,7 @@ fn runChecked(ctx: *DrawContext, argv: []const []const u8, cwd: std.process.Chil
         if (argv.len > 0) utils.measure_profile.recordCommand(argv[0], true, profile_command);
         const message = try commandSpawnFailureMessage(ctx.allocator, argv, err);
         defer ctx.allocator.free(message);
-        if (ctx.command_failure) |sink| try sink.record(message);
+        if (ctx.command_failure) |target| try target.record(message);
         return NativePdfError.AssetConversionFailed;
     };
     defer ctx.allocator.free(result.stdout);
@@ -6082,7 +6091,7 @@ fn runChecked(ctx: *DrawContext, argv: []const []const u8, cwd: std.process.Chil
     if (!failed) return;
     const message = try commandTermFailureMessage(ctx.allocator, argv, result.term, result.stdout, result.stderr);
     defer ctx.allocator.free(message);
-    if (ctx.command_failure) |sink| try sink.record(message);
+    if (ctx.command_failure) |target| try target.record(message);
     return NativePdfError.AssetConversionFailed;
 }
 

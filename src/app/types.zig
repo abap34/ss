@@ -1,7 +1,7 @@
 const module_loader = @import("../modules/loader.zig");
 const pdf = @import("../render/pdf.zig");
 
-pub const RenderOptions = pdf.RenderOptions;
+pub const RenderOptions = pdf.Options;
 
 pub const PdfWriteOptions = struct {
     render: RenderOptions = .{},

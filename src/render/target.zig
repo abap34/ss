@@ -6,7 +6,7 @@ const render_ir = @import("render");
 const Allocator = std.mem.Allocator;
 const Color = core.render_policy.Color;
 
-pub const Sink = union(enum) {
+pub const Target = union(enum) {
     pdf: *c.SsPdf,
     ir: IrTarget,
 
@@ -15,7 +15,7 @@ pub const Sink = union(enum) {
         node_id: ?core.NodeId = null,
     };
 
-    pub fn replaceNodeId(self: *Sink, node_id: ?core.NodeId) ?core.NodeId {
+    pub fn replaceNodeId(self: *Target, node_id: ?core.NodeId) ?core.NodeId {
         return switch (self.*) {
             .pdf => null,
             .ir => |*target| blk: {
@@ -26,11 +26,11 @@ pub const Sink = union(enum) {
         };
     }
 
-    pub fn isIr(self: Sink) bool {
+    pub fn recordsIr(self: Target) bool {
         return self == .ir;
     }
 
-    pub fn fillRect(self: *Sink, allocator: Allocator, rect: render_ir.Rect, color: Color) !void {
+    pub fn fillRect(self: *Target, allocator: Allocator, rect: render_ir.Rect, color: Color) !void {
         switch (self.*) {
             .pdf => |pdf| c.ss_pdf_fill_rect(pdf, rect.x, rect.y, rect.width, rect.height, color.r, color.g, color.b),
             .ir => |target| try target.page.appendFillRect(allocator, target.node_id, rect, color),
@@ -38,7 +38,7 @@ pub const Sink = union(enum) {
     }
 
     pub fn strokeLine(
-        self: *Sink,
+        self: *Target,
         allocator: Allocator,
         start: render_ir.Point,
         end: render_ir.Point,
@@ -75,7 +75,7 @@ pub const Sink = union(enum) {
     }
 
     pub fn roundedRect(
-        self: *Sink,
+        self: *Target,
         allocator: Allocator,
         rect: render_ir.Rect,
         radius: f32,
@@ -114,7 +114,7 @@ pub const Sink = union(enum) {
     }
 
     pub fn textBaseline(
-        self: *Sink,
+        self: *Target,
         allocator: Allocator,
         x: f32,
         baseline_y: f32,
@@ -164,7 +164,7 @@ pub const Sink = union(enum) {
         }
     }
 
-    pub fn raster(self: *Sink, allocator: Allocator, rect: render_ir.Rect, path: []const u8) !void {
+    pub fn raster(self: *Target, allocator: Allocator, rect: render_ir.Rect, path: []const u8) !void {
         switch (self.*) {
             .pdf => |pdf| {
                 const path_z = try allocator.dupeZ(u8, path);
@@ -175,7 +175,7 @@ pub const Sink = union(enum) {
         }
     }
 
-    pub fn svg(self: *Sink, allocator: Allocator, rect: render_ir.Rect, path: []const u8, tint: ?Color) !void {
+    pub fn svg(self: *Target, allocator: Allocator, rect: render_ir.Rect, path: []const u8, tint: ?Color) !void {
         switch (self.*) {
             .pdf => |pdf| {
                 const path_z = try allocator.dupeZ(u8, path);
@@ -187,7 +187,7 @@ pub const Sink = union(enum) {
     }
 
     pub fn pdfPage(
-        self: *Sink,
+        self: *Target,
         allocator: Allocator,
         rect: render_ir.Rect,
         path: []const u8,
@@ -209,7 +209,7 @@ pub const Sink = union(enum) {
         }
     }
 
-    pub fn replayItem(self: *Sink, item: render_ir.Item) !void {
+    pub fn replayItem(self: *Target, item: render_ir.Item) !void {
         const pdf = switch (self.*) {
             .pdf => |value| value,
             .ir => return error.UnsupportedAssetType,

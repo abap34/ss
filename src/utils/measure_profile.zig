@@ -73,7 +73,7 @@ var text_visual_misses = CountTime{};
 
 var layout_measure_total = CountTime{};
 var layout_measure_lock_wait = CountTime{};
-var layout_measure_render_op = CountTime{};
+var layout_measure_object_command = CountTime{};
 var layout_measure_cache_key = CountTime{};
 var layout_measure_memory_hits = CountTime{};
 var layout_measure_file_hits = CountTime{};
@@ -146,8 +146,8 @@ pub fn recordLayoutMeasurementLockWait(start_ns: i128) void {
     if (start_ns != 0) layout_measure_lock_wait.add(elapsed(start_ns));
 }
 
-pub fn recordLayoutMeasurementRenderOp(start_ns: i128) void {
-    if (start_ns != 0) layout_measure_render_op.add(elapsed(start_ns));
+pub fn recordLayoutMeasurementObjectCommand(start_ns: i128) void {
+    if (start_ns != 0) layout_measure_object_command.add(elapsed(start_ns));
 }
 
 pub fn recordLayoutMeasurementCacheKey(start_ns: i128) void {
@@ -206,7 +206,7 @@ pub fn printIfEnabled() void {
 
     printCounter("layout provider total", &layout_measure_total);
     printCounter("layout provider lock wait", &layout_measure_lock_wait);
-    printCounter("layout render op build", &layout_measure_render_op);
+    printCounter("layout object command build", &layout_measure_object_command);
     printCounter("layout cache key", &layout_measure_cache_key);
     printCounter("layout memory cache hit", &layout_measure_memory_hits);
     printCounter("layout file cache hit", &layout_measure_file_hits);
