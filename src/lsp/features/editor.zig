@@ -6,12 +6,12 @@ const lsp_state = @import("../state.zig");
 pub const Context = struct {
     allocator: std.mem.Allocator,
     documents: *lsp_state.DocumentStore,
-    provider: *lsp_state.SnapshotProvider,
-    snapshots: *lsp_state.LayoutStore,
+    provider: *lsp_state.AnalysisProvider,
+    responses: *lsp_state.ResponseStore,
 };
 
 pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
-    var owned_snapshot: ?lsp_state.Snapshot = null;
+    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
 
     const doc_path = try protocol.docPathFromParams(ctx.allocator, params);
@@ -22,16 +22,16 @@ pub fn snapshotResult(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     } orelse return try emptySnapshot(ctx.allocator);
 
     if (snapshot.generation == ctx.documents.generation) {
-        if (snapshot.layout) |*layout| {
-            if (layout.editor_snapshot_json) |editor_json| {
+        if (snapshot.layout_output) |*layout| {
+            if (layout.editor_json) |editor_json| {
                 const result = try ctx.allocator.dupe(u8, editor_json);
                 errdefer ctx.allocator.free(result);
-                try ctx.snapshots.remember(ctx.allocator, snapshot, result);
+                try ctx.responses.store(ctx.allocator, snapshot, result);
                 return result;
             }
         }
     }
-    if (try ctx.snapshots.jsonForEntry(ctx.allocator, snapshot.project.entry_path)) |cached| {
+    if (try ctx.responses.cloneForEntry(ctx.allocator, snapshot.project.entry_path)) |cached| {
         defer ctx.allocator.free(cached);
         return try staleSnapshot(ctx.allocator, cached);
     }

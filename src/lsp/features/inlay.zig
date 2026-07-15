@@ -10,16 +10,16 @@ const ProjectFacts = analysis_snapshot.ProjectFacts;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    provider: *lsp_state.SnapshotProvider,
+    provider: *lsp_state.AnalysisProvider,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     const doc_path = try protocol.docPathFromParams(ctx.allocator, params) orelse return try ctx.allocator.dupe(u8, "[]");
     defer ctx.allocator.free(doc_path);
-    var owned_snapshot: ?lsp_state.Snapshot = null;
+    var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
     defer if (owned_snapshot) |*snapshot| snapshot.deinit();
     const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try ctx.allocator.dupe(u8, "[]");
-    if (!lsp_state.featureEnabledForSnapshot(snapshot, .inlay_hints)) return try ctx.allocator.dupe(u8, "[]");
+    if (!lsp_state.featureEnabledForAnalysis(snapshot, .inlay_hints)) return try ctx.allocator.dupe(u8, "[]");
     const hints = analysis_snapshot.inlayHints(snapshot, doc_path, .{ .budget_ms = query_budget.inlay_ms });
     return json(ctx.allocator, &snapshot.project, doc_path, hints);
 }

@@ -58,20 +58,20 @@ pub const SourceSet = struct {
     }
 };
 
-pub const LayoutHookResult = struct {
-    editor_snapshot_json: ?[]u8 = null,
+pub const LayoutHookOutput = struct {
+    editor_json: ?[]u8 = null,
 };
 
 pub const LayoutHook = struct {
     context: *anyopaque,
-    run: *const fn (context: *anyopaque, ir: *core.Context, graph: *const execution.ExecutionGraph) anyerror!LayoutHookResult,
+    run: *const fn (context: *anyopaque, ir: *core.Context, graph: *const execution.ExecutionGraph) anyerror!LayoutHookOutput,
     on_error: ?*const fn (context: *anyopaque, ir: *core.Context, err: anyerror) anyerror!void = null,
 };
 
-pub const SnapshotOptions = struct {
+pub const Options = struct {
     generation: u64 = 0,
     project: ProjectOptions = .{},
-    layout: ?LayoutHook = null,
+    layout_hook: ?LayoutHook = null,
 };
 
 pub const ProjectFacts = struct {
@@ -209,22 +209,22 @@ pub const EnumCaseFact = struct {
     name_span: ?ast.Span = null,
 };
 
-pub const LayoutFacts = struct {
-    conflict_report_json: []u8,
-    editor_snapshot_json: ?[]u8 = null,
+pub const LayoutOutput = struct {
+    conflicts_json: []u8,
+    editor_json: ?[]u8 = null,
 
-    pub fn fromContext(allocator: std.mem.Allocator, ir: *core.Context, owned_editor_snapshot_json: ?[]u8) !LayoutFacts {
-        errdefer if (owned_editor_snapshot_json) |value| allocator.free(value);
+    pub fn fromContext(allocator: std.mem.Allocator, ir: *core.Context, owned_editor_json: ?[]u8) !LayoutOutput {
+        errdefer if (owned_editor_json) |value| allocator.free(value);
         return .{
-            .conflict_report_json = try core.layout.conflicts.toJson(allocator, ir),
-            .editor_snapshot_json = owned_editor_snapshot_json,
+            .conflicts_json = try core.layout.conflicts.toJson(allocator, ir),
+            .editor_json = owned_editor_json,
         };
     }
 
-    pub fn deinit(self: *LayoutFacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.conflict_report_json);
-        if (self.editor_snapshot_json) |value| allocator.free(value);
-        self.* = .{ .conflict_report_json = &.{}, .editor_snapshot_json = null };
+    pub fn deinit(self: *LayoutOutput, allocator: std.mem.Allocator) void {
+        allocator.free(self.conflicts_json);
+        if (self.editor_json) |value| allocator.free(value);
+        self.* = .{ .conflicts_json = &.{}, .editor_json = null };
     }
 };
 
@@ -246,7 +246,7 @@ pub const AnalysisSnapshot = struct {
     record_fields: []RecordFieldFact = &.{},
     enum_cases: []EnumCaseFact = &.{},
     hints: []core.InlayHint = &.{},
-    layout: ?LayoutFacts = null,
+    layout_output: ?LayoutOutput = null,
     diagnostics: diagnostics.DiagnosticBag,
 
     pub fn fromContext(
@@ -337,7 +337,7 @@ pub const AnalysisSnapshot = struct {
             if (hint.file) |file| self.allocator.free(file);
         }
         self.allocator.free(self.hints);
-        if (self.layout) |*layout| layout.deinit(self.allocator);
+        if (self.layout_output) |*layout| layout.deinit(self.allocator);
         self.diagnostics.deinit();
         self.* = .{
             .allocator = self.allocator,
@@ -379,18 +379,18 @@ pub const AnalysisSnapshot = struct {
     }
 };
 
-pub fn buildSnapshot(
+pub fn build(
     allocator: std.mem.Allocator,
     sources: *const SourceSet,
     entry_path: []const u8,
     asset_base_dir: []const u8,
-    options: SnapshotOptions,
+    options: Options,
 ) !AnalysisSnapshot {
     var diagnostic_bag = diagnostics.DiagnosticBag.init(allocator);
     var diagnostics_moved = false;
     defer if (!diagnostics_moved) diagnostic_bag.deinit();
-    var layout_facts: ?LayoutFacts = null;
-    defer if (layout_facts) |*facts| facts.deinit(allocator);
+    var layout_output: ?LayoutOutput = null;
+    defer if (layout_output) |*facts| facts.deinit(allocator);
 
     var entry_source = sources.readFileAlloc(entry_path) catch |err| {
         try addBuildDiagnostic(&diagnostic_bag, entry_path, "", .@"error", "ProjectReadFailed", "ProjectReadFailed: could not read {s}: {s}", .{ entry_path, @errorName(err) }, null);
@@ -464,10 +464,10 @@ pub fn buildSnapshot(
     try hole_facts.populateExpectedTypes(allocator, &ir, &parse_holes);
     try diagnostic_bag.addContext(&ir);
     if (!diagnostic_bag.hasErrors()) {
-        if (options.layout) |hook| {
+        if (options.layout_hook) |hook| {
             if (execution_graph) |*graph| {
                 if (hook.run(hook.context, &ir, graph)) |result| {
-                    layout_facts = try LayoutFacts.fromContext(allocator, &ir, result.editor_snapshot_json);
+                    layout_output = try LayoutOutput.fromContext(allocator, &ir, result.editor_json);
                     try diagnostic_bag.addContext(&ir);
                 } else |err| switch (err) {
                     error.ConstraintConflict,
@@ -475,7 +475,7 @@ pub fn buildSnapshot(
                     => {
                         if (hook.on_error) |on_error| {
                             try on_error(hook.context, &ir, err);
-                            layout_facts = try LayoutFacts.fromContext(allocator, &ir, null);
+                            layout_output = try LayoutOutput.fromContext(allocator, &ir, null);
                         } else {
                             try addBuildDiagnostic(&diagnostic_bag, entry_path, ir.projectSource(), .@"error", @errorName(err), "BuildFailed: {s}", .{@errorName(err)}, null);
                         }
@@ -498,8 +498,8 @@ pub fn buildSnapshot(
     diagnostics_moved = true;
     var snapshot = try AnalysisSnapshot.fromContext(allocator, &ir, diagnostic_bag, &parse_holes, project_facts);
     snapshot.generation = options.generation;
-    snapshot.layout = layout_facts;
-    layout_facts = null;
+    snapshot.layout_output = layout_output;
+    layout_output = null;
     return snapshot;
 }
 

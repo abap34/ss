@@ -8,13 +8,13 @@ const ProjectFacts = analysis_snapshot.ProjectFacts;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    provider: *lsp_state.SnapshotProvider,
+    provider: *lsp_state.AnalysisProvider,
 };
 
 pub fn result(ctx: *Context, params: ?protocol.JsonValue) ![]const u8 {
     if (try protocol.docPathFromParams(ctx.allocator, params)) |doc_path| {
         defer ctx.allocator.free(doc_path);
-        var owned_snapshot: ?lsp_state.Snapshot = null;
+        var owned_snapshot: ?lsp_state.AnalysisSnapshot = null;
         defer if (owned_snapshot) |*snapshot| snapshot.deinit();
         const snapshot = try ctx.provider.forDocument(doc_path, &owned_snapshot) orelse return try json(ctx.allocator, null);
         return try json(ctx.allocator, &snapshot.project);

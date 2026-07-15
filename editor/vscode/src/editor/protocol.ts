@@ -6,7 +6,7 @@ export interface EditorSnapshot {
   entry_path: string;
   source_paths: string[];
   coordinate_space: CoordinateSpace;
-  layout: LayoutSnapshot;
+  layout: LayoutData;
   display: DisplaySnapshot;
   outline: OutlineItem[];
   editing: EditingTarget[];
@@ -20,7 +20,7 @@ export interface CoordinateSpace {
   y_axis: "down";
 }
 
-export interface LayoutSnapshot {
+export interface LayoutData {
   pages: LayoutPage[];
   objects: LayoutObject[];
   anchors: LayoutAnchor[];
