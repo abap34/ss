@@ -20,6 +20,15 @@ const buildOptions = {
   sourcesContent: false,
 };
 
+const webviewCheckOptions = {
+  entryPoints: [path.join(root, "media", "editor", "main.js")],
+  bundle: true,
+  write: false,
+  format: "esm",
+  platform: "browser",
+  target: "chrome120",
+};
+
 function typecheck() {
   childProcess.execFileSync(process.execPath, [
     require.resolve("typescript/bin/tsc"),
@@ -27,23 +36,6 @@ function typecheck() {
     root,
     "--noEmit",
   ], { stdio: "inherit" });
-}
-
-function copyPdfJsAssets() {
-  const pdfjsRoot = path.join(root, "node_modules", "pdfjs-dist");
-  const targetRoot = path.join(outDir, "pdfjs");
-  fs.rmSync(targetRoot, { recursive: true, force: true });
-  fs.mkdirSync(path.join(targetRoot, "build"), { recursive: true });
-  fs.copyFileSync(
-    path.join(pdfjsRoot, "build", "pdf.min.mjs"),
-    path.join(targetRoot, "build", "pdf.min.mjs"),
-  );
-  fs.copyFileSync(
-    path.join(pdfjsRoot, "build", "pdf.worker.min.mjs"),
-    path.join(targetRoot, "build", "pdf.worker.min.mjs"),
-  );
-  fs.cpSync(path.join(pdfjsRoot, "cmaps"), path.join(targetRoot, "cmaps"), { recursive: true });
-  fs.cpSync(path.join(pdfjsRoot, "standard_fonts"), path.join(targetRoot, "standard_fonts"), { recursive: true });
 }
 
 function copySchemaAssets() {
@@ -59,7 +51,6 @@ function copySchemaAssets() {
 async function main() {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
-  copyPdfJsAssets();
   copySchemaAssets();
 
   if (watch) {
@@ -70,6 +61,7 @@ async function main() {
   }
 
   typecheck();
+  await esbuild.build(webviewCheckOptions);
   await esbuild.build(buildOptions);
 }
 

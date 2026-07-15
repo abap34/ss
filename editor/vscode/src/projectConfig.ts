@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 
 export interface ProjectSettings {
   lsp: LspSettings;
-  preview: PreviewSettings;
+  wysiwyg: WysiwygSettings;
   pageGuide: PageGuideSettings;
 }
 
@@ -24,16 +24,10 @@ export interface LspSettings {
   colors: boolean;
 }
 
-export interface PreviewSettings {
+export interface WysiwygSettings {
   enabled: boolean;
   debounceMs: number;
-  refreshOnSave: boolean;
   refreshOnDependencyChange: boolean;
-  openMode: "vscode" | "external";
-  revealAfterRender: boolean;
-  renderTimeoutMs: number;
-  outputDirectory: string;
-  extraRenderArgs: string[];
 }
 
 export interface PageGuideSettings {
@@ -61,16 +55,10 @@ const defaultSettings: ProjectSettings = {
     semanticTokens: true,
     colors: true,
   },
-  preview: {
+  wysiwyg: {
     enabled: true,
-    debounceMs: 350,
-    refreshOnSave: true,
+    debounceMs: 140,
     refreshOnDependencyChange: true,
-    openMode: "vscode",
-    revealAfterRender: true,
-    renderTimeoutMs: 30000,
-    outputDirectory: ".ss-cache/vscode-preview",
-    extraRenderArgs: [],
   },
   pageGuide: {
     enabled: true,
@@ -109,16 +97,10 @@ export function projectSettings(uri: vscode.Uri | undefined): ProjectSettings {
       semanticTokens: boolValue(table, "editor.lsp", "semantic_tokens", defaultSettings.lsp.semanticTokens),
       colors: boolValue(table, "editor.lsp", "colors", defaultSettings.lsp.colors),
     },
-    preview: {
-      enabled: boolValue(table, "editor.preview", "enabled", defaultSettings.preview.enabled),
-      debounceMs: numberValue(table, "editor.preview", "debounce", defaultSettings.preview.debounceMs, 0),
-      refreshOnSave: boolValue(table, "editor.preview.refresh", "save", defaultSettings.preview.refreshOnSave),
-      refreshOnDependencyChange: boolValue(table, "editor.preview.refresh", "dependency", defaultSettings.preview.refreshOnDependencyChange),
-      openMode: stringValue(table, "editor.preview", "open", defaultSettings.preview.openMode) === "external" ? "external" : "vscode",
-      revealAfterRender: boolValue(table, "editor.preview", "reveal", defaultSettings.preview.revealAfterRender),
-      renderTimeoutMs: numberValue(table, "editor.preview.render", "timeout", defaultSettings.preview.renderTimeoutMs, 0),
-      outputDirectory: stringValue(table, "editor.preview.path", "output", defaultSettings.preview.outputDirectory),
-      extraRenderArgs: stringArrayValue(table, "editor.preview.render", "extra_args"),
+    wysiwyg: {
+      enabled: boolValue(table, "editor.wysiwyg", "enabled", defaultSettings.wysiwyg.enabled),
+      debounceMs: numberValue(table, "editor.wysiwyg", "debounce", defaultSettings.wysiwyg.debounceMs, 0),
+      refreshOnDependencyChange: boolValue(table, "editor.wysiwyg.refresh", "dependency", defaultSettings.wysiwyg.refreshOnDependencyChange),
     },
     pageGuide: {
       enabled: boolValue(table, "editor.page_guide", "enabled", defaultSettings.pageGuide.enabled),
@@ -142,7 +124,7 @@ function readProjectFile(projectFile: string): string | undefined {
 function cloneDefaults(): ProjectSettings {
   return {
     lsp: { ...defaultSettings.lsp },
-    preview: { ...defaultSettings.preview, extraRenderArgs: [...defaultSettings.preview.extraRenderArgs] },
+    wysiwyg: { ...defaultSettings.wysiwyg },
     pageGuide: { ...defaultSettings.pageGuide },
   };
 }
@@ -227,25 +209,4 @@ function boolValue(table: TomlSubset, section: string, key: string, fallback: bo
 function numberValue(table: TomlSubset, section: string, key: string, fallback: number, minimum: number): number {
   const parsed = Number(rawValue(table, section, key));
   return Number.isFinite(parsed) ? Math.max(minimum, parsed) : fallback;
-}
-
-function stringValue(table: TomlSubset, section: string, key: string, fallback: string): string {
-  const value = rawValue(table, section, key);
-  if (!value || value.length < 2 || !value.startsWith("\"") || !value.endsWith("\"")) {
-    return fallback;
-  }
-  return value.slice(1, -1);
-}
-
-function stringArrayValue(table: TomlSubset, section: string, key: string): string[] {
-  const value = rawValue(table, section, key);
-  if (!value?.startsWith("[") || !value.endsWith("]")) {
-    return [];
-  }
-  return value.slice(1, -1).split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
-    if (item.startsWith("\"") && item.endsWith("\"")) {
-      return item.slice(1, -1);
-    }
-    return item;
-  });
 }
