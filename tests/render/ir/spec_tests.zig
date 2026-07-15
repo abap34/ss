@@ -85,6 +85,27 @@ test "render IR page preserves PDF placement and annotations" {
     try testing.expectEqualStrings("section", page.links.items[0].target);
 }
 
+test "stroke ink bounds follow the line normal without extending butt caps" {
+    var page = render_ir.Page{
+        .page_id = 1,
+        .index = 0,
+        .width = 1280,
+        .height = 720,
+    };
+    defer page.deinit(testing.allocator);
+
+    try page.appendStrokeLine(testing.allocator, null, .{ .x = 10, .y = 20 }, .{ .x = 40, .y = 20 }, 10, .{ .r = 0, .g = 0, .b = 0 }, 0, 0);
+    try page.appendStrokeLine(testing.allocator, null, .{ .x = 10, .y = 20 }, .{ .x = 10, .y = 60 }, 10, .{ .r = 0, .g = 0, .b = 0 }, 0, 0);
+    try page.appendStrokeLine(testing.allocator, null, .{ .x = 10, .y = 20 }, .{ .x = 40, .y = 60 }, 10, .{ .r = 0, .g = 0, .b = 0 }, 0, 0);
+
+    const horizontal = page.items.items[0].header().ink_bounds;
+    try testing.expectEqual(render_ir.Rect{ .x = 10, .y = 15, .width = 30, .height = 10 }, horizontal);
+    const vertical = page.items.items[1].header().ink_bounds;
+    try testing.expectEqual(render_ir.Rect{ .x = 5, .y = 20, .width = 10, .height = 40 }, vertical);
+    const diagonal = page.items.items[2].header().ink_bounds;
+    try testing.expectEqual(render_ir.Rect{ .x = 6, .y = 17, .width = 38, .height = 46 }, diagonal);
+}
+
 test "render IR validation accepts deterministic page and item order" {
     var pages = try testing.allocator.alloc(render_ir.Page, 1);
     pages[0] = .{ .page_id = 1, .index = 0, .width = 1280, .height = 720 };
