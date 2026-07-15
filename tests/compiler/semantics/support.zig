@@ -45,8 +45,13 @@ fn analyzeAndFinalizeContext(allocator: std.mem.Allocator, ir: *core.Context) !v
     if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
     try lowering.evaluateDocument(ir, &execution_graph);
     if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
-    try lowering.solveLayout(ir);
+    try solveDocumentAndDiscard(ir);
     if (utils.err.hasContextErrors(ir)) return error.DiagnosticsFailed;
+}
+
+fn solveDocumentAndDiscard(ir: *core.Context) !void {
+    var document = try lowering.solveDocument(ir, null, .{});
+    defer document.deinit(ir.allocator);
 }
 
 pub fn buildSource(io: std.Io, allocator: std.mem.Allocator, path: []const u8, source: []const u8) !void {
@@ -597,7 +602,7 @@ pub fn expectLoweringErrorDiagnostic(
         if (execution_graph) |*graph| {
             lowering.evaluateDocument(&ir, graph) catch {};
             if (!utils.err.hasContextErrors(&ir)) {
-                lowering.solveLayout(&ir) catch {};
+                solveDocumentAndDiscard(&ir) catch {};
             }
         }
     }

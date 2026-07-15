@@ -20,6 +20,21 @@ fn initEmptyContext() !core.Context {
     return try core.Context.init(allocator, asset_base_dir, project_path, project_source, ast.Module.init());
 }
 
+fn finalizeContext(ir: *core.Context) !void {
+    var document = try ir.finalizeDocument(null, .{});
+    defer document.deinit(ir.allocator);
+}
+
+fn solveContext(ir: *core.Context) !void {
+    try solveContextWithOptions(ir, null, .{});
+}
+
+fn solveContextWithOptions(ir: *core.Context, trace_path: ?[]const u8, options: graph.SolveOptions) !void {
+    var document = try solver.solveDocument(ir, trace_path, options);
+    defer document.deinit(ir.allocator);
+    try solver.applyDocument(ir, &document);
+}
+
 fn expectFloat(expected: f32, actual: f32) !void {
     try testing.expectApproxEqAbs(expected, actual, 0.0001);
 }
@@ -592,7 +607,7 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     const self_page = try self_conflict.addPage("Page");
     const object = try self_conflict.makeObject(self_page, "body", null, .text, .text, "A");
     try self_conflict.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 100, "self-top");
-    try testing.expectError(error.ConstraintConflict, self_conflict.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&self_conflict));
 
     var cycle = try initEmptyContext();
     defer cycle.deinit();
@@ -602,7 +617,7 @@ test "layout solver: final validation rejects unsatisfied hard constraints" {
     const b = try cycle.makeObject(cycle_page, "b", null, .text, .text, "B");
     try cycle.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 10, "a-top");
     try cycle.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 10, "b-top");
-    try testing.expectError(error.ConstraintConflict, cycle.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&cycle));
 }
 
 test "layout solver: consistent constraint cycles are fixed by fallback placement" {
@@ -615,7 +630,7 @@ test "layout solver: consistent constraint cycles are fixed by fallback placemen
     try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-top");
     try ir.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = a, .anchor = .top } }, 0, "b-top");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const a_node = ir.getNode(a).?;
     const b_node = ir.getNode(b).?;
@@ -633,7 +648,7 @@ test "layout solver: tautological self-anchor constraints do not block fallback 
     const object = try ir.makeObject(page, "body", null, .text, .text, "A");
     try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .top } }, 0, "self-top");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const node = ir.getNode(object).?;
     try testing.expect(node.frame.x_set);
@@ -655,7 +670,7 @@ test "layout solver: vertical fallback tries alternate roots in incomplete compo
     try ir.addAnchorConstraint(panel, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 16, "panel-top");
     try ir.addAnchorConstraint(panel, .bottom, .{ .node = .{ .node_id = body, .anchor = .bottom } }, -16, "panel-bottom");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const panel_node = ir.getNode(panel).?;
     const body_node = ir.getNode(body).?;
@@ -675,7 +690,7 @@ test "layout solver: constraint-referenced objects participate in fallback place
     const referenced = try ir.makeObject(page, "referenced", null, .text, .text, "referenced");
     try ir.addAnchorConstraint(placed, .top, .{ .node = .{ .node_id = referenced, .anchor = .top } }, 10, "placed-top");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const placed_node = ir.getNode(placed).?;
     const referenced_node = ir.getNode(referenced).?;
@@ -694,7 +709,7 @@ test "layout solver: size-only constraints still receive fallback placement" {
     try ir.addAnchorConstraint(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "object-width");
     try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 96, "object-height");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const node = ir.getNode(object).?;
     try testing.expect(node.frame.x_set);
@@ -717,7 +732,7 @@ test "layout solver: page-dependent group children receive local vertical fallba
     try setLayoutSpacingAfter(&ir, ruler, "12");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const ruler_node = ir.getNode(ruler).?;
     const title_node = ir.getNode(title).?;
@@ -742,7 +757,7 @@ test "layout solver: page-dependent group children before fixed anchors receive 
     try setLayoutLineHeight(&ir, ruler, "4");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const title_node = ir.getNode(title).?;
     const ruler_node = ir.getNode(ruler).?;
@@ -767,7 +782,7 @@ test "layout solver: page-dependent vertical cycles receive fallback placement" 
     try ir.addAnchorConstraint(first, .top, .{ .node = .{ .node_id = second, .anchor = .top } }, 0, "first-cycle");
     try ir.addAnchorConstraint(second, .top, .{ .node = .{ .node_id = first, .anchor = .top } }, 0, "second-cycle");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const ruler_node = ir.getNode(ruler).?;
     const first_node = ir.getNode(first).?;
@@ -793,7 +808,7 @@ test "layout solver: page-dependent horizontal cycles receive fallback placement
     try ir.addAnchorConstraint(first, .left, .{ .node = .{ .node_id = second, .anchor = .left } }, 0, "first-cycle");
     try ir.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "second-cycle");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const first_node = ir.getNode(first).?;
     const second_node = ir.getNode(second).?;
@@ -819,7 +834,7 @@ test "layout solver: centered page-dependent group children receive local vertic
     try setLayoutLineHeight(&ir, body, "500");
     try ir.addAnchorConstraint(ruler, .top, .{ .page = .top }, -200, "rule-top");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const ruler_node = ir.getNode(ruler).?;
     const title_node = ir.getNode(title).?;
@@ -842,7 +857,7 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     _ = try stacked.makeGroupWithOrigin(stacked_page, true, &.{ first, second }, "group");
     try stacked.addAnchorConstraint(second, .left, .{ .node = .{ .node_id = first, .anchor = .left } }, 0, "same-left");
 
-    try solver.solveLayout(&stacked);
+    try solveContext(&stacked);
 
     const first_node = stacked.getNode(first).?;
     const second_node = stacked.getNode(second).?;
@@ -858,7 +873,7 @@ test "layout solver: horizontal alignment alone does not imply vertical row alig
     try row.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left, .anchor = .right } }, 30, "right-of-left");
     try row.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left, .anchor = .center_y } }, 0, "same-center-y");
 
-    try solver.solveLayout(&row);
+    try solveContext(&row);
 
     const left_node = row.getNode(left).?;
     const right_node = row.getNode(right).?;
@@ -874,7 +889,7 @@ test "layout solver: horizontal fallback seeds unconstrained peer anchors" {
     const byline = try ir.makeObject(page, "byline", null, .text, .text, "Byline");
     try ir.addAnchorConstraint(title, .left, .{ .node = .{ .node_id = byline, .anchor = .left } }, 0, "same-left");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const title_node = ir.getNode(title).?;
     const byline_node = ir.getNode(byline).?;
@@ -892,7 +907,7 @@ test "layout solver: same-target peer equalities form one fallback unit" {
     try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-is-b");
     try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, "a-is-c");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const a_node = ir.getNode(a).?;
     const b_node = ir.getNode(b).?;
@@ -913,7 +928,7 @@ test "layout solver: chained peer equalities form one fallback unit" {
     try ir.addAnchorConstraint(a, .top, .{ .node = .{ .node_id = b, .anchor = .top } }, 0, "a-is-b");
     try ir.addAnchorConstraint(b, .top, .{ .node = .{ .node_id = c, .anchor = .top } }, 0, "b-is-c");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const a_node = ir.getNode(a).?;
     const b_node = ir.getNode(b).?;
@@ -933,7 +948,7 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try forward.addAnchorConstraint(forward_a, .top, .{ .page = .top }, -100, "a-top");
     try forward.addAnchorConstraint(forward_b, .top, .{ .page = .top }, -200, "b-top");
     try forward.addAnchorConstraint(forward_a, .top, .{ .node = .{ .node_id = forward_b, .anchor = .top } }, 0, "a-is-b");
-    try testing.expectError(error.ConstraintConflict, forward.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&forward));
 
     var reverse = try initEmptyContext();
     defer reverse.deinit();
@@ -944,7 +959,7 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try reverse.addAnchorConstraint(reverse_a, .top, .{ .page = .top }, -100, "a-top");
     try reverse.addAnchorConstraint(reverse_b, .top, .{ .page = .top }, -200, "b-top");
     try reverse.addAnchorConstraint(reverse_b, .top, .{ .node = .{ .node_id = reverse_a, .anchor = .top } }, 0, "b-is-a");
-    try testing.expectError(error.ConstraintConflict, reverse.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&reverse));
 
     var chain = try initEmptyContext();
     defer chain.deinit();
@@ -957,7 +972,7 @@ test "layout solver: hard peer equality conflicts are independent of direction a
     try chain.addAnchorConstraint(chain_c, .top, .{ .page = .top }, -200, "c-top");
     try chain.addAnchorConstraint(chain_a, .top, .{ .node = .{ .node_id = chain_b, .anchor = .top } }, 0, "a-is-b");
     try chain.addAnchorConstraint(chain_b, .top, .{ .node = .{ .node_id = chain_c, .anchor = .top } }, 0, "b-is-c");
-    try testing.expectError(error.ConstraintConflict, chain.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&chain));
 }
 
 test "layout solver: horizontal fallback does not seed inconsistent hard cycles" {
@@ -970,7 +985,7 @@ test "layout solver: horizontal fallback does not seed inconsistent hard cycles"
     try ir.addAnchorConstraint(a, .left, .{ .node = .{ .node_id = b, .anchor = .left } }, 100, "a-left");
     try ir.addAnchorConstraint(b, .left, .{ .node = .{ .node_id = a, .anchor = .left } }, 200, "b-left");
 
-    try testing.expectError(error.ConstraintConflict, ir.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&ir));
 }
 
 test "layout solver: constrained group source forms one fallback unit" {
@@ -988,7 +1003,7 @@ test "layout solver: constrained group source forms one fallback unit" {
     try ir.addAnchorConstraint(right, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-group");
     try ir.addAnchorConstraint(right, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-center");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const group_node = ir.getNode(left_group).?;
     const left_title_node = ir.getNode(left_title).?;
@@ -1029,7 +1044,7 @@ test "layout solver: centered vflow treats vertically aligned groups as one row"
     try ir.addAnchorConstraint(right_group, .left, .{ .node = .{ .node_id = left_group, .anchor = .right } }, 30, "right-of-left-group");
     try ir.addAnchorConstraint(right_group, .center_y, .{ .node = .{ .node_id = left_group, .anchor = .center_y } }, 0, "align-group-centers");
 
-    try ir.finalize();
+    try finalizeContext(&ir);
 
     const left_group_node = ir.getNode(left_group).?;
     const right_group_node = ir.getNode(right_group).?;
@@ -1057,7 +1072,7 @@ test "layout solver: centered vflow clamps below fixed top components only when 
     try setLayoutLineHeight(&ir, body, "580");
     try ir.addAnchorConstraint(header, .top, .{ .page = .top }, -56, "header-top");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const header_node = ir.getNode(header).?;
     const body_node = ir.getNode(body).?;
@@ -1087,7 +1102,7 @@ test "layout solver: document centered vflow is not shadowed by page default pol
     try setLayoutSpacingAfter(&ir, subtitle, "0");
     try ir.addAnchorConstraint(pageno, .bottom, .{ .page = .bottom }, 20, "pageno-bottom");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const pageno_node = ir.getNode(pageno).?;
     const title_node = ir.getNode(title).?;
@@ -1121,7 +1136,7 @@ test "layout solver: centered vflow preserves page center for side-by-side rows"
     try ir.addAnchorConstraint(pipe, .right, .{ .page = .right }, -100, "pipe-right");
     try ir.addAnchorConstraint(pipe, .top, .{ .node = .{ .node_id = body, .anchor = .top } }, 0, "align-row-top");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const body_node = ir.getNode(body).?;
     const pipe_node = ir.getNode(pipe).?;
@@ -1139,7 +1154,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
     const conflict_object = try conflict.makeObject(conflict_page, "body", null, .text, .text, "A");
     try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 100, "left-a");
     try conflict.addAnchorConstraint(conflict_object, .left, .{ .page = .left }, 120, "left-b");
-    try testing.expectError(error.ConstraintConflict, conflict.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&conflict));
 
     var negative = try initEmptyContext();
     defer negative.deinit();
@@ -1147,7 +1162,7 @@ test "layout solver: explicit anchor conflicts and negative frame sizes are reje
     const negative_page = try negative.addPage("Page");
     const negative_object = try negative.makeObject(negative_page, "body", null, .text, .text, "A");
     try negative.addAnchorConstraint(negative_object, .left, .{ .node = .{ .node_id = negative_object, .anchor = .right } }, 10, "negative-width");
-    try testing.expectError(error.NegativeFrameSize, negative.finalize());
+    try testing.expectError(error.NegativeFrameSize, finalizeContext(&negative));
 }
 
 test "layout solver: group width propagation must preserve child hard widths" {
@@ -1163,7 +1178,7 @@ test "layout solver: group width propagation must preserve child hard widths" {
     try ir.addAnchorConstraint(child, .right, .{ .node = .{ .node_id = child, .anchor = .left } }, 700, "child-width");
     try ir.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 600, "group-width");
 
-    try testing.expectError(error.ConstraintConflict, ir.finalize());
+    try testing.expectError(error.ConstraintConflict, finalizeContext(&ir));
 }
 
 test "layout solver: wrapped width cap propagates through dependent anchors" {
@@ -1185,7 +1200,7 @@ test "layout solver: wrapped width cap propagates through dependent anchors" {
     try ir.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
     try ir.addAnchorConstraint(follower, .left, .{ .node = .{ .node_id = wrapped, .anchor = .right } }, 20, "follower-left");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const wrapped_node = ir.getNode(wrapped).?;
     const follower_node = ir.getNode(follower).?;
@@ -1212,7 +1227,7 @@ test "layout solver: vertical axis observes width-dependent wrapped height" {
     try ir.addAnchorConstraint(wrapped, .left, .{ .page = .left }, 1100, "wrapped-left");
     try ir.addAnchorConstraint(wrapped, .bottom, .{ .page = .bottom }, 40, "wrapped-bottom");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const wrapped_node = ir.getNode(wrapped).?;
     const expected_height = metrics.intrinsicHeight(&ir, wrapped_node);
@@ -1278,7 +1293,7 @@ test "layout solver uses render measurement provider for intrinsic object size" 
     const object = try ir.makeObject(page, "body", null, .text, .text, "provider measured text");
     var measurement = FakeMeasurementContext{ .target = object };
 
-    try solver.solveLayoutWithTracePathAndOptions(&ir, null, .{
+    try solveContextWithOptions(&ir, null, .{
         .measurement_provider = .{
             .context = &measurement,
             .measure = fakeLayoutMeasurement,
@@ -1357,7 +1372,7 @@ test "layout metrics keep asset intrinsic size ahead of render measurement provi
     try setNumberField(&ir, image, "asset_height", 90);
 
     var measurement = FakeAllMeasurementContext{};
-    try solver.solveLayoutWithTracePathAndOptions(&ir, null, .{
+    try solveContextWithOptions(&ir, null, .{
         .measurement_provider = .{
             .context = &measurement,
             .measure = fakeAllLayoutMeasurement,
@@ -1426,7 +1441,7 @@ test "layout solver keeps CJK emoji markdown text on one line when measured atom
     const expected_width = metrics.intrinsicWidth(&ir, ir.getNode(object).?);
     try testing.expect(expected_width > 1);
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const node = ir.getNode(object).?;
     try expectFloat(expected_width, node.frame.width);
@@ -1493,7 +1508,7 @@ test "layout solver: group chrome padding expands tight group bounds" {
     try ir.addAnchorConstraint(child, .bottom, .{ .page = .bottom }, 100, "child-bottom");
     try ir.addAnchorConstraint(child, .top, .{ .node = .{ .node_id = child, .anchor = .bottom } }, 40, "child-height");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const group_node = ir.getNode(group).?;
     try expectFloat(88, group_node.frame.x);
@@ -1522,7 +1537,7 @@ test "layout solver: target group width leaves room for chrome padding" {
     try ir.addAnchorConstraint(group, .left, .{ .page = .left }, 100, "group-left");
     try ir.addAnchorConstraint(group, .right, .{ .node = .{ .node_id = group, .anchor = .left } }, 220, "group-width");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const group_node = ir.getNode(group).?;
     const child_node = ir.getNode(child).?;
@@ -1543,7 +1558,7 @@ test "layout diagnostics: fixed-height object reports frame too small" {
     try ir.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
     try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 20, "height");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     const node = ir.getNode(object).?;
     try expectFloat(20, node.frame.height);
@@ -1586,7 +1601,7 @@ test "layout diagnostics: one-pixel text reports frame too small" {
     try ir.addAnchorConstraint(object, .bottom, .{ .page = .bottom }, 20, "bottom");
     try ir.addAnchorConstraint(object, .top, .{ .node = .{ .node_id = object, .anchor = .bottom } }, 1, "height");
 
-    try solver.solveLayout(&ir);
+    try solveContext(&ir);
 
     var found = false;
     for (ir.diagnostics.items) |diagnostic| {

@@ -1487,11 +1487,6 @@ pub const Context = struct {
         };
     }
 
-    pub fn finalize(self: *Context) !void {
-        var document = try self.finalizeDocument(null, .{});
-        defer document.deinit(self.allocator);
-    }
-
     pub fn finalizeDocument(self: *Context, trace_path: ?[]const u8, options: layout.graph.SolveOptions) !layout.Document {
         self.clearDiagnosticsForPhase(.layout);
         self.clearConstraintFailures();

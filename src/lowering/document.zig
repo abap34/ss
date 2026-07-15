@@ -10,11 +10,6 @@ pub fn evaluateDocument(ir: *core.Context, graph: *const execution.ExecutionGrap
     try ir.validatePageLocalLayout();
 }
 
-pub fn solveLayout(ir: *core.Context) !void {
-    var document = try solveDocument(ir, null, .{});
-    defer document.deinit(ir.allocator);
-}
-
 pub fn solveDocument(ir: *core.Context, trace_path: ?[]const u8, options: core.layout.graph.SolveOptions) !core.layout.Document {
     var document = try ir.finalizeDocument(trace_path, options);
     errdefer document.deinit(ir.allocator);
