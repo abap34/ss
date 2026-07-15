@@ -474,7 +474,7 @@ fn runAnalysisLayout(context: *anyopaque, state: *core.DocumentState, graph: *co
     var render_ir = try render_pdf.compileRenderIr(state.allocator, hook.server.io, state, &pages, .{});
     defer render_ir.deinit(state.allocator);
     try hook.server.checkCanceled();
-    return .{ .editor_json = try editor_snapshot.toJson(state.allocator, state, &render_ir, hook.server.documents.generation) };
+    return .{ .editor_json = try editor_snapshot.toJson(state.allocator, hook.server.io, state, &render_ir, hook.server.documents.generation) };
 }
 
 fn addAnalysisLayoutError(context: *anyopaque, state: *core.DocumentState, err: anyerror) !void {

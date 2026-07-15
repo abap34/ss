@@ -110,6 +110,12 @@ const CommandOptions = struct {
     diagnostic_level: ?error_report.DiagnosticLevel = null,
     quiet: bool = false,
     interval_ms: u64 = 500,
+    format: RenderFormat = .pdf,
+};
+
+const RenderFormat = enum {
+    pdf,
+    html,
 };
 
 const InitOptions = struct {
@@ -169,6 +175,18 @@ fn parseCommandOptions(args: []const []const u8) !CommandOptions {
             if (i + 1 >= args.len) return failUsage("missing value for --output", .{});
             if (options.output_path != null) return failUsage("output path specified more than once", .{});
             options.output_path = args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--format")) {
+            if (i + 1 >= args.len) return failUsage("missing value for --format", .{});
+            const value = args[i + 1];
+            options.format = if (std.mem.eql(u8, value, "pdf"))
+                .pdf
+            else if (std.mem.eql(u8, value, "html"))
+                .html
+            else
+                return failUsage("invalid --format value: {s}", .{value});
             i += 1;
             continue;
         }
@@ -1086,7 +1104,11 @@ fn run(init: std.process.Init) !void {
         var resolved = try resolveProjectOrUsage(allocator, io, options);
         defer resolved.deinit(allocator);
         applyDiagnosticOptions(options, &resolved);
-        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(allocator, resolved.entry_path, "pdf");
+        const output_path = options.output_path orelse try utils.fs.siblingPathWithExtension(
+            allocator,
+            resolved.entry_path,
+            if (options.format == .pdf) "pdf" else "html",
+        );
         try validateOutputParentOrCliError(io, output_path);
         if (options.diagnostics_json_path) |diagnostics_json_path| try validateOutputParentOrCliError(io, diagnostics_json_path);
         var progress = commandProgress(8, options);
@@ -1095,18 +1117,29 @@ fn run(init: std.process.Init) !void {
             .cache_id = options.cache_id,
             .highlight_languages = resolved.highlight.languages,
         };
-        try app.writePdf(io, allocator, .{
-            .source = .{
-                .input_path = resolved.entry_path,
-                .asset_base_dir = resolved.asset_base_dir,
-                .layout_jobs = options.jobs,
-            },
-            .output_path = output_path,
-            .options = .{
-                .render = render_options,
-                .diagnostics_json_path = options.diagnostics_json_path,
-            },
-        }, &progress);
+        const source = app.SourceRequest{
+            .input_path = resolved.entry_path,
+            .asset_base_dir = resolved.asset_base_dir,
+            .layout_jobs = options.jobs,
+        };
+        switch (options.format) {
+            .pdf => try app.writePdf(io, allocator, .{
+                .source = source,
+                .output_path = output_path,
+                .options = .{
+                    .render = render_options,
+                    .diagnostics_json_path = options.diagnostics_json_path,
+                },
+            }, &progress),
+            .html => try app.writeHtml(io, allocator, .{
+                .source = source,
+                .output_directory = output_path,
+                .options = .{
+                    .render = render_options,
+                    .diagnostics_json_path = options.diagnostics_json_path,
+                },
+            }, &progress),
+        }
         return;
     }
 

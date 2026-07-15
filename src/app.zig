@@ -9,6 +9,8 @@ pub const RenderOptions = types.RenderOptions;
 pub const PdfWriteOptions = types.PdfWriteOptions;
 pub const SourceRequest = types.SourceRequest;
 pub const PdfWriteRequest = types.PdfWriteRequest;
+pub const HtmlWriteOptions = types.HtmlWriteOptions;
+pub const HtmlWriteRequest = types.HtmlWriteRequest;
 
 const Progress = utils.progress.Progress;
 
@@ -61,4 +63,8 @@ pub fn writeLayoutConflictReportFile(
 
 pub fn writePdf(io: std.Io, allocator: std.mem.Allocator, request: PdfWriteRequest, progress: *Progress) !void {
     try commands.writePdf(io, allocator, request, progress);
+}
+
+pub fn writeHtml(io: std.Io, allocator: std.mem.Allocator, request: HtmlWriteRequest, progress: *Progress) !void {
+    try commands.writeHtml(io, allocator, request, progress);
 }

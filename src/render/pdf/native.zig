@@ -216,6 +216,7 @@ const Atom = struct {
     underline: bool = false,
     asset_path: ?[]const u8 = null,
     asset_page_index: usize = 0,
+    math_kind: MathKind = .inline_math,
     link_url: ?[]const u8 = null,
 };
 
@@ -1002,6 +1003,8 @@ pub const Compiler = struct {
         allocator: Allocator,
         state: *core.DocumentState,
         prepared_page: *const core.prepared.PreparedPage,
+        resources: *render_ir.ResourceBuilder,
+        math: *render_ir.MathBuilder,
     ) !render_ir.Page {
         const asset_cache_dir = try std.fs.path.join(allocator, &.{ self.options.cache_dir, "artifacts", "native" });
         defer allocator.free(asset_cache_dir);
@@ -1024,6 +1027,8 @@ pub const Compiler = struct {
             prepared_page.index,
             prepared_page.background,
             commands,
+            resources,
+            math,
         );
     }
 };
@@ -2881,9 +2886,15 @@ fn pageArtifactsReady(work: *PlanExecution, page: PageJob) bool {
 
 fn renderPageJob(parent_ctx: *DrawContext, page: *const PageJob) !void {
     if (page.cache_hit) return;
-    var render_page = try buildRenderPage(parent_ctx, page.page_id, page.index, page.background, page.commands);
+    var resource_builder = render_ir.ResourceBuilder{};
+    defer resource_builder.deinit(parent_ctx.allocator);
+    var math_builder = render_ir.MathBuilder{};
+    defer math_builder.deinit(parent_ctx.allocator);
+    var render_page = try buildRenderPage(parent_ctx, page.page_id, page.index, page.background, page.commands, &resource_builder, &math_builder);
     defer render_page.deinit(parent_ctx.allocator);
-    pdf_backend.render(parent_ctx.allocator, parent_ctx.io, &render_page, page.render_path) catch |err| {
+    var resources = try resource_builder.take(parent_ctx.allocator);
+    defer resources.deinit(parent_ctx.allocator);
+    pdf_backend.render(parent_ctx.allocator, parent_ctx.io, &resources, &render_page, page.render_path) catch |err| {
         if (err == error.AssetConversionFailed) try recordQpdfFailure(parent_ctx, "compose page PDF layers");
         return err;
     };
@@ -2897,6 +2908,8 @@ fn buildRenderPage(
     page_index: usize,
     background: ?Color,
     commands: []ObjectCommand,
+    resources: *render_ir.ResourceBuilder,
+    math: *render_ir.MathBuilder,
 ) !render_ir.Page {
     const pdf = c.ss_pdf_create_scratch() orelse return NativePdfError.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
@@ -2917,7 +2930,7 @@ fn buildRenderPage(
         .cache_dir = parent_ctx.cache_dir,
         .highlight_languages = parent_ctx.highlight_languages,
         .command_failure = parent_ctx.command_failure,
-        .target = .{ .ir = .{ .page = &page } },
+        .target = .{ .ir = .{ .page = &page, .resources = resources, .math = math, .io = parent_ctx.io } },
     };
 
     const page_fill = background orelse Color{ .r = 1, .g = 1, .b = 1 };
@@ -4233,7 +4246,7 @@ fn drawDisplayMathBlockAligned(ctx: *DrawContext, x: f32, baseline_bl: f32, widt
         .width = fitted.width,
         .height = fitted.height,
     };
-    try placeMathPdf(ctx, draw_frame, math.path, math.page_index);
+    try placeMathPdf(ctx, draw_frame, math.path, math.page_index, source, .display);
     return block_bottom - text.font_size;
 }
 
@@ -4299,6 +4312,7 @@ fn appendMathAtom(ctx: *DrawContext, atoms: *std.ArrayList(Atom), value: []const
         .is_space = false,
         .asset_path = math.path,
         .asset_page_index = math.page_index,
+        .math_kind = kind,
     });
 }
 
@@ -4408,7 +4422,7 @@ fn drawPositionedAtom(ctx: *DrawContext, atom: Atom, x: f32, baseline_bl: f32, p
         .math => {
             const path = atom.asset_path orelse return;
             const frame = Frame{ .x = x, .y = baseline_bl - atom.height * 0.25, .width = atom.width, .height = atom.height };
-            try placeMathPdf(ctx, frame, path, atom.asset_page_index);
+            try placeMathPdf(ctx, frame, path, atom.asset_page_index, atom.text, atom.math_kind);
         },
         .icon => {
             const path = atom.asset_path orelse return;
@@ -5105,7 +5119,7 @@ fn drawVectorMathCommand(ctx: *DrawContext, command: *const ObjectCommand, frame
         .width = fitted.width,
         .height = fitted.height,
     };
-    try placeMathPdf(ctx, draw_frame, asset.path, asset.page_index);
+    try placeMathPdf(ctx, draw_frame, asset.path, asset.page_index, command.content, command.math_kind);
 }
 
 fn drawVectorAsset(ctx: *DrawContext, frame: Frame, content: []const u8, asset: ?core.render_policy.AssetPaint) !void {
@@ -5543,11 +5557,24 @@ fn drawSvgFrameTinted(ctx: *DrawContext, frame: Frame, svg_path: []const u8, col
     try activeTarget(ctx).svg(ctx.allocator, .{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height }, svg_path, color);
 }
 
-fn placeMathPdf(ctx: *DrawContext, frame: Frame, path: []const u8, page_index: usize) !void {
+fn placeMathPdf(
+    ctx: *DrawContext,
+    frame: Frame,
+    path: []const u8,
+    page_index: usize,
+    source: []const u8,
+    kind: MathKind,
+) !void {
     const rect = render_ir.Rect{ .x = frame.x, .y = topOf(frame), .width = frame.width, .height = frame.height };
     const target = activeTarget(ctx);
     if (target.recordsIr()) {
-        try target.pdfPage(ctx.allocator, rect, path, page_index, .crop, false);
+        const input_kind: render_ir.MathInputKind = switch (kind) {
+            .inline_math => .@"inline",
+            .display => .display,
+            .block => .block,
+            .raw_block => .raw,
+        };
+        try target.math(ctx.allocator, rect, source, input_kind, path, page_index);
         return;
     }
     try target.fillRect(ctx.allocator, rect, .{ .r = 0, .g = 0, .b = 0 });

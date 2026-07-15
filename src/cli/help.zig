@@ -275,12 +275,13 @@ fn render(output: Output) void {
     outputPrint(output,
         \\{s}Usage:{s}
         \\  {s}ss render [input.ss] [output.pdf]{s}
-        \\  {s}ss render --project FILE_OR_DIR --output output.pdf{s}
+        \\  {s}ss render --format html --output output-dir input.ss{s}
         \\
         \\{s}Options:{s}
         \\  {s}--project FILE_OR_DIR{s}   Load entry and asset base from ss.toml
         \\  {s}--asset-base-dir DIR{s}    Resolve relative assets from DIR
-        \\  {s}--output FILE{s}           PDF output path
+        \\  {s}--output PATH{s}           PDF file or HTML directory
+        \\  {s}--format pdf|html{s}        Output format
         \\  {s}--jobs N{s}                Parallel render jobs
         \\  {s}--cache-id ID{s}           Stable cache identity for temporary inputs
         \\  {s}--diagnostics-json FILE{s} Write diagnostics JSON
@@ -304,15 +305,18 @@ fn render(output: Output) void {
         s.option,  s.reset,
         s.option,  s.reset,
         s.option,  s.reset,
+        s.option,  s.reset,
     });
     outputPrint(output,
         \\{s}Examples:{s}
         \\  {s}ss render slide.ss{s}
         \\  {s}ss render slide.ss deck.pdf{s}
         \\  {s}ss render --project slides --output deck.pdf{s}
+        \\  {s}ss render --format html --output deck.html slide.ss{s}
         \\
     , .{
         s.heading, s.reset,
+        s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,
         s.command, s.reset,

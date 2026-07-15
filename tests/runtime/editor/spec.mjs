@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,6 +14,7 @@ import {
 } from "./support.mjs";
 
 await testSnapshotAndSourceEdits();
+await testSnapshotAssetsUseContentAddressedFiles();
 await testLastGoodSnapshotsAreKeptPerEntry();
 
 async function testSnapshotAndSourceEdits() {
@@ -348,6 +349,55 @@ function dependencySource(offset) {
 page dependency
 end
 `;
+}
+
+async function testSnapshotAssetsUseContentAddressedFiles() {
+  const project = await mkdtemp(path.join(os.tmpdir(), "ss-lsp-wysiwyg-assets-"));
+  try {
+    const slide = path.join(project, "slide.ss");
+    const asset = path.join(project, "asset.svg");
+    const uri = pathToFileURL(slide).toString();
+    const source = `import std:themes/default as *
+
+page asset_preview
+let label = text!("Asset preview")
+let picture = image!("asset.svg")
+~ picture.left == page.left + 72
+~ picture.top == page.top - 120
+end
+`;
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="#2f7f73"/></svg>\n';
+    await writeFile(slide, source, "utf8");
+    await writeFile(asset, svg, "utf8");
+
+    await withLspClient({ cwd: project }, async (client) => {
+      await client.initialize();
+      const diagnosticsPromise = client.waitForDiagnostics(uri);
+      client.openDocument({ uri, text: source });
+      assert(
+        (await diagnosticsPromise).params.diagnostics.length === 0,
+        "asset preview fixture produced diagnostics",
+      );
+      const first = await editorSnapshot(client, uri);
+      const firstItem = first.display.pages.flatMap((page) => page.items).find((item) => item.type === "svg");
+      assert(firstItem, `snapshot omitted SVG resource: ${JSON.stringify(first.display)}`);
+      assert(path.isAbsolute(firstItem.path), `snapshot asset path was not absolute: ${firstItem.path}`);
+      assert(
+        path.basename(firstItem.path).startsWith(firstItem.resource_id),
+        `snapshot asset path did not use its content id: ${JSON.stringify(firstItem)}`,
+      );
+      assert((await readFile(firstItem.path, "utf8")) === svg, "published editor asset did not preserve SVG bytes");
+
+      const firstStat = await stat(firstItem.path);
+      const second = await editorSnapshot(client, uri);
+      const secondItem = second.display.pages.flatMap((page) => page.items).find((item) => item.type === "svg");
+      assert(secondItem?.path === firstItem.path, "unchanged snapshot published a different editor asset path");
+      const secondStat = await stat(firstItem.path);
+      assert(secondStat.mtimeMs === firstStat.mtimeMs, "unchanged snapshot rewrote its editor asset");
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
 }
 
 async function testLastGoodSnapshotsAreKeptPerEntry() {

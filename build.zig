@@ -19,6 +19,7 @@ const ProjectModules = struct {
     ast: *Module,
     stdlib_assets: *Module,
     fontawesome_assets: *Module,
+    pdfjs_assets: *Module,
     project: *Module,
     core: *Module,
     render: *Module,
@@ -211,6 +212,23 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     addTestStep(ctx, modules, build_options, exe, tree_sitter_abi_check, tree_sitter);
+    addVisualTestSteps(b, exe);
+}
+
+fn addVisualTestSteps(b: *std.Build, exe: *Step.Compile) void {
+    const parity = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs" });
+    parity.addFileArg(exe.getEmittedBin());
+    parity.setCwd(b.path("."));
+    parity.stdio = .inherit;
+    const parity_step = b.step("test-render-parity", "Compare PDF and HTML pixels locally");
+    parity_step.dependOn(&parity.step);
+
+    const full = b.addSystemCommand(&.{ "node", "tests/visual/render/spec.mjs", "--full" });
+    full.addFileArg(exe.getEmittedBin());
+    full.setCwd(b.path("."));
+    full.stdio = .inherit;
+    const full_step = b.step("test-render-parity-full", "Compare the extended PDF and HTML fixture set locally");
+    full_step.dependOn(&full.step);
 }
 
 fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: std.Build.LazyPath, build_options: *Step.Options, tree_sitter: TreeSitterBundle) ProjectModules {
@@ -225,6 +243,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
     }, null);
     const stdlib_assets_mod = createModule(ctx, "stdlib/embed.zig", &.{}, null);
     const fontawesome_assets_mod = createModule(ctx, "third_party/fontawesome-free/embed.zig", &.{}, null);
+    const pdfjs_assets_mod = createModule(ctx, "third_party/pdfjs/embed.zig", &.{}, null);
     const project_mod = createModule(ctx, "src/project.zig", &.{
         import("utils", utils_mod),
     }, true);
@@ -257,7 +276,6 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         import("core", core_mod),
         import("pdf_ffi", pdf_ffi_mod),
         import("render", render_mod),
-        import("render_target", render_target_mod),
     }, true);
 
     return .{
@@ -267,6 +285,7 @@ fn createProjectModules(ctx: BuildContext, md4c_src: []const u8, md4c_include: s
         .ast = ast_mod,
         .stdlib_assets = stdlib_assets_mod,
         .fontawesome_assets = fontawesome_assets_mod,
+        .pdfjs_assets = pdfjs_assets_mod,
         .project = project_mod,
         .core = core_mod,
         .render = render_mod,
@@ -394,8 +413,14 @@ fn addTestStep(
     addModuleTest(ctx, test_step, "tests/watch/fingerprint/spec_tests.zig", &.{
         import("watch", watch_mod),
     }, true);
+    const render_pdf_document_mod = createModule(ctx, "src/render/pdf/document.zig", &.{
+        import("pdf_backend", modules.pdf_backend),
+        import("pdf_ffi", modules.pdf_ffi),
+        import("render", modules.render),
+    }, true);
     const render_pdf_spec_mod = createModule(ctx, "tests/render/pdf/spec_tests.zig", &.{
         import("pdf_backend", modules.pdf_backend),
+        import("pdf_document", render_pdf_document_mod),
         import("render", modules.render),
     }, true);
     addNativePdfHeadersAndLibraries(b, render_pdf_spec_mod, tree_sitter);
@@ -412,6 +437,19 @@ fn addTestStep(
     test_step.dependOn(&run_render_spec_tests.step);
     const render_test_step = b.step("test-render-ir", "Run focused render IR tests");
     render_test_step.dependOn(&run_render_spec_tests.step);
+    const render_html_mod = createModule(ctx, "src/render/html.zig", &.{
+        import("render", modules.render),
+        import("pdfjs_assets", modules.pdfjs_assets),
+    }, null);
+    const render_html_spec_mod = createModule(ctx, "tests/render/html/spec_tests.zig", &.{
+        import("render", modules.render),
+        import("render_html", render_html_mod),
+    }, null);
+    const render_html_spec_tests = b.addTest(.{ .root_module = render_html_spec_mod });
+    const run_render_html_spec_tests = b.addRunArtifact(render_html_spec_tests);
+    test_step.dependOn(&run_render_html_spec_tests.step);
+    const render_html_test_step = b.step("test-render-html", "Run focused HTML renderer tests");
+    render_html_test_step.dependOn(&run_render_html_spec_tests.step);
     const render_compile_mod = createModule(ctx, "src/render/compile.zig", &.{
         import("core", modules.core),
         import("render", modules.render),
@@ -469,6 +507,7 @@ fn createCommonModule(ctx: BuildContext, root_source_file: []const u8, modules: 
         import("language_type", modules.language_type),
         import("stdlib_assets", modules.stdlib_assets),
         import("fontawesome_assets", modules.fontawesome_assets),
+        import("pdfjs_assets", modules.pdfjs_assets),
         import("render", modules.render),
         import("pdf_ffi", modules.pdf_ffi),
         import("render_target", modules.render_target),

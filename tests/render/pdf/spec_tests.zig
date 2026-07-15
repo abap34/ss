@@ -1,5 +1,6 @@
 const std = @import("std");
 const pdf_backend = @import("pdf_backend");
+const pdf_document = @import("pdf_document");
 const render = @import("render");
 
 const c = @cImport({
@@ -78,6 +79,12 @@ fn expectFileMissing(io: std.Io, file_path: []const u8) !void {
     return error.ExpectedTemporaryFileCleanup;
 }
 
+fn documentSemantics(allocator: std.mem.Allocator) !render.SemanticTree {
+    const nodes = try allocator.alloc(render.SemanticNode, 1);
+    nodes[0] = .{ .id = 1, .role = .document };
+    return .{ .root = 1, .nodes = nodes };
+}
+
 test "render PDF spec: Cairo shim exposes rendering dependency versions" {
     try expectCString(c.ss_pdf_cairo_version_string());
     try expectCString(c.ss_pdf_pango_version_string());
@@ -128,15 +135,15 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     const output_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/page-composed.pdf", .{tmp.sub_path[0..]});
     defer allocator.free(output_path);
 
-    var source = render.Page{
+    var source_pages = [_]render.Page{.{
         .page_id = 1,
         .index = 0,
         .width = 320,
         .height = 180,
-    };
-    defer source.deinit(allocator);
-    try source.appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
-    try source.appendText(
+    }};
+    defer source_pages[0].deinit(allocator);
+    try source_pages[0].appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
+    try source_pages[0].appendText(
         allocator,
         10,
         20,
@@ -149,27 +156,35 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         false,
         false,
     );
-    try source.appendLink(allocator, .uri, "https://example.com/page", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
-    try pdf_backend.render(allocator, testing.io, &source, source_path);
+    try source_pages[0].appendLink(allocator, .uri, "https://example.com/page", .{ .x = 20, .y = 36, .width = 240, .height = 32 });
+    var source_semantics = try documentSemantics(allocator);
+    defer source_semantics.deinit(allocator);
+    const source_ir = render.Ir{ .semantics = source_semantics, .pages = &source_pages };
+    try pdf_backend.render(allocator, testing.io, &source_ir, 0, source_path);
 
-    var composed = render.Page{
+    var composed_pages = [_]render.Page{.{
         .page_id = 2,
         .index = 0,
         .width = 320,
         .height = 180,
-    };
-    defer composed.deinit(allocator);
-    try composed.appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
-    try composed.appendPdfPage(
+    }};
+    defer composed_pages[0].deinit(allocator);
+    try composed_pages[0].appendFillRect(allocator, null, .{ .x = 0, .y = 0, .width = 320, .height = 180 }, .{ .r = 1, .g = 1, .b = 1 });
+    var resource_builder = render.ResourceBuilder{};
+    defer resource_builder.deinit(allocator);
+    const source_resource = try resource_builder.addPath(allocator, testing.io, .pdf, source_path);
+    var resources = try resource_builder.take(allocator);
+    defer resources.deinit(allocator);
+    try composed_pages[0].appendPdfPage(
         allocator,
         11,
         .{ .x = 20, .y = 20, .width = 280, .height = 140 },
-        source_path,
+        source_resource,
         0,
         .crop,
         true,
     );
-    try composed.appendStrokeLine(
+    try composed_pages[0].appendStrokeLine(
         allocator,
         12,
         .{ .x = 20, .y = 20 },
@@ -179,7 +194,10 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
         0,
         0,
     );
-    try pdf_backend.render(allocator, testing.io, &composed, output_path);
+    var composed_semantics = try documentSemantics(allocator);
+    defer composed_semantics.deinit(allocator);
+    const composed_ir = render.Ir{ .resources = resources, .semantics = composed_semantics, .pages = &composed_pages };
+    try pdf_backend.render(allocator, testing.io, &composed_ir, 0, output_path);
 
     const json = try qpdfJson(allocator, testing.io, output_path);
     defer allocator.free(json);
@@ -195,6 +213,66 @@ test "render PDF spec: page renderer replays and composes ordered resources" {
     defer allocator.free(second_layer_path);
     try expectFileMissing(testing.io, first_layer_path);
     try expectFileMissing(testing.io, second_layer_path);
+}
+
+test "render PDF spec: document renderer publishes and reuses content-addressed output" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const allocator = testing.allocator;
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path[0..]});
+    defer allocator.free(root);
+    const cache = try std.fs.path.join(allocator, &.{ root, "render-cache" });
+    defer allocator.free(cache);
+    const first_path = try std.fs.path.join(allocator, &.{ root, "first.pdf" });
+    defer allocator.free(first_path);
+    const second_path = try std.fs.path.join(allocator, &.{ root, "second.pdf" });
+    defer allocator.free(second_path);
+
+    var pages = try allocator.alloc(render.Page, 2);
+    pages[0] = .{ .page_id = 1, .index = 0, .width = 320, .height = 180 };
+    pages[1] = .{ .page_id = 2, .index = 1, .width = 320, .height = 180 };
+    var ir = render.Ir{ .pages = pages };
+    defer ir.deinit(allocator);
+    ir.semantics = try documentSemantics(allocator);
+    try pages[0].appendText(
+        allocator,
+        10,
+        20,
+        60,
+        260,
+        "first cached page",
+        .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
+        24,
+        .{ .r = 0, .g = 0, .b = 0 },
+        false,
+        false,
+    );
+    try pages[1].appendText(
+        allocator,
+        11,
+        20,
+        60,
+        260,
+        "second cached page",
+        .{ .family = "sans-serif", .weight = 400, .style = .normal, .stretch = .normal },
+        24,
+        .{ .r = 0, .g = 0, .b = 0 },
+        false,
+        false,
+    );
+
+    try pdf_document.write(allocator, testing.io, &ir, first_path, .{ .cache_dir = cache }, null);
+    try pdf_document.write(allocator, testing.io, &ir, second_path, .{ .cache_dir = cache }, null);
+    const first = try std.Io.Dir.cwd().readFileAlloc(testing.io, first_path, allocator, .unlimited);
+    defer allocator.free(first);
+    const second = try std.Io.Dir.cwd().readFileAlloc(testing.io, second_path, allocator, .unlimited);
+    defer allocator.free(second);
+    try testing.expectEqualSlices(u8, first, second);
+    if (try pdfTextIfAvailable(allocator, testing.io, second_path)) |text| {
+        defer allocator.free(text);
+        try expectContains(text, "first cached page");
+        try expectContains(text, "second cached page");
+    }
 }
 
 test "render PDF spec: Cairo shim draws baseline text without a clipping frame" {

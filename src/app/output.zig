@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core");
+const render = @import("render");
 const pdf = @import("../render/pdf.zig");
 const utils = @import("utils");
 
@@ -9,17 +10,17 @@ const types = @import("types.zig");
 const error_report = utils.err;
 const Progress = utils.progress.Progress;
 
-pub fn renderPdfOrPrintDiagnostics(
+pub fn writePdfOrPrintDiagnostics(
     allocator: std.mem.Allocator,
     io: std.Io,
     state: *core.DocumentState,
-    pages: *const core.prepared.PreparedPages,
-    layouts: *const core.layout.Document,
+    ir: *const render.Ir,
+    output_path: []const u8,
     options: types.RenderOptions,
     progress: *Progress,
     diagnostics_json_path: ?[]const u8,
-) ![]const u8 {
-    return pdf.renderDocumentToPdf(allocator, io, state, pages, layouts, options, app_progress.render(progress)) catch |err| {
+) !void {
+    return pdf.writeRenderIr(allocator, io, ir, output_path, options, app_progress.render(progress)) catch |err| {
         progress.endStatusLine();
         error_report.printDocumentStateDiagnostics(state.projectPath(), state.projectSource(), state);
         try writeDiagnosticsJsonIfRequested(io, allocator, state, diagnostics_json_path);
