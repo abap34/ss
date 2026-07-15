@@ -18,20 +18,6 @@ const ConstraintTolerance = graph.ConstraintTolerance;
 
 pub const SolveOptions = graph.SolveOptions;
 
-pub fn solveLayout(ir: anytype) !void {
-    try solveLayoutWithTracePath(ir, null);
-}
-
-pub fn solveLayoutWithTracePath(ir: anytype, trace_path: ?[]const u8) !void {
-    try solveLayoutWithTracePathAndOptions(ir, trace_path, .{});
-}
-
-pub fn solveLayoutWithTracePathAndOptions(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !void {
-    var results = try solveDocument(ir, trace_path, options);
-    defer results.deinit(ir.allocator);
-    try applyDocument(ir, &results);
-}
-
 pub fn solveDocument(ir: anytype, trace_path: ?[]const u8, options: SolveOptions) !document.Document {
     layout_trace.beginSolve(ir.allocator, trace_path);
     defer layout_trace.endSolve(ir.allocator);

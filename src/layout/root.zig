@@ -13,9 +13,6 @@ pub const ObjectFrame = document.ObjectFrame;
 pub const Page = document.Page;
 pub const Document = document.Document;
 
-pub const solveLayout = solver.solveLayout;
-pub const solveLayoutWithTracePath = solver.solveLayoutWithTracePath;
-pub const solveLayoutWithTracePathAndOptions = solver.solveLayoutWithTracePathAndOptions;
 pub const solveDocument = solver.solveDocument;
 pub const applyDocument = solver.applyDocument;
 pub const styleForNode = style.styleForNode;
