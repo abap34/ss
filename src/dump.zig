@@ -34,6 +34,8 @@ pub fn toOwnedString(allocator: std.mem.Allocator, ir: *core.Ir) ![]u8 {
     try dump_core_graph.writeNodesField(allocator, &root, ir);
     try dump_layout.writeContainsField(&root, &ir.contains);
     try dump_layout.writeConstraintsField(&root, ir.constraints.items);
+    try dump_layout.writeConstraintUpdatesField(&root, ir.constraint_updates.items);
+    try dump_layout.writeOverriddenConstraintsField(&root, ir.overridden_constraints.items);
     try writeDiagnosticsField(&root, ir.diagnostics.items);
 
     try root.end();

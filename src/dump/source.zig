@@ -360,8 +360,14 @@ fn writeStatement(allocator: std.mem.Allocator, statements: *json.Array, stmt: a
         },
         .constrain => |decl| {
             try item.stringField("kind", "constrain");
+            try item.enumTagField("action", decl.action);
+            try item.enumTagField("target_kind", decl.target_kind);
             try writeAnchorRef(&item, "target", decl.target);
-            try writeAnchorRef(&item, "source", decl.source);
+            if (decl.source) |source| {
+                try writeAnchorRef(&item, "source", source);
+            } else {
+                try item.nullField("source");
+            }
             if (decl.offset) |expr| {
                 try writeExpr(allocator, &item, "offset", expr);
             } else {

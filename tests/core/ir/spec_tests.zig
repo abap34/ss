@@ -91,6 +91,121 @@ test "core IR spec: page-local validation reports unowned layout objects" {
     try expectDiagnosticCode(&ir, "UnownedLayoutObject:");
 }
 
+test "core IR spec: position updates replace deeper constraints across anchors on the same axis" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addAnchorConstraintAtScope(object, .center_x, .{ .page = .center_x }, 0, "component-center", 1);
+    try ir.addAnchorConstraintAtScope(object, .right, .{ .node = .{ .node_id = object, .anchor = .left } }, 240, "component-width", 1);
+    try ir.addConstraintUpdate(object, .left, .position, 0, .{
+        .target_node = object,
+        .target_anchor = .left,
+        .source = .{ .page = .left },
+        .offset = 80,
+        .origin = "page-left",
+        .role = .position,
+        .scope_depth = 0,
+        .from_update = true,
+    }, "page-left");
+
+    try core.constraint_updates.resolve(&ir);
+
+    try testing.expectEqual(@as(usize, 2), ir.constraints.items.len);
+    try testing.expectEqual(@as(usize, 1), ir.overridden_constraints.items.len);
+    try testing.expectEqual(core.Anchor.center_x, ir.overridden_constraints.items[0].target_anchor);
+    try testing.expectEqual(core.ConstraintRole.size, ir.constraints.items[0].role);
+    try testing.expectEqual(core.Anchor.left, ir.constraints.items[1].target_anchor);
+    try testing.expect(ir.constraints.items[1].from_update);
+}
+
+test "core IR spec: pure updates suppress inherited constraints without adding a replacement" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addAnchorConstraintAtScope(object, .top, .{ .page = .top }, -40, "component-top", 1);
+    try ir.addConstraintUpdate(object, .top, .position, 0, null, "page-top");
+
+    try core.constraint_updates.resolve(&ir);
+
+    try testing.expectEqual(@as(usize, 0), ir.constraints.items.len);
+    try testing.expectEqual(@as(usize, 1), ir.overridden_constraints.items.len);
+    try testing.expect(ir.constraint_updates.items[0].active);
+}
+
+test "core IR spec: suppressed cross-page constraints are not diagnosed" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const first = try ir.addPage("First");
+    const second = try ir.addPage("Second");
+    const target = try ir.makeObject(first, "target", null, .text, .text, "Target");
+    const source = try ir.makeObject(second, "source", null, .text, .text, "Source");
+    try ir.addAnchorConstraintAtScope(target, .left, .{ .node = .{ .node_id = source, .anchor = .left } }, 0, "component-left", 1);
+    try ir.addConstraintUpdate(target, .left, .position, 0, null, "page-left");
+
+    try core.constraint_updates.resolve(&ir);
+    try ir.validatePageLocalLayout();
+
+    for (ir.diagnostics.items) |diagnostic| {
+        switch (diagnostic.data) {
+            .user_report => |data| try testing.expect(!std.mem.startsWith(u8, data.message, "CrossPageConstraint:")),
+            else => {},
+        }
+    }
+}
+
+test "core IR spec: caller updates have authority over deeper updates" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addConstraintUpdate(object, .left, .position, 2, .{
+        .target_node = object,
+        .target_anchor = .left,
+        .source = .{ .page = .left },
+        .offset = 20,
+        .role = .position,
+        .scope_depth = 2,
+        .from_update = true,
+    }, "nested-left");
+    try ir.addConstraintUpdate(object, .right, .position, 0, .{
+        .target_node = object,
+        .target_anchor = .right,
+        .source = .{ .page = .right },
+        .offset = -60,
+        .role = .position,
+        .scope_depth = 0,
+        .from_update = true,
+    }, "page-right");
+
+    try core.constraint_updates.resolve(&ir);
+
+    try testing.expect(!ir.constraint_updates.items[0].active);
+    try testing.expect(ir.constraint_updates.items[1].active);
+    try testing.expectEqual(@as(usize, 1), ir.constraints.items.len);
+    try testing.expectEqual(core.Anchor.right, ir.constraints.items[0].target_anchor);
+    try testing.expectEqual(@as(f32, -60), ir.constraints.items[0].offset);
+    try testing.expectEqual(@as(usize, 1), ir.overridden_constraints.items.len);
+}
+
+test "core IR spec: duplicate updates in one scope are diagnosed per axis and role" {
+    var ir = try initEmptyIr();
+    defer ir.deinit();
+
+    const page = try ir.addPage("Page");
+    const object = try ir.makeObject(page, "item", null, .text, .text, "Item");
+    try ir.addConstraintUpdate(object, .left, .position, 0, null, "first");
+    try ir.addConstraintUpdate(object, .right, .position, 0, null, "second");
+
+    try testing.expectError(error.DuplicateConstraintUpdate, core.constraint_updates.resolve(&ir));
+    try expectDiagnosticCode(&ir, "DuplicateConstraintUpdate:");
+}
+
 test "core IR spec: page unit collects inline math asset dependencies" {
     var ir = try initEmptyIr();
     defer ir.deinit();

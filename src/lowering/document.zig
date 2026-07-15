@@ -6,6 +6,7 @@ const schedule = @import("../analysis/schedule.zig");
 
 pub fn evaluateDocumentWithSchedule(ir: *core.Ir, graph: *const schedule.ScheduleGraph) !void {
     try eval_toplevel.evalIrWithSchedule(ir.allocator, ir, graph);
+    try core.constraint_updates.resolve(ir);
     try ir.validatePageLocalLayout();
 }
 

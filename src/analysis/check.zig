@@ -448,7 +448,7 @@ fn checkTopLevelStatement(
                 return error.NoCurrentPage;
             }
             try validateAnchorRef(allocator, ir, sema, env, origin, decl.target, true);
-            try validateAnchorRef(allocator, ir, sema, env, origin, decl.source, false);
+            if (decl.source) |source| try validateAnchorRef(allocator, ir, sema, env, origin, source, false);
             if (decl.offset) |expr| {
                 try rejectPageOnlyExpr(ir, context, origin, page_context, scope, expr);
                 const actual = try inferExprInfo(allocator, ir, sema, env, expr, origin);

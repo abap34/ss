@@ -1172,18 +1172,18 @@ test "syntax spec: assignment syntax separates bindings, properties, and constra
     try testing.expectEqual(.node, width.target.kind);
     try testing.expectEqualStrings("box", width.target.node_name.?);
     try testing.expectEqual(.right, width.target.anchor);
-    try testing.expectEqual(.left, width.source.anchor);
+    try testing.expectEqual(.left, width.source.?.anchor);
     try expectNumber(width.offset.?, 100);
 
     const left = statements[2].kind.constrain;
     try testing.expectEqual(.left, left.target.anchor);
-    try testing.expectEqual(.page, left.source.kind);
-    try testing.expectEqual(.left, left.source.anchor);
+    try testing.expectEqual(.page, left.source.?.kind);
+    try testing.expectEqual(.left, left.source.?.anchor);
     try expectNumber(left.offset.?, 10);
 
     const right = statements[3].kind.constrain;
     try testing.expectEqual(.right, right.target.anchor);
-    try testing.expectEqual(.page, right.source.kind);
+    try testing.expectEqual(.page, right.source.?.kind);
     const neg = try expectCall(right.offset.?, "neg", 1);
     try expectNumber(neg.args.items[0], 20);
 
@@ -1214,10 +1214,52 @@ test "syntax spec: constraints accept record member anchor paths" {
     try testing.expectEqualStrings("caption", constraint.target.node_name.?);
     try testing.expectEqualStrings("caption", constraint.target.node_path.?);
     try testing.expectEqual(.top, constraint.target.anchor);
-    try testing.expectEqual(.node, constraint.source.kind);
-    try testing.expectEqualStrings("parts", constraint.source.node_name.?);
-    try testing.expectEqualStrings("parts.root", constraint.source.node_path.?);
-    try testing.expectEqual(.bottom, constraint.source.anchor);
+    try testing.expectEqual(.node, constraint.source.?.kind);
+    try testing.expectEqualStrings("parts", constraint.source.?.node_name.?);
+    try testing.expectEqualStrings("parts.root", constraint.source.?.node_path.?);
+    try testing.expectEqual(.bottom, constraint.source.?.anchor);
+}
+
+test "syntax spec: constraint updates accept optional replacement relations" {
+    var parsed = try parse(
+        \\page Layout
+        \\  ~!~ box.left
+        \\  ~!~box.top==page.top-24
+        \\  ~!~ box.width == 320
+        \\  ~!~ box.height
+        \\end
+        \\
+    );
+    defer parsed.deinit();
+
+    const statements = parsed.program.pages.items[0].statements.items;
+    const discard = statements[0].kind.constrain;
+    try testing.expectEqual(.update, discard.action);
+    try testing.expectEqual(.anchor, discard.target_kind);
+    try testing.expectEqual(.left, discard.target.anchor);
+    try testing.expect(discard.source == null);
+    try testing.expect(discard.offset == null);
+
+    const replace = statements[1].kind.constrain;
+    try testing.expectEqual(.update, replace.action);
+    try testing.expectEqual(.top, replace.target.anchor);
+    try testing.expectEqual(.page, replace.source.?.kind);
+    try testing.expectEqual(.top, replace.source.?.anchor);
+    const neg = try expectCall(replace.offset.?, "neg", 1);
+    try expectNumber(neg.args.items[0], 24);
+
+    const width = statements[2].kind.constrain;
+    try testing.expectEqual(.update, width.action);
+    try testing.expectEqual(.dimension, width.target_kind);
+    try testing.expectEqual(.right, width.target.anchor);
+    try testing.expectEqual(.left, width.source.?.anchor);
+    try expectNumber(width.offset.?, 320);
+
+    const height = statements[3].kind.constrain;
+    try testing.expectEqual(.update, height.action);
+    try testing.expectEqual(.dimension, height.target_kind);
+    try testing.expectEqual(.top, height.target.anchor);
+    try testing.expect(height.source == null);
 }
 
 test "syntax spec: member expressions stay in the AST" {

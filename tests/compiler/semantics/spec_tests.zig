@@ -4791,6 +4791,88 @@ test "compiler semantics: explicit layout conflicts are rejected" {
     );
 }
 
+test "compiler semantics: page constraint updates replace component positioning and preserve size" {
+    const source =
+        \\import std:themes/default as *
+        \\
+        \\fn component!() -> Object
+        \\  let item = text!("move")
+        \\  ~ item.center_x == page.center_x
+        \\  ~ item.top == page.top - 60
+        \\  ~ item.width == 240
+        \\  return item
+        \\end
+        \\
+        \\page demo
+        \\  let item = component!()
+        \\  ~!~item.left == page.left + 80
+        \\  ~!~item.top == page.top - 120
+        \\end
+        \\
+    ;
+
+    try buildSource(source);
+    try expectDumpContains(source, &.{
+        "\"constraint_updates\":[",
+        "\"overridden_constraints\":[",
+        "\"active\":true",
+        "\"from_update\":true",
+        "\"role\":\"size\"",
+    });
+}
+
+test "compiler semantics: pure constraint updates leave fallback placement available" {
+    try buildSource(
+        \\import std:themes/default as *
+        \\
+        \\fn component!() -> Object
+        \\  let item = text!("fallback")
+        \\  ~ item.center_x == page.center_x
+        \\  ~ item.top == page.top - 60
+        \\  return item
+        \\end
+        \\
+        \\page demo
+        \\  let item = component!()
+        \\  ~!~item.left
+        \\  ~!~item.top
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: caller constraint updates override component updates" {
+    try buildSource(
+        \\import std:themes/default as *
+        \\
+        \\fn component!() -> Object
+        \\  let item = text!("caller")
+        \\  ~!~item.left == page.left + 40
+        \\  ~ item.top == page.top - 60
+        \\  return item
+        \\end
+        \\
+        \\page demo
+        \\  let item = component!()
+        \\  ~!~item.right == page.right - 80
+        \\end
+        \\
+    );
+}
+
+test "compiler semantics: duplicate constraint updates on one axis are diagnosed" {
+    try expectLoweringErrorDiagnostic(
+        \\import std:themes/default as *
+        \\
+        \\page demo
+        \\  let item = text!("duplicate")
+        \\  ~!~item.left
+        \\  ~!~item.right
+        \\end
+        \\
+    , "DuplicateConstraintUpdate");
+}
+
 test "compiler semantics: missing constraint anchors are rejected statically" {
     try expectBuildFails(
         \\import std:themes/default as *

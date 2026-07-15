@@ -783,13 +783,25 @@ pub const AnchorRef = struct {
 };
 
 pub const ConstraintDecl = struct {
+    pub const Action = enum {
+        add,
+        update,
+    };
+
+    pub const TargetKind = enum {
+        anchor,
+        dimension,
+    };
+
+    action: Action = .add,
+    target_kind: TargetKind = .anchor,
     target: AnchorRef,
-    source: AnchorRef,
+    source: ?AnchorRef,
     offset: ?Expr = null,
 
     pub fn deinit(self: *ConstraintDecl, allocator: Allocator) void {
         self.target.deinit(allocator);
-        self.source.deinit(allocator);
+        if (self.source) |*source| source.deinit(allocator);
         if (self.offset) |*offset| offset.deinit(allocator);
     }
 };

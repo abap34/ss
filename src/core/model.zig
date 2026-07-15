@@ -87,13 +87,52 @@ pub const ConstraintSource = union(enum) {
     },
 };
 
+pub const ConstraintRole = enum {
+    position,
+    size,
+};
+
 pub const Constraint = struct {
     target_node: NodeId,
     target_anchor: Anchor,
     source: ConstraintSource,
     offset: f32,
     origin: ?[]const u8 = null,
+    role: ConstraintRole = .position,
+    scope_depth: u32 = 0,
+    from_update: bool = false,
 };
+
+pub const ConstraintUpdate = struct {
+    target_node: NodeId,
+    target_anchor: Anchor,
+    role: ConstraintRole,
+    scope_depth: u32,
+    replacement: ?Constraint = null,
+    origin: ?[]const u8 = null,
+    active: bool = false,
+};
+
+pub fn constraintRoleForRelation(target_node: NodeId, target_anchor: Anchor, source: ConstraintSource) ConstraintRole {
+    const node_source = switch (source) {
+        .page => return .position,
+        .node => |value| value,
+    };
+    if (node_source.node_id != target_node or node_source.anchor == target_anchor) return .position;
+    return if (anchorsShareAxis(target_anchor, node_source.anchor)) .size else .position;
+}
+
+pub fn anchorsShareAxis(left: Anchor, right: Anchor) bool {
+    const left_horizontal = switch (left) {
+        .left, .right, .center_x => true,
+        .top, .bottom, .center_y => false,
+    };
+    const right_horizontal = switch (right) {
+        .left, .right, .center_x => true,
+        .top, .bottom, .center_y => false,
+    };
+    return left_horizontal == right_horizontal;
+}
 
 pub const ConstraintFailureKind = enum {
     conflict,

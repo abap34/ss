@@ -113,3 +113,37 @@ end
           object: (identifier)
           member: (identifier))
         (identifier)))))
+
+================================================================================
+Constraint updates
+================================================================================
+
+page Layout
+  ~!~item.center_x
+  ~!~item.left == page.left + 48
+  ~!~ item.width == 320
+end
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (page_declaration
+    name: (identifier)
+    (constraint_update_statement
+      target: (member_expression
+        object: (identifier)
+        member: (identifier)))
+    (constraint_update_statement
+      target: (member_expression
+        object: (identifier)
+        member: (identifier))
+      source: (binary_expression
+        (member_expression
+          object: (identifier)
+          member: (identifier))
+        (number)))
+    (constraint_update_statement
+      target: (member_expression
+        object: (identifier)
+        member: (identifier))
+      source: (number))))
