@@ -24,10 +24,40 @@ pub fn writeContainsField(root: *json.Object, contains_map: *std.AutoHashMap(cor
 }
 
 pub fn writeConstraintsField(root: *json.Object, constraints: []const core.Constraint) !void {
-    var array = try root.arrayField("constraints");
+    try writeNamedConstraintsField(root, "constraints", constraints);
+}
+
+pub fn writeOverriddenConstraintsField(root: *json.Object, constraints: []const core.Constraint) !void {
+    try writeNamedConstraintsField(root, "overridden_constraints", constraints);
+}
+
+fn writeNamedConstraintsField(root: *json.Object, field_name: []const u8, constraints: []const core.Constraint) !void {
+    var array = try root.arrayField(field_name);
     for (constraints) |constraint| {
         var item = try array.objectItem();
         try writeConstraintFields(&item, constraint, "target_node", "source_node", "node");
+        try item.end();
+    }
+    try array.end();
+}
+
+pub fn writeConstraintUpdatesField(root: *json.Object, updates: []const core.ConstraintUpdate) !void {
+    var array = try root.arrayField("constraint_updates");
+    for (updates) |update| {
+        var item = try array.objectItem();
+        try item.intField("target_node", update.target_node);
+        try item.enumTagField("target_anchor", update.target_anchor);
+        try item.enumTagField("role", update.role);
+        try item.intField("scope_depth", update.scope_depth);
+        try item.boolField("active", update.active);
+        try item.optionalStringField("origin", update.origin);
+        if (update.replacement) |replacement| {
+            var relation = try item.objectField("replacement");
+            try writeConstraintFields(&relation, replacement, "target_node", "source_node", "node");
+            try relation.end();
+        } else {
+            try item.nullField("replacement");
+        }
         try item.end();
     }
     try array.end();
@@ -56,4 +86,7 @@ fn writeConstraintFields(
     }
     try item.floatField("offset", constraint.offset, "{d:.1}");
     try item.optionalStringField("origin", constraint.origin);
+    try item.enumTagField("role", constraint.role);
+    try item.intField("scope_depth", constraint.scope_depth);
+    try item.boolField("from_update", constraint.from_update);
 }

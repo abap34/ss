@@ -13,6 +13,8 @@ const PayloadKind = model.PayloadKind;
 const Anchor = model.Anchor;
 const Constraint = model.Constraint;
 const ConstraintSet = model.ConstraintSet;
+const ConstraintRole = model.ConstraintRole;
+const ConstraintUpdate = model.ConstraintUpdate;
 const ContentProvenance = model.ContentProvenance;
 const ConstraintSource = model.ConstraintSource;
 const Selection = model.Selection;
@@ -95,6 +97,15 @@ pub const SourceModule = struct {
     }
 };
 
+pub const ObjectBinding = struct {
+    node_id: NodeId,
+    page_id: NodeId,
+    module_id: SourceModuleId,
+    name: []const u8,
+    span_start: usize,
+    span_end: usize,
+};
+
 pub const DefinitionKind = enum {
     function,
     constant,
@@ -154,6 +165,9 @@ pub const Ir = struct {
     page_order: std.ArrayList(NodeId),
     contains: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
     constraints: std.ArrayList(Constraint),
+    constraint_updates: std.ArrayList(ConstraintUpdate),
+    overridden_constraints: std.ArrayList(Constraint),
+    object_bindings: std.ArrayList(ObjectBinding),
     diagnostics: std.ArrayList(Diagnostic),
     last_constraint_failure: ?ConstraintFailure,
     constraint_failures: std.ArrayList(ConstraintFailure),
@@ -185,6 +199,9 @@ pub const Ir = struct {
             .page_order = .empty,
             .contains = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .constraints = .empty,
+            .constraint_updates = .empty,
+            .overridden_constraints = .empty,
+            .object_bindings = .empty,
             .diagnostics = .empty,
             .last_constraint_failure = null,
             .constraint_failures = .empty,
@@ -239,6 +256,9 @@ pub const Ir = struct {
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
+        self.constraint_updates.deinit(self.allocator);
+        self.overridden_constraints.deinit(self.allocator);
+        self.object_bindings.deinit(self.allocator);
         self.diagnostics.deinit(self.allocator);
         self.clearConstraintFailures();
         self.constraint_failures.deinit(self.allocator);
@@ -278,6 +298,9 @@ pub const Ir = struct {
         self.nodes.deinit(self.allocator);
         self.page_order.deinit(self.allocator);
         self.constraints.deinit(self.allocator);
+        self.constraint_updates.deinit(self.allocator);
+        self.overridden_constraints.deinit(self.allocator);
+        self.object_bindings.deinit(self.allocator);
         self.clearDiagnostics();
         self.diagnostics.deinit(self.allocator);
         self.clearConstraintFailures();
@@ -799,22 +822,69 @@ pub const Ir = struct {
         offset: f32,
         origin: ?[]const u8,
     ) !void {
+        try self.addAnchorConstraintAtScope(target_node, target_anchor, source, offset, origin, 0);
+    }
+
+    pub fn addAnchorConstraintAtScope(
+        self: *Ir,
+        target_node: NodeId,
+        target_anchor: Anchor,
+        source: ConstraintSource,
+        offset: f32,
+        origin: ?[]const u8,
+        scope_depth: u32,
+    ) !void {
         const constraint = Constraint{
             .target_node = target_node,
             .target_anchor = target_anchor,
             .source = source,
             .offset = offset,
             .origin = origin,
+            .role = model.constraintRoleForRelation(target_node, target_anchor, source),
+            .scope_depth = scope_depth,
         };
         try self.constraints.append(self.allocator, constraint);
-        try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
+    }
+
+    pub fn addConstraintUpdate(
+        self: *Ir,
+        target_node: NodeId,
+        target_anchor: Anchor,
+        role: ConstraintRole,
+        scope_depth: u32,
+        replacement: ?Constraint,
+        origin: ?[]const u8,
+    ) !void {
+        try self.constraint_updates.append(self.allocator, .{
+            .target_node = target_node,
+            .target_anchor = target_anchor,
+            .role = role,
+            .scope_depth = scope_depth,
+            .replacement = replacement,
+            .origin = origin,
+        });
+    }
+
+    pub fn addObjectBinding(
+        self: *Ir,
+        node_id: NodeId,
+        page_id: NodeId,
+        module_id: SourceModuleId,
+        name: []const u8,
+        span: ast.Span,
+    ) !void {
+        try self.object_bindings.append(self.allocator, .{
+            .node_id = node_id,
+            .page_id = page_id,
+            .module_id = module_id,
+            .name = name,
+            .span_start = span.start,
+            .span_end = span.end,
+        });
     }
 
     pub fn addConstraintSet(self: *Ir, constraints: ConstraintSet) !void {
         try self.constraints.appendSlice(self.allocator, constraints.items.items);
-        for (constraints.items.items) |constraint| {
-            try self.addCrossPageConstraintDiagnosticIfKnown(constraint);
-        }
     }
 
     pub fn noteConstraintFailure(self: *Ir, page_id: NodeId, constraint: Constraint, existing_constraint: ?Constraint, kind: ConstraintFailureKind) void {

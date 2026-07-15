@@ -74,6 +74,8 @@ pub fn toJson(allocator: std.mem.Allocator, ir: anytype) ![]u8 {
         try item.intField("index", index);
         try item.stringField("kind", "explicit");
         try item.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
+        try item.enumTagField("role", constraint.role);
+        try item.boolField("from_update", constraint.from_update);
         try item.optionalStringField("origin", constraint.origin);
         try appendOriginObject(&item, "location", ir, constraint.origin);
         try item.floatField("offset", constraint.offset, "{d:.4}");
@@ -148,6 +150,8 @@ fn appendConstraintObject(object: *json.Object, field_name: []const u8, ir: anyt
     try child.optionalStringField("origin", constraint.origin);
     try appendOriginObject(&child, "location", ir, constraint.origin);
     try child.enumTagField("axis", graph.anchorAxis(constraint.target_anchor));
+    try child.enumTagField("role", constraint.role);
+    try child.boolField("from_update", constraint.from_update);
     try child.floatField("offset", constraint.offset, "{d:.4}");
     try appendConstraintExpression(&child, "expression", ir, constraint);
     var target = try child.objectField("target");

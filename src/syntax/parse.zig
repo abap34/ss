@@ -1156,8 +1156,13 @@ const Parser = struct {
         if (try self.consumeKeyword("bind")) {
             return self.failAt(start, error.BindRemoved);
         }
+        if (self.consumeConstraintUpdateMarker()) {
+            const decl = try self.parseMemberConstraintDecl(.update);
+            try self.consumeStatementTerminator();
+            return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
+        }
         if (self.consumeConstraintMarker()) {
-            const decl = try self.parseMemberConstraintDecl();
+            const decl = try self.parseMemberConstraintDecl(.add);
             try self.consumeStatementTerminator();
             return .{ .span = .{ .start = start, .end = self.pos }, .kind = .{ .constrain = decl } };
         }
@@ -1881,9 +1886,17 @@ const Parser = struct {
         return ast.CallableName.bare(try self.allocator.dupe(u8, name));
     }
 
-    fn parseMemberConstraintDecl(self: *Parser) !ConstraintDecl {
+    fn parseMemberConstraintDecl(self: *Parser, action: ConstraintDecl.Action) !ConstraintDecl {
         var target = try self.parseConstraintMemberRef(true);
         errdefer target.anchor_ref.deinit(self.allocator);
+        if (action == .update and self.atStatementBoundary()) {
+            return .{
+                .action = action,
+                .target_kind = if (target.dimension == null) .anchor else .dimension,
+                .target = target.anchor_ref,
+                .source = null,
+            };
+        }
         try self.expectEqualityOperator();
         if (target.dimension) |dimension| {
             if (target.anchor_ref.kind == .page) return self.fail(error.PageCannotBeConstraintTarget);
@@ -1894,6 +1907,8 @@ const Parser = struct {
             const source_anchor = try target.anchor_ref.cloneWithAnchor(self.allocator, dimension.source_anchor);
             target.anchor_ref.deinit(self.allocator);
             return .{
+                .action = action,
+                .target_kind = .dimension,
                 .target = target_anchor,
                 .source = source_anchor,
                 .offset = offset,
@@ -1911,7 +1926,12 @@ const Parser = struct {
             if (sign == '-') expr = try self.makeNegCall(expr);
             offset = expr;
         }
-        return .{ .target = target_anchor, .source = source_anchor, .offset = offset };
+        return .{
+            .action = action,
+            .target = target_anchor,
+            .source = source_anchor,
+            .offset = offset,
+        };
     }
 
     const ConstraintMemberRef = struct {
@@ -2323,6 +2343,13 @@ const Parser = struct {
         source.skipInlineSpaces(self.source, &self.pos);
         if (self.eof() or self.source[self.pos] != '~') return false;
         self.pos += 1;
+        return true;
+    }
+
+    fn consumeConstraintUpdateMarker(self: *Parser) bool {
+        source.skipInlineSpaces(self.source, &self.pos);
+        if (!source.startsWithAt(self.source, self.pos, "~!~")) return false;
+        self.pos += "~!~".len;
         return true;
     }
 

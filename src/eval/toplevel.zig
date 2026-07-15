@@ -103,6 +103,7 @@ fn deinitValues(allocator: std.mem.Allocator, values: []core.Value) void {
 
 var diagnostic_path: []const u8 = "";
 threadlocal var active_module_id: core.SourceModuleId = 0;
+threadlocal var active_call_depth: u32 = 0;
 
 const LowerDiagnostic = struct {
     err: anyerror,
@@ -270,6 +271,7 @@ fn lowerErrorMessage(err: anyerror) ?[]const u8 {
         error.UnknownRole => "UnknownRole: unknown role",
         error.UnknownPayloadKind => "UnknownPayloadKind: unknown payload kind",
         error.PageCannotBeConstraintTarget => "PageCannotBeConstraintTarget: page anchors cannot be constraint targets",
+        error.DuplicateConstraintUpdate => "DuplicateConstraintUpdate: the same constraint target is updated more than once in one evaluation scope",
         error.UnsupportedScheduledPrimitive => "UnsupportedScheduledPrimitive: this operation is not valid during document evaluation",
         error.FunctionDidNotReturnValue => "FunctionDidNotReturnValue: function did not return a value",
         else => null,
@@ -346,8 +348,11 @@ fn executeScheduledUnit(
     unit: schedule.ScheduledUnit,
 ) !void {
     const previous_module_id = active_module_id;
+    const previous_call_depth = active_call_depth;
     active_module_id = unit.module_id;
+    active_call_depth = 0;
     defer active_module_id = previous_module_id;
+    defer active_call_depth = previous_call_depth;
     setLowerDiagnosticOrigin(unit.source, unit.path);
     switch (unit.kind) {
         .document_statement => |document_statement| {
@@ -1710,6 +1715,8 @@ fn anchorEqualityConstraintSet(
             .source = source.toConstraintSource(),
             .offset = offset,
             .origin = origin,
+            .role = core.constraintRoleForRelation(node.node_id, node.anchor, source.toConstraintSource()),
+            .scope_depth = active_call_depth,
         }),
     };
 }
@@ -1892,7 +1899,16 @@ fn executeStatement(
                 try discardStatementValue(ir, value);
                 return .none;
             }
+            const bound_object: ?core.NodeId = switch (value) {
+                .object => |node_id| node_id,
+                else => null,
+            };
             try putEnvValue(ir.allocator, env, binding.name, value);
+            if (context == .page and active_call_depth == 0) {
+                if (bound_object) |node_id| {
+                    try ir.addObjectBinding(node_id, page_id, active_module_id, binding.name, stmt.span);
+                }
+            }
         },
         .return_expr => |expr| {
             const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
@@ -1923,12 +1939,50 @@ fn executeStatement(
         },
         .constrain => |decl| {
             const target = try resolveAnchorRef(ir, mode, env, origin, decl.target, true);
-            const source = try resolveAnchorRef(ir, mode, env, origin, decl.source, false);
+            const resolved_source: ?core.ConstraintSource = if (decl.source) |source_ref|
+                try resolveAnchorRef(ir, mode, env, origin, source_ref, false)
+            else
+                null;
             const offset: f32 = if (decl.offset) |expr| blk: {
                 const value = try evalExpr(ir, page_id, context, mode, env, functions, closures, origin, expr);
                 break :blk try resolveValueNumber(value);
             } else 0;
-            try ir.addAnchorConstraint(target.node_id, target.anchor, source, offset, origin);
+            const role: core.ConstraintRole = if (decl.target_kind == .dimension)
+                .size
+            else if (resolved_source) |source|
+                core.constraintRoleForRelation(target.node_id, target.anchor, source)
+            else
+                .position;
+            switch (decl.action) {
+                .add => try ir.addAnchorConstraintAtScope(
+                    target.node_id,
+                    target.anchor,
+                    resolved_source orelse return error.InvalidConstraint,
+                    offset,
+                    origin,
+                    active_call_depth,
+                ),
+                .update => {
+                    const replacement: ?core.Constraint = if (resolved_source) |source| .{
+                        .target_node = target.node_id,
+                        .target_anchor = target.anchor,
+                        .source = source,
+                        .offset = offset,
+                        .origin = origin,
+                        .role = role,
+                        .scope_depth = active_call_depth,
+                        .from_update = true,
+                    } else null;
+                    try ir.addConstraintUpdate(
+                        target.node_id,
+                        target.anchor,
+                        role,
+                        active_call_depth,
+                        replacement,
+                        origin,
+                    );
+                },
+            }
         },
         .expr_stmt => |expr| switch (expr) {
             .call => |call| {
@@ -2008,6 +2062,10 @@ fn executeCallStatement(
     const func = resolved.decl;
     try validateUserFunctionArity(ir, call.args.items.len, func, current_origin);
 
+    const previous_call_depth = active_call_depth;
+    active_call_depth += 1;
+    defer active_call_depth = previous_call_depth;
+
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, closures, resolved.module_id, func, current_origin, call);
@@ -2080,6 +2138,10 @@ fn invokeClosureValues(
     };
     try validateFixedArity(ir, args.len, closure.lambda.params.items.len, current_origin);
 
+    const previous_call_depth = active_call_depth;
+    active_call_depth += 1;
+    defer active_call_depth = previous_call_depth;
+
     var local_env = try cloneValueEnv(ir.allocator, &closure.env);
     defer deinitValueEnv(ir.allocator, &local_env);
     for (closure.lambda.params.items, 0..) |param, index| {
@@ -2130,6 +2192,10 @@ fn invokeUserFunctionValueInModule(
     if (!func_ref.returns_value) return error.FunctionDoesNotReturnValue;
     try validateUserFunctionArity(ir, call.args.items.len, func, current_origin);
 
+    const previous_call_depth = active_call_depth;
+    active_call_depth += 1;
+    defer active_call_depth = previous_call_depth;
+
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionArgs(ir, page_id, context, mode, env, &local_env, functions, closures, module_id, func, current_origin, call);
@@ -2167,6 +2233,10 @@ fn invokeUserFunctionValues(
     current_origin: []const u8,
     args: []const core.Value,
 ) anyerror!core.Value {
+    const previous_call_depth = active_call_depth;
+    active_call_depth += 1;
+    defer active_call_depth = previous_call_depth;
+
     var local_env = try cloneValueEnv(ir.allocator, env);
     defer deinitValueEnv(ir.allocator, &local_env);
     try bindUserFunctionValueArgs(ir, page_id, context, mode, env, &local_env, functions, closures, module_id, func, current_origin, args);
