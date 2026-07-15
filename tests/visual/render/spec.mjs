@@ -93,7 +93,7 @@ try {
   const pdf = await pdfjs.getDocument({url:source,isEvalSupported:false}).promise;
   for (let index=1;index<=pdf.numPages;index++) {
     const page = await pdf.getPage(index);
-    const viewport = page.getViewport({scale:96/72});
+    const viewport = page.getViewport({scale:2});
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);

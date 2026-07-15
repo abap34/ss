@@ -2,18 +2,20 @@ const std = @import("std");
 const render = @import("render");
 const resources = @import("resources.zig");
 
-const css_line_box_baseline_fraction: f64 = 0.875;
-
-pub const css =
+const document_css =
     \\:root { color-scheme: light dark; --ss-canvas: #e8edf3; }
     \\* { box-sizing: border-box; }
     \\html, body { margin: 0; min-height: 100%; background: var(--ss-canvas); }
     \\body { display: flex; flex-direction: column; align-items: center; gap: 24pt; padding: 24pt; }
+;
+
+pub const fragment_css =
+    \\* { box-sizing: border-box; }
     \\.ss-page { position: relative; flex: none; overflow: hidden; background: white; box-shadow: 0 2pt 12pt rgb(15 23 42 / 18%); }
     \\.ss-item { position: absolute; transform-origin: 0 0; }
-    \\.ss-semantic { display: contents; margin: 0; padding: 0; }
+    \\.ss-semantic-layer { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
     \\.ss-text { white-space: pre; }
-    \\.ss-text-run { position: absolute; white-space: pre; font-kerning: none; }
+    \\.ss-text-run { position: absolute; white-space: pre; font-kerning: none; font-synthesis: none; }
     \\.ss-text-cluster { position: absolute; top: 0; white-space: pre; }
     \\.ss-line { height: 0; border-top-style: solid; }
     \\.ss-image { display: block; object-fit: fill; }
@@ -25,41 +27,32 @@ pub const css =
     \\.ss-pdf .textLayer span { position: absolute; color: transparent; white-space: pre; transform-origin: 0 0; }
     \\.ss-link { position: absolute; display: block; }
     \\.ss-destination { position: absolute; width: 0; height: 0; }
+;
+
+const print_css =
     \\@media print { body { gap: 0; padding: 0; background: transparent; } .ss-page { box-shadow: none; break-after: page; } }
 ;
 
-pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set) ![]u8 {
+pub fn styleSheet(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set, standalone: bool) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, css);
-    var emitted = std.StringHashMap(void).init(allocator);
-    defer {
-        var keys = emitted.keyIterator();
-        while (keys.next()) |key| allocator.free(key.*);
-        emitted.deinit();
-    }
-    for (ir.pages) |page| {
-        for (page.items.items) |item| {
-            if (item != .text) continue;
-            const value = item.text;
-            for (value.layout.runs) |run| {
-                const font_resource = run.font_resource orelse continue;
-                const path = assets.fontPath(font_resource, run.font_index) orelse return error.MissingHtmlResource;
-                const key = try std.fmt.allocPrint(allocator, "{s}:{d}:{s}:{s}", .{ path, value.font_weight, fontStyle(value.font_style), fontStretch(value.font_stretch) });
-                if (emitted.contains(key)) {
-                    allocator.free(key);
-                    continue;
-                }
-                try emitted.put(key, {});
-                try out.appendSlice(allocator, "@font-face { font-family: '");
-                try appendFontFamily(allocator, &out, path);
-                try out.appendSlice(allocator, "'; src: url('");
-                try appendCssUrl(allocator, &out, path);
-                try appendFormat(allocator, &out, "'); font-weight:{d}; font-style:{s}; font-stretch:{s}; ascent-override:80%; descent-override:20%; line-gap-override:0%; }}\n", .{
-                    value.font_weight, fontStyle(value.font_style), fontStretch(value.font_stretch),
-                });
-            }
-        }
+    if (standalone) try out.appendSlice(allocator, document_css);
+    try out.appendSlice(allocator, fragment_css);
+    if (standalone) try out.appendSlice(allocator, print_css);
+    for (ir.fonts.instances) |font| {
+        const path = assets.fontPath(font.resource, font.face_index) orelse return error.MissingHtmlResource;
+        try out.appendSlice(allocator, "@font-face { font-family: '");
+        try appendFontFamily(allocator, &out, font.id);
+        try out.appendSlice(allocator, "'; src: url('");
+        try appendCssUrl(allocator, &out, path);
+        try appendFormat(allocator, &out, "'); font-weight:{d}; font-style:{s}; font-stretch:{s}; ascent-override:{d:.9}%; descent-override:{d:.9}%; line-gap-override:{d:.9}%; font-display:block; }}\n", .{
+            font.weight,
+            fontStyle(font.style),
+            fontStretch(font.stretch),
+            normalized(font.ascent_ratio * 100),
+            normalized(font.descent_ratio * 100),
+            normalized(font.line_gap_ratio * 100),
+        });
     }
     return try out.toOwnedSlice(allocator);
 }
@@ -70,11 +63,21 @@ pub fn generate(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *con
     try out.appendSlice(allocator, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">" ++
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" ++
         "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self'; connect-src 'self'; font-src 'self'\">" ++
-        "<title>ss document</title><link rel=\"stylesheet\" href=\"ss.css\"></head><body><main class=\"ss-document\">");
-    for (ir.pages) |*page| try appendPage(allocator, &out, ir, page, assets);
-    try out.appendSlice(allocator, "</main>");
+        "<title>ss document</title><link rel=\"stylesheet\" href=\"ss.css\"></head><body>");
+    const content = try fragment(allocator, ir, assets);
+    defer allocator.free(content);
+    try out.appendSlice(allocator, content);
     if (assets.has_pdf) try out.appendSlice(allocator, "<script type=\"module\" src=\"ss.js\"></script>");
     try out.appendSlice(allocator, "</body></html>\n");
+    return try out.toOwnedSlice(allocator);
+}
+
+pub fn fragment(allocator: std.mem.Allocator, ir: *const render.Ir, assets: *const resources.Set) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, "<main class=\"ss-document\">");
+    for (ir.pages) |*page| try appendPage(allocator, &out, ir, page, assets);
+    try out.appendSlice(allocator, "</main>");
     return try out.toOwnedSlice(allocator);
 }
 
@@ -93,15 +96,12 @@ fn appendPage(
         try appendAttribute(allocator, out, destination.name);
         try appendFormat(allocator, out, "\" style=\"left:{d:.6}pt;top:{d:.6}pt\"></span>", .{ normalized(destination.point.x), normalized(destination.point.y) });
     }
-    for (page.items.items) |item| if (item.header().semantic_id == null) try appendItem(allocator, out, ir, item, assets);
+    for (page.items.items) |item| try appendItem(allocator, out, ir, item, assets);
+    try out.appendSlice(allocator, "<div class=\"ss-semantic-layer\">");
     for (page.reading_order) |semantic_id| {
-        const semantic = ir.semantics.find(semantic_id) orelse return error.InvalidSemantics;
-        try appendSemanticStart(allocator, out, semantic);
-        for (page.items.items) |item| {
-            if (item.header().semantic_id == semantic_id) try appendItem(allocator, out, ir, item, assets);
-        }
-        try appendSemanticEnd(allocator, out, semantic);
+        try appendSemanticNode(allocator, out, &ir.semantics, semantic_id, 0);
     }
+    try out.appendSlice(allocator, "</div>");
     for (page.links.items) |link| {
         try out.appendSlice(allocator, "<a class=\"ss-link\" href=\"");
         if (link.kind == .destination) try out.append(allocator, '#');
@@ -112,19 +112,41 @@ fn appendPage(
     try out.appendSlice(allocator, "</section>");
 }
 
-fn appendSemanticStart(allocator: std.mem.Allocator, out: *std.ArrayList(u8), semantic: *const render.SemanticNode) !void {
+fn appendSemanticNode(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    tree: *const render.SemanticTree,
+    semantic_id: render.SemanticId,
+    depth: usize,
+) !void {
+    if (depth > tree.nodes.len) return error.InvalidSemantics;
+    const semantic = tree.find(semantic_id) orelse return error.InvalidSemantics;
     const tag = semanticTag(semantic.*);
-    try appendFormat(allocator, out, "<{s} class=\"ss-semantic\" data-ss-semantic-id=\"{d}\"", .{ tag, semantic.id });
+    try appendFormat(allocator, out, "<{s} data-ss-semantic-id=\"{d}\"", .{ tag, semantic.id });
+    if (semantic.role == .list and semantic.list_ordered.? and semantic.list_start.? != 1) {
+        try appendFormat(allocator, out, " start=\"{d}\"", .{semantic.list_start.?});
+    }
+    if (semantic.language) |language| {
+        try out.appendSlice(allocator, " lang=\"");
+        try appendAttribute(allocator, out, language);
+        try out.append(allocator, '"');
+    }
+    if (semantic.role == .link) {
+        try out.appendSlice(allocator, " href=\"");
+        if (semantic.link_kind.? == .destination) try out.append(allocator, '#');
+        try appendAttribute(allocator, out, semantic.link_target.?);
+        try out.append(allocator, '"');
+    }
     if (semantic.alt_text) |alt| {
         try out.appendSlice(allocator, " aria-label=\"");
         try appendAttribute(allocator, out, alt);
         try out.append(allocator, '"');
     }
+    if (semantic.role == .math) try out.appendSlice(allocator, " role=\"math\"");
     try out.append(allocator, '>');
     if (semantic.role == .code) try out.appendSlice(allocator, "<code>");
-}
-
-fn appendSemanticEnd(allocator: std.mem.Allocator, out: *std.ArrayList(u8), semantic: *const render.SemanticNode) !void {
+    if (semantic.text) |value| try appendText(allocator, out, value);
+    for (semantic.children) |child| try appendSemanticNode(allocator, out, tree, child, depth + 1);
     if (semantic.role == .code) try out.appendSlice(allocator, "</code>");
     try appendFormat(allocator, out, "</{s}>", .{semanticTag(semantic.*)});
 }
@@ -142,7 +164,7 @@ fn semanticTag(semantic: render.SemanticNode) []const u8 {
             else => "h6",
         },
         .paragraph => "p",
-        .list => "ul",
+        .list => if (semantic.list_ordered orelse false) "ol" else "ul",
         .list_item => "li",
         .table => "table",
         .table_row => "tr",
@@ -151,7 +173,9 @@ fn semanticTag(semantic: render.SemanticNode) []const u8 {
         .figure => "figure",
         .caption => "figcaption",
         .code => "pre",
-        .math, .link, .group, .decoration => "div",
+        .link => "a",
+        .math, .text => "span",
+        .group, .decoration => "div",
     };
 }
 
@@ -193,35 +217,52 @@ fn appendItem(
             });
             for (value.layout.runs, 0..) |run, run_index| {
                 _ = lineForRun(&value.layout, run_index) orelse return error.InvalidTextLayout;
-                const run_top = run.baseline_y - value.font_size * css_line_box_baseline_fraction;
-                try appendFormat(allocator, out, "<span class=\"ss-text-run\" style=\"left:{d:.6}pt;top:{d:.6}pt;font-family:", .{
-                    normalized(run.x), normalized(run_top),
-                });
-                if (run.font_resource) |font_resource| {
-                    const path = assets.fontPath(font_resource, run.font_index) orelse return error.MissingHtmlResource;
-                    try out.append(allocator, '\'');
-                    try appendFontFamily(allocator, out, path);
-                    try out.append(allocator, '\'');
-                } else {
-                    try appendCssString(allocator, out, run.font_family);
+                const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
+                const ascent = value.font_size * font.ascent_ratio;
+                const descent = value.font_size * font.descent_ratio;
+                const run_top = run.baseline_y - ascent;
+                try out.appendSlice(allocator, "<span class=\"ss-text-run\"");
+                if (run.language.len != 0) {
+                    try out.appendSlice(allocator, " lang=\"");
+                    try appendAttribute(allocator, out, run.language);
+                    try out.append(allocator, '"');
                 }
-                try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:{s}\">", .{
+                try appendFormat(allocator, out, " dir=\"{s}\" style=\"left:{d:.6}pt;top:{d:.6}pt;font-family:", .{
+                    if (run.direction == .left_to_right) "ltr" else "rtl",
+                    normalized(run.x),
+                    normalized(run_top),
+                });
+                try out.append(allocator, '\'');
+                try appendFontFamily(allocator, out, font.id);
+                try out.append(allocator, '\'');
+                try appendFormat(allocator, out, ";width:{d:.6}pt;height:{d:.6}pt;font-size:{d:.6}pt;font-weight:{d};font-style:{s};font-stretch:{s};line-height:{d:.6}pt;color:{s};", .{
                     normalized(run.advance),
+                    normalized(ascent + descent),
                     normalized(value.font_size),
-                    normalized(value.font_size),
-                    value.font_weight,
-                    fontStyle(value.font_style),
-                    fontStretch(value.font_stretch),
-                    normalized(value.font_size),
+                    font.weight,
+                    fontStyle(font.style),
+                    fontStretch(font.stretch),
+                    normalized(ascent + descent),
                     color(value.color),
                 });
+                try appendFontSettings(allocator, out, font);
+                try out.appendSlice(allocator, "\">");
                 const clusters = value.layout.clusters[run.cluster_range.start..run.cluster_range.end];
                 if (clusters.len == 0) {
                     try appendText(allocator, out, value.layout.source_text[run.source.start..run.source.end]);
                 } else {
-                    for (clusters) |cluster| {
+                    const order = try allocator.alloc(usize, clusters.len);
+                    defer allocator.free(order);
+                    for (order, 0..) |*entry, index| entry.* = index;
+                    std.mem.sort(usize, order, clusters, struct {
+                        fn lessThan(values: []const render.TextCluster, lhs: usize, rhs: usize) bool {
+                            return values[lhs].source.start < values[rhs].source.start;
+                        }
+                    }.lessThan);
+                    for (order) |cluster_index| {
+                        const cluster = clusters[cluster_index];
                         try appendFormat(allocator, out, "<span class=\"ss-text-cluster\" style=\"left:{d:.6}pt;width:{d:.6}pt\">", .{
-                            normalized(cluster.x), normalized(cluster.advance),
+                            normalized(cluster.x), normalized(cluster.advance_x),
                         });
                         try appendText(allocator, out, value.layout.source_text[cluster.source.start..cluster.source.end]);
                         try out.appendSlice(allocator, "</span>");
@@ -313,11 +354,8 @@ fn appendMathNode(
 fn appendItemStart(allocator: std.mem.Allocator, out: *std.ArrayList(u8), tag: []const u8, class: []const u8, header: render.ItemHeader) !void {
     try appendFormat(allocator, out, "<{s} class=\"ss-item {s}\" data-ss-item-id=\"{d}\"", .{ tag, class, header.item_id });
     if (header.node_id) |node_id| try appendFormat(allocator, out, " data-ss-node-id=\"{d}\"", .{node_id});
-    if (header.semantic_id) |semantic_id| {
-        try appendFormat(allocator, out, " data-ss-semantic-id=\"{d}\"", .{semantic_id});
-    } else {
-        try out.appendSlice(allocator, " aria-hidden=\"true\"");
-    }
+    if (header.semantic_id) |semantic_id| try appendFormat(allocator, out, " data-ss-semantic-id=\"{d}\"", .{semantic_id});
+    try out.appendSlice(allocator, " aria-hidden=\"true\"");
     try appendFormat(allocator, out, " style=\"z-index:{d};opacity:{d:.6};", .{ header.paint_index, normalized(header.opacity) });
 }
 
@@ -367,11 +405,29 @@ fn appendCssUrl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []
     };
 }
 
-fn appendFontFamily(allocator: std.mem.Allocator, out: *std.ArrayList(u8), relative_path: []const u8) !void {
-    const base = std.fs.path.stem(relative_path);
-    if (base.len < 16) return error.InvalidHtmlResourceName;
+fn appendFontFamily(allocator: std.mem.Allocator, out: *std.ArrayList(u8), id: render.FontInstanceId) !void {
     try out.appendSlice(allocator, "ss-font-");
-    try out.appendSlice(allocator, base[0..16]);
+    const hex = std.fmt.bytesToHex(id, .lower);
+    try out.appendSlice(allocator, &hex);
+}
+
+fn appendFontSettings(allocator: std.mem.Allocator, out: *std.ArrayList(u8), font: *const render.FontInstance) !void {
+    if (font.variations.len != 0) {
+        try out.appendSlice(allocator, "font-variation-settings:");
+        for (font.variations, 0..) |variation, index| {
+            if (index != 0) try out.append(allocator, ',');
+            try appendFormat(allocator, out, "'{s}' {d:.9}", .{ &variation.tag, normalized(variation.value) });
+        }
+        try out.append(allocator, ';');
+    }
+    if (font.features.len != 0) {
+        try out.appendSlice(allocator, "font-feature-settings:");
+        for (font.features, 0..) |feature, index| {
+            if (index != 0) try out.append(allocator, ',');
+            try appendFormat(allocator, out, "'{s}' {d}", .{ &feature.tag, feature.value });
+        }
+        try out.append(allocator, ';');
+    }
 }
 
 fn lineForRun(layout: *const render.TextLayout, run_index: usize) ?render.TextLine {

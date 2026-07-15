@@ -18,19 +18,30 @@ pub const Role = enum {
     code,
     math,
     link,
+    text,
     group,
     decoration,
+};
+
+pub const LinkKind = enum {
+    uri,
+    destination,
 };
 
 pub const Node = struct {
     id: Id,
     role: Role,
     heading_level: ?u8 = null,
+    list_ordered: ?bool = null,
+    list_start: ?usize = null,
     children: []Id = &.{},
     items: []u64 = &.{},
     text: ?[]u8 = null,
     alt_text: ?[]u8 = null,
     language: ?[]u8 = null,
+    code_language: ?[]u8 = null,
+    link_kind: ?LinkKind = null,
+    link_target: ?[]u8 = null,
 
     pub fn deinit(self: *Node, allocator: std.mem.Allocator) void {
         allocator.free(self.children);
@@ -38,6 +49,8 @@ pub const Node = struct {
         if (self.text) |value| allocator.free(value);
         if (self.alt_text) |value| allocator.free(value);
         if (self.language) |value| allocator.free(value);
+        if (self.code_language) |value| allocator.free(value);
+        if (self.link_target) |value| allocator.free(value);
     }
 };
 

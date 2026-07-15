@@ -13,12 +13,14 @@ pub const Error = error{
     InvalidAnnotation,
     InvalidResource,
     MissingResource,
+    InvalidFont,
+    MissingFont,
     InvalidSemantics,
     SemanticCycle,
 };
 
 pub fn document(ir: anytype) Error!void {
-    if (ir.schema_version != 3) return error.UnsupportedSchema;
+    if (ir.schema_version != 4) return error.UnsupportedSchema;
     for (ir.resources.entries, 0..) |resource, resource_index| {
         const expected = @import("resources.zig").identify(resource.kind, resource.bytes);
         if (!std.mem.eql(u8, &resource.id, &expected)) return error.InvalidResource;
@@ -26,6 +28,7 @@ pub fn document(ir: anytype) Error!void {
             if (std.mem.eql(u8, &previous.id, &resource.id)) return error.InvalidResource;
         }
     }
+    try fontCatalog(ir);
     try semanticTree(ir);
     try mathCatalog(ir);
     for (ir.pages, 0..) |*page, page_index| {
@@ -50,9 +53,15 @@ pub fn document(ir: anytype) Error!void {
                 if (!found) return error.InvalidSemantics;
             }
         }
-        for (page.links.items) |link| if (!link.rect.isValid()) return error.InvalidAnnotation;
+        for (page.links.items) |link| {
+            if (!link.rect.isValid() or link.target.len == 0 or
+                !std.unicode.utf8ValidateSlice(link.target) or !validLinkTarget(link.kind, link.target)) return error.InvalidAnnotation;
+            if (link.kind == .destination and !hasDestination(ir, link.target)) return error.InvalidAnnotation;
+        }
         for (page.destinations.items) |destination| {
-            if (!std.math.isFinite(destination.point.x) or !std.math.isFinite(destination.point.y)) return error.InvalidAnnotation;
+            if (!std.math.isFinite(destination.point.x) or !std.math.isFinite(destination.point.y) or
+                destination.name.len == 0 or !std.unicode.utf8ValidateSlice(destination.name) or destination.name[0] == '#') return error.InvalidAnnotation;
+            if (destinationCount(ir, destination.name) != 1) return error.InvalidAnnotation;
         }
         for (page.reading_order) |semantic_id| if (ir.semantics.find(semantic_id) == null) return error.InvalidSemantics;
     }
@@ -62,11 +71,117 @@ fn semanticTree(ir: anytype) Error!void {
     const root = ir.semantics.root orelse return error.InvalidSemantics;
     const root_node = ir.semantics.find(root) orelse return error.InvalidSemantics;
     if (root_node.role != .document) return error.InvalidSemantics;
+    if (root_node.children.len != ir.pages.len) return error.InvalidSemantics;
     for (ir.semantics.nodes, 0..) |node, index| {
+        if (node.id == 0) return error.InvalidSemantics;
         for (ir.semantics.nodes[0..index]) |previous| if (previous.id == node.id) return error.InvalidSemantics;
-        for (node.children) |child| if (ir.semantics.find(child) == null) return error.InvalidSemantics;
+        try semanticNode(node);
+        for (node.children, 0..) |child, child_index| {
+            const child_node = ir.semantics.find(child) orelse return error.InvalidSemantics;
+            if (!validSemanticChild(node.role, child_node.role)) return error.InvalidSemantics;
+            for (node.children[0..child_index]) |previous| if (previous == child) return error.InvalidSemantics;
+        }
+        const parent_count = semanticParentCount(ir, node.id);
+        if (node.id == root) {
+            if (parent_count != 0) return error.InvalidSemantics;
+        } else if (parent_count != 1) return error.InvalidSemantics;
+        for (node.items, 0..) |item_id, item_index| {
+            if (item_id == 0) return error.InvalidSemantics;
+            for (node.items[0..item_index]) |previous| if (previous == item_id) return error.InvalidSemantics;
+            if (!semanticItemMatches(ir, item_id, node.id)) return error.InvalidSemantics;
+        }
         try rejectSemanticCycle(ir, node.id, node.id, 0);
     }
+    for (ir.pages, 0..) |page, page_index| {
+        const page_node = ir.semantics.find(root_node.children[page_index]) orelse return error.InvalidSemantics;
+        if (page_node.role != .page or page_node.children.len != page.reading_order.len) return error.InvalidSemantics;
+        for (page.reading_order, 0..) |semantic_id, reading_index| {
+            if (semantic_id != page_node.children[reading_index]) return error.InvalidSemantics;
+            for (page.reading_order[0..reading_index]) |previous| if (previous == semantic_id) return error.InvalidSemantics;
+        }
+    }
+}
+
+fn validSemanticChild(parent: anytype, child: anytype) bool {
+    return switch (parent) {
+        .document => child == .page,
+        .page => child != .document and child != .page and child != .text,
+        .list => child == .list_item,
+        .table => child == .table_row,
+        .table_row => child == .table_header or child == .table_cell,
+        .heading, .paragraph, .table_header, .table_cell, .code => child == .text or child == .link or child == .math,
+        .text, .link, .math, .decoration => false,
+        .list_item, .figure, .caption, .group => child != .document and child != .page,
+    };
+}
+
+fn semanticNode(node: anytype) Error!void {
+    inline for (.{ node.text, node.alt_text, node.language, node.code_language, node.link_target }) |optional| {
+        if (optional) |value| if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidSemantics;
+    }
+    switch (node.role) {
+        .heading => if (node.heading_level == null or node.heading_level.? < 1 or node.heading_level.? > 6) return error.InvalidSemantics,
+        else => if (node.heading_level != null) return error.InvalidSemantics,
+    }
+    switch (node.role) {
+        .list => {
+            const ordered = node.list_ordered orelse return error.InvalidSemantics;
+            if (ordered) {
+                if (node.list_start == null or node.list_start.? == 0) return error.InvalidSemantics;
+            } else if (node.list_start != null) return error.InvalidSemantics;
+        },
+        else => if (node.list_ordered != null or node.list_start != null) return error.InvalidSemantics,
+    }
+    switch (node.role) {
+        .link => {
+            const kind = node.link_kind orelse return error.InvalidSemantics;
+            const target = node.link_target orelse return error.InvalidSemantics;
+            if (target.len == 0 or !validLinkTarget(kind, target)) return error.InvalidSemantics;
+        },
+        else => if (node.link_kind != null or node.link_target != null) return error.InvalidSemantics,
+    }
+    if (node.role != .code and node.code_language != null) return error.InvalidSemantics;
+    if ((node.role == .text or node.role == .link or node.role == .math) and node.children.len != 0) return error.InvalidSemantics;
+}
+
+fn semanticParentCount(ir: anytype, id: anytype) usize {
+    var count: usize = 0;
+    for (ir.semantics.nodes) |node| for (node.children) |child| if (child == id) {
+        count += 1;
+    };
+    return count;
+}
+
+fn semanticItemMatches(ir: anytype, item_id: anytype, semantic_id: anytype) bool {
+    for (ir.pages) |page| for (page.items.items) |item| {
+        const header = item.header();
+        if (header.item_id == item_id) return header.semantic_id != null and header.semantic_id.? == semantic_id;
+    };
+    return false;
+}
+
+fn validLinkTarget(kind: anytype, target: []const u8) bool {
+    for (target) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    if (kind == .destination) return target[0] != '#';
+    const separator = std.mem.indexOfScalar(u8, target, ':') orelse return true;
+    const path_separator = std.mem.indexOfAny(u8, target, "/?#") orelse target.len;
+    if (separator > path_separator) return true;
+    const scheme = target[0..separator];
+    return std.ascii.eqlIgnoreCase(scheme, "http") or
+        std.ascii.eqlIgnoreCase(scheme, "https") or
+        std.ascii.eqlIgnoreCase(scheme, "mailto");
+}
+
+fn hasDestination(ir: anytype, name: []const u8) bool {
+    return destinationCount(ir, name) != 0;
+}
+
+fn destinationCount(ir: anytype, name: []const u8) usize {
+    var count: usize = 0;
+    for (ir.pages) |page| for (page.destinations.items) |destination| {
+        if (std.mem.eql(u8, destination.name, name)) count += 1;
+    };
+    return count;
 }
 
 fn rejectSemanticCycle(ir: anytype, origin: anytype, current: anytype, depth: usize) Error!void {
@@ -96,20 +211,48 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
             if (!std.math.isFinite(value.x) or !std.math.isFinite(value.y) or
                 !nonNegativeFinite(value.width) or !positiveFinite(value.font_size)) return error.InvalidItemGeometry;
             if (!value.layout.logical_bounds.isValid() or !value.layout.ink_bounds.isValid()) return error.InvalidItemGeometry;
+            if (!std.unicode.utf8ValidateSlice(value.layout.source_text)) return error.InvalidItemGeometry;
             for (value.layout.lines) |line| {
                 if (!line.logical_bounds.isValid() or !line.ink_bounds.isValid() or !std.math.isFinite(line.baseline_y)) return error.InvalidItemGeometry;
+                if (line.source.start > line.source.end or line.source.end > value.layout.source_text.len) return error.InvalidItemGeometry;
+                if (line.run_range.start > line.run_range.end or line.run_range.end > value.layout.runs.len) return error.InvalidItemGeometry;
             }
             for (value.layout.runs) |run| {
                 if (!std.math.isFinite(run.x) or !std.math.isFinite(run.baseline_y) or !std.math.isFinite(run.advance)) return error.InvalidItemGeometry;
                 if (run.source.start > run.source.end or run.source.end > value.layout.source_text.len) return error.InvalidItemGeometry;
                 if (run.glyph_range.start > run.glyph_range.end or run.glyph_range.end > value.layout.glyphs.len) return error.InvalidItemGeometry;
                 if (run.cluster_range.start > run.cluster_range.end or run.cluster_range.end > value.layout.clusters.len) return error.InvalidItemGeometry;
-                if (run.font_resource) |resource| try requireResource(ir, resource, .font);
+                if (ir.fonts.find(run.font_instance) == null) return error.MissingFont;
+                if (!std.unicode.utf8ValidateSlice(run.language)) return error.InvalidItemGeometry;
+                if ((run.direction == .right_to_left) != (run.bidi_level & 1 == 1)) return error.InvalidItemGeometry;
+                var source_bytes: usize = 0;
+                var glyph_count: usize = 0;
+                const run_clusters = value.layout.clusters[run.cluster_range.start..run.cluster_range.end];
+                for (run_clusters, 0..) |cluster, cluster_index| {
+                    if (cluster.source.start < run.source.start or cluster.source.end > run.source.end) return error.InvalidItemGeometry;
+                    if (cluster.glyph_range.start < run.glyph_range.start or cluster.glyph_range.end > run.glyph_range.end) return error.InvalidItemGeometry;
+                    source_bytes += cluster.source.end - cluster.source.start;
+                    glyph_count += cluster.glyph_range.end - cluster.glyph_range.start;
+                    for (run_clusters[0..cluster_index]) |previous| {
+                        if (rangesOverlap(cluster.source, previous.source) or rangesOverlap(cluster.glyph_range, previous.glyph_range)) {
+                            return error.InvalidItemGeometry;
+                        }
+                    }
+                }
+                if (source_bytes != run.source.end - run.source.start or glyph_count != run.glyph_range.end - run.glyph_range.start) {
+                    return error.InvalidItemGeometry;
+                }
             }
             for (value.layout.clusters) |cluster| {
                 if (cluster.source.start > cluster.source.end or cluster.source.end > value.layout.source_text.len) return error.InvalidItemGeometry;
                 if (cluster.glyph_range.start > cluster.glyph_range.end or cluster.glyph_range.end > value.layout.glyphs.len) return error.InvalidItemGeometry;
-                if (!std.math.isFinite(cluster.x) or !nonNegativeFinite(cluster.advance)) return error.InvalidItemGeometry;
+                if (!std.math.isFinite(cluster.x) or !std.math.isFinite(cluster.baseline_y) or
+                    !std.math.isFinite(cluster.advance_x) or !std.math.isFinite(cluster.advance_y) or
+                    !cluster.logical_bounds.isValid() or !cluster.ink_bounds.isValid()) return error.InvalidItemGeometry;
+            }
+            for (value.layout.glyphs) |glyph| {
+                if (!std.math.isFinite(glyph.offset_x) or !std.math.isFinite(glyph.offset_y) or
+                    !std.math.isFinite(glyph.advance_x) or !std.math.isFinite(glyph.advance_y)) return error.InvalidItemGeometry;
             }
         },
         .raster => |value| {
@@ -129,6 +272,37 @@ fn itemGeometry(ir: anytype, item: anytype) Error!void {
             if (!value.rect.isValid()) return error.InvalidItemGeometry;
             try requireResource(ir, value.resource, .pdf);
         },
+    }
+}
+
+fn fontCatalog(ir: anytype) Error!void {
+    for (ir.fonts.instances, 0..) |instance, index| {
+        if (index > 0 and std.mem.order(u8, &ir.fonts.instances[index - 1].id, &instance.id) != .lt) return error.InvalidFont;
+        const expected = @import("fonts.zig").identify(.{
+            .resource = instance.resource,
+            .face_index = instance.face_index,
+            .family = instance.family,
+            .postscript_name = instance.postscript_name,
+            .weight = instance.weight,
+            .style = instance.style,
+            .stretch = instance.stretch,
+            .ascent_ratio = instance.ascent_ratio,
+            .descent_ratio = instance.descent_ratio,
+            .line_gap_ratio = instance.line_gap_ratio,
+            .variations = instance.variations,
+            .features = instance.features,
+            .synthetic_bold = instance.synthetic_bold,
+            .synthetic_italic = instance.synthetic_italic,
+            .family_substitution = instance.family_substitution,
+        });
+        if (!std.mem.eql(u8, &expected, &instance.id)) return error.InvalidFont;
+        if (instance.family.len == 0 or instance.weight < 1 or instance.weight > 1000) return error.InvalidFont;
+        if (instance.synthetic_bold or instance.synthetic_italic) return error.InvalidFont;
+        if (!positiveFinite(instance.ascent_ratio) or !nonNegativeFinite(instance.descent_ratio) or
+            !nonNegativeFinite(instance.line_gap_ratio)) return error.InvalidFont;
+        if (!std.unicode.utf8ValidateSlice(instance.family) or !std.unicode.utf8ValidateSlice(instance.postscript_name)) return error.InvalidFont;
+        for (instance.variations) |variation| if (!std.math.isFinite(variation.value)) return error.InvalidFont;
+        try requireResource(ir, instance.resource, .font);
     }
 }
 
@@ -160,6 +334,10 @@ fn requireResource(ir: anytype, id: anytype, kind: anytype) Error!void {
 
 fn pointFinite(point: anytype) bool {
     return std.math.isFinite(point.x) and std.math.isFinite(point.y);
+}
+
+fn rangesOverlap(lhs: anytype, rhs: anytype) bool {
+    return lhs.start < rhs.end and rhs.start < lhs.end;
 }
 
 fn nonNegativeFinite(value: f64) bool {

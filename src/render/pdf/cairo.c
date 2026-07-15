@@ -10,6 +10,7 @@
 #include <librsvg/rsvg.h>
 #include <pango/pangocairo.h>
 #include <pango/pangofc-font.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -457,60 +458,6 @@ static PangoFontDescription *ss_font_description(const char *family, int weight,
     return desc;
 }
 
-int ss_pdf_draw_text_baseline(
-    SsPdf *pdf,
-    double x,
-    double baseline_y,
-    double width,
-    const char *text,
-    const char *font_family,
-    int font_weight,
-    int font_style,
-    int font_stretch,
-    double font_size,
-    double r,
-    double g,
-    double b,
-    int wrap
-) {
-    if (pdf == NULL || pdf->cr == NULL) return 1;
-
-    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
-    if (layout == NULL) return 1;
-
-    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
-    if (desc == NULL) {
-        g_object_unref(layout);
-        return 1;
-    }
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-
-    char *valid_text = g_utf8_make_valid(text, -1);
-    if (valid_text == NULL) {
-        g_object_unref(layout);
-        return 1;
-    }
-    pango_layout_set_text(layout, valid_text, -1);
-    g_free(valid_text);
-    if (wrap && width > 0) {
-        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
-        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
-    } else {
-        pango_layout_set_width(layout, -1);
-    }
-
-    double layout_y = baseline_y - ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
-    cairo_save(pdf->cr);
-    ss_pdf_set_rgb(r, g, b, pdf->cr);
-    cairo_move_to(pdf->cr, x, layout_y);
-    pango_cairo_show_layout(pdf->cr, layout);
-    cairo_restore(pdf->cr);
-
-    g_object_unref(layout);
-    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
-}
-
 int ss_pdf_draw_glyph_run(
     SsPdf *pdf,
     const char *font_path,
@@ -596,60 +543,6 @@ cleanup:
     if (face != NULL) FT_Done_Face(face);
     if (library != NULL) FT_Done_FreeType(library);
     return result;
-}
-
-int ss_pdf_draw_color_text_baseline(
-    SsPdf *pdf,
-    double x,
-    double baseline_y,
-    double width,
-    const char *text,
-    const char *font_family,
-    int font_weight,
-    int font_style,
-    int font_stretch,
-    double font_size,
-    double r,
-    double g,
-    double b,
-    int wrap
-) {
-    if (pdf == NULL || pdf->cr == NULL) return 1;
-
-    PangoLayout *layout = pango_cairo_create_layout(pdf->cr);
-    if (layout == NULL) return 1;
-
-    PangoFontDescription *desc = ss_font_description(font_family, font_weight, font_style, font_stretch, font_size);
-    if (desc == NULL) {
-        g_object_unref(layout);
-        return 1;
-    }
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-
-    char *valid_text = g_utf8_make_valid(text, -1);
-    if (valid_text == NULL) {
-        g_object_unref(layout);
-        return 1;
-    }
-    pango_layout_set_text(layout, valid_text, -1);
-    g_free(valid_text);
-    if (wrap && width > 0) {
-        pango_layout_set_width(layout, (int)(width * PANGO_SCALE));
-        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
-    } else {
-        pango_layout_set_width(layout, -1);
-    }
-
-    double layout_y = baseline_y - ((double)pango_layout_get_baseline(layout)) / PANGO_SCALE;
-    cairo_save(pdf->cr);
-    ss_pdf_set_rgb(r, g, b, pdf->cr);
-    cairo_move_to(pdf->cr, x, layout_y);
-    pango_cairo_show_layout(pdf->cr, layout);
-    cairo_restore(pdf->cr);
-
-    g_object_unref(layout);
-    return cairo_status(pdf->cr) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
 static double ss_measure_text_on_cairo(cairo_t *cr, const char *text, const char *font_family, int font_weight, int font_style, int font_stretch, double font_size, int visual_width) {
@@ -748,10 +641,19 @@ static char *ss_font_family_copy(PangoFont *font) {
     return result;
 }
 
-static void ss_font_source_copy(PangoFont *font, char **path_out, unsigned int *index_out, char **postscript_name_out) {
+static void ss_font_source_copy(
+    PangoFont *font,
+    char **path_out,
+    unsigned int *index_out,
+    char **postscript_name_out,
+    int *synthetic_bold_out,
+    int *synthetic_italic_out
+) {
     *path_out = g_strdup("");
     *index_out = 0;
     *postscript_name_out = g_strdup("");
+    *synthetic_bold_out = 0;
+    *synthetic_italic_out = 0;
     if (font == NULL) return;
     FcPattern *owned_match = NULL;
     FcPattern *pattern = NULL;
@@ -793,6 +695,14 @@ static void ss_font_source_copy(PangoFont *font, char **path_out, unsigned int *
             g_free(*postscript_name_out);
             *postscript_name_out = g_strdup((const char *)postscript_name);
         }
+        FcBool embolden = FcFalse;
+        if (FcPatternGetBool(pattern, FC_EMBOLDEN, 0, &embolden) == FcResultMatch) {
+            *synthetic_bold_out = embolden == FcTrue;
+        }
+        FcMatrix *matrix = NULL;
+        if (FcPatternGetMatrix(pattern, FC_MATRIX, 0, &matrix) == FcResultMatch && matrix != NULL) {
+            *synthetic_italic_out = matrix->xy != 0 || matrix->yx != 0;
+        }
     }
     if (owned_match != NULL) FcPatternDestroy(owned_match);
 }
@@ -804,10 +714,12 @@ void ss_text_shape_free(SsTextShape *shape) {
             g_free(shape->runs[index].font_family);
             g_free(shape->runs[index].font_path);
             g_free(shape->runs[index].font_postscript_name);
+            g_free(shape->runs[index].language);
         }
     }
     free(shape->lines);
     free(shape->runs);
+    free(shape->clusters);
     free(shape->glyphs);
     memset(shape, 0, sizeof(*shape));
 }
@@ -860,6 +772,7 @@ int ss_text_shape(
 
     const int line_count = pango_layout_get_line_count(layout);
     size_t run_count = 0;
+    size_t cluster_count = 0;
     size_t glyph_count = 0;
     for (int line_index = 0; line_index < line_count; line_index++) {
         PangoLayoutLine *line = pango_layout_get_line_readonly(layout, line_index);
@@ -869,13 +782,19 @@ int ss_text_shape(
             if (item == NULL || item->glyphs == NULL) continue;
             run_count++;
             glyph_count += (size_t)item->glyphs->num_glyphs;
+            for (int glyph_index = 0; glyph_index < item->glyphs->num_glyphs; glyph_index++) {
+                if (glyph_index == 0 || item->glyphs->log_clusters[glyph_index] != item->glyphs->log_clusters[glyph_index - 1]) {
+                    cluster_count++;
+                }
+            }
         }
     }
     shape->lines = (SsTextLine *)calloc((size_t)line_count, sizeof(SsTextLine));
     shape->runs = (SsTextRun *)calloc(run_count, sizeof(SsTextRun));
+    shape->clusters = (SsTextCluster *)calloc(cluster_count, sizeof(SsTextCluster));
     shape->glyphs = (SsTextGlyph *)calloc(glyph_count, sizeof(SsTextGlyph));
     if ((line_count > 0 && shape->lines == NULL) || (run_count > 0 && shape->runs == NULL) ||
-        (glyph_count > 0 && shape->glyphs == NULL)) {
+        (cluster_count > 0 && shape->clusters == NULL) || (glyph_count > 0 && shape->glyphs == NULL)) {
         g_free(valid_text);
         g_object_unref(layout);
         g_mutex_unlock(&ss_text_context_mutex);
@@ -884,6 +803,7 @@ int ss_text_shape(
     }
     shape->line_count = (size_t)line_count;
     shape->run_count = run_count;
+    shape->cluster_count = cluster_count;
     shape->glyph_count = glyph_count;
     PangoRectangle layout_ink = {0};
     PangoRectangle layout_logical = {0};
@@ -892,6 +812,7 @@ int ss_text_shape(
     shape->logical_bounds = ss_pango_extents(layout_logical);
 
     size_t next_run = 0;
+    size_t next_cluster = 0;
     size_t next_glyph = 0;
     PangoLayoutIter *iterator = pango_layout_get_iter(layout);
     if (iterator == NULL) {
@@ -925,16 +846,41 @@ int ss_text_shape(
                 run->source_end = (size_t)(item->offset + item->length);
                 run->glyph_start = next_glyph;
                 run->glyph_count = (size_t)glyphs->num_glyphs;
+                run->cluster_start = next_cluster;
                 run->x = visual_x;
                 run->baseline_y = output_line->baseline_y;
                 run->font_family = ss_font_family_copy(item->analysis.font);
-                ss_font_source_copy(item->analysis.font, &run->font_path, &run->font_index, &run->font_postscript_name);
+                ss_font_source_copy(
+                    item->analysis.font,
+                    &run->font_path,
+                    &run->font_index,
+                    &run->font_postscript_name,
+                    &run->synthetic_bold,
+                    &run->synthetic_italic
+                );
+                PangoFontDescription *actual_font = item->analysis.font != NULL ? pango_font_describe(item->analysis.font) : NULL;
+                run->font_weight = actual_font != NULL ? pango_font_description_get_weight(actual_font) : font_weight;
+                run->font_style = actual_font != NULL ? pango_font_description_get_style(actual_font) : font_style;
+                run->font_stretch = actual_font != NULL ? pango_font_description_get_stretch(actual_font) : font_stretch;
+                if (actual_font != NULL) pango_font_description_free(actual_font);
+                const char *language = item->analysis.language != NULL ? pango_language_to_string(item->analysis.language) : "";
+                run->language = g_strdup(language != NULL ? language : "");
+                run->bidi_level = item->analysis.level;
+                PangoFontMetrics *metrics = item->analysis.font != NULL
+                    ? pango_font_get_metrics(item->analysis.font, item->analysis.language)
+                    : NULL;
+                if (metrics != NULL) {
+                    run->ascent = ((double)pango_font_metrics_get_ascent(metrics)) / PANGO_SCALE;
+                    run->descent = ((double)pango_font_metrics_get_descent(metrics)) / PANGO_SCALE;
+                    const double height = ((double)pango_font_metrics_get_height(metrics)) / PANGO_SCALE;
+                    run->line_gap = fmax(height - run->ascent - run->descent, 0);
+                    pango_font_metrics_unref(metrics);
+                }
                 double advance = 0;
                 for (int glyph_index = 0; glyph_index < glyphs->num_glyphs; glyph_index++) {
                     PangoGlyphInfo info = glyphs->glyphs[glyph_index];
                     SsTextGlyph *glyph = &shape->glyphs[next_glyph++];
                     glyph->id = info.glyph;
-                    glyph->source_index = (unsigned int)(item->offset + glyphs->log_clusters[glyph_index]);
                     glyph->offset_x = ((double)info.geometry.x_offset) / PANGO_SCALE;
                     glyph->offset_y = ((double)info.geometry.y_offset) / PANGO_SCALE;
                     glyph->advance_x = ((double)info.geometry.width) / PANGO_SCALE;
@@ -942,6 +888,56 @@ int ss_text_shape(
                     advance += glyph->advance_x;
                 }
                 run->advance = advance;
+                double cluster_x = 0;
+                int cluster_glyph_start = 0;
+                while (cluster_glyph_start < glyphs->num_glyphs) {
+                    const int source_start = glyphs->log_clusters[cluster_glyph_start];
+                    int cluster_glyph_end = cluster_glyph_start + 1;
+                    while (cluster_glyph_end < glyphs->num_glyphs && glyphs->log_clusters[cluster_glyph_end] == source_start) {
+                        cluster_glyph_end++;
+                    }
+                    double cluster_advance = 0;
+                    for (int cluster_glyph = cluster_glyph_start; cluster_glyph < cluster_glyph_end; cluster_glyph++) {
+                        cluster_advance += ((double)glyphs->glyphs[cluster_glyph].geometry.width) / PANGO_SCALE;
+                    }
+                    PangoRectangle cluster_ink = {0};
+                    PangoRectangle cluster_logical = {0};
+                    pango_glyph_string_extents_range(
+                        glyphs,
+                        cluster_glyph_start,
+                        cluster_glyph_end,
+                        item->analysis.font,
+                        &cluster_ink,
+                        &cluster_logical
+                    );
+                    SsTextCluster *cluster = &shape->clusters[next_cluster++];
+                    cluster->source_start = (size_t)(item->offset + source_start);
+                    cluster->source_end = run->source_end;
+                    cluster->glyph_start = run->glyph_start + (size_t)cluster_glyph_start;
+                    cluster->glyph_count = (size_t)(cluster_glyph_end - cluster_glyph_start);
+                    cluster->x = cluster_x;
+                    cluster->baseline_y = run->baseline_y;
+                    cluster->advance_x = cluster_advance;
+                    cluster->advance_y = 0;
+                    cluster->logical_bounds = ss_pango_extents(cluster_logical);
+                    cluster->logical_bounds.x += run->x + cluster_x;
+                    cluster->logical_bounds.y += run->baseline_y;
+                    cluster->ink_bounds = ss_pango_extents(cluster_ink);
+                    cluster->ink_bounds.x += run->x + cluster_x;
+                    cluster->ink_bounds.y += run->baseline_y;
+                    cluster_x += cluster_advance;
+                    cluster_glyph_start = cluster_glyph_end;
+                }
+                run->cluster_count = next_cluster - run->cluster_start;
+                for (size_t cluster_index = run->cluster_start; cluster_index < next_cluster; cluster_index++) {
+                    for (size_t candidate_index = run->cluster_start; candidate_index < next_cluster; candidate_index++) {
+                        const size_t candidate_start = shape->clusters[candidate_index].source_start;
+                        if (candidate_start > shape->clusters[cluster_index].source_start &&
+                            candidate_start < shape->clusters[cluster_index].source_end) {
+                            shape->clusters[cluster_index].source_end = candidate_start;
+                        }
+                    }
+                }
                 visual_x += advance;
             }
         }

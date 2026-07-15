@@ -20,20 +20,26 @@ pub fn render(
     var materialized = try MaterializedResources.init(allocator, io, &ir.resources, output);
     defer materialized.deinit();
     if (page.hasPdfPages()) {
-        try renderComposed(allocator, io, page, output, &materialized);
+        try renderComposed(allocator, io, ir, page, output, &materialized);
     } else {
-        try renderCairo(allocator, page, output, &materialized);
+        try renderCairo(allocator, ir, page, output, &materialized);
     }
 }
 
-fn renderCairo(allocator: Allocator, page: *const render_ir.Page, output: []const u8, resources: *const MaterializedResources) !void {
+fn renderCairo(
+    allocator: Allocator,
+    ir: *const render_ir.Ir,
+    page: *const render_ir.Page,
+    output: []const u8,
+    resources: *const MaterializedResources,
+) !void {
     const output_z = try allocator.dupeZ(u8, output);
     defer allocator.free(output_z);
     const pdf = c.ss_pdf_create(output_z.ptr, page.width, page.height) orelse return error.CairoCreateFailed;
     defer c.ss_pdf_destroy(pdf);
     c.ss_pdf_set_creator(pdf, "ss page Cairo/Pango backend");
     c.ss_pdf_begin_page(pdf, page.width, page.height);
-    try replayItems(allocator, pdf, page.items.items, resources);
+    try replayItems(allocator, pdf, ir, page.items.items, resources);
     try emitAnnotations(pdf, page);
     c.ss_pdf_end_page(pdf);
     if (c.ss_pdf_finish(pdf) != 0) return error.CairoFailed;
@@ -42,11 +48,12 @@ fn renderCairo(allocator: Allocator, page: *const render_ir.Page, output: []cons
 fn renderComposed(
     allocator: Allocator,
     io: std.Io,
+    ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     output: []const u8,
     resources: *const MaterializedResources,
 ) !void {
-    var composition = Composition.init(allocator, io, page, output, resources);
+    var composition = Composition.init(allocator, io, ir, page, output, resources);
     defer composition.deinit();
 
     var segment_start: usize = 0;
@@ -73,6 +80,7 @@ fn renderComposed(
 const Composition = struct {
     allocator: Allocator,
     io: std.Io,
+    ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     output: []const u8,
     resources: *const MaterializedResources,
@@ -84,6 +92,7 @@ const Composition = struct {
     fn init(
         allocator: Allocator,
         io: std.Io,
+        ir: *const render_ir.Ir,
         page: *const render_ir.Page,
         output: []const u8,
         resources: *const MaterializedResources,
@@ -91,6 +100,7 @@ const Composition = struct {
         return .{
             .allocator = allocator,
             .io = io,
+            .ir = ir,
             .page = page,
             .output = output,
             .resources = resources,
@@ -112,7 +122,7 @@ const Composition = struct {
         const native_path = try layerPath(self.allocator, self.output, self.next_layer_index);
         errdefer self.allocator.free(native_path);
         errdefer deleteFileIfExists(self.io, native_path);
-        try renderNativeLayer(self.allocator, self.page, native_path, start, end, first_layer, self.resources);
+        try renderNativeLayer(self.allocator, self.ir, self.page, native_path, start, end, first_layer, self.resources);
 
         const native_path_z = try self.allocator.dupeZ(u8, native_path);
         self.owned_paths.append(self.allocator, native_path_z) catch |err| {
@@ -172,6 +182,7 @@ const Composition = struct {
 
 fn renderNativeLayer(
     allocator: Allocator,
+    ir: *const render_ir.Ir,
     page: *const render_ir.Page,
     path: []const u8,
     start: usize,
@@ -186,12 +197,18 @@ fn renderNativeLayer(
     c.ss_pdf_set_creator(pdf, "ss page Cairo/Pango/libqpdf backend");
     c.ss_pdf_begin_page(pdf, page.width, page.height);
     if (first_layer) try emitAnnotations(pdf, page);
-    try replayItems(allocator, pdf, page.items.items[start..end], resources);
+    try replayItems(allocator, pdf, ir, page.items.items[start..end], resources);
     c.ss_pdf_end_page(pdf);
     if (c.ss_pdf_finish(pdf) != 0) return error.CairoFailed;
 }
 
-fn replayItems(allocator: Allocator, pdf: *c.SsPdf, items: []const render_ir.Item, resources: *const MaterializedResources) !void {
+fn replayItems(
+    allocator: Allocator,
+    pdf: *c.SsPdf,
+    ir: *const render_ir.Ir,
+    items: []const render_ir.Item,
+    resources: *const MaterializedResources,
+) !void {
     for (items) |item| switch (item) {
         .fill_rect => |value| c.ss_pdf_fill_rect(
             pdf,
@@ -233,7 +250,7 @@ fn replayItems(allocator: Allocator, pdf: *c.SsPdf, items: []const render_ir.Ite
             if (value.stroke) |color| color.b else 0,
             value.line_width,
         ),
-        .text => |value| try replayText(allocator, pdf, value, resources),
+        .text => |value| try replayText(allocator, pdf, ir, value, resources),
         .raster => |value| {
             const path = try resources.resolve(value.resource, .raster);
             if (c.ss_pdf_draw_raster(pdf, path.ptr, value.rect.x, value.rect.y, value.rect.width, value.rect.height) != 0) {
@@ -252,11 +269,16 @@ fn replayItems(allocator: Allocator, pdf: *c.SsPdf, items: []const render_ir.Ite
     };
 }
 
-fn replayText(allocator: Allocator, pdf: *c.SsPdf, text: render_ir.Text, resources: *const MaterializedResources) !void {
-    if (text.layout.glyphs.len == 0) return replayTextWithPango(pdf, text);
+fn replayText(
+    allocator: Allocator,
+    pdf: *c.SsPdf,
+    ir: *const render_ir.Ir,
+    text: render_ir.Text,
+    resources: *const MaterializedResources,
+) !void {
     for (text.layout.runs) |run| {
-        const resource = run.font_resource orelse return error.MissingRenderResource;
-        const font_path = try resources.resolve(resource, .font);
+        const font = ir.fonts.find(run.font_instance) orelse return error.MissingRenderFont;
+        const font_path = try resources.resolve(font.resource, .font);
         const glyph_source = text.layout.glyphs[run.glyph_range.start..run.glyph_range.end];
         const glyphs = try allocator.alloc(c.SsReplayGlyph, glyph_source.len);
         defer allocator.free(glyphs);
@@ -293,12 +315,10 @@ fn replayText(allocator: Allocator, pdf: *c.SsPdf, text: render_ir.Text, resourc
         }
         const source = text.layout.source_text[run.source.start..run.source.end];
         if (byte_count != source.len or glyph_count != glyphs.len) return error.InvalidTextLayout;
-        const backward = cluster_order.len > 1 and
-            cluster_source[cluster_order[0]].source.start > cluster_source[cluster_order[cluster_order.len - 1]].source.start;
         if (c.ss_pdf_draw_glyph_run(
             pdf,
             font_path.ptr,
-            @intCast(run.font_index),
+            @intCast(font.face_index),
             text.font_size,
             text.color.r,
             text.color.g,
@@ -309,49 +329,9 @@ fn replayText(allocator: Allocator, pdf: *c.SsPdf, text: render_ir.Text, resourc
             @intCast(glyphs.len),
             clusters.ptr,
             @intCast(clusters.len),
-            @intFromBool(backward),
+            @intFromBool(run.direction == .right_to_left),
         ) != 0) return error.CairoFailed;
     }
-}
-
-fn replayTextWithPango(pdf: *c.SsPdf, text: render_ir.Text) !void {
-    if (text.layout.runs.len == 0) return error.InvalidTextLayout;
-    const family = text.layout.runs[0].font_family;
-    const result = if (text.preserve_color_glyphs)
-        c.ss_pdf_draw_color_text_baseline(
-            pdf,
-            text.x,
-            text.baselineY(),
-            text.width,
-            text.layout.source_text.ptr,
-            family.ptr,
-            text.font_weight,
-            core.font.styleCode(text.font_style),
-            core.font.stretchCode(text.font_stretch),
-            text.font_size,
-            text.color.r,
-            text.color.g,
-            text.color.b,
-            @intFromBool(text.wrap),
-        )
-    else
-        c.ss_pdf_draw_text_baseline(
-            pdf,
-            text.x,
-            text.baselineY(),
-            text.width,
-            text.layout.source_text.ptr,
-            family.ptr,
-            text.font_weight,
-            core.font.styleCode(text.font_style),
-            core.font.stretchCode(text.font_stretch),
-            text.font_size,
-            text.color.r,
-            text.color.g,
-            text.color.b,
-            @intFromBool(text.wrap),
-        );
-    if (result != 0) return error.PangoCreateFailed;
 }
 
 fn emitAnnotations(pdf: *c.SsPdf, page: *const render_ir.Page) !void {

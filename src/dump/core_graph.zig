@@ -133,7 +133,8 @@ fn writeMarkdownBlock(blocks: *json.Array, block: *const core.markdown.Block) an
     var item = try blocks.objectItem();
     try item.enumTagField("kind", block.kind);
     switch (block.kind) {
-        .paragraph => {
+        .paragraph, .heading => {
+            if (block.heading_level) |level| try item.intField("level", level);
             try writeInlineLines(&item, "lines", block.paragraph.?.lines.items);
         },
         .code_block => {

@@ -420,7 +420,7 @@ fn markdownBlocksHeight(state: anytype, node: *const Node, cache: ?*MeasurementC
 
 fn markdownBlockHeight(state: anytype, node: *const Node, cache: ?*MeasurementCache, style: TextStyle, block: *const markdown.Block, max_width: f32, list_depth: usize) f32 {
     return switch (block.kind) {
-        .paragraph => markdownLinesHeight(state, node, cache, style, block.paragraph.?.lines.items, max_width),
+        .paragraph, .heading => markdownLinesHeight(state, node, cache, style, block.paragraph.?.lines.items, max_width),
         .code_block => blk: {
             const lines = markdown.codeBlockPhysicalLineCount(block);
             break :blk @as(f32, @floatFromInt(lines)) * markdownCodeLineHeight(state, node) + 2.0 * markdownCodePadY(state, node);
@@ -560,7 +560,7 @@ fn markdownBlocksNaturalWidth(state: anytype, node: *const Node, cache: ?*Measur
     if (blocks.len != 1) return null;
     const block = blocks[0];
     return switch (block.kind) {
-        .paragraph => markdownParagraphNaturalWidth(state, node, cache, style, block.paragraph.?.lines.items),
+        .paragraph, .heading => markdownParagraphNaturalWidth(state, node, cache, style, block.paragraph.?.lines.items),
         else => null,
     };
 }
@@ -585,7 +585,7 @@ fn markdownLineContainsDisplayMath(line: markdown.Line) bool {
 fn markdownBlocksContainMeasuredRenderArtifact(blocks: []const *markdown.Block) bool {
     for (blocks) |block| {
         switch (block.kind) {
-            .paragraph, .code_block => if (block.paragraph) |paragraph| {
+            .paragraph, .heading, .code_block => if (block.paragraph) |paragraph| {
                 for (paragraph.lines.items) |line| {
                     if (markdownLineContainsMeasuredRenderArtifact(line)) return true;
                 }

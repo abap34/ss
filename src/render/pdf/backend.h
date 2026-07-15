@@ -17,7 +17,6 @@ typedef struct SsPdfInkExtents {
 
 typedef struct SsTextGlyph {
     unsigned int id;
-    unsigned int source_index;
     double offset_x;
     double offset_y;
     double advance_x;
@@ -29,14 +28,39 @@ typedef struct SsTextRun {
     size_t source_end;
     size_t glyph_start;
     size_t glyph_count;
+    size_t cluster_start;
+    size_t cluster_count;
     double x;
     double baseline_y;
     double advance;
+    double ascent;
+    double descent;
+    double line_gap;
     char *font_family;
     char *font_path;
     unsigned int font_index;
     char *font_postscript_name;
+    int font_weight;
+    int font_style;
+    int font_stretch;
+    int synthetic_bold;
+    int synthetic_italic;
+    char *language;
+    unsigned char bidi_level;
 } SsTextRun;
+
+typedef struct SsTextCluster {
+    size_t source_start;
+    size_t source_end;
+    size_t glyph_start;
+    size_t glyph_count;
+    double x;
+    double baseline_y;
+    double advance_x;
+    double advance_y;
+    SsPdfInkExtents logical_bounds;
+    SsPdfInkExtents ink_bounds;
+} SsTextCluster;
 
 typedef struct SsTextLine {
     size_t source_start;
@@ -53,6 +77,8 @@ typedef struct SsTextShape {
     size_t line_count;
     SsTextRun *runs;
     size_t run_count;
+    SsTextCluster *clusters;
+    size_t cluster_count;
     SsTextGlyph *glyphs;
     size_t glyph_count;
     SsPdfInkExtents logical_bounds;
@@ -135,38 +161,6 @@ int ss_pdf_begin_uri_link(SsPdf *pdf, double x, double y, double width, double h
 int ss_pdf_begin_dest_link(SsPdf *pdf, double x, double y, double width, double height, const char *dest);
 void ss_pdf_end_link(SsPdf *pdf);
 int ss_pdf_add_destination(SsPdf *pdf, const char *name, double x, double y);
-int ss_pdf_draw_text_baseline(
-    SsPdf *pdf,
-    double x,
-    double baseline_y,
-    double width,
-    const char *text,
-    const char *font_family,
-    int font_weight,
-    int font_style,
-    int font_stretch,
-    double font_size,
-    double r,
-    double g,
-    double b,
-    int wrap
-);
-int ss_pdf_draw_color_text_baseline(
-    SsPdf *pdf,
-    double x,
-    double baseline_y,
-    double width,
-    const char *text,
-    const char *font_family,
-    int font_weight,
-    int font_style,
-    int font_stretch,
-    double font_size,
-    double r,
-    double g,
-    double b,
-    int wrap
-);
 int ss_pdf_draw_glyph_run(
     SsPdf *pdf,
     const char *font_path,

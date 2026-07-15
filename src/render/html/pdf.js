@@ -1,18 +1,16 @@
-import * as pdfjs from "./pdfjs/pdf.mjs";
+export async function renderPdfPages(root, pdfjs, workerSource) {
+  pdfjs.GlobalWorkerOptions.workerSrc = workerSource;
+  await Promise.all([...root.querySelectorAll(".ss-pdf")].map(async (container) => {
+    try {
+      await renderPdfPage(container, pdfjs);
+    } catch (error) {
+      container.dataset.error = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
+  }));
+}
 
-pdfjs.GlobalWorkerOptions.workerSrc = "./pdfjs/pdf.worker.mjs";
-
-export const ready = Promise.all([...document.querySelectorAll(".ss-pdf")].map(async (container) => {
-  try {
-    await renderPdfPage(container);
-  } catch (error) {
-    container.dataset.error = error instanceof Error ? error.message : String(error);
-    throw error;
-  }
-}));
-
-
-async function renderPdfPage(container) {
+async function renderPdfPage(container, pdfjs) {
   const documentTask = pdfjs.getDocument({
     url: container.dataset.pdfSrc,
     isEvalSupported: false,
