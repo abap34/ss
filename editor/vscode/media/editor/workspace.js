@@ -143,6 +143,7 @@ export class WorkspaceView {
       const height = Number(shell.dataset.pageHeight);
       shell.style.setProperty("--page-width", `${width * scale}px`);
       shell.style.setProperty("--page-height", `${height * scale}px`);
+      shell.style.setProperty("--scene-scale", String(scale));
     }
   }
 

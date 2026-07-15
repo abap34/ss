@@ -262,9 +262,11 @@ button {
   box-shadow: var(--thumbnail-shadow);
 }
 .thumbnail-scene {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
+  overflow: hidden;
 }
 .outline-list {
   padding-bottom: 8px;
@@ -473,7 +475,40 @@ button {
   height: 100%;
 }
 .scene {
+  overflow: hidden;
   pointer-events: none;
+}
+.scene-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  transform: scale(var(--scene-scale, 1));
+  transform-origin: 0 0;
+}
+.scene-node {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+.scene-box, .scene-line, .scene-text, .scene-image, .scene-pdf-placeholder,
+.pdf-resource {
+  position: absolute;
+  box-sizing: border-box;
+}
+.scene-line {
+  transform-origin: 0 0;
+}
+.scene-text {
+  white-space: pre;
+}
+.scene-image {
+  display: block;
+  object-fit: fill;
+}
+.scene-pdf-placeholder {
+  border: 1px solid #93a59f;
+  background: #eef2ef;
 }
 .interaction-layer {
   overflow: visible;

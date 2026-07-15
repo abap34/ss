@@ -71,9 +71,9 @@ export class ViewResources {
 
 function isResource(
   item: EditorSnapshot["display"]["pages"][number]["items"][number],
-): item is Extract<typeof item, { type: "raster" | "svg" | "pdf_page" }> {
+): item is Extract<typeof item, { type: "raster" | "svg" | "math" | "pdf_page" }> {
   return item.type === "raster" || item.type === "svg" ||
-    item.type === "pdf_page";
+    item.type === "math" || item.type === "pdf_page";
 }
 
 function randomNonce(): string {

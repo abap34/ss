@@ -98,7 +98,7 @@ export interface DisplayPage {
   items: DisplayItem[];
 }
 
-export type DisplayItem = FillRect | StrokeLine | RoundedRect | TextItem | ResourceItem | PdfPageItem;
+export type DisplayItem = FillRect | StrokeLine | RoundedRect | TextItem | ResourceItem | MathItem | PdfPageItem;
 
 interface NodeItem {
   node_id?: number | null;
@@ -147,6 +147,7 @@ export interface TextItem extends NodeItem {
 
 export interface ResourceItem extends NodeItem, Rect {
   type: "raster" | "svg";
+  resource_id: string;
   path: string;
   uri?: string;
   tint?: Color | null;
@@ -154,11 +155,22 @@ export interface ResourceItem extends NodeItem, Rect {
 
 export interface PdfPageItem extends NodeItem, Rect {
   type: "pdf_page";
+  resource_id: string;
   path: string;
   uri?: string;
   page_index: number;
   box: string;
   copy_annotations: boolean;
+}
+
+export interface MathItem extends NodeItem, Rect {
+  type: "math";
+  math_tree_id: number;
+  resource_id: string;
+  path: string;
+  uri?: string;
+  page_index: number;
+  box: string;
 }
 
 export interface Rect {
